@@ -1,0 +1,30 @@
+{
+  "name": "seekforge",
+  "version": "0.0.1",
+  "description": "A local-first coding agent powered by DeepSeek. (placeholder release, under development)",
+  "license": "MIT",
+  "author": "eilyeee",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eilyeee/seekforge.git"
+  },
+  "homepage": "https://github.com/eilyeee/seekforge#readme",
+  "keywords": [
+    "coding-agent",
+    "agent",
+    "deepseek",
+    "cli",
+    "ai"
+  ],
+  "bin": {
+    "seekforge": "bin/seekforge.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
