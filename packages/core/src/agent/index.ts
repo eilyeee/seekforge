@@ -1,6 +1,5 @@
 /**
- * Agent loop: session, context budget, tool-call loop, final report.
- * Implemented after provider and tools streams merge; placeholder for now.
+ * Agent loop: session, context budget, tool-call loop, trace, final report.
  */
 
 import type { AgentEvent, ApprovalMode } from "@seekforge/shared";
@@ -15,3 +14,8 @@ export type RunAgentTaskInput = {
 export interface AgentCore {
   runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent>;
 }
+
+export { createAgentCore, type AgentCoreDeps } from "./loop.js";
+export { buildSystemPrompt } from "./prompt.js";
+export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
+export { createSessionTrace, newSessionId } from "./trace.js";
