@@ -9,6 +9,10 @@ export type RunAgentTaskInput = {
   task: string;
   mode: "ask" | "edit";
   approvalMode: ApprovalMode;
+  /** Continue an existing session: replays its messages, appends `task`. */
+  resumeSessionId?: string;
+  /** Cooperative cancellation (Ctrl+C). Checked between turns and tool calls. */
+  signal?: AbortSignal;
 };
 
 export interface AgentCore {
@@ -18,4 +22,12 @@ export interface AgentCore {
 export { createAgentCore, type AgentCoreDeps } from "./loop.js";
 export { buildSystemPrompt } from "./prompt.js";
 export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
-export { createSessionTrace, newSessionId } from "./trace.js";
+export {
+  createSessionTrace,
+  listSessions,
+  loadSessionMessages,
+  newSessionId,
+  readSessionMeta,
+  writeSessionMeta,
+  type SessionMeta,
+} from "./trace.js";
