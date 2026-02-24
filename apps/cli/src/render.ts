@@ -20,14 +20,27 @@ export function formatUsage(usage: TokenUsage): string {
   );
 }
 
-/** Renders agent events to the terminal. Returns process exit code. */
-export function renderEvent(e: AgentEvent): void {
+export type RendererOptions = {
+  /** When model output is streamed via onModelDelta, don't reprint it. */
+  streaming?: boolean;
+};
+
+/** Creates a terminal renderer for agent events. */
+export function createRenderer(opts: RendererOptions = {}): (e: AgentEvent) => void {
+  return (e) => renderEvent(e, opts);
+}
+
+function renderEvent(e: AgentEvent, opts: RendererOptions): void {
   switch (e.type) {
     case "session.created":
       console.log(`${DIM}session ${e.sessionId}${RESET}`);
       break;
     case "model.message":
-      console.log(`\n${e.content}\n`);
+      if (opts.streaming) {
+        console.log(""); // content already streamed; close the line
+      } else {
+        console.log(`\n${e.content}\n`);
+      }
       break;
     case "tool.started":
       process.stdout.write(`${DIM}→ ${e.toolName} ${summarizeArgs(e.args)}${RESET}\n`);
