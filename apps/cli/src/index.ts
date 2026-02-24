@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { Command } from "commander";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
 import { initCommand } from "./commands/init.js";
+import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
 import { runTaskCommand } from "./commands/run.js";
 import { sessionsCommand, statusCommand } from "./commands/sessions.js";
+import { skillCreateCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
 
 const program = new Command();
 
@@ -68,6 +70,50 @@ program
   .description("continue an existing session with its full history")
   .action(async (sessionId: string, task: string, opts: { yes?: boolean; model?: string }) => {
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
+  });
+
+const skill = program.command("skill").description("manage skills (procedure libraries)");
+skill
+  .command("list", { isDefault: true })
+  .description("list available skills (project > global > builtin)")
+  .action(() => {
+    skillListCommand();
+  });
+skill
+  .command("show")
+  .argument("<skill-id>")
+  .description("print a skill's metadata and SKILL.md")
+  .action((id: string) => {
+    skillShowCommand(id);
+  });
+skill
+  .command("create")
+  .argument("<skill-id>", "lowercase letters, digits, dashes")
+  .description("scaffold a project skill in .seekforge/skills/<id>/")
+  .action((id: string) => {
+    skillCreateCommand(id);
+  });
+
+const memory = program.command("memory").description("inspect and curate project memory");
+memory
+  .command("list", { isDefault: true })
+  .description("show project.md and pending memory candidates")
+  .action(() => {
+    memoryListCommand();
+  });
+memory
+  .command("approve")
+  .argument("<candidate-id>")
+  .description("approve a candidate into project.md")
+  .action((id: string) => {
+    memoryApproveCommand(id);
+  });
+memory
+  .command("reject")
+  .argument("<candidate-id>")
+  .description("reject a candidate")
+  .action((id: string) => {
+    memoryRejectCommand(id);
   });
 
 const config = program.command("config").description("show or change configuration");
