@@ -1,0 +1,98 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { z } from "zod";
+import { BUILTIN_SKILLS } from "./builtins.js";
+import type { Skill, SkillScope } from "./types.js";
+
+const skillJsonSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string(),
+  tags: z.array(z.string()),
+  triggers: z.array(z.string()),
+  appliesTo: z
+    .object({
+      languages: z.array(z.string()).optional(),
+      frameworks: z.array(z.string()).optional(),
+      filePatterns: z.array(z.string()).optional(),
+    })
+    .optional(),
+  priority: z.number().optional(),
+  enabled: z.boolean().optional(),
+  risk: z.enum(["low", "medium", "high"]).optional(),
+});
+
+/** A skills root directory plus the scope its skills get. */
+export type SkillsDir = { scope: SkillScope; path: string };
+
+/**
+ * Merges BUILTIN_SKILLS with the skills found under each dir, in order: later
+ * dirs override earlier ones (and builtins) by id. Disabled skills are removed
+ * AFTER override resolution, so an enabled:false override in a higher layer
+ * disables a lower-layer skill of the same id. Malformed skill dirs (bad JSON,
+ * invalid skill.json, missing SKILL.md) are skipped silently.
+ */
+export function loadSkillsFromDirs(dirs: SkillsDir[]): Skill[] {
+  const byId = new Map<string, Skill>();
+  for (const skill of BUILTIN_SKILLS) byId.set(skill.id, skill);
+  for (const dir of dirs) {
+    for (const skill of readSkillsRoot(dir)) byId.set(skill.id, skill);
+  }
+  return [...byId.values()].filter((skill) => skill.enabled);
+}
+
+function readSkillsRoot({ scope, path: root }: SkillsDir): Skill[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const skills: Skill[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skill = readSkillDir(scope, path.join(root, entry.name));
+    if (skill) skills.push(skill);
+  }
+  return skills;
+}
+
+function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
+  let raw: unknown;
+  let content: string;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(dir, "skill.json"), "utf8"));
+    content = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const parsed = skillJsonSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const json = parsed.data;
+  return {
+    id: json.id,
+    scope,
+    name: json.name,
+    description: json.description,
+    tags: json.tags,
+    triggers: json.triggers,
+    appliesTo: json.appliesTo,
+    priority: json.priority ?? 50,
+    enabled: json.enabled ?? true,
+    risk: json.risk ?? "medium",
+    content,
+  };
+}
+
+/**
+ * Loads builtin + global (~/.seekforge/skills) + project (.seekforge/skills)
+ * skills; a project/global skill with the same id overrides lower layers.
+ * Disabled skills are excluded. Malformed skill dirs are skipped, never thrown.
+ */
+export function loadSkills(workspace: string): Skill[] {
+  return loadSkillsFromDirs([
+    { scope: "global", path: path.join(os.homedir(), ".seekforge", "skills") },
+    { scope: "project", path: path.join(workspace, ".seekforge", "skills") },
+  ]);
+}
