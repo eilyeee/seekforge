@@ -1,0 +1,77 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { describe, expect, it } from "vitest";
+import { BUILTIN_SKILLS, selectSkills } from "../../src/skills/index.js";
+import { makeSkill, makeTempDir } from "./helpers.js";
+
+describe("selectSkills", () => {
+  it("matches a Chinese trigger as a case-insensitive substring", () => {
+    const selections = selectSkills("帮我修复这个登录报错", BUILTIN_SKILLS);
+    expect(selections.length).toBeGreaterThan(0);
+    expect(selections[0]!.skill.id).toBe("bugfix");
+    expect(selections[0]!.reason).toContain('trigger "修复"');
+    expect(selections[0]!.reason).toContain('trigger "报错"');
+  });
+
+  it("scores 4 per trigger and 2 per tag, plus priority/100 tie-break", () => {
+    const skill = makeSkill("s1", { triggers: ["fix"], tags: ["bug"], priority: 50 });
+    const [sel] = selectSkills("please fix this bug", [skill]);
+    expect(sel!.score).toBeCloseTo(4 + 2 + 0.5);
+    expect(sel!.reason).toBe('trigger "fix"; tag bug');
+  });
+
+  it("excludes zero-score skills even with high priority", () => {
+    const skill = makeSkill("unrelated", { triggers: ["deploy"], tags: ["ops"], priority: 99 });
+    expect(selectSkills("fix the login bug", [skill])).toEqual([]);
+  });
+
+  it("boosts skills whose appliesTo.frameworks match package.json deps", () => {
+    const ws = makeTempDir();
+    fs.writeFileSync(
+      path.join(ws, "package.json"),
+      JSON.stringify({ name: "x", dependencies: { vue: "^3.4.0" } }),
+    );
+    const vueSkill = makeSkill("vue-skill", { appliesTo: { frameworks: ["vue"] } });
+
+    const withWs = selectSkills("anything at all", [vueSkill], { workspace: ws });
+    expect(withWs).toHaveLength(1);
+    expect(withWs[0]!.reason).toContain("framework vue");
+    expect(withWs[0]!.score).toBeCloseTo(2 + 0.5);
+
+    // No workspace -> no framework signal -> zero score -> excluded.
+    expect(selectSkills("anything at all", [vueSkill])).toEqual([]);
+  });
+
+  it("gives no framework signal when package.json is missing", () => {
+    const ws = makeTempDir();
+    const vueSkill = makeSkill("vue-skill", { appliesTo: { frameworks: ["vue"] } });
+    expect(selectSkills("anything", [vueSkill], { workspace: ws })).toEqual([]);
+  });
+
+  it("caps at 3 by default and honors opts.max", () => {
+    const skills = ["a", "b", "c", "d"].map((id) => makeSkill(id, { triggers: ["fix"] }));
+    expect(selectSkills("fix it", skills)).toHaveLength(3);
+    expect(selectSkills("fix it", skills, { max: 2 })).toHaveLength(2);
+  });
+
+  it("orders equal scores deterministically by id", () => {
+    const skills = [
+      makeSkill("zeta", { triggers: ["fix"], priority: 50 }),
+      makeSkill("alpha", { triggers: ["fix"], priority: 50 }),
+    ];
+    const ids = selectSkills("fix it", skills).map((s) => s.skill.id);
+    expect(ids).toEqual(["alpha", "zeta"]);
+    // Same input order independence.
+    const idsReversed = selectSkills("fix it", [...skills].reverse()).map((s) => s.skill.id);
+    expect(idsReversed).toEqual(["alpha", "zeta"]);
+  });
+
+  it("uses priority as tie-breaker between equally matched skills", () => {
+    const skills = [
+      makeSkill("low", { triggers: ["fix"], priority: 10 }),
+      makeSkill("high", { triggers: ["fix"], priority: 90 }),
+    ];
+    const ids = selectSkills("fix it", skills).map((s) => s.skill.id);
+    expect(ids).toEqual(["high", "low"]);
+  });
+});

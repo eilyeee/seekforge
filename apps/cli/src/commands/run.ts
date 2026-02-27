@@ -55,6 +55,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     dispatcher: createDefaultDispatcher(),
     confirm: confirmInTerminal,
     onModelDelta: (chunk) => process.stdout.write(chunk),
+    extractMemory: mode === "edit",
   });
 
   try {
