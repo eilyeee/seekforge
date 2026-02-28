@@ -6,6 +6,8 @@ export type CliConfig = {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  /** Path to the seekforge-runtime binary; enables the Rust backend. */
+  runtimeBin?: string;
 };
 
 function readJson(path: string): CliConfig {
@@ -24,5 +26,6 @@ export function loadConfig(projectPath: string): CliConfig {
     ...global,
     ...project,
     ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
+    ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
 }

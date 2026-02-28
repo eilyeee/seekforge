@@ -1,4 +1,12 @@
-import { createAgentCore, createDeepSeekProvider, createDefaultDispatcher, readSessionMeta } from "@seekforge/core";
+import { existsSync } from "node:fs";
+import {
+  createAgentCore,
+  createDeepSeekProvider,
+  createDefaultDispatcher,
+  createRuntimeClient,
+  readSessionMeta,
+  type RuntimeClient,
+} from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
 import { loadConfig } from "../config.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
@@ -44,6 +52,15 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   };
   process.on("SIGINT", onSigint);
 
+  let runtime: RuntimeClient | undefined;
+  if (config.runtimeBin) {
+    if (existsSync(config.runtimeBin)) {
+      runtime = createRuntimeClient({ binPath: config.runtimeBin });
+    } else {
+      console.error(`warning: runtimeBin not found (${config.runtimeBin}); using the TypeScript backend`);
+    }
+  }
+
   const render = createRenderer({ streaming: true });
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
   const agent = createAgentCore({
@@ -56,6 +73,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     confirm: confirmInTerminal,
     onModelDelta: (chunk) => process.stdout.write(chunk),
     extractMemory: mode === "edit",
+    runtime,
   });
 
   try {
@@ -74,5 +92,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     if (failed) process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
+    runtime?.dispose();
   }
 }
