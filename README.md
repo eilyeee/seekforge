@@ -4,37 +4,138 @@
 
 SeekForge is a coding agent for real-world projects: it reads your codebase,
 understands the task, plans changes, edits files, runs verification, keeps
-fixing on failure, and finally presents a reviewable diff with a summary.
+fixing on failure, and finally presents a reviewable diff with a summary and
+token/cost usage.
 
-## Roadmap
+```bash
+cd your-project
+seekforge run "修复登录按钮点击无响应的问题"
+```
 
 ```txt
-Step 1: SeekForge CLI   — a coding agent for your terminal
-Step 2: SeekForge App   — a Tauri-based desktop agent workbench
-```
-
-## Features (planned)
-
-- **Local-first** — execution and data stay on your machine; irrelevant files are never uploaded by default
-- **Cost-aware** — built-in token/cost tracking, optimized for DeepSeek context caching
-- **Fully reviewable** — every change is presented as a diff; dangerous commands are denied by default
-- **Extensible** — project-level AGENTS.md, memory, and skills, with auditable self-evolution
-
-## Usage (under development)
-
-```bash
-seekforge run "Fix the unresponsive login button"
-```
-
-Prefer a shorter command? Set up your own alias:
-
-```bash
-alias sf=seekforge
+session 20260610T110258-c1pbi7
+· skills: bugfix
+→ search_text {"pattern":"login.*button"}
+✓ search_text
+→ read_file {"path":"src/components/LoginButton.vue"}
+✓ read_file
+→ apply_patch {"path":"src/components/LoginButton.vue", ...}
+✓ apply_patch
+● changed src/components/LoginButton.vue
+→ run_command {"command":"pnpm test"}
+✓ run_command
+...
+Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 ```
 
 ## Status
 
-🚧 Early development. No usable release yet.
+✅ **Step 1 — CLI** (usable today): agent loop with context compaction,
+10 sandboxed tools, 5-level permission policy, session resume, streaming,
+skills, reviewable project memory, optional Rust execution backend.
+
+🚧 **Step 2 — SeekForge App** (next): Tauri desktop workbench on top of the
+same agent core. Self-evolution and an evaluation harness come after.
+
+## Install & setup
+
+```bash
+# from npm (CLI)
+npm install -g seekforge
+
+# or from source
+git clone https://github.com/eilyeee/seekforge && cd seekforge
+pnpm install && pnpm typecheck && pnpm test
+
+# configure the DeepSeek API key (one of):
+seekforge config set apiKey sk-... --global     # ~/.seekforge/config.json (0600)
+export DEEPSEEK_API_KEY=sk-...
+```
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model |
+| `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
+| `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
+| `seekforge sessions` | list sessions with status and cost |
+| `seekforge status` | project / config / last-session overview |
+| `seekforge diff` | show the current git diff |
+| `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
+| `seekforge skill list\|show <id>\|create <id>` | procedure skills (project > global > builtin) |
+| `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
+| `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin` |
+
+`Ctrl+C` cancels a running session cooperatively (the trace is kept, so
+`seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
+
+## How it works
+
+- **Edits are search/replace patches** (`oldString` must match uniquely),
+  applied atomically — far more reliable than unified diffs for LLMs.
+- **Context manager** keeps long sessions inside the model window via
+  head/tail compaction, and keeps the prompt prefix stable to hit DeepSeek
+  context caching (cache-hit input is ~10x cheaper; the CLI shows your hit rate).
+- **Skills** are procedure briefs (never permissions) selected per task by
+  rule matching; ship your own in `.seekforge/skills/<id>/`.
+- **Memory**: after each edit session one extra model call distills durable
+  facts as *candidates*; nothing enters long-term memory (`.seekforge/memory/project.md`)
+  until you `seekforge memory approve` it. Relevant memory is injected into
+  later sessions as a short brief.
+- **Sessions** are JSONL traces under `.seekforge/sessions/<id>/` —
+  messages, tool calls, and events are fully auditable.
+
+## Security model
+
+- 5 permission levels: readonly auto-runs; writes ask (unless `-y`);
+  non-allowlisted commands ask; dependency installs always ask;
+  dangerous commands (`rm -rf`, `sudo`, `git push`, pipe-to-shell, `bash -c`…)
+  are always refused.
+- Permission prompts show the **raw command/path**, never a model paraphrase.
+- Workspace sandbox (realpath containment, symlink-escape checks);
+  `.env`/`*.pem`/SSH keys are unreadable; secrets are redacted from output.
+- Tool results are treated as data, not instructions (prompt-injection defense),
+  and memory candidates are filtered and human-reviewed before persisting.
+
+This is **misuse protection within a project you already trust**, not an OS
+sandbox — any project command (e.g. `npm test`) runs that project's code.
+
+## Rust execution backend (optional)
+
+The TypeScript dispatcher can delegate file/command/git execution to a small
+trusted Rust binary that re-checks containment and the command denylist
+(defense in depth). Permission decisions always stay in TypeScript.
+
+```bash
+cargo build --release
+seekforge config set runtimeBin target/release/seekforge-runtime
+```
+
+Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
+
+## Known limitations
+
+- `deepseek-reasoner` is not usable as the agent model yet (no function
+  calling; a fallback text protocol exists in the provider but is not wired
+  into the loop).
+- A resumed session keeps its original system prompt — memory/skills approved
+  in between don't apply to it.
+- `.seekforge/sessions/` grows unbounded (no auto-cleanup yet).
+- macOS / Linux only.
+
+## Monorepo layout
+
+```txt
+apps/cli          the seekforge CLI (published to npm)
+packages/core     agent loop, provider, tools, memory, skills, runtime client
+packages/shared   cross-cutting plain types
+crates/runtime    seekforge-runtime (Rust execution backend)
+examples/         fixture projects for end-to-end verification
+```
+
+Development: `pnpm install`, `pnpm typecheck`, `pnpm test` (TS),
+`cargo test` (Rust). Conventions live in [AGENTS.md](AGENTS.md).
 
 ## Disclaimer
 

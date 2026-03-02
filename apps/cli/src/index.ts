@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
 import { initCommand } from "./commands/init.js";
@@ -9,10 +10,12 @@ import { skillCreateCommand, skillListCommand, skillShowCommand } from "./comman
 
 const program = new Command();
 
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+
 program
   .name("seekforge")
   .description("A local-first coding agent powered by DeepSeek.")
-  .version("0.0.1");
+  .version(version);
 
 program
   .command("run")
