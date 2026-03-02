@@ -82,7 +82,15 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<boolean
   if (!req.command && !req.path) console.log(`  ${req.description}`);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await rl.question("Allow? [y/N] ");
+    // readline swallows Ctrl+C while a question is pending: treat it as a
+    // denial and re-raise so the session's cancel flow still runs.
+    const answer = await new Promise<string>((resolve) => {
+      rl.question("Allow? [y/N] ").then(resolve, () => resolve("n"));
+      rl.once("SIGINT", () => {
+        resolve("n");
+        process.emit("SIGINT" as never);
+      });
+    });
     return answer.trim().toLowerCase() === "y";
   } finally {
     rl.close();
