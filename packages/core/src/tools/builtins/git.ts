@@ -4,6 +4,7 @@ import { z } from "zod";
 import { DEFAULT_LIMITS } from "@seekforge/shared";
 import { ToolError } from "../errors.js";
 import { truncateHeadTail } from "../text.js";
+import { callRuntime } from "../runtime-backend.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 const execFileAsync = promisify(execFile);
@@ -35,6 +36,10 @@ const gitStatus = defineTool({
     command: "git status --porcelain=v1 -b",
   }),
   async run(_args, ctx) {
+    if (ctx.runtime) {
+      const res = await callRuntime<{ output: string }>(ctx.runtime, "git_status", ctx.workspace, {});
+      return { data: { status: res.output } };
+    }
     const { text, truncated } = await runGit(ctx.workspace, ["status", "--porcelain=v1", "-b"]);
     return { data: { status: text }, meta: { truncated } };
   },
@@ -54,6 +59,12 @@ const gitDiff = defineTool({
     command: args.staged ? "git diff --cached" : "git diff",
   }),
   async run(args, ctx) {
+    if (ctx.runtime) {
+      const res = await callRuntime<{ output: string }>(ctx.runtime, "git_diff", ctx.workspace, {
+        staged: args.staged ?? false,
+      });
+      return { data: { diff: res.output } };
+    }
     const gitArgs = args.staged ? ["diff", "--cached"] : ["diff"];
     const { text, truncated } = await runGit(ctx.workspace, gitArgs);
     return { data: { diff: text }, meta: { truncated } };

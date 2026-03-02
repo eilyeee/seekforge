@@ -161,6 +161,24 @@ export type AgentEvent =
   | { type: "session.failed"; error: AgentError };
 
 // ---------------------------------------------------------------------------
+// Runtime stdio protocol (crates/runtime/PROTOCOL.md)
+// ---------------------------------------------------------------------------
+
+export type RuntimeRequest = {
+  id: string;
+  method: string;
+  /** Always includes `workspace` (absolute path) plus method params. */
+  params: Record<string, unknown>;
+};
+
+export type RuntimeResponse<T = unknown> = {
+  id: string | null;
+  ok: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+};
+
+// ---------------------------------------------------------------------------
 // Limits (docs/04-agent-harness.md §6) — defaults, all overridable via config
 // ---------------------------------------------------------------------------
 

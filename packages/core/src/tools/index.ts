@@ -14,6 +14,7 @@ import type {
 } from "@seekforge/shared";
 import { createDispatcher } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
+import type { RuntimeClient } from "../runtime/index.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -22,6 +23,12 @@ export type ToolContext = {
   policy: PermissionPolicy;
   /** Ask the user. Resolves true if approved. Must be given raw args to display. */
   confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Optional Rust execution backend (seekforge-runtime). When present,
+   * fs/command/git tools delegate raw IO to it; permission checks and
+   * output post-processing stay in TypeScript.
+   */
+  runtime?: RuntimeClient;
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
 };
