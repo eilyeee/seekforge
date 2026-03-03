@@ -37,7 +37,8 @@ export function initCommand(): void {
 
   const configPath = join(dir, "config.json");
   if (!existsSync(configPath)) {
-    writeFileSync(configPath, `${JSON.stringify({ model: "deepseek-chat" }, null, 2)}\n`);
+    // 0600: users often put apiKey in here later.
+    writeFileSync(configPath, `${JSON.stringify({ model: "deepseek-chat" }, null, 2)}\n`, { mode: 0o600 });
     console.log("created .seekforge/config.json");
   }
 

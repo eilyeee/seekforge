@@ -1,6 +1,6 @@
 {
   "name": "seekforge",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "A local-first coding agent powered by DeepSeek.",
   "license": "MIT",
   "author": "eilyeee",
@@ -24,16 +24,18 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsup src/index.ts --format esm --clean --sourcemap",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"no tests\""
+    "test": "echo \"no tests\"",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@seekforge/core": "workspace:*",
-    "@seekforge/shared": "workspace:*",
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@seekforge/core": "workspace:*",
+    "@seekforge/shared": "workspace:*",
     "tsx": "^4.19.0",
     "tsup": "^8.3.0",
     "typescript": "^5.7.0",

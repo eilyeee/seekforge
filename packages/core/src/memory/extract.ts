@@ -41,7 +41,9 @@ const DIGEST_MAX_CHARS = 6000;
  * Prompt-injection defense: facts that read like instructions to the agent
  * (e.g. "ignore previous instructions") must never enter project memory.
  */
-const INJECTION_PATTERN = /ignore|disregard|override.*(instruction|rule)/i;
+// Word-boundary on the verb so e.g. ".gitignore" facts are not false positives.
+const INJECTION_PATTERN =
+  /\b(ignore|disregard|override|bypass)\b[\s\S]{0,80}(instruction|rule|sandbox|permission|safety|prompt|policy)|(忽略|无视|绕过)[\s\S]{0,30}(指令|规则|沙箱|权限|限制)/i;
 
 const SYSTEM_PROMPT = [
   "You distill coding-agent sessions into project memory.",
