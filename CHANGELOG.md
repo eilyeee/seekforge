@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+Gap-fill iteration after comparing against Claude Code / Codex CLI.
+
+### Added
+- `git_commit` tool (stages + commits; pushing remains impossible)
+- `web_fetch` tool: public http(s) pages as readable text — always asks for
+  confirmation, refuses private/loopback addresses (SSRF guard)
+- `update_plan` tool: live step checklist rendered in the terminal
+- `--json` flag on `run`/`ask`: one JSON event per line for CI use
+- `@path` tokens in tasks inline file contents (sensitive files excluded)
+- `commandAllowlist` config key (comma-separated command prefixes that
+  auto-run without confirmation) — the policy engine already supported it,
+  now it is configurable
+
 ## 0.1.0 (unreleased)
 
 First usable release of the SeekForge CLI.

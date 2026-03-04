@@ -162,8 +162,11 @@ describe("dispatcher basics", () => {
       "run_command",
       "git_status",
       "git_diff",
+      "git_commit",
       "detect_project",
       "list_scripts",
+      "update_plan",
+      "web_fetch",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     expect(readFileDef?.parameters).toMatchObject({
