@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-zinc-950 font-sans text-sm text-zinc-200 antialiased;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded bg-zinc-700;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+}
