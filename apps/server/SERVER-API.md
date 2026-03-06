@@ -58,8 +58,12 @@ All frames are JSON objects with a `type` field.
 
 Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
+- `send` resumes the session with its original ask/edit mode and
+  `approvalMode: "confirm"`; an unknown session id →
+  `{"type":"error","code":"unknown_session"}`.
 - `permission.request` pauses the run until the matching `permission.response`
-  arrives (or the socket closes → treated as denied).
+  arrives (or the socket closes, or 120 s pass without a response — both
+  treated as denied).
 - Model deltas stream as `{"type":"event", "event":{"type":"model.delta","chunk":"..."}}`
   — this is a server-level event type (the core emits deltas via callback);
   the final full text still arrives as the normal `model.message` event.
@@ -70,6 +74,9 @@ Rules:
 - Implementation lives in `apps/server` (package `@seekforge/server`),
   exporting `startServer(opts: {workspace, port?, token?}): Promise<{port, token, close()}>`
   so the CLI (`seekforge serve`) and later the Tauri shell can embed it.
+  `port: 0` binds an ephemeral port (the real one is reported back).
+  Two additional optional opts exist for tests/embedding: `createAgent`
+  (agent-assembly override) and `staticDir` (UI root override).
 - Dependencies: `ws` only (plus workspace packages). No express.
 - The server constructs AgentCore exactly like the CLI does (provider from
   config, default dispatcher, runtime when configured, extractMemory for
