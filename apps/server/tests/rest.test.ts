@@ -242,10 +242,23 @@ describe("REST endpoints", () => {
 
 describe("static serving", () => {
   it("serves a plain info page mentioning the token URL when no UI build exists", async () => {
-    const res = await fetch(`${base}/?token=${TOKEN}`);
-    const html = await res.text();
-    expect(html).toContain("SeekForge");
-    expect(html).toContain(`/?token=${TOKEN}`);
+    // The suite-level server may pick up a real apps/desktop/dist build;
+    // simulate "no UI build" explicitly with a nonexistent staticDir.
+    const bare = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      staticDir: join(workspace, "definitely-no-dist-here"),
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/?token=${TOKEN}`);
+      const html = await res.text();
+      expect(html).toContain("SeekForge");
+      expect(html).toContain(`/?token=${TOKEN}`);
+    } finally {
+      await bare.close();
+    }
   });
 
   it("serves UI files and blocks path traversal when a dist exists", async () => {

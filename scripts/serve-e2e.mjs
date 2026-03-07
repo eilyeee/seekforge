@@ -8,8 +8,12 @@
  * Needs DEEPSEEK_API_KEY (or configured key) for the live session.
  */
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import WebSocket from "ws";
+
+// Resolve ws from apps/server (it is not a root dependency).
+const require = createRequire(new URL("../apps/server/package.json", import.meta.url));
+const WebSocket = require("ws");
 
 const workspace = process.argv[2];
 if (!workspace) {
