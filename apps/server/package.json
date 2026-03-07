@@ -1,0 +1,26 @@
+{
+  "name": "@seekforge/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@seekforge/core": "workspace:*",
+    "@seekforge/shared": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "vitest": "^3.0.0",
+    "tsx": "^4.19.0"
+  }
+}
