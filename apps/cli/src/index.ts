@@ -4,7 +4,9 @@ import { Command } from "commander";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
 import { initCommand } from "./commands/init.js";
 import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
+import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
+import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, statusCommand } from "./commands/sessions.js";
 import { skillCreateCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
 
@@ -77,6 +79,20 @@ program
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
   });
 
+program
+  .command("serve")
+  .option("--port <n>", "port to listen on (0 = random)", "7373")
+  .description("serve the web UI and agent API for this workspace (127.0.0.1 only)")
+  .action(async (opts: { port: string }) => {
+    const port = Number.parseInt(opts.port, 10);
+    if (Number.isNaN(port) || port < 0 || port > 65535) {
+      console.error(`invalid --port: ${opts.port}`);
+      process.exitCode = 1;
+      return;
+    }
+    await serveCommand({ port });
+  });
+
 const skill = program.command("skill").description("manage skills (procedure libraries)");
 skill
   .command("list", { isDefault: true })
@@ -136,6 +152,15 @@ config
   .description("set a config value")
   .action((key: string, value: string, opts: { global?: boolean }) => {
     configSetCommand(key, value, opts);
+  });
+
+program
+  .command("chat", { isDefault: true })
+  .option("-y, --yes", "auto-approve write/execute permissions")
+  .option("-m, --model <model>", "model for the session")
+  .description("interactive session (default when no command is given)")
+  .action(async (opts: { yes?: boolean; model?: string }) => {
+    await replCommand({ yes: opts.yes, model: opts.model });
   });
 
 program.parseAsync();

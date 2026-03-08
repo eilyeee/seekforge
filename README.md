@@ -34,8 +34,10 @@ Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 10 sandboxed tools, 5-level permission policy, session resume, streaming,
 skills, reviewable project memory, optional Rust execution backend.
 
-🚧 **Step 2 — SeekForge App** (next): Tauri desktop workbench on top of the
-same agent core. Self-evolution and an evaluation harness come after.
+🚧 **Step 2 — SeekForge App** (in progress): `seekforge serve` ships a local
+web workbench (React) — chat with live plan/tool/permission UI, sessions,
+skills, memory review, settings. The Tauri desktop shell, self-evolution,
+and an evaluation harness come after.
 
 ## Install & setup
 
@@ -56,6 +58,8 @@ export DEEPSEEK_API_KEY=sk-...
 
 | Command | What it does |
 | --- | --- |
+| `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
+| `seekforge serve [--port 7373]` | local web UI + agent API for this workspace (127.0.0.1 only, token-protected; open the printed URL) |
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
