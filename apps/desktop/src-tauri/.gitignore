@@ -1,0 +1,2 @@
+# Tauri build artifacts (workspace target/ is ignored at the repo root)
+/gen/schemas
