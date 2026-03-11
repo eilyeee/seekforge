@@ -252,12 +252,39 @@ describe("static serving", () => {
       staticDir: join(workspace, "definitely-no-dist-here"),
     });
     try {
-      const res = await fetch(`http://127.0.0.1:${bare.port}/?token=${TOKEN}`);
+      const res = await fetch(`http://127.0.0.1:${bare.port}/`);
       const html = await res.text();
       expect(html).toContain("SeekForge");
-      expect(html).toContain(`/?token=${TOKEN}`);
+      // The info page is public now — it must NOT leak the token.
+      expect(html).not.toContain(TOKEN);
     } finally {
       await bare.close();
+    }
+  });
+
+  it("serves static assets without a token while /api stays protected", async () => {
+    const distParent = makeWorkspace();
+    writeFileIn(distParent, "dist/index.html", "<html>ui-home</html>");
+    writeFileIn(distParent, "dist/assets/app.js", "console.log('ui')");
+    const ui = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      staticDir: join(distParent, "dist"),
+    });
+    try {
+      const baseUi = `http://127.0.0.1:${ui.port}`;
+      // index.html's subresources can't carry the token — they must be public.
+      const asset = await fetch(`${baseUi}/assets/app.js`);
+      expect(asset.status).toBe(200);
+      const index = await fetch(`${baseUi}/`);
+      expect(index.status).toBe(200);
+      // Capability stays gated: the API still rejects tokenless requests.
+      const api = await fetch(`${baseUi}/api/health`);
+      expect(api.status).toBe(401);
+    } finally {
+      await ui.close();
     }
   });
 
