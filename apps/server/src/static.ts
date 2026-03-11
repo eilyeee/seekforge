@@ -69,7 +69,6 @@ export type ServeStaticOptions = {
   root: string | undefined;
   pathname: string;
   port: number;
-  token: string;
   workspace: string;
 };
 
@@ -81,15 +80,16 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
 
   if (!opts.root) {
     if (opts.pathname !== "/") return notFound();
-    const tokenUrl = `http://127.0.0.1:${opts.port}/?token=${opts.token}`;
+    // Static pages are served without auth, so this page must NOT include
+    // the token — `seekforge serve` prints the full token URL to the terminal.
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(
       `<!doctype html><html><head><meta charset="utf-8"><title>SeekForge server</title></head><body>` +
         `<h1>SeekForge server</h1>` +
         `<p>Workspace: <code>${escapeHtml(opts.workspace)}</code></p>` +
         `<p>The web UI is not built (apps/desktop/dist is missing). ` +
-        `The REST API (<code>/api/*</code>) and WebSocket (<code>/ws</code>) are available.</p>` +
-        `<p>Token URL: <code>${escapeHtml(tokenUrl)}</code></p>` +
+        `The REST API (<code>/api/*</code>) and WebSocket (<code>/ws</code>) are available with the token.</p>` +
+        `<p>Open the token URL printed by <code>seekforge serve</code> (port ${opts.port}).</p>` +
         `</body></html>`,
     );
     return;
