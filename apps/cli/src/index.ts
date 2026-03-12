@@ -16,7 +16,7 @@ import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, statusCommand } from "./commands/sessions.js";
-import { skillCreateCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
+import { skillCreateCommand, skillImportCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
 
 const program = new Command();
 
@@ -121,6 +121,15 @@ skill
   .description("scaffold a project skill in .seekforge/skills/<id>/")
   .action((id: string) => {
     skillCreateCommand(id);
+  });
+skill
+  .command("import")
+  .argument("<path>", "SKILL.md file (or its directory) with YAML frontmatter (Claude-style)")
+  .option("-g, --global", "import into ~/.seekforge/skills (all projects) instead of this project")
+  .option("-f, --force", "replace an existing skill with the same id")
+  .description("import an external skill (e.g. Claude Code / Meta_Kim format)")
+  .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
+    skillImportCommand(sourcePath, opts);
   });
 
 const memory = program.command("memory").description("inspect and curate project memory");

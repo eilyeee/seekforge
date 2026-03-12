@@ -16,3 +16,9 @@ export { selectSkills, type SelectSkillsOptions } from "./select.js";
 export { buildSkillBrief, SKILL_BRIEF_MAX_CHARS } from "./brief.js";
 export { logSkillUsage } from "./usage.js";
 export { createSkillScaffold } from "./scaffold.js";
+export {
+  importExternalSkill,
+  parseFrontmatterSkill,
+  type ImportSkillOptions,
+  type ParsedExternalSkill,
+} from "./import.js";
