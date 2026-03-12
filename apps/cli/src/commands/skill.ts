@@ -1,4 +1,6 @@
-import { createSkillScaffold, loadSkills } from "@seekforge/core";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createSkillScaffold, importExternalSkill, loadSkills } from "@seekforge/core";
 
 export function skillListCommand(): void {
   const skills = loadSkills(process.cwd());
@@ -22,6 +24,27 @@ export function skillShowCommand(id: string): void {
   console.log(`tags: ${skill.tags.join(", ")}   triggers: ${skill.triggers.join(", ")}`);
   console.log("");
   console.log(skill.content);
+}
+
+export function skillImportCommand(
+  sourcePath: string,
+  opts: { global?: boolean; force?: boolean },
+): void {
+  const targetRoot = opts.global
+    ? join(homedir(), ".seekforge", "skills")
+    : join(process.cwd(), ".seekforge", "skills");
+  try {
+    const { dir, skill } = importExternalSkill(sourcePath, { targetRoot, force: opts.force });
+    console.log(`imported "${skill.id}" → ${dir}`);
+    if (skill.triggers.length > 0) {
+      console.log(`triggers: ${skill.triggers.slice(0, 8).join(", ")}${skill.triggers.length > 8 ? ", …" : ""}`);
+    }
+    console.log(`Check it with \`seekforge skill show ${skill.id}\`. Imported skills are`);
+    console.log("procedure suggestions only — they never grant extra permissions.");
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+  }
 }
 
 export function skillCreateCommand(id: string): void {
