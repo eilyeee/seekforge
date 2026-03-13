@@ -33,9 +33,10 @@ program
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
   .option("-m, --model <model>", "override model (deepseek-chat | deepseek-reasoner)")
   .option("--json", "emit one JSON event per line (CI mode; prompts are denied, pair with -y)")
+  .option("-p, --plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
-  .action(async (task: string, opts: { yes?: boolean; model?: string; json?: boolean }) => {
-    await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, json: opts.json });
+  .action(async (task: string, opts: { yes?: boolean; model?: string; json?: boolean; plan?: boolean }) => {
+    await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, json: opts.json, plan: opts.plan });
   });
 
 program

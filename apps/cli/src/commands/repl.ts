@@ -16,6 +16,7 @@ Slash commands:
   /new               start a fresh session (next message opens it)
   /sessions          list sessions of this project
   /resume <id>       continue an existing session
+  /plan <task>       plan read-only first, confirm, then execute
   /model <name>      switch model for subsequent messages
   /usage             cumulative token usage and cost for this REPL
   /quit              exit (Ctrl+D also works)
@@ -63,7 +64,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   console.log(`SeekForge — interactive session  ${DIM}(${model}, ${projectPath})${RESET}`);
   console.log(`${DIM}Type a task, or /help for commands. Ctrl+C cancels a running task.${RESET}\n`);
 
-  const runOnce = async (task: string): Promise<void> => {
+  const runOnce = async (task: string, runOpts?: { mode?: "ask" | "edit"; plan?: boolean }): Promise<void> => {
     const { agent, dispose } = createCliAgent({
       config,
       model,
@@ -81,7 +82,8 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
       for await (const event of agent.runTask({
         projectPath,
         task: expandFileRefs(task, projectPath),
-        mode: "edit",
+        mode: runOpts?.mode ?? "edit",
+        plan: runOpts?.plan,
         approvalMode: opts.yes ? "auto" : "confirm",
         resumeSessionId: sessionId,
         signal: controller.signal,
@@ -132,6 +134,28 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
           }
           sessionId = id;
           console.log(`continuing session ${id} — your next message resumes it`);
+          break;
+        }
+        case "/plan": {
+          const planTask = rest.join(" ").trim();
+          if (!planTask) {
+            console.log("usage: /plan <task>");
+            break;
+          }
+          try {
+            await runOnce(planTask, { mode: "ask", plan: true });
+            const answer = (await rl.question("\nExecute this plan? [y/N] ")).trim().toLowerCase();
+            if (answer === "y") {
+              await runOnce(
+                "Execute the plan you produced above, step by step. Make the changes and run the verification.",
+                { mode: "edit" },
+              );
+            } else {
+              console.log("plan kept; the session continues — refine it or /new");
+            }
+          } catch (err) {
+            console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+          }
           break;
         }
         case "/model":

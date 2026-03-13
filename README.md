@@ -60,7 +60,7 @@ export DEEPSEEK_API_KEY=sk-...
 | --- | --- |
 | `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
 | `seekforge serve [--port 7373]` | local web UI + agent API for this workspace (127.0.0.1 only, token-protected; open the printed URL) |
-| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI |
+| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
 | `seekforge sessions` | list sessions with status and cost |
@@ -128,8 +128,6 @@ Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
 - `deepseek-reasoner` is not usable as the agent model yet (no function
   calling; a fallback text protocol exists in the provider but is not wired
   into the loop).
-- A resumed session keeps its original system prompt — memory/skills approved
-  in between don't apply to it.
 - `.seekforge/sessions/` grows unbounded (no auto-cleanup yet).
 - macOS / Linux only.
 
