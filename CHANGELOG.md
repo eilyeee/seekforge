@@ -5,6 +5,11 @@
 Phase 4 — interactive surfaces.
 
 ### Added
+- Plan mode: `seekforge run --plan` and `/plan <task>` in the REPL —
+  read-only investigation produces a concrete plan; after your confirmation
+  the SAME session executes it. Resumed sessions now rebuild their system
+  prompt, so mode switches apply and freshly approved memory takes effect
+  (fixes the stale-prompt limitation).
 - `seekforge skill import <path> [--global] [--force]`: import external
   Claude-style SKILL.md skills (YAML frontmatter; |-separated triggers,
   block-scalar descriptions — e.g. Meta_Kim canonical skills). Imported

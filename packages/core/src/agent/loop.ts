@@ -99,6 +99,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       let messages: ChatMessage[];
       if (resuming) {
         messages = loadSessionMessages(input.projectPath, sessionId);
+        // Rebuild the system prompt for the resumed run: the mode may have
+        // changed (plan -> execute) and memory approved since the original
+        // run should apply. Costs one prefix-cache miss; correctness first.
+        if (messages[0]?.role === "system") {
+          messages[0] = {
+            role: "system",
+            content: buildSystemPrompt({
+              workspace: input.projectPath,
+              mode: input.mode,
+              plan: input.plan,
+              projectRules: readProjectRules(input.projectPath),
+              memoryBrief: buildMemoryBrief(input.projectPath, input.task),
+            }),
+          };
+        }
         const continuation: ChatMessage = { role: "user", content: input.task };
         messages.push(continuation);
         trace.message(continuation);
@@ -117,6 +132,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         const systemPrompt = buildSystemPrompt({
           workspace: input.projectPath,
           mode: input.mode,
+          plan: input.plan,
           projectRules: readProjectRules(input.projectPath),
           memoryBrief,
           skillBrief: buildSkillBrief(skillSelections),
