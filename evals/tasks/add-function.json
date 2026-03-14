@@ -1,0 +1,11 @@
+{
+  "id": "add-function",
+  "title": "Implement a missing function the tests already import",
+  "fixture": "add-function",
+  "mode": "edit",
+  "task": "The test suite imports a `slugify` function from src/strings.js that does not exist yet, so `npm test` fails. Implement `slugify` in src/strings.js (lowercase the text and join words with single dashes, trimming extra whitespace) and export it. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/strings.js", "pattern": "slugify" }
+  ]
+}

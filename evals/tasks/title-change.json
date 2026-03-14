@@ -1,0 +1,12 @@
+{
+  "id": "title-change",
+  "title": "Change the page title",
+  "fixture": "title-change",
+  "mode": "edit",
+  "task": "Change the page title of index.html from \"My Old App\" to \"SeekForge Demo\". Update both the <title> tag and the <h1> heading so they stay in sync, then run the tests to verify.",
+  "checks": [
+    { "type": "file_contains", "path": "index.html", "pattern": "<title>SeekForge Demo</title>" },
+    { "type": "file_contains", "path": "index.html", "pattern": "<h1>SeekForge Demo</h1>" },
+    { "type": "command_succeeds", "command": "npm test" }
+  ]
+}
