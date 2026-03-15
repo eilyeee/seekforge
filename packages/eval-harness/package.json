@@ -1,0 +1,21 @@
+{
+  "name": "@seekforge/eval-harness",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@seekforge/core": "workspace:*",
+    "@seekforge/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0",
+    "vitest": "^3.0.0",
+    "tsx": "^4.19.0"
+  }
+}

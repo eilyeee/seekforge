@@ -1,0 +1,9 @@
+{
+  "id": "ask-codebase",
+  "title": "Answer a question about the codebase (ask mode)",
+  "fixture": "ask-codebase",
+  "mode": "ask",
+  "task": "这个项目的测试命令是什么？请在回答里直接给出确切的命令。",
+  "checks": [{ "type": "answer_matches", "pattern": "npm test|node --test" }],
+  "notes": "The README states the test command, so the answer is deterministic."
+}

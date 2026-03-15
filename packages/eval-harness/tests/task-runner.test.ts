@@ -1,0 +1,228 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AgentEvent } from "@seekforge/shared";
+import { evaluateCheck, runTask } from "../src/task-runner.js";
+import {
+  FAKE_USAGE,
+  completedEvents,
+  fakeAgent,
+  makeTask,
+  makeTempFixture,
+  type TempFixture,
+} from "./helpers.js";
+
+let fixtures: TempFixture[] = [];
+
+function fixture(files: Record<string, string>): TempFixture {
+  const fx = makeTempFixture(files);
+  fixtures.push(fx);
+  return fx;
+}
+
+afterEach(() => {
+  for (const fx of fixtures) fx.cleanup();
+  fixtures = [];
+});
+
+describe("evaluateCheck", () => {
+  const fileChecks = () => fixture({ "notes.txt": "version v42 shipped", "sub/marker": "x" });
+
+  it("file_contains passes on a regex match and fails otherwise", async () => {
+    const fx = fileChecks();
+    const ctx = { dir: fx.dir, answer: "" };
+    const pass = await evaluateCheck({ type: "file_contains", path: "notes.txt", pattern: "v\\d+" }, ctx);
+    expect(pass.passed).toBe(true);
+    const fail = await evaluateCheck({ type: "file_contains", path: "notes.txt", pattern: "v\\d{5}" }, ctx);
+    expect(fail.passed).toBe(false);
+    expect(fail.detail).toContain("notes.txt");
+    const missing = await evaluateCheck({ type: "file_contains", path: "nope.txt", pattern: "x" }, ctx);
+    expect(missing.passed).toBe(false);
+    expect(missing.detail).toContain("file not found");
+  });
+
+  it("file_not_contains fails when the pattern is present (and on a missing file)", async () => {
+    const fx = fileChecks();
+    const ctx = { dir: fx.dir, answer: "" };
+    const pass = await evaluateCheck(
+      { type: "file_not_contains", path: "notes.txt", pattern: "deprecated" },
+      ctx,
+    );
+    expect(pass.passed).toBe(true);
+    const fail = await evaluateCheck(
+      { type: "file_not_contains", path: "notes.txt", pattern: "v4\\d" },
+      ctx,
+    );
+    expect(fail.passed).toBe(false);
+    expect(fail.detail).toContain("forbidden pattern");
+    const missing = await evaluateCheck({ type: "file_not_contains", path: "nope.txt", pattern: "x" }, ctx);
+    expect(missing.passed).toBe(false);
+  });
+
+  it("command_succeeds reflects the exit code and honors cwd", async () => {
+    const fx = fileChecks();
+    const ctx = { dir: fx.dir, answer: "" };
+    const pass = await evaluateCheck({ type: "command_succeeds", command: "test -f notes.txt" }, ctx);
+    expect(pass.passed).toBe(true);
+    const fail = await evaluateCheck({ type: "command_succeeds", command: "exit 3" }, ctx);
+    expect(fail.passed).toBe(false);
+    expect(fail.detail).toContain("exit 3");
+    const inSub = await evaluateCheck(
+      { type: "command_succeeds", command: "test -f marker", cwd: "sub" },
+      ctx,
+    );
+    expect(inSub.passed).toBe(true);
+  });
+
+  it("answer_matches tests the final answer against the regex", async () => {
+    const ctx = { dir: "/nonexistent", answer: "Run npm test to execute the suite." };
+    const pass = await evaluateCheck({ type: "answer_matches", pattern: "npm test|node --test" }, ctx);
+    expect(pass.passed).toBe(true);
+    const fail = await evaluateCheck({ type: "answer_matches", pattern: "pytest" }, ctx);
+    expect(fail.passed).toBe(false);
+  });
+});
+
+describe("runTask", () => {
+  it("copies the fixture to an isolated git workspace; mutations never touch the source", async () => {
+    const fx = fixture({ "file.txt": "original" });
+    let sawGitRepo = false;
+    const result = await runTask(
+      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "^mutated$" }] }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent((input) => {
+          expect(input.projectPath).not.toBe(fx.dir);
+          sawGitRepo = existsSync(join(input.projectPath, ".git"));
+          writeFileSync(join(input.projectPath, "file.txt"), "mutated");
+          return completedEvents();
+        }),
+      },
+    );
+    expect(sawGitRepo).toBe(true);
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(fx.dir, "file.txt"), "utf8")).toBe("original");
+  });
+
+  it("removes the temp workspace by default and keeps it with keepDir", async () => {
+    const fx = fixture({ "file.txt": "x" });
+    let workspace = "";
+    const opts = {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent((input) => {
+        workspace = input.projectPath;
+        return completedEvents();
+      }),
+    };
+    await runTask(makeTask(), opts);
+    expect(existsSync(workspace)).toBe(false);
+
+    const kept = await runTask(makeTask(), { ...opts, keepDir: true });
+    expect(kept.workspaceDir).toBeDefined();
+    expect(existsSync(kept.workspaceDir as string)).toBe(true);
+  });
+
+  it("fails when the session does not complete, even if all checks pass", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }] }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent(() => [
+          { type: "session.created", sessionId: "s1" },
+          { type: "session.failed", error: { code: "boom", message: "model exploded" } },
+        ]),
+      },
+    );
+    expect(result.checks.every((c) => c.passed)).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("boom");
+  });
+
+  it("fails when any check fails, even if the session completed", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      makeTask({
+        checks: [
+          { type: "file_contains", path: "file.txt", pattern: "ok" },
+          { type: "file_contains", path: "file.txt", pattern: "missing" },
+        ],
+      }),
+      { fixturesDir: fx.fixturesDir, createAgent: fakeAgent(() => completedEvents()) },
+    );
+    expect(result.success).toBe(false);
+    expect(result.checks.map((c) => c.passed)).toEqual([true, false]);
+  });
+
+  it("collects metrics from events and answer_matches uses the final summary", async () => {
+    const fx = fixture({ "file.txt": "x" });
+    const events: AgentEvent[] = [
+      { type: "session.created", sessionId: "s1" },
+      { type: "tool.started", toolName: "read_file", args: {} },
+      { type: "tool.completed", toolName: "read_file", result: { ok: true } },
+      { type: "tool.started", toolName: "run_command", args: {} },
+      { type: "tool.completed", toolName: "run_command", result: { ok: false, error: { code: "x", message: "y" } } },
+      {
+        type: "session.completed",
+        report: {
+          summary: "Use npm test.",
+          changedFiles: [],
+          commandsRun: [],
+          verification: "",
+          usage: FAKE_USAGE,
+        },
+      },
+    ];
+    const result = await runTask(
+      makeTask({ mode: "ask", checks: [{ type: "answer_matches", pattern: "npm test" }] }),
+      { fixturesDir: fx.fixturesDir, createAgent: fakeAgent(() => events) },
+    );
+    expect(result.success).toBe(true);
+    expect(result.metrics.toolCalls).toBe(2);
+    expect(result.metrics.failedToolCalls).toBe(1);
+    expect(result.metrics.costUsd).toBeCloseTo(FAKE_USAGE.costUsd);
+    expect(result.metrics.durationMs).toBeGreaterThanOrEqual(0);
+    // No trace files written by the fake agent: score/turns are absent.
+    expect(result.metrics.score).toBeUndefined();
+    expect(result.metrics.turns).toBeUndefined();
+  });
+
+  it("scores the session via core scoreSession when trace files exist", async () => {
+    const fx = fixture({ "file.txt": "x" });
+    const result = await runTask(
+      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent((input) => {
+          const sessionDir = join(input.projectPath, ".seekforge", "sessions", "fake-session");
+          mkdirSync(sessionDir, { recursive: true });
+          const now = new Date().toISOString();
+          writeFileSync(
+            join(sessionDir, "session.json"),
+            JSON.stringify({
+              id: "fake-session",
+              task: input.task,
+              mode: "edit",
+              status: "completed",
+              createdAt: now,
+              updatedAt: now,
+              usage: FAKE_USAGE,
+            }),
+          );
+          writeFileSync(
+            join(sessionDir, "messages.jsonl"),
+            `${JSON.stringify({ role: "assistant", content: "fixing" })}\n` +
+              `${JSON.stringify({ role: "assistant", content: "fixed" })}\n`,
+          );
+          writeFileSync(
+            join(sessionDir, "tool-calls.jsonl"),
+            `${JSON.stringify({ toolName: "run_command", ok: true, args: { command: "npm test" } })}\n`,
+          );
+          return completedEvents();
+        }),
+      },
+    );
+    expect(result.metrics.score).toBe(100);
+    expect(result.metrics.turns).toBe(2);
+  });
+});
