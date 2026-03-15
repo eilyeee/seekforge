@@ -1,0 +1,129 @@
+{
+  "generatedAt": "2026-06-11T05:11:08.677Z",
+  "results": [
+    {
+      "taskId": "add-function",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/strings.js",
+            "pattern": "slugify"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0023313080000000003,
+        "durationMs": 14535,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "ask-codebase",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "answer_matches",
+            "pattern": "npm test|node --test"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 2,
+        "toolCalls": 1,
+        "failedToolCalls": 0,
+        "costUsd": 0.000645456,
+        "durationMs": 1899,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "failing-test-fix",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/sum.test.js",
+            "pattern": "strictEqual\\(sum\\(\\[1, 2, 3, 4\\]\\),\\s*(?!10\\b)\\d"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/sum.test.js",
+            "pattern": "strictEqual\\(sum\\(\\[1, 2, 3, 4\\]\\),\\s*10\\)"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.001696688,
+        "durationMs": 9149,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "title-change",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "index.html",
+            "pattern": "<title>SeekForge Demo</title>"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "index.html",
+            "pattern": "<h1>SeekForge Demo</h1>"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.00205772,
+        "durationMs": 11708,
+        "score": 100
+      }
+    }
+  ]
+}
