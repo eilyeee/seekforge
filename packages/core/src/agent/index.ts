@@ -15,6 +15,11 @@ export type RunAgentTaskInput = {
   resumeSessionId?: string;
   /** Cooperative cancellation (Ctrl+C). Checked between turns and tool calls. */
   signal?: AbortSignal;
+  /**
+   * Internal: replaces buildSystemPrompt entirely (used by dispatch_agent to
+   * give nested subagent runs their own prompt). Not part of the public API.
+   */
+  systemPromptOverride?: string;
 };
 
 export interface AgentCore {
