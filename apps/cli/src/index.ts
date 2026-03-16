@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
+import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
 import {
   evolveAcceptCommand,
@@ -131,6 +132,30 @@ skill
   .description("import an external skill (e.g. Claude Code / Meta_Kim format)")
   .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
     skillImportCommand(sourcePath, opts);
+  });
+
+const agentCmd = program.command("agent").description("manage specialist subagents (dispatch_agent roster)");
+agentCmd
+  .command("list", { isDefault: true })
+  .description("list available agents (project > global)")
+  .action(() => {
+    agentListCommand();
+  });
+agentCmd
+  .command("show")
+  .argument("<agent-id>")
+  .description("print an agent's frontmatter fields and body")
+  .action((id: string) => {
+    agentShowCommand(id);
+  });
+agentCmd
+  .command("import")
+  .argument("<path>", "agent .md file with YAML frontmatter (Claude Code / Meta_Kim format)")
+  .option("-g, --global", "import into ~/.seekforge/agents (all projects) instead of this project")
+  .option("-f, --force", "replace an existing agent with the same id")
+  .description("import an external agent definition")
+  .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
+    agentImportCommand(sourcePath, opts);
   });
 
 const memory = program.command("memory").description("inspect and curate project memory");
