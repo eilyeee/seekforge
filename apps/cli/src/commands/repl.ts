@@ -1,5 +1,5 @@
 import { createInterface, type Interface } from "node:readline/promises";
-import { listSessions, readSessionMeta } from "@seekforge/core";
+import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { createCliAgent } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
@@ -71,6 +71,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
       confirm: makeConfirm(rl),
       onModelDelta: (chunk) => process.stdout.write(chunk),
       extractMemory: true,
+      subagents: loadAgentDefinitions(projectPath),
     });
     const controller = new AbortController();
     const onSigint = (): void => {

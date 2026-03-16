@@ -15,6 +15,15 @@ import type { RuntimeClient } from "../runtime/index.js";
 import type { ToolContext, ToolDispatcher } from "../tools/index.js";
 import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
+import {
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  DISPATCH_AGENT_TOOL,
+  buildDispatchToolDefinition,
+  buildSubagentPrompt,
+  buildSubagentRoster,
+  whitelistDispatcher,
+  type AgentDefinition,
+} from "../subagents/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
@@ -36,6 +45,10 @@ export type AgentCoreDeps = {
   runtime?: RuntimeClient;
   /** Extra command prefixes the user allows to auto-run (L2). */
   commandAllowlist?: string[];
+  /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
+  subagents?: AgentDefinition[];
+  /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
+  _depth?: number;
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -74,6 +87,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
   const windowTokens = deps.contextWindowTokens ?? 131_072;
   const budgetTokens = Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS;
+  const depth = deps._depth ?? 0;
+  // dispatch_agent is only advertised at depth 0 — dispatched runs never recurse.
+  const roster: AgentDefinition[] = depth === 0 ? (deps.subagents ?? []) : [];
 
   return {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
@@ -105,18 +121,29 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         if (messages[0]?.role === "system") {
           messages[0] = {
             role: "system",
-            content: buildSystemPrompt({
-              workspace: input.projectPath,
-              mode: input.mode,
-              plan: input.plan,
-              projectRules: readProjectRules(input.projectPath),
-              memoryBrief: buildMemoryBrief(input.projectPath, input.task),
-            }),
+            content:
+              input.systemPromptOverride ??
+              buildSystemPrompt({
+                workspace: input.projectPath,
+                mode: input.mode,
+                plan: input.plan,
+                projectRules: readProjectRules(input.projectPath),
+                memoryBrief: buildMemoryBrief(input.projectPath, input.task),
+                subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+              }),
           };
         }
         const continuation: ChatMessage = { role: "user", content: input.task };
         messages.push(continuation);
         trace.message(continuation);
+      } else if (input.systemPromptOverride !== undefined) {
+        // Internal: dispatched subagent runs replace the regular system
+        // prompt (and skip skill selection — the definition is the procedure).
+        messages = [
+          { role: "system", content: input.systemPromptOverride },
+          { role: "user", content: input.task },
+        ];
+        for (const m of messages) trace.message(m);
       } else {
         const memoryBrief = buildMemoryBrief(input.projectPath, input.task);
         const skillSelections = selectSkills(input.task, loadSkills(input.projectPath), {
@@ -136,6 +163,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           projectRules: readProjectRules(input.projectPath),
           memoryBrief,
           skillBrief: buildSkillBrief(skillSelections),
+          subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
         });
         messages = [
           { role: "system", content: systemPrompt },
@@ -163,12 +191,134 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         runtime: deps.runtime,
       };
 
-      const toolDefs = deps.dispatcher.list();
+      const toolDefs =
+        roster.length > 0
+          ? [...deps.dispatcher.list(), buildDispatchToolDefinition(roster)]
+          : deps.dispatcher.list();
       let usage = ZERO_USAGE;
       let toolCallCount = 0;
       const changedFiles = new Set<string>();
       const commandsRun: string[] = [];
       let finalContent: string | undefined;
+
+      /**
+       * Handles a dispatch_agent tool call: runs the named subagent as a
+       * nested agent core (depth+1, no further dispatch), forwards nested
+       * tool activity as step.started events, merges its usage/changes into
+       * the parent, and returns the subagent's report as the tool result.
+       */
+      async function* runDispatch(rawArgs: unknown): AsyncGenerator<AgentEvent, ToolResult> {
+        const a = rawArgs as { agentId?: unknown; task?: unknown };
+        const agentId = typeof a?.agentId === "string" ? a.agentId : "";
+        const task = typeof a?.task === "string" ? a.task.trim() : "";
+        const def = roster.find((d) => d.id === agentId);
+        if (!def) {
+          return {
+            ok: false,
+            error: { code: "unknown_agent", message: `unknown agent "${agentId || "(missing agentId)"}"` },
+          };
+        }
+        if (!task) {
+          return {
+            ok: false,
+            error: { code: "invalid_arguments", message: "dispatch_agent requires a non-empty task string" },
+          };
+        }
+
+        // ask-mode agents are read-only and auto-allowed; edit-mode agents
+        // go through the normal approval flow (unless approvalMode is auto).
+        if (def.mode === "edit" && input.approvalMode !== "auto") {
+          const approved = await deps.confirm({
+            toolName: DISPATCH_AGENT_TOOL,
+            permission: "write",
+            description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
+          });
+          if (!approved) {
+            return {
+              ok: false,
+              error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
+            };
+          }
+        }
+
+        const nested = createAgentCore({
+          ...deps,
+          subagents: undefined,
+          _depth: depth + 1,
+          dispatcher: def.tools ? whitelistDispatcher(deps.dispatcher, def.tools) : deps.dispatcher,
+          onModelDelta: undefined,
+          extractMemory: false,
+          limits: { ...deps.limits, maxAgentTurns: def.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS },
+        });
+
+        let subSessionId: string | undefined;
+        let nestedUsage: TokenUsage | undefined;
+        let report: FinalReport | undefined;
+        let failure: { code: string; message: string } | undefined;
+
+        for await (const ev of nested.runTask({
+          projectPath: input.projectPath,
+          task,
+          mode: def.mode,
+          approvalMode: input.approvalMode,
+          signal: input.signal,
+          systemPromptOverride: buildSubagentPrompt(def, input.projectPath),
+        })) {
+          switch (ev.type) {
+            case "session.created":
+              subSessionId = ev.sessionId;
+              break;
+            case "tool.started":
+              // Cheap visibility into the nested run without new event types.
+              yield emit({ type: "step.started", title: `[${def.id}] ${ev.toolName}` });
+              break;
+            case "file.changed":
+              changedFiles.add(ev.path);
+              yield emit({ type: "file.changed", path: ev.path });
+              break;
+            case "usage.updated":
+              nestedUsage = ev.usage; // cumulative within the nested run
+              break;
+            case "session.completed":
+              report = ev.report;
+              break;
+            case "session.failed":
+              failure = ev.error;
+              break;
+            default:
+              break;
+          }
+        }
+
+        // The nested session has its own trace (separate sessionId); record
+        // the parent linkage by logging the dispatch itself.
+        ctx.log?.({ tool: DISPATCH_AGENT_TOOL, agentId: def.id, task, subSessionId });
+
+        if (nestedUsage) {
+          usage = addUsage(usage, nestedUsage);
+          yield emit({ type: "usage.updated", usage });
+        }
+
+        if (failure || !report) {
+          return {
+            ok: false,
+            error: {
+              code: "subagent_failed",
+              message: failure?.message ?? "subagent run produced no final report",
+            },
+          };
+        }
+        commandsRun.push(...report.commandsRun);
+        return {
+          ok: true,
+          data: {
+            agentId: def.id,
+            report: report.summary,
+            changedFiles: report.changedFiles,
+            commandsRun: report.commandsRun,
+          },
+        };
+      }
 
       try {
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
@@ -228,7 +378,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
             yield emit({ type: "tool.started", toolName: tc.name, args });
             if (!parseFailed) {
-              result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
+              if (roster.length > 0 && tc.name === DISPATCH_AGENT_TOOL) {
+                result = yield* runDispatch(args);
+              } else {
+                result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
+              }
             }
             yield emit({ type: "tool.completed", toolName: tc.name, result: result! });
 

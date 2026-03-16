@@ -9,6 +9,8 @@ export type SystemPromptOptions = {
   memoryBrief?: string;
   /** Compressed procedures of the selected skills. */
   skillBrief?: string;
+  /** One-line-per-agent roster; set only when dispatch_agent is advertised. */
+  subagentRoster?: string;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -70,6 +72,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   if (opts.memoryBrief) {
     parts.push(
       `Relevant project memory (verified facts from earlier sessions):\n${opts.memoryBrief}`,
+    );
+  }
+
+  if (opts.subagentRoster) {
+    parts.push(
+      "Specialist agents are available via the dispatch_agent tool. Delegate bounded " +
+        "sub-tasks to them; they report back, and you stay responsible for the final result:\n" +
+        opts.subagentRoster,
     );
   }
 
