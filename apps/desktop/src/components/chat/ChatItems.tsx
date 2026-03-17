@@ -25,6 +25,13 @@ function ItemView({ item }: { item: ChatItem }) {
       return <ToolRow item={item} />;
     case "plan":
       return <PlanCard items={item.items} />;
+    case "substep":
+      return (
+        <div className="rounded border border-violet-900/60 bg-violet-950/20 px-3 py-1.5 text-xs">
+          <span className="font-mono font-semibold text-violet-300">⤷ {item.agentId}</span>
+          <span className="ml-2 font-mono text-zinc-500">{item.steps.join(" · ")}</span>
+        </div>
+      );
     case "file":
       return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-sky-900 bg-sky-950/40 px-2.5 py-0.5 font-mono text-xs text-sky-300">
