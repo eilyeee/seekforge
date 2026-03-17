@@ -220,6 +220,29 @@ describe("dispatch_agent (loop-level)", () => {
     expect(provider.requests).toHaveLength(2);
   });
 
+  it("refuses to dispatch an edit-mode agent from a read-only (ask/plan) session", async () => {
+    const provider = fakeProvider([dispatchCall("fixer", "go change files"), response({ content: "ok" })]);
+    let confirmCalls = 0;
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher(),
+      confirm: async () => {
+        confirmCalls++;
+        return true;
+      },
+      subagents: [fixer],
+    });
+    // ask-mode parent (also covers --plan, which runs as mode "ask")
+    const events = await collect(
+      agent.runTask({ ...baseInput, mode: "ask", projectPath: workspace }),
+    );
+    const [done] = toolCompleted(events, "dispatch_agent");
+    expect(done!.result.ok).toBe(false);
+    expect(done!.result.error!.code).toBe("forbidden_in_ask_mode");
+    // never prompted, never ran the nested edit agent
+    expect(confirmCalls).toBe(0);
+  });
+
   it("edit-mode dispatch runs when approved (and auto-approves in auto mode)", async () => {
     const provider = fakeProvider([
       dispatchCall("fixer", "fix the bug"),
