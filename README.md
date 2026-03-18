@@ -69,6 +69,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge skill list\|show <id>\|create <id>` | procedure skills (project > global > builtin) |
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
+| `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
 | `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist` (comma-separated prefixes) |
 
@@ -88,6 +89,11 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
   context caching (cache-hit input is ~10x cheaper; the CLI shows your hit rate).
 - **Skills** are procedure briefs (never permissions) selected per task by
   rule matching; ship your own in `.seekforge/skills/<id>/`.
+- **Subagents** (`AGENT.md` in `.seekforge/agents/<id>/`, or imported from
+  Claude/Meta_Kim-style definitions) let the main agent delegate bounded
+  sub-tasks via `dispatch_agent`. Each runs with its own prompt, a tool
+  whitelist, and a turn budget; governance/review agents are read-only.
+  A read-only (`ask`/`--plan`) session cannot dispatch an edit agent.
 - **Memory**: after each edit session one extra model call distills durable
   facts as *candidates*; nothing enters long-term memory (`.seekforge/memory/project.md`)
   until you `seekforge memory approve` it. Relevant memory is injected into
