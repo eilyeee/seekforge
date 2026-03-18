@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
 
@@ -36,6 +36,8 @@ export type SessionMeta = {
   createdAt: string;
   updatedAt: string;
   usage?: TokenUsage;
+  /** Set on sessions spawned by dispatch_agent: the dispatching agent id. */
+  parentAgentId?: string;
 };
 
 function sessionsRoot(workspace: string): string {
@@ -56,17 +58,67 @@ export function readSessionMeta(workspace: string, sessionId: string): SessionMe
   }
 }
 
-/** All sessions of a workspace, newest first. */
-export function listSessions(workspace: string): SessionMeta[] {
+export type ListSessionsOptions = {
+  /** Include subagent (dispatched) sessions. Default: false (top-level only). */
+  includeSubagents?: boolean;
+};
+
+/** Sessions of a workspace, newest first. Subagent sessions hidden by default. */
+export function listSessions(workspace: string, opts: ListSessionsOptions = {}): SessionMeta[] {
   const root = sessionsRoot(workspace);
   if (!existsSync(root)) return [];
   const metas: SessionMeta[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const meta = readSessionMeta(workspace, entry.name);
-    if (meta) metas.push(meta);
+    if (!meta) continue;
+    if (meta.parentAgentId && !opts.includeSubagents) continue;
+    metas.push(meta);
   }
   return metas.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export type PruneSessionsOptions = {
+  /** Delete sessions older than this many days (by createdAt). */
+  olderThanDays?: number;
+  /** Keep at most this many most-recent top-level sessions. */
+  keepLast?: number;
+  /** Only count/report what would be deleted, don't delete. */
+  dryRun?: boolean;
+};
+
+export type PruneResult = { removed: string[]; kept: number };
+
+/**
+ * Removes old session directories. A session is pruned when it is older than
+ * `olderThanDays` OR falls outside the `keepLast` most-recent ones. Subagent
+ * sessions are pruned together with (and counted under) their own age, so the
+ * whole .seekforge/sessions tree stays bounded. Running sessions are skipped.
+ */
+export function pruneSessions(workspace: string, opts: PruneSessionsOptions = {}): PruneResult {
+  const root = sessionsRoot(workspace);
+  if (!existsSync(root)) return { removed: [], kept: 0 };
+
+  const all = listSessions(workspace, { includeSubagents: true });
+  const cutoff =
+    opts.olderThanDays !== undefined ? Date.now() - opts.olderThanDays * 86_400_000 : undefined;
+
+  // keepLast applies to top-level sessions only (subagent runs ride along).
+  const topLevel = all.filter((m) => !m.parentAgentId);
+  const keptByRecency = new Set(
+    opts.keepLast !== undefined ? topLevel.slice(0, opts.keepLast).map((m) => m.id) : topLevel.map((m) => m.id),
+  );
+
+  const removed: string[] = [];
+  for (const meta of all) {
+    if (meta.status === "running") continue;
+    const tooOld = cutoff !== undefined && new Date(meta.createdAt).getTime() < cutoff;
+    const overflow = !meta.parentAgentId && !keptByRecency.has(meta.id);
+    if (!tooOld && !overflow) continue;
+    removed.push(meta.id);
+    if (!opts.dryRun) rmSync(join(root, meta.id), { recursive: true, force: true });
+  }
+  return { removed, kept: all.length - removed.length };
 }
 
 /** Replays messages.jsonl back into ChatMessage[] for session resume. */

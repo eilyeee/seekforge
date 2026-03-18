@@ -16,7 +16,7 @@ import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./
 import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
-import { sessionsCommand, statusCommand } from "./commands/sessions.js";
+import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
 import { skillCreateCommand, skillImportCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
 
 const program = new Command();
@@ -64,11 +64,20 @@ program
     spawn("git", ["diff"], { stdio: "inherit" });
   });
 
-program
+const sessions = program
   .command("sessions")
   .description("list sessions of the current project")
   .action(() => {
     sessionsCommand();
+  });
+sessions
+  .command("prune")
+  .option("--older-than <days>", "remove sessions older than N days")
+  .option("--keep-last <n>", "keep only the N most recent top-level sessions")
+  .option("--dry-run", "show what would be removed without deleting")
+  .description("delete old session traces (subagent runs are pruned with their parent's age)")
+  .action((opts: { olderThan?: string; keepLast?: string; dryRun?: boolean }) => {
+    sessionsPruneCommand(opts);
   });
 
 program

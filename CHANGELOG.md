@@ -5,6 +5,10 @@
 Phase 4 — interactive surfaces.
 
 ### Added
+- `seekforge sessions prune --older-than <days> / --keep-last <n> [--dry-run]`
+  to bound `.seekforge/sessions/`. Subagent (dispatched) sessions are now
+  tagged with their parent agent, hidden from `sessions`/`status` and skipped
+  by `evolve analyze`, and pruned along with their parent's age.
 - Subagents: `AGENT.md` definitions (project > global), `seekforge agent
   list|show|import`, and a `dispatch_agent` tool the main agent uses to
   delegate bounded sub-tasks (own prompt, tool whitelist, turn budget,
