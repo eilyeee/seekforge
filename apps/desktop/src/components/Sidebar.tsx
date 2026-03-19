@@ -3,6 +3,7 @@ import { useStore, type View } from "../store";
 const NAV: { view: View; label: string; glyph: string }[] = [
   { view: "chat", label: "Chat", glyph: ">_" },
   { view: "sessions", label: "Sessions", glyph: "≡" },
+  { view: "diff", label: "Diff", glyph: "±" },
   { view: "skills", label: "Skills", glyph: "✦" },
   { view: "memory", label: "Memory", glyph: "◈" },
   { view: "settings", label: "Settings", glyph: "⚙" },

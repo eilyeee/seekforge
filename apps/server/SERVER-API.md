@@ -25,7 +25,8 @@ Serves exactly one workspace (the cwd at start).
 | --- | --- |
 | GET /api/health | `{version, workspace}` |
 | GET /api/project | `{path, name, detect: {languages, packageManager, frameworks, scripts}}` |
-| GET /api/sessions | `SessionMeta[]` (newest first) |
+| GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
+| GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
 | GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[]}` |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |

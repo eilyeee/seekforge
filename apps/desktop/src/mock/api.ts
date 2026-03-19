@@ -39,6 +39,24 @@ export async function mockRequest(method: string, path: string, body?: unknown):
     return { ...skill, content: mockSkillContent[skill.id] ?? "" };
   }
 
+  if (method === "GET" && path.startsWith("/api/diff")) {
+    return {
+      diff: [
+        "diff --git a/src/app.ts b/src/app.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/app.ts",
+        "+++ b/src/app.ts",
+        "@@ -1,4 +1,4 @@",
+        '-const title = "Old";',
+        '+const title = "New";',
+        " export function render() {",
+        "   return title;",
+        " }",
+      ].join("\n"),
+      truncated: false,
+    };
+  }
+
   if (method === "GET" && path === "/api/memory") return { projectMd: mockProjectMd, candidates };
   m = /^\/api\/memory\/([^/]+)\/(approve|reject)$/.exec(path);
   if (method === "POST" && m) {

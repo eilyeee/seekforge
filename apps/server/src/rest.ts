@@ -3,8 +3,10 @@
  * errors are {error: {code, message}} with an appropriate HTTP status.
  */
 
+import { execFile } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
+import { promisify } from "node:util";
 import {
   approveMemoryCandidate,
   createDefaultDispatcher,
@@ -40,6 +42,27 @@ function isSafeId(id: string): boolean {
 
 // One readonly dispatcher instance for GET /api/project.
 const dispatcher = createDefaultDispatcher();
+
+const execFileAsync = promisify(execFile);
+
+/** Current git diff of the workspace (no shell; capped at 2 MB). */
+async function gitDiff(workspace: string, staged: boolean): Promise<{ diff: string; truncated: boolean }> {
+  const args = staged ? ["diff", "--cached"] : ["diff"];
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: workspace,
+      maxBuffer: 10_000_000,
+      timeout: 30_000,
+    });
+    const MAX = 2_000_000;
+    return stdout.length > MAX
+      ? { diff: stdout.slice(0, MAX), truncated: true }
+      : { diff: stdout, truncated: false };
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(`git diff failed: ${(e.stderr ?? e.message ?? "").slice(0, 500)}`);
+  }
+}
 
 async function detectProject(workspace: string): Promise<unknown> {
   const result = await dispatcher.execute(
@@ -110,6 +133,11 @@ export async function handleApi(
 
     if (method === "GET" && path === "/api/sessions") {
       return sendJson(res, 200, listSessions(ctx.workspace));
+    }
+
+    if (method === "GET" && path === "/api/diff") {
+      const staged = url.searchParams.get("staged") === "1";
+      return sendJson(res, 200, await gitDiff(ctx.workspace, staged));
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "sessions") {
