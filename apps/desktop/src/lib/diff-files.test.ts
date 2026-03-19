@@ -33,6 +33,23 @@ describe("splitDiffByFile", () => {
     expect(splitDiffByFile("\n")).toEqual([]);
   });
 
+  it("handles git-quoted paths (spaces and non-ASCII filenames)", () => {
+    const quoted = [
+      'diff --git "a/my file.ts" "b/my file.ts"',
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      // 设.md → git octal-escapes UTF-8 bytes: 设 = \350\256\276
+      'diff --git "a/\\350\\256\\276.md" "b/\\350\\256\\276.md"',
+      "@@ -0,0 +1 @@",
+      "+hello",
+    ].join("\n");
+    const files = splitDiffByFile(quoted);
+    expect(files.map((f) => f.path)).toEqual(["my file.ts", "设.md"]);
+    expect(files[0]).toMatchObject({ additions: 1, deletions: 1 });
+    expect(files[1]).toMatchObject({ additions: 1, deletions: 0 });
+  });
+
   it("totals add up", () => {
     expect(diffTotals(splitDiffByFile(TWO_FILES))).toEqual({ files: 2, additions: 3, deletions: 1 });
   });
