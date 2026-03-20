@@ -63,6 +63,8 @@ export const api = {
   memory: () => request<MemoryResponse>("GET", "/api/memory"),
   memoryAction: (id: string, action: "approve" | "reject") =>
     request<MemoryCandidate>("POST", `/api/memory/${encodeURIComponent(id)}/${action}`),
+  diff: (staged?: boolean) =>
+    request<{ diff: string; truncated: boolean }>("GET", `/api/diff${staged ? "?staged=1" : ""}`),
   config: () => request<ServerConfig>("GET", "/api/config"),
   setConfig: (key: ConfigKey, value: string, global?: boolean) =>
     request<ServerConfig>("PUT", "/api/config", { key, value, ...(global ? { global: true } : {}) }),

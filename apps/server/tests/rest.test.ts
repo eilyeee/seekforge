@@ -238,6 +238,27 @@ describe("REST endpoints", () => {
     expect(res.status).toBe(404);
     expect((await jsonOf(res)).error.code).toBe("not_found");
   });
+
+  it("GET /api/diff returns the workspace git diff", async () => {
+    // the suite workspace is not a git repo by default — make it one
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["init", "-q"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: workspace });
+    execFileSync("git", ["add", "-A"], { cwd: workspace });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: workspace });
+    writeFileIn(workspace, "package.json", JSON.stringify({ name: "fixture-project-CHANGED" }));
+
+    const res = await authed("/api/diff");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.truncated).toBe(false);
+    expect(body.diff).toContain("diff --git a/package.json");
+    expect(body.diff).toContain("fixture-project-CHANGED");
+
+    const unauth = await fetch(`${base}/api/diff`);
+    expect(unauth.status).toBe(401);
+  });
 });
 
 describe("static serving", () => {

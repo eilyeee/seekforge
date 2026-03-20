@@ -5,6 +5,8 @@
 Phase 4 — interactive surfaces.
 
 ### Added
+- Web workbench Diff view: per-file grouped, collapsible workspace diff with
+  +/- stats and staged toggle, backed by GET /api/diff.
 - `seekforge sessions prune --older-than <days> / --keep-last <n> [--dry-run]`
   to bound `.seekforge/sessions/`. Subagent (dispatched) sessions are now
   tagged with their parent agent, hidden from `sessions`/`status` and skipped
