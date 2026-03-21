@@ -4,9 +4,11 @@ import {
   createDeepSeekProvider,
   createDefaultDispatcher,
   createRuntimeClient,
+  loadMcpToolSpecs,
   type AgentCore,
   type AgentDefinition,
   type RuntimeClient,
+  type ToolSpec,
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
 import type { CliConfig } from "./config.js";
@@ -19,6 +21,8 @@ export type CliAgentOptions = {
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
+  /** Extra tools from MCP servers (see prepareMcp). */
+  mcpToolSpecs?: ToolSpec[];
 };
 
 export type CliAgent = {
@@ -45,7 +49,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
       baseUrl: config.baseUrl,
       model: opts.model ?? config.model,
     }),
-    dispatcher: createDefaultDispatcher(),
+    dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
     extractMemory: opts.extractMemory,
@@ -55,4 +59,16 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
   });
 
   return { agent, dispose: () => runtime?.dispose() };
+}
+
+/**
+ * Spawns the configured MCP servers and builds their ToolSpecs for
+ * createCliAgent. Callers must invoke dispose() when the session ends
+ * (kills the server child processes). No servers configured -> no-op.
+ */
+export async function prepareMcp(config: CliConfig): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
+  if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
+    return { specs: [], dispose: () => {} };
+  }
+  return loadMcpToolSpecs(config.mcpServers);
 }
