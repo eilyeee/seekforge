@@ -21,6 +21,16 @@ export {
   type MemoryCandidateType,
 } from "./store.js";
 
+export {
+  addMemoryFact,
+  listProjectFacts,
+  removeCandidate,
+  removeProjectFact,
+  type AddMemoryFactOptions,
+  type ProjectFact,
+  type ProjectFactSelector,
+} from "./direct.js";
+
 export { buildMemoryBrief } from "./brief.js";
 
 export {
