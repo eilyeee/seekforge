@@ -50,6 +50,8 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "3. Verify: run the most relevant test/lint command after changes and fix failures.",
         "4. Report: when done, reply WITHOUT tool calls. Structure the final reply as markdown with",
         "   sections: ## Summary, ## Changed Files, ## Verification, ## Notes.",
+        "Long-running commands (dev servers, watchers) must use run_command with background:true,",
+        "then task_output to check on them; they are killed when the session ends.",
       ].join("\n"),
     );
   }
