@@ -1,5 +1,14 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
 
 export type SessionTrace = {
@@ -131,6 +140,115 @@ export function loadSessionMessages(workspace: string, sessionId: string): ChatM
     messages.push(message);
   }
   return messages;
+}
+
+export type CheckpointEntry = {
+  ts: string;
+  /** Workspace-relative path of the file. */
+  path: string;
+  /** Full content BEFORE the session's first write, or null if the file did not exist. */
+  before: string | null;
+};
+
+function checkpointsFile(workspace: string, sessionId: string): string {
+  return join(sessionsRoot(workspace), sessionId, "checkpoints.jsonl");
+}
+
+/** Appends one pre-write snapshot to <session>/checkpoints.jsonl. */
+export function appendCheckpoint(workspace: string, sessionId: string, entry: CheckpointEntry): void {
+  const dir = join(sessionsRoot(workspace), sessionId);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, "checkpoints.jsonl"), `${JSON.stringify(entry)}\n`);
+}
+
+/** Reads checkpoints in recorded order. Corrupt/malformed lines are skipped. */
+export function readCheckpoints(workspace: string, sessionId: string): CheckpointEntry[] {
+  const file = checkpointsFile(workspace, sessionId);
+  if (!existsSync(file)) return [];
+  const entries: CheckpointEntry[] = [];
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<CheckpointEntry>;
+      if (typeof parsed.path !== "string" || parsed.path === "") continue;
+      if (parsed.before !== null && typeof parsed.before !== "string") continue;
+      entries.push({ ts: typeof parsed.ts === "string" ? parsed.ts : "", path: parsed.path, before: parsed.before });
+    } catch {
+      // corrupt line: skip, keep the rest usable
+    }
+  }
+  return entries;
+}
+
+export type RewindResult = {
+  restored: string[];
+  deleted: string[];
+  skipped: Array<{ path: string; reason: string }>;
+};
+
+/** Removes now-empty parent directories of a deleted file, up to (excluding) the workspace root. */
+function pruneEmptyDirs(dir: string, root: string): void {
+  let current = dir;
+  while (current.startsWith(root + sep)) {
+    try {
+      if (readdirSync(current).length > 0) return;
+      rmdirSync(current);
+    } catch {
+      return; // best-effort
+    }
+    current = dirname(current);
+  }
+}
+
+/**
+ * Undoes all file changes a session made by applying the FIRST recorded
+ * checkpoint per path: before === null deletes the file (the session created
+ * it), otherwise the pre-session content is written back. Entries whose path
+ * resolves outside the workspace root are refused (the checkpoint file may
+ * have been tampered with).
+ */
+export function rewindSession(
+  workspace: string,
+  sessionId: string,
+  opts: { dryRun?: boolean } = {},
+): RewindResult {
+  const result: RewindResult = { restored: [], deleted: [], skipped: [] };
+  const wsRoot = resolve(workspace);
+  const seen = new Set<string>();
+
+  for (const entry of readCheckpoints(workspace, sessionId)) {
+    if (seen.has(entry.path)) continue; // first-recorded entry per path wins
+    seen.add(entry.path);
+
+    const target = resolve(wsRoot, entry.path);
+    if (target === wsRoot || !target.startsWith(wsRoot + sep)) {
+      result.skipped.push({ path: entry.path, reason: "path escapes the workspace" });
+      continue;
+    }
+
+    try {
+      if (entry.before === null) {
+        if (!existsSync(target)) {
+          result.skipped.push({ path: entry.path, reason: "already absent" });
+          continue;
+        }
+        if (!opts.dryRun) {
+          rmSync(target);
+          pruneEmptyDirs(dirname(target), wsRoot);
+        }
+        result.deleted.push(entry.path);
+      } else {
+        if (!opts.dryRun) {
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, entry.before, "utf8");
+        }
+        result.restored.push(entry.path);
+      }
+    } catch (err) {
+      result.skipped.push({ path: entry.path, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return result;
 }
 
 export function newSessionId(now = new Date()): string {
