@@ -160,6 +160,8 @@ describe("dispatcher basics", () => {
       "write_file",
       "apply_patch",
       "run_command",
+      "task_output",
+      "task_kill",
       "git_status",
       "git_diff",
       "git_commit",

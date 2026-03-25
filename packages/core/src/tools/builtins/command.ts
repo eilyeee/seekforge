@@ -15,6 +15,12 @@ const runCommandSchema = z.object({
     .number()
     .optional()
     .describe("Timeout in milliseconds (defaults: 30s, 120s for tests, 180s for builds)."),
+  background: z
+    .boolean()
+    .optional()
+    .describe(
+      "Run without waiting; returns a taskId for task_output/task_kill. Use for dev servers and watchers.",
+    ),
 });
 
 const runCommand = defineTool({
@@ -38,6 +44,23 @@ const runCommand = defineTool({
     const cls = classifyCommand(args.command, ctx.policy.commandAllowlist);
     const cwd = resolveInsideWorkspace(ctx.workspace, args.cwd ?? ".");
     const timeoutMs = args.timeoutMs ?? cls.defaultTimeoutMs;
+
+    if (args.background) {
+      if (!ctx.background) {
+        throw new ToolError(
+          "background_unavailable",
+          "background tasks are not available in this session",
+        );
+      }
+      const { id } = ctx.background.start({ command: args.command, cwd });
+      return {
+        data: {
+          taskId: id,
+          command: args.command,
+          note: "running in background; poll with task_output",
+        },
+      };
+    }
 
     if (ctx.runtime) {
       const r = await callRuntime<{
@@ -99,4 +122,75 @@ const runCommand = defineTool({
   },
 });
 
-export const commandTools: ToolSpec[] = [runCommand];
+const DEFAULT_TASK_OUTPUT_TAIL_CHARS = 2_000;
+
+const taskOutputSchema = z.object({
+  taskId: z.string().describe("Background task id returned by run_command with background:true."),
+  tail: z
+    .number()
+    .optional()
+    .describe("Return only the last N chars of each stream (default 2000)."),
+});
+
+const taskOutput = defineTool({
+  name: "task_output",
+  description:
+    "Read the latest stdout/stderr and status of a background task started via run_command with background:true.",
+  schema: taskOutputSchema,
+  classify: (args) => ({
+    permission: "readonly",
+    description: `Read output of background task ${args.taskId}`,
+  }),
+  async run(args, ctx) {
+    const task = ctx.background?.get(args.taskId);
+    if (!task) {
+      throw new ToolError("unknown_task", `Unknown background task: ${args.taskId}`);
+    }
+    const tail = Math.max(
+      0,
+      Math.min(args.tail ?? DEFAULT_TASK_OUTPUT_TAIL_CHARS, DEFAULT_LIMITS.toolOutputMaxChars),
+    );
+    return {
+      data: {
+        taskId: task.id,
+        command: task.command,
+        status: task.status,
+        ...(task.status === "exited" ? { exitCode: task.exitCode ?? null } : {}),
+        stdout: redactSecrets(task.stdout.slice(-tail)),
+        stderr: redactSecrets(task.stderr.slice(-tail)),
+        durationMs: task.durationMs,
+      },
+    };
+  },
+});
+
+const taskKillSchema = z.object({
+  taskId: z.string().describe("Background task id returned by run_command with background:true."),
+});
+
+const taskKill = defineTool({
+  name: "task_kill",
+  description: "Kill a background task started in this session (SIGKILL to its process group).",
+  schema: taskKillSchema,
+  classify: (args, ctx) => {
+    const task = ctx.background?.get(args.taskId);
+    return {
+      // "write": it only kills tasks this session itself started.
+      permission: "write",
+      description: task
+        ? `Kill background task ${task.id} (${task.command})`
+        : `Kill background task ${args.taskId}`,
+      ...(task ? { command: task.command } : {}),
+    };
+  },
+  async run(args, ctx) {
+    const task = ctx.background?.get(args.taskId);
+    if (!task || !ctx.background) {
+      throw new ToolError("unknown_task", `Unknown background task: ${args.taskId}`);
+    }
+    ctx.background.kill(args.taskId);
+    return { data: { taskId: args.taskId, killed: true } };
+  },
+});
+
+export const commandTools: ToolSpec[] = [runCommand, taskOutput, taskKill];

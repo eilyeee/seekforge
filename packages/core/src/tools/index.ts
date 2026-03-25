@@ -15,6 +15,7 @@ import type {
 import { createDispatcher, type ToolSpec } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
+import type { BackgroundTasks } from "./background.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -29,6 +30,8 @@ export type ToolContext = {
    * output post-processing stay in TypeScript.
    */
   runtime?: RuntimeClient;
+  /** Per-session background task manager (run_command background:true). */
+  background?: BackgroundTasks;
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
 };
@@ -63,6 +66,13 @@ export {
   normalizeCommand,
   runShellCommand,
 } from "./run-command.js";
+export { createBackgroundTasks } from "./background.js";
+export type {
+  BackgroundTasks,
+  BackgroundTaskSnapshot,
+  BackgroundTaskStatus,
+  BackgroundTaskSummary,
+} from "./background.js";
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
