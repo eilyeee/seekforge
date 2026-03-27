@@ -21,6 +21,7 @@ import {
   memoryRemoveCommand,
 } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
+import { rewindCommand } from "./commands/rewind.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
@@ -103,6 +104,15 @@ program
   .description("continue an existing session with its full history")
   .action(async (sessionId: string, task: string, opts: { yes?: boolean; model?: string }) => {
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
+  });
+
+program
+  .command("rewind")
+  .argument("[session-id]", "session to rewind (default: most recent session with checkpoints)")
+  .option("--dry-run", "show what would be restored/deleted without changing any file")
+  .description("undo all file changes a session made (restore pre-session contents)")
+  .action((sessionId: string | undefined, opts: { dryRun?: boolean }) => {
+    rewindCommand(sessionId, opts);
   });
 
 program
