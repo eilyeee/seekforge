@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   DEFAULT_LIMITS,
   type AgentEvent,
@@ -26,6 +24,7 @@ import {
 } from "../subagents/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
@@ -75,14 +74,6 @@ function toolResultForModel(result: ToolResult, maxChars: number): string {
   return text;
 }
 
-function readProjectRules(workspace: string): string | undefined {
-  try {
-    return readFileSync(join(workspace, "AGENTS.md"), "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
   const windowTokens = deps.contextWindowTokens ?? 131_072;
@@ -128,7 +119,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 workspace: input.projectPath,
                 mode: input.mode,
                 plan: input.plan,
-                projectRules: readProjectRules(input.projectPath),
+                projectRules: collectProjectRules(input.projectPath),
                 memoryBrief: buildMemoryBrief(input.projectPath, input.task),
                 subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
               }),
@@ -161,7 +152,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           workspace: input.projectPath,
           mode: input.mode,
           plan: input.plan,
-          projectRules: readProjectRules(input.projectPath),
+          projectRules: collectProjectRules(input.projectPath),
           memoryBrief,
           skillBrief: buildSkillBrief(skillSelections),
           subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
