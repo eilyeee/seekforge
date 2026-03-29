@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   DEFAULT_LIMITS,
   type AgentEvent,
@@ -7,6 +5,7 @@ import {
   type ChatMessage,
   type FinalReport,
   type PermissionRequest,
+  type PermissionRule,
   type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
@@ -26,6 +25,7 @@ import {
 } from "../subagents/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
@@ -45,6 +45,8 @@ export type AgentCoreDeps = {
   runtime?: RuntimeClient;
   /** Extra command prefixes the user allows to auto-run (L2). */
   commandAllowlist?: string[];
+  /** Fine-grained allow/deny rules, project rules first (first match wins). */
+  permissionRules?: PermissionRule[];
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
@@ -73,14 +75,6 @@ function toolResultForModel(result: ToolResult, maxChars: number): string {
     text = `${text.slice(0, maxChars)}…[truncated]`;
   }
   return text;
-}
-
-function readProjectRules(workspace: string): string | undefined {
-  try {
-    return readFileSync(join(workspace, "AGENTS.md"), "utf8");
-  } catch {
-    return undefined;
-  }
 }
 
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
@@ -128,7 +122,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 workspace: input.projectPath,
                 mode: input.mode,
                 plan: input.plan,
-                projectRules: readProjectRules(input.projectPath),
+                projectRules: collectProjectRules(input.projectPath),
                 memoryBrief: buildMemoryBrief(input.projectPath, input.task),
                 subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
               }),
@@ -161,7 +155,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           workspace: input.projectPath,
           mode: input.mode,
           plan: input.plan,
-          projectRules: readProjectRules(input.projectPath),
+          projectRules: collectProjectRules(input.projectPath),
           memoryBrief,
           skillBrief: buildSkillBrief(skillSelections),
           subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
@@ -191,6 +185,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           approvalMode: input.approvalMode,
           mode: input.mode,
           commandAllowlist: deps.commandAllowlist ?? [],
+          ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
         },
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),

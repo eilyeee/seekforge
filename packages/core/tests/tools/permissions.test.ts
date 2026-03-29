@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PermissionRequest } from "@seekforge/shared";
-import { createDefaultDispatcher } from "../../src/tools/index.js";
+import type { PermissionRequest, PermissionRule } from "@seekforge/shared";
+import { createDefaultDispatcher, enforcePermission } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 const dispatcher = createDefaultDispatcher();
@@ -116,6 +116,199 @@ describe("permission flow", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_dangerous");
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe("permission rules", () => {
+  it("deny rule blocks a readonly tool without prompting (deny wins over everything)", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "secret.txt"), "hidden");
+    const { confirm, requests } = scriptedConfirm(true);
+    const rules: PermissionRule[] = [{ action: "deny", tool: "read_file" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", rules }, confirm });
+    const res = await dispatcher.execute(call("read_file", { path: "secret.txt" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("deny rule blocks an allowlisted command", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const rules: PermissionRule[] = [{ action: "deny", tool: "run_command", match: "pwd" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+    // "pwd" is on the builtin allowlist, but the deny rule still wins.
+    const res = await dispatcher.execute(call("run_command", { command: "pwd" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("deny by command prefix blocks one npm script but not another", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [
+      { action: "deny", tool: "run_command", match: "npm run deploy" },
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    const blocked = await dispatcher.execute(
+      call("run_command", { command: "npm run deploy --prod" }),
+      ctx,
+    );
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+
+    // A different script is not rule-denied: it reaches the normal confirm flow.
+    const other = await dispatcher.execute(call("run_command", { command: "npm run lint" }), ctx);
+    expect(other.ok).toBe(false);
+    expect(other.error?.code).toBe("denied_by_user");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.command).toBe("npm run lint");
+  });
+
+  it("allow rule skips write confirmation", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [{ action: "allow", tool: "write_file" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    expect(res.ok).toBe(true);
+    expect(requests).toHaveLength(0);
+    expect(fs.readFileSync(path.join(ws, "a.txt"), "utf8")).toBe("x");
+  });
+
+  it("allow rule does NOT rescue a dangerous command", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const rules: PermissionRule[] = [{ action: "allow", tool: "run_command" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", rules }, confirm });
+    const res = await dispatcher.execute(call("run_command", { command: "sudo rm -rf /" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_dangerous");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("allow rule does not bypass ask-mode blocking", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const rules: PermissionRule[] = [{ action: "allow", tool: "write_file" }];
+    const ctx = makeCtx(ws, { policy: { mode: "ask", approvalMode: "auto", rules }, confirm });
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("forbidden_in_ask_mode");
+    expect(requests).toHaveLength(0);
+    expect(fs.existsSync(path.join(ws, "a.txt"))).toBe(false);
+  });
+
+  it("env-level allow rule skips the prompt (web_fetch for a docs domain)", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [
+      { action: "allow", tool: "web_fetch", match: "GET https://docs.example.com/" },
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+    // enforcePermission directly: web_fetch.run would hit the real network.
+    const allowed = await enforcePermission(
+      "web_fetch",
+      {
+        permission: "env",
+        description: "Fetch URL: https://docs.example.com/api",
+        command: "GET https://docs.example.com/api",
+      },
+      ctx,
+    );
+    expect(allowed).toEqual({ allowed: true, decision: "allow_rule" });
+    expect(requests).toHaveLength(0);
+
+    // Other domains still go through the env confirmation.
+    const other = await enforcePermission(
+      "web_fetch",
+      {
+        permission: "env",
+        description: "Fetch URL: https://evil.example.org/x",
+        command: "GET https://evil.example.org/x",
+      },
+      ctx,
+    );
+    expect(other.allowed).toBe(false);
+    expect(other.decision).toBe("user_denied");
+    expect(requests).toHaveLength(1);
+  });
+
+  it('tool "*" wildcard matches every tool', async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "hi");
+    const { confirm, requests } = scriptedConfirm(true);
+    const rules: PermissionRule[] = [{ action: "deny", tool: "*" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto", rules }, confirm });
+    const read = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
+    expect(read.error?.code).toBe("denied_by_rule");
+    const write = await dispatcher.execute(call("write_file", { path: "b.txt", content: "x" }), ctx);
+    expect(write.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("first-match precedence: deny scanned before allow, project rules first in the array", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    // Project rules come first in the merged array; the first matching rule
+    // of each category wins, and deny is always scanned before allow.
+    const rules: PermissionRule[] = [
+      { action: "allow", tool: "write_file", match: "src/" }, // project
+      { action: "deny", tool: "write_file", match: "src/generated/" }, // project
+      { action: "deny", tool: "write_file" }, // global: deny all other writes
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    // deny beats a matching allow that appears earlier in the array
+    const generated = await dispatcher.execute(
+      call("write_file", { path: "src/generated/x.ts", content: "x" }),
+      ctx,
+    );
+    expect(generated.error?.code).toBe("denied_by_rule");
+
+    // project allow matches before the broader global deny is relevant —
+    // but deny is scanned first, so only non-matching denies let it through
+    const denied = await dispatcher.execute(
+      call("write_file", { path: "README.md", content: "x" }),
+      ctx,
+    );
+    expect(denied.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("project allow earlier in the array wins within the allow category", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [
+      { action: "allow", tool: "write_file", match: "docs/" }, // project
+      { action: "allow", tool: "write_file", match: "docs/internal/" }, // global (redundant)
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+    const res = await dispatcher.execute(
+      call("write_file", { path: "docs/internal/a.md", content: "x" }),
+      ctx,
+    );
+    expect(res.ok).toBe(true);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("no rules → behavior identical to before (regression)", async () => {
+    const ws = makeWorkspace();
+    const withConfirm = scriptedConfirm(true);
+    const emptyRulesCtx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", rules: [] },
+      confirm: withConfirm.confirm,
+    });
+    const res = await dispatcher.execute(
+      call("write_file", { path: "a.txt", content: "x" }),
+      emptyRulesCtx,
+    );
+    expect(res.ok).toBe(true);
+    expect(withConfirm.requests).toHaveLength(1); // still confirmed, as without rules
+    expect(withConfirm.requests[0]?.permission).toBe("write");
   });
 });
 
