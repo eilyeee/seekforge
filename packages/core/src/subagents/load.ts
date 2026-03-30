@@ -78,7 +78,7 @@ function readAgentDir(scope: AgentScope, id: string, dir: string): AgentDefiniti
 /**
  * Parses our canonical AGENT.md: YAML frontmatter (name, description incl.
  * block scalars, trigger |-separated, tools comma-separated, own,
- * do_not_touch, boundary, mode, max-turns) + markdown body (appended to the
+ * do_not_touch, boundary, mode, max-turns, model) + markdown body (appended to the
  * subagent prompt).
  */
 export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: string): AgentDefinition {
@@ -108,6 +108,7 @@ export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: stri
     doNotTouch: fields.get("do_not_touch") || undefined,
     boundary: fields.get("boundary") || undefined,
     maxTurns: Number.isFinite(maxTurns) && maxTurns > 0 ? maxTurns : undefined,
+    model: fields.get("model")?.trim() || undefined,
     body: body || undefined,
   };
 }
