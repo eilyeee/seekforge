@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { BUILTIN_AGENTS } from "./builtins.js";
 import { AGENT_ID_RE, parseFrontmatter } from "./frontmatter.js";
 import type { AgentDefinition, AgentScope } from "./types.js";
 
@@ -21,14 +22,26 @@ export function loadAgentDefinitionsFromDirs(dirs: AgentsDir[]): AgentDefinition
 }
 
 /**
- * Loads global (~/.seekforge/agents) + project (.seekforge/agents) agent
- * definitions; a project agent with the same id overrides the global one.
+ * Merges the builtin agents at the LOWEST priority: any loaded definition
+ * (global or project) with the same id replaces the builtin.
+ */
+export function withBuiltinAgents(defs: AgentDefinition[]): AgentDefinition[] {
+  const byId = new Map<string, AgentDefinition>(BUILTIN_AGENTS.map((d) => [d.id, d]));
+  for (const def of defs) byId.set(def.id, def);
+  return [...byId.values()];
+}
+
+/**
+ * Loads builtin + global (~/.seekforge/agents) + project (.seekforge/agents)
+ * agent definitions; later scopes override earlier ones by id.
  */
 export function loadAgentDefinitions(workspace: string): AgentDefinition[] {
-  return loadAgentDefinitionsFromDirs([
-    { scope: "global", path: path.join(os.homedir(), ".seekforge", "agents") },
-    { scope: "project", path: path.join(workspace, ".seekforge", "agents") },
-  ]);
+  return withBuiltinAgents(
+    loadAgentDefinitionsFromDirs([
+      { scope: "global", path: path.join(os.homedir(), ".seekforge", "agents") },
+      { scope: "project", path: path.join(workspace, ".seekforge", "agents") },
+    ]),
+  );
 }
 
 function readAgentsRoot({ scope, path: root }: AgentsDir): AgentDefinition[] {

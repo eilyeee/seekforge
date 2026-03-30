@@ -1,5 +1,5 @@
-/** Where an agent definition was loaded from. */
-export type AgentScope = "global" | "project";
+/** Where an agent definition was loaded from. "builtin" = shipped with SeekForge. */
+export type AgentScope = "global" | "project" | "builtin";
 
 /**
  * A specialist subagent definition, loaded from
