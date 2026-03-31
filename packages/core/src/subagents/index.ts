@@ -27,7 +27,11 @@ export {
 } from "./import.js";
 export { buildSubagentPrompt } from "./prompt.js";
 export {
+  AGENT_RESULT_TOOL,
+  AGENT_SEND_TOOL,
   DISPATCH_AGENT_TOOL,
+  buildAgentResultToolDefinition,
+  buildAgentSendToolDefinition,
   buildDispatchToolDefinition,
   buildSubagentRoster,
   whitelistDispatcher,

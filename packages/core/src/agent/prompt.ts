@@ -79,9 +79,16 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
 
   if (opts.subagentRoster) {
     parts.push(
-      "Specialist agents are available via the dispatch_agent tool. Delegate bounded " +
-        "sub-tasks to them; they report back, and you stay responsible for the final result:\n" +
+      [
+        "Specialist agents are available via the dispatch_agent tool. Delegate bounded",
+        "sub-tasks to them; they report back, and you stay responsible for the final result.",
+        "Independent sub-tasks may be dispatched in parallel (several dispatch_agent calls in",
+        "one reply). For long-running sub-tasks pass background:true — the call returns a",
+        "dispatch id immediately (ids are ag-1, ag-2, … in start order); poll it with",
+        "agent_result. To follow up with an agent whose dispatch has completed, use",
+        "agent_send with its dispatch id — it resumes with its full prior context:",
         opts.subagentRoster,
+      ].join("\n"),
     );
   }
 
