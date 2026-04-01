@@ -1,0 +1,50 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Minimal fake MCP server for server-level tests (same pattern as
+ * packages/core/tests/mcp/fixture.ts, copied — test trees must not import
+ * across packages). A node script speaking newline-delimited JSON-RPC 2.0:
+ * - answers the initialize handshake and requires it before anything else,
+ * - tools/list → two tools: echo (with a description) and boom.
+ */
+const FAKE_MCP_SERVER = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+let initialized = false;
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "fake-mcp", version: "0.0.1" },
+    } });
+    return;
+  }
+  if (msg.method === "notifications/initialized") { initialized = true; return; }
+  if (msg.id === undefined) return;
+  if (!initialized) {
+    send({ jsonrpc: "2.0", id: msg.id, error: { code: -32002, message: "not initialized" } });
+    return;
+  }
+  if (msg.method === "tools/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
+      { name: "echo", description: "Echoes arguments back." },
+      { name: "boom", description: "Always fails." },
+    ] } });
+    return;
+  }
+  send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found: " + msg.method } });
+});
+`;
+
+export function writeFixtureServer(): { dir: string; serverPath: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "seekforge-server-mcp-"));
+  const serverPath = join(dir, "fake-mcp-server.cjs");
+  writeFileSync(serverPath, FAKE_MCP_SERVER);
+  chmodSync(serverPath, 0o755);
+  return { dir, serverPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
