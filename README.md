@@ -92,11 +92,17 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
   context caching (cache-hit input is ~10x cheaper; the CLI shows your hit rate).
 - **Skills** are procedure briefs (never permissions) selected per task by
   rule matching; ship your own in `.seekforge/skills/<id>/`.
-- **Subagents** (`AGENT.md` in `.seekforge/agents/<id>/`, or imported from
-  Claude/Meta_Kim-style definitions) let the main agent delegate bounded
-  sub-tasks via `dispatch_agent`. Each runs with its own prompt, a tool
-  whitelist, and a turn budget; governance/review agents are read-only.
-  A read-only (`ask`/`--plan`) session cannot dispatch an edit agent.
+- **Subagents** (builtin `explorer`/`reviewer`, plus `AGENT.md` in
+  `.seekforge/agents/<id>/` or imported Claude/Meta_Kim-style definitions)
+  let the main agent delegate bounded sub-tasks via `dispatch_agent` —
+  in parallel within a turn, in the background (`agent_result` to poll),
+  and resumable afterwards (`agent_send`). Each runs with its own prompt,
+  tool whitelist, optional model, and turn budget; governance/review agents
+  are read-only. A read-only (`ask`/`--plan`) session cannot dispatch an
+  edit agent.
+- **Permission rules**: `permissionRules` in config add allow/deny entries
+  per tool with command/path prefixes; deny always wins. Rules files merge
+  from `~/.seekforge/AGENTS.md` → `AGENTS.md` → `AGENTS.local.md`.
 - **Memory**: after each edit session one extra model call distills durable
   facts as *candidates*; nothing enters long-term memory (`.seekforge/memory/project.md`)
   until you `seekforge memory approve` it. Relevant memory is injected into

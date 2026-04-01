@@ -43,18 +43,32 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     }
   }
 
+  const provider = createDeepSeekProvider({
+    apiKey: config.apiKey ?? "",
+    baseUrl: config.baseUrl,
+    model: opts.model ?? config.model,
+  });
+
   const agent = createAgentCore({
-    provider: createDeepSeekProvider({
-      apiKey: config.apiKey ?? "",
-      baseUrl: config.baseUrl,
-      model: opts.model ?? config.model,
-    }),
+    provider,
+    // Per-agent model override (AgentDefinition.model): same key/endpoint,
+    // different model. deepseek-reasoner cannot drive the tool-call loop.
+    providerForModel: (model) => {
+      if (model === "deepseek-reasoner") {
+        console.error(
+          'warning: subagent model "deepseek-reasoner" does not support tool calls; using the default model',
+        );
+        return provider;
+      }
+      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model });
+    },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
+    permissionRules: config.permissionRules,
     subagents: opts.subagents,
   });
 

@@ -37,12 +37,31 @@ export type PermissionRequest = {
   path?: string;
 };
 
+/**
+ * Fine-grained permission rule. Evaluation: first matching rule of each
+ * action category wins; deny rules are scanned before allow rules, so a
+ * matching deny always blocks (even readonly tools). Allow rules never
+ * rescue "dangerous" calls and never override ask-mode blocking.
+ */
+export type PermissionRule = {
+  action: "allow" | "deny";
+  /** Tool name, or "*" for any tool. */
+  tool: string;
+  /**
+   * Prefix matched against the classified command (run_command/task_kill)
+   * or path (fs tools); absent = matches any call of that tool.
+   */
+  match?: string;
+};
+
 export type PermissionPolicy = {
   approvalMode: ApprovalMode;
   /** "ask" forbids writes and command execution entirely. */
   mode: "ask" | "edit";
   /** Extra command prefixes the user allowed for auto-run (L2). */
   commandAllowlist: string[];
+  /** Fine-grained allow/deny rules, project rules first (first match wins). */
+  rules?: PermissionRule[];
 };
 
 // ---------------------------------------------------------------------------

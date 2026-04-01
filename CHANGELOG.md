@@ -2,9 +2,22 @@
 
 ## 0.4.0 (unreleased)
 
-Phase 8 batch 1 — harness ergonomics.
+Phase 8 batches 1–2 — harness ergonomics.
 
-### Added
+### Added (batch 2)
+- Subagent execution upgrade: multiple `dispatch_agent` calls in one turn
+  run in parallel; `background: true` + `agent_result` polling;
+  `agent_send` continues a completed subagent with its context; builtin
+  read-only `explorer`/`reviewer` agents; per-agent `model:` in AGENT.md.
+- Fine-grained permission rules (`permissionRules` config): allow/deny per
+  tool with command/path prefix match — deny blocks everything (even with
+  `-y`), allow skips prompts but never rescues dangerous commands or
+  bypasses read-only mode.
+- Rules-file hierarchy: `~/.seekforge/AGENTS.md` (all projects) +
+  `AGENTS.md` + `AGENTS.local.md` (personal, gitignore it) merged into the
+  system prompt with origin headers.
+
+### Added (batch 1)
 - Background tasks: `run_command` accepts `background: true` (dev servers,
   watchers) plus `task_output` / `task_kill` tools; ring-buffered output,
   same permission flow as foreground, every task killed at session end.
