@@ -3,9 +3,14 @@ import type { ChatMessage } from "@seekforge/shared";
 import { isMock } from "../mock";
 import { mockRequest } from "../mock/api";
 import type {
+  AgentInfo,
   ConfigKey,
+  EvolutionProposal,
+  McpServer,
+  McpTool,
   MemoryCandidate,
   MemoryResponse,
+  RewindResult,
   ServerConfig,
   SessionMeta,
   Skill,
@@ -30,7 +35,16 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
-  if (isMock()) return (await mockRequest(method, path, body)) as T;
+  if (isMock()) {
+    try {
+      return (await mockRequest(method, path, body)) as T;
+    } catch (e) {
+      // mock errors carry {code, status} props; normalize to ApiError so
+      // views can branch on status (e.g. rewind 404) like with the server.
+      const err = e as { code?: string; status?: number; message?: string };
+      throw new ApiError(err.code ?? "mock_error", err.message ?? String(e), err.status ?? 500);
+    }
+  }
 
   const headers: Record<string, string> = { Authorization: `Bearer ${tokenProvider()}` };
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -68,4 +82,18 @@ export const api = {
   config: () => request<ServerConfig>("GET", "/api/config"),
   setConfig: (key: ConfigKey, value: string, global?: boolean) =>
     request<ServerConfig>("PUT", "/api/config", { key, value, ...(global ? { global: true } : {}) }),
+  agents: () => request<AgentInfo[]>("GET", "/api/agents"),
+  agent: (id: string) => request<AgentInfo>("GET", `/api/agents/${encodeURIComponent(id)}`),
+  evolution: () => request<EvolutionProposal[]>("GET", "/api/evolution"),
+  evolutionAction: (id: string, action: "accept" | "reject") =>
+    request<EvolutionProposal>("POST", `/api/evolution/${encodeURIComponent(id)}/${action}`),
+  evolutionApply: (id: string) =>
+    request<{ proposal: EvolutionProposal; changedPath: string }>(
+      "POST",
+      `/api/evolution/${encodeURIComponent(id)}/apply`,
+    ),
+  mcp: () => request<McpServer[]>("GET", "/api/mcp"),
+  mcpTools: (name: string) => request<McpTool[]>("POST", `/api/mcp/${encodeURIComponent(name)}/tools`),
+  rewind: (sessionId: string, dryRun?: boolean) =>
+    request<RewindResult>("POST", "/api/rewind", { sessionId, ...(dryRun ? { dryRun: true } : {}) }),
 };

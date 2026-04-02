@@ -3,8 +3,8 @@ import type { PermissionRequest } from "@seekforge/shared";
 import type { StreamEvent } from "./events";
 
 export type ClientFrame =
-  | { type: "start"; task: string; mode: "edit" | "ask"; approvalMode: "auto" | "confirm" }
-  | { type: "send"; sessionId: string; task: string }
+  | { type: "start"; task: string; mode: "edit" | "ask"; approvalMode: "auto" | "confirm"; plan?: boolean }
+  | { type: "send"; sessionId: string; task: string; mode?: "edit" }
   | { type: "permission.response"; requestId: string; approved: boolean }
   | { type: "cancel" };
 
