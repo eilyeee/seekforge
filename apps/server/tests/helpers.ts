@@ -35,6 +35,18 @@ export const unusedAgentFactory: CreateAgentFn = () => {
   throw new Error("createAgent must not be called in this test");
 };
 
+/**
+ * Fake factory that records every runTask input into `inputs` and finishes
+ * immediately (for asserting pass-through of start/send frame fields).
+ */
+export function recordingAgentFactory(inputs: RunAgentTaskInput[]): CreateAgentFn {
+  return fakeAgentFactory(async function* (_opts, input) {
+    inputs.push(input);
+    yield { type: "session.created", sessionId: input.resumeSessionId ?? "rec-1" };
+    yield { type: "session.completed", report: emptyReport() };
+  });
+}
+
 export function emptyReport(summary = "done") {
   return {
     summary,
