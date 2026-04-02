@@ -32,6 +32,8 @@ export type ConnectionDeps = {
 type RunInput = {
   task: string;
   mode: "ask" | "edit";
+  /** Plan flavor of ask mode (passed through to the core, not enforced here). */
+  plan?: boolean;
   approvalMode: ApprovalMode;
   resumeSessionId?: string;
 };
@@ -87,6 +89,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         projectPath: deps.workspace,
         task: input.task,
         mode: input.mode,
+        plan: input.plan,
         approvalMode: input.approvalMode,
         resumeSessionId: input.resumeSessionId,
         signal: controller.signal,
@@ -123,7 +126,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     switch (frame["type"]) {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { task, mode, approvalMode } = frame;
+        const { task, mode, approvalMode, plan } = frame;
         if (typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "start.task must be a non-empty string");
         }
@@ -133,23 +136,31 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (approvalMode !== "auto" && approvalMode !== "confirm") {
           return fail("bad_frame", 'start.approvalMode must be "auto" or "confirm"');
         }
-        void run({ task, mode, approvalMode });
+        if (plan !== undefined && typeof plan !== "boolean") {
+          return fail("bad_frame", "start.plan must be a boolean when present");
+        }
+        // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
+        void run({ task, mode, approvalMode, plan });
         return;
       }
 
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { sessionId, task } = frame;
+        const { sessionId, task, mode } = frame;
         if (typeof sessionId !== "string" || typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "send needs sessionId and a non-empty task");
+        }
+        if (mode !== undefined && mode !== "edit" && mode !== "ask") {
+          return fail("bad_frame", 'send.mode must be "edit" or "ask" when present');
         }
         const meta =
           /[/\\]/.test(sessionId) || sessionId.includes("..")
             ? undefined
             : readSessionMeta(deps.workspace, sessionId);
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
-        // A resumed session keeps its original ask/edit mode; approvals stay interactive.
-        void run({ task, mode: meta.mode, approvalMode: "confirm", resumeSessionId: sessionId });
+        // A resumed session keeps its original ask/edit mode unless the frame
+        // overrides it (plan -> execute); approvals stay interactive.
+        void run({ task, mode: mode ?? meta.mode, approvalMode: "confirm", resumeSessionId: sessionId });
         return;
       }
 
