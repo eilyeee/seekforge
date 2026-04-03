@@ -12,6 +12,14 @@ const FINAL_TEXT =
   "- `pnpm typecheck` passes\n\n" +
   "```bash\nseekforge run \"fix the bug\" --json | jq .type\n```";
 
+const PLAN_TEXT =
+  "Here is the plan:\n\n" +
+  "## Plan\n\n" +
+  "1. Inspect `apps/cli/src/index.ts` to find the commander setup\n" +
+  "2. Add the `--json` flag and a JSON-lines renderer\n" +
+  "3. Run `pnpm typecheck` to verify\n\n" +
+  "No changes were made — press **Execute plan** to carry it out.";
+
 export function createMockWs(handlers: WsClientHandlers): WsClient {
   let sessionId = "";
   let sessionCounter = 0;
@@ -30,6 +38,54 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
     new Promise<boolean>((resolve) => {
       permissionWaiter = resolve;
     });
+
+  /** Plan-mode run: read-only, streams the plan text, no file changes. */
+  async function runPlan(): Promise<void> {
+    running = true;
+    cancelled = false;
+    try {
+      sessionId = `s-mock-${++sessionCounter}`;
+      ev({ type: "session.created", sessionId });
+      await sleep(300);
+      if (cancelled) return;
+
+      ev({ type: "tool.started", toolName: "read_file", args: { path: "apps/cli/src/index.ts" } });
+      await sleep(400);
+      if (cancelled) return;
+      ev({
+        type: "tool.completed",
+        toolName: "read_file",
+        result: { ok: true, data: { content: "#!/usr/bin/env node\n// …" } },
+      });
+
+      for (const chunk of PLAN_TEXT.match(/[\s\S]{1,18}/g) ?? []) {
+        if (cancelled) return;
+        ev({ type: "model.delta", chunk });
+        await sleep(30);
+      }
+      ev({ type: "model.message", content: PLAN_TEXT });
+
+      const usage = { promptTokens: 3120, completionTokens: 410, cacheHitTokens: 2400, costUsd: 0.0018 };
+      ev({ type: "usage.updated", usage });
+      ev({
+        type: "session.completed",
+        report: {
+          summary: PLAN_TEXT,
+          changedFiles: [],
+          commandsRun: [],
+          verification: "plan only — no changes made",
+          usage,
+        },
+      });
+      emit({ type: "idle" });
+    } finally {
+      if (cancelled) {
+        ev({ type: "session.failed", error: { code: "cancelled", message: "session cancelled by user" } });
+        emit({ type: "idle" });
+      }
+      running = false;
+    }
+  }
 
   async function run(task: string, resumed: boolean): Promise<void> {
     running = true;
@@ -174,11 +230,14 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       switch (frame.type) {
         case "start":
           if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
-          void run(frame.task, false);
+          // plan: true scripts a plan-style completion (read-only, no edits).
+          if (frame.plan) void runPlan();
+          else void run(frame.task, false);
           break;
         case "send":
           if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
           sessionId = frame.sessionId;
+          // mode: "edit" overrides a plan session — the full edit script runs.
           void run(frame.task, true);
           break;
         case "permission.response": {
