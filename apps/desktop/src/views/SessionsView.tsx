@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { ChatMessage, SessionStatus } from "@seekforge/shared";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import { messagesToItems } from "../lib/messages";
 import { formatUsd } from "../lib/usage";
 import { useStore } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
-import type { SessionMeta } from "../types";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import type { RewindResult, SessionMeta } from "../types";
 
 const STATUS_CHIP: Record<SessionStatus, string> = {
   idle: "bg-zinc-800 text-zinc-300",
@@ -23,6 +24,10 @@ export function SessionsView() {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Dry-run result awaiting confirmation. */
+  const [rewindPreview, setRewindPreview] = useState<{ sessionId: string; result: RewindResult } | null>(null);
+  /** Per-session inline note ("no checkpoints" / result summary). */
+  const [rewindNotes, setRewindNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api
@@ -37,6 +42,32 @@ export function SessionsView() {
       .session(id)
       .then(setDetail)
       .catch((e: unknown) => setError(String(e)));
+  };
+
+  const noteFor = (id: string, e: unknown): string =>
+    e instanceof ApiError && e.status === 404 ? "no checkpoints" : String(e);
+
+  const startRewind = (id: string) => {
+    setRewindNotes((n) => ({ ...n, [id]: "" }));
+    api
+      .rewind(id, true)
+      .then((result) => setRewindPreview({ sessionId: id, result }))
+      .catch((e: unknown) => setRewindNotes((n) => ({ ...n, [id]: noteFor(id, e) })));
+  };
+
+  const confirmRewind = () => {
+    if (!rewindPreview) return;
+    const { sessionId } = rewindPreview;
+    setRewindPreview(null);
+    api
+      .rewind(sessionId)
+      .then((r) =>
+        setRewindNotes((n) => ({
+          ...n,
+          [sessionId]: `rewound — restored ${r.restored.length}, deleted ${r.deleted.length}, skipped ${r.skipped.length}`,
+        })),
+      )
+      .catch((e: unknown) => setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(sessionId, e) })));
   };
 
   if (detail) {
@@ -84,27 +115,84 @@ export function SessionsView() {
           <ul className="space-y-2">
             {sessions.map((s) => (
               <li key={s.id}>
-                <button
-                  type="button"
+                <div
                   onClick={() => openSession(s.id)}
-                  className="w-full rounded border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left hover:border-zinc-700 hover:bg-zinc-900"
+                  className="w-full cursor-pointer rounded border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left hover:border-zinc-700 hover:bg-zinc-900"
                 >
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-zinc-500">{s.id}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${STATUS_CHIP[s.status]}`}>
                       {s.status}
                     </span>
-                    {s.usage && (
-                      <span className="ml-auto font-mono text-xs text-zinc-500">{formatUsd(s.usage.costUsd)}</span>
+                    {rewindNotes[s.id] && (
+                      <span className="font-mono text-[11px] text-amber-400">{rewindNotes[s.id]}</span>
                     )}
+                    <span className="ml-auto flex items-center gap-2">
+                      {s.usage && <span className="font-mono text-xs text-zinc-500">{formatUsd(s.usage.costUsd)}</span>}
+                      {s.status !== "running" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startRewind(s.id);
+                          }}
+                          title="Undo this session's file changes (checkpoint restore)"
+                          className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+                        >
+                          Rewind
+                        </button>
+                      )}
+                    </span>
                   </div>
                   <div className="mt-1 truncate text-sm text-zinc-300">{s.task}</div>
-                </button>
+                </div>
               </li>
             ))}
           </ul>
         )}
       </div>
+
+      {rewindPreview && (
+        <ConfirmDialog
+          title={`Rewind ${rewindPreview.sessionId}?`}
+          confirmLabel="Rewind"
+          danger
+          onConfirm={confirmRewind}
+          onCancel={() => setRewindPreview(null)}
+        >
+          <div className="space-y-2 text-xs">
+            {rewindPreview.result.restored.length === 0 && rewindPreview.result.deleted.length === 0 ? (
+              <p>Nothing to restore — the session made no tracked file changes.</p>
+            ) : (
+              <>
+                {rewindPreview.result.restored.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">would restore</div>
+                    <ul className="space-y-0.5 font-mono text-sky-300">
+                      {rewindPreview.result.restored.map((p) => (
+                        <li key={p}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {rewindPreview.result.deleted.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">would delete</div>
+                    <ul className="space-y-0.5 font-mono text-red-300">
+                      {rewindPreview.result.deleted.map((p) => (
+                        <li key={p}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+            {rewindPreview.result.skipped.length > 0 && (
+              <p className="text-zinc-500">{rewindPreview.result.skipped.length} path(s) would be skipped.</p>
+            )}
+          </div>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import type { ConfigKey, ServerConfig } from "../types";
+import type { ConfigKey, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -31,6 +31,95 @@ function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void 
     >
       {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Failed ✗" : "Save"}
     </button>
+  );
+}
+
+/** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools). */
+function McpSection() {
+  const [servers, setServers] = useState<McpServer[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Per server: tool list, an error string, or "loading". */
+  const [tools, setTools] = useState<Record<string, McpTool[] | { error: string } | "loading">>({});
+
+  useEffect(() => {
+    api
+      .mcp()
+      .then(setServers)
+      .catch((e: unknown) => setLoadError(String(e)));
+  }, []);
+
+  const listTools = (name: string) => {
+    setTools((t) => ({ ...t, [name]: "loading" }));
+    api
+      .mcpTools(name)
+      .then((list) => setTools((t) => ({ ...t, [name]: list })))
+      .catch((e: unknown) => setTools((t) => ({ ...t, [name]: { error: String(e) } })));
+  };
+
+  return (
+    <div>
+      <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">mcp servers</h2>
+      {loadError && (
+        <div className="mb-3 rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">{loadError}</div>
+      )}
+      {servers === null ? (
+        <p className="text-sm text-zinc-600">Loading…</p>
+      ) : servers.length === 0 ? (
+        <p className="text-sm text-zinc-600">No MCP servers configured.</p>
+      ) : (
+        <div className="space-y-3">
+          {servers.map((srv) => {
+            const state = tools[srv.name];
+            return (
+              <div key={srv.name} className="rounded border border-zinc-800 bg-zinc-900/60 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm text-zinc-100">{srv.name}</span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
+                      srv.trusted ? "bg-emerald-900 text-emerald-200" : "bg-zinc-800 text-zinc-400"
+                    }`}
+                  >
+                    {srv.trusted ? "trusted" : "untrusted"}
+                  </span>
+                  {srv.envKeys !== undefined && (
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                      env: {srv.envKeys.length}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={state === "loading"}
+                    onClick={() => listTools(srv.name)}
+                    className="ml-auto rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {state === "loading" ? "Listing…" : "List tools"}
+                  </button>
+                </div>
+                <div className="mt-1.5 font-mono text-xs text-zinc-500">
+                  {srv.command} {srv.args.join(" ")}
+                </div>
+                {state !== undefined && state !== "loading" && (
+                  <div className="mt-2 border-t border-zinc-800 pt-2">
+                    {Array.isArray(state) ? (
+                      <ul className="space-y-1">
+                        {state.map((tool) => (
+                          <li key={tool.name} className="text-xs">
+                            <span className="font-mono text-emerald-300">{tool.name}</span>
+                            <span className="ml-2 text-zinc-400">{tool.description}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="font-mono text-xs text-red-300">{state.error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -171,6 +260,8 @@ export function SettingsView() {
               Shown masked. Type a new key and press Save to replace it.
             </p>
           </div>
+
+          <McpSection />
         </div>
       </div>
     </div>
