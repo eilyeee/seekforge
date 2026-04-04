@@ -59,3 +59,63 @@ export type ServerConfig = {
 };
 
 export type ConfigKey = "apiKey" | "model" | "baseUrl" | "runtimeBin" | "commandAllowlist";
+
+export type AgentScope = "global" | "project" | "builtin";
+
+/** Mirror of @seekforge/core AgentDefinition (GET /api/agents[/:id]). */
+export type AgentInfo = {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  /** Tool-name whitelist; undefined = all tools. */
+  tools?: string[];
+  /** "ask" = read-only governance/review agents; "edit" = executors. */
+  mode: "ask" | "edit";
+  own?: string;
+  doNotTouch?: string;
+  boundary?: string;
+  maxTurns?: number;
+  model?: string;
+  scope: AgentScope;
+  /** AGENT.md markdown body (only present on GET /api/agents/:id). */
+  body?: string;
+};
+
+export type EvolutionProposalType = "project_memory" | "agent_rule" | "skill";
+export type EvolutionProposalRisk = "low" | "medium" | "high";
+export type EvolutionProposalStatus = "pending" | "accepted" | "rejected" | "applied";
+
+/** Mirror of @seekforge/core EvolutionProposal (GET /api/evolution). */
+export type EvolutionProposal = {
+  id: string;
+  sessionId: string;
+  type: EvolutionProposalType;
+  title: string;
+  problem: string;
+  evidence: { files?: string[]; commands?: string[]; errors?: string[] };
+  proposal: { content: string; skillId?: string };
+  risk: EvolutionProposalRisk;
+  status: EvolutionProposalStatus;
+  createdAt: string;
+  reviewedAt?: string;
+};
+
+/** GET /api/mcp entry (configured server; nothing is spawned for the list). */
+export type McpServer = {
+  name: string;
+  command: string;
+  args: string[];
+  trusted: boolean;
+  /** Names of configured env vars (values never leave the server). */
+  envKeys?: string[];
+};
+
+export type McpTool = { name: string; description: string };
+
+/** POST /api/rewind result (mirror of @seekforge/core RewindResult). */
+export type RewindResult = {
+  restored: string[];
+  deleted: string[];
+  skipped: Array<{ path: string; reason: string }>;
+};
