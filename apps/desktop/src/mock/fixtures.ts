@@ -1,6 +1,16 @@
 /** Canned REST fixtures for mock mode. */
 import type { ChatMessage } from "@seekforge/shared";
-import type { MemoryCandidate, ServerConfig, SessionMeta, Skill } from "../types";
+import type {
+  AgentInfo,
+  EvolutionProposal,
+  McpServer,
+  McpTool,
+  MemoryCandidate,
+  RewindResult,
+  ServerConfig,
+  SessionMeta,
+  Skill,
+} from "../types";
 
 export const mockSessions: SessionMeta[] = [
   {
@@ -230,6 +240,113 @@ export const mockCandidates: MemoryCandidate[] = [
     status: "approved",
   },
 ];
+
+export const mockAgents: AgentInfo[] = [
+  {
+    id: "explorer",
+    scope: "builtin",
+    name: "Explorer",
+    description: "Read-only codebase scout: finds files, symbols and call sites, reports back with paths.",
+    triggers: ["explore", "find", "where"],
+    tools: ["read_file", "list_files", "grep"],
+    mode: "ask",
+    maxTurns: 10,
+    body: "# Explorer\n\nA read-only scout. Search broadly, then narrow down.\n\n## Rules\n\n- Never modify files\n- Always report absolute paths\n",
+  },
+  {
+    id: "test-writer",
+    scope: "project",
+    name: "Test writer",
+    description: "Writes vitest unit tests for pure logic; owns packages/core/tests.",
+    triggers: ["test", "coverage"],
+    mode: "edit",
+    own: "packages/core/tests",
+    doNotTouch: "production source files",
+    boundary: "Only adds or edits test files.",
+    maxTurns: 15,
+    model: "deepseek-chat",
+    body: "# Test writer\n\nWrite fast, deterministic vitest tests.\n\n1. Co-locate as `<module>.test.ts`\n2. Cover the happy path and one edge case\n3. Keep `pnpm test` green\n",
+  },
+  {
+    id: "reviewer",
+    scope: "global",
+    name: "Reviewer",
+    description: "Reviews diffs for correctness bugs and style drift; read-only governance agent.",
+    triggers: ["review"],
+    tools: ["read_file", "grep", "run_command"],
+    mode: "ask",
+    body: "# Reviewer\n\nFlag correctness bugs first, style second. Cite file and line.\n",
+  },
+];
+
+export const mockEvolutionProposals: EvolutionProposal[] = [
+  {
+    id: "ep-s-20260610-a1b2-1",
+    sessionId: "s-20260610-a1b2",
+    type: "project_memory",
+    title: "Record where the CLI flags are defined",
+    problem: "The agent grepped 4 times before finding the commander setup in apps/cli/src/index.ts.",
+    evidence: { files: ["apps/cli/src/index.ts"], commands: ["grep -r option apps"] },
+    proposal: { content: "- CLI flags are defined with commander in `apps/cli/src/index.ts` (single entrypoint)" },
+    risk: "low",
+    status: "pending",
+    createdAt: "2026-06-10T09:16:00.000Z",
+  },
+  {
+    id: "ep-s-20260609-c3d4-1",
+    sessionId: "s-20260609-c3d4",
+    type: "skill",
+    title: "Skill: REPL command checklist",
+    problem: "Adding a REPL command failed twice because the help table and dispatcher live in different files.",
+    evidence: { files: ["apps/cli/src/repl.ts"], errors: ["unknown command: /help"] },
+    proposal: {
+      content: "# REPL command checklist\n\n1. Add the handler in repl.ts dispatch\n2. Register it in the help table\n3. Add a smoke test",
+      skillId: "repl-command-checklist",
+    },
+    risk: "medium",
+    status: "pending",
+    createdAt: "2026-06-09T15:32:00.000Z",
+  },
+  {
+    id: "ep-s-20260608-e5f6-1",
+    sessionId: "s-20260608-e5f6",
+    type: "agent_rule",
+    title: "Always run typecheck before reporting done",
+    problem: "A session reported success while tsc was failing.",
+    evidence: { commands: ["pnpm typecheck"] },
+    proposal: { content: "- Run `pnpm typecheck` before declaring any task complete" },
+    risk: "low",
+    status: "applied",
+    createdAt: "2026-06-08T11:05:00.000Z",
+    reviewedAt: "2026-06-08T12:00:00.000Z",
+  },
+];
+
+export const mockMcpServers: McpServer[] = [
+  {
+    name: "context7",
+    command: "npx",
+    args: ["-y", "@upstash/context7-mcp"],
+    trusted: false,
+    envKeys: ["CONTEXT7_API_KEY"],
+  },
+];
+
+export const mockMcpTools: Record<string, McpTool[]> = {
+  context7: [
+    { name: "resolve-library-id", description: "Resolve a package name to a Context7 library id." },
+    { name: "query-docs", description: "Fetch up-to-date documentation for a library id." },
+  ],
+};
+
+/** Only the first mock session has recorded checkpoints. */
+export const mockRewindResults: Record<string, RewindResult> = {
+  "s-20260610-a1b2": {
+    restored: ["apps/cli/src/index.ts"],
+    deleted: ["apps/cli/src/render-json.ts"],
+    skipped: [],
+  },
+};
 
 export const mockConfig: ServerConfig = {
   model: "deepseek-chat",

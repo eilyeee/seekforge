@@ -1,18 +1,21 @@
-import { useStore, type View } from "../store";
+import { activeTab, useStore, type View } from "../store";
 
 const NAV: { view: View; label: string; glyph: string }[] = [
   { view: "chat", label: "Chat", glyph: ">_" },
   { view: "sessions", label: "Sessions", glyph: "≡" },
   { view: "diff", label: "Diff", glyph: "±" },
   { view: "skills", label: "Skills", glyph: "✦" },
+  { view: "agents", label: "Agents", glyph: "⤷" },
   { view: "memory", label: "Memory", glyph: "◈" },
+  { view: "evolution", label: "Evolve", glyph: "↻" },
   { view: "settings", label: "Settings", glyph: "⚙" },
 ];
 
 export function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  const conn = useStore((s) => s.conn);
+  // Connection state of the active tab's socket (each tab owns one).
+  const conn = useStore((s) => activeTab(s.tabs).conn);
 
   return (
     <aside className="flex w-44 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/40">
