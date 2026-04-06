@@ -34,6 +34,14 @@ export {
 export { buildMemoryBrief } from "./brief.js";
 
 export {
+  compactProjectMemory,
+  computeCompaction,
+  type CompactMerge,
+  type CompactOptions,
+  type CompactResult,
+} from "./compact.js";
+
+export {
   extractMemoryFromSession,
   type ExtractMemoryInput,
   type ExtractMemoryResult,

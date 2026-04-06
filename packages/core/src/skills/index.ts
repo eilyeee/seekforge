@@ -17,6 +17,13 @@ export { buildSkillBrief, SKILL_BRIEF_MAX_CHARS } from "./brief.js";
 export { logSkillUsage } from "./usage.js";
 export { createSkillScaffold } from "./scaffold.js";
 export {
+  removeSkill,
+  setSkillEnabled,
+  type ManageSkillOptions,
+  type RemoveSkillResult,
+  type SetSkillEnabledResult,
+} from "./manage.js";
+export {
   importExternalSkill,
   parseFrontmatterSkill,
   type ImportSkillOptions,
