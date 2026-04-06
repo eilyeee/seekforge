@@ -20,6 +20,7 @@ Slash commands:
   /model <name>      switch model for subsequent messages
   /remember <fact>   save a fact to project memory (project.md)
   /usage             cumulative token usage and cost for this REPL
+  /context           latest context-window occupancy + cumulative usage
   /quit              exit (Ctrl+D also works)
 Anything else is sent to the agent. @path tokens inline file contents.
 `.trim();
@@ -61,6 +62,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   let model = opts.model ?? config.model ?? "deepseek-chat";
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
+  let lastContext: { usedTokens: number; budgetTokens: number } | undefined;
   const render = createRenderer({ streaming: true });
 
   console.log(`SeekForge — interactive session  ${DIM}(${model}, ${projectPath})${RESET}`);
@@ -94,6 +96,9 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
       })) {
         if (event.type === "session.created") sessionId = event.sessionId;
         if (event.type === "session.completed") totalUsage = addUsage(totalUsage, event.report.usage);
+        if (event.type === "context.usage") {
+          lastContext = { usedTokens: event.usedTokens, budgetTokens: event.budgetTokens };
+        }
         render(event);
       }
     } finally {
@@ -188,6 +193,18 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
         case "/usage":
           console.log(formatUsage(totalUsage));
           break;
+        case "/context": {
+          if (lastContext) {
+            const { usedTokens, budgetTokens } = lastContext;
+            const pct = budgetTokens > 0 ? Math.round((usedTokens / budgetTokens) * 100) : 0;
+            const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
+            console.log(`context: ${k(usedTokens)}/${k(budgetTokens)} (${pct}%)`);
+          } else {
+            console.log("context: no turn run yet this REPL");
+          }
+          console.log(formatUsage(totalUsage));
+          break;
+        }
         default:
           console.log(`unknown command ${cmd} — /help for the list`);
       }
