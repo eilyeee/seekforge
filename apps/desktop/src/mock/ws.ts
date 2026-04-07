@@ -205,6 +205,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
 
       const usage = { promptTokens: 9450, completionTokens: 1230, cacheHitTokens: 7300, costUsd: 0.0061 };
       ev({ type: "usage.updated", usage });
+      ev({ type: "context.usage", usedTokens: 52_700, budgetTokens: 96_000, percent: 55 });
       ev({
         type: "session.completed",
         report: {

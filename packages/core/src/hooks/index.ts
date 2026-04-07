@@ -1,116 +1,210 @@
 /**
- * User-defined shell hooks fired around tool calls (Claude Code-style).
+ * User-configured shell hooks fired around tool execution and at session end.
  *
- * A hook is a shell command spawned with the JSON payload on stdin and the
- * event/tool name in the environment. preToolUse hooks gate execution: a
- * non-zero exit BLOCKS the tool. postToolUse / sessionEnd hooks are advisory.
+ * Hooks are local commands the USER wrote in their own config — they run
+ * as-is via `/bin/sh -c`. SECURITY: model-controlled content (tool args, raw
+ * commands, paths) is delivered ONLY via the JSON stdin payload and fixed env
+ * vars; it is never interpolated into the hook command line.
  *
- * Tool-name matching uses a deliberately tiny glob: "*" (all), "prefix_*"
- * (prefix), or an exact name. No nested segments, no character classes.
+ * Semantics:
+ * - preToolUse: a hook exiting non-zero BLOCKS the tool; later preToolUse
+ *   hooks are skipped. The outcome carries the output tail as the reason.
+ * - postToolUse / sessionEnd: failures are logged (stderr) but never block.
+ * - Hooks run sequentially in config order.
  */
-
 import { spawn } from "node:child_process";
 
-export type HookDef = {
-  /** Tool-name glob: "*", "run_command", "git_*". Defaults to "*" when unset. */
+export type HookStage = "preToolUse" | "postToolUse" | "sessionEnd";
+
+export type HookEntry = {
+  /** Tool name this hook applies to, or "*" for any tool (default "*"). */
   match?: string;
-  /** Shell command, run via `/bin/sh -c`. */
+  /**
+   * Prefix tested against the classified raw command (run_command family) or
+   * path (fs tools), like PermissionRule.match. Absent = any call.
+   */
+  pattern?: string;
+  /** Shell command, run via `/bin/sh -c` with cwd = workspace. */
   command: string;
 };
 
-export type HooksConfig = {
-  preToolUse?: HookDef[];
-  postToolUse?: HookDef[];
-  sessionEnd?: HookDef[];
+export type HookConfig = {
+  preToolUse?: HookEntry[];
+  postToolUse?: HookEntry[];
+  sessionEnd?: HookEntry[];
 };
 
-export type HookPhase = "preToolUse" | "postToolUse" | "sessionEnd";
+/** Delivered to each hook as JSON on stdin, as `{ stage, ...payload }`. */
+export type HookPayload = {
+  sessionId: string;
+  /** Absolute workspace path (also the hook's cwd). */
+  workspace: string;
+  /** Tool stages only. */
+  toolName?: string;
+  /** Parsed tool arguments (tool stages only). */
+  args?: unknown;
+  /** Classified raw command, when the call runs a command. */
+  command?: string;
+  /** Classified raw path, when the call touches a file. */
+  path?: string;
+  /** postToolUse only: outcome summary — never the raw tool output. */
+  result?: { ok: boolean; errorCode: string | null };
+  /** sessionEnd only: final session status. */
+  status?: string;
+};
 
 export type HookOutcome = {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
+  /** The hook's configured shell command (user-authored). */
+  command: string;
+  /** True when the hook exited 0. */
+  ok: boolean;
+  exitCode: number | null;
+  /** Tail of interleaved stdout+stderr; the block reason on preToolUse. */
+  outputTail: string;
+  timedOut: boolean;
 };
 
-const HOOK_TIMEOUT_MS = 10_000;
-const OUTPUT_CAP = 10_000;
+export type RunHooksOptions = {
+  /** Per-hook timeout (default 10s). */
+  timeoutMs?: number;
+  /** Sink for non-blocking hook failures (default: console.error). */
+  onError?: (message: string) => void;
+};
 
-/** Tiny glob: "*" matches everything, "prefix_*" matches by prefix, else exact. */
-export function matchTool(pattern: string, toolName: string): boolean {
-  if (pattern === "*") return true;
-  if (pattern.endsWith("*")) return toolName.startsWith(pattern.slice(0, -1));
-  return pattern === toolName;
-}
+export const HOOK_TIMEOUT_MS = 10_000;
+/** Block reasons / log lines carry at most this much hook output. */
+export const HOOK_OUTPUT_TAIL_CHARS = 1000;
 
-function cap(s: string): string {
-  return s.length > OUTPUT_CAP ? s.slice(0, OUTPUT_CAP) : s;
+/** Keep a bounded buffer while capturing; only the tail is ever surfaced. */
+const CAPTURE_KEEP_CHARS = 8000;
+
+function hookApplies(entry: HookEntry, payload: HookPayload): boolean {
+  const tool = entry.match ?? "*";
+  // sessionEnd has no toolName; tool matching only applies to tool stages.
+  if (tool !== "*" && payload.toolName !== undefined && tool !== payload.toolName) {
+    return false;
+  }
+  if (entry.pattern !== undefined) {
+    const subject = (payload.command ?? payload.path ?? "").trim();
+    if (!subject.startsWith(entry.pattern.trim())) return false;
+  }
+  return true;
 }
 
 /**
- * Spawns `/bin/sh -c <command>` with the payload as JSON on stdin and the
- * SEEKFORGE_HOOK_EVENT / SEEKFORGE_TOOL_NAME env vars set. Captures stdout and
- * stderr (each capped at 10k). A 10s timeout kills the process and surfaces a
- * non-zero exit code. Never throws — spawn failures map to exitCode 1.
+ * Runs one hook command through `/bin/sh -c` in its own process group (so a
+ * timeout kills the whole tree), with the payload JSON on stdin. Never
+ * throws — spawn failures surface as a failed outcome.
  */
-export function runHook(
-  def: HookDef,
-  payload: { event: HookPhase; toolName?: string; [k: string]: unknown },
+function runOneHook(
+  entry: HookEntry,
+  stage: HookStage,
+  stdinJson: string,
+  toolName: string | undefined,
   cwd: string,
+  timeoutMs: number,
 ): Promise<HookOutcome> {
   return new Promise<HookOutcome>((resolve) => {
-    const child = spawn("/bin/sh", ["-c", def.command], {
-      cwd,
-      env: {
-        ...process.env,
-        SEEKFORGE_HOOK_EVENT: payload.event,
-        ...(payload.toolName ? { SEEKFORGE_TOOL_NAME: payload.toolName } : {}),
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
+    let output = "";
+    let timedOut = false;
     let settled = false;
-    const finish = (outcome: HookOutcome): void => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const append = (chunk: Buffer): void => {
+      output += chunk.toString("utf8");
+      if (output.length > CAPTURE_KEEP_CHARS) output = output.slice(-CAPTURE_KEEP_CHARS);
+    };
+    const finish = (exitCode: number | null): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      resolve(outcome);
+      if (timer !== undefined) clearTimeout(timer);
+      const tail = (timedOut ? `${output}\n[hook timed out after ${timeoutMs}ms]` : output)
+        .trim()
+        .slice(-HOOK_OUTPUT_TAIL_CHARS);
+      resolve({
+        command: entry.command,
+        ok: !timedOut && exitCode === 0,
+        exitCode,
+        outputTail: tail,
+        timedOut,
+      });
     };
 
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish({ exitCode: 124, stdout: cap(stdout), stderr: cap(`${stderr}\n[hook timed out after 10s]`) });
-    }, HOOK_TIMEOUT_MS);
-
-    child.stdout.on("data", (d: Buffer) => {
-      stdout += d.toString();
-    });
-    child.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString();
-    });
-    child.on("error", (err) => {
-      finish({ exitCode: 1, stdout: cap(stdout), stderr: cap(`${stderr}${String(err)}`) });
-    });
-    child.on("close", (code) => {
-      finish({ exitCode: code ?? 1, stdout: cap(stdout), stderr: cap(stderr) });
-    });
-
+    let child: ReturnType<typeof spawn>;
     try {
-      child.stdin.write(JSON.stringify(payload));
-      child.stdin.end();
-    } catch {
-      // stdin may already be closed if the child exited immediately; ignore.
+      child = spawn("/bin/sh", ["-c", entry.command], {
+        cwd,
+        detached: true, // own process group -> tree kill on timeout
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          SEEKFORGE_HOOK_STAGE: stage,
+          SEEKFORGE_TOOL: toolName ?? "",
+        },
+      });
+    } catch (err) {
+      output = String(err);
+      finish(null);
+      return;
     }
+
+    timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    }, timeoutMs);
+
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    child.on("error", (err) => {
+      append(Buffer.from(String(err)));
+      finish(null);
+    });
+    child.on("close", (code) => finish(code));
+
+    // The hook may exit without reading stdin; ignore EPIPE-style errors.
+    child.stdin?.on("error", () => {});
+    child.stdin?.write(stdinJson);
+    child.stdin?.end();
   });
 }
 
 /**
- * Synthetic meta tools have no real side effects, so hooks never fire for them:
- * update_plan and agent_result are pure read-only meta, task_output is a
- * progress channel. Everything else (real builtins, MCP tools, dispatch_agent,
- * agent_send) is hookable.
+ * Runs the hooks of `stage` that match the payload, sequentially in config
+ * order. preToolUse stops at the first failing hook (its outcome is the block
+ * reason — callers must treat any `ok: false` outcome as blocking). For
+ * postToolUse/sessionEnd every matching hook runs; failures go to
+ * `opts.onError` (default stderr) and never block. Never throws.
  */
-export function isHookableTool(name: string): boolean {
-  return name !== "update_plan" && name !== "agent_result" && name !== "task_output";
+export async function runHooks(
+  stage: HookStage,
+  hooks: HookEntry[] | undefined,
+  payload: HookPayload,
+  opts: RunHooksOptions = {},
+): Promise<HookOutcome[]> {
+  const outcomes: HookOutcome[] = [];
+  if (!hooks || hooks.length === 0) return outcomes;
+
+  const stdinJson = JSON.stringify({ stage, ...payload });
+  const timeoutMs = opts.timeoutMs ?? HOOK_TIMEOUT_MS;
+  const onError = opts.onError ?? ((msg: string) => console.error(msg));
+
+  for (const entry of hooks) {
+    if (!hookApplies(entry, payload)) continue;
+    const outcome = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
+    outcomes.push(outcome);
+    if (outcome.ok) continue;
+    if (stage === "preToolUse") break; // blocks the tool; later hooks are moot
+    onError(
+      `seekforge ${stage} hook failed (${entry.command}): ` +
+        `${outcome.timedOut ? "timed out" : `exit ${outcome.exitCode}`}` +
+        `${outcome.outputTail ? ` — ${outcome.outputTail}` : ""}`,
+    );
+  }
+  return outcomes;
 }

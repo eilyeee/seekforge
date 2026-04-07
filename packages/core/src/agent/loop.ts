@@ -33,7 +33,7 @@ import {
   type DispatchManager,
 } from "../subagents/index.js";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
-import { isHookableTool, matchTool, runHook, type HookDef, type HookPhase, type HooksConfig } from "../hooks/index.js";
+import { runHooks, type HookConfig } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
@@ -65,11 +65,11 @@ export type AgentCoreDeps = {
    */
   providerForModel?: (model: string) => ChatProvider;
   /**
-   * User-defined shell hooks fired around tool calls. Hooks only run for the
-   * top-level run (depth 0) — nested subagent runs never fire them, to avoid
-   * duplicate firing for the same logical tool activity.
+   * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
+   * via ToolContext and fire around every tool run (nested subagent runs
+   * included); sessionEnd fires once when the top-level session ends.
    */
-  hooks?: HooksConfig;
+  hooks?: HookConfig;
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
   _depth?: number;
   /** Internal: dispatch-manager override (test seam). */
@@ -213,49 +213,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
+        hooks: deps.hooks,
         background: createBackgroundTasks(),
         checkpoint: (path, before) => {
           if (checkpointed.has(path)) return;
           checkpointed.add(path);
           appendCheckpoint(input.projectPath, sessionId, { ts: new Date().toISOString(), path, before });
         },
-      };
-
-      // Hooks fire only for the top-level run; nested subagent runs (depth > 0)
-      // never fire them, to avoid duplicate firing for the same activity.
-      const hooksEnabled = depth === 0;
-      const hookDefsFor = (phase: HookPhase): HookDef[] => {
-        if (!hooksEnabled || !deps.hooks) return [];
-        return deps.hooks[phase] ?? [];
-      };
-
-      /**
-       * Runs the hooks of a phase that match `toolName` (sessionEnd ignores the
-       * match, firing all). preToolUse returns the first non-zero outcome (the
-       * caller blocks the tool); post/sessionEnd outputs are advisory and only
-       * non-zero exits are logged to the trace. Returns the blocking outcome
-       * for preToolUse, or undefined.
-       */
-      const fireHooks = async (
-        phase: HookPhase,
-        toolName: string | undefined,
-        payload: Record<string, unknown>,
-      ): Promise<{ stdout: string; stderr: string } | undefined> => {
-        const defs = hookDefsFor(phase);
-        if (defs.length === 0) return undefined;
-        for (const def of defs) {
-          if (phase !== "sessionEnd" && toolName !== undefined && !matchTool(def.match ?? "*", toolName)) {
-            continue;
-          }
-          const outcome = await runHook(def, { event: phase, ...(toolName ? { toolName } : {}), ...payload }, input.projectPath);
-          if (phase === "preToolUse" && outcome.exitCode !== 0) {
-            return { stdout: outcome.stdout, stderr: outcome.stderr };
-          }
-          if (phase !== "preToolUse" && outcome.exitCode !== 0) {
-            ctx.log?.({ tool: toolName, hook: phase, command: def.command, exitCode: outcome.exitCode, stderr: outcome.stderr });
-          }
-        }
-        return undefined;
       };
 
       const toolDefs =
@@ -601,19 +565,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             });
           }
 
-          // Window occupancy for this turn (cheap; once per turn). Distinct
-          // from usage.updated, which tracks cumulative $ token cost.
-          yield emit({
-            type: "context.usage",
-            usedTokens: estimateMessagesTokens(messages),
-            budgetTokens,
-          });
-
           const res = deps.onModelDelta
             ? await deps.provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta)
             : await deps.provider.chat({ messages, tools: toolDefs });
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
+
+          // Window occupancy after each provider response (cheap estimate).
+          // Distinct from usage.updated, which tracks cumulative token cost.
+          const usedTokens = estimateMessagesTokens(messages);
+          yield emit({
+            type: "context.usage",
+            usedTokens,
+            budgetTokens,
+            percent: Math.round((usedTokens / Math.max(budgetTokens, 1)) * 100),
+          });
 
           if (res.content) yield emit({ type: "model.message", content: res.content });
 
@@ -671,21 +637,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               yield emit({ type: "tool.completed", toolName: tc.name, result: parseError });
               continue;
             }
-            // preToolUse hooks gate dispatch-family calls too (a non-zero hook
-            // blocks the dispatch before it starts).
-            const blockedDispatch = await fireHooks("preToolUse", tc.name, { args });
-            if (blockedDispatch) {
-              const blocked: ToolResult = {
-                ok: false,
-                error: {
-                  code: "blocked_by_hook",
-                  message: blockedDispatch.stderr || blockedDispatch.stdout || "blocked by preToolUse hook",
-                },
-              };
-              callResults[i] = blocked;
-              yield emit({ type: "tool.completed", toolName: tc.name, result: blocked });
-              continue;
-            }
             pendingDispatches++;
             const run = tc.name === DISPATCH_AGENT_TOOL ? runDispatch(args) : runAgentSend(args);
             void run
@@ -696,8 +647,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   error: { code: "subagent_failed", message: err instanceof Error ? err.message : String(err) },
                 }),
               )
-              .then(async (result) => {
-                if (result.ok) await fireHooks("postToolUse", tc.name, { args, result: result.data });
+              .then((result) => {
                 callResults[i] = result;
                 pendingDispatches--;
                 pushEvent({ type: "tool.completed", toolName: tc.name, result });
@@ -717,27 +667,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
               result = handleAgentResult(args);
             } else {
-              // preToolUse hooks gate execution: a matching hook exiting
-              // non-zero BLOCKS the tool (it never runs). Synthetic meta tools
-              // (update_plan/agent_result/task_output) are not hookable.
-              const blocked = isHookableTool(tc.name)
-                ? await fireHooks("preToolUse", tc.name, { args })
-                : undefined;
-              if (blocked) {
-                result = {
-                  ok: false,
-                  error: {
-                    code: "blocked_by_hook",
-                    message: blocked.stderr || blocked.stdout || "blocked by preToolUse hook",
-                  },
-                };
-              } else {
-                result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
-                // postToolUse hooks run after a successful execute; advisory only.
-                if (result.ok && isHookableTool(tc.name)) {
-                  await fireHooks("postToolUse", tc.name, { args, result: result.data });
-                }
-              }
+              // preToolUse/postToolUse hooks fire inside the dispatcher
+              // (after permission enforcement, around tool.run).
+              result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
             }
             yield emit({ type: "tool.completed", toolName: tc.name, result });
 
@@ -829,19 +761,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           error: { code, message: e.message ?? String(err) },
         });
       } finally {
-        // sessionEnd hooks fire once after the session reaches a terminal
-        // state. Advisory only; never affects the (already emitted) outcome.
-        if (sessionEndStatus !== undefined) {
-          await fireHooks("sessionEnd", undefined, {
-            sessionId,
-            status: sessionEndStatus,
-            changedFiles: [...changedFiles],
-            usage,
-          });
-        }
         queue.end();
         dispatchManager?.disposeAll();
         ctx.background?.disposeAll();
+        // sessionEnd hooks fire once per top-level session, after cleanup.
+        // Advisory only; never affects the (already emitted) outcome. Nested
+        // subagent sessions (depth > 0) do not fire it.
+        if (depth === 0) {
+          await runHooks("sessionEnd", deps.hooks?.sessionEnd, {
+            sessionId,
+            workspace: input.projectPath,
+            status: sessionEndStatus ?? "cancelled",
+          });
+        }
       }
     },
   };
