@@ -9,6 +9,7 @@ import type { ToolContext, ToolDispatcher } from "./index.js";
 import { ToolError } from "./errors.js";
 import { zodToJsonSchema } from "./json-schema.js";
 import { enforcePermission, type PermissionDecision } from "./permissions.js";
+import { runHooks, type HookPayload } from "../hooks/index.js";
 
 /** Result of classifying one concrete call before permission enforcement. */
 export type ClassifiedCall = {
@@ -88,15 +89,42 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
           if (!outcome.allowed) {
             result = fail(outcome.errorCode, outcome.errorMessage);
           } else {
-            try {
-              const out = await tool.run(parsed.data as never, ctx);
-              result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
-            } catch (err) {
-              if (err instanceof ToolError) {
-                result = fail(err.code, err.message, err.detail);
-              } else {
-                result = fail("internal_error", err instanceof Error ? err.message : String(err));
+            // Hooks fire only for calls that passed permission enforcement.
+            // Model-controlled content goes into the payload (stdin), never
+            // into the hook command line.
+            const hookPayload: HookPayload = {
+              sessionId: ctx.sessionId,
+              workspace: ctx.workspace,
+              toolName: call.name,
+              args: parsed.data,
+              ...(classified.command !== undefined ? { command: classified.command } : {}),
+              ...(classified.path !== undefined ? { path: classified.path } : {}),
+            };
+            const preOutcomes = await runHooks("preToolUse", ctx.hooks?.preToolUse, hookPayload);
+            const blockedBy = preOutcomes.find((o) => !o.ok);
+            if (blockedBy) {
+              result = fail(
+                "hook_blocked",
+                `Blocked by preToolUse hook${blockedBy.timedOut ? " (timed out)" : ""}: ` +
+                  (blockedBy.outputTail || `exit ${blockedBy.exitCode}`),
+              );
+            } else {
+              try {
+                const out = await tool.run(parsed.data as never, ctx);
+                result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
+              } catch (err) {
+                if (err instanceof ToolError) {
+                  result = fail(err.code, err.message, err.detail);
+                } else {
+                  result = fail("internal_error", err instanceof Error ? err.message : String(err));
+                }
               }
+              // postToolUse is advisory: failures log to stderr, never block.
+              // The payload carries ok/errorCode only, never raw tool output.
+              await runHooks("postToolUse", ctx.hooks?.postToolUse, {
+                ...hookPayload,
+                result: { ok: result.ok, errorCode: result.error?.code ?? null },
+              });
             }
           }
         }

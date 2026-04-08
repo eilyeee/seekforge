@@ -173,6 +173,7 @@ export type AgentEvent =
   | { type: "tool.completed"; toolName: string; result: ToolResult }
   | { type: "permission.required"; request: PermissionRequest }
   | { type: "context.compacted"; droppedTurns: number; summaryTokens: number }
+  | { type: "context.usage"; usedTokens: number; budgetTokens: number; percent: number }
   | { type: "usage.updated"; usage: TokenUsage }
   | { type: "file.changed"; path: string }
   | { type: "command.output"; stream: "stdout" | "stderr"; chunk: string }

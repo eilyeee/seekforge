@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { McpServerConfig } from "@seekforge/core";
+import type { HookConfig, McpServerConfig } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
 export type CliConfig = {
@@ -20,6 +20,12 @@ export type CliConfig = {
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * User-defined shell hooks fired around tool calls. preToolUse hooks can
+   * block a tool (non-zero exit); postToolUse/sessionEnd are advisory. Edit
+   * the file directly; not settable via `config set`.
+   */
+  hooks?: HookConfig;
 };
 
 function readJson(path: string): CliConfig {
@@ -39,11 +45,19 @@ export function loadConfig(projectPath: string): CliConfig {
   // permissionRules concatenates project-then-global: first match wins, so
   // project rules take precedence over global ones.
   const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
+  // hooks concatenate per stage, global-then-project: every hook runs
+  // (sequentially), global ones first.
+  const hooks: HookConfig = {};
+  for (const stage of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
+    const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
+    if (merged.length > 0) hooks[stage] = merged;
+  }
   return {
     ...global,
     ...project,
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
     ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };

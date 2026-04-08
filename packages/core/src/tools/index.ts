@@ -16,6 +16,7 @@ import { createDispatcher, type ToolSpec } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
+import type { HookConfig } from "../hooks/index.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -32,6 +33,11 @@ export type ToolContext = {
   runtime?: RuntimeClient;
   /** Per-session background task manager (run_command background:true). */
   background?: BackgroundTasks;
+  /**
+   * User-configured shell hooks. The dispatcher fires preToolUse (blocking)
+   * and postToolUse (advisory) around every tool run; see ../hooks/index.ts.
+   */
+  hooks?: HookConfig;
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
   /**
