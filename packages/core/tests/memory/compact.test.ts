@@ -58,6 +58,25 @@ describe("compactProjectMemory", () => {
     expect(md.match(/test suite/g)).toHaveLength(1);
   });
 
+  it("merges near-duplicate Chinese facts via per-character tokenization", () => {
+    const ws = makeWorkspace();
+    writeProjectMemory(
+      ws,
+      [
+        "# Project Memory",
+        "- [convention] 项目使用 pnpm 作为包管理器",
+        "- [convention] 项目使用 pnpm 包管理器",
+        "",
+      ].join("\n"),
+    );
+    // Without per-char CJK tokenization each clause is one token and these
+    // never overlap; with it the shared characters push Jaccard past 0.8.
+    const res = compactProjectMemory(ws);
+    expect(res.after).toBe(1);
+    expect(res.merged).toHaveLength(1);
+    expect(res.merged[0]?.kept).toContain("作为包管理器"); // the longer survives
+  });
+
   it("does NOT merge near-duplicates across different types", () => {
     const ws = makeWorkspace();
     writeProjectMemory(
