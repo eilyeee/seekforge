@@ -133,6 +133,15 @@ describe("reduceEvent", () => {
     expect(s.items.filter((i) => i.kind === "report")).toHaveLength(2);
   });
 
+  it("stores the latest context.usage on the state without adding a row", () => {
+    let s = play([{ type: "context.usage", usedTokens: 40_000, budgetTokens: 96_000, percent: 42 }]);
+    expect(s.items).toHaveLength(0);
+    expect(s.contextUsage).toEqual({ usedTokens: 40_000, budgetTokens: 96_000, percent: 42 });
+    // a later event replaces the previous one
+    s = play([{ type: "context.usage", usedTokens: 88_000, budgetTokens: 96_000, percent: 92 }], s);
+    expect(s.contextUsage).toEqual({ usedTokens: 88_000, budgetTokens: 96_000, percent: 92 });
+  });
+
   it("renders session.failed as a banner and stops running", () => {
     const s = play(
       [{ type: "session.failed", error: { code: "max_turns_exceeded", message: "boom" } }],

@@ -70,6 +70,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     commandAllowlist: config.commandAllowlist,
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
+    hooks: config.hooks,
   });
 
   return { agent, dispose: () => runtime?.dispose() };

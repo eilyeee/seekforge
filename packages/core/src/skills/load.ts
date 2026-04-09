@@ -58,14 +58,38 @@ function readSkillsRoot({ scope, path: root }: SkillsDir): Skill[] {
   return skills;
 }
 
+// A disable marker is a skill.json with enabled:false and no SKILL.md; it only
+// needs an id, so accept a minimal stub here even if the full schema would fail.
+const disableMarkerSchema = z.object({ id: z.string().min(1), enabled: z.literal(false) });
+
 function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
   let raw: unknown;
   let content: string;
   try {
     raw = JSON.parse(fs.readFileSync(path.join(dir, "skill.json"), "utf8"));
-    content = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
   } catch {
     return undefined;
+  }
+  try {
+    content = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
+  } catch {
+    // No SKILL.md: only valid as a pure disable marker (enabled:false stub),
+    // which overrides a lower-layer skill of the same id and is then filtered
+    // out by loadSkillsFromDirs. Anything else is malformed → skip.
+    const marker = disableMarkerSchema.safeParse(raw);
+    if (!marker.success) return undefined;
+    return {
+      id: marker.data.id,
+      scope,
+      name: marker.data.id,
+      description: "",
+      tags: [],
+      triggers: [],
+      priority: 50,
+      enabled: false,
+      risk: "medium",
+      content: "",
+    };
   }
   const parsed = skillJsonSchema.safeParse(raw);
   if (!parsed.success) return undefined;

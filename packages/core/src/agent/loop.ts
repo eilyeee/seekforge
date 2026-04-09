@@ -32,7 +32,8 @@ import {
   type DispatchHooks,
   type DispatchManager,
 } from "../subagents/index.js";
-import { compactMessages } from "./context.js";
+import { compactMessages, estimateMessagesTokens } from "./context.js";
+import { runHooks, type HookConfig } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
@@ -63,6 +64,12 @@ export type AgentCoreDeps = {
    * definitions without a model, dispatches use the default provider.
    */
   providerForModel?: (model: string) => ChatProvider;
+  /**
+   * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
+   * via ToolContext and fire around every tool run (nested subagent runs
+   * included); sessionEnd fires once when the top-level session ends.
+   */
+  hooks?: HookConfig;
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
   _depth?: number;
   /** Internal: dispatch-manager override (test seam). */
@@ -206,6 +213,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
+        hooks: deps.hooks,
         background: createBackgroundTasks(),
         checkpoint: (path, before) => {
           if (checkpointed.has(path)) return;
@@ -224,6 +232,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ]
           : deps.dispatcher.list();
       let usage = ZERO_USAGE;
+      let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
       let toolCallCount = 0;
       const changedFiles = new Set<string>();
       const commandsRun: string[] = [];
@@ -562,6 +571,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
 
+          // Window occupancy after each provider response (cheap estimate).
+          // Distinct from usage.updated, which tracks cumulative token cost.
+          const usedTokens = estimateMessagesTokens(messages);
+          yield emit({
+            type: "context.usage",
+            usedTokens,
+            budgetTokens,
+            percent: Math.round((usedTokens / Math.max(budgetTokens, 1)) * 100),
+          });
+
           if (res.content) yield emit({ type: "model.message", content: res.content });
 
           if (res.toolCalls.length === 0) {
@@ -648,6 +667,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
               result = handleAgentResult(args);
             } else {
+              // preToolUse/postToolUse hooks fire inside the dispatcher
+              // (after permission enforcement, around tool.run).
               result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
             }
             yield emit({ type: "tool.completed", toolName: tc.name, result });
@@ -722,10 +743,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
         }
 
+        sessionEndStatus = "completed";
         yield emit({ type: "session.completed", report });
       } catch (err) {
         const e = err as Partial<AgentLimitError> & Error;
         const code = e.code ?? "agent_error";
+        sessionEndStatus = code === "cancelled" ? "cancelled" : "failed";
         writeSessionMeta(input.projectPath, {
           ...meta,
           status: code === "cancelled" ? "cancelled" : "failed",
@@ -741,6 +764,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         queue.end();
         dispatchManager?.disposeAll();
         ctx.background?.disposeAll();
+        // sessionEnd hooks fire once per top-level session, after cleanup.
+        // Advisory only; never affects the (already emitted) outcome. Nested
+        // subagent sessions (depth > 0) do not fire it.
+        if (depth === 0) {
+          await runHooks("sessionEnd", deps.hooks?.sessionEnd, {
+            sessionId,
+            workspace: input.projectPath,
+            status: sessionEndStatus ?? "cancelled",
+          });
+        }
       }
     },
   };

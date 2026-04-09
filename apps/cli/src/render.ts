@@ -25,9 +25,34 @@ export type RendererOptions = {
   streaming?: boolean;
 };
 
+/**
+ * Suffix for usage lines: dim "· ctx 42%". Only shown from 50% occupancy up
+ * (below that it is noise); `always` forces it (REPL /usage, /context).
+ */
+export function formatContextSuffix(
+  ctx: { percent: number } | undefined,
+  opts: { always?: boolean } = {},
+): string {
+  if (!ctx || (!opts.always && ctx.percent < 50)) return "";
+  return ` ${DIM}· ctx ${ctx.percent}%${RESET}`;
+}
+
 /** Creates a terminal renderer for agent events. */
 export function createRenderer(opts: RendererOptions = {}): (e: AgentEvent) => void {
-  return (e) => renderEvent(e, opts);
+  // context.usage prints no line of its own; the latest value decorates the
+  // final usage line (session.completed) once occupancy is worth mentioning.
+  let lastContext: { percent: number } | undefined;
+  return (e) => {
+    if (e.type === "context.usage") {
+      lastContext = { percent: e.percent };
+      return;
+    }
+    if (e.type === "session.completed") {
+      console.log(`\n${formatUsage(e.report.usage)}${formatContextSuffix(lastContext)}`);
+      return;
+    }
+    renderEvent(e, opts);
+  };
 }
 
 function renderEvent(e: AgentEvent, opts: RendererOptions): void {
@@ -73,6 +98,8 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       console.error(`${RED}failed: ${e.error.code} — ${e.error.message}${RESET}`);
       break;
     case "session.completed":
+      // Reached only when called outside createRenderer (which intercepts
+      // session.completed to append the context suffix).
       console.log(`\n${formatUsage(e.report.usage)}`);
       break;
     default:
