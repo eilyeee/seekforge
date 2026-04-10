@@ -9,21 +9,28 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
 import { createDefaultAgent, type CreateAgentFn } from "./agent.js";
 import { handleApi, sendApiError } from "./rest.js";
 import { resolveStaticRoot, serveStatic } from "./static.js";
+import { createWorkspaceRegistry } from "./workspaces.js";
 import { handleConnection } from "./ws.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions } from "./agent.js";
 export type { ServerConfig } from "./config.js";
+export type { Workspace } from "./workspaces.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 export type StartServerOptions = {
-  /** Absolute or relative path of the single workspace this server drives. */
-  workspace: string;
+  /**
+   * Workspaces this server drives. Provide either `workspaces` (one or more,
+   * the first is the default) or the single `workspace` (back-compat). At least
+   * one must be given.
+   */
+  workspaces?: string[];
+  /** Single-workspace shorthand (back-compat). Equivalent to `workspaces: [workspace]`. */
+  workspace?: string;
   /** TCP port (127.0.0.1). 0 picks an ephemeral port. Default: 7373. */
   port?: number;
   /** Pre-set auth token (embedding/tests); random when omitted. */
@@ -41,7 +48,11 @@ export type RunningServer = {
 };
 
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
-  const workspace = resolve(opts.workspace);
+  const paths = opts.workspaces ?? (opts.workspace !== undefined ? [opts.workspace] : []);
+  if (paths.length === 0) {
+    throw new Error("startServer requires `workspaces` or `workspace`");
+  }
+  const registry = createWorkspaceRegistry(paths);
   const token = opts.token ?? randomBytes(24).toString("base64url");
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const staticRoot = resolveStaticRoot(opts.staticDir);
@@ -58,13 +69,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (!isAuthorized(req, token)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
-      void handleApi(req, res, url, { workspace, version });
+      void handleApi(req, res, url, { registry, version });
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       return sendApiError(res, 405, "method_not_allowed", `${req.method} not allowed for ${url.pathname}`);
     }
-    serveStatic(res, { root: staticRoot, pathname: url.pathname, port, workspace });
+    serveStatic(res, { root: staticRoot, pathname: url.pathname, port, workspace: registry.default.path });
   });
 
   const wss = new WebSocketServer({ noServer: true });
@@ -80,7 +91,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, { workspace, createAgent }));
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, { registry, createAgent }));
   });
 
   await new Promise<void>((resolveListen, rejectListen) => {

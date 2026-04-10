@@ -126,16 +126,23 @@ program
 
 program
   .command("serve")
+  .argument("[paths...]", "workspace paths to host (default: current directory)")
   .option("--port <n>", "port to listen on (0 = random)", "7373")
-  .description("serve the web UI and agent API for this workspace (127.0.0.1 only)")
-  .action(async (opts: { port: string }) => {
+  .option(
+    "--workspace <path>",
+    "workspace path to host (repeatable; combined with positional paths)",
+    (val: string, prev: string[]) => [...prev, val],
+    [] as string[],
+  )
+  .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
+  .action(async (paths: string[], opts: { port: string; workspace: string[] }) => {
     const port = Number.parseInt(opts.port, 10);
     if (Number.isNaN(port) || port < 0 || port > 65535) {
       console.error(`invalid --port: ${opts.port}`);
       process.exitCode = 1;
       return;
     }
-    await serveCommand({ port });
+    await serveCommand({ port, workspaces: [...paths, ...opts.workspace] });
   });
 
 const skill = program.command("skill").description("manage skills (procedure libraries)");
