@@ -6,17 +6,23 @@ import type { StartMode } from "./tabs";
 export const EXECUTE_PLAN_TASK =
   "Execute the plan you produced above, step by step. Make the changes and run the verification.";
 
-/**
- * "plan" maps to a read-only ask run with the plan flag set; the server
- * builds the planning prompt from it (see SERVER-API.md).
- */
-export function buildStartFrame(task: string, mode: StartMode, autoApprove: boolean): ClientFrame {
-  const approvalMode = autoApprove ? "auto" : "confirm";
-  if (mode === "plan") return { type: "start", task, mode: "ask", approvalMode, plan: true };
-  return { type: "start", task, mode, approvalMode };
+/** Adds an optional workspace id to a frame (omitted when empty for back-compat). */
+function withWs<T extends ClientFrame>(frame: T, ws?: string): T {
+  return ws ? { ...frame, ws } : frame;
 }
 
-/** Continue the plan session with an edit-mode override. */
-export function buildExecutePlanFrame(sessionId: string): ClientFrame {
-  return { type: "send", sessionId, task: EXECUTE_PLAN_TASK, mode: "edit" };
+/**
+ * "plan" maps to a read-only ask run with the plan flag set; the server
+ * builds the planning prompt from it (see SERVER-API.md). `ws` targets the
+ * workspace the run executes in (default: first workspace when omitted).
+ */
+export function buildStartFrame(task: string, mode: StartMode, autoApprove: boolean, ws?: string): ClientFrame {
+  const approvalMode = autoApprove ? "auto" : "confirm";
+  if (mode === "plan") return withWs({ type: "start", task, mode: "ask", approvalMode, plan: true }, ws);
+  return withWs({ type: "start", task, mode, approvalMode }, ws);
+}
+
+/** Continue the plan session with an edit-mode override, in the tab's workspace. */
+export function buildExecutePlanFrame(sessionId: string, ws?: string): ClientFrame {
+  return withWs({ type: "send", sessionId, task: EXECUTE_PLAN_TASK, mode: "edit" }, ws);
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import type { ConfigKey, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -40,13 +41,16 @@ function McpSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Per server: tool list, an error string, or "loading". */
   const [tools, setTools] = useState<Record<string, McpTool[] | { error: string } | "loading">>({});
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setServers(null);
+    setTools({});
     api
       .mcp()
       .then(setServers)
       .catch((e: unknown) => setLoadError(String(e)));
-  }, []);
+  }, [ws]);
 
   const listTools = (name: string) => {
     setTools((t) => ({ ...t, [name]: "loading" }));
@@ -138,6 +142,7 @@ export function SettingsView() {
   const [allowlist, setAllowlist] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyMask, setApiKeyMask] = useState("");
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
     api
@@ -150,7 +155,7 @@ export function SettingsView() {
         setApiKeyMask(config.apiKey ?? "");
       })
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   return (
     <div className="flex h-full flex-col">
