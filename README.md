@@ -59,7 +59,8 @@ export DEEPSEEK_API_KEY=sk-...
 | Command | What it does |
 | --- | --- |
 | `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
-| `seekforge serve [--port 7373]` | local web UI + agent API for this workspace (127.0.0.1 only, token-protected; open the printed URL) |
+| `seekforge-tui` | **terminal UI** (Ink): full-screen chat with live tool/plan/diff and a status bar |
+| `seekforge serve [paths...] [--port 7373]` | local web UI + agent API; pass multiple workspace paths to host them together (127.0.0.1 only, token-protected) |
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
