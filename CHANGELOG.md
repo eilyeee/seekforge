@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+Phase 8 batch 5 — terminal UI and multi-project.
+
+### Added
+- `seekforge-tui`: an Ink (React-for-terminal) chat UI — scrolling transcript
+  with streamed markdown, tool rows, in-place plan checklist, file badges and
+  a final report; bottom composer with a status bar (model, context %, cost,
+  working spinner); inline permission panel showing the raw command/path;
+  slash commands (/help /new /model /context /usage /quit), @path inlining,
+  Ctrl+C cancel. Runs AgentCore in-process (no server).
+- Multi-project: one `seekforge serve [paths...] [--workspace <p>]` hosts
+  several workspaces; `GET /api/workspaces`, a `?ws=<id>` param on all scoped
+  routes (default = first, back-compatible), and a `ws` field on WS start/send.
+  The web workbench gains a workspace switcher; each tab binds to its own
+  workspace.
+
 ## 0.5.0 (unreleased)
 
 Phase 8 batch 4 — final harness pieces.

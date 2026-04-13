@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import { transitionProposal, type EvolutionAction } from "../lib/evolution";
 import type { EvolutionProposal, EvolutionProposalRisk, EvolutionProposalType } from "../types";
 
@@ -27,13 +28,16 @@ export function EvolutionView() {
   const [changedPaths, setChangedPaths] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setProposals(null);
+    setChangedPaths({});
     api
       .evolution()
       .then(setProposals)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   const act = async (id: string, action: EvolutionAction) => {
     if (!proposals || busyId) return;

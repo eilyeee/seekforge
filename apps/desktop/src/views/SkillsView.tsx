@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import type { Skill, SkillScope } from "../types";
 
@@ -13,13 +14,16 @@ export function SkillsView() {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [detail, setDetail] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setSkills(null);
+    setDetail(null);
     api
       .skills()
       .then(setSkills)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   if (detail) {
     return (

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ChatMessage } from "@seekforge/shared";
-import { setTokenProvider } from "./lib/api";
+import { api, setTokenProvider, setWorkspaceProvider } from "./lib/api";
 import { appendUser, initialChatState } from "./lib/events";
 import { buildExecutePlanFrame, buildStartFrame, EXECUTE_PLAN_TASK } from "./lib/frames";
 import { messagesToItems } from "./lib/messages";
@@ -22,7 +22,7 @@ import {
 } from "./lib/tabs";
 import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
-import type { SessionMeta } from "./types";
+import type { SessionMeta, Workspace } from "./types";
 
 export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
 
@@ -38,6 +38,18 @@ type AppStore = {
   view: View;
   token: string;
   tabs: TabsState;
+  /** Hosted workspaces (GET /api/workspaces); empty until loaded. */
+  workspaces: Workspace[];
+  /**
+   * Active workspace id — the one new tabs bind to and workspace-scoped views
+   * read from. Empty = the server's default (first) workspace.
+   */
+  activeWorkspaceId: string;
+
+  /** Loads the workspace list at boot and selects the first one. */
+  loadWorkspaces: () => void;
+  /** Switches the active workspace (new tabs + views follow it). */
+  setActiveWorkspace: (id: string) => void;
 
   setView: (view: View) => void;
   /** Ensures the active tab has a (re)connecting WS client. */
@@ -92,6 +104,31 @@ export const useStore = create<AppStore>()((set, get) => {
     view: "chat",
     token: readTokenFromLocation(),
     tabs: initialTabsState(),
+    workspaces: [],
+    activeWorkspaceId: "",
+
+    loadWorkspaces: () => {
+      api
+        .workspaces()
+        .then((workspaces) => {
+          set((s) => ({
+            workspaces,
+            // Adopt the first workspace as active (and bind the initial tab to
+            // it) unless the user already picked one.
+            activeWorkspaceId: s.activeWorkspaceId || (workspaces[0]?.id ?? ""),
+            tabs:
+              s.activeWorkspaceId || workspaces.length === 0
+                ? s.tabs
+                : updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: workspaces[0]!.id }),
+          }));
+        })
+        .catch(() => {
+          // Single-workspace / old server without /api/workspaces: stay on the
+          // default workspace (empty id -> server's first).
+        });
+    },
+
+    setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
 
     setView: (view) => set({ view }),
 
@@ -100,7 +137,7 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     openTab: () => {
-      set((s) => ({ tabs: openTabPure(s.tabs) }));
+      set((s) => ({ tabs: openTabPure(s.tabs, s.activeWorkspaceId) }));
       ensureWs(get().tabs.activeTabId);
     },
 
@@ -130,11 +167,11 @@ export const useStore = create<AppStore>()((set, get) => {
         planReady: false,
       };
       if (tab.chat.sessionId) {
-        client.send({ type: "send", sessionId: tab.chat.sessionId, task });
+        client.send({ type: "send", sessionId: tab.chat.sessionId, task, ...(tab.ws ? { ws: tab.ws } : {}) });
       } else {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
-        client.send(buildStartFrame(task, tab.mode, tab.autoApprove));
+        client.send(buildStartFrame(task, tab.mode, tab.autoApprove, tab.ws));
       }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
     },
@@ -144,7 +181,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || !tab.chat.sessionId || !tab.planReady) return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      client.send(buildExecutePlanFrame(tab.chat.sessionId));
+      client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws));
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...appendUser(tab.chat, EXECUTE_PLAN_TASK), running: true },
@@ -182,8 +219,9 @@ export const useStore = create<AppStore>()((set, get) => {
     continueSession: (meta, messages) => {
       const items = messagesToItems(messages);
       set((s) => {
-        // "Continue this session" always opens a NEW tab bound to the session.
-        let tabs = openTabPure(s.tabs);
+        // "Continue this session" always opens a NEW tab bound to the session,
+        // in the workspace it was viewed in (the active one).
+        let tabs = openTabPure(s.tabs, s.activeWorkspaceId);
         tabs = updateTab(tabs, tabs.activeTabId, {
           title: titleFromTask(meta.task),
           chat: {
@@ -204,3 +242,8 @@ export const useStore = create<AppStore>()((set, get) => {
 });
 
 setTokenProvider(() => useStore.getState().token);
+setWorkspaceProvider(() => useStore.getState().activeWorkspaceId);
+
+// Load the hosted workspaces once at boot (no-op on old single-workspace
+// servers without /api/workspaces — the default workspace stays selected).
+useStore.getState().loadWorkspaces();

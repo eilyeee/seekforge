@@ -21,6 +21,7 @@ type Detail = { meta: SessionMeta; messages: ChatMessage[] };
 
 export function SessionsView() {
   const continueSession = useStore((s) => s.continueSession);
+  const ws = useStore((s) => s.activeWorkspaceId);
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +31,14 @@ export function SessionsView() {
   const [rewindNotes, setRewindNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    setSessions(null);
+    setDetail(null);
+    setRewindNotes({});
     api
       .sessions()
       .then(setSessions)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   const openSession = (id: string) => {
     setError(null);

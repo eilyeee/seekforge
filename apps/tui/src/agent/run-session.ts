@@ -1,0 +1,55 @@
+import { loadAgentDefinitions, type ToolSpec } from "@seekforge/core";
+import type { PermissionRequest } from "@seekforge/shared";
+import type { TuiConfig } from "../config.js";
+import { expandFileRefs } from "../file-refs.js";
+import { createTuiAgent } from "./factory.js";
+import type { ChatAction } from "../model.js";
+
+export type RunSessionDeps = {
+  config: TuiConfig;
+  model: string;
+  projectPath: string;
+  mcpToolSpecs: ToolSpec[];
+  /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
+  dispatch: (action: ChatAction) => void;
+  /** Awaits the inline PermissionPanel's y/n answer. */
+  confirm: (req: PermissionRequest) => Promise<boolean>;
+  /** Resolves the current session id for resume chaining. */
+  getSessionId: () => string | undefined;
+};
+
+/**
+ * Drives a single agent turn: assembles the agent, consumes runTask events
+ * into the reducer, and routes streamed model deltas to the live assistant
+ * item. Cancellation is cooperative via the AbortSignal.
+ */
+export async function runSession(
+  task: string,
+  signal: AbortSignal,
+  deps: RunSessionDeps,
+): Promise<void> {
+  const { agent, dispose } = createTuiAgent({
+    config: deps.config,
+    model: deps.model,
+    confirm: deps.confirm,
+    onModelDelta: (chunk) => deps.dispatch({ type: "model-delta", chunk }),
+    extractMemory: true,
+    subagents: loadAgentDefinitions(deps.projectPath),
+    mcpToolSpecs: deps.mcpToolSpecs,
+  });
+
+  try {
+    for await (const event of agent.runTask({
+      projectPath: deps.projectPath,
+      task: expandFileRefs(task, deps.projectPath),
+      mode: "edit",
+      approvalMode: "confirm",
+      resumeSessionId: deps.getSessionId(),
+      signal,
+    })) {
+      deps.dispatch({ type: "event", event });
+    }
+  } finally {
+    dispose();
+  }
+}

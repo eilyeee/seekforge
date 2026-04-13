@@ -17,6 +17,13 @@ export type ChatTab = {
   tabId: string;
   /** First words of the first task; placeholder until a task is sent. */
   title: string;
+  /**
+   * Workspace id this tab is bound to. Set when the tab is opened (from the
+   * then-active workspace) and never changes — a tab keeps running its session
+   * in its original workspace even after the active workspace switches.
+   * Empty = the server's default (first) workspace.
+   */
+  ws: string;
   chat: ChatState;
   conn: ConnState;
   pendingPermission: PendingPermission | null;
@@ -48,10 +55,11 @@ export function titleFromTask(task: string): string {
   return `${words.slice(0, max - 1)}…`;
 }
 
-function makeTab(tabId: string): ChatTab {
+function makeTab(tabId: string, ws = ""): ChatTab {
   return {
     tabId,
     title: DEFAULT_TAB_TITLE,
+    ws,
     chat: initialChatState(),
     conn: "disconnected",
     pendingPermission: null,
@@ -63,19 +71,19 @@ function makeTab(tabId: string): ChatTab {
   };
 }
 
-export function initialTabsState(): TabsState {
-  return { tabs: [makeTab("t1")], activeTabId: "t1", nextTabNum: 2 };
+export function initialTabsState(ws = ""): TabsState {
+  return { tabs: [makeTab("t1", ws)], activeTabId: "t1", nextTabNum: 2 };
 }
 
 export function activeTab(state: TabsState): ChatTab {
   return state.tabs.find((t) => t.tabId === state.activeTabId) ?? state.tabs[0]!;
 }
 
-/** Appends a fresh tab and activates it. */
-export function openTab(state: TabsState): TabsState {
+/** Appends a fresh tab bound to `ws` (the active workspace) and activates it. */
+export function openTab(state: TabsState, ws = ""): TabsState {
   const tabId = `t${state.nextTabNum}`;
   return {
-    tabs: [...state.tabs, makeTab(tabId)],
+    tabs: [...state.tabs, makeTab(tabId, ws)],
     activeTabId: tabId,
     nextTabNum: state.nextTabNum + 1,
   };
@@ -88,9 +96,11 @@ export function openTab(state: TabsState): TabsState {
 export function closeTab(state: TabsState, tabId: string): TabsState {
   const idx = state.tabs.findIndex((t) => t.tabId === tabId);
   if (idx < 0) return state;
+  const closedWs = state.tabs[idx]!.ws;
   const tabs = state.tabs.filter((t) => t.tabId !== tabId);
   if (tabs.length === 0) {
-    const fresh = makeTab(`t${state.nextTabNum}`);
+    // The replacement tab keeps the closed tab's workspace binding.
+    const fresh = makeTab(`t${state.nextTabNum}`, closedWs);
     return { tabs: [fresh], activeTabId: fresh.tabId, nextTabNum: state.nextTabNum + 1 };
   }
   let activeTabId = state.activeTabId;
