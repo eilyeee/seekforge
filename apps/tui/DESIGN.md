@@ -6,8 +6,11 @@ Stack: Ink 5 (React for the terminal) + the in-process `@seekforge/core`
 AgentCore (no server). Aesthetic target: Claude Code's TUI — calm, modern,
 single accent color, generous spacing, rounded boxes.
 
-> Status: **v1 shipped (0.6.0)** = transcript + status bar + composer +
-> permission panel + 6 slash commands. This document plans v2 → full parity.
+> Status: **v2 shipped (0.7.0)** — all four batches (A input & navigation,
+> B review & modes, C sessions/memory/surfaces, D polish) are implemented;
+> this document is the design record. Built contract-first: model.ts /
+> commands.ts / keymap.ts landed first, then the batches in parallel
+> worktrees, then app.tsx integration.
 
 ## Reference points
 

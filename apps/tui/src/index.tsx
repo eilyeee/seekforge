@@ -3,10 +3,13 @@ import { render } from "ink";
 import { App } from "./app.js";
 import { loadConfig } from "./config.js";
 import { prepareMcp } from "./agent/factory.js";
+import { loadTheme } from "./theme.js";
+import { setAccent } from "./components/Header.js";
 
 async function main(): Promise<void> {
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
+  setAccent(loadTheme(config.accent).accent);
 
   // The TUI is interactive only. Without a TTY (CI, piped stdout, smoke import)
   // there is nothing to render — print a short notice and exit cleanly instead

@@ -1,6 +1,6 @@
 {
   "name": "@seekforge/tui",
-  "version": "0.0.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Polished terminal UI for SeekForge, built with Ink.",
   "license": "MIT",
@@ -8,7 +8,11 @@
   "bin": {
     "seekforge-tui": "./bin/seekforge-tui.js"
   },
-  "files": ["bin", "dist", "README.md"],
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },

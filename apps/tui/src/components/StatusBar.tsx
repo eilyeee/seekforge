@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import type { TokenUsage } from "@seekforge/shared";
 import { statusBarParts } from "../format.js";
-import type { ContextUsage } from "../model.js";
+import type { ApprovalSetting, ContextUsage } from "../model.js";
 import { ACCENT } from "./Header.js";
 
 type StatusBarProps = {
@@ -11,6 +11,9 @@ type StatusBarProps = {
   context?: ContextUsage;
   usage: TokenUsage;
   running: boolean;
+  approval: ApprovalSetting;
+  bgRunning: number;
+  scrolled: boolean;
 };
 
 export function StatusBar(props: StatusBarProps): React.ReactElement {
@@ -32,6 +35,19 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
         {"  ·  "}
         {parts.tokens}
       </Text>
+      {parts.approval ? (
+        <Text color={props.approval === "auto" ? "yellow" : "magenta"}>
+          {"  ·  "}
+          {parts.approval}
+        </Text>
+      ) : null}
+      {parts.bg ? (
+        <Text color={ACCENT}>
+          {"  ·  "}
+          {parts.bg}
+        </Text>
+      ) : null}
+      {props.scrolled ? <Text color="yellow">{"  ·  ↑ scrolled"}</Text> : null}
     </Box>
   );
 }

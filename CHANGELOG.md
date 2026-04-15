@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+TUI v2 — full-parity terminal UI (apps/tui/DESIGN.md batches A–D).
+
+### Added
+- Input & navigation: typing `/` opens a fuzzy command palette (↑↓/Tab/Enter,
+  argument hints); typing `@` opens a frecency-ranked fuzzy file picker over
+  the workspace; multiline composer (trailing `\` or Ctrl+J for newlines,
+  ↑/↓ history persisted to `.seekforge/tui-history`, Ctrl+U clear, Esc clears
+  or cancels); managed scrollback viewport (PageUp/PageDown, Esc jumps to
+  latest, older items virtualized).
+- Review & modes: inline colored diffs after `apply_patch`/`write_file`
+  (before/after captured around the tool call, unified hunks, collapsible);
+  `/plan <task>` runs a read-only planning turn then asks `y` to execute in
+  the same session; persistent approval modes auto / confirm / plan
+  (Shift+Tab cycles, `/approve` sets); the permission panel gains
+  `a` = allow similar commands for this session (feeds the live allowlist,
+  applies mid-run); `/rewind [yes]` dry-runs/undoes the session's file edits.
+- Sessions, memory, surfaces: `/sessions` + `/resume <id>`;
+  `# <fact>` / `/remember` write straight to project memory; background
+  tasks surface as `⚙ N bg` in the status bar and `/tasks`; `/context`
+  opens a context inspector overlay (gauge, tokens, usage, items);
+  `/agents` and `/mcp` list what's dispatchable; nested subagent activity
+  renders as indented `↳ [agent] tool` rows.
+- Polish: syntax-highlighted fenced code blocks (built-in tokenizer for
+  ts/js/py/rust/go/sh/json/css/html/yaml — no new deps); configurable accent
+  color (`accent` in config or `SEEKFORGE_TUI_ACCENT`; `NO_COLOR` respected);
+  Ctrl+G / `/editor` edits the prompt in `$EDITOR`; `/copy` copies the last
+  reply to the clipboard.
+
+### Changed
+- TUI keybindings are a declarative testable table (`keymap.ts`); all input
+  routing (permission → overlay → composer) is centralized in one handler.
+- TUI tests: 26 → 162 (editor model, history, fuzzy, file index, viewport,
+  diff, capture, allowlist, surfaces, highlight, theme, keymap).
+
 ## 0.6.0 (unreleased)
 
 Phase 8 batch 5 — terminal UI and multi-project.

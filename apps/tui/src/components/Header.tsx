@@ -1,7 +1,15 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-export const ACCENT = "cyan";
+/**
+ * Accent color, set once at startup from the theme (live ESM binding: every
+ * component imports ACCENT and reads the current value at render time).
+ */
+export let ACCENT = "cyan";
+
+export function setAccent(color: string): void {
+  ACCENT = color;
+}
 
 export function Header({ projectPath, model }: { projectPath: string; model: string }): React.ReactElement {
   return (

@@ -29,7 +29,9 @@ export function PermissionPanel({ request }: { request: PermissionRequest }): Re
         </Text>
       ) : null}
       {!request.command && !request.path ? <Text>{request.description}</Text> : null}
-      <Text dimColor>Allow? press y to approve, any other key to deny</Text>
+      <Text dimColor>
+        y allow once{request.command ? " · a allow similar commands this session" : ""} · any other key deny
+      </Text>
     </Box>
   );
 }

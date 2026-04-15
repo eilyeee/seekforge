@@ -1,6 +1,6 @@
 {
   "name": "seekforge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A local-first coding agent powered by DeepSeek.",
   "license": "MIT",
   "author": "eilyeee",
@@ -10,12 +10,22 @@
     "directory": "apps/cli"
   },
   "homepage": "https://github.com/eilyeee/seekforge#readme",
-  "keywords": ["coding-agent", "agent", "deepseek", "cli", "ai"],
+  "keywords": [
+    "coding-agent",
+    "agent",
+    "deepseek",
+    "cli",
+    "ai"
+  ],
   "type": "module",
   "bin": {
     "seekforge": "./bin/seekforge.js"
   },
-  "files": ["bin", "dist", "README.md"],
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -38,9 +48,9 @@
     "@seekforge/core": "workspace:*",
     "@seekforge/server": "workspace:*",
     "@seekforge/shared": "workspace:*",
-    "tsx": "^4.19.0",
+    "@types/node": "^22.10.0",
     "tsup": "^8.3.0",
-    "typescript": "^5.7.0",
-    "@types/node": "^22.10.0"
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

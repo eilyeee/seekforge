@@ -22,6 +22,8 @@ export type TuiConfig = {
   mcpServers?: Record<string, McpServerConfig>;
   /** User-defined shell hooks fired around tool calls. */
   hooks?: HookConfig;
+  /** TUI accent color (any Ink color name); SEEKFORGE_TUI_ACCENT overrides. */
+  accent?: string;
 };
 
 function readJson(path: string): TuiConfig {
