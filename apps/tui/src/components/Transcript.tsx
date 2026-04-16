@@ -50,6 +50,28 @@ function Item({ item }: { item: ChatItem }): React.ReactElement | null {
       );
     case "diff":
       return <DiffCard path={item.path} lines={item.lines} />;
+    case "shell": {
+      const lines = item.output.trimEnd().split("\n");
+      const shown = lines.slice(0, 30);
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text>
+            <Text color={item.exitCode === 0 ? "green" : "red"} bold>
+              ${" "}
+            </Text>
+            <Text bold>{item.command}</Text>
+            {item.exitCode !== 0 ? <Text color="red">  (exit {item.exitCode})</Text> : null}
+          </Text>
+          {shown.map((l, i) => (
+            <Text key={i} dimColor>
+              {"  "}
+              {l}
+            </Text>
+          ))}
+          {lines.length > shown.length ? <Text dimColor>  … {lines.length - shown.length} more lines</Text> : null}
+        </Box>
+      );
+    }
     case "notice":
       return <Text color={item.tone === "error" ? "red" : undefined} dimColor={item.tone === "dim"}>{item.text}</Text>;
     case "report":

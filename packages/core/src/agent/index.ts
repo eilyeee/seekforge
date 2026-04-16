@@ -34,6 +34,7 @@ export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js
 export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
 export {
   appendCheckpoint,
+  compactSessionNow,
   createSessionTrace,
   listSessions,
   loadSessionMessages,
@@ -45,6 +46,7 @@ export {
   writeSessionMeta,
   type CheckpointEntry,
   type ListSessionsOptions,
+  type ManualCompactionResult,
   type PruneResult,
   type PruneSessionsOptions,
   type RewindResult,

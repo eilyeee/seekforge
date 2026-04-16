@@ -1,4 +1,4 @@
-import { loadAgentDefinitions, type ToolSpec } from "@seekforge/core";
+import { loadAgentDefinitions, type BackgroundTasks, type ToolSpec } from "@seekforge/core";
 import type { ApprovalMode, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
@@ -17,6 +17,8 @@ export type RunSessionDeps = {
   plan: boolean;
   /** auto skips confirmations (the TUI's auto approval setting). */
   approvalMode: ApprovalMode;
+  /** Shared background-task manager (tasks outlive single runs). */
+  background: BackgroundTasks;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
   dispatch: (action: ChatAction) => void;
   /** Awaits the inline PermissionPanel's y/n answer. */
@@ -43,6 +45,7 @@ export async function runSession(
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath),
     mcpToolSpecs: deps.mcpToolSpecs,
+    background: deps.background,
   });
 
   // One capture per run: snapshots files around write tools to render diffs.

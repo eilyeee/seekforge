@@ -211,22 +211,58 @@ describe("chatReducer v2 state", () => {
     expect(s.bgTasks[0]?.status).toBe("exited");
   });
 
-  it("marks all bg tasks exited on run-end (loop disposes them)", () => {
-    let s = base();
-    s = reduce(
-      s,
-      { type: "tool.started", toolName: "run_command", args: { command: "watch", background: true } },
-      { type: "tool.completed", toolName: "run_command", result: { ok: true, data: { taskId: "bg-9" } } },
-    );
-    s = chatReducer(s, { type: "run-end" });
-    expect(s.bgTasks[0]?.status).toBe("exited");
-  });
-
   it("appends diff items via the diff action", () => {
     let s = base();
     s = chatReducer(s, { type: "diff", path: "a.ts", lines: [{ kind: "add", text: "+x" }] });
     const item = s.items[0] as ChatItem & { kind: "diff" };
     expect(item.kind).toBe("diff");
     expect(item.path).toBe("a.ts");
+  });
+});
+
+describe("chatReducer v2.1 (steering queue, shell, bg-sync, clear)", () => {
+  it("queues and dequeues steering messages in order", () => {
+    let s = base();
+    s = chatReducer(s, { type: "queue", text: "first" });
+    s = chatReducer(s, { type: "queue", text: "second" });
+    expect(s.queue).toEqual(["first", "second"]);
+    s = chatReducer(s, { type: "dequeue" });
+    expect(s.queue).toEqual(["second"]);
+    s = chatReducer(s, { type: "queue-clear" });
+    expect(s.queue).toEqual([]);
+  });
+
+  it("appends shell items for ! passthrough output", () => {
+    let s = base();
+    s = chatReducer(s, { type: "shell", command: "ls", output: "a\nb", exitCode: 0 });
+    const item = s.items[0] as ChatItem & { kind: "shell" };
+    expect(item.kind).toBe("shell");
+    expect(item.exitCode).toBe(0);
+  });
+
+  it("bg-sync replaces the task snapshot wholesale", () => {
+    let s = base();
+    s = chatReducer(s, { type: "bg-sync", tasks: [{ id: "bg-1", command: "dev", status: "running" }] });
+    expect(s.bgTasks).toHaveLength(1);
+    s = chatReducer(s, { type: "bg-sync", tasks: [] });
+    expect(s.bgTasks).toEqual([]);
+  });
+
+  it("run-end no longer force-exits bg tasks (shared manager owns them)", () => {
+    let s = base();
+    s = chatReducer(s, { type: "bg-sync", tasks: [{ id: "bg-1", command: "dev", status: "running" }] });
+    s = chatReducer(s, { type: "run-end" });
+    expect(s.bgTasks[0]?.status).toBe("running");
+  });
+
+  it("clear resets transcript, session, queue and overlay", () => {
+    let s = base();
+    s = chatReducer(s, { type: "notice", text: "x" });
+    s = chatReducer(s, { type: "set-session", sessionId: "s1" });
+    s = chatReducer(s, { type: "queue", text: "q" });
+    s = chatReducer(s, { type: "clear" });
+    expect(s.items).toEqual([]);
+    expect(s.sessionId).toBeUndefined();
+    expect(s.queue).toEqual([]);
   });
 });

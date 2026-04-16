@@ -64,3 +64,48 @@ describe("sessions list + prune", () => {
     expect(existsSync(dir("old"))).toBe(true);
   });
 });
+
+describe("compactSessionNow", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-compactnow-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("compacts a long session in place and the rewrite is replayable", async () => {
+    const { createSessionTrace, loadSessionMessages, compactSessionNow } = await import(
+      "../../src/agent/trace.js"
+    );
+    const trace = createSessionTrace(ws, "s1");
+    trace.message({ role: "system", content: "system prompt" });
+    trace.message({ role: "user", content: "the task" });
+    for (let i = 0; i < 20; i += 1) {
+      trace.message({ role: "assistant", content: `turn ${i} ${"x".repeat(200)}` });
+      trace.message({ role: "user", content: `reply ${i}` });
+    }
+    const before = loadSessionMessages(ws, "s1");
+    const result = compactSessionNow(ws, "s1");
+    expect(result).not.toBeNull();
+    expect(result!.droppedTurns).toBeGreaterThan(0);
+    expect(result!.afterTokens).toBeLessThan(result!.beforeTokens);
+    const after = loadSessionMessages(ws, "s1");
+    expect(after.length).toBeLessThan(before.length);
+    // Head (system + task) and digest survive.
+    expect(after[0]?.content).toBe("system prompt");
+    expect(after[1]?.content).toBe("the task");
+    // The digest replaces the dropped middle: head, digest, then the tail.
+    expect(after[2]?.role).toBe("user");
+    expect(after[2]?.content.length).toBeGreaterThan(0);
+  });
+
+  it("returns null for short sessions and missing files", async () => {
+    const { createSessionTrace, compactSessionNow } = await import("../../src/agent/trace.js");
+    const trace = createSessionTrace(ws, "tiny");
+    trace.message({ role: "system", content: "s" });
+    trace.message({ role: "user", content: "t" });
+    expect(compactSessionNow(ws, "tiny")).toBeNull();
+    expect(compactSessionNow(ws, "missing")).toBeNull();
+  });
+});

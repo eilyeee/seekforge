@@ -12,7 +12,12 @@ import {
 } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
-import { createBackgroundTasks, type ToolContext, type ToolDispatcher } from "../tools/index.js";
+import {
+  createBackgroundTasks,
+  type BackgroundTasks,
+  type ToolContext,
+  type ToolDispatcher,
+} from "../tools/index.js";
 import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
@@ -59,6 +64,13 @@ export type AgentCoreDeps = {
   permissionRules?: PermissionRule[];
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
+  /**
+   * Shared background-task manager. When provided, the CALLER owns its
+   * lifecycle: tasks survive across runs (a TUI/REPL session spanning many
+   * turns) and are not killed when one run ends. Unset, each run gets its
+   * own manager, disposed when the session ends.
+   */
+  background?: BackgroundTasks;
   /**
    * Builds a provider for a subagent's `model` override. Unset, or for
    * definitions without a model, dispatches use the default provider.
@@ -214,7 +226,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
         hooks: deps.hooks,
-        background: createBackgroundTasks(),
+        background: deps.background ?? createBackgroundTasks(),
         checkpoint: (path, before) => {
           if (checkpointed.has(path)) return;
           checkpointed.add(path);
@@ -763,7 +775,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       } finally {
         queue.end();
         dispatchManager?.disposeAll();
-        ctx.background?.disposeAll();
+        // A caller-provided manager outlives the run (multi-turn sessions).
+        if (!deps.background) ctx.background?.disposeAll();
         // sessionEnd hooks fire once per top-level session, after cleanup.
         // Advisory only; never affects the (already emitted) outcome. Nested
         // subagent sessions (depth > 0) do not fire it.

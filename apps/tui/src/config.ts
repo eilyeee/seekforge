@@ -24,6 +24,8 @@ export type TuiConfig = {
   hooks?: HookConfig;
   /** TUI accent color (any Ink color name); SEEKFORGE_TUI_ACCENT overrides. */
   accent?: string;
+  /** Terminal bell on permission prompts / run completion (default true). */
+  bell?: boolean;
 };
 
 function readJson(path: string): TuiConfig {

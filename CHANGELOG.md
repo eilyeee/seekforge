@@ -30,11 +30,27 @@ TUI v2 — full-parity terminal UI (apps/tui/DESIGN.md batches A–D).
   Ctrl+G / `/editor` edits the prompt in `$EDITOR`; `/copy` copies the last
   reply to the clipboard.
 
+- Steering & shell: the composer stays live during a run — Enter queues
+  follow-ups (sent in order afterwards; Esc cancels run + queue); `!cmd`
+  runs a local shell command directly with inline output; terminal bell on
+  permission prompts and completion (`"bell": false` in config disables).
+- `/clear` (reset transcript + session), `/diff` (colored git diff of the
+  working tree), `/export [path]` (transcript → markdown), `/memory [edit]`
+  (list project facts / open in $EDITOR); `/sessions` is now an interactive
+  picker (↑↓ + Enter resumes).
+- Manual `/compact`: core gains `compactSessionNow(workspace, sessionId)` —
+  folds the middle of a stored session's messages.jsonl into a digest on
+  demand (the next message resumes the compacted history).
+- Background tasks now survive across turns: `createAgentCore` accepts a
+  shared caller-owned `background` manager (the TUI passes one per process,
+  killed on exit); `/tasks` shows live status and `/tasks kill <id>` stops
+  one.
+
 ### Changed
 - TUI keybindings are a declarative testable table (`keymap.ts`); all input
   routing (permission → overlay → composer) is centralized in one handler.
-- TUI tests: 26 → 162 (editor model, history, fuzzy, file index, viewport,
-  diff, capture, allowlist, surfaces, highlight, theme, keymap).
+- TUI tests: 26 → 172 (editor model, history, fuzzy, file index, viewport,
+  diff, capture, allowlist, surfaces, highlight, theme, keymap, export).
 
 ## 0.6.0 (unreleased)
 

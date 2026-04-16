@@ -66,3 +66,22 @@ describe("computeDiffLines", () => {
     expect(lines.filter((l) => l.kind === "add")).toHaveLength(1);
   });
 });
+
+describe("classifyUnifiedDiff", () => {
+  it("classifies git diff output lines", async () => {
+    const { classifyUnifiedDiff } = await import("../diff.js");
+    const text = [
+      "diff --git a/x.ts b/x.ts",
+      "index 111..222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,2 +1,2 @@",
+      " ctx line",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const kinds = classifyUnifiedDiff(text).map((l) => l.kind);
+    expect(kinds).toEqual(["hunk", "hunk", "hunk", "hunk", "hunk", "ctx", "del", "add"]);
+  });
+});

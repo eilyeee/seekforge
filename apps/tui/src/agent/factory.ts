@@ -7,6 +7,7 @@ import {
   loadMcpToolSpecs,
   type AgentCore,
   type AgentDefinition,
+  type BackgroundTasks,
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
@@ -23,6 +24,8 @@ export type TuiAgentOptions = {
   subagents?: AgentDefinition[];
   /** Extra tools from MCP servers (see prepareMcp). */
   mcpToolSpecs?: ToolSpec[];
+  /** Shared background-task manager: tasks survive across turns (app owns it). */
+  background?: BackgroundTasks;
 };
 
 export type TuiAgent = {
@@ -70,6 +73,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     hooks: config.hooks,
+    ...(opts.background ? { background: opts.background } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

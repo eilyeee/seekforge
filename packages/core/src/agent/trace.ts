@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
+import { compactMessages, estimateMessagesTokens } from "./context.js";
 
 export type SessionTrace = {
   dir: string;
@@ -140,6 +141,42 @@ export function loadSessionMessages(workspace: string, sessionId: string): ChatM
     messages.push(message);
   }
   return messages;
+}
+
+export type ManualCompactionResult = {
+  droppedTurns: number;
+  beforeTokens: number;
+  afterTokens: number;
+};
+
+/**
+ * On-demand compaction of a stored session (the TUI/REPL /compact command):
+ * folds the middle of messages.jsonl into a digest NOW, regardless of the
+ * context budget, and rewrites the file. The next resume replays the
+ * compacted history. Returns null when the session is too short to compact
+ * or has no messages file.
+ */
+export function compactSessionNow(workspace: string, sessionId: string): ManualCompactionResult | null {
+  let messages: ChatMessage[];
+  try {
+    messages = loadSessionMessages(workspace, sessionId);
+  } catch {
+    return null;
+  }
+  const beforeTokens = estimateMessagesTokens(messages);
+  // Budget 0 forces compaction whenever the message shape allows it.
+  const compacted = compactMessages(messages, 0);
+  if (!compacted) return null;
+
+  const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
+  const ts = new Date().toISOString();
+  const lines = compacted.messages.map((m) => JSON.stringify({ ts, ...m }));
+  writeFileSync(file, `${lines.join("\n")}\n`);
+  return {
+    droppedTurns: compacted.droppedTurns,
+    beforeTokens,
+    afterTokens: estimateMessagesTokens(compacted.messages),
+  };
 }
 
 export type CheckpointEntry = {

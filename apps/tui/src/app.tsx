@@ -1,12 +1,19 @@
-import React, { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   addMemoryFact,
+  compactSessionNow,
+  createBackgroundTasks,
+  listProjectFacts,
   listSessions,
   loadAgentDefinitions,
+  projectMemoryPath,
   readSessionMeta,
   rewindSession,
+  type BackgroundTasks,
   type ToolSpec,
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
@@ -39,6 +46,8 @@ import { appendHistory, createHistoryNav, loadHistory, type HistoryNav } from ".
 import { fuzzyRank } from "./fuzzy.js";
 import { bumpFrecency, loadFrecency, rankFiles, scanWorkspaceFiles, type Frecency } from "./files.js";
 import { sessionAllowPrefix } from "./allowlist.js";
+import { classifyUnifiedDiff } from "./diff.js";
+import { transcriptToMarkdown, defaultExportPath } from "./export.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
 import { openInExternalEditor } from "./external-editor.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -50,6 +59,7 @@ import { PermissionPanel } from "./components/PermissionPanel.js";
 import { Palette } from "./components/Palette.js";
 import { FilePicker } from "./components/FilePicker.js";
 import { ContextInspector } from "./components/ContextInspector.js";
+import { ListOverlay } from "./components/ListOverlay.js";
 
 export type AppProps = {
   config: TuiConfig;
@@ -98,6 +108,26 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   // the currently running task too.
   const allowlistRef = useRef<string[]>([...(config.commandAllowlist ?? [])]);
   const runConfigRef = useRef<TuiConfig>({ ...config, commandAllowlist: allowlistRef.current });
+
+  // One background-task manager for the whole TUI process: tasks started by
+  // any turn (dev servers, watchers) survive across runs; killed on exit.
+  const bgRef = useRef<BackgroundTasks | null>(null);
+  if (bgRef.current === null) bgRef.current = createBackgroundTasks();
+
+  const syncBg = useCallback(() => {
+    const tasks = (bgRef.current?.list() ?? []).map((t) => ({ id: t.id, command: t.command, status: t.status }));
+    dispatch({ type: "bg-sync", tasks });
+  }, []);
+
+  const quit = useCallback(() => {
+    bgRef.current?.disposeAll();
+    exit();
+  }, [exit]);
+
+  /** Terminal bell on permission prompts and run completion (config.bell). */
+  const ring = useCallback(() => {
+    if (config.bell !== false) process.stdout.write("\x07");
+  }, [config.bell]);
 
   // Composer history, persisted across sessions.
   const historyFile = useMemo(() => join(projectPath, ".seekforge", "tui-history"), [projectPath]);
@@ -180,12 +210,14 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           mode: opts?.mode ?? "edit",
           plan: opts?.plan ?? false,
           approvalMode: approvalRef.current === "auto" ? "auto" : "confirm",
+          background: bgRef.current as BackgroundTasks,
           dispatch: dispatch as (a: ChatAction) => void,
           getSessionId: () => sessionIdRef.current,
           confirm: (req) =>
             new Promise<boolean>((resolve) => {
               pendingPermissionRef.current = { request: req, resolve };
               dispatch({ type: "permission", request: req });
+              ring();
             }),
         });
         if (opts?.plan && !controller.signal.aborted) {
@@ -204,9 +236,11 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         }
         controllerRef.current = null;
         dispatch({ type: "run-end" });
+        syncBg();
+        ring();
       }
     },
-    [projectPath, mcpToolSpecs],
+    [projectPath, mcpToolSpecs, syncBg, ring],
   );
 
   const submitTask = useCallback(
@@ -249,11 +283,31 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           break;
         case "new":
           dispatch({ type: "new-session" });
+          syncBg();
           notice("next message starts a fresh session");
           break;
-        case "sessions":
-          for (const line of formatSessionLines(listSessions(projectPath))) notice(line);
+        case "clear":
+          dispatch({ type: "clear" });
+          syncBg();
+          notice("transcript cleared — next message starts a fresh session");
           break;
+        case "sessions": {
+          const metas = listSessions(projectPath);
+          if (metas.length === 0) {
+            notice("no sessions yet");
+            break;
+          }
+          dispatch({
+            type: "overlay",
+            overlay: {
+              kind: "sessions",
+              ids: metas.map((m) => m.id),
+              lines: formatSessionLines(metas, 50),
+              index: 0,
+            },
+          });
+          break;
+        }
         case "resume": {
           if (!command.arg || !readSessionMeta(projectPath, command.arg)) {
             notice("usage: /resume <session-id> (see /sessions)", "error");
@@ -266,6 +320,10 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         case "plan":
           if (!command.arg) {
             notice("usage: /plan <task>", "error");
+            break;
+          }
+          if (controllerRef.current) {
+            notice("a task is already running — Esc cancels it, or wait for it to finish", "error");
             break;
           }
           void runTask(command.arg, { mode: "ask", plan: true });
@@ -325,9 +383,68 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           }
           break;
         }
-        case "tasks":
-          for (const line of formatBgTaskLines(stateRef.current.bgTasks)) notice(line);
+        case "tasks": {
+          const mgr = bgRef.current as BackgroundTasks;
+          const [verb, taskId] = (command.arg ?? "").split(/\s+/);
+          if (verb === "kill" && taskId) {
+            const killed = mgr.kill(taskId);
+            notice(killed ? `killed ${taskId}` : `unknown task ${taskId}`, killed ? "dim" : "error");
+            syncBg();
+            break;
+          }
+          syncBg();
+          const live = mgr.list().map((t) => ({ id: t.id, command: t.command, status: t.status }));
+          for (const line of formatBgTaskLines(live)) notice(line);
+          if (live.some((t) => t.status === "running")) notice("  /tasks kill <id> stops one; all are killed on exit");
           break;
+        }
+        case "memory": {
+          if (command.arg === "edit") {
+            setRawMode(false);
+            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [projectMemoryPath(projectPath)], {
+              stdio: "inherit",
+            });
+            setRawMode(true);
+            if (r.error) notice(`editor failed: ${r.error.message}`, "error");
+            else notice("project memory saved");
+            break;
+          }
+          const facts = listProjectFacts(projectPath);
+          if (facts.length === 0) {
+            notice("project memory is empty — /remember <fact> or # <fact> adds one");
+            break;
+          }
+          notice(`project memory (${facts.length} facts):`);
+          for (const f of facts.slice(0, 30)) notice(`  ${f.index}. ${f.line}`);
+          if (facts.length > 30) notice(`  … ${facts.length - 30} more (/memory edit opens the file)`);
+          break;
+        }
+        case "diff": {
+          const r = spawnSync("git", ["diff"], { cwd: projectPath, encoding: "utf8", maxBuffer: 4_000_000 });
+          if (r.status !== 0 && r.stderr) {
+            notice(`git diff failed: ${r.stderr.trim().slice(0, 200)}`, "error");
+            break;
+          }
+          const text = (r.stdout ?? "").trim();
+          if (text === "") {
+            notice("working tree clean — no uncommitted changes");
+            break;
+          }
+          dispatch({ type: "diff", path: "working tree (git diff)", lines: classifyUnifiedDiff(text) });
+          break;
+        }
+        case "export": {
+          const rel = command.arg ?? defaultExportPath();
+          const target = isAbsolute(rel) ? rel : resolve(projectPath, rel);
+          try {
+            mkdirSync(dirname(target), { recursive: true });
+            writeFileSync(target, transcriptToMarkdown(stateRef.current.items, { title: `SeekForge session ${stateRef.current.sessionId ?? ""}` }));
+            notice(`exported transcript → ${rel}`);
+          } catch (err) {
+            notice(`export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+          }
+          break;
+        }
         case "agents":
           for (const line of formatAgentLines(loadAgentDefinitions(projectPath))) notice(line);
           break;
@@ -337,10 +454,27 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         case "context":
           dispatch({ type: "overlay", overlay: { kind: "context" } });
           break;
-        case "compact":
-          notice("compaction is automatic: when context usage crosses the budget, older turns");
-          notice("are folded into a short digest (you'll see a 'context compacted' notice).");
+        case "compact": {
+          const sessionId = sessionIdRef.current;
+          if (!sessionId) {
+            notice("no active session — compaction also runs automatically past the budget");
+            break;
+          }
+          if (controllerRef.current) {
+            notice("wait for the running task to finish before compacting", "error");
+            break;
+          }
+          const result = compactSessionNow(projectPath, sessionId);
+          if (!result) {
+            notice("nothing to compact — the session is still short");
+            break;
+          }
+          notice(
+            `compacted: dropped ${result.droppedTurns} earlier messages, ` +
+              `${kfmt(result.beforeTokens)} → ${kfmt(result.afterTokens)} tokens (applies on the next message)`,
+          );
           break;
+        }
         case "usage":
           notice(formatUsage(stateRef.current.totalUsage));
           break;
@@ -359,19 +493,34 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           openExternalEditor();
           break;
         case "quit":
-          exit();
+          quit();
           break;
         case "unknown":
           notice(`unknown command ${command.raw} — /help for the list`, "error");
           break;
       }
     },
-    [notice, projectPath, config.mcpServers, mcpToolSpecs, runTask, openExternalEditor, exit],
+    [notice, projectPath, config.mcpServers, mcpToolSpecs, runTask, openExternalEditor, quit, syncBg, setRawMode],
   );
 
   // ---------------------------------------------------------------------
   // Submit.
   // ---------------------------------------------------------------------
+
+  /** "!cmd" passthrough: the user's own shell command, run locally, blocking. */
+  const runBash = useCallback(
+    (command: string) => {
+      const r = spawnSync("/bin/sh", ["-c", command], {
+        cwd: projectPath,
+        encoding: "utf8",
+        timeout: 60_000,
+        maxBuffer: 4_000_000,
+      });
+      const output = `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd() || (r.error ? String(r.error.message) : "(no output)");
+      dispatch({ type: "shell", command, output, exitCode: r.status ?? 1 });
+    },
+    [projectPath],
+  );
 
   const handleSubmit = useCallback(() => {
     const raw = editor.text;
@@ -384,8 +533,27 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       handleSlash(parsed.command);
       return;
     }
+    if (parsed.kind === "bash") {
+      runBash(parsed.command);
+      return;
+    }
+    // Steering: typing during a run queues the message; it is sent (in
+    // order) as soon as the current turn ends.
+    if (stateRef.current.running) {
+      dispatch({ type: "queue", text: parsed.text });
+      return;
+    }
     submitTask(parsed.text);
-  }, [editor.text, applyEditor, historyFile, handleSlash, submitTask]);
+  }, [editor.text, applyEditor, historyFile, handleSlash, runBash, submitTask]);
+
+  // Drain the steering queue between runs.
+  useEffect(() => {
+    if (state.running || state.planPending || state.permission || state.queue.length === 0) return;
+    const next = state.queue[0];
+    if (next === undefined) return;
+    dispatch({ type: "dequeue" });
+    submitTask(next);
+  }, [state.running, state.planPending, state.permission, state.queue, submitTask]);
 
   // ---------------------------------------------------------------------
   // Key routing: permission → plan decision → Ctrl+C → overlay → global →
@@ -435,14 +603,14 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       sigintCountRef.current += 1;
       controllerRef.current.abort();
       if (sigintCountRef.current >= 2) {
-        exit();
+        quit();
         return;
       }
       notice("cancelling… (Ctrl+C again to force-exit)");
     } else {
-      exit();
+      quit();
     }
-  }, [exit, notice]);
+  }, [quit, notice]);
 
   useInput((rawInput, key) => {
     const stroke: KeyStroke = toStroke(rawInput, key as unknown as InkKey);
@@ -497,7 +665,14 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         return;
       }
       const action = resolveAction("overlay", stroke);
-      const count = overlay.kind === "palette" ? paletteCommands.length : pickerFiles.length;
+      const count =
+        overlay.kind === "palette"
+          ? paletteCommands.length
+          : overlay.kind === "files"
+            ? pickerFiles.length
+            : overlay.kind === "sessions"
+              ? overlay.ids.length
+              : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -511,10 +686,21 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         return;
       }
       if (action === "overlay-accept") {
-        if (overlay.kind === "palette") acceptPaletteEntry(stroke.name === "return");
-        else acceptFileEntry();
+        if (overlay.kind === "palette") {
+          acceptPaletteEntry(stroke.name === "return");
+        } else if (overlay.kind === "files") {
+          acceptFileEntry();
+        } else if (overlay.kind === "sessions") {
+          const id = overlay.ids[overlay.index];
+          dispatch({ type: "overlay", overlay: null });
+          if (id) {
+            dispatch({ type: "set-session", sessionId: id });
+            notice(`continuing session ${id} — your next message resumes it`);
+          }
+        }
         return;
       }
+      if (overlay.kind === "sessions") return; // modal: plain typing is ignored
       // Anything else falls through: typing keeps filtering via the composer.
     }
 
@@ -534,6 +720,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
     if (stroke.name === "escape") {
       if (controllerRef.current) {
         controllerRef.current.abort();
+        if (stateRef.current.queue.length > 0) dispatch({ type: "queue-clear" });
         notice("cancelling… (session stays open)");
       } else if (stateRef.current.scrollOffset > 0) {
         dispatch({ type: "scroll-latest" });
@@ -543,8 +730,8 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       return;
     }
 
-    // 6. Composer (disabled while a task runs).
-    if (stateRef.current.running) return;
+    // 6. Composer. Stays live during a run: Enter queues a follow-up
+    // (steering); slash/! commands execute immediately.
     const action = resolveAction("composer", stroke);
     switch (action) {
       case "submit":
@@ -639,10 +826,28 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         {state.overlay?.kind === "files" ? (
           <FilePicker files={pickerFiles} index={state.overlay.index} query={state.overlay.query} />
         ) : null}
+        {state.overlay?.kind === "sessions" ? (
+          <ListOverlay
+            title="Sessions"
+            lines={state.overlay.lines}
+            index={state.overlay.index}
+            footer="↑↓ select · Enter resume · Esc dismiss"
+          />
+        ) : null}
+        {state.queue.length > 0 ? (
+          <Text dimColor>
+            queued ({state.queue.length}): {state.queue[0]?.slice(0, 60)}
+            {state.queue.length > 1 || (state.queue[0]?.length ?? 0) > 60 ? "…" : ""}
+          </Text>
+        ) : null}
         <MultilineComposer
           editor={editor}
-          disabled={state.running || !!state.permission}
-          placeholder="Ask SeekForge to do something…  (/ commands · @ files · # remember)"
+          disabled={!!state.permission}
+          placeholder={
+            state.running
+              ? "working… type to queue a follow-up · Esc cancels · ! runs shell"
+              : "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)"
+          }
         />
         <Text dimColor>
           {state.sessionId ? (
