@@ -109,3 +109,58 @@ describe("compactSessionNow", () => {
     expect(compactSessionNow(ws, "missing")).toBeNull();
   });
 });
+
+describe("truncateSessionAtUserTurn", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-truncate-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  /** system + task (turn 0) + 3 resumed user turns (1..3), assistant replies interleaved. */
+  async function seed(id: string) {
+    const { createSessionTrace } = await import("../../src/agent/trace.js");
+    const trace = createSessionTrace(ws, id);
+    trace.message({ role: "system", content: "system prompt" });
+    trace.message({ role: "user", content: "the task" });
+    trace.message({ role: "assistant", content: "answer 0" });
+    trace.message({ role: "user", content: "follow-up 1" });
+    trace.message({ role: "assistant", content: "answer 1" });
+    trace.message({ role: "user", content: "follow-up 2" });
+    trace.message({ role: "assistant", content: "answer 2" });
+    trace.message({ role: "user", content: "follow-up 3" });
+    trace.message({ role: "assistant", content: "answer 3" });
+  }
+
+  it("truncates at a user turn, keeping everything before it", async () => {
+    const { loadSessionMessages, truncateSessionAtUserTurn } = await import("../../src/agent/trace.js");
+    await seed("s1");
+    const result = truncateSessionAtUserTurn(ws, "s1", 2);
+    // 9 messages total; turn 2 is "follow-up 2" at index 5 → keep 5, drop 4.
+    expect(result).toEqual({ removedMessages: 4, keptMessages: 5 });
+    const after = loadSessionMessages(ws, "s1");
+    expect(after.map((m) => m.content)).toEqual([
+      "system prompt",
+      "the task",
+      "answer 0",
+      "follow-up 1",
+      "answer 1",
+    ]);
+  });
+
+  it("refuses turn 0 and out-of-range turns", async () => {
+    const { loadSessionMessages, truncateSessionAtUserTurn } = await import("../../src/agent/trace.js");
+    await seed("s2");
+    expect(truncateSessionAtUserTurn(ws, "s2", 0)).toBeNull();
+    expect(truncateSessionAtUserTurn(ws, "s2", -1)).toBeNull();
+    expect(truncateSessionAtUserTurn(ws, "s2", 4)).toBeNull(); // only turns 0..3 exist
+    expect(loadSessionMessages(ws, "s2")).toHaveLength(9); // untouched
+  });
+
+  it("returns null for a missing session", async () => {
+    const { truncateSessionAtUserTurn } = await import("../../src/agent/trace.js");
+    expect(truncateSessionAtUserTurn(ws, "nope", 1)).toBeNull();
+  });
+});
