@@ -6,7 +6,7 @@ import type { AgentEvent, ChatResponse } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
-import { appendCheckpoint, readCheckpoints, rewindSession } from "../../src/agent/trace.js";
+import { appendCheckpoint, readCheckpoints, rewindSession, rewindSessionToTurn } from "../../src/agent/trace.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -248,7 +248,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
     expect(existsSync(join(ws, "gen"))).toBe(false);
   });
 
-  it("resume pre-seeds checkpoints: rewind restores the FIRST original", async () => {
+  it("a resumed run re-checkpoints the path with its turn; full rewind still restores the FIRST original", async () => {
     writeFileSync(join(ws, "a.txt"), "v-original");
     const first = agentWith([
       response({
@@ -259,7 +259,10 @@ describe("checkpoint + rewind (agent loop integration)", () => {
     ]);
     const firstEvents = await collect(first.runTask({ ...baseInput, projectPath: ws }));
     const sessionId = sessionIdOf(firstEvents);
-    expect(readCheckpoints(ws, sessionId)).toHaveLength(1);
+    // Fresh session: the task is user turn 0.
+    expect(readCheckpoints(ws, sessionId)).toEqual([
+      expect.objectContaining({ path: "a.txt", before: "v-original", turn: 0 }),
+    ]);
 
     const second = agentWith([
       response({
@@ -273,13 +276,44 @@ describe("checkpoint + rewind (agent loop integration)", () => {
     );
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("v-run2");
 
-    // the resumed run must NOT re-checkpoint a.txt with run1's content
+    // Per-run dedup: the resumed run records its own pre-write snapshot,
+    // tagged with the resumed turn index (run1 traced task + assistant
+    // reply, so the continuation is user turn 1).
     const ckpts = readCheckpoints(ws, sessionId);
-    expect(ckpts).toHaveLength(1);
-    expect(ckpts[0]).toMatchObject({ path: "a.txt", before: "v-original" });
+    expect(ckpts).toHaveLength(2);
+    expect(ckpts[0]).toMatchObject({ path: "a.txt", before: "v-original", turn: 0 });
+    expect(ckpts[1]).toMatchObject({ path: "a.txt", before: "v-run1", turn: 1 });
 
+    // Full rewind still applies the oldest entry per path.
     const res = rewindSession(ws, sessionId);
     expect(res.restored).toEqual(["a.txt"]);
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("v-original");
+  });
+
+  it("rewindSessionToTurn undoes only the resumed turn's changes", async () => {
+    writeFileSync(join(ws, "a.txt"), "v-original");
+    const first = agentWith([
+      response({
+        toolCalls: [toolCall("write_file", { path: "a.txt", content: "v-run1", overwrite: true })],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "run1 done" }),
+    ]);
+    const sessionId = sessionIdOf(await collect(first.runTask({ ...baseInput, projectPath: ws })));
+
+    const second = agentWith([
+      response({
+        toolCalls: [toolCall("write_file", { path: "a.txt", content: "v-run2", overwrite: true })],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "run2 done" }),
+    ]);
+    await collect(
+      second.runTask({ ...baseInput, projectPath: ws, task: "continue", resumeSessionId: sessionId }),
+    );
+
+    const res = rewindSessionToTurn(ws, sessionId, 1);
+    expect(res.restored).toEqual(["a.txt"]);
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("v-run1");
   });
 });
