@@ -24,13 +24,18 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" },
   { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" },
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" },
+  { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" },
   { name: "diff", summary: "git diff of the working tree" },
   { name: "model", args: "<name>", summary: "switch model for subsequent messages" },
   { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" },
   { name: "memory", args: "[edit]", summary: "list project memory facts (edit opens $EDITOR)" },
   { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" },
   { name: "agents", summary: "list dispatchable subagents" },
+  { name: "skills", summary: "list installed skills and their status" },
   { name: "mcp", summary: "list configured MCP servers and their tools" },
+  { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" },
+  { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" },
+  { name: "vim", summary: "toggle vim mode for the composer" },
   { name: "context", summary: "open the context inspector" },
   { name: "compact", summary: "how context compaction works" },
   { name: "usage", summary: "cumulative token usage and cost" },
@@ -49,13 +54,18 @@ export type SlashCommand =
   | { name: "plan"; arg?: string }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
+  | { name: "backtrack" }
   | { name: "diff" }
   | { name: "model"; arg?: string }
   | { name: "remember"; arg?: string }
   | { name: "memory"; arg?: string }
   | { name: "tasks"; arg?: string }
   | { name: "agents" }
+  | { name: "skills" }
   | { name: "mcp" }
+  | { name: "init" }
+  | { name: "doctor" }
+  | { name: "vim" }
   | { name: "context" }
   | { name: "compact" }
   | { name: "usage" }
@@ -77,9 +87,14 @@ const NO_ARG = new Set([
   "new",
   "clear",
   "sessions",
+  "backtrack",
   "diff",
   "agents",
+  "skills",
   "mcp",
+  "init",
+  "doctor",
+  "vim",
   "context",
   "compact",
   "usage",

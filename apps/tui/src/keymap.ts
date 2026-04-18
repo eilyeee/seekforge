@@ -42,6 +42,8 @@ export type ActionId =
   | "delete-back"
   | "delete-forward"
   | "external-editor"
+  | "history-search"
+  | "path-complete"
   // overlay
   | "overlay-up"
   | "overlay-down"
@@ -75,6 +77,8 @@ export const KEYMAP: ReadonlyArray<Binding> = [
   { scope: "composer", key: { input: "", name: "backspace" }, action: "delete-back" },
   { scope: "composer", key: { input: "", name: "delete" }, action: "delete-back" },
   { scope: "composer", key: { input: "g", ctrl: true }, action: "external-editor" },
+  { scope: "composer", key: { input: "r", ctrl: true }, action: "history-search" },
+  { scope: "composer", key: { input: "", name: "tab" }, action: "path-complete" },
 
   // Global (any scope, checked after the scope's own bindings).
   { scope: "global", key: { input: "c", ctrl: true }, action: "cancel-or-quit" },

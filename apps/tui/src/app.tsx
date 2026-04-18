@@ -13,6 +13,7 @@ import {
   projectMemoryPath,
   readSessionMeta,
   rewindSession,
+  truncateSessionAtUserTurn,
   type BackgroundTasks,
   type ToolSpec,
 } from "@seekforge/core";
@@ -46,8 +47,23 @@ import { appendHistory, createHistoryNav, loadHistory, type HistoryNav } from ".
 import { fuzzyRank } from "./fuzzy.js";
 import { bumpFrecency, loadFrecency, rankFiles, scanWorkspaceFiles, type Frecency } from "./files.js";
 import { sessionAllowPrefix } from "./allowlist.js";
+import { backtrackTargets } from "./backtrack.js";
 import { classifyUnifiedDiff } from "./diff.js";
+import { createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
 import { transcriptToMarkdown, defaultExportPath } from "./export.js";
+import {
+  currentMatch,
+  searchBackspace,
+  searchInput,
+  searchNext,
+  startSearch,
+  type HistorySearch,
+} from "./history-search.js";
+import { INIT_PROMPT } from "./init-prompt.js";
+import { notify } from "./notify.js";
+import { applyCompletion, cycleCompletion, startCompletion, type PathCompletion } from "./path-complete.js";
+import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
+import { applyVimKey, initialVim, type VimState } from "./vim.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
 import { openInExternalEditor } from "./external-editor.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -89,6 +105,18 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   const [state, dispatch] = useReducer(chatReducer, undefined, () => initialState(initialModel));
   const [editor, setEditor] = useState<EditorState>(emptyEditor());
 
+  // Vim mode (off by default; /vim toggles, config.vim preseeds).
+  const [vimOn, setVimOn] = useState(config.vim === true);
+  const [vim, setVim] = useState<VimState>(initialVim());
+
+  // Ctrl+R reverse history search; entries snapshotted when the search opens.
+  const [search, setSearch] = useState<HistorySearch | null>(null);
+  const searchEntriesRef = useRef<string[]>([]);
+
+  // Tab path-completion cycling state (reset on any other edit).
+  const completionRef = useRef<PathCompletion | null>(null);
+  const lastEscRef = useRef(0);
+
   // Mutable refs hold values the async run loop reads after renders.
   const sessionIdRef = useRef<string | undefined>(undefined);
   sessionIdRef.current = state.sessionId;
@@ -124,10 +152,17 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
     exit();
   }, [exit]);
 
-  /** Terminal bell on permission prompts and run completion (config.bell). */
-  const ring = useCallback(() => {
-    if (config.bell !== false) process.stdout.write("\x07");
-  }, [config.bell]);
+  /** OS notification + terminal bell (config.notify / config.bell gate each). */
+  const ring = useCallback(
+    (body?: string) => {
+      if (config.notify !== false && body) {
+        notify("SeekForge", body, { bell: config.bell !== false });
+      } else if (config.bell !== false) {
+        process.stdout.write("\x07");
+      }
+    },
+    [config.notify, config.bell],
+  );
 
   // Composer history, persisted across sessions.
   const historyFile = useMemo(() => join(projectPath, ".seekforge", "tui-history"), [projectPath]);
@@ -173,6 +208,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
 
   const applyEditor = useCallback(
     (next: EditorState) => {
+      completionRef.current = null; // any edit invalidates Tab-cycling
       setEditor(next);
       syncOverlay(next);
     },
@@ -217,7 +253,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
             new Promise<boolean>((resolve) => {
               pendingPermissionRef.current = { request: req, resolve };
               dispatch({ type: "permission", request: req });
-              ring();
+              ring(`Permission needed: ${req.toolName}${req.command ? ` — ${req.command.slice(0, 60)}` : ""}`);
             }),
         });
         if (opts?.plan && !controller.signal.aborted) {
@@ -237,7 +273,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         controllerRef.current = null;
         dispatch({ type: "run-end" });
         syncBg();
-        ring();
+        ring(`Task finished: ${task.slice(0, 60)}`);
       }
     },
     [projectPath, mcpToolSpecs, syncBg, ring],
@@ -448,6 +484,43 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         case "agents":
           for (const line of formatAgentLines(loadAgentDefinitions(projectPath))) notice(line);
           break;
+        case "skills":
+          for (const line of formatSkillLines(loadSkillsWithStatus(projectPath))) notice(line);
+          break;
+        case "init":
+          if (controllerRef.current) {
+            notice("a task is already running — wait for it to finish", "error");
+            break;
+          }
+          dispatch({ type: "user", text: "/init — analyze the codebase and write AGENTS.md" });
+          void runTask(INIT_PROMPT, { echoUser: false });
+          break;
+        case "doctor":
+          notice("doctor:");
+          for (const line of formatDoctorLines(runDoctor(projectPath, config, createDefaultProbes()))) {
+            notice(`  ${line}`);
+          }
+          break;
+        case "vim":
+          setVimOn((on) => {
+            notice(on ? "vim mode off" : "vim mode on — Esc for NORMAL, i to insert");
+            return !on;
+          });
+          setVim(initialVim());
+          break;
+        case "backtrack": {
+          const targets = backtrackTargets(stateRef.current.items);
+          if (targets.length === 0) {
+            notice("nothing to backtrack — need at least a second message in this session");
+            break;
+          }
+          if (controllerRef.current) {
+            notice("cannot backtrack while a task runs — Esc cancels it first", "error");
+            break;
+          }
+          dispatch({ type: "overlay", overlay: { kind: "backtrack", targets, index: targets.length - 1 } });
+          break;
+        }
         case "mcp":
           for (const line of formatMcpLines(config.mcpServers, mcpToolSpecs)) notice(line);
           break;
@@ -655,6 +728,24 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       return;
     }
 
+    // 3.5 Reverse history search captures everything while open.
+    if (search) {
+      if (stroke.ctrl && stroke.input === "r") {
+        setSearch(searchNext(search));
+      } else if (stroke.name === "escape") {
+        setSearch(null);
+      } else if (stroke.name === "return") {
+        const match = currentMatch(search, searchEntriesRef.current);
+        setSearch(null);
+        if (match !== null) applyEditor(setText(match));
+      } else if (stroke.name === "backspace" || stroke.name === "delete") {
+        setSearch(searchBackspace(search, searchEntriesRef.current));
+      } else if (rawInput.length > 0 && !key.ctrl && !key.meta) {
+        setSearch(searchInput(search, searchEntriesRef.current, rawInput));
+      }
+      return;
+    }
+
     // 4. Overlay scope (palette / file picker / context inspector).
     const overlay = stateRef.current.overlay;
     if (overlay) {
@@ -672,7 +763,9 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
             ? pickerFiles.length
             : overlay.kind === "sessions"
               ? overlay.ids.length
-              : 0;
+              : overlay.kind === "backtrack"
+                ? overlay.targets.length
+                : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -697,10 +790,27 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
             dispatch({ type: "set-session", sessionId: id });
             notice(`continuing session ${id} — your next message resumes it`);
           }
+        } else if (overlay.kind === "backtrack") {
+          const target = overlay.targets[overlay.index];
+          dispatch({ type: "overlay", overlay: null });
+          if (target) {
+            const sessionId = sessionIdRef.current;
+            const result = sessionId ? truncateSessionAtUserTurn(projectPath, sessionId, target.turn) : null;
+            if (!result) {
+              notice("backtrack failed — the stored session no longer matches this transcript", "error");
+              return;
+            }
+            dispatch({ type: "backtrack-apply", itemIndex: target.itemIndex });
+            applyEditor(setText(target.text));
+            notice(
+              `rewound to turn ${target.turn} (${result.removedMessages} messages dropped); ` +
+                "file changes were NOT reverted — /rewind covers files",
+            );
+          }
         }
         return;
       }
-      if (overlay.kind === "sessions") return; // modal: plain typing is ignored
+      if (overlay.kind === "sessions" || overlay.kind === "backtrack") return; // modal: plain typing is ignored
       // Anything else falls through: typing keeps filtering via the composer.
     }
 
@@ -722,16 +832,55 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         controllerRef.current.abort();
         if (stateRef.current.queue.length > 0) dispatch({ type: "queue-clear" });
         notice("cancelling… (session stays open)");
-      } else if (stateRef.current.scrollOffset > 0) {
-        dispatch({ type: "scroll-latest" });
-      } else if (editor.text !== "") {
-        applyEditor(clearAll(editor));
+        return;
       }
-      return;
+      if (stateRef.current.scrollOffset > 0) {
+        dispatch({ type: "scroll-latest" });
+        return;
+      }
+      if (!vimOn) {
+        if (editor.text !== "") {
+          applyEditor(clearAll(editor));
+        } else {
+          // Double-Esc on an empty idle composer opens the backtrack picker.
+          const now = Date.now();
+          if (now - lastEscRef.current < 600) {
+            lastEscRef.current = 0;
+            handleSlash({ name: "backtrack" });
+          } else {
+            lastEscRef.current = now;
+          }
+        }
+        return;
+      }
+      // vim mode: Esc falls through to the composer branch (enters NORMAL).
     }
 
     // 6. Composer. Stays live during a run: Enter queues a follow-up
     // (steering); slash/! commands execute immediately.
+    if (vimOn) {
+      const vimName =
+        stroke.name === "escape" ||
+        stroke.name === "return" ||
+        stroke.name === "backspace" ||
+        stroke.name === "up" ||
+        stroke.name === "down" ||
+        stroke.name === "left" ||
+        stroke.name === "right" ||
+        stroke.name === "tab"
+          ? stroke.name
+          : undefined;
+      const result = applyVimKey(vim, editor, {
+        input: rawInput,
+        ...(vimName ? { name: vimName } : {}),
+        ...(key.ctrl ? { ctrl: true } : {}),
+      });
+      if (result.vim !== vim) setVim(result.vim);
+      if (!result.passthrough) {
+        applyEditor(result.editor);
+        return;
+      }
+    }
     const action = resolveAction("composer", stroke);
     switch (action) {
       case "submit":
@@ -780,6 +929,24 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       case "external-editor":
         openExternalEditor();
         return;
+      case "history-search":
+        searchEntriesRef.current = loadHistory(historyFile);
+        setSearch(startSearch());
+        return;
+      case "path-complete": {
+        const existing = completionRef.current;
+        if (existing && existing.candidates.length > 0) {
+          const cycled = cycleCompletion(existing);
+          applyEditor(applyCompletion(editor, cycled));
+          completionRef.current = cycled;
+          return;
+        }
+        const completion = startCompletion(editor, ensureFiles());
+        if (!completion) return;
+        applyEditor(applyCompletion(editor, completion));
+        completionRef.current = completion;
+        return;
+      }
       default:
         break;
     }
@@ -821,6 +988,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           approval={state.approval}
           bgRunning={bgRunning}
           scrolled={state.scrollOffset > 0}
+          {...(vimOn ? { vim: vim.mode } : {})}
         />
         {state.overlay?.kind === "palette" ? <Palette commands={paletteCommands} index={state.overlay.index} /> : null}
         {state.overlay?.kind === "files" ? (
@@ -833,6 +1001,23 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
             index={state.overlay.index}
             footer="↑↓ select · Enter resume · Esc dismiss"
           />
+        ) : null}
+        {state.overlay?.kind === "backtrack" ? (
+          <ListOverlay
+            title="Backtrack — rewind the conversation to…"
+            lines={state.overlay.targets.map(
+              (t) => `turn ${t.turn}: ${t.text.replace(/\s+/g, " ").slice(0, 64)}${t.text.length > 64 ? "…" : ""}`,
+            )}
+            index={state.overlay.index}
+            footer="↑↓ select · Enter rewind (files NOT reverted) · Esc dismiss"
+          />
+        ) : null}
+        {search ? (
+          <Text>
+            <Text color={ACCENT}>(reverse-i-search)</Text>
+            <Text> `{search.query}`: </Text>
+            {currentMatch(search, searchEntriesRef.current) ?? <Text dimColor>no match</Text>}
+          </Text>
         ) : null}
         {state.queue.length > 0 ? (
           <Text dimColor>
