@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
+import { completionCommand } from "./commands/completion.js";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
 import {
   evolveAcceptCommand,
@@ -338,6 +339,14 @@ config
   .description("set a config value")
   .action((key: string, value: string, opts: { global?: boolean }) => {
     configSetCommand(key, value, opts);
+  });
+
+program
+  .command("completion")
+  .argument("<shell>", "bash | zsh")
+  .description("print a static shell completion script (source it from your rc file)")
+  .action((shell: string) => {
+    completionCommand(shell);
   });
 
 program
