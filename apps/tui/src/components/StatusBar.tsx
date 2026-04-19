@@ -16,6 +16,8 @@ type StatusBarProps = {
   scrolled: boolean;
   /** Vim composer mode; undefined when vim mode is off. */
   vim?: "insert" | "normal";
+  /** Agent runs detached to the background with Ctrl+B. */
+  detachedRuns?: number;
 };
 
 export function StatusBar(props: StatusBarProps): React.ReactElement {
@@ -48,6 +50,9 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
           {"  ·  "}
           {parts.bg}
         </Text>
+      ) : null}
+      {props.detachedRuns && props.detachedRuns > 0 ? (
+        <Text color="yellow">{`  ·  ⚒ ${props.detachedRuns} run${props.detachedRuns > 1 ? "s" : ""} bg`}</Text>
       ) : null}
       {props.scrolled ? <Text color="yellow">{"  ·  ↑ scrolled"}</Text> : null}
       {props.vim ? (

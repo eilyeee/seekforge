@@ -13,6 +13,8 @@ import {
   projectMemoryPath,
   readSessionMeta,
   rewindSession,
+  rewindSessionToTurn,
+  sessionTitle,
   truncateSessionAtUserTurn,
   type BackgroundTasks,
   type ToolSpec,
@@ -21,8 +23,14 @@ import type { PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
 import { chatReducer, initialState, type ApprovalSetting, type ChatAction, type Overlay } from "./model.js";
 import { formatUsage, kfmt } from "./format.js";
-import { COMMANDS, HELP_LINES, parseInput, type SlashCommand } from "./commands.js";
-import { resolveAction, toStroke, type InkKey, type KeyStroke } from "./keymap.js";
+import { COMMANDS, HELP_LINES, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
+import { KEYMAP, resolveAction, toStroke, type Binding, type InkKey, type KeyStroke, type Scope } from "./keymap.js";
+import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "./custom-commands.js";
+import { captureClipboardImage, imagePlaceholder } from "./clipboard-image.js";
+import { createPasteRegistry, expandPastes, registerPaste, shouldPlaceholder } from "./paste.js";
+import { clearTerminalTitle, MOUSE_DISABLE, MOUSE_ENABLE, parseMouseWheel, setTerminalTitle } from "./terminal.js";
+import { loadKeybindings, mergeKeymap } from "./keybindings.js";
+import { KNOWN_MODELS, modelPickerLines } from "./model-list.js";
 import { runSession } from "./agent/run-session.js";
 import {
   atTokenAt,
@@ -76,12 +84,15 @@ import { Palette } from "./components/Palette.js";
 import { FilePicker } from "./components/FilePicker.js";
 import { ContextInspector } from "./components/ContextInspector.js";
 import { ListOverlay } from "./components/ListOverlay.js";
+import { QuestionPanel } from "./components/QuestionPanel.js";
 
 export type AppProps = {
   config: TuiConfig;
   projectPath: string;
   initialModel: string;
   mcpToolSpecs: ToolSpec[];
+  /** Resume this session on launch (-c / --continue). */
+  initialSessionId?: string;
 };
 
 type PendingPermission = {
@@ -99,11 +110,20 @@ const EXECUTE_PLAN_PROMPT =
 
 const APPROVAL_CYCLE: ApprovalSetting[] = ["confirm", "auto", "plan"];
 
-export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProps): React.ReactElement {
+export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSessionId }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
   const [state, dispatch] = useReducer(chatReducer, undefined, () => initialState(initialModel));
   const [editor, setEditor] = useState<EditorState>(emptyEditor());
+
+  // -c / --continue: chain onto the most recent session.
+  useEffect(() => {
+    if (initialSessionId) {
+      dispatch({ type: "set-session", sessionId: initialSessionId });
+      dispatch({ type: "notice", text: `continuing session ${initialSessionId} — your next message resumes it` });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Vim mode (off by default; /vim toggles, config.vim preseeds).
   const [vimOn, setVimOn] = useState(config.vim === true);
@@ -131,6 +151,34 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   const pendingPermissionRef = useRef<PendingPermission | null>(null);
   const sigintCountRef = useRef(0);
 
+  // Ctrl+B run detachment: ids of runs sent to the background, their
+  // controllers (aborted on quit), and the per-run id counter.
+  const runIdCounterRef = useRef(0);
+  const currentRunIdRef = useRef<number | null>(null);
+  const detachedRunsRef = useRef<Set<number>>(new Set());
+  const detachedControllersRef = useRef<Map<number, AbortController>>(new Map());
+
+  // ask_user tool: the pending question's resolver.
+  const pendingQuestionRef = useRef<((answer: string) => void) | null>(null);
+
+  // Large-paste placeholders and clipboard-image attachments.
+  const pasteRegistryRef = useRef(createPasteRegistry());
+  const imageCounterRef = useRef(0);
+
+  // User keybinding overrides merged over the built-in table, once.
+  const keymapTableRef = useRef<Binding[] | null>(null);
+  if (keymapTableRef.current === null) {
+    keymapTableRef.current = mergeKeymap(KEYMAP, loadKeybindings(projectPath));
+  }
+  const keys = useCallback(
+    (scope: Scope, stroke: KeyStroke) => resolveAction(scope, stroke, keymapTableRef.current ?? KEYMAP),
+    [],
+  );
+
+  // Custom slash commands (.seekforge/commands/*.md), loaded once.
+  const customCommandsRef = useRef<CustomCommand[] | null>(null);
+  if (customCommandsRef.current === null) customCommandsRef.current = loadCustomCommands(projectPath);
+
   // "Allow for the session" pushes prefixes into this array IN PLACE: the
   // same reference flows into the dispatcher policy, so additions apply to
   // the currently running task too.
@@ -148,9 +196,48 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   }, []);
 
   const quit = useCallback(() => {
+    for (const c of detachedControllersRef.current.values()) c.abort();
+    detachedControllersRef.current.clear();
     bgRef.current?.disposeAll();
+    process.stdout.write(MOUSE_DISABLE);
+    clearTerminalTitle();
     exit();
   }, [exit]);
+
+  // Mouse-wheel tracking + terminal title for the app's lifetime.
+  useEffect(() => {
+    process.stdout.write(MOUSE_ENABLE);
+    return () => {
+      process.stdout.write(MOUSE_DISABLE);
+      clearTerminalTitle();
+    };
+  }, []);
+  useEffect(() => {
+    const name = projectPath.split("/").filter(Boolean).pop() ?? "seekforge";
+    setTerminalTitle(`seekforge — ${name}${state.running ? " ⚙" : ""}`);
+  }, [projectPath, state.running]);
+
+  // Ctrl+Z suspend: restore the terminal, stop, and re-enter raw mode on fg.
+  useEffect(() => {
+    const onCont = (): void => {
+      setRawMode(true);
+      process.stdout.write(MOUSE_ENABLE);
+    };
+    process.on("SIGCONT", onCont);
+    return () => {
+      process.removeListener("SIGCONT", onCont);
+    };
+  }, [setRawMode]);
+
+  const suspend = useCallback(() => {
+    setRawMode(false);
+    process.stdout.write(MOUSE_DISABLE);
+    process.kill(process.pid, "SIGTSTP");
+  }, [setRawMode]);
+
+  const notice = useCallback((text: string, tone?: "dim" | "error") => {
+    dispatch(tone ? { type: "notice", text, tone } : { type: "notice", text });
+  }, []);
 
   /** OS notification + terminal bell (config.notify / config.bell gate each). */
   const ring = useCallback(
@@ -218,7 +305,8 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   // Derived overlay candidate lists (recomputed per render; lists are small).
   const paletteCommands = useMemo(() => {
     if (state.overlay?.kind !== "palette") return [];
-    return fuzzyRank(state.overlay.query, COMMANDS, (c) => c.name, 24);
+    const all: CommandSpec[] = [...COMMANDS, ...customCommandSpecs(customCommandsRef.current ?? [])];
+    return fuzzyRank(state.overlay.query, all, (c) => c.name, 24);
   }, [state.overlay]);
 
   const pickerFiles = useMemo(() => {
@@ -233,8 +321,28 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   const runTask = useCallback(
     async (task: string, opts?: { mode?: "ask" | "edit"; plan?: boolean; echoUser?: boolean }) => {
       const controller = new AbortController();
+      const runId = ++runIdCounterRef.current;
+      const label = task.replace(/\s+/g, " ").slice(0, 48);
+      const detached = (): boolean => detachedRunsRef.current.has(runId);
+      // Detached runs stay silent except for their final outcome.
+      const dispatchRun = (a: ChatAction): void => {
+        if (!detached()) {
+          dispatch(a);
+          return;
+        }
+        if (a.type === "event" && a.event.type === "session.completed") {
+          const summary = a.event.report.summary.split("\n")[0] ?? "done";
+          dispatch({ type: "notice", text: `⚒ background task done: ${summary.slice(0, 100)}` });
+        } else if (a.type === "event" && a.event.type === "session.failed") {
+          dispatch({ type: "notice", tone: "error", text: `⚒ background task failed: ${a.event.error.message}` });
+        }
+      };
       controllerRef.current = controller;
+      currentRunIdRef.current = runId;
       sigintCountRef.current = 0;
+      // The session this run owns: detaching frees the UI's sessionId for a
+      // fresh session, so the run must keep resolving its own.
+      const ownSessionId = { current: sessionIdRef.current };
       if (opts?.echoUser !== false) dispatch({ type: "user", text: task });
       dispatch({ type: "run-start" });
       try {
@@ -247,37 +355,97 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           plan: opts?.plan ?? false,
           approvalMode: approvalRef.current === "auto" ? "auto" : "confirm",
           background: bgRef.current as BackgroundTasks,
-          dispatch: dispatch as (a: ChatAction) => void,
-          getSessionId: () => sessionIdRef.current,
+          dispatch: (a: ChatAction) => {
+            if (a.type === "event" && a.event.type === "session.created") ownSessionId.current = a.event.sessionId;
+            dispatchRun(a);
+          },
+          getSessionId: () => ownSessionId.current,
           confirm: (req) =>
             new Promise<boolean>((resolve) => {
+              if (detached()) {
+                dispatch({
+                  type: "notice",
+                  tone: "error",
+                  text: `⚒ background task asked permission for ${req.toolName} — denied (foreground only)`,
+                });
+                resolve(false);
+                return;
+              }
               pendingPermissionRef.current = { request: req, resolve };
               dispatch({ type: "permission", request: req });
               ring(`Permission needed: ${req.toolName}${req.command ? ` — ${req.command.slice(0, 60)}` : ""}`);
             }),
+          askUser: (q) =>
+            new Promise<string>((resolve) => {
+              if (detached()) {
+                resolve("(no answer — the session was moved to the background)");
+                return;
+              }
+              pendingQuestionRef.current = resolve;
+              dispatch({
+                type: "overlay",
+                overlay: { kind: "question", question: q.question, options: [...q.options], index: 0 },
+              });
+              ring(`Question: ${q.question.slice(0, 60)}`);
+            }),
         });
-        if (opts?.plan && !controller.signal.aborted) {
+        if (opts?.plan && !controller.signal.aborted && !detached()) {
           dispatch({ type: "plan-pending", pending: true });
           dispatch({ type: "notice", text: "Execute this plan? press y to run it, any other key to keep planning" });
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (!controller.signal.aborted) dispatch({ type: "notice", tone: "error", text: `error: ${message}` });
+        if (!controller.signal.aborted && !detached()) {
+          dispatch({ type: "notice", tone: "error", text: `error: ${message}` });
+        }
       } finally {
         // If a permission prompt was still open when the run ended, deny it.
-        if (pendingPermissionRef.current) {
+        if (pendingPermissionRef.current && currentRunIdRef.current === runId) {
           pendingPermissionRef.current.resolve(false);
           pendingPermissionRef.current = null;
           dispatch({ type: "permission-resolved" });
         }
-        controllerRef.current = null;
-        dispatch({ type: "run-end" });
+        if (detached()) {
+          detachedRunsRef.current.delete(runId);
+          detachedControllersRef.current.delete(runId);
+          dispatch({ type: "run-detach-done", label });
+        } else {
+          controllerRef.current = null;
+          currentRunIdRef.current = null;
+          dispatch({ type: "run-end" });
+        }
         syncBg();
         ring(`Task finished: ${task.slice(0, 60)}`);
       }
     },
     [projectPath, mcpToolSpecs, syncBg, ring],
   );
+
+  /** Ctrl+B: detach the current run; chat continues in a fresh session. */
+  const detachRun = useCallback(() => {
+    const runId = currentRunIdRef.current;
+    const controller = controllerRef.current;
+    if (runId === null || !controller) {
+      notice("nothing to detach — no task is running");
+      return;
+    }
+    detachedRunsRef.current.add(runId);
+    detachedControllersRef.current.set(runId, controller);
+    controllerRef.current = null;
+    currentRunIdRef.current = null;
+    // A pending permission would block the detached run forever: deny it now.
+    if (pendingPermissionRef.current) {
+      pendingPermissionRef.current.resolve(false);
+      pendingPermissionRef.current = null;
+      dispatch({ type: "permission-resolved" });
+    }
+    if (pendingQuestionRef.current) {
+      pendingQuestionRef.current("(no answer — the session was moved to the background)");
+      pendingQuestionRef.current = null;
+      dispatch({ type: "overlay", overlay: null });
+    }
+    dispatch({ type: "run-detach", label: "task" });
+  }, [notice]);
 
   const submitTask = useCallback(
     (task: string) => {
@@ -293,10 +461,6 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   // ---------------------------------------------------------------------
   // Slash commands.
   // ---------------------------------------------------------------------
-
-  const notice = useCallback((text: string, tone?: "dim" | "error") => {
-    dispatch(tone ? { type: "notice", text, tone } : { type: "notice", text });
-  }, []);
 
   const openExternalEditor = useCallback(() => {
     setRawMode(false);
@@ -333,12 +497,14 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
             notice("no sessions yet");
             break;
           }
+          // Display titles (summary first line when available) instead of raw tasks.
+          const titled = metas.map((m) => ({ ...m, task: sessionTitle(projectPath, m.id) }));
           dispatch({
             type: "overlay",
             overlay: {
               kind: "sessions",
               ids: metas.map((m) => m.id),
-              lines: formatSessionLines(metas, 50),
+              lines: formatSessionLines(titled, 50),
               index: 0,
             },
           });
@@ -398,7 +564,15 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         }
         case "model":
           if (!command.arg) {
-            notice(`model: ${modelRef.current}`);
+            dispatch({
+              type: "overlay",
+              overlay: {
+                kind: "model",
+                ids: KNOWN_MODELS.map((m) => m.id),
+                lines: modelPickerLines(KNOWN_MODELS, modelRef.current),
+                index: Math.max(0, KNOWN_MODELS.findIndex((m) => m.id === modelRef.current)),
+              },
+            });
           } else if (command.arg === "deepseek-reasoner") {
             notice("deepseek-reasoner has no tool calling and cannot drive the agent", "error");
           } else {
@@ -568,9 +742,22 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         case "quit":
           quit();
           break;
-        case "unknown":
+        case "unknown": {
+          // User-defined commands (.seekforge/commands/*.md) resolve here.
+          const [head, ...rest] = command.raw.slice(1).split(/\s+/);
+          const custom = (customCommandsRef.current ?? []).find((c) => c.name === (head ?? "").toLowerCase());
+          if (custom) {
+            if (controllerRef.current) {
+              notice("a task is already running — wait for it to finish", "error");
+              break;
+            }
+            dispatch({ type: "user", text: command.raw });
+            void runTask(expandCustomCommand(custom, rest.join(" ").trim()), { echoUser: false });
+            break;
+          }
           notice(`unknown command ${command.raw} — /help for the list`, "error");
           break;
+        }
       }
     },
     [notice, projectPath, config.mcpServers, mcpToolSpecs, runTask, openExternalEditor, quit, syncBg, setRawMode],
@@ -596,7 +783,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   );
 
   const handleSubmit = useCallback(() => {
-    const raw = editor.text;
+    const raw = expandPastes(pasteRegistryRef.current, editor.text);
     const parsed = parseInput(raw);
     applyEditor(emptyEditor());
     if (parsed.kind === "empty") return;
@@ -644,6 +831,12 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       }
       if (run && !spec.args) {
         applyEditor(emptyEditor());
+        const custom = (customCommandsRef.current ?? []).find((c) => c.name === spec.name);
+        if (custom) {
+          dispatch({ type: "user", text: `/${spec.name}` });
+          void runTask(expandCustomCommand(custom, ""), { echoUser: false });
+          return;
+        }
         handleSlash({ name: spec.name } as SlashCommand);
         return;
       }
@@ -663,6 +856,32 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
     bumpFrecency(projectPath, file);
     applyEditor(replaceAtToken(editor, overlay.anchor, file));
   }, [pickerFiles, projectPath, editor, applyEditor]);
+
+  /** Backtrack: truncate the stored conversation (and optionally files). */
+  const applyBacktrack = useCallback(
+    (target: { turn: number; text: string; itemIndex: number }, withFiles: boolean) => {
+      const sessionId = sessionIdRef.current;
+      const result = sessionId ? truncateSessionAtUserTurn(projectPath, sessionId, target.turn) : null;
+      if (!result) {
+        notice("backtrack failed — the stored session no longer matches this transcript", "error");
+        return;
+      }
+      dispatch({ type: "backtrack-apply", itemIndex: target.itemIndex });
+      applyEditor(setText(target.text));
+      let fileNote = "file changes kept";
+      if (withFiles && sessionId) {
+        const fr = rewindSessionToTurn(projectPath, sessionId, target.turn);
+        const restored = fr.restored.length + fr.deleted.length;
+        fileNote =
+          restored > 0
+            ? `${fr.restored.length} files restored, ${fr.deleted.length} deleted`
+            : "no file changes to revert";
+        for (const s of fr.skipped.slice(0, 5)) notice(`  skipped ${s.path}: ${s.reason}`, "error");
+      }
+      notice(`rewound to turn ${target.turn} (${result.removedMessages} messages dropped; ${fileNote})`);
+    },
+    [projectPath, notice, applyEditor],
+  );
 
   const cycleApproval = useCallback(() => {
     const idx = APPROVAL_CYCLE.indexOf(approvalRef.current);
@@ -687,6 +906,17 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
 
   useInput((rawInput, key) => {
     const stroke: KeyStroke = toStroke(rawInput, key as unknown as InkKey);
+
+    // 0. Mouse wheel (SGR sequences arrive as raw input chunks).
+    const wheel = parseMouseWheel(rawInput);
+    if (wheel) {
+      dispatch({
+        type: "scroll",
+        delta: wheel === "up" ? 3 : -3,
+        max: Math.max(0, stateRef.current.items.length - 1),
+      });
+      return;
+    }
 
     // 1. Permission prompt: y allow once / a allow for session / anything else deny.
     if (pendingPermissionRef.current) {
@@ -746,7 +976,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       return;
     }
 
-    // 4. Overlay scope (palette / file picker / context inspector).
+    // 4. Overlay scope (palette / file picker / context inspector / pickers).
     const overlay = stateRef.current.overlay;
     if (overlay) {
       if (overlay.kind === "context") {
@@ -755,7 +985,37 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         }
         return;
       }
-      const action = resolveAction("overlay", stroke);
+      // ask_user question: modal; digits jump, Enter answers, Esc declines.
+      if (overlay.kind === "question") {
+        const resolveAnswer = (answer: string): void => {
+          const resolve = pendingQuestionRef.current;
+          pendingQuestionRef.current = null;
+          dispatch({ type: "overlay", overlay: null });
+          resolve?.(answer);
+        };
+        if (stroke.name === "escape") {
+          resolveAnswer("(the user declined to answer)");
+        } else if (stroke.name === "return") {
+          resolveAnswer(overlay.options[overlay.index] ?? "(the user declined to answer)");
+        } else if (stroke.name === "up" || stroke.name === "down") {
+          dispatch({ type: "overlay-move", delta: stroke.name === "up" ? -1 : 1, count: overlay.options.length });
+        } else if (/^[1-9]$/.test(rawInput)) {
+          const n = Number(rawInput) - 1;
+          if (n < overlay.options.length) {
+            const picked = overlay.options[n];
+            if (picked !== undefined) resolveAnswer(picked);
+          }
+        }
+        return;
+      }
+      // Backtrack: "c" rewinds the conversation only (Enter = conversation + files).
+      if (overlay.kind === "backtrack" && rawInput.toLowerCase() === "c" && !stroke.ctrl) {
+        const target = overlay.targets[overlay.index];
+        dispatch({ type: "overlay", overlay: null });
+        if (target) applyBacktrack(target, false);
+        return;
+      }
+      const action = keys("overlay", stroke);
       const count =
         overlay.kind === "palette"
           ? paletteCommands.length
@@ -765,7 +1025,9 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
               ? overlay.ids.length
               : overlay.kind === "backtrack"
                 ? overlay.targets.length
-                : 0;
+                : overlay.kind === "model"
+                  ? overlay.ids.length
+                  : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -793,38 +1055,47 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         } else if (overlay.kind === "backtrack") {
           const target = overlay.targets[overlay.index];
           dispatch({ type: "overlay", overlay: null });
-          if (target) {
-            const sessionId = sessionIdRef.current;
-            const result = sessionId ? truncateSessionAtUserTurn(projectPath, sessionId, target.turn) : null;
-            if (!result) {
-              notice("backtrack failed — the stored session no longer matches this transcript", "error");
-              return;
-            }
-            dispatch({ type: "backtrack-apply", itemIndex: target.itemIndex });
-            applyEditor(setText(target.text));
-            notice(
-              `rewound to turn ${target.turn} (${result.removedMessages} messages dropped); ` +
-                "file changes were NOT reverted — /rewind covers files",
-            );
+          if (target) applyBacktrack(target, true);
+        } else if (overlay.kind === "model") {
+          const id = overlay.ids[overlay.index];
+          dispatch({ type: "overlay", overlay: null });
+          if (id && id !== "deepseek-reasoner") {
+            dispatch({ type: "set-model", model: id });
+            notice(`model: ${id}`);
+          } else if (id === "deepseek-reasoner") {
+            notice("deepseek-reasoner has no tool calling and cannot drive the agent", "error");
           }
         }
         return;
       }
-      if (overlay.kind === "sessions" || overlay.kind === "backtrack") return; // modal: plain typing is ignored
+      if (overlay.kind === "sessions" || overlay.kind === "backtrack" || overlay.kind === "model") return; // modal
       // Anything else falls through: typing keeps filtering via the composer.
     }
 
-    // 5. Global keys.
-    if (stroke.name === "tab" && stroke.shift) {
+    // 5. Global keys (user keybindings apply via the merged table).
+    const globalAction = keys("global", stroke);
+    if (globalAction === "cycle-approval") {
       cycleApproval();
       return;
     }
-    if (stroke.name === "pageup") {
-      dispatch({ type: "scroll", delta: SCROLL_PAGE, max: Math.max(0, stateRef.current.items.length - 1) });
+    if (globalAction === "scroll-up" || globalAction === "scroll-down") {
+      dispatch({
+        type: "scroll",
+        delta: globalAction === "scroll-up" ? SCROLL_PAGE : -SCROLL_PAGE,
+        max: Math.max(0, stateRef.current.items.length - 1),
+      });
       return;
     }
-    if (stroke.name === "pagedown") {
-      dispatch({ type: "scroll", delta: -SCROLL_PAGE, max: Math.max(0, stateRef.current.items.length - 1) });
+    if (globalAction === "toggle-verbose") {
+      dispatch({ type: "toggle-verbose" });
+      return;
+    }
+    if (globalAction === "detach-run") {
+      detachRun();
+      return;
+    }
+    if (globalAction === "suspend") {
+      suspend();
       return;
     }
     if (stroke.name === "escape") {
@@ -881,7 +1152,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         return;
       }
     }
-    const action = resolveAction("composer", stroke);
+    const action = keys("composer", stroke);
     switch (action) {
       case "submit":
         if (endsWithContinuation(editor)) {
@@ -933,6 +1204,17 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
         searchEntriesRef.current = loadHistory(historyFile);
         setSearch(startSearch());
         return;
+      case "paste-image": {
+        const captured = captureClipboardImage(projectPath);
+        if (!captured) {
+          notice("no image on the clipboard (text paste works as usual)");
+          return;
+        }
+        imageCounterRef.current += 1;
+        applyEditor(insertText(editor, imagePlaceholder(imageCounterRef.current, captured.path)));
+        notice(`image saved → ${captured.path}`);
+        return;
+      }
       case "path-complete": {
         const existing = completionRef.current;
         if (existing && existing.candidates.length > 0) {
@@ -950,8 +1232,13 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
       default:
         break;
     }
-    // Printable input (including multi-char paste; Ink delivers paste as one chunk).
+    // Printable input (including multi-char paste; Ink delivers paste as one
+    // chunk). Big pastes collapse into a placeholder token, expanded on send.
     if (rawInput.length > 0 && !key.ctrl && !key.meta) {
+      if (rawInput.length > 1 && shouldPlaceholder(rawInput)) {
+        applyEditor(insertText(editor, registerPaste(pasteRegistryRef.current, rawInput)));
+        return;
+      }
       applyEditor(insertText(editor, rawInput));
     }
   });
@@ -961,8 +1248,11 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
   return (
     <Box flexDirection="column">
       <Header projectPath={projectPath} model={state.model} />
-      <Transcript items={state.items} offset={state.scrollOffset} size={VIEW_ITEMS} />
+      <Transcript items={state.items} offset={state.scrollOffset} size={VIEW_ITEMS} verbose={state.verbose} />
       {state.permission ? <PermissionPanel request={state.permission} /> : null}
+      {state.overlay?.kind === "question" ? (
+        <QuestionPanel question={state.overlay.question} options={state.overlay.options} index={state.overlay.index} />
+      ) : null}
       {state.overlay?.kind === "context" ? (
         <ContextInspector
           {...(state.context ? { context: state.context } : {})}
@@ -989,6 +1279,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
           bgRunning={bgRunning}
           scrolled={state.scrollOffset > 0}
           {...(vimOn ? { vim: vim.mode } : {})}
+          detachedRuns={state.detached.length}
         />
         {state.overlay?.kind === "palette" ? <Palette commands={paletteCommands} index={state.overlay.index} /> : null}
         {state.overlay?.kind === "files" ? (
@@ -1009,7 +1300,15 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs }: AppProp
               (t) => `turn ${t.turn}: ${t.text.replace(/\s+/g, " ").slice(0, 64)}${t.text.length > 64 ? "…" : ""}`,
             )}
             index={state.overlay.index}
-            footer="↑↓ select · Enter rewind (files NOT reverted) · Esc dismiss"
+            footer="↑↓ select · Enter rewind conversation+files · c conversation only · Esc dismiss"
+          />
+        ) : null}
+        {state.overlay?.kind === "model" ? (
+          <ListOverlay
+            title="Model"
+            lines={state.overlay.lines}
+            index={state.overlay.index}
+            footer="↑↓ select · Enter switch · Esc dismiss"
           />
         ) : null}
         {search ? (

@@ -9,7 +9,7 @@ import { PlanCard } from "./PlanCard.js";
 import { ReportCard } from "./ReportCard.js";
 import { DiffCard } from "./DiffCard.js";
 
-function Item({ item }: { item: ChatItem }): React.ReactElement | null {
+function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.ReactElement | null {
   switch (item.kind) {
     case "user":
       return (
@@ -38,7 +38,15 @@ function Item({ item }: { item: ChatItem }): React.ReactElement | null {
       }
       return <Text dimColor>· {item.title}</Text>;
     case "tool":
-      return <ToolRow toolName={item.toolName} args={item.args} status={item.status} error={item.error} />;
+      return (
+        <ToolRow
+          toolName={item.toolName}
+          args={item.args}
+          status={item.status}
+          error={item.error}
+          {...(verbose && item.resultPreview ? { resultPreview: item.resultPreview } : {})}
+        />
+      );
     case "plan":
       return <PlanCard items={item.items} />;
     case "file":
@@ -49,10 +57,10 @@ function Item({ item }: { item: ChatItem }): React.ReactElement | null {
         </Text>
       );
     case "diff":
-      return <DiffCard path={item.path} lines={item.lines} />;
+      return <DiffCard path={item.path} lines={item.lines} {...(verbose ? { maxLines: Number.MAX_SAFE_INTEGER } : {})} />;
     case "shell": {
       const lines = item.output.trimEnd().split("\n");
-      const shown = lines.slice(0, 30);
+      const shown = verbose ? lines : lines.slice(0, 30);
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text>
@@ -87,15 +95,17 @@ type TranscriptProps = {
   offset: number;
   /** Max items rendered at once (older ones are virtualized away). */
   size: number;
+  /** Ctrl+O: render full tool results / diffs / shell output. */
+  verbose: boolean;
 };
 
-export function Transcript({ items, offset, size }: TranscriptProps): React.ReactElement {
+export function Transcript({ items, offset, size, verbose }: TranscriptProps): React.ReactElement {
   const { start, end, hiddenAbove, hiddenBelow } = computeWindow(items.length, offset, size);
   return (
     <Box flexDirection="column">
       {hiddenAbove > 0 ? <Text dimColor>… {hiddenAbove} earlier items (PageUp to scroll)</Text> : null}
       {items.slice(start, end).map((item) => (
-        <Item key={item.id} item={item} />
+        <Item key={item.id} item={item} verbose={verbose} />
       ))}
       {hiddenBelow > 0 ? (
         <Text dimColor>

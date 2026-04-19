@@ -45,7 +45,11 @@ export type Overlay =
       kind: "backtrack";
       targets: Array<{ turn: number; text: string; itemIndex: number }>;
       index: number;
-    };
+    }
+  /** Model picker (/model with no argument). */
+  | { kind: "model"; ids: string[]; lines: string[]; index: number }
+  /** ask_user tool question awaiting an answer. */
+  | { kind: "question"; question: string; options: string[]; index: number };
 
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
@@ -58,6 +62,8 @@ export type ChatItem =
       args: unknown;
       status: "running" | "ok" | "error";
       error?: { code: string; message: string };
+      /** Trimmed result payload, shown in verbose mode (Ctrl+O). */
+      resultPreview?: string;
     }
   | { kind: "plan"; id: string; items: PlanItem[] }
   | { kind: "file"; id: string; path: string }
@@ -97,6 +103,10 @@ export type ChatState = {
   bgTasks: BgTask[];
   /** Messages typed while a run was active, sent in order afterwards. */
   queue: string[];
+  /** Verbose rendering (Ctrl+O): full diffs, shell output, tool results. */
+  verbose: boolean;
+  /** Tasks detached to the background with Ctrl+B (display labels). */
+  detached: string[];
 };
 
 export function emptyUsage(): TokenUsage {
@@ -124,6 +134,8 @@ export function initialState(model: string): ChatState {
     planPending: false,
     bgTasks: [],
     queue: [],
+    verbose: false,
+    detached: [],
   };
 }
 
@@ -154,6 +166,10 @@ export type ChatAction =
   | { type: "bg-sync"; tasks: BgTask[] }
   /** Conversation backtrack: drop the target user item and everything after. */
   | { type: "backtrack-apply"; itemIndex: number }
+  | { type: "toggle-verbose" }
+  /** Ctrl+B: the current run detaches; chat continues in a fresh session. */
+  | { type: "run-detach"; label: string }
+  | { type: "run-detach-done"; label: string }
   | { type: "event"; event: AgentEvent };
 
 let counter = 0;
@@ -308,6 +324,29 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
         planPending: false,
       };
 
+    case "toggle-verbose":
+      return { ...state, verbose: !state.verbose };
+
+    case "run-detach":
+      return {
+        ...state,
+        running: false,
+        sessionId: undefined,
+        detached: [...state.detached, action.label],
+        items: [
+          ...state.items,
+          {
+            kind: "notice",
+            id: nextId("n"),
+            tone: "dim",
+            text: `⚒ task continues in the background — new messages start a fresh session`,
+          },
+        ],
+      };
+
+    case "run-detach-done":
+      return { ...state, detached: state.detached.filter((t) => t !== action.label) };
+
     case "event":
       return applyEvent(state, action.event);
 
@@ -380,6 +419,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         ...row,
         status: e.result.ok ? "ok" : "error",
         error: e.result.ok ? undefined : { code: e.result.error?.code ?? "error", message: e.result.error?.message ?? "" },
+        ...(e.result.ok && e.result.data !== undefined ? { resultPreview: previewData(e.result.data) } : {}),
       };
       return applyBgEvent({ ...state, items: next }, e.toolName, e.result.ok, e.result.data, row.args);
     }
@@ -466,6 +506,19 @@ function applyBgEvent(
   }
 
   return state;
+}
+
+const RESULT_PREVIEW_CHARS = 1500;
+
+/** Compact JSON preview of a tool result for verbose mode. */
+function previewData(data: unknown): string {
+  let text: string;
+  try {
+    text = typeof data === "string" ? data : JSON.stringify(data, null, 1) ?? "";
+  } catch {
+    text = String(data);
+  }
+  return text.length > RESULT_PREVIEW_CHARS ? `${text.slice(0, RESULT_PREVIEW_CHARS)}…` : text;
 }
 
 function lastRunningToolIndex(items: ChatItem[], toolName: string): number {

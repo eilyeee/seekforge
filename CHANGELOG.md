@@ -59,6 +59,28 @@ TUI v2 — full-parity terminal UI (apps/tui/DESIGN.md batches A–D).
   notifications via osascript/notify-send on permission prompts and
   completion (`"notify": false` disables; bell kept as fallback).
 
+- Run control: Ctrl+B detaches the running task to the background (chat
+  continues in a fresh session; outcome arrives as a notice + bell); Ctrl+O
+  verbose mode shows full diffs/shell output/tool results; Ctrl+Z suspends;
+  mouse wheel scrolls the transcript.
+- Per-turn checkpoints (core): file snapshots are tagged with the user turn;
+  backtrack (Esc Esc) now restores files too via `rewindSessionToTurn`
+  (Enter = conversation + files, `c` = conversation only).
+- `ask_user` tool (core): the agent can ask a 2-6 option multiple-choice
+  question; the TUI pops a panel (↑↓/1-N/Enter; Esc declines; unavailable to
+  subagents and backgrounded runs).
+- Custom slash commands: `.seekforge/commands/<name>.md` (project/global)
+  appear in the palette; `$ARGUMENTS` substitution.
+- Clipboard images: Ctrl+V saves the clipboard image to
+  `.seekforge/uploads/` and inserts an `[image #N: path]` marker that
+  travels with the task (ready for vision-capable models).
+- Large pastes collapse to `[Pasted text #N]` placeholders, expanded on
+  send; `/model` with no argument opens a picker; `/sessions` shows
+  summary-based titles (core `sessionTitle`).
+- Launch & environment: `-c/--continue`, `--model`, `--vim` flags; first-run
+  API-key wizard; user keybinding overrides in `.seekforge/keybindings.json`;
+  terminal-title updates; `seekforge completion bash|zsh`.
+
 ### Changed
 - TUI keybindings are a declarative testable table (`keymap.ts`); all input
   routing (permission → overlay → composer) is centralized in one handler.
