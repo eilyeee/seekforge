@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { ToolError } from "./errors.js";
+import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
 export type CommandPermission = "execute" | "env" | "dangerous";
 
@@ -129,18 +130,39 @@ export type ShellResult = {
 /** Cap raw capture so a chatty process cannot exhaust memory; tools re-truncate for output. */
 const MAX_CAPTURE_CHARS = 2_000_000;
 
+export type RunShellOptions = {
+  /** OS-level sandbox; "off"/absent = plain /bin/sh (current behavior). */
+  sandbox?: SandboxLevel | undefined;
+  /** Workspace root the sandbox allows writes in. Defaults to `cwd`. */
+  workspace?: string | undefined;
+};
+
 /**
  * Run `command` through /bin/sh -c in its own process group so the whole
  * tree can be killed on timeout. Throws ToolError("timeout") when exceeded.
+ * With options.sandbox set, wraps the shell in the OS sandbox (seatbelt /
+ * bwrap); throws ToolError("sandbox_unavailable") instead of silently
+ * running unsandboxed when the wrapper cannot be built.
  */
 export function runShellCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
+  options: RunShellOptions = {},
 ): Promise<ShellResult> {
+  const { sandbox, workspace = cwd } = options;
+  if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
+    return Promise.reject(
+      new ToolError(
+        "sandbox_unavailable",
+        "sandbox requested but sandbox-exec/bwrap not found on this system",
+      ),
+    );
+  }
+  const shell = sandboxedShell(command, sandbox, workspace);
   const started = Date.now();
   return new Promise<ShellResult>((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", command], {
+    const child = spawn(shell.bin, shell.args, {
       cwd,
       detached: true, // own process group -> tree kill on timeout
       stdio: ["ignore", "pipe", "pipe"],

@@ -52,7 +52,12 @@ const runCommand = defineTool({
           "background tasks are not available in this session",
         );
       }
-      const { id } = ctx.background.start({ command: args.command, cwd });
+      const { id } = ctx.background.start({
+        command: args.command,
+        cwd,
+        sandbox: ctx.sandbox,
+        workspace: ctx.workspace,
+      });
       return {
         data: {
           taskId: id,
@@ -95,7 +100,10 @@ const runCommand = defineTool({
 
     let res;
     try {
-      res = await runShellCommand(args.command, cwd, timeoutMs);
+      res = await runShellCommand(args.command, cwd, timeoutMs, {
+        sandbox: ctx.sandbox,
+        workspace: ctx.workspace,
+      });
     } catch (err) {
       if (err instanceof ToolError && err.code === "timeout") {
         const d = err.detail as { timeoutMs: number; stdout: string; stderr: string };

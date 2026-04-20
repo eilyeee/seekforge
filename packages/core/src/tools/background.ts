@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { ToolError } from "./errors.js";
+import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
 /** Per-stream ring buffer: keep only the LAST N chars of stdout/stderr. */
 const RING_BUFFER_CHARS = 100_000;
@@ -31,7 +33,18 @@ export type BackgroundTaskSummary = {
  * pattern as runShellCommand) so kill() can take down the whole tree.
  */
 export type BackgroundTasks = {
-  start(input: { command: string; cwd: string }): { id: string; pid?: number };
+  /**
+   * Spawn a detached background command. With `sandbox` set, the shell is
+   * wrapped in the OS sandbox (writes confined to `workspace`, which defaults
+   * to `cwd`); throws ToolError("sandbox_unavailable") rather than silently
+   * running unsandboxed when the wrapper cannot be built.
+   */
+  start(input: {
+    command: string;
+    cwd: string;
+    sandbox?: SandboxLevel | undefined;
+    workspace?: string | undefined;
+  }): { id: string; pid?: number };
   get(id: string): BackgroundTaskSnapshot | undefined;
   /** SIGKILL the task's process group. Idempotent; false for unknown ids. */
   kill(id: string): boolean;
@@ -78,9 +91,16 @@ export function createBackgroundTasks(): BackgroundTasks {
   }
 
   return {
-    start({ command, cwd }) {
+    start({ command, cwd, sandbox, workspace = cwd }) {
+      if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
+        throw new ToolError(
+          "sandbox_unavailable",
+          "sandbox requested but sandbox-exec/bwrap not found on this system",
+        );
+      }
+      const shell = sandboxedShell(command, sandbox, workspace);
       const id = `bg-${++nextId}`;
-      const child = spawn("/bin/sh", ["-c", command], {
+      const child = spawn(shell.bin, shell.args, {
         cwd,
         detached: true, // own process group -> tree kill
         stdio: ["ignore", "pipe", "pipe"],
