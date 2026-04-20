@@ -15,6 +15,7 @@ import type { RuntimeClient } from "../runtime/index.js";
 import {
   createBackgroundTasks,
   type BackgroundTasks,
+  type SandboxLevel,
   type ToolContext,
   type ToolDispatcher,
 } from "../tools/index.js";
@@ -64,6 +65,11 @@ export type AgentCoreDeps = {
   extractMemory?: boolean;
   /** Rust execution backend; passed through to tools via ToolContext. */
   runtime?: RuntimeClient;
+  /**
+   * OS-level sandbox for run_command (seatbelt on darwin, bwrap on linux).
+   * "off" or absent = no wrapper. Inherited by nested subagent runs.
+   */
+  sandbox?: SandboxLevel;
   /** Extra command prefixes the user allows to auto-run (L2). */
   commandAllowlist?: string[];
   /** Fine-grained allow/deny rules, project rules first (first match wins). */
@@ -266,6 +272,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
         hooks: deps.hooks,
+        sandbox: deps.sandbox,
         background: deps.background ?? createBackgroundTasks(),
         checkpoint: (path, before) => {
           if (checkpointed.has(path)) return;

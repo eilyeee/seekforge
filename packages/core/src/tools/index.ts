@@ -17,6 +17,7 @@ import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import type { BackgroundTasks } from "./background.js";
 import type { HookConfig } from "../hooks/index.js";
+import type { SandboxLevel } from "./os-sandbox.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -35,6 +36,11 @@ export type ToolContext = {
   runtime?: RuntimeClient;
   /** Per-session background task manager (run_command background:true). */
   background?: BackgroundTasks;
+  /**
+   * OS-level sandbox wrapper for run_command (seatbelt on darwin, bwrap on
+   * linux). "off" or absent = current behavior (no wrapper).
+   */
+  sandbox?: SandboxLevel;
   /**
    * User-configured shell hooks. The dispatcher fires preToolUse (blocking)
    * and postToolUse (advisory) around every tool run; see ../hooks/index.ts.
@@ -81,6 +87,8 @@ export {
   normalizeCommand,
   runShellCommand,
 } from "./run-command.js";
+export { buildSandboxSpec, sandboxedShell } from "./os-sandbox.js";
+export type { SandboxLevel, SandboxSpec } from "./os-sandbox.js";
 export { createBackgroundTasks } from "./background.js";
 export type {
   BackgroundTasks,
