@@ -18,6 +18,46 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
   return total;
 }
 
+/** Tool outputs at or below this length are never micro-cleared. */
+const CLEAR_MIN_CHARS = 200;
+const CLEARED_TOOL_CONTENT = '{"ok":true,"note":"[old tool output cleared to save context]"}';
+const DEFAULT_KEEP_LAST_TURNS = 2;
+
+/**
+ * Micro-compaction: blanks role:"tool" message contents OLDER than the last
+ * `keepLastTurns` (default 2) user turns when they exceed 200 chars, replacing
+ * them with a short JSON note. Cheaper than full compaction — assistant
+ * reasoning and message structure stay intact, only stale tool payloads go.
+ * Pure: returns a new array (input untouched) and the number of cleared
+ * results. Idempotent — the replacement note is below the length threshold.
+ */
+export function clearOldToolResults(
+  messages: ChatMessage[],
+  keepLastTurns = DEFAULT_KEEP_LAST_TURNS,
+): { messages: ChatMessage[]; cleared: number } {
+  // Boundary: index of the keepLastTurns-th user message from the end. Tool
+  // messages BEFORE it are "old". Fewer user turns than that = nothing is old.
+  let boundary = -1;
+  let seen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role !== "user") continue;
+    seen++;
+    if (seen === keepLastTurns) {
+      boundary = i;
+      break;
+    }
+  }
+  if (boundary < 0) return { messages, cleared: 0 };
+
+  let cleared = 0;
+  const out = messages.map((m, i) => {
+    if (i >= boundary || m.role !== "tool" || m.content.length <= CLEAR_MIN_CHARS) return m;
+    cleared++;
+    return { ...m, content: CLEARED_TOOL_CONTENT };
+  });
+  return cleared > 0 ? { messages: out, cleared } : { messages, cleared: 0 };
+}
+
 export type CompactionResult = {
   messages: ChatMessage[];
   droppedTurns: number;

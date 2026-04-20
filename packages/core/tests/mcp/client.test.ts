@@ -89,6 +89,52 @@ describe("mcp client", () => {
     }
   });
 
+  it("lists resources via resources/list", async () => {
+    const client = makeClient();
+    try {
+      const resources = await client.listResources();
+      expect(resources).toEqual([
+        { uri: "mem://notes", name: "Notes", mimeType: "text/plain" },
+        { uri: "mem://logo" },
+      ]);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("reads a text resource and flattens it; blobs become a placeholder", async () => {
+    const client = makeClient();
+    try {
+      expect(await client.readResource("mem://notes")).toBe("note one\nnote two");
+      expect(await client.readResource("mem://logo")).toBe("[binary content: image/png]");
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("caps a read resource at 50_000 chars", async () => {
+    const client = makeClient();
+    try {
+      const text = await client.readResource("mem://big");
+      expect(text.length).toBeLessThanOrEqual(50_000 + "…[truncated]".length);
+      expect(text.endsWith("…[truncated]")).toBe(true);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("propagates server errors for unknown resources", async () => {
+    const client = makeClient();
+    try {
+      await expect(client.readResource("mem://nope")).rejects.toMatchObject({
+        name: "McpError",
+        code: "mcp_error",
+      });
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("surfaces launch failures as errors", async () => {
     const client = createMcpClient({
       name: "missing",

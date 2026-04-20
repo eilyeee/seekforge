@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { createMcpClient, type McpClient } from "../../src/mcp/client.js";
-import { buildMcpToolSpecs, loadMcpToolSpecs } from "../../src/mcp/tools.js";
+import { buildMcpToolSpecs, listMcpResources, loadMcpToolSpecs, readMcpResource } from "../../src/mcp/tools.js";
 import { createDefaultDispatcher, createDispatcher } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 import { writeFixtureServer } from "./fixture.js";
@@ -155,5 +155,46 @@ describe("loadMcpToolSpecs", () => {
     } finally {
       dispose();
     }
+  });
+
+  it("exposes the live connections for resource access via entries", async () => {
+    const { entries, dispose } = await loadMcpToolSpecs({
+      fake: { command: process.execPath, args: [serverPath] },
+    });
+    try {
+      expect(entries.map((e) => e.serverName)).toEqual(["fake"]);
+      const refs = await listMcpResources(entries);
+      expect(refs).toEqual([
+        { server: "fake", uri: "mem://notes", name: "Notes" },
+        { server: "fake", uri: "mem://logo" },
+      ]);
+      expect(await readMcpResource("fake", "mem://notes", entries)).toBe("note one\nnote two");
+    } finally {
+      dispose();
+    }
+  });
+});
+
+describe("mcp resources", () => {
+  it("listMcpResources skips a failing server but keeps the others", async () => {
+    const broken = {
+      serverName: "broken",
+      client: createMcpClient({
+        name: "broken",
+        config: { command: "/nonexistent/seekforge-no-such-binary" },
+      }),
+      trusted: false,
+    };
+    clients.push(broken.client);
+    const refs = await listMcpResources([broken, makeEntry("fake", false)]);
+    expect(refs.map((r) => r.uri)).toEqual(["mem://notes", "mem://logo"]);
+    expect(refs.every((r) => r.server === "fake")).toBe(true);
+  });
+
+  it("readMcpResource rejects an unknown server name", async () => {
+    await expect(readMcpResource("nope", "mem://notes", [makeEntry("fake", false)])).rejects.toMatchObject({
+      name: "McpError",
+      code: "unknown_server",
+    });
   });
 });

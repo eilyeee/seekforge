@@ -161,6 +161,50 @@ describe("runHooks", () => {
     expect(await runHooks("sessionEnd", [], payload())).toEqual([]);
   });
 
+  it("delivers the stage-specific payload fields of each new stage", async () => {
+    const cases = [
+      { stage: "sessionStart", extras: { task: "do it", mode: "edit", resuming: false } },
+      { stage: "userPromptSubmit", extras: { task: "do it" } },
+      { stage: "preCompact", extras: { reason: "auto" } },
+      { stage: "stop", extras: { summary: "all done" } },
+      { stage: "subagentStop", extras: { agentId: "reviewer", ok: true } },
+      { stage: "notification", extras: { kind: "permission", detail: { toolName: "run_command" } } },
+    ] as const;
+    for (const { stage, extras } of cases) {
+      const file = `${stage}.json`;
+      const outcomes = await runHooks(stage, [{ command: `cat > ${file}` }], payload(extras));
+      expect(outcomes[0]!.ok).toBe(true);
+      const written = JSON.parse(readFileSync(join(workspace, file), "utf8"));
+      expect(written).toMatchObject({ stage, sessionId: "s-test", workspace, ...extras });
+    }
+  });
+
+  it("userPromptSubmit blocks like preToolUse: first failure stops later hooks", async () => {
+    const outcomes = await runHooks(
+      "userPromptSubmit",
+      [{ command: "echo blocked-reason; exit 2" }, { command: "touch should-not-exist-prompt" }],
+      payload({ task: "do it" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.outputTail).toContain("blocked-reason");
+    expect(existsSync(join(workspace, "should-not-exist-prompt"))).toBe(false);
+  });
+
+  it("new advisory stages never block: failures are logged, later hooks run", async () => {
+    const errors: string[] = [];
+    const outcomes = await runHooks(
+      "notification",
+      [{ command: "exit 5" }, { command: "touch notif-still-ran" }],
+      payload({ kind: "question", detail: { question: "?" } }),
+      { onError: (m) => errors.push(m) },
+    );
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[1]!.ok).toBe(true);
+    expect(existsSync(join(workspace, "notif-still-ran"))).toBe(true);
+    expect(errors).toHaveLength(1);
+  });
+
   it("sessionEnd entries run without a toolName and receive the status", async () => {
     const outcomes = await runHooks(
       "sessionEnd",

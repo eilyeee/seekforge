@@ -4,7 +4,7 @@ import { ToolError } from "../tools/errors.js";
 import { redactSecrets } from "../tools/redact.js";
 import { defineTool, type ToolSpec } from "../tools/registry.js";
 import { truncateHeadTail } from "../tools/text.js";
-import { createMcpClient, type McpClient } from "./client.js";
+import { createMcpClient, McpError, type McpClient } from "./client.js";
 import type { McpServerConfig, McpTool } from "./types.js";
 
 const DESCRIPTION_MAX_CHARS = 500;
@@ -69,13 +69,50 @@ export async function buildMcpToolSpecs(clients: McpClientEntry[]): Promise<Tool
   return specs;
 }
 
+/** One resource as surfaced to callers, tagged with its server name. */
+export type McpResourceRef = { server: string; uri: string; name?: string };
+
+/**
+ * Lists the resources of every connected server (resources/list), tagged
+ * with the server name. A server that fails or does not support resources
+ * logs a warning and contributes zero entries; this function never throws.
+ */
+export async function listMcpResources(clients: McpClientEntry[]): Promise<McpResourceRef[]> {
+  const refs: McpResourceRef[] = [];
+  for (const entry of clients) {
+    try {
+      for (const r of await entry.client.listResources()) {
+        refs.push({ server: entry.serverName, uri: r.uri, ...(r.name !== undefined ? { name: r.name } : {}) });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`warning: MCP server "${entry.serverName}" resources unavailable: ${message}\n`);
+    }
+  }
+  return refs;
+}
+
+/**
+ * Reads one resource (resources/read) from the named server, flattened to
+ * text and capped at RESOURCE_READ_MAX_CHARS (see client.ts). Throws
+ * McpError("unknown_server") when no client of that name exists; server-side
+ * failures propagate as McpError.
+ */
+export async function readMcpResource(server: string, uri: string, clients: McpClientEntry[]): Promise<string> {
+  const entry = clients.find((e) => e.serverName === server);
+  if (!entry) throw new McpError("unknown_server", `no MCP server named "${server}" is connected`);
+  return entry.client.readResource(uri);
+}
+
 /**
  * Creates a client per configured server and builds their ToolSpecs.
- * dispose() shuts every client down (kills the child processes).
+ * `entries` exposes the live connections for resource access
+ * (listMcpResources / readMcpResource). dispose() shuts every client down
+ * (kills the child processes).
  */
 export async function loadMcpToolSpecs(
   servers: Record<string, McpServerConfig>,
-): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
+): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
   const entries: McpClientEntry[] = Object.entries(servers).map(([serverName, config]) => ({
     serverName,
     client: createMcpClient({ name: serverName, config }),
@@ -84,6 +121,7 @@ export async function loadMcpToolSpecs(
   const specs = await buildMcpToolSpecs(entries);
   return {
     specs,
+    entries,
     dispose: () => {
       for (const e of entries) e.client.dispose();
     },

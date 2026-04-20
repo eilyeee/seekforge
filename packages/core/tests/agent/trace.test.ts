@@ -244,6 +244,63 @@ describe("rewindSessionToTurn", () => {
   });
 });
 
+describe("forkSession", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-fork-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("copies messages + checkpoints into a new session with derived meta", async () => {
+    const { appendCheckpoint, createSessionTrace, forkSession, loadSessionMessages, readCheckpoints, readSessionMeta } =
+      await import("../../src/agent/trace.js");
+    writeSessionMeta(ws, meta("orig", 5, { task: "fix the bug" }));
+    const trace = createSessionTrace(ws, "orig");
+    trace.message({ role: "system", content: "system prompt" });
+    trace.message({ role: "user", content: "fix the bug" });
+    trace.message({ role: "assistant", content: "done" });
+    appendCheckpoint(ws, "orig", { ts: "t0", path: "a.txt", before: "before", turn: 0 });
+
+    const forkId = forkSession(ws, "orig");
+    expect(forkId).not.toBeNull();
+    expect(forkId).not.toBe("orig");
+
+    // Conversation and checkpoints replay identically in the fork.
+    expect(loadSessionMessages(ws, forkId!)).toEqual(loadSessionMessages(ws, "orig"));
+    expect(readCheckpoints(ws, forkId!)).toEqual(readCheckpoints(ws, "orig"));
+
+    const forkMeta = readSessionMeta(ws, forkId!)!;
+    expect(forkMeta.id).toBe(forkId);
+    expect(forkMeta.task).toBe("(fork) fix the bug");
+    expect(forkMeta.status).toBe("completed");
+    expect(forkMeta.mode).toBe("edit"); // inherited
+    expect(new Date(forkMeta.createdAt).getTime()).toBeGreaterThan(Date.now() - 60_000); // fresh timestamps
+
+    // The original is untouched.
+    expect(readSessionMeta(ws, "orig")!.task).toBe("fix the bug");
+  });
+
+  it("works without a checkpoints file", async () => {
+    const { createSessionTrace, forkSession, readCheckpoints } = await import("../../src/agent/trace.js");
+    writeSessionMeta(ws, meta("nockpt", 1));
+    const trace = createSessionTrace(ws, "nockpt");
+    trace.message({ role: "user", content: "t" });
+    const forkId = forkSession(ws, "nockpt");
+    expect(forkId).not.toBeNull();
+    expect(readCheckpoints(ws, forkId!)).toEqual([]);
+  });
+
+  it("returns null when the source session is missing or has no messages", async () => {
+    const { forkSession } = await import("../../src/agent/trace.js");
+    expect(forkSession(ws, "missing")).toBeNull();
+    // Meta exists but messages.jsonl does not: still null.
+    writeSessionMeta(ws, meta("metaonly", 1));
+    expect(forkSession(ws, "metaonly")).toBeNull();
+  });
+});
+
 describe("sessionTitle", () => {
   let ws: string;
   beforeEach(() => {

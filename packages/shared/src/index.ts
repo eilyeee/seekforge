@@ -173,6 +173,8 @@ export type AgentEvent =
   | { type: "tool.completed"; toolName: string; result: ToolResult }
   | { type: "permission.required"; request: PermissionRequest }
   | { type: "context.compacted"; droppedTurns: number; summaryTokens: number }
+  /** Micro-compaction: old tool outputs were blanked to save context. */
+  | { type: "context.microcompacted"; clearedResults: number }
   | { type: "context.usage"; usedTokens: number; budgetTokens: number; percent: number }
   | { type: "usage.updated"; usage: TokenUsage }
   | { type: "file.changed"; path: string }

@@ -146,6 +146,64 @@ project's own check command.
 - Skipping verification because the change "looked trivial".
 `;
 
+const GITHUB_ISSUE_PR_CONTENT = `# GitHub Issue → PR
+
+Take a GitHub issue from report to reviewed fix: understand it with gh,
+reproduce it, fix it on a dedicated branch, and open a PR that links back.
+
+## When to Use
+
+- The user points at a GitHub issue (a number, a URL, or "修复 issue #N")
+  and wants it fixed and submitted as a pull request.
+- The user asks to open a PR for work that addresses a tracked issue.
+
+## Do Not Use When
+
+- The repository is not hosted on GitHub or \`gh\` is not authenticated.
+- The user only wants a local fix with no PR — use the bugfix skill.
+- The "issue" is a vague idea, not a tracked GitHub issue.
+
+## Required Context
+
+- The issue number or URL, and a checkout of the target repository.
+- How the project is tested: call detect_project and list_scripts first.
+
+## Procedure
+
+1. Read the issue with run_command: \`gh issue view <number>\` (add --comments
+   when the discussion matters). Extract the expected behavior and repro steps.
+2. Reproduce the problem first: use search_text and read_file to find the
+   involved code, then run the failing command or test with run_command.
+3. Create a work branch with run_command: \`git checkout -b fix/<issue>\`.
+   Never commit fixes to the default branch directly.
+4. Apply the smallest fix that addresses the root cause with apply_patch, and
+   add or adjust a regression test where the project has a test setup.
+5. Run the project's test/check scripts with run_command until green.
+6. Commit, push the branch, and open the PR with run_command:
+   \`gh pr create\` with a body that links the issue (e.g. "Fixes #<number>")
+   and summarizes the change and how it was verified.
+
+NOTE on permissions: \`gh\` and \`git push\` talk to remote services — they
+require user-approved command permissions and must NEVER auto-run. If approval
+is not granted, stop after the local commit and tell the user the exact
+commands to run themselves.
+
+## Verification
+
+- The reproduction from step 2 now passes via run_command.
+- The full test/check script passes on the branch.
+- \`gh pr view\` (or the URL printed by gh pr create) shows a PR whose body
+  references the issue.
+
+## Common Mistakes
+
+- Fixing without reading the issue thread — comments often narrow the cause.
+- Working on the default branch instead of a fix/<issue> branch.
+- Opening the PR before the tests pass locally.
+- Pushing or creating the PR without explicit user approval of gh/git push.
+- A PR body that never mentions the issue, breaking the auto-close link.
+`;
+
 /** Skills are procedure suggestions only — they never grant permissions. */
 export const BUILTIN_SKILLS: Skill[] = [
   {
@@ -186,5 +244,18 @@ export const BUILTIN_SKILLS: Skill[] = [
     enabled: true,
     risk: "low",
     content: SMALL_CODE_CHANGE_CONTENT,
+  },
+  {
+    id: "github-issue-pr",
+    scope: "builtin",
+    name: "GitHub Issue → PR",
+    description:
+      "Fix a GitHub issue end-to-end: read it with gh, reproduce, fix on a dedicated branch, run the tests, and open a PR that links the issue. gh and git push always need user approval.",
+    tags: ["github", "workflow"],
+    triggers: ["github", "issue", "pull request", "pr", "修复 issue", "提 pr"],
+    priority: 40,
+    enabled: true,
+    risk: "low",
+    content: GITHUB_ISSUE_PR_CONTENT,
   },
 ];

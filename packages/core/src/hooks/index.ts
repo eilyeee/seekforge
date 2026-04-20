@@ -1,20 +1,49 @@
 /**
- * User-configured shell hooks fired around tool execution and at session end.
+ * User-configured shell hooks fired around tool execution and at session
+ * lifecycle points.
  *
  * Hooks are local commands the USER wrote in their own config — they run
  * as-is via `/bin/sh -c`. SECURITY: model-controlled content (tool args, raw
  * commands, paths) is delivered ONLY via the JSON stdin payload and fixed env
  * vars; it is never interpolated into the hook command line.
  *
+ * Stages (payload fields beyond { sessionId, workspace }):
+ * | stage            | fires                                        | blocking | payload extras                  |
+ * |------------------|----------------------------------------------|----------|---------------------------------|
+ * | preToolUse       | before each tool runs                        | YES      | toolName, args, command?, path? |
+ * | postToolUse      | after each tool ran                          | no       | toolName, args, result          |
+ * | sessionStart     | top-level run begins                         | no       | task, mode, resuming            |
+ * | userPromptSubmit | right after sessionStart, for the task       | YES      | task                            |
+ * | preCompact       | before compaction mutates the messages       | no       | reason ("auto")                 |
+ * | stop             | after session.completed (not fail/cancel)    | no       | summary                         |
+ * | subagentStop     | a dispatched subagent run finished           | no       | agentId, ok                     |
+ * | notification     | permission prompt or ask_user question shown | no       | kind, detail                    |
+ * | sessionEnd       | top-level session ended (any status)         | no       | status                          |
+ *
  * Semantics:
- * - preToolUse: a hook exiting non-zero BLOCKS the tool; later preToolUse
- *   hooks are skipped. The outcome carries the output tail as the reason.
- * - postToolUse / sessionEnd: failures are logged (stderr) but never block.
+ * - Blocking stages (preToolUse, userPromptSubmit): a hook exiting non-zero
+ *   BLOCKS the tool/run; later hooks of that stage are skipped. The outcome
+ *   carries the output tail as the reason.
+ * - All other stages are advisory: failures are logged (stderr), never block.
+ * - sessionStart, userPromptSubmit and stop fire only for the TOP-LEVEL run
+ *   (like sessionEnd); nested subagent runs never fire them.
  * - Hooks run sequentially in config order.
  */
 import { spawn } from "node:child_process";
 
-export type HookStage = "preToolUse" | "postToolUse" | "sessionEnd";
+export type HookStage =
+  | "preToolUse"
+  | "postToolUse"
+  | "sessionStart"
+  | "userPromptSubmit"
+  | "preCompact"
+  | "stop"
+  | "subagentStop"
+  | "notification"
+  | "sessionEnd";
+
+/** Stages where a non-zero exit blocks (tool call / run) instead of logging. */
+const BLOCKING_STAGES: ReadonlySet<HookStage> = new Set(["preToolUse", "userPromptSubmit"]);
 
 export type HookEntry = {
   /** Tool name this hook applies to, or "*" for any tool (default "*"). */
@@ -31,6 +60,12 @@ export type HookEntry = {
 export type HookConfig = {
   preToolUse?: HookEntry[];
   postToolUse?: HookEntry[];
+  sessionStart?: HookEntry[];
+  userPromptSubmit?: HookEntry[];
+  preCompact?: HookEntry[];
+  stop?: HookEntry[];
+  subagentStop?: HookEntry[];
+  notification?: HookEntry[];
   sessionEnd?: HookEntry[];
 };
 
@@ -51,6 +86,24 @@ export type HookPayload = {
   result?: { ok: boolean; errorCode: string | null };
   /** sessionEnd only: final session status. */
   status?: string;
+  /** sessionStart / userPromptSubmit: the submitted task text. */
+  task?: string;
+  /** sessionStart only: run mode ("ask" | "edit"). */
+  mode?: string;
+  /** sessionStart only: true when the run resumes an existing session. */
+  resuming?: boolean;
+  /** preCompact only: why compaction runs ("auto"). */
+  reason?: string;
+  /** stop only: the final assistant summary. */
+  summary?: string;
+  /** subagentStop only: the finished subagent's definition id. */
+  agentId?: string;
+  /** subagentStop only: whether the subagent run produced a report. */
+  ok?: boolean;
+  /** notification only: what the user is being asked. */
+  kind?: "permission" | "question";
+  /** notification only: the permission request / question object. */
+  detail?: unknown;
 };
 
 export type HookOutcome = {
@@ -176,10 +229,11 @@ function runOneHook(
 
 /**
  * Runs the hooks of `stage` that match the payload, sequentially in config
- * order. preToolUse stops at the first failing hook (its outcome is the block
- * reason — callers must treat any `ok: false` outcome as blocking). For
- * postToolUse/sessionEnd every matching hook runs; failures go to
- * `opts.onError` (default stderr) and never block. Never throws.
+ * order. Blocking stages (preToolUse, userPromptSubmit) stop at the first
+ * failing hook (its outcome is the block reason — callers must treat any
+ * `ok: false` outcome as blocking). For every other stage all matching hooks
+ * run; failures go to `opts.onError` (default stderr) and never block.
+ * Never throws.
  */
 export async function runHooks(
   stage: HookStage,
@@ -199,7 +253,7 @@ export async function runHooks(
     const outcome = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
     outcomes.push(outcome);
     if (outcome.ok) continue;
-    if (stage === "preToolUse") break; // blocks the tool; later hooks are moot
+    if (BLOCKING_STAGES.has(stage)) break; // blocks the tool/run; later hooks are moot
     onError(
       `seekforge ${stage} hook failed (${entry.command}): ` +
         `${outcome.timedOut ? "timed out" : `exit ${outcome.exitCode}`}` +
