@@ -2,12 +2,13 @@ import React from "react";
 import { Box, Text } from "ink";
 import { ACCENT } from "./Header.js";
 import { highlightLines } from "../highlight.js";
+import { layoutTable } from "../render-helpers.js";
 
 /**
- * Minimal terminal markdown: headings, bullet/numbered lists, fenced code
- * blocks (syntax highlighted), and inline spans (code, bold, italic).
- * Deliberately small — no heavy markdown dep. Good enough for streamed
- * assistant prose.
+ * Minimal terminal markdown: headings, nested bullet/numbered lists, fenced
+ * code blocks (syntax highlighted), tables, blockquotes, horizontal rules,
+ * and inline spans (code, bold, italic, links). Deliberately small — no
+ * heavy markdown dep. Streaming tolerant: partial input must never crash.
  */
 export function Markdown({ text }: { text: string }): React.ReactElement {
   const lines = text.replace(/\s+$/, "").split("\n");
@@ -45,7 +46,8 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
     fence = null;
   };
 
-  for (const line of lines) {
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx] as string;
     const trimmed = line.trim();
     if (trimmed.startsWith("```")) {
       if (fence) {
@@ -69,12 +71,53 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
       );
       continue;
     }
-    const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
-    if (bullet) {
+    // Horizontal rule (checked before bullets: "---" has no trailing space).
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push(
+        <Text key={key++} dimColor>
+          {"─".repeat(40)}
+        </Text>,
+      );
+      continue;
+    }
+    // Table: a run of |-rows starting here that layoutTable accepts.
+    if (trimmed.startsWith("|")) {
+      let end = idx;
+      while (end < lines.length && (lines[end] as string).trim().startsWith("|")) end += 1;
+      const table = layoutTable(lines.slice(idx, end));
+      if (table) {
+        table.forEach((row, i) => {
+          out.push(
+            <Text key={key++} bold={i === 0} dimColor={i === 1}>
+              {row}
+            </Text>,
+          );
+        });
+        idx = end - 1;
+        continue;
+      }
+      // Malformed (or still streaming): fall through and render as plain text.
+    }
+    const quote = /^\s*>\s?(.*)$/.exec(line);
+    if (quote) {
+      const inner = /^>\s?(.*)$/.exec(quote[1] ?? "");
       out.push(
         <Text key={key++}>
-          {bullet[1]}
-          <Text color={ACCENT}>• </Text>
+          <Text dimColor>│ {inner ? "│ " : ""}</Text>
+          {renderInline(inner ? (inner[1] ?? "") : (quote[1] ?? ""))}
+        </Text>,
+      );
+      continue;
+    }
+    const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
+    if (bullet) {
+      const indent = bullet[1] ?? "";
+      const glyphs = ["•", "◦", "▪"];
+      const glyph = glyphs[Math.floor(indent.length / 2) % glyphs.length];
+      out.push(
+        <Text key={key++}>
+          {indent}
+          <Text color={ACCENT}>{glyph} </Text>
           {renderInline(bullet[2] ?? "")}
         </Text>,
       );
@@ -98,10 +141,11 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
   return <Box flexDirection="column">{out}</Box>;
 }
 
-/** Inline spans: `code`, **bold**, *italic*. */
+/** Inline spans: `code`, [text](url), **bold**, *italic*, bare URLs. */
 function renderInline(text: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
-  const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  const regex =
+    /(`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s)\]]+)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -114,16 +158,38 @@ function renderInline(text: string): React.ReactNode {
           {token.slice(1, -1)}
         </Text>,
       );
+    } else if (token.startsWith("[")) {
+      const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(token);
+      if (link) {
+        const label = link[1] as string;
+        const url = link[2] as string;
+        parts.push(
+          <Text key={key++}>
+            <Text color={ACCENT} underline>
+              {label}
+            </Text>
+            {url !== label ? <Text dimColor> ({url})</Text> : null}
+          </Text>,
+        );
+      } else {
+        parts.push(token);
+      }
     } else if (token.startsWith("**")) {
       parts.push(
         <Text key={key++} bold>
           {token.slice(2, -2)}
         </Text>,
       );
-    } else {
+    } else if (token.startsWith("*")) {
       parts.push(
         <Text key={key++} italic>
           {token.slice(1, -1)}
+        </Text>,
+      );
+    } else {
+      parts.push(
+        <Text key={key++} underline>
+          {token}
         </Text>,
       );
     }
