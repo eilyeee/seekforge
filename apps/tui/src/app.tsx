@@ -341,7 +341,10 @@ export function App({
   // Derived overlay candidate lists (recomputed per render; lists are small).
   const paletteCommands = useMemo(() => {
     if (state.overlay?.kind !== "palette") return [];
-    const all: CommandSpec[] = [...COMMANDS, ...customCommandSpecs(customCommandsRef.current ?? [])];
+    const all: CommandSpec[] = [
+      ...COMMANDS,
+      ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
+    ];
     return fuzzyRank(state.overlay.query, all, (c) => c.name, 24);
   }, [state.overlay]);
 

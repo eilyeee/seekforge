@@ -13,42 +13,57 @@ export type CommandSpec = {
   /** Argument hint shown in the palette/help, e.g. "<task>". */
   args?: string;
   summary: string;
+  /** Help/palette grouping (see COMMAND_GROUPS order). */
+  group: CommandGroup;
 };
 
+export type CommandGroup = "session" | "run" | "review" | "context" | "tools" | "settings" | "info";
+
+/** Display order for grouped help. */
+export const COMMAND_GROUPS: ReadonlyArray<[CommandGroup, string]> = [
+  ["session", "Session"],
+  ["run", "Running tasks"],
+  ["review", "Review & history"],
+  ["context", "Context & memory"],
+  ["tools", "Tools & surfaces"],
+  ["settings", "Settings"],
+  ["info", "Info"],
+];
+
 export const COMMANDS: ReadonlyArray<CommandSpec> = [
-  { name: "help", summary: "show all commands" },
-  { name: "new", summary: "start a fresh session (next message opens it)" },
-  { name: "clear", summary: "clear the transcript and start fresh" },
-  { name: "sessions", summary: "pick a session to resume (interactive)" },
-  { name: "resume", args: "<id>", summary: "continue an existing session" },
-  { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" },
-  { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" },
-  { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" },
-  { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" },
-  { name: "fork", summary: "fork the current session (continue without touching the original)" },
-  { name: "diff", summary: "git diff of the working tree" },
-  { name: "review", summary: "review the uncommitted changes (read-only)" },
-  { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" },
-  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references" },
-  { name: "model", args: "<name>", summary: "switch model for subsequent messages" },
-  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" },
-  { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" },
-  { name: "memory", args: "[edit]", summary: "list project memory facts (edit opens $EDITOR)" },
-  { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" },
-  { name: "agents", summary: "list dispatchable subagents" },
-  { name: "skills", summary: "list installed skills and their status" },
-  { name: "mcp", summary: "list configured MCP servers and their tools" },
-  { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" },
-  { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" },
-  { name: "vim", summary: "toggle vim mode for the composer" },
-  { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" },
-  { name: "context", summary: "open the context inspector" },
-  { name: "compact", summary: "how context compaction works" },
-  { name: "usage", summary: "cumulative token usage and cost" },
-  { name: "export", args: "[path]", summary: "export the transcript as markdown" },
-  { name: "copy", summary: "copy the last assistant message to the clipboard" },
-  { name: "editor", summary: "edit the prompt in $EDITOR (Ctrl+G)" },
-  { name: "quit", summary: "exit (Ctrl+C twice also works)" },
+  { name: "help", summary: "show all commands" , group: "info" },
+  { name: "new", summary: "start a fresh session (next message opens it)" , group: "session" },
+  { name: "clear", summary: "clear the transcript and start fresh" , group: "session" },
+  { name: "sessions", summary: "pick a session to resume (interactive)" , group: "session" },
+  { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
+  { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
+  { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" , group: "run" },
+  { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
+  { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
+  { name: "fork", summary: "fork the current session (continue without touching the original)" , group: "session" },
+  { name: "diff", summary: "git diff of the working tree" , group: "review" },
+  { name: "review", summary: "review the uncommitted changes (read-only)" , group: "review" },
+  { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" , group: "context" },
+  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references" , group: "tools" },
+  { name: "model", args: "<name>", summary: "switch model for subsequent messages" , group: "run" },
+  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" , group: "run" },
+  { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" , group: "context" },
+  { name: "memory", args: "[edit]", summary: "list project memory facts (edit opens $EDITOR)" , group: "context" },
+  { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" , group: "tools" },
+  { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
+  { name: "skills", summary: "list installed skills and their status" , group: "tools" },
+  { name: "mcp", summary: "list configured MCP servers and their tools" , group: "tools" },
+  { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" , group: "tools" },
+  { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" , group: "info" },
+  { name: "vim", summary: "toggle vim mode for the composer" , group: "settings" },
+  { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" , group: "settings" },
+  { name: "context", summary: "open the context inspector" , group: "context" },
+  { name: "compact", summary: "how context compaction works" , group: "context" },
+  { name: "usage", summary: "cumulative token usage and cost" , group: "context" },
+  { name: "export", args: "[path]", summary: "export the transcript as markdown" , group: "review" },
+  { name: "copy", summary: "copy the last assistant message to the clipboard" , group: "review" },
+  { name: "editor", summary: "edit the prompt in $EDITOR (Ctrl+G)" , group: "settings" },
+  { name: "quit", summary: "exit (Ctrl+C twice also works)" , group: "session" },
 ];
 
 export type SlashCommand =
@@ -84,6 +99,12 @@ export type SlashCommand =
   | { name: "export"; arg?: string }
   | { name: "copy" }
   | { name: "editor" }
+  | { name: "status" }
+  | { name: "config"; arg?: string }
+  | { name: "permissions" }
+  | { name: "hooks" }
+  | { name: "release-notes" }
+  | { name: "bug" }
   | { name: "quit" }
   | { name: "unknown"; raw: string };
 
@@ -110,6 +131,11 @@ const NO_ARG = new Set([
   "init",
   "doctor",
   "vim",
+  "status",
+  "permissions",
+  "hooks",
+  "release-notes",
+  "bug",
   "context",
   "compact",
   "usage",
@@ -120,7 +146,7 @@ const NO_ARG = new Set([
 /** Commands whose argument is the whole rest of the line (free text). */
 const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir"]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "memory", "export"]);
+const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "memory", "export", "config"]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();
@@ -145,7 +171,8 @@ export function parseInput(line: string): ParsedInput {
 
   const [head, ...rest] = trimmed.slice(1).split(/\s+/);
   const name = (head ?? "").toLowerCase();
-  const alias = name === "exit" ? "quit" : name === "todos" ? "todo" : name;
+  const ALIAS: Record<string, string> = { exit: "quit", q: "quit", h: "help", todos: "todo", cost: "usage" };
+  const alias = ALIAS[name] ?? name;
 
   if (NO_ARG.has(alias)) return { kind: "slash", command: { name: alias } as SlashCommand };
   if (REST_ARG.has(alias)) {
