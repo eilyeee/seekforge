@@ -54,6 +54,8 @@ export type Overlay =
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  /** Chain-of-thought block (V4 thinking mode); collapsed unless verbose. */
+  | { kind: "thinking"; id: string; text: string; streaming: boolean; startedAt: number; endedAt?: number }
   | { kind: "step"; id: string; title: string; agentId?: string }
   | {
       kind: "tool";
@@ -107,6 +109,10 @@ export type ChatState = {
   verbose: boolean;
   /** Tasks detached to the background with Ctrl+B (display labels). */
   detached: string[];
+  /** Epoch ms when the current run started (drives the elapsed counter). */
+  turnStartedAt?: number;
+  /** Live token count for the current turn (from usage.updated events). */
+  turnTokens: number;
 };
 
 export function emptyUsage(): TokenUsage {
@@ -136,6 +142,7 @@ export function initialState(model: string): ChatState {
     queue: [],
     verbose: false,
     detached: [],
+    turnTokens: 0,
   };
 }
 
@@ -143,6 +150,7 @@ export type ChatAction =
   | { type: "user"; text: string }
   | { type: "notice"; text: string; tone?: "dim" | "error" }
   | { type: "model-delta"; chunk: string }
+  | { type: "thinking-delta"; chunk: string }
   | { type: "run-start" }
   | { type: "run-end" }
   | { type: "set-model"; model: string }
@@ -183,6 +191,15 @@ function lastItem(items: ChatItem[]): ChatItem | undefined {
   return items[items.length - 1];
 }
 
+/** Closes a trailing streaming thinking block (stamps its duration). */
+function closeStreamingThinking(items: ChatItem[]): ChatItem[] {
+  const last = items[items.length - 1];
+  if (last && last.kind === "thinking" && last.streaming) {
+    return [...items.slice(0, -1), { ...last, streaming: false, endedAt: Date.now() }];
+  }
+  return items;
+}
+
 /** Matches nested-subagent step titles emitted by the loop: "[agentId] tool". */
 const NESTED_STEP = /^\[([A-Za-z0-9_-]+)\] (.+)$/;
 
@@ -212,27 +229,46 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "model-delta": {
       // Coalesce streamed deltas into the trailing streaming assistant item;
-      // open a new one if the last item is not a live assistant turn.
-      const last = lastItem(state.items);
+      // open a new one if the last item is not a live assistant turn. A
+      // streaming thinking block is closed first (content follows thought).
+      const closed = closeStreamingThinking(state.items);
+      const last = lastItem(closed);
       if (last && last.kind === "assistant" && last.streaming) {
+        const updated: ChatItem = { ...last, text: last.text + action.chunk };
+        return { ...state, items: [...closed.slice(0, -1), updated] };
+      }
+      return {
+        ...state,
+        items: [...closed, { kind: "assistant", id: nextId("a"), text: action.chunk, streaming: true }],
+      };
+    }
+
+    case "thinking-delta": {
+      const last = lastItem(state.items);
+      if (last && last.kind === "thinking" && last.streaming) {
         const updated: ChatItem = { ...last, text: last.text + action.chunk };
         return { ...state, items: [...state.items.slice(0, -1), updated] };
       }
       return {
         ...state,
-        items: [...state.items, { kind: "assistant", id: nextId("a"), text: action.chunk, streaming: true }],
+        items: [
+          ...state.items,
+          { kind: "thinking", id: nextId("th"), text: action.chunk, streaming: true, startedAt: Date.now() },
+        ],
       };
     }
 
     case "run-start":
-      return { ...state, running: true, scrollOffset: 0 };
+      return { ...state, running: true, scrollOffset: 0, turnStartedAt: Date.now(), turnTokens: 0 };
 
     case "run-end": {
-      // Close any open streaming assistant item. Background tasks live in the
-      // shared manager and survive the run; the app bg-syncs a snapshot.
-      const items = state.items.map((it) =>
-        it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it,
-      );
+      // Close any open streaming assistant/thinking items. Background tasks
+      // live in the shared manager and survive the run.
+      const items = state.items.map((it): ChatItem => {
+        if (it.kind === "assistant" && it.streaming) return { ...it, streaming: false };
+        if (it.kind === "thinking" && it.streaming) return { ...it, streaming: false, endedAt: Date.now() };
+        return it;
+      });
       return { ...state, running: false, items };
     }
 
@@ -439,10 +475,24 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "context.usage":
       return { ...state, context: { usedTokens: e.usedTokens, budgetTokens: e.budgetTokens, percent: e.percent } };
 
+    case "context.microcompacted":
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          {
+            kind: "notice",
+            id: nextId("n"),
+            tone: "dim",
+            text: `context: cleared ${(e as { clearedResults: number }).clearedResults} old tool outputs`,
+          },
+        ],
+      };
+
     case "usage.updated":
-      // usage.updated is incremental within a turn; cumulative total is taken
-      // from session.completed to avoid double counting.
-      return state;
+      // Cumulative cost is taken from session.completed (avoid double
+      // counting); the in-turn number drives the live activity counter.
+      return { ...state, turnTokens: e.usage.promptTokens + e.usage.completionTokens };
 
     case "session.completed":
       return {

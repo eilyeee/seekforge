@@ -30,6 +30,16 @@ export type TuiConfig = {
   notify?: boolean;
   /** Start the composer in vim mode (/vim toggles at runtime). */
   vim?: boolean;
+  /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
+  sandbox?: "off" | "workspace-write" | "restricted";
+  /** Shell command producing one custom status-bar line (JSON payload on stdin). */
+  statusLine?: string;
+  /** Warn at 80% and 100% of this cumulative cost (USD) per TUI session. */
+  costBudgetUsd?: number;
+  /** DeepSeek V4 thinking mode (default: API default). /think toggles. */
+  thinking?: boolean;
+  /** V4 reasoning effort: "high" or "max". */
+  reasoningEffort?: "high" | "max";
 };
 
 function readJson(path: string): TuiConfig {

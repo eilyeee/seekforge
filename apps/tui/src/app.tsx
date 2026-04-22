@@ -11,12 +11,16 @@ import {
   listSessions,
   loadAgentDefinitions,
   projectMemoryPath,
+  forkSession,
+  listMcpResources,
+  readMcpResource,
   readSessionMeta,
   rewindSession,
   rewindSessionToTurn,
   sessionTitle,
   truncateSessionAtUserTurn,
   type BackgroundTasks,
+  type McpClientEntry,
   type ToolSpec,
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
@@ -38,6 +42,12 @@ import {
 } from "./terminal.js";
 import { loadKeybindings, mergeKeymap } from "./keybindings.js";
 import { KNOWN_MODELS, modelPickerLines } from "./model-list.js";
+import { addTodo, formatTodoLines, loadTodos, removeTodo, toggleTodo } from "./todos.js";
+import { expandExtraFileRefs, formatExtraDirLines, normalizeExtraDir } from "./workspace-dirs.js";
+import { runStatusLine } from "./statusline.js";
+import { checkBudget, type BudgetState } from "./budget.js";
+import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
+import { keyHints, turnSummaryLine } from "./render-helpers.js";
 import { runSession } from "./agent/run-session.js";
 import {
   atTokenAt,
@@ -98,8 +108,12 @@ export type AppProps = {
   projectPath: string;
   initialModel: string;
   mcpToolSpecs: ToolSpec[];
+  /** Live MCP connections (resource listing / @mcp: references). */
+  mcpEntries?: McpClientEntry[];
   /** Resume this session on launch (-c / --continue). */
   initialSessionId?: string;
+  /** Package version, shown in the header. */
+  version?: string;
 };
 
 type PendingPermission = {
@@ -117,7 +131,15 @@ const EXECUTE_PLAN_PROMPT =
 
 const APPROVAL_CYCLE: ApprovalSetting[] = ["confirm", "auto", "plan"];
 
-export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSessionId }: AppProps): React.ReactElement {
+export function App({
+  config,
+  projectPath,
+  initialModel,
+  mcpToolSpecs,
+  mcpEntries = [],
+  initialSessionId,
+  version,
+}: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
   const [state, dispatch] = useReducer(chatReducer, undefined, () => initialState(initialModel));
@@ -185,6 +207,13 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
   // Custom slash commands (.seekforge/commands/*.md), loaded once.
   const customCommandsRef = useRef<CustomCommand[] | null>(null);
   if (customCommandsRef.current === null) customCommandsRef.current = loadCustomCommands(projectPath);
+
+  // Extra read-only roots for @ references (/add-dir).
+  const extraDirsRef = useRef<string[]>([]);
+  // Cost-budget warning state (80% / 100%, warned once each).
+  const budgetRef = useRef<BudgetState>({ warned80: false, warnedOver: false });
+  // Custom statusline output (config.statusLine command), refreshed per run.
+  const [statusLineText, setStatusLineText] = useState<string | null>(null);
 
   // "Allow for the session" pushes prefixes into this array IN PLACE: the
   // same reference flows into the dispatcher policy, so additions apply to
@@ -350,9 +379,27 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
       // The session this run owns: detaching frees the UI's sessionId for a
       // fresh session, so the run must keep resolving its own.
       const ownSessionId = { current: sessionIdRef.current };
+      const startedAt = Date.now();
+      const costBefore = stateRef.current.totalUsage.costUsd;
       if (opts?.echoUser !== false) dispatch({ type: "user", text: task });
       dispatch({ type: "run-start" });
       try {
+        // Inline @mcp:server:uri resource references (max 5 per message).
+        const mcpRefs = [...task.matchAll(/@mcp:([A-Za-z0-9_-]+):(\S+)/g)].slice(0, 5);
+        for (const m of mcpRefs) {
+          const [, server, uri] = m;
+          if (!server || !uri) continue;
+          try {
+            const text = await readMcpResource(server, uri, mcpEntries);
+            task += `\n\n--- MCP resource ${server}:${uri} ---\n${text}`;
+          } catch (err) {
+            dispatch({
+              type: "notice",
+              tone: "error",
+              text: `mcp resource ${server}:${uri} failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        }
         await runSession(task, controller.signal, {
           config: runConfigRef.current,
           model: modelRef.current,
@@ -420,12 +467,38 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
           controllerRef.current = null;
           currentRunIdRef.current = null;
           dispatch({ type: "run-end" });
+          // Turn summary + budget + custom statusline (foreground runs only).
+          if (!controller.signal.aborted) {
+            const s = stateRef.current;
+            dispatch({
+              type: "notice",
+              text: turnSummaryLine({
+                durationMs: Date.now() - startedAt,
+                costUsd: Math.max(0, s.totalUsage.costUsd - costBefore),
+                totalTokens: s.turnTokens,
+              }),
+            });
+            const budget = checkBudget(budgetRef.current, s.totalUsage.costUsd, config.costBudgetUsd);
+            budgetRef.current = budget.state;
+            if (budget.warning) dispatch({ type: "notice", tone: "error", text: budget.warning });
+            if (config.statusLine) {
+              setStatusLineText(
+                runStatusLine(config.statusLine, {
+                  model: modelRef.current,
+                  cwd: projectPath,
+                  ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+                  costUsd: s.totalUsage.costUsd,
+                  ...(s.context ? { contextPercent: s.context.percent } : {}),
+                }),
+              );
+            }
+          }
         }
         syncBg();
         ring(`Task finished: ${task.slice(0, 60)}`);
       }
     },
-    [projectPath, mcpToolSpecs, syncBg, ring],
+    [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd, config.statusLine],
   );
 
   /** Ctrl+B: detach the current run; chat continues in a fresh session. */
@@ -456,10 +529,13 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
 
   const submitTask = useCallback(
     (task: string) => {
+      // Inline files referenced from /add-dir extra roots (workspace-level
+      // @ expansion happens inside run-session).
+      const expanded = extraDirsRef.current.length > 0 ? expandExtraFileRefs(task, extraDirsRef.current) : task;
       if (approvalRef.current === "plan") {
-        void runTask(task, { mode: "ask", plan: true });
+        void runTask(expanded, { mode: "ask", plan: true });
       } else {
-        void runTask(task);
+        void runTask(expanded);
       }
     },
     [runTask],
@@ -636,6 +712,98 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
           if (facts.length > 30) notice(`  … ${facts.length - 30} more (/memory edit opens the file)`);
           break;
         }
+        case "review":
+          if (controllerRef.current) {
+            notice("a task is already running — wait for it to finish", "error");
+            break;
+          }
+          dispatch({ type: "user", text: "/review — review the uncommitted changes" });
+          void runTask(
+            "Review the uncommitted changes in this repository. Use git_diff (and read_file for context) to inspect them. " +
+              "Report findings grouped by severity (bugs, risks, style), each with file:line references. " +
+              "Do NOT modify any files — this is a read-only review.",
+            { mode: "ask", echoUser: false },
+          );
+          break;
+        case "fork": {
+          const sessionId = sessionIdRef.current;
+          if (!sessionId) {
+            notice("no active session to fork", "error");
+            break;
+          }
+          const forked = forkSession(projectPath, sessionId);
+          if (!forked) {
+            notice("fork failed — session not found on disk", "error");
+            break;
+          }
+          dispatch({ type: "set-session", sessionId: forked });
+          notice(`forked → ${forked} — next message continues the fork; the original is untouched`);
+          break;
+        }
+        case "todo": {
+          const arg = command.arg ?? "";
+          const [verb, ...restWords] = arg.split(/\s+/).filter(Boolean);
+          try {
+            if (!verb) {
+              for (const line of formatTodoLines(loadTodos(projectPath))) notice(line);
+            } else if (verb === "add" && restWords.length > 0) {
+              const t = addTodo(projectPath, restWords.join(" "));
+              notice(`added todo ${t.index}: ${t.text}`);
+            } else if (verb === "done" && restWords[0]) {
+              const t = toggleTodo(projectPath, Number(restWords[0]));
+              notice(t ? `${t.done ? "done" : "reopened"}: ${t.text}` : "no such todo", t ? "dim" : "error");
+            } else if (verb === "rm" && restWords[0]) {
+              const t = removeTodo(projectPath, Number(restWords[0]));
+              notice(t ? `removed: ${t.text}` : "no such todo", t ? "dim" : "error");
+            } else {
+              notice("usage: /todo [add <text> | done <n> | rm <n>]", "error");
+            }
+          } catch (err) {
+            notice(`todo error: ${err instanceof Error ? err.message : String(err)}`, "error");
+          }
+          break;
+        }
+        case "add-dir": {
+          if (!command.arg) {
+            for (const line of formatExtraDirLines(extraDirsRef.current)) notice(line);
+            break;
+          }
+          const dir = normalizeExtraDir(command.arg, projectPath);
+          if (!dir) {
+            notice("not a directory (or inside the workspace already)", "error");
+            break;
+          }
+          if (!extraDirsRef.current.includes(dir)) extraDirsRef.current.push(dir);
+          notice(`added read-only dir: ${dir} — reference its files with @${dir}/…`);
+          break;
+        }
+        case "terminal-setup":
+          for (const line of terminalSetupInstructions(detectTerminal())) notice(line);
+          break;
+        case "think": {
+          const cfg = runConfigRef.current;
+          const arg = command.arg;
+          if (!arg) {
+            notice(
+              `thinking: ${cfg.thinking === false ? "off" : "on"}${cfg.reasoningEffort ? ` · effort ${cfg.reasoningEffort}` : ""} (V4 models only — /think on|off|high|max)`,
+            );
+            break;
+          }
+          if (arg === "on") cfg.thinking = true;
+          else if (arg === "off") cfg.thinking = false;
+          else if (arg === "high" || arg === "max") {
+            cfg.thinking = true;
+            cfg.reasoningEffort = arg;
+          } else {
+            notice("usage: /think [on|off|high|max]", "error");
+            break;
+          }
+          notice(
+            `thinking ${cfg.thinking === false ? "off" : "on"}${cfg.reasoningEffort ? ` · effort ${cfg.reasoningEffort}` : ""} — applies from the next message` +
+              (modelRef.current.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)"),
+          );
+          break;
+        }
         case "diff": {
           const r = spawnSync("git", ["diff"], { cwd: projectPath, encoding: "utf8", maxBuffer: 4_000_000 });
           if (r.status !== 0 && r.stderr) {
@@ -704,6 +872,16 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
         }
         case "mcp":
           for (const line of formatMcpLines(config.mcpServers, mcpToolSpecs)) notice(line);
+          if (mcpEntries.length > 0) {
+            void listMcpResources(mcpEntries)
+              .then((rs) => {
+                if (rs.length === 0) return;
+                notice(`resources (${rs.length}) — reference with @mcp:<server>:<uri> in a message:`);
+                for (const r of rs.slice(0, 10)) notice(`  @mcp:${r.server}:${r.uri}${r.name ? `  (${r.name})` : ""}`);
+                if (rs.length > 10) notice(`  … ${rs.length - 10} more`);
+              })
+              .catch(() => {});
+          }
           break;
         case "context":
           dispatch({ type: "overlay", overlay: { kind: "context" } });
@@ -1020,6 +1198,21 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
         }
         return;
       }
+      // Sessions: "f" forks the selected session instead of resuming it.
+      if (overlay.kind === "sessions" && rawInput.toLowerCase() === "f" && !stroke.ctrl) {
+        const id = overlay.ids[overlay.index];
+        dispatch({ type: "overlay", overlay: null });
+        if (id) {
+          const forked = forkSession(projectPath, id);
+          if (forked) {
+            dispatch({ type: "set-session", sessionId: forked });
+            notice(`forked ${id.slice(0, 12)}… → ${forked} — next message continues the fork`);
+          } else {
+            notice("fork failed — session not found on disk", "error");
+          }
+        }
+        return;
+      }
       // Backtrack: "c" rewinds the conversation only (Enter = conversation + files).
       if (overlay.kind === "backtrack" && rawInput.toLowerCase() === "c" && !stroke.ctrl) {
         const target = overlay.targets[overlay.index];
@@ -1259,7 +1452,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
 
   return (
     <Box flexDirection="column">
-      <Header projectPath={projectPath} model={state.model} />
+      <Header projectPath={projectPath} model={state.model} {...(version ? { version } : {})} />
       <Transcript items={state.items} offset={state.scrollOffset} size={VIEW_ITEMS} verbose={state.verbose} />
       {state.permission ? <PermissionPanel request={state.permission} /> : null}
       {state.overlay?.kind === "question" ? (
@@ -1292,6 +1485,8 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
           scrolled={state.scrollOffset > 0}
           {...(vimOn ? { vim: vim.mode } : {})}
           detachedRuns={state.detached.length}
+          {...(state.turnStartedAt !== undefined ? { turnStartedAt: state.turnStartedAt } : {})}
+          turnTokens={state.turnTokens}
         />
         {state.overlay?.kind === "palette" ? <Palette commands={paletteCommands} index={state.overlay.index} /> : null}
         {state.overlay?.kind === "files" ? (
@@ -1302,7 +1497,7 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
             title="Sessions"
             lines={state.overlay.lines}
             index={state.overlay.index}
-            footer="↑↓ select · Enter resume · Esc dismiss"
+            footer="↑↓ select · Enter resume · f fork · Esc dismiss"
           />
         ) : null}
         {state.overlay?.kind === "backtrack" ? (
@@ -1345,14 +1540,15 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
               : "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)"
           }
         />
+        {statusLineText ? <Text dimColor>{statusLineText}</Text> : null}
         <Text dimColor>
           {state.sessionId ? (
             <>
-              session <Text color={ACCENT}>{state.sessionId.slice(0, 8)}</Text> · /help for commands
+              session <Text color={ACCENT}>{state.sessionId.slice(0, 8)}</Text>
+              {" · "}
             </>
-          ) : (
-            "/help for commands"
-          )}
+          ) : null}
+          {keyHints(state.permission ? "permission" : state.running ? "running" : "idle")}
         </Text>
       </Box>
     </Box>

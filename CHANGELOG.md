@@ -1,6 +1,43 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.7.0 (unreleased) — round 5: engine gaps + UI polish + DeepSeek V4
+
+### Added (engine)
+- OS-level command sandbox (opt-in `"sandbox": "workspace-write" | "restricted"`):
+  seatbelt on macOS, bwrap on Linux; restricted also cuts network; hard-fails
+  when requested but unavailable (never silently unsandboxed).
+- DeepSeek V4 support: `deepseek-v4-flash` / `deepseek-v4-pro` with thinking
+  mode + tool calling — streamed `reasoning_content` renders as a collapsible
+  "✻ thought for Ns" block (Ctrl+O expands); `/think on|off|high|max` and
+  config `thinking` / `reasoningEffort` control it; reasoning is never echoed
+  back into requests.
+- Hook events: sessionStart, userPromptSubmit (blocking), preCompact, stop,
+  subagentStop, notification — alongside the existing three.
+- Micro-compaction: over budget, old tool outputs are cleared first
+  (`context.microcompacted` event); full digesting only if still over.
+- ask_user → see round 4; subagents and detached runs can never block on it.
+- `forkSession` (core) + `/fork` and `f` in the sessions picker.
+- MCP resources: `listMcpResources`/`readMcpResource` over the live client
+  connections; `/mcp` lists them and `@mcp:<server>:<uri>` in a message
+  inlines the resource.
+- GitHub workflow builtin skill (`github-issue-pr`): gh issue → branch →
+  fix → tests → PR, with explicit user-approval notes for gh/git push.
+- `/review`: read-only review of the uncommitted changes.
+
+### Added (TUI UX)
+- Claude Code-style tool rows: `⏺ Read(src/app.ts)` with friendly per-tool
+  titles and `  ⎿  120 lines`-style result summaries; verbose keeps full
+  payloads. Live activity line: spinner + elapsed seconds + live token count
+  + "esc to interrupt"; per-turn summary line `✓ 34s · $0.0123 · 12.4K tok`.
+- Rich markdown: tables, blockquotes, rules, links, nested bullets; diffs
+  gain old/new line-number gutters; header shows the version + a rotating tip;
+  context-sensitive key-hint footer.
+- Cross-session todos (`/todo`, `.seekforge/todos.md`); `/add-dir` read-only
+  extra roots for @ references; custom statusline (`statusLine` command,
+  JSON on stdin); cost budget warnings (`costBudgetUsd`, 80%/100% once);
+  `/terminal-setup` Shift+Enter instructions.
+
+## 0.7.0 (earlier rounds)
 
 TUI v2 — full-parity terminal UI (apps/tui/DESIGN.md batches A–D).
 

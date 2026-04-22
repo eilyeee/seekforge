@@ -15,11 +15,13 @@ type ToolRowProps = {
   args: unknown;
   status: "running" | "ok" | "error";
   error?: { code: string; message: string };
-  /** Full(ish) result payload, rendered when verbose mode (Ctrl+O) is on. */
+  /** Full(ish) result payload (always passed; feeds the ⎿ summary). */
   resultPreview?: string;
+  /** Ctrl+O: render the full preview lines below the summary. */
+  verbose?: boolean;
 };
 
-export function ToolRow({ toolName, args, status, error, resultPreview }: ToolRowProps): React.ReactElement {
+export function ToolRow({ toolName, args, status, error, resultPreview, verbose }: ToolRowProps): React.ReactElement {
   const { verb, detail } = toolTitle(toolName, args);
   const summary = toolResultSummary(toolName, status === "ok", resultPreview, error);
   return (
@@ -49,7 +51,7 @@ export function ToolRow({ toolName, args, status, error, resultPreview }: ToolRo
           {summary}
         </Text>
       ) : null}
-      {resultPreview
+      {verbose && resultPreview
         ? resultPreview.split("\n").map((line, i) => (
             <Text key={i} dimColor>
               {"    "}

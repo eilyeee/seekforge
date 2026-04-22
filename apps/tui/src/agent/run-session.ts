@@ -44,6 +44,7 @@ export async function runSession(
     model: deps.model,
     confirm: deps.confirm,
     onModelDelta: (chunk) => deps.dispatch({ type: "model-delta", chunk }),
+    onReasoningDelta: (chunk) => deps.dispatch({ type: "thinking-delta", chunk }),
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath),
     mcpToolSpecs: deps.mcpToolSpecs,

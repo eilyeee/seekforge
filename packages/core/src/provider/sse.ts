@@ -10,6 +10,7 @@ type WireStreamChunk = {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -25,6 +26,8 @@ export type SseAccumulator = {
   /** Carry-over for a partial line split across network chunks. */
   buffer: string;
   content: string;
+  /** Accumulated chain-of-thought (V4 thinking mode). */
+  reasoningContent: string;
   toolCallsByIndex: Map<number, { id: string; name: string; argumentsJson: string }>;
   rawFinishReason: string | null;
   usage: WireUsage | null;
@@ -35,6 +38,7 @@ export function createSseAccumulator(): SseAccumulator {
   return {
     buffer: "",
     content: "",
+    reasoningContent: "",
     toolCallsByIndex: new Map(),
     rawFinishReason: null,
     usage: null,
@@ -51,17 +55,23 @@ export function feedSseChunk(
   acc: SseAccumulator,
   chunk: string,
   onDelta?: (delta: string) => void,
+  onReasoningDelta?: (delta: string) => void,
 ): void {
   acc.buffer += chunk;
   let newlineIdx: number;
   while ((newlineIdx = acc.buffer.indexOf("\n")) !== -1) {
     const line = acc.buffer.slice(0, newlineIdx);
     acc.buffer = acc.buffer.slice(newlineIdx + 1);
-    processLine(acc, line, onDelta);
+    processLine(acc, line, onDelta, onReasoningDelta);
   }
 }
 
-function processLine(acc: SseAccumulator, rawLine: string, onDelta?: (delta: string) => void): void {
+function processLine(
+  acc: SseAccumulator,
+  rawLine: string,
+  onDelta?: (delta: string) => void,
+  onReasoningDelta?: (delta: string) => void,
+): void {
   const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
   if (!line.startsWith("data:")) return; // blank lines, comments, other fields
   const payload = line.slice("data:".length).trim();
@@ -86,6 +96,10 @@ function processLine(acc: SseAccumulator, rawLine: string, onDelta?: (delta: str
     acc.content += delta.content;
     onDelta?.(delta.content);
   }
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+    acc.reasoningContent += delta.reasoning_content;
+    onReasoningDelta?.(delta.reasoning_content);
+  }
   for (const tc of delta.tool_calls ?? []) {
     const index = tc.index ?? 0;
     let entry = acc.toolCallsByIndex.get(index);
@@ -101,6 +115,7 @@ function processLine(acc: SseAccumulator, rawLine: string, onDelta?: (delta: str
 
 export type SseResult = {
   content: string;
+  reasoningContent: string;
   toolCalls: ProviderToolCall[];
   finishReason: ChatFinishReason;
   usage: WireUsage | null;
@@ -122,6 +137,7 @@ export function finalizeSse(acc: SseAccumulator): SseResult {
     }));
   return {
     content: acc.content,
+    reasoningContent: acc.reasoningContent,
     toolCalls,
     finishReason: mapFinishReason(acc.rawFinishReason),
     usage: acc.usage,

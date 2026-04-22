@@ -26,6 +26,45 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
           <Markdown text={item.text} />
         </Box>
       );
+    case "thinking": {
+      // Streaming: show the tail. Done: a one-line summary; verbose expands.
+      if (item.streaming) {
+        const tail = item.text.trimEnd().split("\n").slice(-3);
+        return (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color="magenta" dimColor>
+              ✻ thinking…
+            </Text>
+            {tail.map((l, i) => (
+              <Text key={i} dimColor italic>
+                {"  "}
+                {l}
+              </Text>
+            ))}
+          </Box>
+        );
+      }
+      const secs = item.endedAt ? Math.max(1, Math.round((item.endedAt - item.startedAt) / 1000)) : 0;
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="magenta" dimColor>
+            ✻ thought{secs > 0 ? ` for ${secs}s` : ""}
+            {!verbose ? <Text dimColor> (Ctrl+O to expand)</Text> : null}
+          </Text>
+          {verbose
+            ? item.text
+                .trimEnd()
+                .split("\n")
+                .map((l, i) => (
+                  <Text key={i} dimColor italic>
+                    {"  "}
+                    {l}
+                  </Text>
+                ))
+            : null}
+        </Box>
+      );
+    }
     case "step":
       // Nested subagent activity renders as an indented branch row.
       if (item.agentId) {
@@ -44,7 +83,8 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
           args={item.args}
           status={item.status}
           error={item.error}
-          {...(verbose && item.resultPreview ? { resultPreview: item.resultPreview } : {})}
+          {...(item.resultPreview ? { resultPreview: item.resultPreview } : {})}
+          verbose={verbose}
         />
       );
     case "plan":

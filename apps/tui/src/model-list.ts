@@ -7,9 +7,11 @@
 export type ModelInfo = { id: string; note: string };
 
 export const KNOWN_MODELS: readonly ModelInfo[] = [
-  { id: "deepseek-chat", note: "general, tool calling — default" },
-  { id: "deepseek-coder", note: "code-tuned" },
-  { id: "deepseek-reasoner", note: "no tool calling — cannot drive the agent" },
+  { id: "deepseek-v4-pro", note: "V4 flagship — thinking mode + tool calling" },
+  { id: "deepseek-v4-flash", note: "V4 fast — thinking mode + tool calling" },
+  { id: "deepseek-chat", note: "legacy general (deprecated 2026-07)" },
+  { id: "deepseek-coder", note: "legacy code-tuned" },
+  { id: "deepseek-reasoner", note: "legacy — no tool calling, cannot drive the agent" },
 ];
 
 /** Renders picker lines, marking the current model with a filled dot. */
