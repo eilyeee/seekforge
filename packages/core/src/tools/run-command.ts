@@ -135,7 +135,33 @@ export type RunShellOptions = {
   sandbox?: SandboxLevel | undefined;
   /** Workspace root the sandbox allows writes in. Defaults to `cwd`. */
   workspace?: string | undefined;
+  /**
+   * Live output observer, fired once per data chunk (decoded utf8) as the
+   * command runs, in arrival order, unthrottled. Observer errors are
+   * swallowed: a broken listener must never break the command.
+   */
+  onOutput?: ((stream: "stdout" | "stderr", chunk: string) => void) | undefined;
 };
+
+/**
+ * Output substrings (case-insensitive) that typically mean the OS sandbox —
+ * not the command itself — caused a failure (seatbelt/bwrap write or network
+ * denial). Used to decide whether to offer an unsandboxed retry.
+ */
+const SANDBOX_DENIAL_PATTERNS: readonly string[] = [
+  "operation not permitted",
+  "read-only file system",
+  "eperm",
+  "eacces",
+  "network is unreachable",
+  "sandbox",
+];
+
+/** True when a failed command's combined output looks like an OS-sandbox denial. */
+export function looksLikeSandboxDenial(output: string): boolean {
+  const lower = output.toLowerCase();
+  return SANDBOX_DENIAL_PATTERNS.some((p) => lower.includes(p));
+}
 
 /**
  * Run `command` through /bin/sh -c in its own process group so the whole
@@ -150,7 +176,7 @@ export function runShellCommand(
   timeoutMs: number,
   options: RunShellOptions = {},
 ): Promise<ShellResult> {
-  const { sandbox, workspace = cwd } = options;
+  const { sandbox, workspace = cwd, onOutput } = options;
   if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
     return Promise.reject(
       new ToolError(
@@ -176,8 +202,23 @@ export function runShellCommand(
     const append = (cur: string, chunk: Buffer): string =>
       cur.length >= MAX_CAPTURE_CHARS ? cur : cur + chunk.toString("utf8");
 
-    child.stdout.on("data", (c: Buffer) => (stdout = append(stdout, c)));
-    child.stderr.on("data", (c: Buffer) => (stderr = append(stderr, c)));
+    const observe = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+      if (onOutput === undefined) return;
+      try {
+        onOutput(stream, chunk.toString("utf8"));
+      } catch {
+        // observers must never break the command
+      }
+    };
+
+    child.stdout.on("data", (c: Buffer) => {
+      stdout = append(stdout, c);
+      observe("stdout", c);
+    });
+    child.stderr.on("data", (c: Buffer) => {
+      stderr = append(stderr, c);
+      observe("stderr", c);
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;

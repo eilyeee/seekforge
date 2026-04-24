@@ -4,9 +4,25 @@ import { ToolError } from "../errors.js";
 import { redactSecrets } from "../redact.js";
 import { resolveInsideWorkspace } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
-import { classifyCommand, normalizeCommand, runShellCommand } from "../run-command.js";
+import {
+  classifyCommand,
+  looksLikeSandboxDenial,
+  normalizeCommand,
+  runShellCommand,
+  type ShellResult,
+} from "../run-command.js";
 import { callRuntime } from "../runtime-backend.js";
-import { defineTool, type ToolSpec } from "../registry.js";
+import { defineTool, type ToolRunOutput, type ToolSpec } from "../registry.js";
+
+/**
+ * Test seam: the foreground execution path (initial run AND the unsandboxed
+ * escalation retry) goes through this indirection so tests can stub the
+ * shell without spawning real processes. Null restores the default.
+ */
+let shellRunner: typeof runShellCommand = runShellCommand;
+export function setShellRunnerForTests(fn: typeof runShellCommand | null): void {
+  shellRunner = fn ?? runShellCommand;
+}
 
 const runCommandSchema = z.object({
   command: z.string().describe("Shell command line to run via /bin/sh -c."),
@@ -98,35 +114,67 @@ const runCommand = defineTool({
       };
     }
 
-    let res;
-    try {
-      res = await runShellCommand(args.command, cwd, timeoutMs, {
-        sandbox: ctx.sandbox,
-        workspace: ctx.workspace,
-      });
-    } catch (err) {
-      if (err instanceof ToolError && err.code === "timeout") {
-        const d = err.detail as { timeoutMs: number; stdout: string; stderr: string };
-        throw new ToolError(err.code, err.message, {
-          timeoutMs: d.timeoutMs,
-          stdout: redactSecrets(truncateHeadTail(d.stdout, DEFAULT_LIMITS.toolOutputMaxChars).text),
-          stderr: redactSecrets(truncateHeadTail(d.stderr, DEFAULT_LIMITS.toolOutputMaxChars).text),
+    // Foreground execution; used for both the initial (possibly sandboxed)
+    // run and the unsandboxed escalation retry. Output is streamed live via
+    // ctx.emitOutput when the loop provides it.
+    const execute = async (sandbox: typeof ctx.sandbox): Promise<ShellResult> => {
+      try {
+        return await shellRunner(args.command, cwd, timeoutMs, {
+          sandbox,
+          workspace: ctx.workspace,
+          onOutput: ctx.emitOutput,
         });
+      } catch (err) {
+        if (err instanceof ToolError && err.code === "timeout") {
+          const d = err.detail as { timeoutMs: number; stdout: string; stderr: string };
+          throw new ToolError(err.code, err.message, {
+            timeoutMs: d.timeoutMs,
+            stdout: redactSecrets(truncateHeadTail(d.stdout, DEFAULT_LIMITS.toolOutputMaxChars).text),
+            stderr: redactSecrets(truncateHeadTail(d.stderr, DEFAULT_LIMITS.toolOutputMaxChars).text),
+          });
+        }
+        throw err;
       }
-      throw err;
+    };
+
+    const finish = (res: ShellResult, sandboxEscalated = false): ToolRunOutput => {
+      const out = truncateHeadTail(res.stdout, DEFAULT_LIMITS.toolOutputMaxChars);
+      const errOut = truncateHeadTail(res.stderr, DEFAULT_LIMITS.toolOutputMaxChars);
+      return {
+        data: {
+          exitCode: res.exitCode,
+          stdout: redactSecrets(out.text),
+          stderr: redactSecrets(errOut.text),
+          durationMs: res.durationMs,
+        },
+        meta: {
+          truncated: out.truncated || errOut.truncated,
+          ...(sandboxEscalated ? { sandboxEscalated: true } : {}),
+        },
+      };
+    };
+
+    const res = await execute(ctx.sandbox);
+
+    // Sandbox escalation (Codex-style): when the policy sandbox is active and
+    // the failure output looks like a sandbox denial (not a genuine command
+    // error), offer ONE unsandboxed retry. confirm decides — auto-deny modes
+    // simply keep the original failure. sandbox_unavailable setup errors throw
+    // above and never reach this path.
+    const sandboxActive = ctx.sandbox !== undefined && ctx.sandbox !== "off";
+    if (sandboxActive && res.exitCode !== 0 && looksLikeSandboxDenial(`${res.stdout}\n${res.stderr}`)) {
+      const approved = await ctx.confirm({
+        toolName: "run_command",
+        permission: "execute",
+        description: "Command failed inside the sandbox — retry WITHOUT sandbox?",
+        command: args.command,
+      });
+      if (approved) {
+        return finish(await execute("off"), true);
+      }
     }
 
-    const out = truncateHeadTail(res.stdout, DEFAULT_LIMITS.toolOutputMaxChars);
-    const errOut = truncateHeadTail(res.stderr, DEFAULT_LIMITS.toolOutputMaxChars);
-    return {
-      data: {
-        exitCode: res.exitCode,
-        stdout: redactSecrets(out.text),
-        stderr: redactSecrets(errOut.text),
-        durationMs: res.durationMs,
-      },
-      meta: { truncated: out.truncated || errOut.truncated },
-    };
+    return finish(res);
   },
 });
 
