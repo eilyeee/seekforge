@@ -150,3 +150,41 @@ export function replaceAtToken(s: EditorState, anchor: number, replacement: stri
     cursor: anchor + inserted.length,
   };
 }
+
+/**
+ * Slash-command ARGUMENT context: when the buffer is a single line starting
+ * with "/", the first word is complete (followed by whitespace), and the
+ * cursor sits in/after the argument region, returns the command name
+ * (lowercased, without the slash), the argument text from its start THROUGH
+ * the cursor, and the index where the argument region begins (first char
+ * after the whitespace run following the command word). Else null — while
+ * the cursor is still inside the command word the name palette owns the
+ * state, not the argument picker.
+ */
+export function slashArgAt(s: EditorState): { name: string; anchor: number; arg: string } | null {
+  if (s.text.includes("\n") || !s.text.startsWith("/")) return null;
+  const wsIdx = s.text.search(/\s/);
+  if (wsIdx <= 1) return null; // no whitespace after the word, or an empty command name
+  let anchor = wsIdx;
+  while (anchor < s.text.length && /\s/.test(s.text[anchor] ?? "")) anchor += 1;
+  if (s.cursor < anchor) return null;
+  return {
+    name: s.text.slice(1, wsIdx).toLowerCase(),
+    anchor,
+    arg: s.text.slice(anchor, s.cursor),
+  };
+}
+
+/**
+ * Replaces the argument region (`anchor` → end of line, so any text after
+ * the cursor on that line is dropped — the simplest correct behavior for a
+ * picker commit) with `replacement`; the cursor lands at the end of the
+ * replacement. An empty replacement just truncates at the anchor.
+ */
+export function replaceSlashArg(s: EditorState, anchor: number, replacement: string): EditorState {
+  const end = lineEnd(s.text, anchor);
+  return {
+    text: s.text.slice(0, anchor) + replacement + s.text.slice(end),
+    cursor: anchor + replacement.length,
+  };
+}
