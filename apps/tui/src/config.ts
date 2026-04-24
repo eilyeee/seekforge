@@ -61,7 +61,17 @@ export function loadConfig(projectPath: string): TuiConfig {
   const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
   // hooks concatenate per stage, global-then-project: every hook runs.
   const hooks: HookConfig = {};
-  for (const stage of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
+  for (const stage of [
+    "preToolUse",
+    "postToolUse",
+    "sessionEnd",
+    "sessionStart",
+    "userPromptSubmit",
+    "preCompact",
+    "stop",
+    "subagentStop",
+    "notification",
+  ] as const) {
     const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
     if (merged.length > 0) hooks[stage] = merged;
   }
