@@ -1,4 +1,4 @@
-/** MCP (Model Context Protocol) client support — SeekForge as an MCP client over stdio. */
+/** MCP (Model Context Protocol) client support — SeekForge as an MCP client over stdio or Streamable HTTP. */
 
 export { createMcpClient, McpError, RESOURCE_READ_MAX_CHARS } from "./client.js";
 export type { McpClient, McpClientOptions } from "./client.js";
