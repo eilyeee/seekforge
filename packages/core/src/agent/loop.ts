@@ -38,7 +38,7 @@ import {
   type DispatchHooks,
   type DispatchManager,
 } from "../subagents/index.js";
-import { clearOldToolResults, compactMessages, estimateMessagesTokens } from "./context.js";
+import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
 import { runHooks, type HookConfig } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
@@ -59,6 +59,13 @@ export type AgentCoreDeps = {
   limits?: Partial<AgentLimits>;
   /** Model context window in tokens. DeepSeek: 128K. */
   contextWindowTokens?: number;
+  /**
+   * Full-compaction strategy when still over budget after micro-compaction:
+   * "llm" summarizes the dropped middle with one extra provider call and
+   * falls back to the mechanical digest on any provider failure. Default
+   * "mechanical" (no extra model call, fully deterministic).
+   */
+  compaction?: "mechanical" | "llm";
   /** When set, model output is streamed through this callback (chatStream). */
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (DeepSeek V4 thinking mode). */
@@ -666,7 +673,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               messages = micro.messages;
               yield emit({ type: "context.microcompacted", clearedResults: micro.cleared });
             }
-            const compacted = compactMessages(messages, budgetTokens);
+            // LLM compaction when configured; null (under budget OR provider
+            // failure) falls back to the mechanical digest.
+            const compacted =
+              (deps.compaction === "llm"
+                ? await llmCompactMessages(deps.provider, messages, budgetTokens)
+                : null) ?? compactMessages(messages, budgetTokens);
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.
               await runHooks("preCompact", deps.hooks?.preCompact, {

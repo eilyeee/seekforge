@@ -6,7 +6,7 @@ import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
-import { listSessions, loadSessionMessages, readSessionMeta } from "../../src/agent/trace.js";
+import { createSessionTrace, listSessions, loadSessionMessages, readSessionMeta } from "../../src/agent/trace.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
 
@@ -171,5 +171,113 @@ describe("agent loop", () => {
     const traced = loadSessionMessages(workspace, sessionId);
     expect(traced.at(-1)!.content).toBe("resumed answer");
     expect(traced.at(-2)!.content).toBe("continue");
+  });
+});
+
+describe("agent loop: LLM compaction", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-llmcompact-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  /** Seeds a resumable over-budget session (mirrors the micro-compaction tests). */
+  function seedSession(id: string, turns: number, toolChars: number): void {
+    const trace = createSessionTrace(workspace, id);
+    trace.message({ role: "system", content: "sys" });
+    for (let i = 1; i <= turns; i++) {
+      trace.message({ role: "user", content: `turn ${i}` });
+      trace.message({
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: `c${i}`, name: "read_file", argumentsJson: "{}" }],
+      });
+      trace.message({ role: "tool", content: "x".repeat(toolChars), toolCallId: `c${i}` });
+      trace.message({ role: "assistant", content: `ok ${i}` });
+    }
+  }
+
+  const resumeInput = (id: string) => ({
+    projectPath: workspace,
+    task: "next turn",
+    mode: "edit" as const,
+    approvalMode: "auto" as const,
+    resumeSessionId: id,
+    systemPromptOverride: "sys",
+  });
+
+  it('compaction: "llm" summarizes via the provider (one extra chat call)', async () => {
+    seedSession("s-llm", 3, 3_000);
+    const provider = fakeProvider([
+      response({ content: "LLM-SUMMARY: edited a.ts, tests green" }), // summarization call
+      response({ content: "done" }), // the actual turn
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      contextWindowTokens: 11_000, // still over budget after micro-compaction
+      compaction: "llm",
+    });
+    const events = await collect(agent.runTask(resumeInput("s-llm")));
+
+    expect(events.some((e) => e.type === "context.compacted")).toBe(true);
+    expect(provider.requests).toHaveLength(2);
+    // First call is the summarization prompt over the dropped segment.
+    expect(provider.requests[0]!.messages).toHaveLength(1);
+    expect(provider.requests[0]!.messages[0]!.content).toContain("Summarize this conversation segment");
+    // The turn request carries the wrapped summary instead of a digest.
+    const turnMessages = provider.requests[1]!.messages;
+    const summary = turnMessages.find((m) => m.content.includes("[Context compacted"));
+    expect(summary?.content).toContain("LLM-SUMMARY: edited a.ts, tests green");
+    expect(summary?.content).not.toContain("Digest of the dropped earlier turns");
+  });
+
+  it("falls back to the mechanical digest when the summarization call fails", async () => {
+    seedSession("s-fallback", 3, 3_000);
+    const requests: ChatRequest[] = [];
+    const provider: ChatProvider = {
+      model: "fake",
+      chat: async (req) => {
+        requests.push(req);
+        if (requests.length === 1) throw new Error("provider down"); // summarization
+        return response({ content: "done" });
+      },
+      chatStream: async () => {
+        throw new Error("unused");
+      },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      contextWindowTokens: 11_000,
+      compaction: "llm",
+    });
+    const events = await collect(agent.runTask(resumeInput("s-fallback")));
+
+    expect(events.some((e) => e.type === "context.compacted")).toBe(true);
+    expect(requests).toHaveLength(2); // failed summarization + the turn
+    const turnMessages = requests[1]!.messages;
+    expect(turnMessages.some((m) => m.content.includes("Digest of the dropped earlier turns"))).toBe(true);
+  });
+
+  it("default (mechanical) makes no extra provider call", async () => {
+    seedSession("s-mech", 3, 3_000);
+    const provider = fakeProvider([response({ content: "done" })]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      contextWindowTokens: 11_000,
+    });
+    const events = await collect(agent.runTask(resumeInput("s-mech")));
+    expect(events.some((e) => e.type === "context.compacted")).toBe(true);
+    expect(provider.requests).toHaveLength(1);
+    expect(
+      provider.requests[0]!.messages.some((m) => m.content.includes("Digest of the dropped earlier turns")),
+    ).toBe(true);
   });
 });
