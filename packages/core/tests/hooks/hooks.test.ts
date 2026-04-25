@@ -2,7 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runHooks, type HookPayload } from "../../src/hooks/index.js";
+import {
+  buildHookContext,
+  HOOK_CONTEXT_MAX_CHARS,
+  runHooks,
+  type HookOutcome,
+  type HookPayload,
+} from "../../src/hooks/index.js";
 
 describe("runHooks", () => {
   let workspace: string;
@@ -205,6 +211,96 @@ describe("runHooks", () => {
     expect(errors).toHaveLength(1);
   });
 
+  it("captures stdout separately from the interleaved output tail", async () => {
+    const outcomes = await runHooks(
+      "userPromptSubmit",
+      [{ command: "echo to-stdout; echo to-stderr 1>&2" }],
+      payload({ task: "do it" }),
+    );
+    expect(outcomes[0]!.ok).toBe(true);
+    expect(outcomes[0]!.stdout.trim()).toBe("to-stdout");
+    expect(outcomes[0]!.outputTail).toContain("to-stderr");
+  });
+
+  it('preToolUse stdout {"decision":"deny"} blocks with the reason despite exit 0', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: `echo '{"decision":"deny","reason":"forbidden path"}'` },
+        { command: "touch deny-should-skip" },
+      ],
+      payload({ toolName: "apply_patch", path: "src/a.ts" }),
+    );
+    expect(outcomes).toHaveLength(1); // later hooks skipped after the block
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.exitCode).toBe(0);
+    expect(outcomes[0]!.decision).toBe("deny");
+    expect(outcomes[0]!.outputTail).toBe("forbidden path");
+    expect(existsSync(join(workspace, "deny-should-skip"))).toBe(false);
+  });
+
+  it("a JSON deny without a reason still blocks with a default reason", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: `echo '{"decision":"deny"}'` }],
+      payload({ toolName: "run_command", command: "rm -rf /" }),
+    );
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.outputTail).toContain("denied by preToolUse hook");
+  });
+
+  it('preToolUse stdout {"decision":"allow"} short-circuits the remaining hooks', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: `echo '{"decision":"allow"}'` },
+        { command: "touch allow-should-skip; exit 1" }, // would block if it ran
+      ],
+      payload({ toolName: "read_file", path: "a.ts" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(true);
+    expect(outcomes[0]!.decision).toBe("allow");
+    expect(existsSync(join(workspace, "allow-should-skip"))).toBe(false);
+  });
+
+  it("malformed JSON / non-decision stdout on preToolUse is ignored", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: `echo '{decision: deny}'` }, // malformed JSON
+        { command: `echo '{"decision":"maybe"}'` }, // not a known decision
+        { command: "echo plain words" }, // not JSON at all
+        { command: "touch decisions-fell-through" },
+      ],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes).toHaveLength(4);
+    expect(outcomes.every((o) => o.ok)).toBe(true);
+    expect(outcomes.every((o) => o.decision === undefined)).toBe(true);
+    expect(existsSync(join(workspace, "decisions-fell-through"))).toBe(true);
+  });
+
+  it("a non-zero exit still blocks even when stdout says allow", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: `echo '{"decision":"allow"}'; exit 1` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.decision).toBeUndefined();
+  });
+
+  it("JSON decisions apply to preToolUse only — userPromptSubmit stdout is plain context", async () => {
+    const outcomes = await runHooks(
+      "userPromptSubmit",
+      [{ command: `echo '{"decision":"deny","reason":"nope"}'` }],
+      payload({ task: "do it" }),
+    );
+    expect(outcomes[0]!.ok).toBe(true);
+    expect(outcomes[0]!.decision).toBeUndefined();
+  });
+
   it("sessionEnd entries run without a toolName and receive the status", async () => {
     const outcomes = await runHooks(
       "sessionEnd",
@@ -214,5 +310,52 @@ describe("runHooks", () => {
     expect(outcomes[0]!.ok).toBe(true);
     const written = JSON.parse(readFileSync(join(workspace, "end.json"), "utf8"));
     expect(written).toMatchObject({ stage: "sessionEnd", status: "completed", sessionId: "s-test" });
+  });
+});
+
+describe("buildHookContext", () => {
+  const outcome = (overrides: Partial<HookOutcome>): HookOutcome => ({
+    command: "echo",
+    ok: true,
+    exitCode: 0,
+    outputTail: "",
+    stdout: "",
+    timedOut: false,
+    ...overrides,
+  });
+
+  it("wraps each successful hook's trimmed stdout in its own <hook-context> block", () => {
+    const suffix = buildHookContext([
+      outcome({ stdout: "  first context\n" }),
+      outcome({ stdout: "second context" }),
+    ]);
+    expect(suffix).toBe(
+      "\n\n<hook-context>\nfirst context\n</hook-context>" +
+        "\n\n<hook-context>\nsecond context\n</hook-context>",
+    );
+  });
+
+  it("skips failed hooks and empty stdout", () => {
+    expect(
+      buildHookContext([
+        outcome({ ok: false, stdout: "blocked output" }),
+        outcome({ stdout: "   \n  " }),
+        outcome({ stdout: "" }),
+      ]),
+    ).toBe("");
+  });
+
+  it("caps the combined stdout at HOOK_CONTEXT_MAX_CHARS", () => {
+    const suffix = buildHookContext([
+      outcome({ stdout: "z".repeat(HOOK_CONTEXT_MAX_CHARS - 10) }),
+      outcome({ stdout: "q".repeat(500) }),
+      outcome({ stdout: "never included" }),
+    ]);
+    const included = (suffix.match(/z|q/g) ?? []).length;
+    expect(included).toBe(HOOK_CONTEXT_MAX_CHARS);
+    expect(suffix).toContain("…[truncated]");
+    expect(suffix).not.toContain("never included");
+    // Two blocks made it in (the second truncated), the third contributed nothing.
+    expect(suffix.match(/<hook-context>/g)).toHaveLength(2);
   });
 });

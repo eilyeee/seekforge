@@ -1,12 +1,26 @@
-/** MCP (Model Context Protocol) client types — stdio transport only (v1). */
+/** MCP (Model Context Protocol) client types — stdio and Streamable HTTP transports. */
 
-/** One entry under `mcpServers` in .seekforge/config.json (Claude Code-compatible). */
+/**
+ * One entry under `mcpServers` in .seekforge/config.json (Claude Code-compatible).
+ * Exactly one transport applies per server: `url` present → Streamable HTTP,
+ * otherwise `command` (stdio).
+ */
 export type McpServerConfig = {
-  /** Executable to spawn (e.g. "npx"). */
-  command: string;
+  /** Executable to spawn for the stdio transport (e.g. "npx"). */
+  command?: string;
   args?: string[];
-  /** Extra environment variables; merged over process.env. */
+  /** Extra environment variables; merged over process.env (stdio only). */
   env?: Record<string, string>;
+  /**
+   * Streamable HTTP endpoint (e.g. "https://example.com/mcp"). Presence
+   * selects the HTTP transport; `command`/`args`/`env` are then ignored.
+   */
+  url?: string;
+  /**
+   * Extra HTTP headers sent on every request (HTTP transport only), e.g.
+   * `{"Authorization": "Bearer <token>"}` for bearer-token servers.
+   */
+  headers?: Record<string, string>;
   /**
    * SeekForge-specific (default false). Untrusted servers' tools run at the
    * "env" permission level (always confirmed, even with -y); trusted servers'
