@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatUsage, kfmt, planGlyph, statusBarParts, summarizeArgs } from "../format.js";
+import {
+  formatDuration,
+  formatUsage,
+  formatUsageDetail,
+  kfmt,
+  planGlyph,
+  relativeAge,
+  statusBarParts,
+  summarizeArgs,
+} from "../format.js";
 
 describe("kfmt", () => {
   it("formats thousands compactly", () => {
@@ -15,6 +24,65 @@ describe("formatUsage", () => {
     expect(s).toContain("1.5K prompt (1.0K cache hit)");
     expect(s).toContain("800 completion");
     expect(s).toContain("$0.0123");
+  });
+});
+
+describe("formatUsageDetail", () => {
+  const usage = { promptTokens: 1500, completionTokens: 800, cacheHitTokens: 1000, costUsd: 0.0123 };
+
+  it("renders labeled prompt/completion/total/cost lines with the cache-hit rate", () => {
+    expect(formatUsageDetail(usage)).toEqual([
+      "prompt      1.5K tokens (1.0K cache hit · 67% hit rate)",
+      "completion  800 tokens",
+      "total       2.3K tokens",
+      "cost        $0.0123",
+    ]);
+  });
+
+  it("appends duration and turns when provided", () => {
+    const lines = formatUsageDetail(usage, { durationMs: 192_000, turns: 4 });
+    expect(lines).toContain("duration    3m 12s");
+    expect(lines).toContain("turns       4");
+    expect(lines).toHaveLength(6);
+  });
+
+  it("reports a 0% hit rate when no prompt tokens were used", () => {
+    const [prompt] = formatUsageDetail({ promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 });
+    expect(prompt).toContain("0% hit rate");
+  });
+});
+
+describe("formatDuration", () => {
+  it("uses at most two units per magnitude", () => {
+    expect(formatDuration(45_000)).toBe("45s");
+    expect(formatDuration(192_000)).toBe("3m 12s");
+    expect(formatDuration(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
+  });
+
+  it("clamps negatives and sub-second values to 0s", () => {
+    expect(formatDuration(-5)).toBe("0s");
+    expect(formatDuration(800)).toBe("0s");
+  });
+});
+
+describe("relativeAge", () => {
+  const now = Date.parse("2026-06-12T12:00:00.000Z");
+
+  it("buckets ages into just now / m / h / d / mo", () => {
+    expect(relativeAge("2026-06-12T11:59:30.000Z", now)).toBe("just now");
+    expect(relativeAge("2026-06-12T11:55:00.000Z", now)).toBe("5m ago");
+    expect(relativeAge("2026-06-12T10:00:00.000Z", now)).toBe("2h ago");
+    expect(relativeAge("2026-06-09T12:00:00.000Z", now)).toBe("3d ago");
+    expect(relativeAge("2026-04-01T12:00:00.000Z", now)).toBe("2mo ago");
+  });
+
+  it("returns a dash for invalid or future timestamps", () => {
+    expect(relativeAge("not-a-date", now)).toBe("—");
+    expect(relativeAge("2027-01-01T00:00:00.000Z", now)).toBe("—");
+  });
+
+  it("accepts a Date for now", () => {
+    expect(relativeAge("2026-06-12T11:00:00.000Z", new Date(now))).toBe("1h ago");
   });
 });
 
