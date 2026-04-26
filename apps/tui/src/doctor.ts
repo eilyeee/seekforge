@@ -9,7 +9,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** A single diagnostic result rendered as one line by formatDoctorLines. */
-export type DoctorCheck = { name: string; ok: boolean; detail: string };
+export type DoctorCheck = { name: string; ok: boolean; detail: string; fixHint?: string };
 
 /** System probes injected into runDoctor; swap with fakes in tests. */
 export type DoctorProbes = {
@@ -65,7 +65,7 @@ export function runDoctor(
   checks.push(
     config.apiKey
       ? { name: "api key", ok: true, detail: "configured" }
-      : { name: "api key", ok: false, detail: "missing — set DEEPSEEK_API_KEY or add apiKey to .seekforge/config.json" },
+      : { name: "api key", ok: false, detail: "missing", fixHint: "restart seekforge-tui for the setup wizard, or export DEEPSEEK_API_KEY" },
   );
 
   const version = probes.nodeVersion();
@@ -73,7 +73,7 @@ export function runDoctor(
   checks.push(
     Number.isFinite(major) && major >= 20
       ? { name: "node", ok: true, detail: `${version} (>= 20)` }
-      : { name: "node", ok: false, detail: `${version} — SeekForge requires node >= 20` },
+      : { name: "node", ok: false, detail: `${version} — SeekForge requires node >= 20`, fixHint: "nvm install 22 && nvm use 22" },
   );
 
   checks.push({ name: "platform", ok: true, detail: probes.platform() });
@@ -81,7 +81,7 @@ export function runDoctor(
   checks.push(
     probes.fileExists(join(projectPath, ".git"))
       ? { name: "git repo", ok: true, detail: ".git present" }
-      : { name: "git repo", ok: false, detail: "not a git repository — checkpoints and /diff are limited" },
+      : { name: "git repo", ok: false, detail: "not a git repository — checkpoints and /diff are limited", fixHint: "git init" },
   );
 
   checks.push(
@@ -94,7 +94,7 @@ export function runDoctor(
     checks.push(
       probes.fileExists(config.runtimeBin)
         ? { name: "rust runtime", ok: true, detail: config.runtimeBin }
-        : { name: "rust runtime", ok: false, detail: `${config.runtimeBin} not found` },
+        : { name: "rust runtime", ok: false, detail: `${config.runtimeBin} not found`, fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)" },
     );
   } else {
     checks.push({ name: "rust runtime", ok: true, detail: "not configured (TS fallback)" });
@@ -143,7 +143,11 @@ export function runDoctor(
  */
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
   const width = Math.max(0, ...checks.map((c) => c.name.length));
-  const lines = checks.map((c) => `${c.ok ? "✓" : "✗"} ${c.name.padEnd(width)}  ${c.detail}`);
+  const lines: string[] = [];
+  for (const c of checks) {
+    lines.push(`${c.ok ? "✓" : "✗"} ${c.name.padEnd(width)}  ${c.detail}`);
+    if (!c.ok && c.fixHint) lines.push(`  ${" ".repeat(width)}  → fix: ${c.fixHint}`);
+  }
   const passed = checks.filter((c) => c.ok).length;
   lines.push(`${passed}/${checks.length} checks passed`);
   return lines;

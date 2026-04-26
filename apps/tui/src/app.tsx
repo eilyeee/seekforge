@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -20,6 +20,12 @@ import {
   rewindSessionToTurn,
   sessionTitle,
   truncateSessionAtUserTurn,
+  writeSessionMeta,
+  loadSessionMessages,
+  rewriteSessionMessages,
+  llmCompactMessages,
+  estimateMessagesTokens,
+  createDeepSeekProvider,
   BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
   type McpClientEntry,
@@ -266,14 +272,17 @@ export function App({
     exit();
   }, [exit]);
 
-  // Mouse-wheel tracking + terminal title for the app's lifetime.
+  // Mouse capture is OFF by default so native text selection keeps working
+  // (Claude Code behaves the same); "/mouse" or `"mouse": true` enables
+  // wheel-scrolling of the transcript instead.
+  const [mouseOn, setMouseOn] = useState(config.mouse === true);
   useEffect(() => {
-    process.stdout.write(MOUSE_ENABLE);
+    process.stdout.write(mouseOn ? MOUSE_ENABLE : MOUSE_DISABLE);
     return () => {
       process.stdout.write(MOUSE_DISABLE);
       clearTerminalTitle();
     };
-  }, []);
+  }, [mouseOn]);
   useEffect(() => {
     const name = projectPath.split("/").filter(Boolean).pop() ?? "seekforge";
     setTerminalTitle(`seekforge — ${name}${state.running ? " ⚙" : ""}`);
@@ -283,13 +292,13 @@ export function App({
   useEffect(() => {
     const onCont = (): void => {
       setRawMode(true);
-      process.stdout.write(MOUSE_ENABLE);
+      if (mouseOn) process.stdout.write(MOUSE_ENABLE);
     };
     process.on("SIGCONT", onCont);
     return () => {
       process.removeListener("SIGCONT", onCont);
     };
-  }, [setRawMode]);
+  }, [setRawMode, mouseOn]);
 
   const suspend = useCallback(() => {
     setRawMode(false);
@@ -342,6 +351,13 @@ export function App({
       bgTasks: (bgRef.current?.list() ?? []).map((t) => ({ id: t.id, command: t.command, status: t.status })),
       models: [...KNOWN_MODELS],
       memoryFactCount: listProjectFacts(projectPath).length,
+      memoryFiles: (() => {
+        try {
+          return readdirSync(dirname(projectMemoryPath(projectPath))).filter((f) => !f.startsWith("."));
+        } catch {
+          return [];
+        }
+      })(),
     };
   }, [projectPath]);
 
@@ -651,11 +667,22 @@ export function App({
           syncBg();
           notice("next message starts a fresh session");
           break;
-        case "clear":
+        case "clear": {
+          // "/clear <name>" labels the old session so /sessions shows it.
+          const oldId = sessionIdRef.current;
+          if (command.arg && oldId) {
+            const meta = readSessionMeta(projectPath, oldId);
+            if (meta) writeSessionMeta(projectPath, { ...meta, task: command.arg });
+          }
           dispatch({ type: "clear" });
           syncBg();
-          notice("transcript cleared — next message starts a fresh session");
+          notice(
+            command.arg && oldId
+              ? `transcript cleared — old session labeled "${command.arg}" (see /sessions)`
+              : "transcript cleared — next message starts a fresh session",
+          );
           break;
+        }
         case "sessions": {
           const metas = listSessions(projectPath);
           if (metas.length === 0) {
@@ -725,6 +752,7 @@ export function App({
           for (const p of result.deleted.slice(0, 10)) notice(`  ${apply ? "deleted" : "would delete"} ${p}`);
           for (const s of result.skipped.slice(0, 10)) notice(`  skipped ${s.path}: ${s.reason}`, "error");
           if (!apply && total > 0) notice("run /rewind yes to apply");
+          notice("(/rewind restores files; Esc Esc or /backtrack rewinds the conversation)");
           break;
         }
         case "model":
@@ -774,14 +802,22 @@ export function App({
           break;
         }
         case "memory": {
-          if (command.arg === "edit") {
+          if (command.arg?.startsWith("edit")) {
+            // "/memory edit [file]" — files restricted to .seekforge/memory/.
+            const fileArg = command.arg.slice(4).trim();
+            const memoryDir = dirname(projectMemoryPath(projectPath));
+            const target = fileArg ? resolve(memoryDir, fileArg) : projectMemoryPath(projectPath);
+            if (!target.startsWith(memoryDir)) {
+              notice("memory files live under .seekforge/memory/ only", "error");
+              break;
+            }
             setRawMode(false);
-            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [projectMemoryPath(projectPath)], {
+            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [target], {
               stdio: "inherit",
             });
             setRawMode(true);
             if (r.error) notice(`editor failed: ${r.error.message}`, "error");
-            else notice("project memory saved");
+            else notice("memory file saved");
             break;
           }
           const facts = listProjectFacts(projectPath);
@@ -932,6 +968,16 @@ export function App({
             notice(`  ${line}`);
           }
           break;
+        case "mouse":
+          setMouseOn((on) => {
+            notice(
+              on
+                ? "mouse capture off — select text normally; PageUp/PageDown scrolls"
+                : "mouse wheel scroll on — hold Shift (Option on iTerm2) to select text",
+            );
+            return !on;
+          });
+          break;
         case "vim":
           setVimOn((on) => {
             notice(on ? "vim mode off" : "vim mode on — Esc for NORMAL, i to insert");
@@ -955,6 +1001,7 @@ export function App({
         case "mcp":
           for (const line of formatMcpLines(config.mcpServers, mcpToolSpecs)) notice(line);
           if (mcpEntries.length > 0) {
+            notice("(connections are per-process — restart the TUI to reconnect; edit config.json to add/remove servers)");
             void listMcpResources(mcpEntries)
               .then((rs) => {
                 if (rs.length === 0) return;
@@ -976,6 +1023,45 @@ export function App({
           }
           if (controllerRef.current) {
             notice("wait for the running task to finish before compacting", "error");
+            break;
+          }
+          // With a focus argument the middle is summarized by the model
+          // (steered by the focus); without one it stays the instant
+          // deterministic digest.
+          if (command.arg) {
+            const focus = command.arg;
+            notice(`compacting with focus: ${focus} …`);
+            void (async () => {
+              try {
+                const messages = loadSessionMessages(projectPath, sessionId);
+                const before = estimateMessagesTokens(messages);
+                const provider = createDeepSeekProvider({
+                  apiKey: runConfigRef.current.apiKey ?? "",
+                  baseUrl: runConfigRef.current.baseUrl,
+                  model: modelRef.current,
+                });
+                const focused = {
+                  chat: (req: { messages: Parameters<typeof provider.chat>[0]["messages"] }) =>
+                    provider.chat({
+                      messages: req.messages.map((m, i) =>
+                        i === 0 ? { ...m, content: `${m.content}\n\nFocus especially on: ${focus}` } : m,
+                      ),
+                    }),
+                };
+                const result = await llmCompactMessages(focused, messages, 0);
+                if (!result) {
+                  notice("nothing to compact — the session is still short (or the model call failed)");
+                  return;
+                }
+                rewriteSessionMessages(projectPath, sessionId, result.messages);
+                notice(
+                  `compacted (LLM, focused): dropped ${result.droppedTurns} earlier messages, ` +
+                    `${kfmt(before)} → ${kfmt(estimateMessagesTokens(result.messages))} tokens`,
+                );
+              } catch (err) {
+                notice(`compact failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+              }
+            })();
             break;
           }
           const result = compactSessionNow(projectPath, sessionId);
@@ -1467,7 +1553,7 @@ export function App({
           dispatch({ type: "overlay", overlay: null });
           if (id && id !== "deepseek-reasoner") {
             dispatch({ type: "set-model", model: id });
-            notice(`model: ${id}`);
+            notice(`model: ${id} (session only — set "model" in config.json to persist)`);
           } else if (id === "deepseek-reasoner") {
             notice("deepseek-reasoner has no tool calling and cannot drive the agent", "error");
           }
@@ -1666,6 +1752,17 @@ export function App({
   });
 
   const bgRunning = state.bgTasks.filter((t) => t.status === "running").length;
+  // The shell command currently executing (for the under-input mode line).
+  const runningShell = useMemo(() => {
+    for (let i = state.items.length - 1; i >= 0; i -= 1) {
+      const it = state.items[i];
+      if (it?.kind === "tool" && it.toolName === "run_command" && it.status === "running") {
+        const cmd = (it.args as { command?: unknown })?.command;
+        return typeof cmd === "string" ? cmd : "(command)";
+      }
+    }
+    return null;
+  }, [state.items]);
 
   return (
     <Box flexDirection="column">
@@ -1776,6 +1873,22 @@ export function App({
               : "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)"
           }
         />
+        {/* Claude Code-style mode line under the input box. */}
+        {state.approval !== "confirm" ? (
+          <Text color={state.approval === "auto" ? "yellow" : "magenta"}>
+            {state.approval === "auto" ? "⏵⏵ auto-approve on" : "⏸ plan mode on"}
+            <Text dimColor> (shift+tab to cycle)</Text>
+          </Text>
+        ) : null}
+        {runningShell || bgRunning > 0 || state.detached.length > 0 ? (
+          <Text dimColor>
+            {runningShell ? `⚙ running: ${runningShell.slice(0, 60)}` : null}
+            {runningShell && (bgRunning > 0 || state.detached.length > 0) ? "  ·  " : null}
+            {bgRunning > 0 ? `${bgRunning} background task${bgRunning > 1 ? "s" : ""}` : null}
+            {bgRunning > 0 && state.detached.length > 0 ? "  ·  " : null}
+            {state.detached.length > 0 ? `${state.detached.length} detached run${state.detached.length > 1 ? "s" : ""}` : null}
+          </Text>
+        ) : null}
         {statusLineText ? <Text dimColor>{statusLineText}</Text> : null}
         <Text dimColor>
           {state.sessionId ? (

@@ -57,21 +57,8 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
         {"  ·  "}
         {parts.tokens}
       </Text>
-      {parts.approval ? (
-        <Text color={props.approval === "auto" ? "yellow" : "magenta"}>
-          {"  ·  "}
-          {parts.approval}
-        </Text>
-      ) : null}
-      {parts.bg ? (
-        <Text color={ACCENT}>
-          {"  ·  "}
-          {parts.bg}
-        </Text>
-      ) : null}
-      {props.detachedRuns && props.detachedRuns > 0 ? (
-        <Text color="yellow">{`  ·  ⚒ ${props.detachedRuns} run${props.detachedRuns > 1 ? "s" : ""} bg`}</Text>
-      ) : null}
+      {/* approval / background / detached moved to the mode line under the
+          composer (Claude Code-style); the top bar stays lean. */}
       {props.scrolled ? <Text color="yellow">{"  ·  ↑ scrolled"}</Text> : null}
       {props.vim ? (
         <Text color={props.vim === "normal" ? "magenta" : ACCENT} bold>

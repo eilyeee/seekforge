@@ -42,6 +42,8 @@ export type TuiConfig = {
   reasoningEffort?: "high" | "max";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
   compaction?: "mechanical" | "llm";
+  /** Capture the mouse for wheel scrolling (default false: text stays selectable). */
+  mouse?: boolean;
 };
 
 function readJson(path: string): TuiConfig {

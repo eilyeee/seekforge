@@ -33,7 +33,7 @@ export const COMMAND_GROUPS: ReadonlyArray<[CommandGroup, string]> = [
 export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "help", summary: "show all commands" , group: "info" },
   { name: "new", summary: "start a fresh session (next message opens it)" , group: "session" },
-  { name: "clear", summary: "clear the transcript and start fresh" , group: "session" },
+  { name: "clear", args: "[name]", summary: "clear the transcript (name labels the old session)" , group: "session" },
   { name: "sessions", summary: "pick a session to resume (interactive)" , group: "session" },
   { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
@@ -48,7 +48,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "model", args: "<name>", summary: "switch model for subsequent messages" , group: "run" },
   { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" , group: "run" },
   { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" , group: "context" },
-  { name: "memory", args: "[edit]", summary: "list project memory facts (edit opens $EDITOR)" , group: "context" },
+  { name: "memory", args: "[edit <file>]", summary: "list project memory facts (edit opens a memory file)" , group: "context" },
   { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" , group: "tools" },
   { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
   { name: "skills", summary: "list installed skills and their status" , group: "tools" },
@@ -56,9 +56,10 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" , group: "tools" },
   { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" , group: "info" },
   { name: "vim", summary: "toggle vim mode for the composer" , group: "settings" },
+  { name: "mouse", summary: "toggle mouse-wheel scroll (off = native text selection)", group: "settings" },
   { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" , group: "settings" },
   { name: "context", summary: "open the context inspector" , group: "context" },
-  { name: "compact", summary: "how context compaction works" , group: "context" },
+  { name: "compact", args: "[focus]", summary: "compact the session now (focus steers the LLM summary)" , group: "context" },
   { name: "usage", summary: "cumulative token usage and cost" , group: "context" },
   { name: "export", args: "[path]", summary: "export the transcript as markdown" , group: "review" },
   { name: "copy", summary: "copy the last assistant message to the clipboard" , group: "review" },
@@ -69,7 +70,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
 export type SlashCommand =
   | { name: "help" }
   | { name: "new" }
-  | { name: "clear" }
+  | { name: "clear"; arg?: string }
   | { name: "sessions" }
   | { name: "resume"; arg?: string }
   | { name: "plan"; arg?: string }
@@ -93,8 +94,9 @@ export type SlashCommand =
   | { name: "init" }
   | { name: "doctor" }
   | { name: "vim" }
+  | { name: "mouse" }
   | { name: "context" }
-  | { name: "compact" }
+  | { name: "compact"; arg?: string }
   | { name: "usage" }
   | { name: "export"; arg?: string }
   | { name: "copy" }
@@ -118,7 +120,6 @@ export type ParsedInput =
 const NO_ARG = new Set([
   "help",
   "new",
-  "clear",
   "sessions",
   "backtrack",
   "fork",
@@ -131,22 +132,22 @@ const NO_ARG = new Set([
   "init",
   "doctor",
   "vim",
+  "mouse",
   "status",
   "permissions",
   "hooks",
   "release-notes",
   "bug",
   "context",
-  "compact",
   "usage",
   "copy",
   "editor",
   "quit",
 ]);
 /** Commands whose argument is the whole rest of the line (free text). */
-const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir"]);
+const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory"]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "memory", "export", "config"]);
+const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "config"]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();
