@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDefinition, McpServerConfig, SessionMeta, ToolSpec } from "@seekforge/core";
-import type { BgTask } from "../model.js";
+import type { BgTask, ChatItem } from "../model.js";
 import {
+  contextBreakdown,
   formatAgentLines,
   formatBgTaskLines,
   formatMcpLines,
@@ -39,15 +40,30 @@ function mcpSpec(name: string): ToolSpec {
 }
 
 describe("formatSessionLines", () => {
-  it("renders id, status, cost, and task", () => {
-    const lines = formatSessionLines([
-      meta({ usage: { promptTokens: 1, completionTokens: 1, cacheHitTokens: 0, costUsd: 0.0123 } }),
-    ]);
-    expect(lines).toEqual(["20260612T100000-abc123  [completed]  $0.0123  fix the build"]);
+  // Two hours after the fixture's updatedAt (2026-06-12T10:05Z).
+  const NOW = Date.parse("2026-06-12T12:05:00.000Z");
+
+  it("renders id, status, relative age, cost, and task", () => {
+    const lines = formatSessionLines(
+      [meta({ usage: { promptTokens: 1, completionTokens: 1, cacheHitTokens: 0, costUsd: 0.0123 } })],
+      15,
+      NOW,
+    );
+    expect(lines).toEqual(["20260612T100000-abc123  [completed]  2h ago  $0.0123  fix the build"]);
+  });
+
+  it("derives the age from updatedAt per session", () => {
+    const lines = formatSessionLines(
+      [meta({ id: "s-old", updatedAt: "2026-06-09T12:05:00.000Z" }), meta({ id: "s-fresh", updatedAt: "2026-06-12T12:04:40.000Z" })],
+      15,
+      NOW,
+    );
+    expect(lines[0]).toContain("3d ago");
+    expect(lines[1]).toContain("just now");
   });
 
   it("shows a dash when the session has no recorded usage", () => {
-    const [line] = formatSessionLines([meta({})]);
+    const [line] = formatSessionLines([meta({})], 15, NOW);
     expect(line).toContain("  —  ");
   });
 
@@ -178,5 +194,74 @@ describe("gauge", () => {
 describe("gaugeCaption", () => {
   it("formats used/budget tokens compactly", () => {
     expect(gaugeCaption(28_000, 100_000)).toBe("28.0K of 100.0K tokens");
+  });
+});
+
+describe("contextBreakdown", () => {
+  const items: ChatItem[] = [
+    { kind: "user", id: "u1", text: "x".repeat(40) }, // 10 tok
+    { kind: "assistant", id: "a1", text: "y".repeat(400), streaming: false }, // 100 tok
+    {
+      kind: "tool",
+      id: "t1",
+      toolName: "read_file",
+      args: { path: "src/index.ts" },
+      status: "ok",
+      resultPreview: "z".repeat(800),
+    },
+    { kind: "shell", id: "sh1", command: "ls", output: "a\nb\nc", exitCode: 0 },
+    { kind: "step", id: "s1", title: "step title is excluded" },
+    { kind: "notice", id: "n1", text: "local notice is excluded", tone: "dim" },
+  ];
+
+  it("groups items into categories with chars/4 estimates, sorted by tokens", () => {
+    const rows = contextBreakdown(items);
+    expect(rows.map((r) => r.label)).toEqual([
+      "tool results",
+      "assistant text",
+      "user messages",
+      "shell output",
+    ]);
+    const tool = rows[0]!;
+    // read_file + args JSON + 800-char preview, chars/4
+    expect(tool.tokens).toBeGreaterThan(200);
+    expect(tool.count).toBe(1);
+    const assistant = rows[1]!;
+    expect(assistant.tokens).toBe(100);
+  });
+
+  it("percents are shares of the total and sum to ~100", () => {
+    const rows = contextBreakdown(items);
+    const sum = rows.reduce((acc, r) => acc + r.percent, 0);
+    expect(sum).toBeGreaterThanOrEqual(98);
+    expect(sum).toBeLessThanOrEqual(102);
+    for (const row of rows) {
+      expect(row.percent).toBeGreaterThanOrEqual(0);
+      expect(row.percent).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("excludes steps and notices and merges same-category items", () => {
+    const rows = contextBreakdown([
+      { kind: "step", id: "s", title: "only steps" },
+      { kind: "notice", id: "n", text: "only notices", tone: "dim" },
+      { kind: "user", id: "u1", text: "aaaa" },
+      { kind: "user", id: "u2", text: "bbbb" },
+    ]);
+    expect(rows).toEqual([{ label: "user messages", tokens: 2, count: 2, percent: 100 }]);
+  });
+
+  it("groups diffs and file references together", () => {
+    const rows = contextBreakdown([
+      { kind: "diff", id: "d1", path: "a.ts", lines: [{ kind: "add", text: "+new line" }] },
+      { kind: "file", id: "f1", path: "src/very/long/path.ts" },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.label).toBe("diffs & files");
+    expect(rows[0]!.count).toBe(2);
+  });
+
+  it("returns no rows for an empty transcript", () => {
+    expect(contextBreakdown([])).toEqual([]);
   });
 });

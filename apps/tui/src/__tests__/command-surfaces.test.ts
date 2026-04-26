@@ -78,6 +78,12 @@ describe("formatStatusLines", () => {
     expect(lines).toContainEqual(expect.stringMatching(/vim\s+off/));
     expect(lines).toContainEqual(expect.stringMatching(/api key\s+not set/));
   });
+
+  it("renders an uptime row when uptimeMs is provided and omits it otherwise", () => {
+    const withUptime = formatStatusLines(status({ uptimeMs: 3 * 60_000 + 12_000 }));
+    expect(withUptime).toContainEqual(expect.stringMatching(/uptime\s+3m 12s/));
+    expect(formatStatusLines(status({})).join("\n")).not.toContain("uptime");
+  });
 });
 
 const CONFIG_PATHS = { global: "/home/u/.seekforge/config.json", project: "/work/proj/.seekforge/config.json" };

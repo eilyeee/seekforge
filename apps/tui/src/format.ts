@@ -14,6 +14,59 @@ export function formatUsage(usage: TokenUsage): string {
   );
 }
 
+/** "2h 5m" / "3m 12s" / "45s" duration formatting (whole seconds, two units max). */
+export function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * Relative age like "2h ago" for ISO timestamps; "just now" under a minute,
+ * then m/h/d/mo buckets. Invalid or future timestamps return "—" so callers
+ * always have a printable column.
+ */
+export function relativeAge(iso: string, now: Date | number = Date.now()): string {
+  const then = Date.parse(iso);
+  const ref = typeof now === "number" ? now : now.getTime();
+  if (!Number.isFinite(then) || then > ref) return "—";
+  const seconds = Math.floor((ref - then) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+/**
+ * Multi-line usage block for /usage — labeled prompt / completion / total /
+ * cost rows with the cache-hit ratio, plus optional duration and turn count.
+ * The one-line formatUsage stays for the status bar.
+ */
+export function formatUsageDetail(
+  usage: TokenUsage,
+  opts?: { durationMs?: number; turns?: number },
+): string[] {
+  const hitRate =
+    usage.promptTokens > 0 ? Math.round((usage.cacheHitTokens / usage.promptTokens) * 100) : 0;
+  const lines = [
+    `prompt      ${kfmt(usage.promptTokens)} tokens (${kfmt(usage.cacheHitTokens)} cache hit · ${hitRate}% hit rate)`,
+    `completion  ${kfmt(usage.completionTokens)} tokens`,
+    `total       ${kfmt(usage.promptTokens + usage.completionTokens)} tokens`,
+    `cost        $${usage.costUsd.toFixed(4)}`,
+  ];
+  if (opts?.durationMs !== undefined) lines.push(`duration    ${formatDuration(opts.durationMs)}`);
+  if (opts?.turns !== undefined) lines.push(`turns       ${opts.turns}`);
+  return lines;
+}
+
 /** Dimmed JSON arg preview for a tool row (port of render.ts summarizeArgs). */
 export function summarizeArgs(args: unknown): string {
   const text = JSON.stringify(args) ?? "";
