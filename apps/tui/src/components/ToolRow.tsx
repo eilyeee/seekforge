@@ -19,9 +19,11 @@ type ToolRowProps = {
   resultPreview?: string;
   /** Ctrl+O: render the full preview lines below the summary. */
   verbose?: boolean;
+  /** Live output tail while a command runs (last few lines, dim). */
+  outputTail?: string;
 };
 
-export function ToolRow({ toolName, args, status, error, resultPreview, verbose }: ToolRowProps): React.ReactElement {
+export function ToolRow({ toolName, args, status, error, resultPreview, verbose, outputTail }: ToolRowProps): React.ReactElement {
   const { verb, detail } = toolTitle(toolName, args);
   const summary = toolResultSummary(toolName, status === "ok", resultPreview, error);
   return (
@@ -45,6 +47,18 @@ export function ToolRow({ toolName, args, status, error, resultPreview, verbose 
           ) : null}
         </Text>
       </Box>
+      {status === "running" && outputTail
+        ? outputTail
+            .trimEnd()
+            .split("\n")
+            .slice(-4)
+            .map((line, i) => (
+              <Text key={`t${i}`} dimColor>
+                {"    "}
+                {line.slice(0, 100)}
+              </Text>
+            ))
+        : null}
       {status !== "running" && summary ? (
         <Text color={status === "error" ? "red" : undefined} dimColor={status !== "error"}>
           {"  ⎿  "}

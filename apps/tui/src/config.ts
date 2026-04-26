@@ -40,6 +40,8 @@ export type TuiConfig = {
   thinking?: boolean;
   /** V4 reasoning effort: "high" or "max". */
   reasoningEffort?: "high" | "max";
+  /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
+  compaction?: "mechanical" | "llm";
 };
 
 function readJson(path: string): TuiConfig {

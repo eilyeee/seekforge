@@ -299,3 +299,32 @@ describe("chatReducer thinking blocks (V4)", () => {
     expect(s.turnTokens).toBe(0);
   });
 });
+
+describe("chatReducer live command output", () => {
+  it("appends a rolling tail to the running run_command row and drops it on completion", () => {
+    let s = base();
+    s = reduce(s, { type: "tool.started", toolName: "run_command", args: { command: "npm test" } });
+    s = reduce(s, { type: "command.output", stream: "stdout", chunk: "line1\n" });
+    s = reduce(s, { type: "command.output", stream: "stderr", chunk: "line2\n" });
+    let row = s.items[0] as ChatItem & { kind: "tool" };
+    expect(row.outputTail).toBe("line1\nline2\n");
+    s = reduce(s, { type: "tool.completed", toolName: "run_command", result: { ok: true, data: { exitCode: 0 } } });
+    row = s.items[0] as ChatItem & { kind: "tool" };
+    expect(row.outputTail).toBeUndefined();
+    expect(row.status).toBe("ok");
+  });
+
+  it("caps the tail at ~400 chars", () => {
+    let s = base();
+    s = reduce(s, { type: "tool.started", toolName: "run_command", args: {} });
+    s = reduce(s, { type: "command.output", stream: "stdout", chunk: "x".repeat(1000) });
+    const row = s.items[0] as ChatItem & { kind: "tool" };
+    expect(row.outputTail?.length).toBe(400);
+  });
+
+  it("ignores output with no running command row", () => {
+    let s = base();
+    s = reduce(s, { type: "command.output", stream: "stdout", chunk: "noise" });
+    expect(s.items).toHaveLength(0);
+  });
+});

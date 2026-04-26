@@ -76,6 +76,8 @@ export type ChatItem =
       error?: { code: string; message: string };
       /** Trimmed result payload, shown in verbose mode (Ctrl+O). */
       resultPreview?: string;
+      /** Rolling tail of live output while the command runs (last ~400 chars). */
+      outputTail?: string;
     }
   | { kind: "plan"; id: string; items: PlanItem[] }
   | { kind: "file"; id: string; path: string }
@@ -461,8 +463,9 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       if (idx < 0) return applyBgEvent(state, e.toolName, e.result.ok, e.result.data, undefined);
       const next = state.items.slice();
       const row = next[idx] as ChatItem & { kind: "tool" };
+      const { outputTail: _tail, ...rest } = row; // live tail ends with the call
       next[idx] = {
-        ...row,
+        ...rest,
         status: e.result.ok ? "ok" : "error",
         error: e.result.ok ? undefined : { code: e.result.error?.code ?? "error", message: e.result.error?.message ?? "" },
         ...(e.result.ok && e.result.data !== undefined ? { resultPreview: previewData(e.result.data) } : {}),
@@ -510,6 +513,17 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         totalUsage: addUsage(state.totalUsage, e.report.usage),
         items: [...state.items, { kind: "report", id: nextId("r"), report: e.report }],
       };
+
+    case "command.output": {
+      // Live tail on the most recent running run_command row (cap ~400 chars).
+      const idx = lastRunningToolIndex(state.items, "run_command");
+      if (idx < 0) return state;
+      const next = state.items.slice();
+      const row = next[idx] as ChatItem & { kind: "tool" };
+      const merged = ((row.outputTail ?? "") + e.chunk).slice(-400);
+      next[idx] = { ...row, outputTail: merged };
+      return { ...state, items: next };
+    }
 
     case "session.failed":
       return {
