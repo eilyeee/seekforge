@@ -65,10 +65,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
 
   // JSON mode: machine-readable JSONL events, no streaming/colors, and no
   // interactive prompts — anything that would ask is denied (pair with -y).
+  // Reasoning deltas are also suppressed (they are a stdout stream, not events).
   const json = opts.json ?? false;
-  const render = json
-    ? (e: unknown) => console.log(JSON.stringify(e))
-    : createRenderer({ streaming: true });
+  const renderer = json ? undefined : createRenderer({ streaming: true });
+  const render = renderer ? renderer.render : (e: unknown) => console.log(JSON.stringify(e));
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
   const mcp = await prepareMcp(config);
   const { agent, dispose } = createCliAgent({
@@ -76,7 +76,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     model,
     mcpToolSpecs: mcp.specs,
     confirm: json ? async () => false : confirmInTerminal,
-    onModelDelta: json ? undefined : (chunk) => process.stdout.write(chunk),
+    onModelDelta: renderer?.modelDelta,
+    onReasoningDelta: renderer?.reasoningDelta,
     extractMemory: mode === "edit",
     subagents: loadAgentDefinitions(projectPath),
   });

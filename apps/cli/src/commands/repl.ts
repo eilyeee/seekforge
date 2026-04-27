@@ -17,7 +17,8 @@ Slash commands:
   /sessions          list sessions of this project
   /resume <id>       continue an existing session
   /plan <task>       plan read-only first, confirm, then execute
-  /model <name>      switch model for subsequent messages
+  /model <name>      switch model (e.g. deepseek-chat, deepseek-v4-flash, deepseek-v4-pro)
+  /think [on|off|high|max]  V4 thinking mode and reasoning effort
   /remember <fact>   save a fact to project memory (project.md)
   /usage             cumulative token usage and cost for this REPL
   /context           context-window occupancy of the last turn
@@ -46,6 +47,18 @@ function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean
   };
 }
 
+/** ask_user channel over the REPL's readline: numbered options, pick by index. */
+function makeAskUser(rl: Interface): (q: { question: string; options: string[] }) => Promise<string> {
+  return async (q) => {
+    console.log(`\n${YELLOW}Question${RESET} ${q.question}`);
+    q.options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
+    const answer = (await rl.question(`answer [1-${q.options.length}]: `)).trim();
+    const n = Number.parseInt(answer, 10);
+    if (!Number.isInteger(n) || n < 1 || n > q.options.length) return "(the user declined to answer)";
+    return q.options[n - 1] as string;
+  };
+}
+
 export async function replCommand(opts: { model?: string; yes?: boolean }): Promise<void> {
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
@@ -63,7 +76,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
   let lastContext: { usedTokens: number; budgetTokens: number; percent: number } | undefined;
-  const render = createRenderer({ streaming: true });
+  const renderer = createRenderer({ streaming: true });
 
   console.log(`SeekForge — interactive session  ${DIM}(${model}, ${projectPath})${RESET}`);
   console.log(`${DIM}Type a task, or /help for commands. Ctrl+C cancels a running task.${RESET}\n`);
@@ -73,7 +86,9 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
       config,
       model,
       confirm: makeConfirm(rl),
-      onModelDelta: (chunk) => process.stdout.write(chunk),
+      onModelDelta: renderer.modelDelta,
+      onReasoningDelta: renderer.reasoningDelta,
+      askUser: makeAskUser(rl),
       extractMemory: true,
       subagents: loadAgentDefinitions(projectPath),
       mcpToolSpecs: mcp.specs,
@@ -103,7 +118,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
             percent: event.percent,
           };
         }
-        render(event);
+        renderer.render(event);
       }
     } finally {
       process.removeListener("SIGINT", onSigint);
@@ -177,9 +192,36 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
             console.log("deepseek-reasoner has no tool calling and cannot drive the agent yet");
             break;
           }
-          model = rest[0] ?? model;
+          if (!rest[0]) {
+            console.log(`model: ${model} (try deepseek-chat, deepseek-v4-flash, deepseek-v4-pro)`);
+            break;
+          }
+          model = rest[0];
           console.log(`model: ${model}`);
           break;
+        case "/think": {
+          const arg = rest[0];
+          if (!arg) {
+            console.log(
+              `thinking: ${config.thinking === false ? "off" : "on"}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""} (V4 models only — /think on|off|high|max)`,
+            );
+            break;
+          }
+          if (arg === "on") config.thinking = true;
+          else if (arg === "off") config.thinking = false;
+          else if (arg === "high" || arg === "max") {
+            config.thinking = true;
+            config.reasoningEffort = arg;
+          } else {
+            console.log("usage: /think [on|off|high|max]");
+            break;
+          }
+          console.log(
+            `thinking ${config.thinking === false ? "off" : "on"}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""} — applies from the next message` +
+              (model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)"),
+          );
+          break;
+        }
         case "/remember": {
           const fact = rest.join(" ").trim();
           if (!fact) {

@@ -18,6 +18,10 @@ export type CliAgentOptions = {
   model?: string;
   confirm: (req: PermissionRequest) => Promise<boolean>;
   onModelDelta?: (chunk: string) => void;
+  /** Streamed chain-of-thought deltas (V4 thinking mode). */
+  onReasoningDelta?: (chunk: string) => void;
+  /** ask_user channel (REPL readline prompt). Absent in non-interactive runs. */
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
@@ -43,10 +47,16 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     }
   }
 
+  // V4 thinking controls travel with every provider we build (main + per-agent).
+  const thinkingOpts = {
+    ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+  };
   const provider = createDeepSeekProvider({
     apiKey: config.apiKey ?? "",
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
+    ...thinkingOpts,
   });
 
   const agent = createAgentCore({
@@ -60,17 +70,21 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
         );
         return provider;
       }
-      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model });
+      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model, ...thinkingOpts });
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
+    ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
+    ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     hooks: config.hooks,
+    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
+    ...(config.compaction ? { compaction: config.compaction } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };
