@@ -137,6 +137,100 @@ describe("start -> events -> idle", () => {
   });
 });
 
+describe("reasoning + new event forwarding", () => {
+  it("streams reasoning.delta frames and forwards command.output / context.microcompacted unchanged", async () => {
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "think-1" };
+        opts.onReasoningDelta?.("hmm ");
+        opts.onReasoningDelta?.("ok");
+        opts.onModelDelta?.("answer");
+        yield { type: "command.output", stream: "stdout", chunk: "line 1\n" };
+        yield { type: "context.microcompacted", clearedResults: 3 };
+        yield { type: "model.message", content: "answer" };
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "think hard", mode: "ask", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+
+    const events = rx.frames.filter((f) => f.type === "event").map((f) => f.event);
+    expect(events).toContainEqual({ type: "reasoning.delta", chunk: "hmm " });
+    expect(events).toContainEqual({ type: "reasoning.delta", chunk: "ok" });
+    // Reasoning deltas arrive before the model delta (callback order preserved).
+    const reasoningIdx = events.findIndex((e) => (e as { type: string }).type === "reasoning.delta");
+    const modelIdx = events.findIndex((e) => (e as { type: string }).type === "model.delta");
+    expect(reasoningIdx).toBeGreaterThanOrEqual(0);
+    expect(reasoningIdx).toBeLessThan(modelIdx);
+    // The new AgentEvents pass through unchanged.
+    expect(events).toContainEqual({ type: "command.output", stream: "stdout", chunk: "line 1\n" });
+    expect(events).toContainEqual({ type: "context.microcompacted", clearedResults: 3 });
+  });
+});
+
+describe("question bridge (ask_user)", () => {
+  const questionScript = (observe: (answer: string) => void): CreateAgentFn =>
+    fakeAgentFactory(async function* (opts) {
+      yield { type: "session.created", sessionId: "q-1" };
+      const answer = await opts.askUser!({
+        question: "Which database?",
+        options: ["Postgres", "SQLite"],
+      });
+      observe(answer);
+      yield { type: "session.completed", report: emptyReport() };
+    });
+
+  it("round-trips question.request/question.answer", async () => {
+    let answerSeen: string | undefined;
+    const { server } = await boot(questionScript((a) => (answerSeen = a)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "ask me", mode: "edit", approvalMode: "auto" });
+    const req = await rx.waitFor((f) => f.type === "question.request");
+    expect(req).toMatchObject({
+      question: "Which database?",
+      options: ["Postgres", "SQLite"],
+    });
+    expect(typeof req.id).toBe("string");
+
+    sendFrame(ws, { type: "question.answer", id: req.id, answer: "SQLite" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(answerSeen).toBe("SQLite");
+  });
+
+  it("resolves a declined answer when the socket closes without an answer", async () => {
+    let answerSeen: string | undefined;
+    const { server } = await boot(questionScript((a) => (answerSeen = a)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "ask me", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "question.request");
+
+    ws.close();
+    await waitUntil(() => answerSeen !== undefined);
+    expect(answerSeen).toBe("(the user declined to answer)");
+  });
+
+  it("treats an empty answer as declined and rejects unknown question ids", async () => {
+    let answerSeen: string | undefined;
+    const { server } = await boot(questionScript((a) => (answerSeen = a)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "ask me", mode: "edit", approvalMode: "auto" });
+    const req = await rx.waitFor((f) => f.type === "question.request");
+
+    sendFrame(ws, { type: "question.answer", id: "q999", answer: "x" });
+    const err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("unknown_request");
+
+    sendFrame(ws, { type: "question.answer", id: req.id, answer: "" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(answerSeen).toBe("(the user declined to answer)");
+  });
+});
+
 describe("plan flavor and mode override", () => {
   function seedAskSession(workspace: string, id = "plan-1"): void {
     writeFileIn(

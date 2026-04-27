@@ -23,6 +23,10 @@ export type CreateAgentOptions = {
   /** Permission bridge: resolves with the user's decision over the WS. */
   confirm: (req: PermissionRequest) => Promise<boolean>;
   onModelDelta?: (chunk: string) => void;
+  /** Streamed chain-of-thought deltas (thinking mode), mirrored over the WS. */
+  onReasoningDelta?: (chunk: string) => void;
+  /** ask_user bridge: resolves with the user's answer over the WS. */
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   extractMemory: boolean;
 };
 
@@ -46,13 +50,20 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
       apiKey: config.apiKey ?? "",
       baseUrl: config.baseUrl,
       model: config.model,
+      // Thinking mode + effort passthrough (mirrors apps/tui agent factory).
+      ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
+      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     }),
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
+    ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
+    ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
+    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
+    ...(config.compaction ? { compaction: config.compaction } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

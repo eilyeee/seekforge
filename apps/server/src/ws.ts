@@ -3,8 +3,10 @@
  *
  * One connection drives at most one *running* session at a time (busy rule).
  * Permission requests pause the run until the matching permission.response,
- * a 120 s timeout, or socket close (both treated as denied). Socket close
- * while running aborts the run via AbortController.
+ * a 120 s timeout, or socket close (both treated as denied). ask_user
+ * questions bridge the same way (question.request/question.answer; timeout
+ * or close resolves as a declined answer). Socket close while running aborts
+ * the run via AbortController.
  */
 
 import type { RawData, WebSocket } from "ws";
@@ -15,12 +17,17 @@ import type { WorkspaceRegistry } from "./workspaces.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
-/** Server-level event: model deltas streamed via the core's callback. */
+/** Answer reported to the core when the user never answers an ask_user question. */
+export const DECLINED_ANSWER = "(the user declined to answer)";
+
+/** Server-level events: model/reasoning deltas streamed via core callbacks. */
 type ModelDeltaEvent = { type: "model.delta"; chunk: string };
+type ReasoningDeltaEvent = { type: "reasoning.delta"; chunk: string };
 
 type ServerFrame =
-  | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent }
+  | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent | ReasoningDeltaEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
+  | { type: "question.request"; id: string; question: string; options: string[] }
   | { type: "error"; code: string; message: string }
   | { type: "idle" };
 
@@ -49,6 +56,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let requestCounter = 0;
   // requestId -> settle(approved); settling clears its timeout and unregisters.
   const pending = new Map<string, (approved: boolean) => void>();
+  // question id -> settle(answer); same lifecycle as `pending`.
+  const pendingQuestions = new Map<string, (answer: string) => void>();
 
   const send = (frame: ServerFrame): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
@@ -57,6 +66,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
   const denyAllPending = (): void => {
     for (const settle of [...pending.values()]) settle(false);
+    for (const settle of [...pendingQuestions.values()]) settle(DECLINED_ANSWER);
   };
 
   const confirm = (request: PermissionRequest): Promise<boolean> =>
@@ -77,6 +87,25 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       send({ type: "permission.request", requestId, request });
     });
 
+  /** ask_user bridge, mirroring `confirm`: timeout/disconnect = declined. */
+  const askUser = (q: { question: string; options: string[] }): Promise<string> =>
+    new Promise<string>((resolve) => {
+      if (closed) {
+        resolve(DECLINED_ANSWER);
+        return;
+      }
+      const id = `q${++requestCounter}`;
+      let timer: NodeJS.Timeout | undefined;
+      const settle = (answer: string) => {
+        if (timer !== undefined) clearTimeout(timer);
+        pendingQuestions.delete(id);
+        resolve(answer);
+      };
+      timer = setTimeout(() => settle(DECLINED_ANSWER), timeoutMs);
+      pendingQuestions.set(id, settle);
+      send({ type: "question.request", id, question: q.question, options: q.options });
+    });
+
   const run = async (input: RunInput): Promise<void> => {
     running = true;
     controller = new AbortController();
@@ -84,7 +113,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     const handle = deps.createAgent({
       workspace: input.workspace,
       confirm,
+      askUser,
       onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
+      onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
       extractMemory: input.mode === "edit",
     });
     try {
@@ -189,6 +220,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         const settle = typeof requestId === "string" ? pending.get(requestId) : undefined;
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
         settle(approved === true);
+        return;
+      }
+
+      case "question.answer": {
+        const { id, answer } = frame;
+        const settle = typeof id === "string" ? pendingQuestions.get(id) : undefined;
+        if (!settle) return fail("unknown_request", `no pending question: ${String(id)}`);
+        settle(typeof answer === "string" && answer.length > 0 ? answer : DECLINED_ANSWER);
         return;
       }
 
