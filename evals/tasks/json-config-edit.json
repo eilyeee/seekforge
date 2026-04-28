@@ -1,0 +1,15 @@
+{
+  "id": "json-config-edit",
+  "title": "Update a JSON config file per instructions",
+  "fixture": "json-config-edit",
+  "mode": "edit",
+  "task": "Update config/app.json for the v2 rollout: set \"version\" to \"2.0.0\", change server.port to 8080, and add a features.darkMode flag set to true. Every other field must stay exactly as it is and the file must remain valid JSON. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    {
+      "type": "command_succeeds",
+      "command": "node -e \"const c = require('./config/app.json'); const ok = c.name === 'demo-service' && c.version === '2.0.0' && c.server.host === 'localhost' && c.server.port === 8080 && c.features.beta === false && c.features.darkMode === true; process.exit(ok ? 0 : 1)\""
+    }
+  ],
+  "notes": "The node -e check parses the JSON and asserts the full shape independently of the test file, so rewriting the test can't fake a pass."
+}

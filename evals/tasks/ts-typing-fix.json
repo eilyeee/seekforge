@@ -1,0 +1,13 @@
+{
+  "id": "ts-typing-fix",
+  "title": "Fix a TypeScript type error so tsc is clean",
+  "fixture": "ts-typing-fix",
+  "mode": "edit",
+  "task": "`npm test` runs the TypeScript compiler on this project and currently fails with a type error in src/stats.ts. Fix the incorrect type annotation — the runtime logic is already correct, so do not change what the code computes (the formatted `toFixed(2)` output must stay). Run `npm test` to confirm tsc compiles cleanly.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/stats.ts", "pattern": "const avg: string" },
+    { "type": "file_contains", "path": "src/stats.ts", "pattern": "toFixed\\(2\\)" }
+  ],
+  "notes": "npm test shells out to a version-pinned tsc via `npx --yes --package typescript@5.7.3` so the fixture declares no dependencies; npx caches the package after the first run."
+}
