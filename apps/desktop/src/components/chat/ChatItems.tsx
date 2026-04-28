@@ -1,8 +1,36 @@
+import { useState } from "react";
 import type { ChatItem } from "../../lib/events";
 import { formatTokens, formatUsd } from "../../lib/usage";
 import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
+
+/**
+ * Streamed chain-of-thought: a dim block, expanded while streaming and
+ * collapsed to one line once the answer starts (click toggles).
+ */
+function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? item.streaming;
+  return (
+    <div className="rounded border border-zinc-800/80 bg-zinc-900/40">
+      <button
+        type="button"
+        onClick={() => setManualOpen(!open)}
+        className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-zinc-500 hover:text-zinc-400"
+      >
+        <span className={item.streaming ? "animate-pulse" : ""}>✻</span>
+        <span className="italic">thinking{item.streaming ? "…" : ""}</span>
+        <span className="ml-auto text-zinc-700">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="whitespace-pre-wrap border-t border-zinc-800/80 px-3 py-2 text-xs italic text-zinc-500">
+          {item.text}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ItemView({ item }: { item: ChatItem }) {
   switch (item.kind) {
@@ -21,6 +49,8 @@ function ItemView({ item }: { item: ChatItem }) {
           {item.streaming && <span className="ml-0.5 animate-pulse text-emerald-400">▌</span>}
         </div>
       );
+    case "thinking":
+      return <ThinkingBlock item={item} />;
     case "tool":
       return <ToolRow item={item} />;
     case "plan":
@@ -43,6 +73,12 @@ function ItemView({ item }: { item: ChatItem }) {
       return (
         <div className="rounded border border-dashed border-zinc-700 px-3 py-1.5 text-center text-xs text-zinc-500">
           context compacted — {item.droppedTurns} turns summarized into ~{item.summaryTokens} tokens
+        </div>
+      );
+    case "microcompacted":
+      return (
+        <div className="rounded border border-dashed border-zinc-800 px-3 py-1 text-center text-xs text-zinc-600">
+          context micro-compacted — {item.clearedResults} old tool result(s) cleared
         </div>
       );
     case "report":

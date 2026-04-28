@@ -18,6 +18,14 @@ export type ServerConfig = {
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
   commandAllowlist?: string[];
+  /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
+  sandbox?: "off" | "workspace-write" | "restricted";
+  /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
+  compaction?: "mechanical" | "llm";
+  /** DeepSeek V4 thinking mode (default: API default). */
+  thinking?: boolean;
+  /** Reasoning effort for thinking mode. */
+  reasoningEffort?: "high" | "max";
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
 };

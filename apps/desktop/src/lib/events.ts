@@ -10,13 +10,22 @@ export type PlanItem = { step: string; status: "pending" | "in_progress" | "done
 
 /**
  * Everything the WS delivers inside {"type":"event"} frames: every AgentEvent
- * plus the server-level model.delta streaming event (see SERVER-API.md).
+ * plus the server-level model.delta / reasoning.delta streaming events
+ * (see SERVER-API.md).
  */
-export type StreamEvent = AgentEvent | { type: "model.delta"; chunk: string };
+export type StreamEvent =
+  | AgentEvent
+  | { type: "model.delta"; chunk: string }
+  | { type: "reasoning.delta"; chunk: string };
+
+/** Max live-output lines kept on a running command row (command.output). */
+export const COMMAND_TAIL_LINES = 5;
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string }
   | { kind: "assistant"; id: number; text: string; streaming: boolean }
+  /** Streamed chain-of-thought; collapsed in the UI once streaming ends. */
+  | { kind: "thinking"; id: number; text: string; streaming: boolean }
   | {
       kind: "tool";
       id: number;
@@ -24,11 +33,14 @@ export type ChatItem =
       args: unknown;
       status: "running" | "ok" | "error";
       result?: ToolResult;
+      /** Live output while running, capped to the last COMMAND_TAIL_LINES lines. */
+      tail?: string;
     }
   | { kind: "plan"; id: number; items: PlanItem[] }
   | { kind: "substep"; id: number; agentId: string; steps: string[] }
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
+  | { kind: "microcompacted"; id: number; clearedResults: number }
   | { kind: "report"; id: number; report: FinalReport }
   | { kind: "failed"; id: number; error: AgentError };
 
@@ -103,8 +115,31 @@ export function upsertPlan(state: ChatState, items: PlanItem[]): ChatState {
 /** Nested subagent activity arrives as step.started "[agentId] toolName". */
 const SUBSTEP_RE = /^\[([a-z0-9-]+)\]\s+(.+)$/;
 
+/** Ends the streaming thinking block (any later event = the answer started). */
+function finishThinking(state: ChatState): ChatState {
+  const idx = findLastIndex(state.items, (i) => i.kind === "thinking" && i.streaming);
+  if (idx < 0) return state;
+  const thinking = state.items[idx] as Extract<ChatItem, { kind: "thinking" }>;
+  const next = [...state.items];
+  next[idx] = { ...thinking, streaming: false };
+  return { ...state, items: next };
+}
+
 export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
+  // Reasoning streams strictly before the answer/tool calls of a turn, so any
+  // other event closes (collapses) the open thinking block.
+  if (ev.type !== "reasoning.delta") state = finishThinking(state);
   switch (ev.type) {
+    case "reasoning.delta": {
+      const last = state.items[state.items.length - 1];
+      if (last && last.kind === "thinking" && last.streaming) {
+        const next = [...state.items];
+        next[next.length - 1] = { ...last, text: last.text + ev.chunk };
+        return { ...state, items: next };
+      }
+      return push(state, { kind: "thinking", text: ev.chunk, streaming: true });
+    }
+
     case "session.created":
       return { ...state, sessionId: ev.sessionId };
 
@@ -163,10 +198,23 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       if (idx >= 0) {
         const running = state.items[idx] as Extract<ChatItem, { kind: "tool" }>;
         const next = [...state.items];
-        next[idx] = { ...running, status, result: ev.result };
+        // The live tail is dropped: the result carries the full output now.
+        next[idx] = { ...running, status, result: ev.result, tail: undefined };
         return { ...state, items: next };
       }
       return push(state, { kind: "tool", name: ev.toolName, args: undefined, status, result: ev.result });
+    }
+
+    // Live output of the running command: keep only the last few lines.
+    case "command.output": {
+      const idx = findLastIndex(state.items, (i) => i.kind === "tool" && i.status === "running");
+      if (idx < 0) return state;
+      const running = state.items[idx] as Extract<ChatItem, { kind: "tool" }>;
+      // Chunks may end mid-line: concatenate raw, then cap by line count.
+      const lines = `${running.tail ?? ""}${ev.chunk}`.split("\n");
+      const next = [...state.items];
+      next[idx] = { ...running, tail: lines.slice(-COMMAND_TAIL_LINES).join("\n") };
+      return { ...state, items: next };
     }
 
     case "file.changed":
@@ -178,6 +226,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         droppedTurns: ev.droppedTurns,
         summaryTokens: ev.summaryTokens,
       });
+
+    case "context.microcompacted":
+      return push(state, { kind: "microcompacted", clearedResults: ev.clearedResults });
 
     // No chat row: the footer renders the latest occupancy.
     case "context.usage":
@@ -197,7 +248,7 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
     }
 
     // permission.required is delivered via the dedicated permission.request
-    // frame; step.*, usage.updated and command.output have no row of their own.
+    // frame; step.* and usage.updated have no row of their own.
     default:
       return state;
   }

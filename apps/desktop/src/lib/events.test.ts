@@ -171,6 +171,82 @@ describe("reduceEvent", () => {
     expect(s.items[1]).toMatchObject({ kind: "substep", agentId: "meta-scout", steps: ["web_fetch"] });
   });
 
+  it("accumulates reasoning.delta chunks into one streaming thinking item", () => {
+    const s = play([
+      { type: "reasoning.delta", chunk: "let me " },
+      { type: "reasoning.delta", chunk: "think" },
+    ]);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ kind: "thinking", text: "let me think", streaming: true });
+  });
+
+  it("collapses the thinking block once the answer starts streaming", () => {
+    const s = play([
+      { type: "reasoning.delta", chunk: "hmm" },
+      { type: "model.delta", chunk: "Answer" },
+    ]);
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ kind: "thinking", text: "hmm", streaming: false });
+    expect(s.items[1]).toMatchObject({ kind: "assistant", text: "Answer", streaming: true });
+  });
+
+  it("collapses the thinking block when a tool call starts instead", () => {
+    const s = play([
+      { type: "reasoning.delta", chunk: "checking files" },
+      { type: "tool.started", toolName: "read_file", args: {} },
+    ]);
+    expect(s.items[0]).toMatchObject({ kind: "thinking", streaming: false });
+    expect(s.items[1]).toMatchObject({ kind: "tool", name: "read_file" });
+  });
+
+  it("starts a fresh thinking block per turn", () => {
+    const s = play([
+      { type: "reasoning.delta", chunk: "first" },
+      { type: "model.message", content: "answer one" },
+      { type: "reasoning.delta", chunk: "second" },
+    ]);
+    const thinking = s.items.filter((i) => i.kind === "thinking");
+    expect(thinking).toHaveLength(2);
+    expect(thinking[0]).toMatchObject({ text: "first", streaming: false });
+    expect(thinking[1]).toMatchObject({ text: "second", streaming: true });
+  });
+
+  it("attaches command.output as a capped live tail on the running tool row", () => {
+    let s = play([
+      { type: "tool.started", toolName: "run_command", args: { command: "pnpm test" } },
+      { type: "command.output", stream: "stdout", chunk: "line 1\nline 2\npar" },
+      { type: "command.output", stream: "stdout", chunk: "tial\n" },
+    ]);
+    // Chunks ending mid-line are joined back together.
+    expect(s.items[0]).toMatchObject({ kind: "tool", tail: "line 1\nline 2\npartial\n" });
+
+    s = play([{ type: "command.output", stream: "stderr", chunk: "l4\nl5\nl6\nl7\n" }], s);
+    const tool = s.items[0] as Extract<(typeof s.items)[number], { kind: "tool" }>;
+    // Capped to the last COMMAND_TAIL_LINES split segments.
+    expect(tool.tail!.split("\n").length).toBeLessThanOrEqual(5);
+    expect(tool.tail).toContain("l7");
+    expect(tool.tail).not.toContain("line 1");
+  });
+
+  it("drops the tail when the tool completes (the result has the full output)", () => {
+    const s = play([
+      { type: "tool.started", toolName: "run_command", args: { command: "ls" } },
+      { type: "command.output", stream: "stdout", chunk: "a.ts\n" },
+      { type: "tool.completed", toolName: "run_command", result: { ok: true, data: { output: "a.ts" } } },
+    ]);
+    expect(s.items[0]).toMatchObject({ kind: "tool", status: "ok", tail: undefined });
+  });
+
+  it("ignores command.output without a running tool row", () => {
+    const s = play([{ type: "command.output", stream: "stdout", chunk: "orphan\n" }]);
+    expect(s.items).toHaveLength(0);
+  });
+
+  it("adds a context.microcompacted notice row", () => {
+    const s = play([{ type: "context.microcompacted", clearedResults: 4 }]);
+    expect(s.items[0]).toMatchObject({ kind: "microcompacted", clearedResults: 4 });
+  });
+
   it("appendUser adds a user item", () => {
     const s = appendUser(initialChatState(), "do the thing");
     expect(s.items[0]).toMatchObject({ kind: "user", text: "do the thing" });

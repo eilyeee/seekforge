@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { activeTab, useStore, type StartMode } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
 import { PermissionModal } from "../components/chat/PermissionModal";
+import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -16,7 +17,7 @@ export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
-  const { sendTask, cancel, newSession, respondPermission, connect } = useStore.getState();
+  const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
@@ -196,6 +197,14 @@ export function ChatView() {
 
       {tab.pendingPermission && (
         <PermissionModal request={tab.pendingPermission.request} onRespond={respondPermission} />
+      )}
+
+      {!tab.pendingPermission && tab.pendingQuestion && (
+        <QuestionModal
+          question={tab.pendingQuestion.question}
+          options={tab.pendingQuestion.options}
+          onAnswer={respondQuestion}
+        />
       )}
 
       {confirmClose && (

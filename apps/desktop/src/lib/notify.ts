@@ -6,6 +6,7 @@
 
 export type NotifyEvent =
   | { kind: "permission" }
+  | { kind: "question" }
   | { kind: "completed"; tabTitle: string }
   | { kind: "failed"; tabTitle: string };
 
@@ -15,6 +16,8 @@ export function shouldNotify(ev: NotifyEvent, hidden: boolean): { title: string;
   switch (ev.kind) {
     case "permission":
       return { title: "SeekForge", body: "SeekForge 等待你的确认" };
+    case "question":
+      return { title: "SeekForge", body: "SeekForge 有问题需要你回答" };
     case "completed":
       return { title: "SeekForge", body: `任务完成 — ${ev.tabTitle}` };
     case "failed":

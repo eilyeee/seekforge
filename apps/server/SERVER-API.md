@@ -81,6 +81,7 @@ All frames are JSON objects with a `type` field.
 {"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?}  // continue; mode overrides
                                                                         // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
+{"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
 {"type": "cancel"}                                            // cancel the running session
 ```
 
@@ -93,6 +94,7 @@ workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 ```jsonc
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
+{"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run finishes and a new start/send is accepted
 ```
@@ -105,9 +107,23 @@ Rules:
 - `permission.request` pauses the run until the matching `permission.response`
   arrives (or the socket closes, or 120 s pass without a response — both
   treated as denied).
+- `question.request` (ask_user tool) pauses the run until the matching
+  `question.answer` arrives. The socket closing or 120 s without an answer
+  resolve the question as `"(the user declined to answer)"`; an empty
+  `answer` string counts as declined too. An unknown `id` →
+  `{"type":"error","code":"unknown_request"}`.
 - Model deltas stream as `{"type":"event", "event":{"type":"model.delta","chunk":"..."}}`
   — this is a server-level event type (the core emits deltas via callback);
   the final full text still arrives as the normal `model.message` event.
+- Reasoning (chain-of-thought) deltas stream the same way as
+  `{"type":"event", "event":{"type":"reasoning.delta","chunk":"..."}}` when the
+  configured model runs in thinking mode (`thinking` / `reasoningEffort`
+  config). Reasoning text is display-only and not persisted in transcripts.
+- `command.output` AgentEvents (`{"type":"command.output","stream":"stdout"|"stderr","chunk":"..."}`)
+  forward unchanged: live output of a running command (capped by the core; the
+  full truncated output still lands in the tool result).
+- `context.microcompacted` AgentEvents (`{"type":"context.microcompacted","clearedResults":n}`)
+  forward unchanged: old tool outputs were blanked to save context.
 - Socket close while running → the run is cancelled (AbortController).
 
 ## Implementation notes (binding)
@@ -123,4 +139,6 @@ Rules:
 - Dependencies: `ws` only (plus workspace packages). No express.
 - The server constructs AgentCore exactly like the CLI does (provider from
   config, default dispatcher, runtime when configured, extractMemory for
-  edit mode, commandAllowlist from config).
+  edit mode, commandAllowlist from config), plus the TUI's config
+  passthrough: `sandbox` and `compaction` into createAgentCore, `thinking`
+  and `reasoningEffort` into the provider.
