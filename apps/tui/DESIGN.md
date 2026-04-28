@@ -11,6 +11,42 @@ single accent color, generous spacing, rounded boxes.
 > this document is the design record. Built contract-first: model.ts /
 > commands.ts / keymap.ts landed first, then the batches in parallel
 > worktrees, then app.tsx integration.
+>
+> Development continued through rounds 3–8 (all in 0.7.0; see CHANGELOG.md):
+>
+> - **Steering & shell**: composer stays live mid-run (Enter queues, Esc
+>   cancels run + queue), `!cmd` passthrough, manual `/compact` (core
+>   `compactSessionNow`), persistent background manager, `/clear /diff
+>   /export /memory`.
+> - **Vim / search / backtrack**: modal editing (`vim.ts` state machine),
+>   Ctrl+R reverse history search + Tab path completion, Esc Esc
+>   conversation backtrack (core `truncateSessionAtUserTurn`), `/init
+>   /doctor /skills`, OS notifications.
+> - **Custom commands / images / onboarding**: `.seekforge/commands/*.md`
+>   palette entries with `$ARGUMENTS`, Ctrl+V clipboard images →
+>   `.seekforge/uploads/`, paste placeholders, first-run API-key wizard,
+>   launch flags + `keybindings.json` overrides.
+> - **Run control & questions**: Ctrl+B detaches a run to the background,
+>   Ctrl+O verbose mode, `ask_user` multiple-choice panel (core tool),
+>   per-turn file checkpoints so backtrack also restores files (core
+>   `rewindSessionToTurn`).
+> - **Engine round + UI polish**: opt-in OS sandbox (seatbelt/bwrap),
+>   DeepSeek V4 thinking (✻ blocks, `/think`), 9 hook stages,
+>   micro-compaction, MCP resources, `/fork /review /todo /add-dir`;
+>   Claude-style ⏺/⎿ tool rows and rich markdown.
+> - **Command experience v2**: slash-argument pickers with real candidates,
+>   grouped interactive `/help` overlay, usage-ranked palette +
+>   did-you-mean, `/status /config /permissions /hooks /release-notes /bug`.
+> - **Final gaps**: live command-output tail (core `command.output`),
+>   sandbox-denial escalation prompt, MCP streamable HTTP, hook stdout
+>   injection, LLM compaction option, skills as `/skill:<id>`, command-depth
+>   audit (`/context` breakdown, detailed `/usage`).
+> - **Detail alignment**: `/compact <focus>`, `/memory edit <file>` picker,
+>   `/clear <name>`; approval-mode line + running-command counts moved under
+>   the input box (Claude style); mouse capture off by default (`/mouse`
+>   opts in).
+>
+> The batch plan below is kept as the historical design record.
 
 ## Reference points
 
