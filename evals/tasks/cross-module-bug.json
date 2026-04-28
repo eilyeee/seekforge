@@ -1,0 +1,13 @@
+{
+  "id": "cross-module-bug",
+  "title": "Fix a bug whose symptom and cause live in different modules",
+  "fixture": "cross-module-bug",
+  "mode": "edit",
+  "task": "`npm test` currently fails: checkout totals come out wrong. The failing test is test/checkout.test.js, but the root cause is not necessarily in the file the test imports. Find the bug and fix it at its source — do not paper over it at the call site, and do NOT modify any file under test/. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/discount.js", "pattern": "return subtotal \\* percent;" },
+    { "type": "file_contains", "path": "test/checkout.test.js", "pattern": "checkoutTotal\\(\\[120, 80\\], 10\\), 180" }
+  ],
+  "notes": "The bug lives in src/discount.js (percent treated as a fraction multiplier). file_not_contains proves the cause file was fixed rather than compensated for in src/checkout.js; the file_contains pin stops a test rewrite."
+}

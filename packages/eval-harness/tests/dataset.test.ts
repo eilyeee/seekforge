@@ -9,12 +9,22 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the four expected tasks", () => {
+  it("contains the fourteen expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
+      "add-missing-tests",
       "ask-codebase",
+      "cross-module-bug",
+      "deprecated-api-migration",
+      "error-handling",
       "failing-test-fix",
+      "json-config-edit",
+      "off-by-one-fix",
+      "perf-nested-loop",
+      "rename-across-files",
+      "spec-to-feature",
       "title-change",
+      "ts-typing-fix",
     ]);
   });
 
