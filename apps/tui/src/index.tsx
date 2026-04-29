@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     if (args.vim !== undefined) config = { ...config, vim: args.vim };
   }
 
-  const model = config.model ?? "deepseek-chat";
+  const model = config.model ?? "deepseek-v4-flash";
   const mcp = await prepareMcp(config); // MCP servers live for the whole session
   const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : undefined;
 
