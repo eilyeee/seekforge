@@ -364,6 +364,7 @@ describe("dispatcher basics", () => {
       "web_fetch",
       "web_search",
       "ask_user",
+      "image_analyze",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     expect(readFileDef?.parameters).toMatchObject({

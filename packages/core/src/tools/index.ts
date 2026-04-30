@@ -106,5 +106,5 @@ export type {
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
-export { builtinTools } from "./builtins/index.js";
+export { builtinTools, configureVision, type VisionConfig } from "./builtins/index.js";
 export { truncateHeadTail } from "./text.js";
