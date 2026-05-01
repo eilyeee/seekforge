@@ -29,6 +29,8 @@ export interface AgentCore {
 }
 
 export { createAgentCore, type AgentCoreDeps } from "./loop.js";
+export { classifyAgentError } from "./errors.js";
+export type { AgentErrorKind, ClassifiedAgentError } from "./errors.js";
 export { buildSystemPrompt } from "./prompt.js";
 export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
 export {

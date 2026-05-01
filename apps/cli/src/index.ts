@@ -14,6 +14,7 @@ import {
 } from "./commands/evolve.js";
 import { initCommand } from "./commands/init.js";
 import { mcpListCommand } from "./commands/mcp.js";
+import { mcpServeCommand } from "./commands/mcp-serve.js";
 import {
   memoryAddCommand,
   memoryApproveCommand,
@@ -232,6 +233,21 @@ mcp
   .description("list configured MCP servers and the tools they expose")
   .action(async (opts: { tools?: boolean }) => {
     await mcpListCommand(opts);
+  });
+
+program
+  .command("mcp-serve")
+  .option("--allow-write", "expose write/execute tools too and auto-approve them (TRUSTED callers only)")
+  .description("run SeekForge as an MCP server on stdio (read-only tool set by default)")
+  .addHelpText(
+    "after",
+    `
+Add to another agent's mcpServers config:
+  { "mcpServers": { "seekforge": { "command": "seekforge", "args": ["mcp-serve"] } } }
+`,
+  )
+  .action(async (opts: { allowWrite?: boolean }) => {
+    await mcpServeCommand(opts);
   });
 
 const memory = program.command("memory").description("inspect and curate project memory");
