@@ -40,6 +40,7 @@ import {
 } from "../subagents/index.js";
 import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
+import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
@@ -959,7 +960,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         for (const ev of queue.drainNow()) yield ev;
         yield emit({
           type: "session.failed",
-          error: { code, message: e.message ?? String(err) },
+          error: {
+            code,
+            message: e.message ?? String(err),
+            // Actionable recovery hint for every frontend; a user cancel
+            // needs none (it is not a failure to recover from).
+            ...(code === "cancelled" ? {} : { hint: classifyAgentError(err).hint }),
+          },
         });
       } finally {
         queue.end();

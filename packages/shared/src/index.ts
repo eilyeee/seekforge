@@ -158,6 +158,8 @@ export type SessionStatus =
 export type AgentError = {
   code: string;
   message: string;
+  /** Actionable recovery hint (core agent/errors.ts taxonomy). Additive. */
+  hint?: string;
 };
 
 export type FinalReport = {
