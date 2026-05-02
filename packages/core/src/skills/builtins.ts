@@ -205,6 +205,190 @@ commands to run themselves.
 `;
 
 /** Skills are procedure suggestions only — they never grant permissions. */
+
+const CODE_REVIEW_CONTENT = `# Code Review
+
+Review changes for correctness bugs first, quality second - report findings,
+do not fix them unless asked.
+
+## When to Use
+
+- The user asks to review a diff, a branch, recent changes, or a PR.
+- Before merging: "review this", "check these changes for problems".
+
+## Do Not Use When
+
+- The user wants the problems FIXED, not listed - review, then ask before fixing.
+- There are no pending changes (git_diff empty and no range given).
+
+## Required Context
+
+- What to review: git_diff (uncommitted) by default; a branch/range if named.
+
+## Procedure
+
+1. Collect the change set with git_diff (and git_status); read every touched
+   file's surrounding context with read_file - never judge a hunk in isolation.
+2. First pass - correctness only: logic errors, off-by-ones, broken error paths,
+   race conditions, missing await, wrong types crossing boundaries, behavior
+   changes the diff does not mention.
+3. Second pass - safety: injection, path traversal, secrets in code or logs,
+   unvalidated input reaching exec/fs/network.
+4. Third pass - quality, only where it matters: dead code, duplicated logic the
+   repo already has a helper for, misleading names, missing tests for changed
+   behavior.
+5. If the diff claims a behavior ("fixes X", "tests pass"), confirm it: run the
+   relevant test or command with run_command rather than trusting the message.
+6. For each finding: severity (bug / risk / style), file:line, one-line why,
+   and the smallest suggested fix. Skip nitpicks a formatter would catch.
+
+## Verification
+
+- Every finding cites a real file:line from the diff.
+- Re-read each "bug" finding once before reporting - drop any you cannot
+  defend concretely; false alarms destroy trust in reviews.
+
+## Common Mistakes
+
+- Rewriting the author's style instead of reviewing the change.
+- Listing 30 nitpicks that bury the one real bug.
+- Reviewing only the diff text without reading the surrounding file.
+`;
+
+const SECURITY_REVIEW_CONTENT = `# Security Review
+
+Audit the change (or module) for exploitable issues; report by severity with
+concrete attack paths, not generic advice.
+
+## When to Use
+
+- The user asks for a security review/audit of changes, a module, or an endpoint.
+- Before exposing something to untrusted input (HTTP handlers, file parsing,
+  command construction).
+
+## Do Not Use When
+
+- The user wants general code review - use the code-review skill.
+
+## Required Context
+
+- The attack surface: what input is untrusted, what privileges the code runs with.
+
+## Procedure
+
+1. Map untrusted inputs: search_text for entry points (HTTP routes, argv, env,
+   file reads, network responses) feeding the code under review.
+2. Trace each input to a sink: command execution, file paths (traversal: search
+   for path joins with user input), SQL/queries, HTML output (XSS),
+   deserialization, eval.
+3. Check authn/authz on every state-changing path; check secrets handling
+   (hardcoded keys, secrets in logs or error messages).
+4. Check dependency risk only where the diff touches it (new deps, version
+   pins loosened); where a finding depends on runtime behavior, confirm it
+   with a targeted run_command instead of speculating.
+5. Report each finding: severity (critical/high/medium/low), the attack path
+   ("attacker controls X, reaches Y, causes Z"), file:line, minimal fix.
+   No finding without a plausible attacker story.
+
+## Verification
+
+- Every critical/high finding has a concrete input that triggers it.
+- The report states what was checked and found clean, not just the problems.
+
+## Common Mistakes
+
+- Cargo-cult findings ("use HTTPS") with no attack path in THIS code.
+- Flagging trusted-input paths as injection risks.
+- Missing the boring ones: secrets in logs, world-writable file modes.
+`;
+
+const VERIFY_CHANGE_CONTENT = `# Verify Change
+
+Prove a change actually works by running the code, not by reading it.
+
+## When to Use
+
+- After implementing a change, before reporting it done.
+- The user asks to verify/confirm the change works.
+
+## Do Not Use When
+
+- Nothing was changed (nothing to verify).
+
+## Required Context
+
+- What behavior changed, and the command that exercises it (detect_project /
+  list_scripts if unknown).
+
+## Procedure
+
+1. Identify the narrowest command that exercises the changed behavior: the
+   specific test file, a CLI invocation, a request against a dev server.
+   If unsure what changed, read_file the touched files (git_diff lists them).
+2. Run it with run_command. For servers/watchers use background:true, poll
+   task_output until ready, exercise the endpoint, then task_kill.
+3. If it fails: that is the result - report the failure honestly with output,
+   do not paper over it or claim partial success.
+4. Run the project's standard check (test/lint script) to catch fallout
+   beyond the targeted path.
+5. Report exactly what was run and what each command output proved.
+
+## Verification
+
+- The report quotes real command output, not assumptions.
+- Both the targeted check AND the project-wide check ran.
+
+## Common Mistakes
+
+- "The code looks correct" - reading is not verification.
+- Testing only the happy path the change was written for.
+- Leaving background processes running after verification.
+`;
+
+const SIMPLIFY_CONTENT = `# Simplify
+
+Reduce the change (or module) to its essential form: reuse what exists,
+delete what is not needed, without changing behavior.
+
+## When to Use
+
+- After a working change: "clean this up", "can this be simpler".
+- A diff that grew helpers/abstractions the repo may already have.
+
+## Do Not Use When
+
+- The code is broken - fix first (bugfix skill), simplify after.
+- The user asked for a behavior change.
+
+## Required Context
+
+- The scope: the current diff (git_diff) by default.
+
+## Procedure
+
+1. For every new helper/abstraction in the diff, search_text the repo for an
+   existing equivalent - reuse beats reimplementation.
+2. Delete: unused params, dead branches, premature configuration, comments
+   that narrate the code, layers that only forward calls.
+3. Inline single-use abstractions; extract only what is used twice or more.
+4. Keep names and idioms consistent with the surrounding file - match the
+   repo, not your taste.
+5. After each simplification, re-run the relevant tests (run_command); revert
+   any "simplification" that changes behavior.
+
+## Verification
+
+- Tests pass identically before and after.
+- git_diff is NET SMALLER (or equal with clear readability wins) than before.
+
+## Common Mistakes
+
+- Clever one-liners that are shorter but harder to read - simpler is not
+  the same as shorter.
+- Refactoring beyond the requested scope.
+- Removing error handling because the happy path works.
+`;
+
 export const BUILTIN_SKILLS: Skill[] = [
   {
     id: "bugfix",
@@ -257,5 +441,57 @@ export const BUILTIN_SKILLS: Skill[] = [
     enabled: true,
     risk: "low",
     content: GITHUB_ISSUE_PR_CONTENT,
+  },
+  {
+    id: "code-review",
+    scope: "builtin",
+    name: "Code Review",
+    description:
+      "Review a diff/branch for correctness bugs first, then safety and quality; report severity + file:line + minimal fix, without rewriting the author's style.",
+    tags: ["review", "quality"],
+    triggers: ["review", "code review", "check the changes", "look for problems"],
+    priority: 40,
+    enabled: true,
+    risk: "low",
+    content: CODE_REVIEW_CONTENT,
+  },
+  {
+    id: "security-review",
+    scope: "builtin",
+    name: "Security Review",
+    description:
+      "Audit changes for exploitable issues: trace untrusted input to sinks, report severity with a concrete attack path, never cargo-cult advice.",
+    tags: ["security", "review"],
+    triggers: ["security", "audit", "vulnerability", "injection"],
+    priority: 45,
+    enabled: true,
+    risk: "low",
+    content: SECURITY_REVIEW_CONTENT,
+  },
+  {
+    id: "verify-change",
+    scope: "builtin",
+    name: "Verify Change",
+    description:
+      "Prove a change works by running it - targeted command plus the project-wide check; report real output, failures included.",
+    tags: ["verify", "test"],
+    triggers: ["verify", "confirm it works", "test it", "make sure it works"],
+    priority: 35,
+    enabled: true,
+    risk: "low",
+    content: VERIFY_CHANGE_CONTENT,
+  },
+  {
+    id: "simplify",
+    scope: "builtin",
+    name: "Simplify",
+    description:
+      "Reduce a working change to its essential form: reuse existing helpers, delete the unneeded, behavior identical, diff net smaller.",
+    tags: ["refactor", "quality"],
+    triggers: ["simplify", "clean up", "make it simpler", "reduce"],
+    priority: 30,
+    enabled: true,
+    risk: "low",
+    content: SIMPLIFY_CONTENT,
   },
 ];

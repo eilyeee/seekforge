@@ -11,11 +11,20 @@ const REQUIRED_SECTIONS = [
 ];
 
 describe("BUILTIN_SKILLS", () => {
-  it("contains exactly the four builtin skills with unique ids", () => {
-    expect(BUILTIN_SKILLS).toHaveLength(4);
+  it("contains exactly the eight builtin skills with unique ids", () => {
+    expect(BUILTIN_SKILLS).toHaveLength(8);
     const ids = BUILTIN_SKILLS.map((s) => s.id);
-    expect(new Set(ids).size).toBe(4);
-    expect(ids.sort()).toEqual(["bugfix", "github-issue-pr", "small-code-change", "test-failure-fix"]);
+    expect(new Set(ids).size).toBe(8);
+    expect(ids.sort()).toEqual([
+      "bugfix",
+      "code-review",
+      "github-issue-pr",
+      "security-review",
+      "simplify",
+      "small-code-change",
+      "test-failure-fix",
+      "verify-change",
+    ]);
   });
 
   it("github-issue-pr describes the gh issue → branch → PR procedure", () => {
