@@ -58,7 +58,11 @@ export type ActionId =
   | "scroll-latest"
   | "toggle-verbose"
   | "detach-run"
-  | "suspend";
+  | "suspend"
+  | "tab-new"
+  | "tab-cycle"
+  | "toggle-sidebar"
+  | "toggle-pager";
 
 export type Binding = { scope: Scope; key: KeyStroke; action: ActionId };
 
@@ -93,6 +97,10 @@ export const KEYMAP: ReadonlyArray<Binding> = [
   { scope: "global", key: { input: "o", ctrl: true }, action: "toggle-verbose" },
   { scope: "global", key: { input: "b", ctrl: true }, action: "detach-run" },
   { scope: "global", key: { input: "z", ctrl: true }, action: "suspend" },
+  { scope: "global", key: { input: "n", ctrl: true }, action: "tab-new" },
+  { scope: "global", key: { input: "t", ctrl: true }, action: "tab-cycle" },
+  { scope: "global", key: { input: "e", ctrl: true }, action: "toggle-sidebar" },
+  { scope: "global", key: { input: "l", ctrl: true }, action: "toggle-pager" },
 ];
 
 /** Ink useInput key object, structurally (so we don't import ink here). */

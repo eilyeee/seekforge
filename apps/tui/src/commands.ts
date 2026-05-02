@@ -41,6 +41,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
   { name: "fork", summary: "fork the current session (continue without touching the original)" , group: "session" },
+  { name: "tab", args: "[new|close|next|<n>]", summary: "tabs: parallel sessions (Ctrl+N new, Ctrl+T cycle)", group: "session" },
   { name: "diff", summary: "git diff of the working tree" , group: "review" },
   { name: "review", summary: "review the uncommitted changes (read-only)" , group: "review" },
   { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" , group: "context" },
@@ -57,11 +58,15 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" , group: "info" },
   { name: "vim", summary: "toggle vim mode for the composer" , group: "settings" },
   { name: "mouse", summary: "toggle mouse-wheel scroll (off = native text selection)", group: "settings" },
+  { name: "theme", args: "[preset]", summary: "switch the color theme (deepseek/mono/solarized/matrix…)", group: "settings" },
   { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" , group: "settings" },
   { name: "context", summary: "open the context inspector" , group: "context" },
   { name: "compact", args: "[focus]", summary: "compact the session now (focus steers the LLM summary)" , group: "context" },
   { name: "usage", summary: "cumulative token usage and cost" , group: "context" },
+  { name: "balance", summary: "DeepSeek account balance", group: "info" },
   { name: "export", args: "[path]", summary: "export the transcript as markdown" , group: "review" },
+  { name: "handoff", args: "[list]", summary: "write a session handoff document for the next session", group: "review" },
+  { name: "stash", args: "[pop|list]", summary: "stash / restore the composer draft", group: "session" },
   { name: "copy", summary: "copy the last assistant message to the clipboard" , group: "review" },
   { name: "editor", summary: "edit the prompt in $EDITOR (Ctrl+G)" , group: "settings" },
   { name: "quit", summary: "exit (Ctrl+C twice also works)" , group: "session" },
@@ -78,6 +83,7 @@ export type SlashCommand =
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
   | { name: "fork" }
+  | { name: "tab"; arg?: string }
   | { name: "diff" }
   | { name: "review" }
   | { name: "todo"; arg?: string }
@@ -95,6 +101,10 @@ export type SlashCommand =
   | { name: "doctor" }
   | { name: "vim" }
   | { name: "mouse" }
+  | { name: "theme"; arg?: string }
+  | { name: "balance" }
+  | { name: "handoff"; arg?: string }
+  | { name: "stash"; arg?: string }
   | { name: "context" }
   | { name: "compact"; arg?: string }
   | { name: "usage" }
@@ -133,6 +143,7 @@ const NO_ARG = new Set([
   "doctor",
   "vim",
   "mouse",
+  "balance",
   "status",
   "permissions",
   "hooks",
@@ -147,7 +158,7 @@ const NO_ARG = new Set([
 /** Commands whose argument is the whole rest of the line (free text). */
 const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory"]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "config"]);
+const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "config", "tab", "theme", "handoff", "stash"]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();

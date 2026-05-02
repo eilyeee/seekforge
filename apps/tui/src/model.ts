@@ -48,6 +48,8 @@ export type Overlay =
     }
   /** Model picker (/model with no argument). */
   | { kind: "model"; ids: string[]; lines: string[]; index: number }
+  /** Theme picker (/theme with no argument). */
+  | { kind: "theme"; ids: string[]; lines: string[]; index: number }
   /** ask_user tool question awaiting an answer. */
   | { kind: "question"; question: string; options: string[]; index: number }
   /** Slash-argument picker ("/resume <cursor>"): Tab fills, Enter runs. */
@@ -530,7 +532,12 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         ...state,
         items: [
           ...state.items,
-          { kind: "notice", id: nextId("n"), tone: "error", text: `failed: ${e.error.code} — ${e.error.message}` },
+          {
+            kind: "notice",
+            id: nextId("n"),
+            tone: "error",
+            text: `failed: ${e.error.code} — ${e.error.message}${(e.error as { hint?: string }).hint ? `\n  → ${(e.error as { hint?: string }).hint}` : ""}`,
+          },
         ],
       };
 

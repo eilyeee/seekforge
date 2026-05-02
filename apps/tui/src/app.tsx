@@ -12,6 +12,7 @@ import {
   listSessions,
   loadAgentDefinitions,
   projectMemoryPath,
+  fetchBalance,
   forkSession,
   listMcpResources,
   readMcpResource,
@@ -33,7 +34,16 @@ import {
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
-import { chatReducer, initialState, type ApprovalSetting, type ChatAction, type Overlay } from "./model.js";
+import { type ApprovalSetting, type ChatAction, type ChatState, type Overlay } from "./model.js";
+import { activeChat, activeTabId, initialTabs, tabLabels, tabsReducer } from "./tabs.js";
+import { buildTree, moveCursor, toggleDir, visibleNodes, type TreeState } from "./file-tree.js";
+import { Sidebar } from "./components/Sidebar.js";
+import { pagerLines, pagerWindow } from "./pager-source.js";
+import { Pager } from "./components/Pager.js";
+import { ghostSuggestion } from "./suggestion.js";
+import { stashList, stashPop, stashPush } from "./stash.js";
+import { THEME_PRESETS, loadTheme, themePickerLines } from "./theme.js";
+import { buildHandoff, handoffPath, latestHandoff, listHandoffs } from "./handoff.js";
 import { formatUsageDetail, kfmt } from "./format.js";
 import { COMMANDS, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
@@ -68,6 +78,7 @@ import { runStatusLine } from "./statusline.js";
 import { checkBudget, type BudgetState } from "./budget.js";
 import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
+import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
 import {
   atTokenAt,
@@ -115,7 +126,7 @@ import { applyVimKey, initialVim, type VimState } from "./vim.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
 import { openInExternalEditor } from "./external-editor.js";
 import { copyToClipboard } from "./clipboard.js";
-import { Header, ACCENT } from "./components/Header.js";
+import { Header, ACCENT, setAccent } from "./components/Header.js";
 import { Transcript } from "./components/Transcript.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { MultilineComposer } from "./components/MultilineComposer.js";
@@ -165,7 +176,16 @@ export function App({
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
-  const [state, dispatch] = useReducer(chatReducer, undefined, () => initialState(initialModel));
+  // Multi-tab state: each tab owns a full ChatState; actions route by tab ID
+  // so runs keep writing to their own tab after you switch away.
+  const [tabsState, tabsDispatch] = useReducer(tabsReducer, undefined, () => initialTabs(initialModel));
+  const state = activeChat(tabsState);
+  const activeIdRef = useRef(activeTabId(tabsState));
+  activeIdRef.current = activeTabId(tabsState);
+  const dispatch = useCallback(
+    (action: ChatAction) => tabsDispatch({ type: "chat", tabId: activeIdRef.current, action }),
+    [],
+  );
   const [editor, setEditor] = useState<EditorState>(emptyEditor());
 
   // -c / --continue: chain onto the most recent session.
@@ -198,20 +218,38 @@ export function App({
   approvalRef.current = state.approval;
   const stateRef = useRef(state);
   stateRef.current = state;
+  const tabsStateRef = useRef(tabsState);
+  tabsStateRef.current = tabsState;
 
-  const controllerRef = useRef<AbortController | null>(null);
-  const pendingPermissionRef = useRef<PendingPermission | null>(null);
+  // Per-tab foreground run state: each tab can run its own task; Esc/Ctrl+C
+  // and prompt keys always act on the ACTIVE tab's entries only.
+  const runsByTabRef = useRef<Map<number, { controller: AbortController; runId: number }>>(new Map());
+  const pendingPermissionByTabRef = useRef<Map<number, PendingPermission>>(new Map());
+  const pendingQuestionByTabRef = useRef<Map<number, (answer: string) => void>>(new Map());
   const sigintCountRef = useRef(0);
 
   // Ctrl+B run detachment: ids of runs sent to the background, their
   // controllers (aborted on quit), and the per-run id counter.
   const runIdCounterRef = useRef(0);
-  const currentRunIdRef = useRef<number | null>(null);
   const detachedRunsRef = useRef<Set<number>>(new Set());
   const detachedControllersRef = useRef<Map<number, AbortController>>(new Map());
 
-  // ask_user tool: the pending question's resolver.
-  const pendingQuestionRef = useRef<((answer: string) => void) | null>(null);
+  // Active-tab views over the per-tab maps (legacy single-tab call sites).
+  const controllerRef = {
+    get current(): AbortController | null {
+      return runsByTabRef.current.get(activeIdRef.current)?.controller ?? null;
+    },
+  };
+  const pendingPermissionRef = {
+    get current(): PendingPermission | null {
+      return pendingPermissionByTabRef.current.get(activeIdRef.current) ?? null;
+    },
+  };
+  const pendingQuestionRef = {
+    get current(): ((answer: string) => void) | null {
+      return pendingQuestionByTabRef.current.get(activeIdRef.current) ?? null;
+    },
+  };
 
   // Large-paste placeholders and clipboard-image attachments.
   const pasteRegistryRef = useRef(createPasteRegistry());
@@ -240,6 +278,10 @@ export function App({
   const extraDirsRef = useRef<string[]>([]);
   // Palette ranking: commands used this session float to the top.
   const usageRef = useRef<CommandUsage>({});
+  // Sidebar file tree (Ctrl+E): null = hidden; focused steals ↑↓/Enter.
+  const [sidebar, setSidebar] = useState<(TreeState & { focused: boolean }) | null>(null);
+  // Transcript pager (Ctrl+L): offset from the top of the full plain text.
+  const [pager, setPager] = useState<{ lines: string[]; offset: number } | null>(null);
   const versionRef = useRef(version);
   const lastErrorRef = useRef<string | null>(null);
   // Cost-budget warning state (80% / 100%, warned once each).
@@ -266,6 +308,8 @@ export function App({
   const quit = useCallback(() => {
     for (const c of detachedControllersRef.current.values()) c.abort();
     detachedControllersRef.current.clear();
+    for (const r of runsByTabRef.current.values()) r.controller.abort();
+    runsByTabRef.current.clear();
     bgRef.current?.disposeAll();
     process.stdout.write(MOUSE_DISABLE);
     clearTerminalTitle();
@@ -325,8 +369,10 @@ export function App({
   // Composer history, persisted across sessions.
   const historyFile = useMemo(() => join(projectPath, ".seekforge", "tui-history"), [projectPath]);
   const historyNavRef = useRef<HistoryNav | null>(null);
+  const historyEntriesRef = useRef<string[]>([]);
   if (historyNavRef.current === null) {
-    historyNavRef.current = createHistoryNav(loadHistory(historyFile));
+    historyEntriesRef.current = loadHistory(historyFile);
+    historyNavRef.current = createHistoryNav(historyEntriesRef.current);
   }
 
   // Workspace file index for the @ picker (scanned lazily, once).
@@ -439,31 +485,36 @@ export function App({
     async (task: string, opts?: { mode?: "ask" | "edit"; plan?: boolean; echoUser?: boolean }) => {
       const controller = new AbortController();
       const runId = ++runIdCounterRef.current;
+      // The run belongs to the tab it started in: every dispatch below
+      // routes there by ID, surviving tab switches.
+      const runTabId = activeIdRef.current;
+      const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
+      const tabChat = (): ChatState =>
+        tabsStateRef.current.tabs.find((t) => t.id === runTabId)?.chat ?? stateRef.current;
       const label = task.replace(/\s+/g, " ").slice(0, 48);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       // Detached runs stay silent except for their final outcome.
       const dispatchRun = (a: ChatAction): void => {
         if (!detached()) {
-          dispatch(a);
+          dispatchTab(a);
           return;
         }
         if (a.type === "event" && a.event.type === "session.completed") {
           const summary = a.event.report.summary.split("\n")[0] ?? "done";
-          dispatch({ type: "notice", text: `⚒ background task done: ${summary.slice(0, 100)}` });
+          dispatchTab({ type: "notice", text: `⚒ background task done: ${summary.slice(0, 100)}` });
         } else if (a.type === "event" && a.event.type === "session.failed") {
-          dispatch({ type: "notice", tone: "error", text: `⚒ background task failed: ${a.event.error.message}` });
+          dispatchTab({ type: "notice", tone: "error", text: `⚒ background task failed: ${a.event.error.message}` });
         }
       };
-      controllerRef.current = controller;
-      currentRunIdRef.current = runId;
+      runsByTabRef.current.set(runTabId, { controller, runId });
       sigintCountRef.current = 0;
       // The session this run owns: detaching frees the UI's sessionId for a
       // fresh session, so the run must keep resolving its own.
-      const ownSessionId = { current: sessionIdRef.current };
+      const ownSessionId = { current: tabChat().sessionId };
       const startedAt = Date.now();
-      const costBefore = stateRef.current.totalUsage.costUsd;
-      if (opts?.echoUser !== false) dispatch({ type: "user", text: task });
-      dispatch({ type: "run-start" });
+      const costBefore = tabChat().totalUsage.costUsd;
+      if (opts?.echoUser !== false) dispatchTab({ type: "user", text: task });
+      dispatchTab({ type: "run-start" });
       try {
         // Inline @mcp:server:uri resource references (max 5 per message).
         const mcpRefs = [...task.matchAll(/@mcp:([A-Za-z0-9_-]+):(\S+)/g)].slice(0, 5);
@@ -474,7 +525,7 @@ export function App({
             const text = await readMcpResource(server, uri, mcpEntries);
             task += `\n\n--- MCP resource ${server}:${uri} ---\n${text}`;
           } catch (err) {
-            dispatch({
+            dispatchTab({
               type: "notice",
               tone: "error",
               text: `mcp resource ${server}:${uri} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -498,7 +549,7 @@ export function App({
           confirm: (req) =>
             new Promise<boolean>((resolve) => {
               if (detached()) {
-                dispatch({
+                dispatchTab({
                   type: "notice",
                   tone: "error",
                   text: `⚒ background task asked permission for ${req.toolName} — denied (foreground only)`,
@@ -506,8 +557,8 @@ export function App({
                 resolve(false);
                 return;
               }
-              pendingPermissionRef.current = { request: req, resolve };
-              dispatch({ type: "permission", request: req });
+              pendingPermissionByTabRef.current.set(runTabId, { request: req, resolve });
+              dispatchTab({ type: "permission", request: req });
               ring(`Permission needed: ${req.toolName}${req.command ? ` — ${req.command.slice(0, 60)}` : ""}`);
             }),
           askUser: (q) =>
@@ -516,8 +567,8 @@ export function App({
                 resolve("(no answer — the session was moved to the background)");
                 return;
               }
-              pendingQuestionRef.current = resolve;
-              dispatch({
+              pendingQuestionByTabRef.current.set(runTabId, resolve);
+              dispatchTab({
                 type: "overlay",
                 overlay: { kind: "question", question: q.question, options: [...q.options], index: 0 },
               });
@@ -525,34 +576,36 @@ export function App({
             }),
         });
         if (opts?.plan && !controller.signal.aborted && !detached()) {
-          dispatch({ type: "plan-pending", pending: true });
-          dispatch({ type: "notice", text: "Execute this plan? press y to run it, any other key to keep planning" });
+          dispatchTab({ type: "plan-pending", pending: true });
+          dispatchTab({ type: "notice", text: "Execute this plan? press y to run it, any other key to keep planning" });
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         lastErrorRef.current = message;
         if (!controller.signal.aborted && !detached()) {
-          dispatch({ type: "notice", tone: "error", text: `error: ${message}` });
+          dispatchTab({ type: "notice", tone: "error", text: `error: ${message}` });
         }
       } finally {
         // If a permission prompt was still open when the run ended, deny it.
-        if (pendingPermissionRef.current && currentRunIdRef.current === runId) {
-          pendingPermissionRef.current.resolve(false);
-          pendingPermissionRef.current = null;
-          dispatch({ type: "permission-resolved" });
+        const stalePerm = pendingPermissionByTabRef.current.get(runTabId);
+        if (stalePerm) {
+          stalePerm.resolve(false);
+          pendingPermissionByTabRef.current.delete(runTabId);
+          dispatchTab({ type: "permission-resolved" });
         }
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
-          dispatch({ type: "run-detach-done", label });
+          dispatchTab({ type: "run-detach-done", label });
         } else {
-          controllerRef.current = null;
-          currentRunIdRef.current = null;
-          dispatch({ type: "run-end" });
+          if (runsByTabRef.current.get(runTabId)?.runId === runId) {
+            runsByTabRef.current.delete(runTabId);
+          }
+          dispatchTab({ type: "run-end" });
           // Turn summary + budget + custom statusline (foreground runs only).
           if (!controller.signal.aborted) {
-            const s = stateRef.current;
-            dispatch({
+            const s = tabChat();
+            dispatchTab({
               type: "notice",
               text: turnSummaryLine({
                 durationMs: Date.now() - startedAt,
@@ -562,13 +615,13 @@ export function App({
             });
             const budget = checkBudget(budgetRef.current, s.totalUsage.costUsd, config.costBudgetUsd);
             budgetRef.current = budget.state;
-            if (budget.warning) dispatch({ type: "notice", tone: "error", text: budget.warning });
+            if (budget.warning) dispatchTab({ type: "notice", tone: "error", text: budget.warning });
             if (config.statusLine) {
               setStatusLineText(
                 runStatusLine(config.statusLine, {
                   model: modelRef.current,
                   cwd: projectPath,
-                  ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+                  ...(ownSessionId.current ? { sessionId: ownSessionId.current } : {}),
                   costUsd: s.totalUsage.costUsd,
                   ...(s.context ? { contextPercent: s.context.percent } : {}),
                 }),
@@ -583,31 +636,32 @@ export function App({
     [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd, config.statusLine],
   );
 
-  /** Ctrl+B: detach the current run; chat continues in a fresh session. */
+  /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
   const detachRun = useCallback(() => {
-    const runId = currentRunIdRef.current;
-    const controller = controllerRef.current;
-    if (runId === null || !controller) {
-      notice("nothing to detach — no task is running");
+    const tabId = activeIdRef.current;
+    const entry = runsByTabRef.current.get(tabId);
+    if (!entry) {
+      notice("nothing to detach — no task is running in this tab");
       return;
     }
-    detachedRunsRef.current.add(runId);
-    detachedControllersRef.current.set(runId, controller);
-    controllerRef.current = null;
-    currentRunIdRef.current = null;
+    detachedRunsRef.current.add(entry.runId);
+    detachedControllersRef.current.set(entry.runId, entry.controller);
+    runsByTabRef.current.delete(tabId);
     // A pending permission would block the detached run forever: deny it now.
-    if (pendingPermissionRef.current) {
-      pendingPermissionRef.current.resolve(false);
-      pendingPermissionRef.current = null;
+    const perm = pendingPermissionByTabRef.current.get(tabId);
+    if (perm) {
+      perm.resolve(false);
+      pendingPermissionByTabRef.current.delete(tabId);
       dispatch({ type: "permission-resolved" });
     }
-    if (pendingQuestionRef.current) {
-      pendingQuestionRef.current("(no answer — the session was moved to the background)");
-      pendingQuestionRef.current = null;
+    const q = pendingQuestionByTabRef.current.get(tabId);
+    if (q) {
+      q("(no answer — the session was moved to the background)");
+      pendingQuestionByTabRef.current.delete(tabId);
       dispatch({ type: "overlay", overlay: null });
     }
     dispatch({ type: "run-detach", label: "task" });
-  }, [notice]);
+  }, [notice, dispatch]);
 
   const submitTask = useCallback(
     (task: string) => {
@@ -843,6 +897,28 @@ export function App({
             { mode: "ask", echoUser: false },
           );
           break;
+        case "tab": {
+          const arg = command.arg;
+          if (!arg || arg === "new") {
+            tabsDispatch({ type: "tab-new", model: modelRef.current });
+          } else if (arg === "close") {
+            const closing = activeIdRef.current;
+            const entry = runsByTabRef.current.get(closing);
+            if (entry) {
+              notice("this tab has a running task — Esc cancels it or Ctrl+B detaches it first", "error");
+              break;
+            }
+            runsByTabRef.current.delete(closing);
+            tabsDispatch({ type: "tab-close" });
+          } else if (arg === "next") {
+            tabsDispatch({ type: "tab-next" });
+          } else if (/^[1-9][0-9]*$/.test(arg)) {
+            tabsDispatch({ type: "tab-switch", index: Number(arg) - 1 });
+          } else {
+            notice("usage: /tab [new|close|next|<n>]", "error");
+          }
+          break;
+        }
         case "fork": {
           const sessionId = sessionIdRef.current;
           if (!sessionId) {
@@ -1174,6 +1250,73 @@ export function App({
           if (!copied) for (const l of report.split("\n").slice(0, 30)) notice(`  ${l}`);
           break;
         }
+        case "theme": {
+          if (!command.arg) {
+            dispatch({
+              type: "overlay",
+              overlay: {
+                kind: "theme",
+                ids: Object.keys(THEME_PRESETS),
+                lines: themePickerLines(config.accent ?? "default"),
+                index: 0,
+              },
+            });
+            notice("themes — Enter applies for this session; set \"accent\" in config.json to persist");
+            break;
+          }
+          setAccent(loadTheme(command.arg).accent);
+          notice(`theme: ${command.arg} (session only — set "accent" in config.json to persist)`);
+          break;
+        }
+        case "balance":
+          void fetchBalance(runConfigRef.current.apiKey ?? "", runConfigRef.current.baseUrl).then((b) =>
+            notice(b ? `balance: ${b.totalBalance} ${b.currency}` : "balance unavailable (network or auth)", b ? "dim" : "error"),
+          );
+          break;
+        case "stash": {
+          if (command.arg === "pop") {
+            const draft = stashPop(projectPath);
+            if (draft === null) notice("stash is empty");
+            else applyEditor(setText(draft));
+            break;
+          }
+          if (command.arg === "list") {
+            const drafts = stashList(projectPath);
+            if (drafts.length === 0) notice("stash is empty");
+            for (const [i, d] of drafts.entries()) notice(`  ${i + 1}. ${d.replace(/\s+/g, " ").slice(0, 60)}`);
+            break;
+          }
+          if (editor.text.trim() === "") {
+            notice("nothing to stash — type a draft first (/stash pop restores)");
+            break;
+          }
+          const count = stashPush(projectPath, editor.text);
+          applyEditor(emptyEditor());
+          notice(`stashed draft (${count} in stash) — /stash pop restores`);
+          break;
+        }
+        case "handoff": {
+          if (command.arg === "list") {
+            const all = listHandoffs(projectPath);
+            if (all.length === 0) notice("no handoffs yet — /handoff writes one");
+            for (const h of all.slice(0, 10)) notice(`  ${h}`);
+            break;
+          }
+          const rel = handoffPath();
+          const target = resolve(projectPath, rel);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(
+            target,
+            buildHandoff({
+              items: stateRef.current.items,
+              ...(stateRef.current.sessionId ? { sessionId: stateRef.current.sessionId } : {}),
+              model: modelRef.current,
+              costUsd: stateRef.current.totalUsage.costUsd,
+            }),
+          );
+          notice(`handoff written → ${rel} (next session: read it or /handoff list)`);
+          break;
+        }
         case "quit":
           quit();
           break;
@@ -1245,7 +1388,8 @@ export function App({
     applyEditor(emptyEditor());
     if (parsed.kind === "empty") return;
     appendHistory(historyFile, raw);
-    historyNavRef.current = createHistoryNav(loadHistory(historyFile));
+    historyEntriesRef.current = loadHistory(historyFile);
+    historyNavRef.current = createHistoryNav(historyEntriesRef.current);
     if (parsed.kind === "slash") {
       handleSlash(parsed.command);
       return;
@@ -1380,6 +1524,47 @@ export function App({
       return;
     }
 
+    // 0.5 Pager (Ctrl+L): modal full-transcript scroller.
+    if (pager) {
+      const h = 20;
+      if (stroke.name === "escape" || rawInput === "q") setPager(null);
+      else if (stroke.name === "up") setPager({ ...pager, offset: Math.max(0, pager.offset - 1) });
+      else if (stroke.name === "down") setPager({ ...pager, offset: pager.offset + 1 });
+      else if (stroke.name === "pageup") setPager({ ...pager, offset: Math.max(0, pager.offset - h) });
+      else if (stroke.name === "pagedown") setPager({ ...pager, offset: pager.offset + h });
+      else if (rawInput === "g") setPager({ ...pager, offset: 0 });
+      else if (rawInput === "G") setPager({ ...pager, offset: pager.lines.length });
+      return;
+    }
+
+    // 0.6 Sidebar focus (Ctrl+E): tree navigation until closed/unfocused.
+    if (sidebar?.focused) {
+      const visible = visibleNodes(sidebar.nodes, sidebar.expanded);
+      if (stroke.name === "escape" || (stroke.ctrl && stroke.input === "e")) {
+        setSidebar(null);
+        return;
+      }
+      if (stroke.name === "up" || stroke.name === "down") {
+        setSidebar({ ...moveCursor(sidebar, stroke.name === "up" ? -1 : 1), focused: true });
+        return;
+      }
+      const node = visible[sidebar.cursor];
+      if ((stroke.name === "left" || stroke.name === "right") && node?.dir) {
+        setSidebar({ ...toggleDir(sidebar, node.path), focused: true });
+        return;
+      }
+      if (stroke.name === "return" && node) {
+        if (node.dir) {
+          setSidebar({ ...toggleDir(sidebar, node.path), focused: true });
+        } else {
+          applyEditor(insertText(editor, `@${node.path} `));
+          setSidebar({ ...sidebar, focused: false });
+        }
+        return;
+      }
+      return; // modal while focused
+    }
+
     // 1. Permission prompt: y allow once / a allow for session / anything else deny.
     if (pendingPermissionRef.current) {
       const pending = pendingPermissionRef.current;
@@ -1397,7 +1582,7 @@ export function App({
           }
         }
       }
-      pendingPermissionRef.current = null;
+      pendingPermissionByTabRef.current.delete(activeIdRef.current);
       dispatch({ type: "permission-resolved" });
       pending.resolve(approved);
       return;
@@ -1464,7 +1649,7 @@ export function App({
       if (overlay.kind === "question") {
         const resolveAnswer = (answer: string): void => {
           const resolve = pendingQuestionRef.current;
-          pendingQuestionRef.current = null;
+          pendingQuestionByTabRef.current.delete(activeIdRef.current);
           dispatch({ type: "overlay", overlay: null });
           resolve?.(answer);
         };
@@ -1519,7 +1704,9 @@ export function App({
                   ? overlay.ids.length
                   : overlay.kind === "args"
                     ? overlay.candidates.length
-                    : 0;
+                    : overlay.kind === "theme"
+                      ? overlay.ids.length
+                      : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -1557,6 +1744,13 @@ export function App({
           } else if (id === "deepseek-reasoner") {
             notice("deepseek-reasoner has no tool calling and cannot drive the agent", "error");
           }
+        } else if (overlay.kind === "theme") {
+          const id = overlay.ids[overlay.index];
+          dispatch({ type: "overlay", overlay: null });
+          if (id) {
+            setAccent(loadTheme(id).accent);
+            notice(`theme: ${id} (session only — set "accent" in config.json to persist)`);
+          }
         } else if (overlay.kind === "args") {
           const candidate = overlay.candidates[overlay.index];
           if (!candidate) {
@@ -1576,7 +1770,7 @@ export function App({
         }
         return;
       }
-      if (overlay.kind === "sessions" || overlay.kind === "backtrack" || overlay.kind === "model") return; // modal
+      if (overlay.kind === "sessions" || overlay.kind === "backtrack" || overlay.kind === "model" || overlay.kind === "theme") return; // modal
       // Anything else falls through: typing keeps filtering via the composer.
     }
 
@@ -1604,6 +1798,27 @@ export function App({
     }
     if (globalAction === "suspend") {
       suspend();
+      return;
+    }
+    if (globalAction === "tab-new") {
+      tabsDispatch({ type: "tab-new", model: modelRef.current });
+      return;
+    }
+    if (globalAction === "tab-cycle") {
+      tabsDispatch({ type: "tab-next" });
+      return;
+    }
+    if (globalAction === "toggle-sidebar") {
+      if (sidebar) {
+        setSidebar(null);
+      } else {
+        const nodes = buildTree(ensureFiles());
+        setSidebar({ nodes, expanded: new Set<string>(), cursor: 0, focused: true });
+      }
+      return;
+    }
+    if (globalAction === "toggle-pager") {
+      setPager({ lines: pagerLines(stateRef.current.items), offset: 0 });
       return;
     }
     if (stroke.name === "escape") {
@@ -1693,9 +1908,17 @@ export function App({
       case "cursor-left":
         applyEditor(moveLeft(editor));
         return;
-      case "cursor-right":
+      case "cursor-right": {
+        if (editor.cursor === editor.text.length) {
+          const g = ghostSuggestion(editor.text, historyEntriesRef.current);
+          if (g) {
+            applyEditor(insertText(editor, g));
+            return;
+          }
+        }
         applyEditor(moveRight(editor));
         return;
+      }
       case "clear-line":
         applyEditor(clearAll(editor));
         return;
@@ -1752,6 +1975,11 @@ export function App({
   });
 
   const bgRunning = state.bgTasks.filter((t) => t.status === "running").length;
+  // Ghost autocompletion from history (→ at end of input accepts).
+  const ghost =
+    editor.cursor === editor.text.length && !state.permission
+      ? ghostSuggestion(editor.text, historyEntriesRef.current)
+      : null;
   // The shell command currently executing (for the under-input mode line).
   const runningShell = useMemo(() => {
     for (let i = state.items.length - 1; i >= 0; i -= 1) {
@@ -1766,8 +1994,38 @@ export function App({
 
   return (
     <Box flexDirection="column">
+      {tabsState.tabs.length > 1 ? (
+        <Box>
+          {tabLabels(tabsState).map((label, i) => (
+            <Text key={i} inverse={i === tabsState.active} color={i === tabsState.active ? ACCENT : undefined} dimColor={i !== tabsState.active}>
+              {" "}
+              {label}{" "}
+            </Text>
+          ))}
+          <Text dimColor>  Ctrl+T switch · Ctrl+N new · /tab close</Text>
+        </Box>
+      ) : null}
       <Header projectPath={projectPath} model={state.model} {...(version ? { version } : {})} />
-      <Transcript items={state.items} offset={state.scrollOffset} size={VIEW_ITEMS} verbose={state.verbose} />
+      {pager ? (
+        <Pager
+          lines={pager.lines}
+          offset={Math.min(pager.offset, Math.max(0, pager.lines.length - 1))}
+          height={20}
+        />
+      ) : (
+        <Box>
+          {sidebar ? (
+            <Sidebar
+              visible={visibleNodes(sidebar.nodes, sidebar.expanded)}
+              cursor={sidebar.cursor}
+              focused={sidebar.focused}
+            />
+          ) : null}
+          <Box flexDirection="column" flexGrow={1}>
+            <Transcript items={state.items} offset={state.scrollOffset} size={VIEW_ITEMS} verbose={state.verbose} />
+          </Box>
+        </Box>
+      )}
       {state.permission ? <PermissionPanel request={state.permission} /> : null}
       {state.overlay?.kind === "question" ? (
         <QuestionPanel question={state.overlay.question} options={state.overlay.options} index={state.overlay.index} />
@@ -1833,6 +2091,14 @@ export function App({
             footer="↑↓ select · Enter switch · Esc dismiss"
           />
         ) : null}
+        {state.overlay?.kind === "theme" ? (
+          <ListOverlay
+            title="Theme"
+            lines={state.overlay.lines}
+            index={state.overlay.index}
+            footer="↑↓ select · Enter apply · Esc dismiss"
+          />
+        ) : null}
         {state.overlay?.kind === "args" ? (
           <ListOverlay
             title={`/${state.overlay.command}`}
@@ -1867,17 +2133,14 @@ export function App({
         <MultilineComposer
           editor={editor}
           disabled={!!state.permission}
-          placeholder={
-            state.running
-              ? "working… type to queue a follow-up · Esc cancels · ! runs shell"
-              : "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)"
-          }
+          {...(ghost ? { ghost } : {})}
+          placeholder={state.running ? t("composer.running") : t("composer.idle")}
         />
         {/* Claude Code-style mode line under the input box. */}
         {state.approval !== "confirm" ? (
           <Text color={state.approval === "auto" ? "yellow" : "magenta"}>
-            {state.approval === "auto" ? "⏵⏵ auto-approve on" : "⏸ plan mode on"}
-            <Text dimColor> (shift+tab to cycle)</Text>
+            {state.approval === "auto" ? `⏵⏵ ${t("mode.autoApprove")}` : `⏸ ${t("mode.plan")}`}
+            <Text dimColor> {t("mode.cycleHint")}</Text>
           </Text>
         ) : null}
         {runningShell || bgRunning > 0 || state.detached.length > 0 ? (
