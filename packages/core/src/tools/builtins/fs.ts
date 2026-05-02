@@ -25,8 +25,8 @@ const MAX_SEARCHABLE_FILE_BYTES = 1_000_000;
 // ---------------------------------------------------------------------------
 
 const listFilesSchema = z.object({
-  path: z.string().optional().describe("Directory to list, relative to the workspace root."),
-  maxDepth: z.number().optional().describe("Maximum recursion depth (default 10)."),
+  path: z.string().optional().describe("Directory to list, relative to the workspace root (default '.')."),
+  maxDepth: z.number().optional().describe("Maximum recursion depth (default 10); lower it for a quick overview."),
 });
 
 function walkEntries(root: string, maxDepth: number): { entries: string[]; truncated: boolean } {
@@ -66,7 +66,7 @@ function walkEntries(root: string, maxDepth: number): { entries: string[]; trunc
 const listFiles = defineTool({
   name: "list_files",
   description:
-    "Recursively list files and directories in the workspace (common build/dependency directories are skipped). Directories end with '/'.",
+    "Recursively list files and directories under path; directories end with '/'. Prefer this over search_text when exploring project structure rather than hunting for specific code. Build/dependency directories (node_modules, .git, dist, ...) are skipped and output caps at 500 entries — narrow path or maxDepth if truncated.",
   schema: listFilesSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -106,13 +106,14 @@ const listFiles = defineTool({
 
 const readFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
-  offset: z.number().optional().describe("1-based line number to start reading from."),
+  offset: z.number().optional().describe("1-based line number to start reading from (combine with limit for large files)."),
   limit: z.number().optional().describe("Maximum number of lines to return."),
 });
 
 const readFile = defineTool({
   name: "read_file",
-  description: "Read a UTF-8 text file from the workspace, optionally a line range.",
+  description:
+    "Read the UTF-8 text file at path. For large files pass offset (1-based line) and limit to read only the range you need — output beyond 20k chars is head/tail truncated. Do not re-read a file you have not changed since the last read; the earlier content is still valid.",
   schema: readFileSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -156,8 +157,10 @@ const readFile = defineTool({
 // ---------------------------------------------------------------------------
 
 const searchTextSchema = z.object({
-  pattern: z.string().describe("Regular expression (falls back to literal text if invalid)."),
-  path: z.string().optional().describe("Directory to search, relative to the workspace root."),
+  pattern: z
+    .string()
+    .describe("JavaScript regular expression, e.g. \"function\\\\s+createUser\" (an invalid regex is retried as literal text)."),
+  path: z.string().optional().describe("File or directory to search, relative to the workspace root (default '.')."),
   caseSensitive: z.boolean().optional().describe("Case-sensitive matching (default false)."),
 });
 
@@ -168,7 +171,7 @@ function escapeRegExp(s: string): string {
 const searchText = defineTool({
   name: "search_text",
   description:
-    "Search file contents recursively with a regex (or literal text). Returns matches as {file, line, text}. Skips binary files, files over 1MB, and ignored directories.",
+    "Your FIRST tool for locating code: recursively search file contents for a regex pattern (e.g. \"function\\s+createUser\"); an invalid regex falls back to a literal-text search. Matching is per-line, case-insensitive by default, returns {file, line, text} up to 200 matches; binary files, files over 1MB, and ignored directories are skipped. Pass path to narrow the search.",
   schema: searchTextSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -272,14 +275,14 @@ async function runtimeBeforeContent(ctx: ToolContext, relPath: string): Promise<
 
 const writeFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
-  content: z.string().describe("Full file content to write (UTF-8)."),
+  content: z.string().describe("Complete file content (UTF-8) — replaces the entire file, nothing is merged."),
   overwrite: z.boolean().optional().describe("Allow replacing an existing file (default false)."),
 });
 
 const writeFile = defineTool({
   name: "write_file",
   description:
-    "Create a file (parent directories are created). Fails if the file exists unless overwrite is true.",
+    "Write content as the COMPLETE file at path (parent directories are created). Whole-file replacement: use only for new files or intentional full rewrites — use apply_patch for any edit to an existing file. Fails if the file already exists unless overwrite is true.",
   schema: writeFileSchema,
   classify: (args) => ({
     permission: "write",
@@ -319,8 +322,12 @@ const applyPatchSchema = z.object({
   edits: z
     .array(
       z.object({
-        oldString: z.string().describe("Exact text to replace; must occur exactly once."),
-        newString: z.string().describe("Replacement text."),
+        oldString: z
+          .string()
+          .describe(
+            "Exact text copied VERBATIM from the current file (whitespace included); must occur exactly once — include surrounding lines to disambiguate.",
+          ),
+        newString: z.string().describe("Replacement text, written with the same exactness as oldString."),
       }),
     )
     .describe("Search/replace edits, applied in order, all-or-nothing."),
@@ -329,7 +336,7 @@ const applyPatchSchema = z.object({
 const applyPatch = defineTool({
   name: "apply_patch",
   description:
-    "Edit a file with search/replace edits. Each oldString must match exactly once; edits are applied atomically (any failure writes nothing).",
+    "Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Each oldString must be copied verbatim from the CURRENT file content (your latest read) and match exactly once. If a patch fails, re-read the file before retrying; prefer several small targeted edits over one large one.",
   schema: applyPatchSchema,
   classify: (args) => ({
     permission: "write",
