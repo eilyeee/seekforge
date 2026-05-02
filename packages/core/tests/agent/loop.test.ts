@@ -6,7 +6,13 @@ import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
-import { createSessionTrace, listSessions, loadSessionMessages, readSessionMeta } from "../../src/agent/trace.js";
+import {
+  createSessionTrace,
+  listSessions,
+  loadSessionMessages,
+  readSessionMeta,
+  truncateSessionAtUserTurn,
+} from "../../src/agent/trace.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
 
@@ -229,6 +235,136 @@ describe("agent loop", () => {
     const traced = loadSessionMessages(workspace, sessionId);
     expect(traced.at(-1)!.content).toBe("resumed answer");
     expect(traced.at(-2)!.content).toBe("continue");
+  });
+});
+
+describe("agent loop: turn-budget wrap-up", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-wrapup-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const baseInput = { projectPath: "", task: "do the thing", mode: "edit" as const, approvalMode: "auto" as const };
+  const NUDGE = "[harness] Turn budget nearly exhausted";
+
+  /** Script that burns `toolTurns` turns on tool calls, then answers. */
+  function burningScript(toolTurns: number): ChatResponse[] {
+    const script: ChatResponse[] = [];
+    for (let i = 0; i < toolTurns; i++) {
+      script.push(
+        response({
+          toolCalls: [{ id: `c${i}`, name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+          finishReason: "tool_calls",
+        }),
+      );
+    }
+    script.push(response({ content: "## Summary\ndone" }));
+    return script;
+  }
+
+  function nudges(messages: ChatMessage[]): string[] {
+    return messages.filter((m) => m.role === "user" && m.content.startsWith(NUDGE)).map((m) => m.content);
+  }
+
+  /**
+   * Like fakeProvider, but snapshots the messages of each request at call
+   * time — the loop mutates one shared messages array across turns, so the
+   * live references fakeProvider records all converge on the final state.
+   */
+  function snapshotProvider(script: ChatResponse[]): ChatProvider & { snapshots: ChatMessage[][] } {
+    const snapshots: ChatMessage[][] = [];
+    const next = async (req: ChatRequest) => {
+      snapshots.push(req.messages.map((m) => ({ ...m })));
+      const res = script.shift();
+      if (!res) throw new Error("fake provider script exhausted");
+      return res;
+    };
+    return { model: "fake", snapshots, chat: next, chatStream: (req) => next(req) };
+  }
+
+  it("injects the wrap-up nudge exactly once per threshold (at -3 and -1)", async () => {
+    // maxAgentTurns 6: thresholds hit at turn 3 (3 left) and turn 5 (1 left).
+    const provider = snapshotProvider(burningScript(5));
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 6 },
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+    expect(provider.snapshots).toHaveLength(6);
+
+    // Requests before the first threshold carry no nudge.
+    for (let i = 0; i < 3; i++) expect(nudges(provider.snapshots[i]!)).toHaveLength(0);
+    // Turn 3 (3 turns left): exactly one nudge, and it is the latest message.
+    const atThree = nudges(provider.snapshots[3]!);
+    expect(atThree).toHaveLength(1);
+    expect(atThree[0]).toContain("(3 turns left)");
+    expect(provider.snapshots[3]!.at(-1)!.content).toContain("(3 turns left)");
+    // Turn 4: still only the first nudge (no spam between thresholds).
+    expect(nudges(provider.snapshots[4]!)).toHaveLength(1);
+    // Turn 5 (1 turn left): the second nudge joins; both present exactly once.
+    const atOne = nudges(provider.snapshots[5]!);
+    expect(atOne).toHaveLength(2);
+    expect(atOne[1]).toContain("(1 turn left)");
+  });
+
+  it("does not nudge runs that finish well before the budget", async () => {
+    const provider = fakeProvider(burningScript(2));
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 50 },
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    for (const req of provider.requests) expect(nudges(req.messages)).toHaveLength(0);
+  });
+
+  it("keeps the stored session free of nudges so user-turn indexing stays aligned", async () => {
+    const provider = fakeProvider(burningScript(5));
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+      limits: { maxAgentTurns: 6 },
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const created = events.find((e) => e.type === "session.created");
+    const sessionId = created && created.type === "session.created" ? created.sessionId : "";
+
+    // Trace invariant: exactly ONE user message per run (the task) — the
+    // nudges were transient. truncateSessionAtUserTurn / checkpoint turns /
+    // TUI backtrack all count user messages and rely on this.
+    const traced = loadSessionMessages(workspace, sessionId);
+    expect(traced.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(traced.some((m) => m.content.includes("[harness]"))).toBe(false);
+    // No second user turn exists yet, so turn 1 is not truncatable.
+    expect(truncateSessionAtUserTurn(workspace, sessionId, 1)).toBeNull();
+
+    // Resume: the continuation becomes user turn 1 and replay has no nudges.
+    const resumeProvider = fakeProvider([response({ content: "resumed" })]);
+    const second = createAgentCore({
+      provider: resumeProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    await collect(
+      second.runTask({ ...baseInput, projectPath: workspace, task: "continue", resumeSessionId: sessionId }),
+    );
+    expect(resumeProvider.requests[0]!.messages.some((m) => m.content.includes("[harness]"))).toBe(false);
+    // The continuation is now user turn 1, exactly where backtrack expects it.
+    const beforeCut = loadSessionMessages(workspace, sessionId);
+    const cut = truncateSessionAtUserTurn(workspace, sessionId, 1);
+    expect(cut).not.toBeNull();
+    expect(cut!.removedMessages).toBeGreaterThan(0);
+    const afterCut = loadSessionMessages(workspace, sessionId);
+    expect(afterCut.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(beforeCut[afterCut.length]!.content).toBe("continue");
   });
 });
 

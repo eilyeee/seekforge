@@ -123,6 +123,25 @@ export type AgentCoreDeps = {
 const OUTPUT_RESERVE_TOKENS = 8192;
 
 /**
+ * Turn counts (remaining) at which the loop nudges the model to wrap up.
+ * Injected as TRANSIENT user messages: they go to the provider but are NOT
+ * written to messages.jsonl, because the stored session must keep exactly
+ * one user message per run — truncateSessionAtUserTurn, checkpoint `turn`
+ * tagging, and the TUI backtrack targets all count user messages and assume
+ * that invariant (see apps/tui/src/backtrack.ts). A resumed session simply
+ * replays without the nudge, which is correct: it gets a fresh turn budget.
+ */
+const WRAPUP_THRESHOLDS = [3, 1] as const;
+
+function buildWrapupNudge(turnsLeft: number): string {
+  return (
+    `[harness] Turn budget nearly exhausted (${turnsLeft} ${turnsLeft === 1 ? "turn" : "turns"} left). ` +
+    "Stop exploring; finish the most important remaining edit and produce the final report now. " +
+    "If work remains, list it under ## Notes as next steps."
+  );
+}
+
+/**
  * Max command.output events forwarded per tool call. A chatty command keeps
  * running and its full (truncated) output still lands in the tool result;
  * only the LIVE event stream is capped (excess chunks dropped silently) so
@@ -696,10 +715,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           );
         }
 
+        const wrapupInjected = new Set<number>();
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
           throwIfCancelled();
           // Surface events from background dispatches between turns.
           for (const ev of queue.drainNow()) yield ev;
+
+          // Turn-budget wrap-up nudge: once per threshold, transient (not
+          // traced — see WRAPUP_THRESHOLDS for why), before the provider
+          // call so this turn's request already carries it.
+          const turnsLeft = limits.maxAgentTurns - turn;
+          if (
+            (WRAPUP_THRESHOLDS as readonly number[]).includes(turnsLeft) &&
+            !wrapupInjected.has(turnsLeft)
+          ) {
+            wrapupInjected.add(turnsLeft);
+            messages.push({ role: "user", content: buildWrapupNudge(turnsLeft) });
+          }
           if (estimateMessagesTokens(messages) > budgetTokens) {
             // Micro-compaction first: blank stale tool outputs (cheap, keeps
             // structure). Full compaction only when that is not enough.
