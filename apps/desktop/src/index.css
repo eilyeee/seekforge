@@ -2,23 +2,58 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * SeekForge theme — deep cool-zinc dark with a single "whale blue" accent.
+ * Values are space-separated RGB so Tailwind alpha modifiers work
+ * (see tailwind.config.js for the semantic token names).
+ */
 @layer base {
+  :root {
+    --sf-surface: 14 15 18; /* #0e0f12 app background */
+    --sf-surface-raised: 22 23 28; /* #16171c cards, sidebar */
+    --sf-surface-overlay: 30 31 38; /* #1e1f26 hover, popovers */
+    --sf-border-subtle: 39 40 48; /* #272830 */
+    --sf-border-strong: 56 58 68; /* #383a44 */
+    --sf-accent: 80 150 255; /* #5096ff whale blue */
+    --sf-accent-hover: 110 169 255; /* #6ea9ff */
+    --sf-accent-muted: 30 45 72; /* #1e2d48 tinted background */
+    --sf-text-primary: 235 236 240; /* #ebecf0 */
+    --sf-text-secondary: 160 162 172; /* #a0a2ac */
+    --sf-text-tertiary: 106 108 119; /* #6a6c77 */
+    --sf-ok: 52 211 153; /* emerald-400 */
+    --sf-warn: 251 191 36; /* amber-400 */
+    --sf-danger: 248 113 113; /* red-400 */
+  }
+
   html,
   body,
   #root {
     height: 100%;
   }
   body {
-    @apply bg-zinc-950 font-sans text-sm text-zinc-200 antialiased;
+    @apply bg-surface font-sans text-sm text-primary antialiased;
+  }
+  ::selection {
+    @apply bg-accent/30;
   }
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    @apply rounded bg-zinc-700;
+    @apply rounded-full bg-zinc-700/80;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-600;
   }
   ::-webkit-scrollbar-track {
     @apply bg-transparent;
+  }
+}
+
+@layer components {
+  /* Shared keyboard-focus treatment; put on any interactive element. */
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface;
   }
 }

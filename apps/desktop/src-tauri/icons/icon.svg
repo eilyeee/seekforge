@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    SeekForge app icon: whale (DeepSeek heritage) + forge spark, whale-blue
+    on deep zinc. Regenerate the platform icon set with:
+      pnpm tauri icon apps/desktop/src-tauri/icons/icon.svg -o apps/desktop/src-tauri/icons
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b2230" />
+      <stop offset="1" stop-color="#0c0f16" />
+    </linearGradient>
+    <linearGradient id="whale" x1="200" y1="300" x2="824" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7ab2ff" />
+      <stop offset="1" stop-color="#3d7ee6" />
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square plate (macOS-style margin) -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)" />
+  <rect x="64.5" y="64.5" width="895" height="895" rx="199.5" stroke="#3a4254" stroke-opacity="0.55" stroke-width="3" />
+
+  <!-- forge spark above the tail -->
+  <path d="M716 268l16.5 54.5L787 339l-54.5 16.5L716 410l-16.5-54.5L645 339l54.5-16.5z" fill="#9cc4ff" />
+  <circle cx="788" cy="252" r="14" fill="#5e96e6" />
+
+  <!-- whale, scaled from the in-app LogoMark (24-unit grid x32, offset 128) -->
+  <g transform="translate(128,128) scale(32)">
+    <path
+      d="M3 13.5c0-4.4 3.8-7.5 8.3-7.5 4 0 7.2 2.3 8.7 5.6.3.6-.1 1.2-.7 1.4-1.1.3-2.6 1-3.5 2.4-1 1.5-2.7 2.6-4.8 2.6H4.5c-.8 0-1.5-.7-1.5-1.5v-3z"
+      fill="url(#whale)"
+    />
+    <path d="M19.5 14.5l2.6-1.6c.5-.3 1.1.2.9.8l-1 3a.9.9 0 01-1.4.4l-1.1-1.1z" fill="url(#whale)" />
+    <circle cx="7.2" cy="12.2" r="1" fill="#0c0f16" />
+  </g>
+</svg>

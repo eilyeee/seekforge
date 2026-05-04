@@ -1,12 +1,15 @@
 import { useEffect } from "react";
 import type { PermissionRequest } from "@seekforge/shared";
+import { Badge, type BadgeTone } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Modal } from "../ui/Modal";
 
-const PERMISSION_BADGE: Record<string, string> = {
-  readonly: "bg-zinc-700 text-zinc-200",
-  write: "bg-sky-900 text-sky-200",
-  execute: "bg-amber-900 text-amber-200",
-  env: "bg-orange-900 text-orange-200",
-  dangerous: "bg-red-900 text-red-200",
+const PERMISSION_TONE: Record<string, BadgeTone> = {
+  readonly: "neutral",
+  write: "accent",
+  execute: "warn",
+  env: "warn",
+  dangerous: "danger",
 };
 
 type Props = {
@@ -18,73 +21,63 @@ type Props = {
  * Permission prompt. SECURITY: always shows the raw command / path verbatim
  * in monospace — never only the model's paraphrase (prompt-injection defense,
  * see AGENTS.md). Dismissing (Escape / backdrop) counts as deny.
+ * Keyboard: y = allow, n = deny (TUI parity).
  */
 export function PermissionModal({ request, onRespond }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onRespond(false);
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "y") onRespond(true);
+      if (e.key === "n") onRespond(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onRespond]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={() => onRespond(false)}
-    >
-      <div
-        className="w-full max-w-lg rounded-lg border border-zinc-700 bg-zinc-900 p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-sm font-semibold text-zinc-100">Permission required</span>
-          <span
-            className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
-              PERMISSION_BADGE[request.permission] ?? PERMISSION_BADGE.readonly
-            }`}
-          >
-            {request.permission}
-          </span>
-          <span className="ml-auto font-mono text-xs text-zinc-500">{request.toolName}</span>
-        </div>
-
-        <p className="mb-3 text-sm text-zinc-300">{request.description}</p>
-
-        {request.command !== undefined && (
-          <div className="mb-3">
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">raw command</div>
-            <pre className="overflow-x-auto rounded border border-zinc-700 bg-zinc-950 p-2 font-mono text-xs text-amber-300">
-              {request.command}
-            </pre>
-          </div>
-        )}
-        {request.path !== undefined && (
-          <div className="mb-3">
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">raw path</div>
-            <pre className="overflow-x-auto rounded border border-zinc-700 bg-zinc-950 p-2 font-mono text-xs text-sky-300">
-              {request.path}
-            </pre>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => onRespond(false)}
-            className="rounded border border-zinc-700 px-4 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
-          >
+    <Modal
+      wide
+      onDismiss={() => onRespond(false)}
+      title={
+        <>
+          <span>Permission required</span>
+          <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
+          <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
+        </>
+      }
+      footer={
+        <>
+          <Button onClick={() => onRespond(false)}>
             Deny
-          </button>
-          <button
-            type="button"
-            onClick={() => onRespond(true)}
-            className="rounded bg-emerald-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-600"
-          >
+            <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
+          </Button>
+          <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
             Allow
-          </button>
+            <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-secondary">{request.description}</p>
+
+      {request.command !== undefined && (
+        <div className="mb-3">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">raw command</div>
+          <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-warn">
+            {request.command}
+          </pre>
         </div>
-      </div>
-    </div>
+      )}
+      {request.path !== undefined && (
+        <div className="mb-3">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">raw path</div>
+          <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-accent-hover">
+            {request.path}
+          </pre>
+        </div>
+      )}
+    </Modal>
   );
 }
