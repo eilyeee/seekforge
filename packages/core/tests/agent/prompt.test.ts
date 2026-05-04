@@ -85,7 +85,7 @@ describe("buildSystemPrompt: optional sections", () => {
       subagentRoster: "- explorer: read-only scout",
     });
     expect(full).toContain("Project rules (AGENTS.md):\nuse pnpm");
-    expect(full).toContain("Relevant project memory (verified facts from earlier sessions):\ntests live under tests/");
+    expect(full).toContain("Relevant project memory:\ntests live under tests/");
     expect(full).toContain("dispatch_agent");
     expect(full).toContain("agent_send");
     expect(full).toContain("- explorer: read-only scout");

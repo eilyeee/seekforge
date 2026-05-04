@@ -115,7 +115,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
 
   if (opts.memoryBrief) {
     parts.push(
-      `Relevant project memory (verified facts from earlier sessions):\n${opts.memoryBrief}`,
+      `Relevant project memory:\n${opts.memoryBrief}`,
     );
   }
 
