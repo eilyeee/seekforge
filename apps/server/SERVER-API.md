@@ -51,6 +51,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/project | `{path, name, detect: {languages, packageManager, frameworks, scripts}}` |
 | GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
 | GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
+| GET /api/files[?q=] | `{files: string[], truncated}` — workspace-relative paths (BFS, shallow first; skips the tools' DEFAULT_IGNORE_DIRS, dot-directories, and symlinks; capped at 2000, `truncated: true` when the cap cut the scan short). `q` is a case-insensitive substring filter on the relative path, applied while scanning. Feeds the web composer's `@` file picker. |
+| POST /api/upload | body `{name, dataBase64}` — saves a pasted/dropped image to `.seekforge/uploads/img-<stamp>.<ext>` and returns `{path}` (workspace-relative; core `image_analyze` consumes it). Only the extension of `name` is used (png/jpg/jpeg/gif/webp); decoded size capped at 4 MB; `dataBase64` may carry a data-URL prefix. Errors: 400 `bad_request` (bad JSON/fields/extension/base64), 413 `too_large`. |
 | GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[]}` |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
