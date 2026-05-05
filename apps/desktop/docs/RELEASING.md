@@ -9,7 +9,11 @@ https://github.com/eilyeee/seekforge/releases/latest/download/latest.json
 
 on every launch (see `spawn_update_check` in `src-tauri/src/main.rs`). Until
 the placeholder pubkey in `src-tauri/tauri.conf.json` is replaced, the
-updater logs "updater unavailable" and the app otherwise works normally.
+updater logs "updater unavailable" at runtime and the app otherwise works
+normally — but `pnpm tauri build` ends with
+`failed to decode pubkey: ... Invalid symbol` **after** producing the
+`.app` / DMG / `.app.tar.gz` bundles, because the bundler validates the
+pubkey when signing the updater artifact. Step 0 below removes that error.
 
 ## 0. One-time: generate the updater signing keypair
 
@@ -39,10 +43,14 @@ also produces signed updater artifacts. Output (workspace root, since the
 crate is a member of the root Cargo workspace):
 
 ```
-target/release/bundle/dmg/SeekForge_<version>_aarch64.dmg     # what users download
+target/release/bundle/dmg/SeekForge_<version>_<arch>.dmg      # what users download
 target/release/bundle/macos/SeekForge.app.tar.gz              # updater payload
 target/release/bundle/macos/SeekForge.app.tar.gz.sig          # updater signature
 ```
+
+(`<arch>` is `x64` on Intel, `aarch64` on Apple Silicon; cross-build the
+other with `pnpm tauri build --target aarch64-apple-darwin` /
+`x86_64-apple-darwin` after `rustup target add`.)
 
 Bump `version` in `src-tauri/tauri.conf.json` (and keep
 `src-tauri/Cargo.toml` in sync) before each release.
@@ -71,7 +79,7 @@ Without these env vars the build still succeeds; tell testers to
   "notes": "What changed.",
   "pub_date": "2026-06-12T00:00:00Z",
   "platforms": {
-    "darwin-aarch64": {
+    "darwin-x86_64": {
       "signature": "<contents of SeekForge.app.tar.gz.sig>",
       "url": "https://github.com/eilyeee/seekforge/releases/download/v0.1.0/SeekForge.app.tar.gz"
     }
@@ -79,14 +87,14 @@ Without these env vars the build still succeeds; tell testers to
 }
 ```
 
-Add a `darwin-x86_64` entry too if you also build on/for Intel
-(`pnpm tauri build --target x86_64-apple-darwin`).
+Add a `darwin-aarch64` entry too when you build for Apple Silicon (give the
+two tarballs distinct upload names, e.g. `SeekForge_x64.app.tar.gz`).
 
 ## 4. Publish the GitHub release
 
 ```sh
 gh release create v0.1.0 \
-  target/release/bundle/dmg/SeekForge_0.1.0_aarch64.dmg \
+  target/release/bundle/dmg/SeekForge_0.1.0_x64.dmg \
   target/release/bundle/macos/SeekForge.app.tar.gz \
   latest.json \
   --title "SeekForge 0.1.0" --notes "..."
