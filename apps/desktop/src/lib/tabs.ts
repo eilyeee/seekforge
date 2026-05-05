@@ -16,6 +16,23 @@ export type PendingPermission = { requestId: string; request: PermissionRequest 
 /** ask_user question awaiting an answer (question.request frame). */
 export type PendingQuestion = { id: string; question: string; options: string[] };
 
+/** Worktree session binding: the tab's `ws` is the worktree's workspace id. */
+export type TabWorktree = {
+  /** Worktree id == its workspace id (`wt-<slug>`). */
+  id: string;
+  /** Branch the session runs on (`seekforge/<slug>`). */
+  branch: string;
+  /** Workspace id of the base repo (where merge-back lands). */
+  base: string;
+  /** Uncommitted changes in the worktree (refreshed after runs). */
+  dirty: boolean;
+};
+
+/** Chip label for a worktree tab: the slug part of `seekforge/<slug>`. */
+export function worktreeLabel(wt: TabWorktree): string {
+  return wt.branch.replace(/^seekforge\//, "");
+}
+
 export type ChatTab = {
   tabId: string;
   /** First words of the first task; placeholder until a task is sent. */
@@ -27,6 +44,12 @@ export type ChatTab = {
    * Empty = the server's default (first) workspace.
    */
   ws: string;
+  /**
+   * Set when this tab is an isolated worktree session ("New worktree
+   * session"). `ws` then equals `worktree.id`, so the chat WS and all
+   * scoped REST calls automatically target the worktree checkout.
+   */
+  worktree?: TabWorktree;
   chat: ChatState;
   conn: ConnState;
   pendingPermission: PendingPermission | null;
@@ -84,11 +107,14 @@ export function activeTab(state: TabsState): ChatTab {
   return state.tabs.find((t) => t.tabId === state.activeTabId) ?? state.tabs[0]!;
 }
 
-/** Appends a fresh tab bound to `ws` (the active workspace) and activates it. */
-export function openTab(state: TabsState, ws = ""): TabsState {
+/**
+ * Appends a fresh tab bound to `ws` (the active workspace) and activates it.
+ * `patch` seeds extra fields on the new tab (e.g. a worktree binding).
+ */
+export function openTab(state: TabsState, ws = "", patch?: Partial<ChatTab>): TabsState {
   const tabId = `t${state.nextTabNum}`;
   return {
-    tabs: [...state.tabs, makeTab(tabId, ws)],
+    tabs: [...state.tabs, { ...makeTab(tabId, ws), ...patch }],
     activeTabId: tabId,
     nextTabNum: state.nextTabNum + 1,
   };
@@ -101,10 +127,12 @@ export function openTab(state: TabsState, ws = ""): TabsState {
 export function closeTab(state: TabsState, tabId: string): TabsState {
   const idx = state.tabs.findIndex((t) => t.tabId === tabId);
   if (idx < 0) return state;
-  const closedWs = state.tabs[idx]!.ws;
+  const closed = state.tabs[idx]!;
+  // The replacement tab keeps the closed tab's workspace binding — except for
+  // worktree tabs, whose workspace may no longer exist: fall back to the base.
+  const closedWs = closed.worktree ? closed.worktree.base : closed.ws;
   const tabs = state.tabs.filter((t) => t.tabId !== tabId);
   if (tabs.length === 0) {
-    // The replacement tab keeps the closed tab's workspace binding.
     const fresh = makeTab(`t${state.nextTabNum}`, closedWs);
     return { tabs: [fresh], activeTabId: fresh.tabId, nextTabNum: state.nextTabNum + 1 };
   }

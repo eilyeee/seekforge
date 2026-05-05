@@ -26,10 +26,12 @@ import {
   setEvolutionProposalStatus,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
+import { WorktreeError, type WorktreeManager } from "./worktrees.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export type RestContext = {
   registry: WorkspaceRegistry;
+  worktrees: WorktreeManager;
   version: string;
 };
 
@@ -152,6 +154,40 @@ export async function handleApi(
       return sendApiError(res, 404, "not_found", `unknown workspace: ${String(wsId)}`);
     }
     const workspace = ws.path;
+
+    // Worktree sessions — `?ws=` selects the BASE workspace for create/list;
+    // merge/delete identify the worktree by :id (its own record knows the base).
+    if (path === "/api/worktrees" && method === "GET") {
+      return sendJson(res, 200, await ctx.worktrees.list(ws));
+    }
+
+    if (path === "/api/worktrees" && method === "POST") {
+      const raw = await readBody(req);
+      let name: string | undefined;
+      if (raw.trim() !== "") {
+        let body: unknown;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+        }
+        const candidate = (body ?? {}) as { name?: unknown };
+        if (candidate.name !== undefined && typeof candidate.name !== "string") {
+          return sendApiError(res, 400, "bad_request", "body must be {name?: string}");
+        }
+        name = candidate.name;
+      }
+      return sendJson(res, 200, await ctx.worktrees.create(ws, name));
+    }
+
+    if (method === "POST" && segs.length === 4 && segs[1] === "worktrees" && segs[3] === "merge") {
+      return sendJson(res, 200, await ctx.worktrees.merge(segs[2]!));
+    }
+
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "worktrees") {
+      await ctx.worktrees.remove(segs[2]!);
+      return sendJson(res, 200, { deleted: true });
+    }
 
     if (method === "GET" && path === "/api/project") {
       return sendJson(res, 200, await detectProject(workspace));
@@ -357,6 +393,9 @@ export async function handleApi(
 
     return sendApiError(res, 404, "not_found", `no such endpoint: ${method} ${path}`);
   } catch (err) {
+    if (err instanceof WorktreeError) {
+      return sendApiError(res, err.status, err.code, err.message);
+    }
     const message = err instanceof Error ? err.message : String(err);
     return sendApiError(res, 500, "internal", message);
   }

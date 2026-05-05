@@ -14,11 +14,13 @@ import { createDefaultAgent, type CreateAgentFn } from "./agent.js";
 import { handleApi, sendApiError } from "./rest.js";
 import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
+import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions } from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
+export type { MergeResult, WorktreeStatus } from "./worktrees.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -53,6 +55,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw new Error("startServer requires `workspaces` or `workspace`");
   }
   const registry = createWorkspaceRegistry(paths);
+  const worktrees = new WorktreeManager(registry);
   const token = opts.token ?? randomBytes(24).toString("base64url");
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const staticRoot = resolveStaticRoot(opts.staticDir);
@@ -69,7 +72,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (!isAuthorized(req, token)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
-      void handleApi(req, res, url, { registry, version });
+      void handleApi(req, res, url, { registry, worktrees, version });
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {

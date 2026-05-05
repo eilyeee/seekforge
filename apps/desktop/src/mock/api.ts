@@ -35,6 +35,11 @@ const mockWorkspaces = [
   { id: "mockws2", name: "other-project", path: "/mock/other-project" },
 ];
 
+/** In-memory worktree sessions (mock of the git-backed real server). */
+type MockWorktree = { id: string; branch: string; path: string; dirty: boolean; ahead: number };
+const mockWorktrees: MockWorktree[] = [];
+let mockWorktreeSeq = 0;
+
 export async function mockRequest(method: string, fullPath: string, body?: unknown): Promise<unknown> {
   await delay();
 
@@ -42,7 +47,40 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   // for every workspace, so strip the query and match on the bare path.
   const path = fullPath.split("?")[0]!;
 
-  if (method === "GET" && path === "/api/workspaces") return mockWorkspaces;
+  if (method === "GET" && path === "/api/workspaces")
+    return [...mockWorkspaces, ...mockWorktrees.map((w) => ({ id: w.id, name: w.branch.split("/")[1]!, path: w.path }))];
+
+  if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
+  if (method === "POST" && path === "/api/worktrees") {
+    const { name } = (body ?? {}) as { name?: string };
+    const slug = (name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `session-${++mockWorktreeSeq}`;
+    const wt: MockWorktree = {
+      id: `wt-${slug}`,
+      branch: `seekforge/${slug}`,
+      path: `/mock/workspace/.seekforge/worktrees/${slug}`,
+      dirty: false,
+      ahead: 0,
+    };
+    mockWorktrees.push(wt);
+    return { id: wt.id, path: wt.path, branch: wt.branch };
+  }
+  let wtm = /^\/api\/worktrees\/([^/]+)\/merge$/.exec(path);
+  if (method === "POST" && wtm) {
+    const wt = mockWorktrees.find((w) => w.id === wtm![1]);
+    if (!wt) throw mockError(404, "not_found", `unknown worktree: ${wtm[1]}`);
+    // A worktree named "conflict" exercises the conflict UI in mock mode.
+    if (wt.id.includes("conflict")) return { conflict: true, files: ["src/app.ts", "README.md"] };
+    wt.dirty = false;
+    wt.ahead = 0;
+    return { merged: true };
+  }
+  wtm = /^\/api\/worktrees\/([^/]+)$/.exec(path);
+  if (method === "DELETE" && wtm) {
+    const idx = mockWorktrees.findIndex((w) => w.id === wtm![1]);
+    if (idx < 0) throw mockError(404, "not_found", `unknown worktree: ${wtm[1]}`);
+    mockWorktrees.splice(idx, 1);
+    return { deleted: true };
+  }
   if (method === "GET" && path === "/api/health")
     return { version: "0.2.0-mock", workspace: "/mock/workspace", workspaces: mockWorkspaces };
   if (method === "GET" && path === "/api/sessions") return mockSessions;

@@ -46,9 +46,38 @@ export function createWorkspaceRegistry(paths: string[]): WorkspaceRegistry {
 
 export class WorkspaceRegistry {
   private readonly byId: Map<string, Workspace>;
+  private readonly workspaces: Workspace[];
 
-  constructor(public readonly list: readonly Workspace[]) {
+  constructor(list: readonly Workspace[]) {
+    this.workspaces = [...list];
     this.byId = new Map(list.map((w) => [w.id, w]));
+  }
+
+  /** Ordered workspaces; the first one is the default. */
+  get list(): readonly Workspace[] {
+    return this.workspaces;
+  }
+
+  /**
+   * Dynamically registers a workspace (e.g. a freshly created git worktree).
+   * The id must not collide with an existing one.
+   */
+  register(workspace: Workspace): void {
+    if (this.byId.has(workspace.id)) {
+      throw new Error(`workspace id already registered: ${workspace.id}`);
+    }
+    this.workspaces.push(workspace);
+    this.byId.set(workspace.id, workspace);
+  }
+
+  /** Removes a dynamically registered workspace. The default cannot be removed. */
+  unregister(id: string): void {
+    if (this.workspaces[0]?.id === id) {
+      throw new Error("cannot unregister the default workspace");
+    }
+    const idx = this.workspaces.findIndex((w) => w.id === id);
+    if (idx >= 0) this.workspaces.splice(idx, 1);
+    this.byId.delete(id);
   }
 
   /** The default workspace used when `?ws=`/`ws:` is omitted (the first one). */

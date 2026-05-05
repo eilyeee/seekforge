@@ -10,6 +10,7 @@ import {
   switchTab,
   titleFromTask,
   updateTab,
+  worktreeLabel,
   type TabsState,
 } from "./tabs";
 
@@ -86,6 +87,51 @@ describe("per-tab workspace binding", () => {
   it("closing the last tab preserves its workspace binding on the replacement", () => {
     const s = closeTab(initialTabsState("ws-a"), "t1");
     expect(s.tabs[0]!.ws).toBe("ws-a");
+  });
+});
+
+describe("worktree tabs", () => {
+  const wt = { id: "wt-fix-login", branch: "seekforge/fix-login", base: "ws-a", dirty: false };
+
+  it("openTab seeds the worktree binding; ws is the worktree workspace id", () => {
+    const s = openTab(initialTabsState("ws-a"), wt.id, { worktree: wt });
+    const tab = activeTab(s);
+    expect(tab.ws).toBe("wt-fix-login"); // chat WS binds ws=wt-… automatically
+    expect(tab.worktree).toEqual(wt);
+    expect(s.tabs[0]!.worktree).toBeUndefined(); // existing tabs untouched
+  });
+
+  it("worktreeLabel is the slug part of the branch", () => {
+    expect(worktreeLabel(wt)).toBe("fix-login");
+    expect(worktreeLabel({ ...wt, branch: "other/name" })).toBe("other/name");
+  });
+
+  it("updateTab toggles the dirty flag without touching the rest", () => {
+    let s = openTab(initialTabsState("ws-a"), wt.id, { worktree: wt });
+    s = updateTab(s, s.activeTabId, { worktree: { ...wt, dirty: true } });
+    expect(activeTab(s).worktree).toEqual({ ...wt, dirty: true });
+    expect(activeTab(s).ws).toBe("wt-fix-login");
+  });
+
+  it("closing the last remaining worktree tab falls back to the BASE workspace", () => {
+    // The worktree workspace may already be deleted — a fresh tab must not
+    // keep pointing at it.
+    let s = closeTab(initialTabsState("ws-a"), "t1"); // fresh state, then rebuild:
+    s = openTab(initialTabsState("ws-a"), wt.id, { worktree: wt });
+    s = closeTab(s, "t1"); // drop the plain tab; only the worktree tab remains
+    s = closeTab(s, s.tabs[0]!.tabId); // close the worktree tab itself
+    expect(s.tabs).toHaveLength(1);
+    expect(s.tabs[0]!.ws).toBe("ws-a");
+    expect(s.tabs[0]!.worktree).toBeUndefined();
+  });
+
+  it("closing a background worktree tab leaves the others untouched", () => {
+    let s = openTab(initialTabsState("ws-a"), wt.id, { worktree: wt });
+    s = openTab(s, "ws-a");
+    const worktreeTabId = s.tabs[1]!.tabId;
+    s = closeTab(s, worktreeTabId);
+    expect(s.tabs.map((t) => t.worktree)).toEqual([undefined, undefined]);
+    expect(s.activeTabId).toBe(s.tabs[1]!.tabId);
   });
 });
 
