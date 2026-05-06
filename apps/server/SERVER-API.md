@@ -23,6 +23,45 @@ basename. The **first** workspace is the default.
 The single-workspace contract is unchanged: starting with one workspace and
 omitting `?ws=`/`ws` behaves exactly as before.
 
+## Worktrees (parallel sessions)
+
+A *worktree session* runs on an isolated `git worktree` so a chat tab can work
+on its own branch and merge back when done. Creating one requires the base
+workspace to be a git repository; the server runs
+`git worktree add .seekforge/worktrees/<slug> -b seekforge/<slug>` (slug from
+the optional `name`, else a UTC timestamp; colliding slugs get a `-2`, `-3`, …
+suffix) and registers the checkout as a **workspace** with id `wt-<slug>` —
+every `?ws=`/`ws:` mechanism (REST scoping, chat runs) then targets the
+worktree transparently. `.seekforge/worktrees/` is appended to
+`.git/info/exclude` (per-clone, never the repo's .gitignore) so checkouts stay
+out of `git status`.
+
+- `POST /api/worktrees?ws=<base>` body `{name?}` → `{id, path, branch}`.
+  400 `not_a_git_repo` when the base workspace is not a git repo; 400
+  `bad_request` when `ws` points at another worktree (no nesting).
+- `GET /api/worktrees?ws=<base>` → `[{id, branch, path, dirty, ahead}]` for
+  worktrees created from that base. `dirty` = uncommitted changes in the
+  worktree; `ahead` = commits on the branch not on the base HEAD.
+- `POST /api/worktrees/:id/merge` → `{merged: true}` or
+  `{conflict: true, files}` (both HTTP 200). **Merge semantics:** if the
+  worktree is dirty it is auto-committed first (`git add -A` +
+  `git commit -m "seekforge worktree checkpoint"`) so nothing is lost, then
+  the base workspace runs `git merge --no-ff seekforge/<slug>`. On conflict
+  the server collects the conflicting files and runs `git merge --abort` —
+  the base repo is **never left mid-merge** and the worktree (incl. its
+  checkpoint commit) survives for retry. Other git failures (e.g. a dirty
+  base blocking the merge) are 500 `git_error` with the git stderr.
+- `DELETE /api/worktrees/:id` → `{deleted: true}` — `git worktree remove
+  --force` + `seekforge/<slug>` branch delete + workspace unregister (the
+  `wt-<slug>` id stops resolving). Unmerged work is lost (discard flow).
+
+`:id` identifies the worktree (the server knows its base); the `?ws=` on
+merge/delete only has to resolve to *some* registered workspace. Worktree
+registrations live in server memory — after a restart the directories and
+branches still exist but are no longer listed; clean them up with plain git
+(`git worktree remove`, `git branch -D`). Errors: 404 `not_found` for unknown
+worktree ids; all git failures are structured `{error: {code: "git_error"}}`.
+
 ## Security
 
 - Binds **127.0.0.1 only**. Never 0.0.0.0.
@@ -47,7 +86,11 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | Method/Path | Response |
 | --- | --- |
 | GET /api/health | `{version, workspace, workspaces: [{id, name, path}]}` (global; `workspace` = default path) |
-| GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default) |
+| GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
+| POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
+| GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
+| POST /api/worktrees/:id/merge | `{merged: true}` \| `{conflict: true, files}` — dirty worktree auto-committed; conflicts abort cleanly |
+| DELETE /api/worktrees/:id | `{deleted: true}` — remove worktree + branch, unregister the workspace |
 | GET /api/project | `{path, name, detect: {languages, packageManager, frameworks, scripts}}` |
 | GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
 | GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
