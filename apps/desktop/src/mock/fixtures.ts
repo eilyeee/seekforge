@@ -349,9 +349,13 @@ export const mockRewindResults: Record<string, RewindResult> = {
 };
 
 export const mockConfig: ServerConfig = {
-  model: "deepseek-chat",
+  model: "deepseek-v4-flash",
   baseUrl: "https://api.deepseek.com",
   runtimeBin: "",
   commandAllowlist: ["pnpm test", "pnpm typecheck", "git status"],
   apiKey: "sk-abc****",
+  sandbox: "workspace-write",
+  compaction: "mechanical",
+  thinking: false,
+  reasoningEffort: null,
 };

@@ -17,6 +17,8 @@ export function Sidebar() {
   const workspaces = useStore((s) => s.workspaces);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const setActiveWorkspace = useStore((s) => s.setActiveWorkspace);
+  const todosOpen = useStore((s) => s.todosOpen);
+  const toggleTodos = useStore((s) => s.toggleTodos);
   // Connection state of the active tab's socket (each tab owns one).
   const conn = useStore((s) => activeTab(s.tabs).conn);
 
@@ -59,6 +61,19 @@ export function Sidebar() {
           </button>
         ))}
       </nav>
+      <div className="px-2 pb-1">
+        <button
+          type="button"
+          onClick={toggleTodos}
+          title="cross-session todo list (.seekforge/todos.md)"
+          className={`flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
+            todosOpen ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
+          }`}
+        >
+          <span className="w-5 font-mono text-xs text-zinc-500">☑</span>
+          Todos
+        </button>
+      </div>
       <div className="flex items-center gap-1.5 px-4 py-3 font-mono text-[10px] text-zinc-600">
         <span
           className={`h-1.5 w-1.5 rounded-full ${

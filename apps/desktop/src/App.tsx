@@ -1,5 +1,6 @@
 import { useStore } from "./store";
 import { Sidebar } from "./components/Sidebar";
+import { TodosPanel } from "./components/TodosPanel";
 import { AgentsView } from "./views/AgentsView";
 import { ChatView } from "./views/ChatView";
 import { DiffView } from "./views/DiffView";
@@ -11,6 +12,7 @@ import { SkillsView } from "./views/SkillsView";
 
 export function App() {
   const view = useStore((s) => s.view);
+  const todosOpen = useStore((s) => s.todosOpen);
   return (
     <div className="flex h-full">
       <Sidebar />
@@ -24,6 +26,7 @@ export function App() {
         {view === "evolution" && <EvolutionView />}
         {view === "settings" && <SettingsView />}
       </main>
+      {todosOpen && <TodosPanel />}
     </div>
   );
 }

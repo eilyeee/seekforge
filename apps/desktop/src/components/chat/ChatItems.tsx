@@ -32,11 +32,21 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
   );
 }
 
-function ItemView({ item }: { item: ChatItem }) {
+function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId: number) => void }) {
   switch (item.kind) {
     case "user":
       return (
-        <div className="flex justify-end">
+        <div className="group flex items-start justify-end gap-1.5">
+          {onBacktrack && (
+            <button
+              type="button"
+              onClick={() => onBacktrack(item.id)}
+              title="Rewind the conversation to just before this message"
+              className="mt-1 rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-500 opacity-0 hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100"
+            >
+              ↺
+            </button>
+          )}
           <div className="max-w-[85%] whitespace-pre-wrap rounded-lg border border-emerald-900/60 bg-emerald-950/40 px-3 py-2 text-zinc-100">
             {item.text}
           </div>
@@ -106,12 +116,27 @@ function ItemView({ item }: { item: ChatItem }) {
   }
 }
 
-/** Shared renderer for live chat and read-only session transcripts. */
-export function ChatItems({ items }: { items: ChatItem[] }) {
+/**
+ * Shared renderer for live chat and read-only session transcripts.
+ * `onBacktrack` (live chat only) puts a ↺ rewind button on every user bubble
+ * except the first — turn 0 is the original task and is not backtrackable.
+ */
+export function ChatItems({
+  items,
+  onBacktrack,
+}: {
+  items: ChatItem[];
+  onBacktrack?: (itemId: number) => void;
+}) {
+  const firstUserId = items.find((i) => i.kind === "user")?.id;
   return (
     <div className="space-y-3">
       {items.map((item) => (
-        <ItemView key={item.id} item={item} />
+        <ItemView
+          key={item.id}
+          item={item}
+          onBacktrack={item.kind === "user" && item.id !== firstUserId ? onBacktrack : undefined}
+        />
       ))}
     </div>
   );

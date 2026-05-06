@@ -52,12 +52,18 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
 | GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
 | GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[]}` |
+| GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
+| POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts, or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
+| GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
+| POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — mutates `.seekforge/todos.md`, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range |
+| GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
+| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every configured MCP server (spawned on demand, then disposed). A server that fails or lacks resource support contributes zero entries |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
-| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}`; `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
+| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` (always present, with effective defaults `"off"` / `"mechanical"` / `false` / `null`); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
@@ -77,13 +83,21 @@ All frames are JSON objects with a `type` field.
 ### client → server
 
 ```jsonc
-{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?}
-{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?}  // continue; mode overrides
-                                                                        // the session's own (plan -> execute)
+{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?,
+                   "model": "deepseek-v4-pro"?, "thinking": true?, "reasoningEffort": "high"|"max"?}
+{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?,   // continue; mode overrides
+                   "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
 {"type": "cancel"}                                            // cancel the running session
 ```
+
+`model` / `thinking` / `reasoningEffort` are optional per-run overrides on
+both `start` and `send`: when present they win over the workspace config for
+THAT run only (a fresh agent/provider is assembled per run; nothing is written
+to config). Omitted fields fall back to config. Invalid values (empty model,
+non-boolean thinking, an effort other than `"high"`/`"max"`) →
+`{"type":"error","code":"bad_frame"}`.
 
 `ws` selects the workspace id (default: first workspace when omitted). The run
 executes in that workspace's path; `send` looks the session up in that

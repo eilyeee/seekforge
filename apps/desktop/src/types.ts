@@ -63,6 +63,11 @@ export type ServerConfig = {
   commandAllowlist?: string[];
   /** Masked by the server (`sk-xxx****`). */
   apiKey?: string;
+  /** Engine knobs — always present on GET /api/config (effective defaults). */
+  sandbox?: "off" | "workspace-write" | "restricted";
+  compaction?: "mechanical" | "llm";
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max" | null;
 };
 
 export type ConfigKey = "apiKey" | "model" | "baseUrl" | "runtimeBin" | "commandAllowlist";
@@ -126,3 +131,22 @@ export type RewindResult = {
   deleted: string[];
   skipped: Array<{ path: string; reason: string }>;
 };
+
+/** GET /api/sessions/:id/turns entry — all-user-messages indexing (turn 0 = original task). */
+export type SessionTurn = { turn: number; text: string; backtrackable: boolean };
+
+/** POST /api/sessions/:id/backtrack result (files is null when restore was not requested). */
+export type BacktrackResult = {
+  removedMessages: number;
+  keptMessages: number;
+  files: { restored: number; deleted: number; skipped: number } | null;
+};
+
+/** GET/POST /api/todos entry (.seekforge/todos.md checklist line; 1-based index). */
+export type Todo = { index: number; text: string; done: boolean };
+
+/** GET /api/balance payload (DeepSeek account balance; null = unknown). */
+export type AccountBalance = { currency: string; totalBalance: string };
+
+/** GET /api/mcp/resources entry. Inline reference syntax: @mcp:<server>:<uri>. */
+export type McpResource = { server: string; uri: string; name?: string };

@@ -16,7 +16,7 @@ import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
 import { handleConnection } from "./ws.js";
 
-export type { AgentHandle, CreateAgentFn, CreateAgentOptions } from "./agent.js";
+export type { AgentHandle, CreateAgentFn, CreateAgentOptions, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 

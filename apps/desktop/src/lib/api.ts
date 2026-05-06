@@ -3,9 +3,12 @@ import type { ChatMessage } from "@seekforge/shared";
 import { isMock } from "../mock";
 import { mockRequest } from "../mock/api";
 import type {
+  AccountBalance,
   AgentInfo,
+  BacktrackResult,
   ConfigKey,
   EvolutionProposal,
+  McpResource,
   McpServer,
   McpTool,
   MemoryCandidate,
@@ -13,7 +16,9 @@ import type {
   RewindResult,
   ServerConfig,
   SessionMeta,
+  SessionTurn,
   Skill,
+  Todo,
   Workspace,
 } from "../types";
 
@@ -132,4 +137,18 @@ export const api = {
       sessionId,
       ...(dryRun ? { dryRun: true } : {}),
     }),
+  // `ws` overrides the active workspace where a tab is bound to another one.
+  sessionTurns: (id: string, ws?: string) =>
+    request<SessionTurn[]>("GET", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/turns`, ws)),
+  backtrack: (id: string, turn: number, files: boolean, ws?: string) =>
+    request<BacktrackResult>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/backtrack`, ws), {
+      turn,
+      files,
+    }),
+  todos: () => request<Todo[]>("GET", withWorkspace("/api/todos")),
+  /** Every mutation returns the updated todo list. */
+  todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }) =>
+    request<Todo[]>("POST", withWorkspace("/api/todos"), op),
+  balance: () => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance")),
+  mcpResources: () => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources")),
 };
