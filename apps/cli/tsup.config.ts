@@ -8,7 +8,9 @@ export default defineConfig({
     tui: "../tui/src/index.tsx",
   },
   format: ["esm"],
-  sourcemap: true,
+  // No sourcemaps in the published bundle — they were ~70% of the tarball
+  // and a shipped CLI doesn't need them (dev uses tsx on the sources).
+  sourcemap: false,
   clean: true,
   // Workspace packages don't exist on npm — bundle them into the CLI.
   // Their runtime deps (zod, ink, react) are declared as real dependencies.

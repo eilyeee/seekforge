@@ -19,8 +19,8 @@
   ],
   "type": "module",
   "bin": {
-    "seekforge": "./bin/seekforge.js",
-    "seekforge-tui": "./bin/seekforge-tui.js"
+    "seekforge": "bin/seekforge.js",
+    "seekforge-tui": "bin/seekforge-tui.js"
   },
   "files": [
     "bin",
