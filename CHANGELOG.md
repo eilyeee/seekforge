@@ -26,6 +26,27 @@
   diagnostics-via-tools and permission rules cover the need at lower
   complexity), full i18n of every string (chrome strings only for now).
 
+## 0.7.0 (unreleased) — round 11: desktop parity + design system
+
+- Rich composer: / command palette, @ file picker (new GET /api/files),
+  image paste & drag-drop upload (POST /api/upload → [image #N] markers for
+  image_analyze), per-workspace input history.
+- Worktree parallel sessions (Claude Code desktop-style): a tab can run on
+  an isolated git worktree branch (auto-registered as a workspace); merge
+  back auto-checkpoints dirty work and aborts cleanly on conflicts; discard
+  deletes branch + worktree.
+- Core-capability UI: ↺ backtrack on user bubbles (conversation + optional
+  file restore), todos drawer, per-tab model/thinking/effort controls
+  (per-run WS overrides), sandbox badge, balance chip, MCP resources list,
+  client-side handoff export, session search.
+- Design system: semantic tokens (surface/border/accent/text tiers,
+  whale-blue accent), ui/ primitives (Button/Card/Badge/Input/Modal/…),
+  ⏺/⎿ tool rows, macOS overlay title bar, typography pass — referencing
+  Claude desktop calm + Codex minimalism.
+- Packaging: real DMG built (SeekForge_0.1.0_x64.dmg + updater payload),
+  tauri-plugin-updater wired to GitHub releases; signing keys are the
+  documented user step (apps/desktop/docs/RELEASING.md).
+
 ## 0.7.0 (unreleased) — round 8: release readiness
 
 - `seekforge-tui` now ships inside the published `seekforge` npm package as
