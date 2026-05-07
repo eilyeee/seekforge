@@ -12,7 +12,9 @@ import {
   approveMemoryCandidate,
   createDefaultDispatcher,
   createMcpClient,
+  fetchBalance,
   listEvolutionProposals,
+  listMcpResources,
   listMemoryCandidates,
   listSessions,
   loadAgentDefinitions,
@@ -23,11 +25,15 @@ import {
   readSessionMeta,
   rejectMemoryCandidate,
   rewindSession,
+  rewindSessionToTurn,
   setEvolutionProposalStatus,
+  truncateSessionAtUserTurn,
+  type McpClientEntry,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
 import { listWorkspaceFiles, saveUpload, UploadError } from "./files.js";
 import { WorktreeError, type WorktreeManager } from "./worktrees.js";
+import { addTodo, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export type RestContext = {
@@ -247,6 +253,57 @@ export async function handleApi(
       return sendJson(res, 200, { meta, messages });
     }
 
+    // User-turn index of a session: every role:"user" message in file order,
+    // numbered 0..N-1 — the SAME all-user-messages indexing that
+    // truncateSessionAtUserTurn / rewindSessionToTurn use. Turn 0 (the
+    // original task) is flagged not backtrackable: truncating before it
+    // would empty the conversation.
+    if (method === "GET" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "turns") {
+      const id = segs[2]!;
+      if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
+        return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      }
+      let messages: ReturnType<typeof loadSessionMessages> = [];
+      try {
+        messages = loadSessionMessages(workspace, id);
+      } catch {
+        // no messages.jsonl yet -> zero turns
+      }
+      const turns = messages
+        .filter((m) => m.role === "user")
+        .map((m, turn) => ({ turn, text: m.content, backtrackable: turn > 0 }));
+      return sendJson(res, 200, turns);
+    }
+
+    if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "backtrack") {
+      const id = segs[2]!;
+      if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
+        return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { turn, files } = (body ?? {}) as { turn?: unknown; files?: unknown };
+      if (typeof turn !== "number" || !Number.isInteger(turn)) {
+        return sendApiError(res, 400, "bad_request", "body must be {turn: integer, files?: boolean}");
+      }
+      // Truncating validates the turn index (null = turn 0 / out of range);
+      // file checkpoints are restored only after that validation passed.
+      const truncated = truncateSessionAtUserTurn(workspace, id, turn);
+      if (truncated === null) {
+        return sendApiError(res, 400, "bad_request", `turn ${turn} is not backtrackable (turn 0 or out of range)`);
+      }
+      let filesResult: { restored: number; deleted: number; skipped: number } | null = null;
+      if (files === true) {
+        const r = rewindSessionToTurn(workspace, id, turn);
+        filesResult = { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length };
+      }
+      return sendJson(res, 200, { ...truncated, files: filesResult });
+    }
+
     if (method === "GET" && path === "/api/skills") {
       return sendJson(
         res,
@@ -340,6 +397,64 @@ export async function handleApi(
         }
         // Wrong-state transitions and apply failures (e.g. skill_exists) are conflicts.
         return sendApiError(res, 409, "conflict", message);
+      }
+    }
+
+    // Cross-session todo list (.seekforge/todos.md, TUI-compatible format).
+    if (method === "GET" && path === "/api/todos") {
+      return sendJson(res, 200, loadTodos(workspace));
+    }
+
+    if (method === "POST" && path === "/api/todos") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { op, text, index } = (body ?? {}) as { op?: unknown; text?: unknown; index?: unknown };
+      if (op === "add") {
+        if (typeof text !== "string" || text.trim() === "") {
+          return sendApiError(res, 400, "bad_request", 'op "add" needs a non-empty text');
+        }
+        addTodo(workspace, text.trim());
+      } else if (op === "toggle" || op === "remove") {
+        if (typeof index !== "number" || !Number.isInteger(index)) {
+          return sendApiError(res, 400, "bad_request", `op "${op}" needs an integer index (1-based)`);
+        }
+        const result = op === "toggle" ? toggleTodo(workspace, index) : removeTodo(workspace, index);
+        if (result === null) {
+          return sendApiError(res, 404, "not_found", `no todo at index ${index}`);
+        }
+      } else {
+        return sendApiError(res, 400, "bad_request", 'op must be "add", "toggle" or "remove"');
+      }
+      // Every mutation returns the updated list (what the UI re-renders).
+      return sendJson(res, 200, loadTodos(workspace));
+    }
+
+    // DeepSeek account balance via the server's key. Null-safe by contract:
+    // missing key or any fetch failure -> {balance: null}, never an error.
+    if (method === "GET" && path === "/api/balance") {
+      const config = loadConfig(workspace);
+      const balance = config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
+      return sendJson(res, 200, { balance });
+    }
+
+    // Resources of every configured MCP server (resources/list), spawned on
+    // demand like POST /api/mcp/:name/tools. A server that fails or lacks
+    // resource support contributes zero entries (listMcpResources never throws).
+    if (method === "GET" && path === "/api/mcp/resources") {
+      const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
+      const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
+        serverName,
+        client: createMcpClient({ name: serverName, config }),
+        trusted: config.trusted === true,
+      }));
+      try {
+        return sendJson(res, 200, { resources: await listMcpResources(entries) });
+      } finally {
+        for (const e of entries) e.client.dispose();
       }
     }
 

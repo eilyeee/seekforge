@@ -63,6 +63,12 @@ export type ChatTab = {
   planPending: boolean;
   /** A plan run completed — offer the "Execute plan" button. */
   planReady: boolean;
+  /** Model override sent with each start/send; empty = server config default. */
+  model: string;
+  /** Thinking toggle; null = untouched (server config decides, nothing sent). */
+  thinking: boolean | null;
+  /** Reasoning effort; only sent while thinking is explicitly on. */
+  reasoningEffort: "high" | "max";
 };
 
 export type TabsState = {
@@ -96,6 +102,9 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     autoApprove: false,
     planPending: false,
     planReady: false,
+    model: "",
+    thinking: null,
+    reasoningEffort: "high",
   };
 }
 

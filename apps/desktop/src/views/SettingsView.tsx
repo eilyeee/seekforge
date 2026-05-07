@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { ConfigKey, McpServer, McpTool, ServerConfig } from "../types";
+import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -121,6 +121,82 @@ function McpSection() {
               </div>
             );
           })}
+        </div>
+      )}
+      {servers !== null && servers.length > 0 && <McpResourcesSection />}
+    </div>
+  );
+}
+
+/**
+ * Resources of every configured MCP server (GET /api/mcp/resources, spawned
+ * on demand). Each row has a copy button for the @mcp:<server>:<uri> inline
+ * reference syntax (paste it into a task to pull the resource in).
+ */
+function McpResourcesSection() {
+  const [state, setState] = useState<McpResource[] | { error: string } | "loading" | null>(null);
+  const [copiedUri, setCopiedUri] = useState<string | null>(null);
+
+  const load = () => {
+    setState("loading");
+    api
+      .mcpResources()
+      .then((r) => setState(r.resources))
+      .catch((e: unknown) => setState({ error: String(e) }));
+  };
+
+  const copy = (server: string, uri: string) => {
+    const ref = `@mcp:${server}:${uri}`;
+    void navigator.clipboard.writeText(ref).then(() => {
+      setCopiedUri(`${server}:${uri}`);
+      setTimeout(() => setCopiedUri(null), 2000);
+    });
+  };
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-[10px] uppercase tracking-wider text-zinc-500">mcp resources</h3>
+        <button
+          type="button"
+          disabled={state === "loading"}
+          onClick={load}
+          className="rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+        >
+          {state === "loading" ? "Listing…" : state === null ? "List resources" : "Refresh"}
+        </button>
+      </div>
+      {state !== null && state !== "loading" && (
+        <div className="mt-2">
+          {Array.isArray(state) ? (
+            state.length === 0 ? (
+              <p className="text-xs text-zinc-600">No resources exposed by the configured servers.</p>
+            ) : (
+              <ul className="space-y-1">
+                {state.map((r) => (
+                  <li
+                    key={`${r.server}:${r.uri}`}
+                    className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs"
+                  >
+                    <span className="font-mono text-violet-300">{r.server}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-zinc-300" title={r.uri}>
+                      {r.name ? `${r.name} — ${r.uri}` : r.uri}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => copy(r.server, r.uri)}
+                      title={`copy @mcp:${r.server}:${r.uri}`}
+                      className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+                    >
+                      {copiedUri === `${r.server}:${r.uri}` ? "Copied ✓" : "Copy @mcp:…"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : (
+            <p className="font-mono text-xs text-red-300">{state.error}</p>
+          )}
         </div>
       )}
     </div>

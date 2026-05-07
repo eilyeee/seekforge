@@ -480,3 +480,87 @@ describe("protocol errors", () => {
     expect(err.code).toBe("bad_frame");
   });
 });
+
+describe("per-run model/thinking overrides", () => {
+  /** Factory that records the CreateAgentOptions of every run. */
+  function overridesRecordingFactory(seen: Array<Record<string, unknown> | undefined>): CreateAgentFn {
+    return (opts) => ({
+      agent: {
+        runTask: async function* (input: RunAgentTaskInput) {
+          seen.push(opts.overrides as Record<string, unknown> | undefined);
+          yield { type: "session.created", sessionId: input.resumeSessionId ?? "ovr-1" } as const;
+          yield { type: "session.completed", report: emptyReport() } as const;
+        },
+      },
+      dispose: () => {},
+    });
+  }
+
+  it("start passes model/thinking/reasoningEffort to the agent factory", async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const { server } = await boot(overridesRecordingFactory(seen));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, {
+      type: "start",
+      task: "go",
+      mode: "edit",
+      approvalMode: "auto",
+      model: "deepseek-v4-pro",
+      thinking: true,
+      reasoningEffort: "max",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seen).toEqual([{ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" }]);
+  });
+
+  it("start without overrides leaves them undefined (config wins)", async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const { server } = await boot(overridesRecordingFactory(seen));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seen).toEqual([undefined]);
+  });
+
+  it("send passes overrides too (per-message control on resumed sessions)", async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const workspace = makeWorkspace();
+    writeFileIn(
+      workspace,
+      ".seekforge/sessions/ovr-1/session.json",
+      JSON.stringify({
+        id: "ovr-1",
+        task: "orig",
+        mode: "edit",
+        status: "completed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const { server } = await boot(overridesRecordingFactory(seen), workspace);
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "send", sessionId: "ovr-1", task: "more", thinking: false });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seen).toEqual([{ thinking: false }]);
+  });
+
+  it("rejects invalid override values as bad_frame", async () => {
+    const { server } = await boot(fakeAgentFactory(async function* () {}));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", model: "" });
+    let err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", thinking: "yes" });
+    err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", reasoningEffort: "low" });
+    err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
+  });
+});

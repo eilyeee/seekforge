@@ -7,7 +7,8 @@ import { join } from "node:path";
  * packages/core/tests/mcp/fixture.ts, copied — test trees must not import
  * across packages). A node script speaking newline-delimited JSON-RPC 2.0:
  * - answers the initialize handshake and requires it before anything else,
- * - tools/list → two tools: echo (with a description) and boom.
+ * - tools/list → two tools: echo (with a description) and boom,
+ * - resources/list → two resources (one named, one bare uri).
  */
 const FAKE_MCP_SERVER = `#!/usr/bin/env node
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -34,6 +35,13 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
       { name: "echo", description: "Echoes arguments back." },
       { name: "boom", description: "Always fails." },
+    ] } });
+    return;
+  }
+  if (msg.method === "resources/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { resources: [
+      { uri: "file:///docs/readme.md", name: "readme" },
+      { uri: "file:///docs/plain.txt" },
     ] } });
     return;
   }

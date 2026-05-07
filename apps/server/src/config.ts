@@ -65,6 +65,12 @@ export function maskedConfig(workspace: string): Record<string, unknown> {
   return {
     ...merged,
     apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined,
+    // Engine knobs are always present (with their effective defaults) so the
+    // UI can render the sandbox badge / thinking controls without guessing.
+    sandbox: merged.sandbox ?? "off",
+    compaction: merged.compaction ?? "mechanical",
+    thinking: merged.thinking ?? false,
+    reasoningEffort: merged.reasoningEffort ?? null,
   };
 }
 

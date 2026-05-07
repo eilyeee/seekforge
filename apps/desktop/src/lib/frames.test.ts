@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExecutePlanFrame, buildStartFrame, EXECUTE_PLAN_TASK } from "./frames";
+import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./frames";
 
 describe("buildStartFrame", () => {
   it("plan mode sends mode:ask with the plan flag", () => {
@@ -57,5 +57,54 @@ describe("buildExecutePlanFrame", () => {
   it("carries the tab's workspace id when present", () => {
     expect(buildExecutePlanFrame("s-1", "ws-b")).toMatchObject({ ws: "ws-b" });
     expect(buildExecutePlanFrame("s-1")).not.toHaveProperty("ws");
+  });
+});
+
+describe("overridesOf (header controls -> frame fields)", () => {
+  it("untouched controls produce no fields (server config decides)", () => {
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high" })).toEqual({});
+    expect(overridesOf({ model: "   ", thinking: null, reasoningEffort: "max" })).toEqual({});
+  });
+
+  it("a non-empty model is trimmed and sent", () => {
+    expect(overridesOf({ model: " deepseek-v4-pro ", thinking: null, reasoningEffort: "high" })).toEqual({
+      model: "deepseek-v4-pro",
+    });
+  });
+
+  it("thinking on sends thinking AND the effort; thinking off sends only thinking:false", () => {
+    expect(overridesOf({ model: "", thinking: true, reasoningEffort: "max" })).toEqual({
+      thinking: true,
+      reasoningEffort: "max",
+    });
+    expect(overridesOf({ model: "", thinking: false, reasoningEffort: "max" })).toEqual({
+      thinking: false,
+    });
+  });
+});
+
+describe("frame builders carry per-run overrides", () => {
+  const overrides = { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" } as const;
+
+  it("buildStartFrame spreads overrides into the frame (plan mode too)", () => {
+    expect(buildStartFrame("go", "edit", false, "", overrides)).toMatchObject(overrides);
+    expect(buildStartFrame("go", "plan", false, "ws-a", overrides)).toMatchObject({
+      ...overrides,
+      plan: true,
+      ws: "ws-a",
+    });
+    expect(buildStartFrame("go", "edit", false)).not.toHaveProperty("model");
+  });
+
+  it("buildSendFrame and buildExecutePlanFrame carry overrides per message", () => {
+    expect(buildSendFrame("s-1", "more", "ws-a", overrides)).toEqual({
+      type: "send",
+      sessionId: "s-1",
+      task: "more",
+      ws: "ws-a",
+      ...overrides,
+    });
+    expect(buildSendFrame("s-1", "more")).toEqual({ type: "send", sessionId: "s-1", task: "more" });
+    expect(buildExecutePlanFrame("s-1", "", { thinking: false })).toMatchObject({ thinking: false });
   });
 });

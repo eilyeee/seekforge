@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import type { ChatMessage } from "@seekforge/shared";
 import { api, setTokenProvider, setWorkspaceProvider } from "./lib/api";
+import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
-import { buildExecutePlanFrame, buildStartFrame, EXECUTE_PLAN_TASK } from "./lib/frames";
+import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./lib/frames";
 import { messagesToItems } from "./lib/messages";
 import { notify, requestNotifyPermission } from "./lib/notify";
 import {
@@ -52,6 +53,10 @@ type AppStore = {
   /** Switches the active workspace (new tabs + views follow it). */
   setActiveWorkspace: (id: string) => void;
 
+  /** Whether the todos drawer is open (global, not per-tab). */
+  todosOpen: boolean;
+  toggleTodos: () => void;
+
   setView: (view: View) => void;
   /** Ensures the active tab has a (re)connecting WS client. */
   connect: () => void;
@@ -77,6 +82,15 @@ type AppStore = {
   setActiveTab: (tabId: string) => void;
   setMode: (mode: StartMode) => void;
   setAutoApprove: (on: boolean) => void;
+  /** Chat-header run controls (per tab, sent with each start/send). */
+  setModel: (model: string) => void;
+  setThinking: (on: boolean) => void;
+  setReasoningEffort: (effort: "high" | "max") => void;
+  /**
+   * Drops the given user item and everything after it from the active tab's
+   * transcript (after a successful POST backtrack on the server).
+   */
+  truncateAtItem: (itemId: number) => void;
   sendTask: (task: string) => void;
   executePlan: () => void;
   cancel: () => void;
@@ -228,23 +242,44 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setAutoApprove: (on) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { autoApprove: on }) })),
 
+    setModel: (model) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { model }) })),
+
+    setThinking: (on) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { thinking: on }) })),
+
+    setReasoningEffort: (effort) =>
+      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { reasoningEffort: effort }) })),
+
+    todosOpen: false,
+    toggleTodos: () => set((s) => ({ todosOpen: !s.todosOpen })),
+
+    truncateAtItem: (itemId) =>
+      set((s) => ({
+        tabs: updateTab(s.tabs, s.tabs.activeTabId, (tab) => ({
+          chat: truncateChatAtItem(tab.chat, itemId),
+          planPending: false,
+          planReady: false,
+          wsError: null,
+        })),
+      })),
+
     sendTask: (task) => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || task.trim() === "") return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
 
+      const overrides = overridesOf(tab);
       const patch: Partial<ChatTab> = {
         chat: { ...appendUser(tab.chat, task), running: true },
         wsError: null,
         planReady: false,
       };
       if (tab.chat.sessionId) {
-        client.send({ type: "send", sessionId: tab.chat.sessionId, task, ...(tab.ws ? { ws: tab.ws } : {}) });
+        client.send(buildSendFrame(tab.chat.sessionId, task, tab.ws, overrides));
       } else {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
-        client.send(buildStartFrame(task, tab.mode, tab.autoApprove, tab.ws));
+        client.send(buildStartFrame(task, tab.mode, tab.autoApprove, tab.ws, overrides));
       }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
     },
@@ -254,7 +289,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || !tab.chat.sessionId || !tab.planReady) return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws));
+      client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws, overridesOf(tab)));
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...appendUser(tab.chat, EXECUTE_PLAN_TASK), running: true },

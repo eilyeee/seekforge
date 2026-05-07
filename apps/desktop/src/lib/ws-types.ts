@@ -2,8 +2,15 @@
 import type { PermissionRequest } from "@seekforge/shared";
 import type { StreamEvent } from "./events";
 
+/** Per-run model/thinking overrides (win over server config for that run only). */
+export type RunOverrides = {
+  model?: string;
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max";
+};
+
 export type ClientFrame =
-  | {
+  | ({
       type: "start";
       task: string;
       mode: "edit" | "ask";
@@ -11,8 +18,8 @@ export type ClientFrame =
       plan?: boolean;
       /** Workspace id (default: first workspace when omitted). */
       ws?: string;
-    }
-  | { type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string }
+    } & RunOverrides)
+  | ({ type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string } & RunOverrides)
   | { type: "permission.response"; requestId: string; approved: boolean }
   | { type: "question.answer"; id: string; answer: string }
   | { type: "cancel" };
