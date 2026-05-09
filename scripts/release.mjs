@@ -72,9 +72,12 @@ function writeVersion(target, version) {
   const text = readFileSync(file, "utf8");
   if (target.kind === "json") {
     // Minimal-diff rewrite: replace only the top-level "version" string.
-    const replaced = text.replace(/("version"\s*:\s*)"[^"]*"/, `$1"${version}"`);
-    if (replaced === text) fail(`could not find a "version" field in ${target.path}`);
-    writeFileSync(file, replaced);
+    // Guard on the pattern MATCHING, not on the text changing — a file
+    // already at the target version is a valid no-op, not a missing field.
+    const re = /("version"\s*:\s*)"[^"]*"/;
+    if (!re.test(text)) fail(`could not find a "version" field in ${target.path}`);
+    const replaced = text.replace(re, `$1"${version}"`);
+    if (replaced !== text) writeFileSync(file, replaced);
     return;
   }
   // cargo: replace the [package] version line only.
