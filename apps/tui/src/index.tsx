@@ -11,6 +11,7 @@ import { setAccent } from "./components/Header.js";
 import { parseTuiArgs, TUI_HELP } from "./cli-args.js";
 import { needsOnboarding, saveGlobalApiKey } from "./onboarding.js";
 import { Onboarding } from "./components/Onboarding.js";
+import { checkForUpdate, formatUpdateNotice } from "../../cli/src/version-check.js";
 
 /** First-run wizard: collect the API key, save it globally, return it. */
 async function runOnboarding(): Promise<string | null> {
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
     // header simply omits the version
   }
 
-  const { waitUntilExit } = render(
+  const appTree = (extra?: { updateNotice?: string }): React.ReactElement => (
     <App
       config={config}
       projectPath={projectPath}
@@ -94,8 +95,20 @@ async function main(): Promise<void> {
       mcpEntries={mcp.entries}
       {...(continueSessionId ? { initialSessionId: continueSessionId } : {})}
       {...(version ? { version } : {})}
-    />,
+      {...(extra?.updateNotice ? { updateNotice: extra.updateNotice } : {})}
+    />
   );
+
+  const { waitUntilExit, rerender } = render(appTree());
+
+  // Non-blocking npm update check: never delays render; re-renders with a dim
+  // notice if a newer version is found (mostly instant via the 24h cache).
+  if (version) {
+    const v = version;
+    void checkForUpdate(v).then((latest) => {
+      if (latest) rerender(appTree({ updateNotice: formatUpdateNotice(latest, v) }));
+    });
+  }
   try {
     await waitUntilExit();
   } finally {

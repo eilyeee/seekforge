@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
+import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
 import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { completionCommand } from "./commands/completion.js";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
@@ -374,4 +375,13 @@ program
     await replCommand({ yes: opts.yes, model: opts.model });
   });
 
-program.parseAsync();
+// Non-blocking update check: fire-and-forget at start, print the notice (to
+// stderr, so it never pollutes stdout) after the command finishes. Skipped for
+// --json / non-TTY output so machine consumers are unaffected.
+const quietUpdate = process.argv.includes("--json") || !process.stderr.isTTY;
+const updatePromise = quietUpdate ? Promise.resolve(null) : checkForUpdate(version);
+
+program.parseAsync().finally(async () => {
+  const latest = await updatePromise;
+  if (latest) process.stderr.write(`${formatUpdateNotice(latest, version)}\n`);
+});
