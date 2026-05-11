@@ -127,6 +127,13 @@ export type ChatState = {
   turnStartedAt?: number;
   /** Live token count for the current turn (from usage.updated events). */
   turnTokens: number;
+  /**
+   * Transient provider-retry indicator (provider.retry events). Shown in the
+   * status bar while the provider backs off; cleared automatically on the next
+   * successful provider response (usage.updated) or when the run ends, so it
+   * never lingers and never spams the transcript.
+   */
+  retryStatus?: { attempt: number; maxAttempts: number; delayMs: number; reason: string };
 };
 
 export function emptyUsage(): TokenUsage {
@@ -273,7 +280,14 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "run-start":
-      return { ...state, running: true, scrollOffset: 0, turnStartedAt: Date.now(), turnTokens: 0 };
+      return {
+        ...state,
+        running: true,
+        scrollOffset: 0,
+        turnStartedAt: Date.now(),
+        turnTokens: 0,
+        retryStatus: undefined,
+      };
 
     case "run-end": {
       // Close any open streaming assistant/thinking items. Background tasks
@@ -283,7 +297,7 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
         if (it.kind === "thinking" && it.streaming) return { ...it, streaming: false, endedAt: Date.now() };
         return it;
       });
-      return { ...state, running: false, items };
+      return { ...state, running: false, items, retryStatus: undefined };
     }
 
     case "set-model":
@@ -504,10 +518,29 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         ],
       };
 
+    case "provider.retry":
+      // Transient status only (no transcript row): the provider is backing off
+      // before retrying a 429/5xx/network blip. Cleared by the next successful
+      // provider response (usage.updated) or run end.
+      return {
+        ...state,
+        retryStatus: {
+          attempt: e.attempt,
+          maxAttempts: e.maxAttempts,
+          delayMs: e.delayMs,
+          reason: e.reason,
+        },
+      };
+
     case "usage.updated":
       // Cumulative cost is taken from session.completed (avoid double
-      // counting); the in-turn number drives the live activity counter.
-      return { ...state, turnTokens: e.usage.promptTokens + e.usage.completionTokens };
+      // counting); the in-turn number drives the live activity counter. A
+      // successful provider response also clears any pending retry indicator.
+      return {
+        ...state,
+        turnTokens: e.usage.promptTokens + e.usage.completionTokens,
+        retryStatus: undefined,
+      };
 
     case "session.completed":
       return {
@@ -527,19 +560,29 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       return { ...state, items: next };
     }
 
-    case "session.failed":
+    case "session.failed": {
+      const hint = e.error.hint ? `\n  → ${e.error.hint}` : "";
+      // A genuine, recoverable failure (not a user cancel): tell the user the
+      // exact resume command. The session id comes from the error (set by the
+      // loop) or, failing that, the session id we already track.
+      const resumeId = e.error.recoverable ? (e.error.sessionId ?? state.sessionId) : undefined;
+      const recover = resumeId
+        ? `\n  → resume with /resume ${resumeId} (your file changes and completed steps are preserved; checkpoints intact)`
+        : "";
       return {
         ...state,
+        retryStatus: undefined,
         items: [
           ...state.items,
           {
             kind: "notice",
             id: nextId("n"),
             tone: "error",
-            text: `failed: ${e.error.code} — ${e.error.message}${(e.error as { hint?: string }).hint ? `\n  → ${(e.error as { hint?: string }).hint}` : ""}`,
+            text: `failed: ${e.error.code} — ${e.error.message}${hint}${recover}`,
           },
         ],
       };
+    }
 
     default:
       return state; // command.output / step.completed: silent for now

@@ -160,6 +160,16 @@ export type AgentError = {
   message: string;
   /** Actionable recovery hint (core agent/errors.ts taxonomy). Additive. */
   hint?: string;
+  /**
+   * A genuine mid-task failure the user can recover from by resuming the
+   * session (file changes + completed steps + checkpoints are preserved).
+   * False/absent for user-cancelled runs, which need no recovery guidance.
+   * Frontends pair this with the session id to show a "/resume <id>" hint.
+   * Additive (round 8).
+   */
+  recoverable?: boolean;
+  /** Session id to resume when recoverable. Set by the loop on failure. */
+  sessionId?: string;
 };
 
 export type FinalReport = {
@@ -182,6 +192,13 @@ export type AgentEvent =
   /** Micro-compaction: old tool outputs were blanked to save context. */
   | { type: "context.microcompacted"; clearedResults: number }
   | { type: "context.usage"; usedTokens: number; budgetTokens: number; percent: number }
+  /**
+   * The provider is retrying a transient API failure (429/5xx/network) with
+   * backoff. Transient/progress-only: frontends should show a clearing status
+   * indicator, NOT a permanent transcript row. Fires once per retry attempt,
+   * right before the backoff sleep.
+   */
+  | { type: "provider.retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
   | { type: "usage.updated"; usage: TokenUsage }
   | { type: "file.changed"; path: string }
   | { type: "command.output"; stream: "stdout" | "stderr"; chunk: string }

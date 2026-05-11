@@ -168,6 +168,51 @@ describe("reasoning + new event forwarding", () => {
     expect(events).toContainEqual({ type: "command.output", stream: "stdout", chunk: "line 1\n" });
     expect(events).toContainEqual({ type: "context.microcompacted", clearedResults: 3 });
   });
+
+  it("forwards provider.retry events verbatim (generic forwarder)", async () => {
+    const { server } = await boot(
+      fakeAgentFactory(async function* () {
+        yield { type: "session.created", sessionId: "retry-1" };
+        yield { type: "provider.retry", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "rate limited" };
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+
+    const events = rx.frames.filter((f) => f.type === "event").map((f) => f.event);
+    expect(events).toContainEqual({
+      type: "provider.retry",
+      attempt: 2,
+      maxAttempts: 3,
+      delayMs: 1000,
+      reason: "rate limited",
+    });
+  });
+
+  it("forwards session.failed with recoverable + sessionId for resume guidance", async () => {
+    const { server } = await boot(
+      fakeAgentFactory(async function* () {
+        yield { type: "session.created", sessionId: "fail-1" };
+        yield {
+          type: "session.failed",
+          error: { code: "rate_limit", message: "boom", hint: "wait", recoverable: true, sessionId: "fail-1" },
+        };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+
+    const events = rx.frames.filter((f) => f.type === "event").map((f) => f.event);
+    expect(events).toContainEqual({
+      type: "session.failed",
+      error: { code: "rate_limit", message: "boom", hint: "wait", recoverable: true, sessionId: "fail-1" },
+    });
+  });
 });
 
 describe("question bridge (ask_user)", () => {

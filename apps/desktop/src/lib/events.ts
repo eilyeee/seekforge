@@ -47,6 +47,9 @@ export type ChatItem =
 /** Latest context-window occupancy (context.usage event). */
 export type ContextUsage = { usedTokens: number; budgetTokens: number; percent: number };
 
+/** Transient provider-retry indicator (provider.retry events). */
+export type RetryStatus = { attempt: number; maxAttempts: number; delayMs: number; reason: string };
+
 export type ChatState = {
   items: ChatItem[];
   sessionId: string | null;
@@ -55,11 +58,26 @@ export type ChatState = {
   usage: TokenUsage;
   /** Latest context.usage event; null until the first turn reports it. */
   contextUsage: ContextUsage | null;
+  /**
+   * Transient provider-retry status while the provider backs off; null
+   * otherwise. Cleared on the next successful provider response
+   * (usage.updated) or when the run ends. Rendered as a small inline notice,
+   * never as a permanent transcript row.
+   */
+  retry: RetryStatus | null;
   nextId: number;
 };
 
 export function initialChatState(): ChatState {
-  return { items: [], sessionId: null, running: false, usage: emptyUsage(), contextUsage: null, nextId: 1 };
+  return {
+    items: [],
+    sessionId: null,
+    running: false,
+    usage: emptyUsage(),
+    contextUsage: null,
+    retry: null,
+    nextId: 1,
+  };
 }
 
 /** Distributive Omit so each union member loses `id` individually. */
@@ -237,14 +255,31 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         contextUsage: { usedTokens: ev.usedTokens, budgetTokens: ev.budgetTokens, percent: ev.percent },
       };
 
+    // Transient retry indicator (no chat row): the footer renders it while the
+    // provider backs off; the next successful turn (usage.updated) clears it.
+    case "provider.retry":
+      return {
+        ...state,
+        retry: {
+          attempt: ev.attempt,
+          maxAttempts: ev.maxAttempts,
+          delayMs: ev.delayMs,
+          reason: ev.reason,
+        },
+      };
+
+    case "usage.updated":
+      // A successful provider response clears any pending retry indicator.
+      return state.retry ? { ...state, retry: null } : state;
+
     case "session.completed": {
       const next = push(state, { kind: "report", report: ev.report });
-      return { ...next, usage: addUsage(state.usage, ev.report.usage), running: false };
+      return { ...next, usage: addUsage(state.usage, ev.report.usage), running: false, retry: null };
     }
 
     case "session.failed": {
       const next = push(state, { kind: "failed", error: ev.error });
-      return { ...next, running: false };
+      return { ...next, running: false, retry: null };
     }
 
     // permission.required is delivered via the dedicated permission.request

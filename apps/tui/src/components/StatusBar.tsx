@@ -23,6 +23,8 @@ type StatusBarProps = {
   turnStartedAt?: number;
   /** Live token count this turn. */
   turnTokens?: number;
+  /** Transient provider-retry indicator (set while the provider backs off). */
+  retryStatus?: { attempt: number; maxAttempts: number; delayMs: number; reason: string };
 };
 
 /** 1 Hz tick while running, so the elapsed counter advances. */
@@ -56,6 +58,12 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
         <Text color={ACCENT}>
           <Spinner type="dots" /> {t("status.working")} {elapsed > 0 ? `${elapsed}s ` : ""}
           {props.turnTokens && props.turnTokens > 0 ? `· ↓${kfmt(props.turnTokens)} tok ` : ""}
+          {props.retryStatus ? (
+            <Text dimColor>
+              · ⟳ retrying ({props.retryStatus.attempt}/{props.retryStatus.maxAttempts}) in{" "}
+              {(props.retryStatus.delayMs / 1000).toFixed(1)}s — {props.retryStatus.reason}{" "}
+            </Text>
+          ) : null}
           <Text dimColor>· {t("status.interrupt")}</Text>
         </Text>
       ) : (

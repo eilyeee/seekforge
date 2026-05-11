@@ -2069,6 +2069,7 @@ export function App({
           detachedRuns={state.detached.length}
           {...(state.turnStartedAt !== undefined ? { turnStartedAt: state.turnStartedAt } : {})}
           turnTokens={state.turnTokens}
+          {...(state.retryStatus ? { retryStatus: state.retryStatus } : {})}
         />
         {state.overlay?.kind === "palette" ? <Palette commands={paletteCommands} index={state.overlay.index} /> : null}
         {state.overlay?.kind === "files" ? (
