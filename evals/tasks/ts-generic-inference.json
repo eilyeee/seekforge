@@ -1,0 +1,14 @@
+{
+  "id": "ts-generic-inference",
+  "title": "Fix a generic-inference TypeScript error across two files",
+  "fixture": "ts-generic-inference",
+  "mode": "edit",
+  "task": "`npm test` runs tsc and fails with a type error in src/app.ts, but the root cause is the generic signature of `mapValues` in src/store.ts: its mapper is typed `(value: U) => U`, which breaks inference so callers in app.ts that map values to a different type get an error. Fix the generics in src/store.ts so the mapper receives the input value type and returns the output type (and inference flows to app.ts). Do not change the runtime logic and do not weaken types with `any`. Run `npm test` to confirm tsc is clean.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/store.ts", "pattern": "fn: \\(value: V\\) => U" },
+    { "type": "file_not_contains", "path": "src/app.ts", "pattern": ": any" },
+    { "type": "file_not_contains", "path": "src/store.ts", "pattern": ": any" }
+  ],
+  "notes": "tsc shells out to the version-pinned typescript@5.7.3 via npx (cached after first run), matching ts-typing-fix, so the fixture installs nothing. The file_contains pins the corrected signature; the any guards stop type-hole shortcuts."
+}

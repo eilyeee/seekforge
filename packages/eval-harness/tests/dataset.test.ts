@@ -9,21 +9,33 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the fourteen expected tasks", () => {
+  it("contains the twenty-six expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
+      "ambiguous-dedup",
+      "api-version-migration",
       "ask-codebase",
+      "async-race-fix",
       "cross-module-bug",
       "deprecated-api-migration",
       "error-handling",
+      "error-path-typed",
       "failing-test-fix",
+      "feature-edge-cases",
+      "fix-without-regression",
       "json-config-edit",
+      "large-context-nav",
+      "multi-file-extract-helper",
       "off-by-one-fix",
       "perf-nested-loop",
+      "pipeline-transform-bug",
+      "regression-guard",
       "rename-across-files",
+      "schema-migration",
       "spec-to-feature",
       "title-change",
+      "ts-generic-inference",
       "ts-typing-fix",
     ]);
   });
