@@ -1,0 +1,15 @@
+{
+  "id": "schema-migration",
+  "title": "Migrate a nested JSON config to a new schema",
+  "fixture": "schema-migration",
+  "mode": "edit",
+  "task": "Migrate config/settings.json from schema v1 to v2 with these changes: set schemaVersion to 2; rename timeoutSeconds to timeout and convert its value to milliseconds (multiply by 1000); and convert the endpoints ARRAY into an OBJECT keyed by each endpoint's name, where each value is { path, retry: { max } } — i.e. drop the redundant name field and move retries into a nested retry.max. Preserve all other fields exactly (e.g. service) and keep the file valid JSON. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    {
+      "type": "command_succeeds",
+      "command": "node -e \"const c=require('./config/settings.json'); const ok = c.schemaVersion===2 && c.service==='billing' && c.timeout===30000 && !('timeoutSeconds' in c) && !Array.isArray(c.endpoints) && c.endpoints.create.path==='/v1/create' && c.endpoints.create.retry.max===3 && c.endpoints.status.retry.max===0; process.exit(ok?0:1)\""
+    }
+  ],
+  "notes": "The node -e check deep-validates the migrated shape independently of the test file, so a test rewrite cannot fake the pass; nested key renames and the array-to-object reshape are the hard parts."
+}

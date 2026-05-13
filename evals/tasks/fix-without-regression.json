@@ -1,0 +1,13 @@
+{
+  "id": "fix-without-regression",
+  "title": "Fix a case without regressing an existing one",
+  "fixture": "fix-without-regression",
+  "mode": "edit",
+  "task": "`joinNames` in src/joinNames.js should join names into an Oxford-comma phrase: [] -> \"\", [\"a\"] -> \"a\", [\"a\",\"b\"] -> \"a and b\", [\"a\",\"b\",\"c\"] -> \"a, b, and c\", [\"a\",\"b\",\"c\",\"d\"] -> \"a, b, c, and d\". The three-or-more case is currently wrong (plain comma join, no Oxford comma). Fix it so ALL cases pass — note the two-name case must keep its \"a and b\" form, which a naive rewrite focused only on 3+ tends to break. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "test/joinNames.test.js", "pattern": "two names use 'and' with no comma" },
+    { "type": "file_contains", "path": "test/joinNames.test.js", "pattern": "Oxford comma before 'and'" }
+  ],
+  "notes": "Two pre-existing tests pull in opposite directions: a naive Oxford fix that forgets the two-name special case regresses it, and the original two-name code fails the 3+ case. Only a fix that satisfies both passes. Test pins block rewriting either assertion."
+}

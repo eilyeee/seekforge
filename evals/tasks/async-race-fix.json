@@ -1,0 +1,14 @@
+{
+  "id": "async-race-fix",
+  "title": "Fix a missing await that corrupts async results",
+  "fixture": "async-race-fix",
+  "mode": "edit",
+  "task": "`npm test` fails: `processAll` in src/queue.js is supposed to return an array of resolved numbers but it pushes un-awaited Promises into the results array, so callers get pending Promises instead of values. Fix the actual async bug (await each result) while keeping the in-order, sequential behavior and the return shape (a plain array of resolved numbers). Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/queue.js", "pattern": "await" },
+    { "type": "file_not_contains", "path": "src/queue.js", "pattern": "const doubled = doubleAsync\\(value\\);" },
+    { "type": "file_contains", "path": "test/queue.test.js", "pattern": "not pending Promises" }
+  ],
+  "notes": "The bug is deterministic (no real timing race), but the fix must be a real await rather than e.g. resolving the promises in the test. file_not_contains removes the buggy push; the test pin blocks rewriting the assertion."
+}
