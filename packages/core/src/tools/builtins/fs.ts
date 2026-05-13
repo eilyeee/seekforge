@@ -20,6 +20,112 @@ const MAX_LIST_ENTRIES = 500;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_SEARCHABLE_FILE_BYTES = 1_000_000;
 
+// Edit-review preview: cap the rendered diff so a huge rewrite cannot bloat the
+// permission prompt. Beyond this the diff is truncated with a marker line.
+const MAX_PREVIEW_DIFF_LINES = 400;
+
+// ---------------------------------------------------------------------------
+// Edit-review preview (write tools)
+// ---------------------------------------------------------------------------
+
+/** Split into lines, dropping the empty tail produced by a trailing newline. */
+function splitDiffLines(text: string): string[] {
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/**
+ * Minimal pure unified diff (LCS over lines) of `before` → `after`. Self-contained
+ * (no core diff util exists) so the preview can be computed at classify time with
+ * no I/O beyond reading the current file. `null` before = file creation. Output is
+ * capped at MAX_PREVIEW_DIFF_LINES with a truncation marker.
+ */
+function unifiedDiff(before: string | null, after: string, relPath: string): string {
+  const a = splitDiffLines(before ?? "");
+  const b = splitDiffLines(after);
+  const header = `--- a/${relPath}\n+++ b/${relPath}`;
+
+  const n = a.length;
+  const m = b.length;
+  // LCS table; guard pathological sizes by falling back to del-all/add-all.
+  const body: string[] = [];
+  if (n > 4000 || m > 4000) {
+    body.push(`@@ -${n > 0 ? 1 : 0},${n} +${m > 0 ? 1 : 0},${m} @@`);
+    for (const line of a) body.push(`-${line}`);
+    for (const line of b) body.push(`+${line}`);
+  } else {
+    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) {
+        body.push(` ${a[i]}`);
+        i++;
+        j++;
+      } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+        body.push(`-${a[i]}`);
+        i++;
+      } else {
+        body.push(`+${b[j]}`);
+        j++;
+      }
+    }
+    while (i < n) body.push(`-${a[i++]}`);
+    while (j < m) body.push(`+${b[j++]}`);
+    body.unshift(`@@ -${n > 0 ? 1 : 0},${n} +${m > 0 ? 1 : 0},${m} @@`);
+  }
+
+  let lines = body;
+  if (lines.length > MAX_PREVIEW_DIFF_LINES) {
+    const hidden = lines.length - MAX_PREVIEW_DIFF_LINES;
+    lines = [...lines.slice(0, MAX_PREVIEW_DIFF_LINES), `@@ … ${hidden} more lines truncated @@`];
+  }
+  return `${header}\n${lines.join("\n")}`;
+}
+
+/**
+ * Reads the current content of a workspace file for diff previews at classify
+ * time. Returns null when the file does not exist (creation) or cannot be read.
+ * Never throws — preview is best-effort and must never block the write path.
+ *
+ * Synchronous local read only: classify is sync, so a runtime-backed session
+ * (where the file lives behind an async call) simply gets no preview, which the
+ * frontends handle by falling back to the plain allow/deny prompt.
+ */
+function readCurrentForPreview(ctx: ToolContext, relPath: string): string | null {
+  try {
+    if (ctx.runtime) return null;
+    const resolved = resolveForRead(ctx.workspace, relPath);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return null;
+    return fs.readFileSync(resolved, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort write-tool preview; returns undefined on any failure. */
+function buildPreview(
+  ctx: ToolContext,
+  relPath: string,
+  computeAfter: (before: string | null) => string,
+): { path: string; diff: string } | undefined {
+  try {
+    const before = readCurrentForPreview(ctx, relPath);
+    const after = computeAfter(before);
+    if (before === after) return undefined;
+    return { path: relPath, diff: unifiedDiff(before, after, relPath) };
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // list_files
 // ---------------------------------------------------------------------------
@@ -284,11 +390,15 @@ const writeFile = defineTool({
   description:
     "Write content as the COMPLETE file at path (parent directories are created). Whole-file replacement: use only for new files or intentional full rewrites — use apply_patch for any edit to an existing file. Fails if the file already exists unless overwrite is true.",
   schema: writeFileSchema,
-  classify: (args) => ({
-    permission: "write",
-    description: `Write file ${args.path} (${args.content.length} chars)`,
-    path: args.path,
-  }),
+  classify: (args, ctx) => {
+    const preview = buildPreview(ctx, args.path, () => args.content);
+    return {
+      permission: "write",
+      description: `Write file ${args.path} (${args.content.length} chars)`,
+      path: args.path,
+      ...(preview ? { preview } : {}),
+    };
+  },
   async run(args, ctx) {
     if (ctx.runtime) {
       if (ctx.checkpoint) {
@@ -338,11 +448,19 @@ const applyPatch = defineTool({
   description:
     "Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Each oldString must be copied verbatim from the CURRENT file content (your latest read) and match exactly once. If a patch fails, re-read the file before retrying; prefer several small targeted edits over one large one.",
   schema: applyPatchSchema,
-  classify: (args) => ({
-    permission: "write",
-    description: `Apply ${args.edits.length} edit(s) to ${args.path}`,
-    path: args.path,
-  }),
+  classify: (args, ctx) => {
+    // applyEdits throws on no_match/ambiguous; buildPreview swallows it and the
+    // preview is simply omitted — the real run will surface the same error.
+    const preview = buildPreview(ctx, args.path, (before) =>
+      applyEdits(before ?? "", args.edits),
+    );
+    return {
+      permission: "write",
+      description: `Apply ${args.edits.length} edit(s) to ${args.path}`,
+      path: args.path,
+      ...(preview ? { preview } : {}),
+    };
+  },
   async run(args, ctx) {
     if (ctx.runtime) {
       if (ctx.checkpoint) {

@@ -3,6 +3,7 @@ import type { PermissionRequest } from "@seekforge/shared";
 import { Badge, type BadgeTone } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
+import { DiffBlock } from "../DiffBlock";
 
 const PERMISSION_TONE: Record<string, BadgeTone> = {
   readonly: "neutral",
@@ -21,7 +22,11 @@ type Props = {
  * Permission prompt. SECURITY: always shows the raw command / path verbatim
  * in monospace — never only the model's paraphrase (prompt-injection defense,
  * see AGENTS.md). Dismissing (Escape / backdrop) counts as deny.
- * Keyboard: y = allow, n = deny (TUI parity).
+ * Keyboard: y = allow/accept, n = deny/reject (TUI parity).
+ *
+ * Edit-review: when `request.preview` is present (write tools) the modal renders
+ * the proposed diff with Accept / Reject buttons (Reject → onRespond(false) =
+ * no write). Non-preview requests keep the plain allow/deny modal.
  */
 export function PermissionModal({ request, onRespond }: Props) {
   useEffect(() => {
@@ -35,6 +40,38 @@ export function PermissionModal({ request, onRespond }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onRespond]);
+
+  const preview = request.preview;
+  if (preview) {
+    return (
+      <Modal
+        wide
+        onDismiss={() => onRespond(false)}
+        title={
+          <>
+            <span>Review change: {preview.path}</span>
+            <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
+            <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
+          </>
+        }
+        footer={
+          <>
+            <Button onClick={() => onRespond(false)}>
+              Reject
+              <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
+            </Button>
+            <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
+              Accept
+              <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-secondary">{request.description}</p>
+        <DiffBlock diff={preview.diff} />
+      </Modal>
+    );
+  }
 
   return (
     <Modal

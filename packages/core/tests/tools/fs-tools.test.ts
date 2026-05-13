@@ -112,3 +112,116 @@ describe("read_file", () => {
     expect(res.error?.code).toBe("sensitive_path");
   });
 });
+
+describe("edit-review preview (write tools)", () => {
+  // Capture the PermissionRequest the dispatcher hands to confirm(): set
+  // approvalMode "confirm" so write tools prompt, and approve so the write
+  // still happens. This exercises the full classify → confirmWithUser seam.
+  async function captureRequest(
+    ws: string,
+    name: string,
+    args: unknown,
+  ): Promise<{ ok: boolean; preview?: { path: string; diff: string } }> {
+    let preview: { path: string; diff: string } | undefined;
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm" },
+      confirm: async (req) => {
+        preview = req.preview;
+        return true;
+      },
+    });
+    const res = await dispatcher.execute(call(name, args), ctx);
+    return { ok: res.ok, preview };
+  }
+
+  it("write_file attaches a current→proposed diff when overwriting", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "line1\nline2\n");
+    const { ok, preview } = await captureRequest(ws, "write_file", {
+      path: "a.txt",
+      content: "line1\nCHANGED\n",
+      overwrite: true,
+    });
+    expect(ok).toBe(true);
+    expect(preview?.path).toBe("a.txt");
+    expect(preview?.diff).toContain("--- a/a.txt");
+    expect(preview?.diff).toContain("+++ b/a.txt");
+    expect(preview?.diff).toContain("-line2");
+    expect(preview?.diff).toContain("+CHANGED");
+    expect(preview?.diff).toContain(" line1"); // unchanged context line
+  });
+
+  it("write_file diff treats a new file as a creation (no current content)", async () => {
+    const ws = makeWorkspace();
+    const { ok, preview } = await captureRequest(ws, "write_file", {
+      path: "new.txt",
+      content: "hello\nworld\n",
+    });
+    expect(ok).toBe(true);
+    expect(preview?.diff).toContain("+hello");
+    expect(preview?.diff).toContain("+world");
+    // No deletion body lines (the "--- a/" header line is metadata, not a del).
+    const delBody = preview!.diff.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---"));
+    expect(delBody).toHaveLength(0);
+  });
+
+  it("apply_patch attaches a diff of the applied edits", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "alpha\nbeta\ngamma\n");
+    const { ok, preview } = await captureRequest(ws, "apply_patch", {
+      path: "a.txt",
+      edits: [{ oldString: "beta", newString: "BETA" }],
+    });
+    expect(ok).toBe(true);
+    expect(preview?.path).toBe("a.txt");
+    expect(preview?.diff).toContain("-beta");
+    expect(preview?.diff).toContain("+BETA");
+  });
+
+  it("omits the preview when apply_patch targets a missing file (graceful)", async () => {
+    const ws = makeWorkspace();
+    let sawRequest = false;
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm" },
+      confirm: async (req) => {
+        sawRequest = true;
+        expect(req.preview).toBeUndefined();
+        return true;
+      },
+    });
+    const res = await dispatcher.execute(
+      call("apply_patch", { path: "missing.txt", edits: [{ oldString: "x", newString: "y" }] }),
+      ctx,
+    );
+    expect(sawRequest).toBe(true);
+    // The run itself then fails because the file does not exist.
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("not_found");
+  });
+
+  it("omits the preview when an apply_patch edit does not match (graceful)", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "alpha\n");
+    const { preview } = await captureRequest(ws, "apply_patch", {
+      path: "a.txt",
+      edits: [{ oldString: "does-not-exist", newString: "z" }],
+    });
+    expect(preview).toBeUndefined();
+  });
+
+  it("truncates very large diffs with a marker", async () => {
+    const ws = makeWorkspace();
+    const big = Array.from({ length: 1000 }, (_, i) => `old-${i}`).join("\n") + "\n";
+    fs.writeFileSync(path.join(ws, "big.txt"), big);
+    const next = Array.from({ length: 1000 }, (_, i) => `new-${i}`).join("\n") + "\n";
+    const { preview } = await captureRequest(ws, "write_file", {
+      path: "big.txt",
+      content: next,
+      overwrite: true,
+    });
+    expect(preview).toBeDefined();
+    expect(preview?.diff).toContain("more lines truncated");
+    // Body capped at 400 lines + header(2) + marker; comfortably under 2000.
+    expect(preview!.diff.split("\n").length).toBeLessThan(420);
+  });
+});
