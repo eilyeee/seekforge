@@ -25,6 +25,29 @@
     --sf-danger: 248 113 113; /* red-400 */
   }
 
+  /*
+   * Light theme — same semantic tokens, warm-neutral paper surfaces with the
+   * whale blue darkened so it stays legible as text/accent on white. Applied
+   * via <html data-theme="light"> (ThemeSwitcher; "system" resolves to this
+   * when prefers-color-scheme: light).
+   */
+  :root[data-theme="light"] {
+    --sf-surface: 250 250 251; /* #fafafb app background */
+    --sf-surface-raised: 255 255 255; /* #ffffff cards, sidebar */
+    --sf-surface-overlay: 240 241 244; /* #f0f1f4 hover, popovers */
+    --sf-border-subtle: 226 228 233; /* #e2e4e9 */
+    --sf-border-strong: 200 203 211; /* #c8cbd3 */
+    --sf-accent: 40 110 230; /* #286ee6 whale blue (darker for white bg) */
+    --sf-accent-hover: 30 92 200; /* #1e5cc8 */
+    --sf-accent-muted: 220 232 252; /* #dce8fc tinted background */
+    --sf-text-primary: 24 26 32; /* #181a20 */
+    --sf-text-secondary: 82 86 96; /* #525660 */
+    --sf-text-tertiary: 130 134 144; /* #828690 */
+    --sf-ok: 5 150 105; /* emerald-600 */
+    --sf-warn: 217 119 6; /* amber-600 */
+    --sf-danger: 220 38 38; /* red-600 */
+  }
+
   html,
   body,
   #root {
@@ -41,10 +64,11 @@
     height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    @apply rounded-full bg-zinc-700/80;
+    background-color: rgb(var(--sf-border-strong) / 0.8);
+    border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-zinc-600;
+    background-color: rgb(var(--sf-border-strong));
   }
   ::-webkit-scrollbar-track {
     @apply bg-transparent;
