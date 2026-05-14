@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
 import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { completionCommand } from "./commands/completion.js";
@@ -13,9 +13,11 @@ import {
   evolveRejectCommand,
   evolveShowCommand,
 } from "./commands/evolve.js";
+import { doctorCommand } from "./commands/doctor.js";
 import { initCommand } from "./commands/init.js";
-import { mcpListCommand } from "./commands/mcp.js";
+import { mcpAddCommand, mcpListCommand, mcpRemoveCommand } from "./commands/mcp.js";
 import { mcpServeCommand } from "./commands/mcp-serve.js";
+import { printCommand } from "./commands/print.js";
 import {
   memoryAddCommand,
   memoryApproveCommand,
@@ -27,7 +29,9 @@ import {
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { runTaskCommand } from "./commands/run.js";
+import { resolveOutputFormat } from "./output-format.js";
 import { serveCommand } from "./commands/serve.js";
+import { updateCommand } from "./commands/update.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
 import {
   skillCreateCommand,
@@ -43,31 +47,113 @@ const program = new Command();
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
+/** commander collector for repeatable options (e.g. --add-dir). */
+const collect = (val: string, prev: string[]): string[] => [...prev, val];
+
+/** Parse a positive-integer option string; throws InvalidArgumentError on bad input. */
+function parsePositiveInt(val: string): number {
+  const n = Number.parseInt(val, 10);
+  if (Number.isNaN(n) || n <= 0) throw new InvalidArgumentError("must be a positive integer");
+  return n;
+}
+
+/** Resolve --output-format / --json, printing a clean error and exiting on bad input. */
+function resolveOutputFormatOrExit(opts: { outputFormat?: string; json?: boolean }) {
+  try {
+    return resolveOutputFormat(opts);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
 program
   .name("seekforge")
   .description("A local-first coding agent powered by DeepSeek.")
+  // Required for `mcp add`'s passThroughOptions (literal command flags).
+  .enablePositionalOptions()
   .version(version);
+
+// Top-level headless print mode: `seekforge -p "<prompt>"` (also reads piped
+// stdin). Routes to the print handler before the default `chat` command would
+// open an interactive session. Common run flags are accepted here too.
+program
+  .option("-p, --print [prompt]", "headless single run: stream the result to stdout and exit (reads piped stdin)")
+  .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
+  .option("-y, --yes", "with -p: auto-approve write/execute permissions")
+  .option("-m, --model <model>", "with -p: override model")
+  .option("--output-format <fmt>", "with -p: text | json | stream-json")
+  .option("--json", "with -p: alias for --output-format stream-json")
+  .option("-c, --continue", "with -p: resume the most recent session")
+  .option("--resume <id>", "with -p: resume a specific session")
+  .option("--add-dir <path>", "with -p: extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--max-turns <n>", "with -p: cap agent turns", parsePositiveInt)
+  .option("--verbose", "with -p: print full tool args and results");
+
+type SharedRunOpts = {
+  yes?: boolean;
+  model?: string;
+  json?: boolean;
+  outputFormat?: string;
+  continue?: boolean;
+  resume?: string;
+  addDir?: string[];
+  maxTurns?: number;
+  verbose?: boolean;
+};
 
 program
   .command("run")
   .argument("<task>", "development task to perform (@path tokens inline file contents)")
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
   .option("-m, --model <model>", "override model (deepseek-chat | deepseek-reasoner)")
-  .option("--json", "emit one JSON event per line (CI mode; prompts are denied, pair with -y)")
-  .option("-p, --plan", "plan first (read-only), confirm, then execute in the same session")
+  .option("--output-format <fmt>", "text | json (final object) | stream-json (one event/line)")
+  .option("--json", "alias for --output-format stream-json (CI mode; prompts denied, pair with -y)")
+  .option("-c, --continue", "resume the most recent session")
+  .option("--resume <id>", "resume a specific session (see `seekforge sessions`)")
+  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
+  .option("--verbose", "print full tool args and results")
+  .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
-  .action(async (task: string, opts: { yes?: boolean; model?: string; json?: boolean; plan?: boolean }) => {
-    await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, json: opts.json, plan: opts.plan });
+  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
+    await runTaskCommand(task, {
+      mode: "edit",
+      yes: opts.yes,
+      model: opts.model,
+      outputFormat: resolveOutputFormatOrExit(opts),
+      continueLast: opts.continue,
+      resumeSessionId: opts.resume,
+      addDirs: opts.addDir,
+      maxTurns: opts.maxTurns,
+      verbose: opts.verbose,
+      plan: opts.plan,
+    });
   });
 
 program
   .command("ask")
   .argument("<question>", "question about the current project (@path tokens inline file contents)")
   .option("-m, --model <model>", "override model")
-  .option("--json", "emit one JSON event per line (CI mode)")
+  .option("--output-format <fmt>", "text | json (final object) | stream-json (one event/line)")
+  .option("--json", "alias for --output-format stream-json (CI mode)")
+  .option("-c, --continue", "resume the most recent session")
+  .option("--resume <id>", "resume a specific session")
+  .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
+  .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
+  .option("--verbose", "print full tool args and results")
   .description("read-only Q&A about the codebase (no writes, no commands)")
-  .action(async (question: string, opts: { model?: string; json?: boolean }) => {
-    await runTaskCommand(question, { mode: "ask", model: opts.model, json: opts.json });
+  .action(async (question: string, opts: SharedRunOpts) => {
+    await runTaskCommand(question, {
+      mode: "ask",
+      model: opts.model,
+      outputFormat: resolveOutputFormatOrExit(opts),
+      continueLast: opts.continue,
+      resumeSessionId: opts.resume,
+      addDirs: opts.addDir,
+      maxTurns: opts.maxTurns,
+      verbose: opts.verbose,
+    });
   });
 
 program
@@ -82,6 +168,21 @@ program
   .description("show current git diff")
   .action(() => {
     spawn("git", ["diff"], { stdio: "inherit" });
+  });
+
+program
+  .command("doctor")
+  .description("run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard)")
+  .action(() => {
+    doctorCommand();
+  });
+
+program
+  .command("update")
+  .alias("upgrade")
+  .description("check npm for a newer seekforge and print the install command")
+  .action(async () => {
+    await updateCommand();
   });
 
 const sessions = program
@@ -235,6 +336,28 @@ mcp
   .action(async (opts: { tools?: boolean }) => {
     await mcpListCommand(opts);
   });
+mcp
+  .command("add")
+  .argument("<name>", "server name (key under mcpServers)")
+  .argument("<command...>", "command to spawn, then its args (e.g. npx -y @scope/server .)")
+  .option("-g, --global", "write to ~/.seekforge/config.json instead of the project")
+  // Treat everything after <name> literally so flags like `-y` belong to the
+  // spawned command, not to seekforge. Put -g before the command, e.g.
+  //   seekforge mcp add -g fs npx -y @scope/server .
+  .passThroughOptions()
+  .description("add a stdio MCP server to config")
+  .action((name: string, command: string[], opts: { global?: boolean }) => {
+    mcpAddCommand(name, command, opts);
+  });
+mcp
+  .command("remove")
+  .alias("rm")
+  .argument("<name>", "server name to remove")
+  .option("-g, --global", "edit ~/.seekforge/config.json instead of the project")
+  .description("remove an MCP server from config")
+  .action((name: string, opts: { global?: boolean }) => {
+    mcpRemoveCommand(name, opts);
+  });
 
 program
   .command("mcp-serve")
@@ -370,15 +493,50 @@ program
   .command("chat", { isDefault: true })
   .option("-y, --yes", "auto-approve write/execute permissions")
   .option("-m, --model <model>", "model for the session")
-  .description("interactive session (default when no command is given)")
+  .description("interactive session (default when no command is given; `-p` for headless print mode)")
   .action(async (opts: { yes?: boolean; model?: string }) => {
+    // `seekforge -p "…"` (or piped stdin) takes precedence over interactive chat.
+    const root = program.opts<{
+      print?: string | boolean;
+      ask?: boolean;
+      yes?: boolean;
+      model?: string;
+      outputFormat?: string;
+      json?: boolean;
+      continue?: boolean;
+      resume?: string;
+      addDir?: string[];
+      maxTurns?: number;
+      verbose?: boolean;
+    }>();
+    if (root.print !== undefined) {
+      const inline = typeof root.print === "string" ? root.print : undefined;
+      await printCommand(inline, {
+        ask: root.ask,
+        yes: root.yes ?? opts.yes,
+        model: root.model ?? opts.model,
+        outputFormat: root.outputFormat,
+        json: root.json,
+        continueLast: root.continue,
+        resume: root.resume,
+        addDir: root.addDir,
+        maxTurns: root.maxTurns !== undefined ? String(root.maxTurns) : undefined,
+        verbose: root.verbose,
+      });
+      return;
+    }
     await replCommand({ yes: opts.yes, model: opts.model });
   });
 
 // Non-blocking update check: fire-and-forget at start, print the notice (to
 // stderr, so it never pollutes stdout) after the command finishes. Skipped for
 // --json / non-TTY output so machine consumers are unaffected.
-const quietUpdate = process.argv.includes("--json") || !process.stderr.isTTY;
+const quietUpdate =
+  process.argv.includes("--json") ||
+  process.argv.includes("--output-format") ||
+  process.argv.includes("-p") ||
+  process.argv.includes("--print") ||
+  !process.stderr.isTTY;
 const updatePromise = quietUpdate ? Promise.resolve(null) : checkForUpdate(version);
 
 program.parseAsync().finally(async () => {
