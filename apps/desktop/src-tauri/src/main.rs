@@ -17,6 +17,7 @@ struct ServerState(Mutex<Option<ServeChild>>);
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ServerState(Mutex::new(None)))
         .setup(|app| {
