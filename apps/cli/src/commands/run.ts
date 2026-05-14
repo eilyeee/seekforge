@@ -1,25 +1,37 @@
 import { createInterface } from "node:readline/promises";
-import { loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
-import type { ApprovalMode } from "@seekforge/shared";
+import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import type { ApprovalMode, FinalReport } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
+import { buildJsonResult, isMachineFormat, type OutputFormat } from "../output-format.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
+import { expandExtraFileRefs, normalizeExtraDir } from "../workspace-dirs.js";
 
 export type RunOptions = {
   mode: "ask" | "edit";
   yes?: boolean;
   model?: string;
   resumeSessionId?: string;
-  /** Emit one JSON event per line instead of human-readable output. */
-  json?: boolean;
+  /** Resume the most recent session (`-c`/`--continue`). */
+  continueLast?: boolean;
+  /** Output format: text (human) | json (final object) | stream-json (JSONL). */
+  outputFormat?: OutputFormat;
   /** Plan first (read-only), then ask before executing in the same session. */
   plan?: boolean;
+  /** Extra read-only roots whose @path references resolve. */
+  addDirs?: string[];
+  /** Cap on agent turns (limits.maxAgentTurns). */
+  maxTurns?: number;
+  /** Verbose tool args/results in text mode. */
+  verbose?: boolean;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
+  const format: OutputFormat = opts.outputFormat ?? "text";
+  const machine = isMachineFormat(format);
 
   const model = opts.model ?? config.model;
   if (model === "deepseek-reasoner") {
@@ -42,15 +54,35 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     return;
   }
 
+  // Resolve which session (if any) to resume: explicit --resume wins over -c.
+  let resumeSessionId = opts.resumeSessionId;
+  if (!resumeSessionId && opts.continueLast) {
+    const recent = listSessions(projectPath)[0];
+    if (!recent) {
+      console.error("No previous session to continue. Run a task first.");
+      process.exitCode = 1;
+      return;
+    }
+    resumeSessionId = recent.id;
+  }
+
   let mode = opts.mode;
-  if (opts.resumeSessionId) {
-    const meta = readSessionMeta(projectPath, opts.resumeSessionId);
+  if (resumeSessionId) {
+    const meta = readSessionMeta(projectPath, resumeSessionId);
     if (!meta) {
-      console.error(`Session "${opts.resumeSessionId}" not found. See \`seekforge sessions\`.`);
+      console.error(`Session "${resumeSessionId}" not found. See \`seekforge sessions\`.`);
       process.exitCode = 1;
       return;
     }
     mode = meta.mode; // a resumed session keeps its original ask/edit mode
+  }
+
+  // Normalize --add-dir roots (existing dirs outside the project); warn & skip bad ones.
+  const extraDirs: string[] = [];
+  for (const raw of opts.addDirs ?? []) {
+    const abs = normalizeExtraDir(raw, projectPath);
+    if (abs) extraDirs.push(abs);
+    else console.error(`warning: --add-dir "${raw}" skipped (not an existing dir outside the project)`);
   }
 
   // Ctrl+C: first press cancels cooperatively (session marked cancelled,
@@ -63,24 +95,35 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   };
   process.on("SIGINT", onSigint);
 
-  // JSON mode: machine-readable JSONL events, no streaming/colors, and no
-  // interactive prompts — anything that would ask is denied (pair with -y).
-  // Reasoning deltas are also suppressed (they are a stdout stream, not events).
-  const json = opts.json ?? false;
-  const renderer = json ? undefined : createRenderer({ streaming: true });
-  const render = renderer ? renderer.render : (e: unknown) => console.log(JSON.stringify(e));
+  // Machine formats (json/stream-json): no streaming/colors, and no interactive
+  // prompts — anything that would ask is denied (pair with -y). Reasoning
+  // deltas are also suppressed (they are a stdout stream, not events).
+  const renderer = machine ? undefined : createRenderer({ streaming: true, verbose: opts.verbose });
+  // stream-json emits one AgentEvent per line; json buffers the final report.
+  const render =
+    format === "stream-json"
+      ? (e: unknown) => console.log(JSON.stringify(e))
+      : renderer
+        ? renderer.render
+        : () => {}; // json: swallow events, emit one final object at the end
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
   const mcp = await prepareMcp(config);
   const { agent, dispose } = createCliAgent({
     config,
     model,
     mcpToolSpecs: mcp.specs,
-    confirm: json ? async () => false : confirmInTerminal,
+    confirm: machine ? async () => false : confirmInTerminal,
     onModelDelta: renderer?.modelDelta,
     onReasoningDelta: renderer?.reasoningDelta,
     extractMemory: mode === "edit",
     subagents: loadAgentDefinitions(projectPath),
+    ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
   });
+
+  // @-references resolve against the workspace first, then any extra dirs.
+  const expand = (t: string): string => expandExtraFileRefs(expandFileRefs(t, projectPath), extraDirs);
+
+  let finalReport: FinalReport | undefined;
 
   const runOnce = async (input: {
     task: string;
@@ -101,20 +144,25 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     })) {
       render(event);
       if (event.type === "session.created") sessionId = event.sessionId;
-      if (event.type === "session.completed") completed = true;
+      if (event.type === "session.completed") {
+        completed = true;
+        finalReport = event.report;
+      }
     }
     return { sessionId, completed };
   };
 
+  const emitJsonResult = (sessionId: string | undefined): void => {
+    if (format === "json" && finalReport) {
+      console.log(JSON.stringify(buildJsonResult(finalReport, sessionId), null, 2));
+    }
+  };
+
   try {
-    if (opts.plan && !json) {
-      // Plan mode: read-only investigation first, then execute on approval
-      // in the SAME session (the loop rebuilds the system prompt for edit).
-      const planRun = await runOnce({
-        task: expandFileRefs(task, projectPath),
-        mode: "ask",
-        plan: true,
-      });
+    // Plan mode requires interactive confirmation, so only the human text
+    // format supports it (machine formats run straight through).
+    if (opts.plan && !machine) {
+      const planRun = await runOnce({ task: expand(task), mode: "ask", plan: true });
       if (!planRun.completed || !planRun.sessionId) {
         process.exitCode = 1;
         return;
@@ -139,11 +187,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       return;
     }
 
-    const run = await runOnce({
-      task: expandFileRefs(task, projectPath),
-      mode,
-      resumeSessionId: opts.resumeSessionId,
-    });
+    const run = await runOnce({ task: expand(task), mode, resumeSessionId });
+    emitJsonResult(run.sessionId);
     if (!run.completed) process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
