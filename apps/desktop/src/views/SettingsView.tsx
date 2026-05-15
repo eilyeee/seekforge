@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
+import { Badge, Button, Card, Input, TextArea } from "../components/ui";
 import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -26,14 +27,9 @@ function useFieldSave() {
 
 function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={state === "saving"}
-      className="shrink-0 rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-    >
+    <Button variant="ghost" size="md" onClick={onClick} disabled={state === "saving"} className="shrink-0">
       {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Failed ✗" : "Save"}
-    </button>
+    </Button>
   );
 }
 
@@ -47,6 +43,7 @@ function McpSection() {
 
   useEffect(() => {
     setServers(null);
+    setLoadError(null);
     setTools({});
     api
       .mcp()
@@ -64,63 +61,54 @@ function McpSection() {
 
   return (
     <div>
-      <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">mcp servers</h2>
+      <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">mcp servers</h2>
       {loadError && (
-        <div className="mb-3 rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">{loadError}</div>
+        <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{loadError}</div>
       )}
       {servers === null ? (
-        <p className="text-sm text-zinc-600">Loading…</p>
+        !loadError && <p className="text-sm text-tertiary">Loading…</p>
       ) : servers.length === 0 ? (
-        <p className="text-sm text-zinc-600">No MCP servers configured.</p>
+        <p className="text-sm text-tertiary">No MCP servers configured.</p>
       ) : (
         <div className="space-y-3">
           {servers.map((srv) => {
             const state = tools[srv.name];
             return (
-              <div key={srv.name} className="rounded border border-zinc-800 bg-zinc-900/60 p-3">
+              <Card key={srv.name} flush className="bg-surface-raised/60 p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm text-zinc-100">{srv.name}</span>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
-                      srv.trusted ? "bg-emerald-900 text-emerald-200" : "bg-zinc-800 text-zinc-400"
-                    }`}
-                  >
-                    {srv.trusted ? "trusted" : "untrusted"}
-                  </span>
-                  {srv.envKeys !== undefined && (
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
-                      env: {srv.envKeys.length}
-                    </span>
-                  )}
-                  <button
-                    type="button"
+                  <span className="font-mono text-sm text-primary">{srv.name}</span>
+                  <Badge tone={srv.trusted ? "ok" : "neutral"}>{srv.trusted ? "trusted" : "untrusted"}</Badge>
+                  {srv.envKeys !== undefined && <Badge tone="neutral">env: {srv.envKeys.length}</Badge>}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
                     disabled={state === "loading"}
                     onClick={() => listTools(srv.name)}
-                    className="ml-auto rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {state === "loading" ? "Listing…" : "List tools"}
-                  </button>
+                  </Button>
                 </div>
-                <div className="mt-1.5 font-mono text-xs text-zinc-500">
+                <div className="mt-1.5 font-mono text-xs text-tertiary">
                   {srv.command} {srv.args.join(" ")}
                 </div>
                 {state !== undefined && state !== "loading" && (
-                  <div className="mt-2 border-t border-zinc-800 pt-2">
+                  <div className="mt-2 border-t border-subtle pt-2">
                     {Array.isArray(state) ? (
                       <ul className="space-y-1">
                         {state.map((tool) => (
                           <li key={tool.name} className="text-xs">
-                            <span className="font-mono text-emerald-300">{tool.name}</span>
-                            <span className="ml-2 text-zinc-400">{tool.description}</span>
+                            <span className="font-mono text-accent">{tool.name}</span>
+                            <span className="ml-2 text-secondary">{tool.description}</span>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="font-mono text-xs text-red-300">{state.error}</p>
+                      <p className="font-mono text-xs text-danger">{state.error}</p>
                     )}
                   </div>
                 )}
-              </div>
+              </Card>
             );
           })}
         </div>
@@ -158,46 +146,42 @@ function McpResourcesSection() {
   return (
     <div className="mt-4">
       <div className="flex items-center gap-2">
-        <h3 className="text-[10px] uppercase tracking-wider text-zinc-500">mcp resources</h3>
-        <button
-          type="button"
-          disabled={state === "loading"}
-          onClick={load}
-          className="rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-        >
+        <h3 className="text-[10px] uppercase tracking-wider text-tertiary">mcp resources</h3>
+        <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={load}>
           {state === "loading" ? "Listing…" : state === null ? "List resources" : "Refresh"}
-        </button>
+        </Button>
       </div>
       {state !== null && state !== "loading" && (
         <div className="mt-2">
           {Array.isArray(state) ? (
             state.length === 0 ? (
-              <p className="text-xs text-zinc-600">No resources exposed by the configured servers.</p>
+              <p className="text-xs text-tertiary">No resources exposed by the configured servers.</p>
             ) : (
               <ul className="space-y-1">
                 {state.map((r) => (
                   <li
                     key={`${r.server}:${r.uri}`}
-                    className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs"
+                    className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised/60 px-2 py-1 text-xs"
                   >
-                    <span className="font-mono text-violet-300">{r.server}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-zinc-300" title={r.uri}>
+                    <span className="font-mono text-accent">{r.server}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-secondary" title={r.uri}>
                       {r.name ? `${r.name} — ${r.uri}` : r.uri}
                     </span>
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
                       onClick={() => copy(r.server, r.uri)}
                       title={`copy @mcp:${r.server}:${r.uri}`}
-                      className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
                     >
                       {copiedUri === `${r.server}:${r.uri}` ? "Copied ✓" : "Copy @mcp:…"}
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>
             )
           ) : (
-            <p className="font-mono text-xs text-red-300">{state.error}</p>
+            <p className="font-mono text-xs text-danger">{state.error}</p>
           )}
         </div>
       )}
@@ -211,15 +195,15 @@ function PreferencesSection() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">appearance</h2>
+        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">appearance</h2>
         <div className="flex items-center gap-3">
           <ThemeSwitcher />
-          <span className="text-[11px] text-zinc-600">Dark, light, or follow your system.</span>
+          <span className="text-[11px] text-tertiary">Dark, light, or follow your system.</span>
         </div>
       </div>
       <div>
-        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">notifications</h2>
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
+        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">notifications</h2>
+        <label className="flex items-center gap-2 text-xs text-secondary">
           <input
             type="checkbox"
             checked={notify}
@@ -227,7 +211,7 @@ function PreferencesSection() {
               setNotify(e.target.checked);
               setNotificationsEnabled(e.target.checked);
             }}
-            className="accent-emerald-600"
+            className="accent-accent"
           />
           Notify on permission requests (when unfocused) and finished tasks
         </label>
@@ -236,12 +220,11 @@ function PreferencesSection() {
   );
 }
 
-const FIELD_LABEL = "mb-1 block text-[10px] uppercase tracking-wider text-zinc-500";
-const FIELD_INPUT =
-  "w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none";
+const FIELD_LABEL = "mb-1 block text-[10px] uppercase tracking-wider text-tertiary";
 
 export function SettingsView() {
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [global, setGlobal] = useState(false);
   const { states, save } = useFieldSave();
 
@@ -254,6 +237,8 @@ export function SettingsView() {
   const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setError(null);
+    setLoading(true);
     api
       .config()
       .then((config) => {
@@ -263,122 +248,133 @@ export function SettingsView() {
         setAllowlist((config.commandAllowlist ?? []).join(", "));
         setApiKeyMask(config.apiKey ?? "");
       })
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => setLoading(false));
   }, [ws]);
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-zinc-800 px-4 py-2">
-        <h1 className="text-sm font-semibold text-zinc-100">Settings</h1>
+      <header className="border-b border-subtle px-4 py-2">
+        <h1 className="text-sm font-semibold text-primary">Settings</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
-        {error && <div className="mb-3 rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">{error}</div>}
-        <div className="max-w-xl space-y-5">
-          <label className="flex items-center gap-2 text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={global}
-              onChange={(e) => setGlobal(e.target.checked)}
-              className="accent-emerald-600"
-            />
-            Save to global config (~/.seekforge) instead of this project
-          </label>
-
-          <PreferencesSection />
-
-          <div>
-            <label className={FIELD_LABEL}>model</label>
-            <div className="flex gap-2">
-              <select value={model} onChange={(e) => setModel(e.target.value)} className={FIELD_INPUT}>
-                <option value="deepseek-chat">deepseek-chat</option>
-                <option value="deepseek-reasoner" disabled>
-                  deepseek-reasoner (no tool calling yet)
-                </option>
-              </select>
-              <SaveButton state={states.model ?? "idle"} onClick={() => void save("model", model, global)} />
-            </div>
-            <p className="mt-1 text-[11px] text-zinc-600">
-              deepseek-reasoner is disabled: it does not support tool calling yet.
-            </p>
-          </div>
-
-          <div>
-            <label className={FIELD_LABEL}>baseUrl</label>
-            <div className="flex gap-2">
+        {error && (
+          <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</div>
+        )}
+        {loading && !error ? (
+          <p className="text-tertiary">Loading…</p>
+        ) : (
+          <div className="max-w-xl space-y-5">
+            <label className="flex items-center gap-2 text-xs text-secondary">
               <input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://api.deepseek.com"
-                className={FIELD_INPUT}
+                type="checkbox"
+                checked={global}
+                onChange={(e) => setGlobal(e.target.checked)}
+                className="accent-accent"
               />
-              <SaveButton state={states.baseUrl ?? "idle"} onClick={() => void save("baseUrl", baseUrl, global)} />
-            </div>
-          </div>
+              Save to global config (~/.seekforge) instead of this project
+            </label>
 
-          <div>
-            <label className={FIELD_LABEL}>runtimeBin</label>
-            <div className="flex gap-2">
-              <input
-                value={runtimeBin}
-                onChange={(e) => setRuntimeBin(e.target.value)}
-                placeholder="/path/to/seekforge-runtime (optional)"
-                className={FIELD_INPUT}
-              />
-              <SaveButton
-                state={states.runtimeBin ?? "idle"}
-                onClick={() => void save("runtimeBin", runtimeBin, global)}
-              />
-            </div>
-          </div>
+            <PreferencesSection />
 
-          <div>
-            <label className={FIELD_LABEL}>commandAllowlist (comma-separated prefixes)</label>
-            <div className="flex gap-2">
-              <textarea
-                value={allowlist}
-                onChange={(e) => setAllowlist(e.target.value)}
-                placeholder="pnpm test, pnpm typecheck, git status"
-                rows={3}
-                className={`${FIELD_INPUT} resize-y`}
-              />
-              <SaveButton
-                state={states.commandAllowlist ?? "idle"}
-                onClick={() => void save("commandAllowlist", allowlist, global)}
-              />
+            <div>
+              <label className={FIELD_LABEL}>model</label>
+              <div className="flex gap-2">
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                >
+                  <option value="deepseek-chat">deepseek-chat</option>
+                  <option value="deepseek-reasoner" disabled>
+                    deepseek-reasoner (no tool calling yet)
+                  </option>
+                </select>
+                <SaveButton state={states.model ?? "idle"} onClick={() => void save("model", model, global)} />
+              </div>
+              <p className="mt-1 text-[11px] text-tertiary">
+                deepseek-reasoner is disabled: it does not support tool calling yet.
+              </p>
             </div>
-          </div>
 
-          <div>
-            <label className={FIELD_LABEL}>apiKey</label>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={apiKeyMask || "sk-…"}
-                autoComplete="off"
-                className={FIELD_INPUT}
-              />
-              <SaveButton
-                state={states.apiKey ?? "idle"}
-                onClick={() => {
-                  if (apiKey.trim() === "") return;
-                  void save("apiKey", apiKey, global).then((config) => {
-                    if (config) {
-                      setApiKey("");
-                      setApiKeyMask(config.apiKey ?? "");
-                    }
-                  });
-                }}
-              />
+            <div>
+              <label className={FIELD_LABEL}>baseUrl</label>
+              <div className="flex gap-2">
+                <Input
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://api.deepseek.com"
+                  className="font-mono"
+                />
+                <SaveButton state={states.baseUrl ?? "idle"} onClick={() => void save("baseUrl", baseUrl, global)} />
+              </div>
             </div>
-            <p className="mt-1 text-[11px] text-zinc-600">
-              Shown masked. Type a new key and press Save to replace it.
-            </p>
-          </div>
 
-          <McpSection />
-        </div>
+            <div>
+              <label className={FIELD_LABEL}>runtimeBin</label>
+              <div className="flex gap-2">
+                <Input
+                  value={runtimeBin}
+                  onChange={(e) => setRuntimeBin(e.target.value)}
+                  placeholder="/path/to/seekforge-runtime (optional)"
+                  className="font-mono"
+                />
+                <SaveButton
+                  state={states.runtimeBin ?? "idle"}
+                  onClick={() => void save("runtimeBin", runtimeBin, global)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={FIELD_LABEL}>commandAllowlist (comma-separated prefixes)</label>
+              <div className="flex gap-2">
+                <TextArea
+                  value={allowlist}
+                  onChange={(e) => setAllowlist(e.target.value)}
+                  placeholder="pnpm test, pnpm typecheck, git status"
+                  rows={3}
+                  className="resize-y font-mono"
+                />
+                <SaveButton
+                  state={states.commandAllowlist ?? "idle"}
+                  onClick={() => void save("commandAllowlist", allowlist, global)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={FIELD_LABEL}>apiKey</label>
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={apiKeyMask || "sk-…"}
+                  autoComplete="off"
+                  className="font-mono"
+                />
+                <SaveButton
+                  state={states.apiKey ?? "idle"}
+                  onClick={() => {
+                    if (apiKey.trim() === "") return;
+                    void save("apiKey", apiKey, global).then((config) => {
+                      if (config) {
+                        setApiKey("");
+                        setApiKeyMask(config.apiKey ?? "");
+                      }
+                    });
+                  }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-tertiary">
+                Shown masked. Type a new key and press Save to replace it.
+              </p>
+            </div>
+
+            <McpSection />
+          </div>
+        )}
       </div>
     </div>
   );
