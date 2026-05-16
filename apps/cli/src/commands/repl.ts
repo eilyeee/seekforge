@@ -2,13 +2,10 @@ import { createInterface, type Interface } from "node:readline/promises";
 import { addMemoryFact, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
+import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
-
-const DIM = "\x1b[2m";
-const YELLOW = "\x1b[33m";
-const RESET = "\x1b[0m";
 
 const HELP = `
 Slash commands:
@@ -38,7 +35,7 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 /** Permission prompt sharing the REPL's readline (no competing stdin readers). */
 function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean> {
   return async (req) => {
-    console.log(`\n${YELLOW}Permission required${RESET} [${req.permission}] ${req.toolName}`);
+    console.log(`\n${yellow("Permission required")} [${req.permission}] ${req.toolName}`);
     if (req.command) console.log(`  command: ${req.command}`);
     if (req.path) console.log(`  path:    ${req.path}`);
     if (!req.command && !req.path) console.log(`  ${req.description}`);
@@ -50,7 +47,7 @@ function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean
 /** ask_user channel over the REPL's readline: numbered options, pick by index. */
 function makeAskUser(rl: Interface): (q: { question: string; options: string[] }) => Promise<string> {
   return async (q) => {
-    console.log(`\n${YELLOW}Question${RESET} ${q.question}`);
+    console.log(`\n${yellow("Question")} ${q.question}`);
     q.options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
     const answer = (await rl.question(`answer [1-${q.options.length}]: `)).trim();
     const n = Number.parseInt(answer, 10);
@@ -63,10 +60,9 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
   if (!config.apiKey) {
-    console.error(
-      "No DeepSeek API key found. Set DEEPSEEK_API_KEY or run: seekforge config set apiKey <key> --global",
-    );
-    process.exitCode = 1;
+    fail("no DeepSeek API key found", {
+      hint: "set DEEPSEEK_API_KEY or run: seekforge config set apiKey <key> --global",
+    });
     return;
   }
 
@@ -78,8 +74,8 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   let lastContext: { usedTokens: number; budgetTokens: number; percent: number } | undefined;
   const renderer = createRenderer({ streaming: true });
 
-  console.log(`SeekForge — interactive session  ${DIM}(${model}, ${projectPath})${RESET}`);
-  console.log(`${DIM}Type a task, or /help for commands. Ctrl+C cancels a running task.${RESET}\n`);
+  console.log(`SeekForge — interactive session  ${dim(`(${model}, ${projectPath})`)}`);
+  console.log(`${dim("Type a task, or /help for commands. Ctrl+C cancels a running task.")}\n`);
 
   const runOnce = async (task: string, runOpts?: { mode?: "ask" | "edit"; plan?: boolean }): Promise<void> => {
     const { agent, dispose } = createCliAgent({
@@ -248,7 +244,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
             console.log("context: no turn run yet this REPL");
           }
           console.log(
-            `${DIM}When usage exceeds the budget, older turns are compacted into a short digest automatically.${RESET}`,
+            dim("When usage exceeds the budget, older turns are compacted into a short digest automatically."),
           );
           break;
         }
