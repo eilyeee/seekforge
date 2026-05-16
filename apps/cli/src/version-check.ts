@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { dim, useColor } from "./colors.js";
 
 const REGISTRY_URL = "https://registry.npmjs.org/seekforge/latest";
 const PACKAGE_NAME = "seekforge";
@@ -133,9 +134,12 @@ async function fetchLatest(): Promise<string | null> {
   }
 }
 
-/** One dim line, e.g. "↑ seekforge 0.8.0 available (you have 0.7.0) — npm i -g seekforge". */
+/**
+ * One dim line, e.g. "↑ seekforge 0.8.0 available (you have 0.7.0) — npm i -g
+ * seekforge". The notice prints to stderr; dim it only when stderr is a TTY and
+ * NO_COLOR is unset (it is suppressed entirely in machine modes upstream).
+ */
 export function formatUpdateNotice(latest: string, current: string): string {
-  const DIM = "\x1b[2m";
-  const RESET = "\x1b[0m";
-  return `${DIM}↑ ${PACKAGE_NAME} ${latest} available (you have ${current}) — npm i -g ${PACKAGE_NAME}${RESET}`;
+  const enabled = useColor({ isTTY: Boolean(process.stderr.isTTY) });
+  return dim(`↑ ${PACKAGE_NAME} ${latest} available (you have ${current}) — npm i -g ${PACKAGE_NAME}`, enabled);
 }

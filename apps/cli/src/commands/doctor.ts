@@ -7,12 +7,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { dim, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
-
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
 
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fixHint?: string };
 
@@ -132,9 +128,9 @@ export function formatDoctorLines(checks: DoctorCheck[]): string[] {
   const width = Math.max(0, ...checks.map((c) => c.name.length));
   const lines: string[] = [];
   for (const c of checks) {
-    const mark = c.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+    const mark = c.ok ? green("✓") : red("✗");
     lines.push(`${mark} ${c.name.padEnd(width)}  ${c.detail}`);
-    if (!c.ok && c.fixHint) lines.push(`  ${" ".repeat(width)}  ${DIM}→ fix: ${c.fixHint}${RESET}`);
+    if (!c.ok && c.fixHint) lines.push(`  ${" ".repeat(width)}  ${dim(`→ fix: ${c.fixHint}`)}`);
   }
   const passed = checks.filter((c) => c.ok).length;
   lines.push(`${passed}/${checks.length} checks passed`);

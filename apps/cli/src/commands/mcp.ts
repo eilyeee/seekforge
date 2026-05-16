@@ -1,4 +1,5 @@
 import { createMcpClient } from "@seekforge/core";
+import { dim, fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import {
   addMcpServer,
@@ -7,9 +8,6 @@ import {
   removeMcpServer,
   writeConfigDoc,
 } from "../mcp-config.js";
-
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
 
 /**
  * `seekforge mcp list` — spawn each configured server, handshake, and list
@@ -29,18 +27,18 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
     const client = createMcpClient({ name, config: serverConfig });
     try {
       const tools = await client.listTools();
-      console.log(`${name}  ${DIM}(${commandLine}, ${trust})${RESET}  ${tools.length} tool(s)`);
+      console.log(`${name}  ${dim(`(${commandLine}, ${trust})`)}  ${tools.length} tool(s)`);
       for (const tool of tools) {
         if (opts.tools) {
           const firstLine = (tool.description ?? "").split("\n")[0] ?? "";
-          console.log(`  ${tool.name}  ${DIM}${firstLine}${RESET}`);
+          console.log(`  ${tool.name}  ${dim(firstLine)}`);
         } else {
           console.log(`  ${tool.name}`);
         }
       }
     } catch (err) {
       console.error(
-        `${name}  ${DIM}(${commandLine}, ${trust})${RESET}  error: ${err instanceof Error ? err.message : String(err)}`,
+        `${name}  ${dim(`(${commandLine}, ${trust})`)}  error: ${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
       client.dispose();
@@ -59,8 +57,9 @@ export function mcpAddCommand(
   opts: { global?: boolean },
 ): void {
   if (commandTokens.length === 0) {
-    console.error('usage: seekforge mcp add <name> <command> [args...]\n  e.g. seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .');
-    process.exitCode = 1;
+    fail("missing command for `mcp add`", {
+      hint: "seekforge mcp add <name> <command> [args...]  e.g. seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .",
+    });
     return;
   }
   const [command, ...args] = commandTokens;
@@ -69,13 +68,12 @@ export function mcpAddCommand(
     const next = addMcpServer(readConfigDoc(path), name, command ?? "", args);
     writeConfigDoc(path, next);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
+    fail(err instanceof Error ? err.message : String(err));
     return;
   }
   const commandLine = [command, ...args].join(" ");
   console.log(`added MCP server "${name}" (${commandLine}) to ${path}`);
-  console.log(`${DIM}note: new servers are untrusted by default — set "trusted": true in config to auto-approve their tools${RESET}`);
+  console.log(dim('note: new servers are untrusted by default — set "trusted": true in config to auto-approve their tools'));
 }
 
 /**
@@ -88,8 +86,7 @@ export function mcpRemoveCommand(name: string, opts: { global?: boolean }): void
     const next = removeMcpServer(readConfigDoc(path), name);
     writeConfigDoc(path, next);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
+    fail(err instanceof Error ? err.message : String(err));
     return;
   }
   console.log(`removed MCP server "${name}" from ${path}`);

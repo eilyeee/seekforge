@@ -4,9 +4,14 @@
 // first failure is enough signal for `pnpm test`.
 
 import assert from "node:assert/strict";
+import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
 import { addMcpServer, removeMcpServer } from "../mcp-config.js";
 import { buildJsonResult, isMachineFormat, resolveOutputFormat } from "../output-format.js";
 import { composePrompt } from "../stdin-prompt.js";
+
+// Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
+// whole point of the color-gating tests, so the control char is intentional.
+const ANSI = new RegExp("\\x1b\\[");
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -108,6 +113,82 @@ test("removeMcpServer: keeps siblings", () => {
 });
 test("removeMcpServer: missing throws", () => {
   assert.throws(() => removeMcpServer({}, "nope"));
+});
+
+// --- useColor predicate ------------------------------------------------------
+test("useColor: TTY on + NO_COLOR off + not machine → true", () => {
+  assert.equal(useColor({ isTTY: true, noColor: false, machine: false }), true);
+});
+test("useColor: NO_COLOR set → false even on a TTY", () => {
+  assert.equal(useColor({ isTTY: true, noColor: true, machine: false }), false);
+});
+test("useColor: non-TTY (piped) → false", () => {
+  assert.equal(useColor({ isTTY: false, noColor: false, machine: false }), false);
+});
+test("useColor: machine mode → false even on a TTY with NO_COLOR off", () => {
+  assert.equal(useColor({ isTTY: true, noColor: false, machine: true }), false);
+});
+
+// --- color helpers no-op when disabled --------------------------------------
+test("color helper colors when enabled, plain when disabled", () => {
+  assert.match(green("ok", true), ANSI);
+  assert.equal(green("ok", false), "ok");
+});
+test("makeColorizer(false) emits zero escapes for every helper", () => {
+  const c = makeColorizer(false);
+  for (const s of [c.green("a"), c.red("b"), c.yellow("c"), c.dim("d"), c.italic("e"), c.dimItalic("f")]) {
+    assert.doesNotMatch(s, ANSI);
+  }
+  assert.equal(c.enabled, false);
+});
+test("makeColorizer(true) wraps in escapes (and resets)", () => {
+  const c = makeColorizer(true);
+  assert.match(c.green("x"), ANSI);
+  assert.match(c.green("x"), /\x1b\[0m$/); // ends with reset
+});
+
+// --- machine-format selection forces color off ------------------------------
+test("isMachineFormat(json/stream-json) gates color off via useColor", () => {
+  // The wiring: machine = isMachineFormat(format); color = useColor({ machine }).
+  assert.equal(useColor({ isTTY: true, noColor: false, machine: isMachineFormat("json") }), false);
+  assert.equal(useColor({ isTTY: true, noColor: false, machine: isMachineFormat("stream-json") }), false);
+  // text on a TTY keeps color
+  assert.equal(useColor({ isTTY: true, noColor: false, machine: isMachineFormat("text") }), true);
+});
+
+// --- fail / formatError formatting ------------------------------------------
+test("formatError: plain message", () => {
+  assert.equal(formatError("boom"), "error: boom");
+});
+test("formatError: with hint adds a → line", () => {
+  assert.equal(formatError("boom", "do x"), "error: boom\n  → do x");
+});
+test("fail: writes error: to STDERR (not stdout) and sets exit code", () => {
+  const prevExit = process.exitCode;
+  const prevErr = process.stderr.write.bind(process.stderr);
+  const prevOut = process.stdout.write.bind(process.stdout);
+  let errOut = "";
+  let stdoutOut = "";
+  process.stderr.write = (chunk: string | Uint8Array): boolean => {
+    errOut += String(chunk);
+    return true;
+  };
+  process.stdout.write = (chunk: string | Uint8Array): boolean => {
+    stdoutOut += String(chunk);
+    return true;
+  };
+  try {
+    fail("kaboom", { hint: "try again", code: 3 });
+  } finally {
+    process.stderr.write = prevErr;
+    process.stdout.write = prevOut;
+  }
+  assert.match(errOut, /error:/);
+  assert.match(errOut, /kaboom/);
+  assert.match(errOut, /→ try again/);
+  assert.equal(stdoutOut, ""); // never corrupts stdout
+  assert.equal(process.exitCode, 3);
+  process.exitCode = prevExit; // restore so the runner can still exit 0
 });
 
 console.log(`${passed} CLI helper tests passed`);
