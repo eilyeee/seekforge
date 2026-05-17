@@ -352,6 +352,7 @@ describe("dispatcher basics", () => {
       "search_text",
       "write_file",
       "apply_patch",
+      "glob",
       "run_command",
       "task_output",
       "task_kill",

@@ -26,7 +26,12 @@ export function setShellRunnerForTests(fn: typeof runShellCommand | null): void 
 
 const runCommandSchema = z.object({
   command: z.string().describe("Non-interactive shell command line to run via /bin/sh -c."),
-  cwd: z.string().optional().describe("Working directory, relative to the workspace root (default '.')."),
+  cwd: z
+    .string()
+    .optional()
+    .describe(
+      "Working directory for this command, relative to the workspace root (default '.'). Use this to run in a subdir instead of chaining 'cd <dir> && ...'. Each call is a fresh /bin/sh, so shell state (env vars, activated venvs, a prior 'cd') does NOT persist between calls.",
+    ),
   timeoutMs: z
     .number()
     .optional()

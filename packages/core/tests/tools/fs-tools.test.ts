@@ -77,6 +77,88 @@ describe("search_text", () => {
   });
 });
 
+describe("search_text (grep parity)", () => {
+  function setup(): string {
+    const ws = makeWorkspace();
+    fs.mkdirSync(path.join(ws, "src"));
+    fs.writeFileSync(
+      path.join(ws, "src/a.ts"),
+      "line1\nline2\nneedle here\nline4\nline5\n",
+    );
+    fs.writeFileSync(path.join(ws, "src/b.js"), "another needle\n");
+    fs.writeFileSync(path.join(ws, "notes.md"), "no match here\n");
+    return ws;
+  }
+
+  it("includes contextLines before and after each match", async () => {
+    const ws = setup();
+    const res = await dispatcher.execute(
+      call("search_text", { pattern: "needle", path: "src/a.ts", contextLines: 2 }),
+      makeCtx(ws),
+    );
+    const data = res.data as {
+      matches: Array<{ line: number; text: string; context: { before: string[]; after: string[] } }>;
+    };
+    expect(data.matches).toHaveLength(1);
+    const m = data.matches[0]!;
+    expect(m.line).toBe(3);
+    expect(m.text).toBe("needle here");
+    expect(m.context.before).toEqual(["line1", "line2"]);
+    expect(m.context.after).toEqual(["line4", "line5"]);
+  });
+
+  it("glob filter restricts which files are searched", async () => {
+    const ws = setup();
+    const res = await dispatcher.execute(
+      call("search_text", { pattern: "needle", glob: "*.ts" }),
+      makeCtx(ws),
+    );
+    const data = res.data as { matches: Array<{ file: string }> };
+    expect(data.matches.map((m) => m.file)).toEqual(["src/a.ts"]);
+  });
+
+  it("filesWithMatches returns just file paths", async () => {
+    const ws = setup();
+    const res = await dispatcher.execute(
+      call("search_text", { pattern: "needle", filesWithMatches: true }),
+      makeCtx(ws),
+    );
+    const data = res.data as { files: string[]; matches?: unknown };
+    expect([...data.files].sort()).toEqual(["src/a.ts", "src/b.js"]);
+    expect(data.matches).toBeUndefined();
+  });
+
+  it("multiline lets the pattern span newlines", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "f.ts"), "start\nfoo\nbar\nend\n");
+    const single = await dispatcher.execute(
+      call("search_text", { pattern: "foo\\nbar", path: "f.ts" }),
+      makeCtx(ws),
+    );
+    expect((single.data as { matches: unknown[] }).matches).toEqual([]);
+    const multi = await dispatcher.execute(
+      call("search_text", { pattern: "foo\\nbar", path: "f.ts", multiline: true }),
+      makeCtx(ws),
+    );
+    const data = multi.data as { matches: Array<{ line: number }> };
+    expect(data.matches).toHaveLength(1);
+    expect(data.matches[0]!.line).toBe(2);
+  });
+
+  it("maxMatches caps results and flags truncation", async () => {
+    const ws = makeWorkspace();
+    const lines = Array.from({ length: 10 }, () => "needle").join("\n");
+    fs.writeFileSync(path.join(ws, "many.txt"), lines + "\n");
+    const res = await dispatcher.execute(
+      call("search_text", { pattern: "needle", maxMatches: 3 }),
+      makeCtx(ws),
+    );
+    const data = res.data as { matches: unknown[]; truncated: boolean };
+    expect(data.matches).toHaveLength(3);
+    expect(data.truncated).toBe(true);
+  });
+});
+
 describe("list_files", () => {
   it("lists recursively, sorted, honoring the ignore list", async () => {
     const ws = makeWorkspace();
