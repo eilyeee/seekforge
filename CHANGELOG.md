@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 (unreleased) — round 15: polish pass (CLI output + desktop design system)
+
+- Desktop: all 8 views adopt the whale-blue semantic tokens + ui/ primitives
+  (Button/Card/Badge/Input/EmptyState) — previously they still used the old
+  green zinc/emerald palette while the chrome was blue. Added consistent
+  empty / loading / error states across every data view; everything now
+  reads correctly in light theme too. Sidebar Todos button tokenized.
+- CLI: NO_COLOR + non-TTY color gating (piped output and NO_COLOR users no
+  longer get raw \x1b[ escapes); a single useColor() predicate + no-op color
+  helpers across render/doctor/mcp/update/repl/version-check. Consistent
+  errors via fail() → "error: <msg>" (+ hint) on stderr with non-zero exit.
+  --output-format json/stream-json guaranteed byte-clean (no color, no
+  notices, errors to stderr).
+
 ## 0.7.0 (unreleased) — round 14: CLI + desktop detail parity vs Claude Code
 
 - Edit review before apply: write tools (write_file/apply_patch) attach a diff
