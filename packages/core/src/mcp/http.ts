@@ -2,8 +2,16 @@ import type { McpClientOptions } from "./client.js";
 import { McpError } from "./errors.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const PROTOCOL_VERSION = "2024-11-05";
+// Latest stable MCP spec revision; servers version-fallback to their own.
+const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
+// We advertise the roots capability for parity with the stdio transport. Note:
+// answering a server-initiated roots/list request requires the client to read
+// the server's standalone GET SSE stream, which this one-POST-per-message
+// transport does not open (matching its existing "no server-initiated requests"
+// scope). The capability is advertised so HTTP servers that only read
+// capabilities.roots still see it; live roots/list answering is stdio-only.
+const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 
 type JsonRpcResponse = {
   jsonrpc?: string;
@@ -168,7 +176,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     if (!handshake) {
       handshake = rawRequest("initialize", {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
+        capabilities: CLIENT_CAPABILITIES,
         clientInfo: CLIENT_INFO,
       }).then(
         async () => {

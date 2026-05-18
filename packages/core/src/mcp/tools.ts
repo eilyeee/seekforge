@@ -5,7 +5,7 @@ import { redactSecrets } from "../tools/redact.js";
 import { defineTool, type ToolSpec } from "../tools/registry.js";
 import { truncateHeadTail } from "../tools/text.js";
 import { createMcpClient, McpError, type McpClient } from "./client.js";
-import type { McpServerConfig, McpTool } from "./types.js";
+import type { McpPromptArgument, McpServerConfig, McpTool } from "./types.js";
 
 const DESCRIPTION_MAX_CHARS = 500;
 
@@ -104,18 +104,75 @@ export async function readMcpResource(server: string, uri: string, clients: McpC
   return entry.client.readResource(uri);
 }
 
+/** One prompt as surfaced to callers, tagged with its server name. */
+export type McpPromptRef = {
+  server: string;
+  name: string;
+  description?: string;
+  arguments?: McpPromptArgument[];
+};
+
+/**
+ * Lists the prompts of every connected server (prompts/list), tagged with the
+ * server name. A server that fails or does not support prompts logs a warning
+ * and contributes zero entries; this function never throws. Mirrors
+ * listMcpResources.
+ */
+export async function listMcpPrompts(clients: McpClientEntry[]): Promise<McpPromptRef[]> {
+  const refs: McpPromptRef[] = [];
+  for (const entry of clients) {
+    try {
+      for (const p of await entry.client.listPrompts()) {
+        refs.push({
+          server: entry.serverName,
+          name: p.name,
+          ...(p.description !== undefined ? { description: p.description } : {}),
+          ...(p.arguments !== undefined ? { arguments: p.arguments } : {}),
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`warning: MCP server "${entry.serverName}" prompts unavailable: ${message}\n`);
+    }
+  }
+  return refs;
+}
+
+/**
+ * Gets one prompt (prompts/get) from the named server, with its messages
+ * rendered to a single string and capped at RESOURCE_READ_MAX_CHARS (see
+ * client.ts). Throws McpError("unknown_server") when no client of that name
+ * exists; server-side failures propagate as McpError. Mirrors readMcpResource.
+ */
+export async function getMcpPrompt(
+  server: string,
+  name: string,
+  args: Record<string, unknown> | undefined,
+  clients: McpClientEntry[],
+): Promise<string> {
+  const entry = clients.find((e) => e.serverName === server);
+  if (!entry) throw new McpError("unknown_server", `no MCP server named "${server}" is connected`);
+  return entry.client.getPrompt(name, args);
+}
+
 /**
  * Creates a client per configured server and builds their ToolSpecs.
  * `entries` exposes the live connections for resource access
  * (listMcpResources / readMcpResource). dispose() shuts every client down
- * (kills the child processes).
+ * (kills the child processes). `workspaceRoots` (absolute paths) is advertised
+ * to each server via the roots capability and answered on roots/list.
  */
 export async function loadMcpToolSpecs(
   servers: Record<string, McpServerConfig>,
+  workspaceRoots?: string[],
 ): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
   const entries: McpClientEntry[] = Object.entries(servers).map(([serverName, config]) => ({
     serverName,
-    client: createMcpClient({ name: serverName, config }),
+    client: createMcpClient({
+      name: serverName,
+      config,
+      ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
+    }),
     trusted: config.trusted ?? false,
   }));
   const specs = await buildMcpToolSpecs(entries);
