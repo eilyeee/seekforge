@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import {
@@ -280,6 +282,28 @@ describe("run_command", () => {
     const data = res.data as { stdout: string };
     expect(data.stdout).not.toContain("sk-abcdef1234567890abcdef");
     expect(data.stdout).toContain("sk-a****");
+  });
+
+  it("runs in the cwd subdir without chaining cd", async () => {
+    const ws = makeWorkspace();
+    fs.mkdirSync(path.join(ws, "sub"));
+    fs.writeFileSync(path.join(ws, "sub/marker.txt"), "x");
+    const res = await dispatcher.execute(
+      call("run_command", { command: "ls", cwd: "sub" }),
+      makeCtx(ws),
+    );
+    expect(res.ok).toBe(true);
+    expect((res.data as { stdout: string }).stdout).toContain("marker.txt");
+  });
+
+  it("rejects a cwd that escapes the workspace", async () => {
+    const ws = makeWorkspace();
+    const res = await dispatcher.execute(
+      call("run_command", { command: "ls", cwd: "../.." }),
+      makeCtx(ws),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("outside_workspace");
   });
 });
 
