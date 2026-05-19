@@ -10,6 +10,10 @@ import {
   imageMarker,
   insertAtPath,
   insertImageMarker,
+  isImagePath,
+  listImageMarkers,
+  removeImageMarker,
+  splitImageMarkers,
   loadHistory,
   pushHistory,
   slashQuery,
@@ -169,6 +173,55 @@ describe("history navigation", () => {
     nav.reset();
     expect(nav.down()).toBeNull();
     expect(nav.up("new draft")).toBe("one");
+  });
+});
+
+describe("image markers", () => {
+  it("isImagePath: by extension, case-insensitive", () => {
+    expect(isImagePath(".seekforge/uploads/a.png")).toBe(true);
+    expect(isImagePath("b.JPEG")).toBe(true);
+    expect(isImagePath("c.webp")).toBe(true);
+    expect(isImagePath("d.txt")).toBe(false);
+    expect(isImagePath("noext")).toBe(false);
+  });
+
+  it("splitImageMarkers: separates prose from image markers", () => {
+    const text = "look [image #1: .seekforge/uploads/a.png] here";
+    expect(splitImageMarkers(text)).toEqual([
+      { kind: "text", text: "look " },
+      {
+        kind: "image",
+        marker: { n: 1, path: ".seekforge/uploads/a.png" },
+        raw: "[image #1: .seekforge/uploads/a.png]",
+      },
+      { kind: "text", text: " here" },
+    ]);
+  });
+
+  it("splitImageMarkers: a non-image marker stays literal text", () => {
+    const text = "see [image #1: notes.txt] ok";
+    expect(splitImageMarkers(text)).toEqual([{ kind: "text", text }]);
+  });
+
+  it("splitImageMarkers: handles multiple markers and plain text", () => {
+    const text = "[image #1: a.png][image #2: b.jpg]end";
+    const segs = splitImageMarkers(text);
+    expect(segs.filter((s) => s.kind === "image")).toHaveLength(2);
+    expect(segs[segs.length - 1]).toEqual({ kind: "text", text: "end" });
+  });
+
+  it("listImageMarkers: in order, images only", () => {
+    expect(listImageMarkers("x [image #2: a.png] y [image #5: b.gif]")).toEqual([
+      { n: 2, path: "a.png" },
+      { n: 5, path: "b.gif" },
+    ]);
+    expect(listImageMarkers("no markers here")).toEqual([]);
+  });
+
+  it("removeImageMarker: strips the marker and tidies whitespace", () => {
+    expect(removeImageMarker("a [image #1: a.png] b", { n: 1, path: "a.png" })).toBe("a b");
+    expect(removeImageMarker("[image #1: a.png]", { n: 1, path: "a.png" })).toBe("");
+    expect(removeImageMarker("hi", { n: 1, path: "a.png" })).toBe("hi");
   });
 });
 
