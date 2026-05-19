@@ -16,8 +16,10 @@ import {
   filterCommands,
   insertAtPath,
   insertImageMarker,
+  listImageMarkers,
   loadHistory,
   pushHistory,
+  removeImageMarker,
   slashQuery,
   type ComposerCommand,
   type HistoryNav,
@@ -138,11 +140,21 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
   }, [dropdownSignature]);
   const selIndex = dropdown ? Math.min(sel, dropdown.count - 1) : 0;
 
+  // Pending image attachments: the `[image #N: path]` markers currently in the
+  // input, surfaced as removable chips. The markers stay in the text (the
+  // send-marker contract), so removing a chip just strips its marker.
+  const pendingImages = useMemo(() => listImageMarkers(value), [value]);
+
   // --- actions --------------------------------------------------------------
 
   const applyChange = (text: string, nextCaret: number) => {
     pendingCaret.current = nextCaret;
     onChange(text);
+  };
+
+  const removeImage = (marker: { n: number; path: string }) => {
+    const next = removeImageMarker(value, marker);
+    applyChange(next, next.length);
   };
 
   const pickSlash = (index: number) => {
@@ -318,6 +330,37 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
                   {path}
                 </button>
               ))}
+        </div>
+      )}
+
+      {pendingImages.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {pendingImages.map((marker) => {
+            const name = marker.path.split("/").pop() || marker.path;
+            return (
+              <span
+                key={`${marker.n}:${marker.path}`}
+                title={marker.path}
+                className="inline-flex max-w-[14rem] items-center gap-1 rounded-md border border-subtle bg-surface-raised px-1.5 py-0.5 font-mono text-xs text-secondary"
+              >
+                <span aria-hidden className="text-tertiary">
+                  🖼
+                </span>
+                <span className="truncate">
+                  #{marker.n} {name}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove image #${marker.n}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => removeImage(marker)}
+                  className="ml-0.5 rounded text-tertiary hover:text-danger"
+                >
+                  ✕
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
 
