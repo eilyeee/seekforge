@@ -11,7 +11,7 @@ import {
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { CliConfig } from "./config.js";
 
 export type CliAgentOptions = {
@@ -30,6 +30,12 @@ export type CliAgentOptions = {
   mcpToolSpecs?: ToolSpec[];
   /** Cap on agent turns (maps to limits.maxAgentTurns); CLI --max-turns. */
   maxTurns?: number;
+  /**
+   * Per-run permission rules (CLI --allowedTools/--disallowedTools), prepended
+   * to config rules. When set, replaces config.permissionRules for this run
+   * (the caller is expected to have already merged the base in).
+   */
+  permissionRules?: PermissionRule[];
 };
 
 export type CliAgent = {
@@ -95,7 +101,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
-    permissionRules: config.permissionRules,
+    permissionRules: opts.permissionRules ?? config.permissionRules,
     subagents: opts.subagents,
     hooks: config.hooks,
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
