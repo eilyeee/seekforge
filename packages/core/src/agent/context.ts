@@ -1,4 +1,5 @@
 import type { ChatMessage } from "@seekforge/shared";
+import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 
 /** Rough estimate: ~4 chars per token plus per-message overhead. */
 export function estimateTokens(text: string): number {
@@ -192,15 +193,23 @@ export async function llmCompactMessages(
   provider: SummaryProvider,
   messages: ChatMessage[],
   budgetTokens: number,
+  opts?: { focus?: string },
 ): Promise<CompactionResult | null> {
   const split = splitForCompaction(messages, budgetTokens);
   if (!split) return null;
 
   const segment = serializeSegment(split.dropped);
+  // A focus steers the summary toward what the user cares about (e.g.
+  // "/compact the auth refactor"); appended to the standard instruction.
+  const focus = opts?.focus?.trim();
+  const instruction =
+    focus !== undefined && focus !== ""
+      ? `${LLM_SUMMARY_INSTRUCTION} Focus especially on: ${focus}.`
+      : LLM_SUMMARY_INSTRUCTION;
   let summary: string;
   try {
     const res = await provider.chat({
-      messages: [{ role: "user", content: `${LLM_SUMMARY_INSTRUCTION}\n\n${segment}` }],
+      messages: [{ role: "user", content: `${instruction}\n\n${segment}` }],
     });
     summary = res.content.trim();
   } catch {
@@ -214,4 +223,55 @@ export async function llmCompactMessages(
     compactionSummaryMessage("Summary", summary),
     split.dropped.length,
   );
+}
+
+export type LlmCompactSessionResult = {
+  droppedTurns: number;
+  beforeTokens: number;
+  afterTokens: number;
+};
+
+/**
+ * Manual LLM-summarized /compact of a STORED session, with an optional focus.
+ * The LLM-flavored counterpart to trace.ts compactSessionNow (which stays
+ * mechanical/provider-free): loads the session's messages, summarizes the
+ * dropped middle with the provider via llmCompactMessages (budget 0 forces
+ * compaction whenever the shape allows it), and rewrites messages.jsonl via
+ * trace's existing rewrite helper. The next resume replays the compacted
+ * history. Returns null when the session is too short to compact, has no
+ * messages file, or the provider produced no usable summary (the caller can
+ * fall back to the mechanical compactSessionNow).
+ *
+ * Frontends (the TUI /compact <focus> command) can wire this later — a
+ * follow-up; today only the auto-compact site in the loop passes a focus.
+ */
+export async function llmCompactSessionNow(
+  workspace: string,
+  sessionId: string,
+  provider: SummaryProvider,
+  focus?: string,
+): Promise<LlmCompactSessionResult | null> {
+  let messages: ChatMessage[];
+  try {
+    messages = loadSessionMessages(workspace, sessionId);
+  } catch {
+    return null;
+  }
+  const beforeTokens = estimateMessagesTokens(messages);
+  // Budget 0 forces compaction whenever the message shape allows it; null on
+  // a too-short session OR any provider failure/empty summary.
+  const compacted = await llmCompactMessages(
+    provider,
+    messages,
+    0,
+    focus !== undefined ? { focus } : undefined,
+  );
+  if (!compacted) return null;
+
+  rewriteSessionMessages(workspace, sessionId, compacted.messages);
+  return {
+    droppedTurns: compacted.droppedTurns,
+    beforeTokens,
+    afterTokens: estimateMessagesTokens(compacted.messages),
+  };
 }

@@ -24,7 +24,18 @@ export const PERMISSION_LEVEL: Record<PermissionName, PermissionLevel> = {
   dangerous: 4,
 };
 
-export type ApprovalMode = "auto" | "confirm" | "manual";
+/**
+ * Graded approval tiers (least → most interactive):
+ *  - "auto":       all-allow except the hard L4 denylist (and deny-rules).
+ *  - "acceptEdits": auto-allow L1 in-workspace WRITES (write_file/apply_patch)
+ *                   but still confirm L2 command execution and L3 env changes.
+ *                   The "let it edit freely but ask before running things" tier.
+ *  - "confirm":    confirm every L1+ action that is not allowlisted/allow-ruled.
+ *  - "manual":     reserved for fully manual flows (treated like "confirm" by
+ *                  enforcePermission — every L1+ action is confirmed).
+ * Deny-rules and the L4 dangerous denylist stay authoritative over ALL modes.
+ */
+export type ApprovalMode = "auto" | "acceptEdits" | "confirm" | "manual";
 
 export type PermissionRequest = {
   toolName: string;
@@ -44,6 +55,18 @@ export type PermissionRequest = {
    */
   preview?: { path: string; diff: string };
 };
+
+/**
+ * Richer confirm result (allow-for-session channel). A frontend's confirm()
+ * may return a plain boolean (the original contract — `true`=allow once,
+ * `false`=deny) OR this object to also grow the run's session allowlist:
+ * `{ allow: true, remember: "session" }` means "yes, and don't ask again this
+ * session" — enforcePermission then pushes the classified command prefix
+ * (run_command/task_kill) or the tool name into policy.sessionAllowlist so
+ * subsequent matching calls auto-allow. `remember` is ignored when allow is
+ * false. Additive: the boolean form keeps working unchanged.
+ */
+export type ConfirmResult = boolean | { allow: boolean; remember?: "session" };
 
 /**
  * Fine-grained permission rule. Evaluation: first matching rule of each
@@ -70,6 +93,16 @@ export type PermissionPolicy = {
   commandAllowlist: string[];
   /** Fine-grained allow/deny rules, project rules first (first match wins). */
   rules?: PermissionRule[];
+  /**
+   * In-memory, run-scoped allowlist grown by "allow-for-session" confirmations
+   * (confirm returning `{ allow: true, remember: "session" }`). For
+   * run_command/task_kill it holds classified command PREFIXES; for other
+   * tools it holds bare tool names. A subsequent matching call auto-allows
+   * without re-prompting. Mutated in place by enforcePermission, so the caller
+   * MUST pass a single array shared across a session's tool calls. NOT
+   * persisted (unlike commandAllowlist/rules) — it dies with the run.
+   */
+  sessionAllowlist?: string[];
 };
 
 // ---------------------------------------------------------------------------

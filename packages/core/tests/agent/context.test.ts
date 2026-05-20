@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@seekforge/shared";
 import {
@@ -5,8 +8,10 @@ import {
   compactMessages,
   estimateMessagesTokens,
   llmCompactMessages,
+  llmCompactSessionNow,
   type SummaryProvider,
 } from "../../src/agent/context.js";
+import { createSessionTrace, loadSessionMessages, newSessionId } from "../../src/agent/trace.js";
 
 function msg(role: ChatMessage["role"], content: string, extra?: Partial<ChatMessage>): ChatMessage {
   return { role, content, ...extra };
@@ -117,6 +122,23 @@ describe("llmCompactMessages", () => {
     expect(sent[0]!.content.length).toBeLessThanOrEqual(25_000);
   });
 
+  it("puts the focus into the summarization prompt when provided", async () => {
+    const provider = summaryProvider("summary");
+    await llmCompactMessages(provider, conversation(30), 2000, { focus: "the auth refactor" });
+    expect(provider.requests).toHaveLength(1);
+    const sent = provider.requests[0]!;
+    expect(sent[0]!.content).toContain("Focus especially on: the auth refactor.");
+  });
+
+  it("omits the focus phrase when focus is empty/absent", async () => {
+    const provider = summaryProvider("summary");
+    await llmCompactMessages(provider, conversation(30), 2000, { focus: "   " });
+    expect(provider.requests[0]![0]!.content).not.toContain("Focus especially on");
+    const provider2 = summaryProvider("summary");
+    await llmCompactMessages(provider2, conversation(30), 2000);
+    expect(provider2.requests[0]![0]!.content).not.toContain("Focus especially on");
+  });
+
   it("returns null when the provider throws (caller falls back to mechanical)", async () => {
     const provider: SummaryProvider = {
       chat: async () => {
@@ -187,5 +209,57 @@ describe("clearOldToolResults", () => {
     const second = clearOldToolResults(first.messages);
     expect(second.cleared).toBe(0); // the note is below the threshold
     expect(second.messages).toBe(first.messages);
+  });
+});
+
+describe("llmCompactSessionNow", () => {
+  function fakeProvider(content: string): SummaryProvider & { requests: ChatMessage[][] } {
+    const requests: ChatMessage[][] = [];
+    return {
+      requests,
+      chat: async (req) => {
+        requests.push(req.messages);
+        return { content };
+      },
+    };
+  }
+
+  function writeSession(messages: ChatMessage[]): { workspace: string; sessionId: string } {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-compact-"));
+    const sessionId = newSessionId();
+    const trace = createSessionTrace(workspace, sessionId);
+    for (const m of messages) trace.message(m);
+    return { workspace, sessionId };
+  }
+
+  it("round-trips: rewrites the stored session with the model summary", async () => {
+    const { workspace, sessionId } = writeSession(conversation(30));
+    const provider = fakeProvider("Dense session summary.");
+    const result = await llmCompactSessionNow(workspace, sessionId, provider, "the parser fix");
+    expect(result).not.toBeNull();
+    expect(result!.droppedTurns).toBeGreaterThan(0);
+    expect(result!.afterTokens).toBeLessThan(result!.beforeTokens);
+    // Focus reaches the provider prompt.
+    expect(provider.requests[0]![0]!.content).toContain("Focus especially on: the parser fix.");
+    // The stored history is now compacted and replays the summary.
+    const reloaded = loadSessionMessages(workspace, sessionId);
+    expect(reloaded.some((m) => m.content.includes("Dense session summary."))).toBe(true);
+    expect(reloaded.length).toBeLessThan(conversation(30).length);
+  });
+
+  it("returns null for a missing session (no messages file)", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-compact-"));
+    const provider = fakeProvider("never");
+    expect(await llmCompactSessionNow(workspace, "does-not-exist", provider)).toBeNull();
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("returns null on a too-short session without rewriting", async () => {
+    const { workspace, sessionId } = writeSession(conversation(2));
+    const provider = fakeProvider("never");
+    expect(await llmCompactSessionNow(workspace, sessionId, provider)).toBeNull();
+    expect(provider.requests).toHaveLength(0);
+    // Untouched.
+    expect(loadSessionMessages(workspace, sessionId)).toHaveLength(conversation(2).length);
   });
 });

@@ -38,7 +38,9 @@ export {
   estimateMessagesTokens,
   estimateTokens,
   llmCompactMessages,
+  llmCompactSessionNow,
   type CompactionResult,
+  type LlmCompactSessionResult,
   type SummaryProvider,
 } from "./context.js";
 export {
