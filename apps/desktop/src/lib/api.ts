@@ -97,9 +97,31 @@ async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: strin
   return (await res.json()) as T;
 }
 
+/**
+ * A 1x1 transparent PNG, used as the mock-mode placeholder for rawUrl so the
+ * UI renders an <img> (which then falls back to the styled chip via onError,
+ * or simply shows nothing visible) instead of pointing at a real server route.
+ */
+const MOCK_RAW_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 export const api = {
   // Global (not workspace-scoped).
   workspaces: () => request<Workspace[]>("GET", "/api/workspaces"),
+
+  /**
+   * URL that serves the raw bytes of an uploaded image (GET /api/raw), for use
+   * as an `<img src>`. Carries `?ws=` (the tab's workspace, or `ws` override)
+   * and the auth token in the query string — an `<img>` request cannot send an
+   * Authorization header. In mock mode returns a data-URL placeholder so the
+   * mock UI never points at a real route.
+   */
+  rawUrl: (path: string, ws?: string): string => {
+    if (isMock()) return MOCK_RAW_DATA_URL;
+    const url = withWorkspace(`/api/raw?path=${encodeURIComponent(path)}`, ws);
+    const token = tokenProvider();
+    return token ? `${url}&token=${encodeURIComponent(token)}` : url;
+  },
 
   // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
   sessions: () => request<SessionMeta[]>("GET", withWorkspace("/api/sessions")),

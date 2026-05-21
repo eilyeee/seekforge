@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api } from "../../lib/api";
 import type { ChatItem } from "../../lib/events";
 import { isImagePath, splitImageMarkers } from "../../lib/composer";
 import { formatTokens, formatUsd } from "../../lib/usage";
@@ -6,14 +7,8 @@ import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
 
-/**
- * A small chip standing in for an `[image #N: path]` marker. There is no
- * raw-file serve endpoint yet (the server only serves SPA assets + the JSON
- * API), so we render a styled image chip rather than an <img>; once a raw
- * upload-bytes route exists this becomes a <img> thumbnail (see follow-up).
- */
-function ImageChip({ n, path }: { n: number; path: string }) {
-  const name = path.split("/").pop() || path;
+/** The styled fallback chip shown for non-image markers or when an <img> fails. */
+function ImageChipFallback({ label, path }: { label: string; path: string }) {
   return (
     <span
       title={path}
@@ -22,10 +17,65 @@ function ImageChip({ n, path }: { n: number; path: string }) {
       <span aria-hidden className="text-tertiary">
         🖼
       </span>
-      <span className="truncate">
-        #{n} {name}
-      </span>
+      <span className="truncate">{label}</span>
     </span>
+  );
+}
+
+/**
+ * An `[image #N: path]` marker rendered as a real thumbnail: the raw upload
+ * bytes via GET /api/raw, capped at ~200px, click-to-open in a new tab. On a
+ * load error (missing file, mock mode) it degrades to the styled chip.
+ */
+function ImageChip({ n, path }: { n: number; path: string }) {
+  const [failed, setFailed] = useState(false);
+  const name = path.split("/").pop() || path;
+  const src = api.rawUrl(path);
+  if (failed) return <ImageChipFallback label={`#${n} ${name}`} path={path} />;
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={path}
+      className="mx-0.5 inline-block max-w-[200px] align-middle"
+    >
+      <img
+        src={src}
+        alt={name}
+        onError={() => setFailed(true)}
+        className="max-h-[200px] max-w-[200px] rounded-md border border-subtle object-cover"
+      />
+    </a>
+  );
+}
+
+/**
+ * A changed/uploaded image file (the `file` chat item) rendered as a real
+ * thumbnail with a filename caption, click-to-open, and styled-chip fallback.
+ */
+function ImageFileChip({ path }: { path: string }) {
+  const [failed, setFailed] = useState(false);
+  const name = path.split("/").pop() || path;
+  const src = api.rawUrl(path);
+  if (failed) {
+    return (
+      <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-muted px-2.5 py-0.5 font-mono text-xs text-accent">
+        <span aria-hidden>🖼</span>
+        <span>{path}</span>
+      </div>
+    );
+  }
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" title={path} className="inline-block">
+      <img
+        src={src}
+        alt={name}
+        onError={() => setFailed(true)}
+        className="max-h-[200px] max-w-[200px] rounded-md border border-subtle object-cover"
+      />
+      <span className="mt-0.5 block max-w-[200px] truncate font-mono text-xs text-tertiary">{name}</span>
+    </a>
   );
 }
 
@@ -119,9 +169,10 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       );
     case "file": {
       const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
+      if (isImage) return <ImageFileChip path={item.path} />;
       return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-muted px-2.5 py-0.5 font-mono text-xs text-accent">
-          <span aria-hidden>{isImage ? "🖼" : "±"}</span>
+          <span aria-hidden>±</span>
           <span>{item.path}</span>
         </div>
       );

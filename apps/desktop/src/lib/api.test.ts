@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { setWorkspaceProvider, withWorkspace } from "./api";
+import { api, setTokenProvider, setWorkspaceProvider, withWorkspace } from "./api";
 
 afterEach(() => {
   // Reset to the default (no active workspace) between tests.
   setWorkspaceProvider(() => "");
+  setTokenProvider(() => "");
 });
 
 describe("withWorkspace", () => {
@@ -35,5 +36,31 @@ describe("withWorkspace", () => {
   it("url-encodes the workspace id", () => {
     setWorkspaceProvider(() => "a b");
     expect(withWorkspace("/api/memory")).toBe("/api/memory?ws=a%20b");
+  });
+});
+
+describe("api.rawUrl", () => {
+  // These tests run outside mock mode (no window in jsdom-less node env / no
+  // ?mock=1), so rawUrl hits the real-route branch.
+  it("builds /api/raw?path= with the encoded path and active ws + token", () => {
+    setWorkspaceProvider(() => "ws-a");
+    setTokenProvider(() => "tok123");
+    expect(api.rawUrl(".seekforge/uploads/img-1.png")).toBe(
+      "/api/raw?path=.seekforge%2Fuploads%2Fimg-1.png&ws=ws-a&token=tok123",
+    );
+  });
+
+  it("omits ws when none is active, and omits the token when empty", () => {
+    setWorkspaceProvider(() => "");
+    setTokenProvider(() => "");
+    expect(api.rawUrl(".seekforge/uploads/a.png")).toBe("/api/raw?path=.seekforge%2Fuploads%2Fa.png");
+  });
+
+  it("an explicit ws overrides the active workspace", () => {
+    setWorkspaceProvider(() => "active");
+    setTokenProvider(() => "");
+    expect(api.rawUrl("x.png", "explicit")).toBe("/api/raw?path=x.png&ws=explicit");
+    // An explicit empty ws means the server default (no ws param).
+    expect(api.rawUrl("x.png", "")).toBe("/api/raw?path=x.png");
   });
 });
