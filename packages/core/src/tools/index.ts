@@ -6,6 +6,7 @@
  */
 
 import type {
+  ConfirmResult,
   PermissionPolicy,
   PermissionRequest,
   ToolCall,
@@ -24,8 +25,13 @@ export type ToolContext = {
   /** Absolute path of the project workspace; all file access must stay inside. */
   workspace: string;
   policy: PermissionPolicy;
-  /** Ask the user. Resolves true if approved. Must be given raw args to display. */
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Ask the user. Must be given raw args to display. May resolve a plain
+   * boolean (allow-once / deny — the original contract) OR a ConfirmResult
+   * object to also grow the session allowlist (`{ allow, remember: "session" }`).
+   * enforcePermission treats `true`/`false` exactly as before.
+   */
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /** Interactive question channel (TUI). Absent in non-interactive runs. */
   askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   /**

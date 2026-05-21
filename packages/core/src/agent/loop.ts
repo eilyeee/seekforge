@@ -3,6 +3,7 @@ import {
   type AgentEvent,
   type AgentLimits,
   type ChatMessage,
+  type ConfirmResult,
   type FinalReport,
   type PermissionRequest,
   type PermissionRule,
@@ -63,8 +64,14 @@ export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => voi
 export type AgentCoreDeps = {
   provider: ChatProvider;
   dispatcher: ToolDispatcher;
-  /** Asks the user for permission; must surface the raw command/path. */
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Asks the user for permission; must surface the raw command/path. May
+   * resolve a plain boolean (allow-once / deny — the original contract) or a
+   * ConfirmResult object (`{ allow, remember: "session" }`) to grow the run's
+   * allow-for-session allowlist. Frontends can keep returning booleans and opt
+   * into the richer form later (a follow-up — see docs).
+   */
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /**
    * Interactive question channel (TUI), backing the ask_user tool. Absent in
    * non-interactive runs; never forwarded to nested subagent runs (they must
@@ -81,6 +88,13 @@ export type AgentCoreDeps = {
    * "mechanical" (no extra model call, fully deterministic).
    */
   compaction?: "mechanical" | "llm";
+  /**
+   * Optional focus steering the LLM auto-compaction summary toward what the
+   * user cares about (appended to the summarization prompt as "focus
+   * especially on: <focus>"). Ignored when compaction is "mechanical".
+   * Frontends can surface this from a /compact <focus> directive.
+   */
+  compactFocus?: string;
   /** When set, model output is streamed through this callback (chatStream). */
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (DeepSeek V4 thinking mode). */
@@ -333,7 +347,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // notification hooks fire just before the user is interrupted (a
       // permission prompt or an ask_user question), so external notifiers
       // (sound, desktop alert) can ping. Advisory; never affects the answer.
-      const confirmWithNotify = async (req: PermissionRequest): Promise<boolean> => {
+      const confirmWithNotify = async (req: PermissionRequest): Promise<ConfirmResult> => {
         await runHooks("notification", deps.hooks?.notification, {
           sessionId,
           workspace: input.projectPath,
@@ -341,6 +355,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           detail: req,
         });
         return deps.confirm(req);
+      };
+      // Boolean view of confirmWithNotify for the dispatch flow, which only
+      // needs allow/deny (allow-for-session has no meaning for a one-off
+      // agent dispatch). Normalizes the boolean | { allow } contract.
+      const confirmAllowed = async (req: PermissionRequest): Promise<boolean> => {
+        const answer = await confirmWithNotify(req);
+        return typeof answer === "boolean" ? answer : answer.allow;
       };
       const askUser = deps.askUser;
       const askUserWithNotify =
@@ -361,6 +382,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // user-turn index. rewindSession keeps using the oldest entry per path;
       // rewindSessionToTurn picks the earliest entry with turn >= N.
       const checkpointed = new Set<string>();
+      // Run-scoped allow-for-session allowlist: one array shared by every tool
+      // call this run makes, grown in place by enforcePermission when the user
+      // answers "yes, don't ask again". Not persisted — it dies with the run.
+      const sessionAllowlist: string[] = [];
       const ctx: ToolContext = {
         sessionId,
         workspace: input.projectPath,
@@ -368,6 +393,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           approvalMode: input.approvalMode,
           mode: input.mode,
           commandAllowlist: deps.commandAllowlist ?? [],
+          sessionAllowlist,
           ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
         },
         confirm: confirmWithNotify,
@@ -608,7 +634,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // ask-mode agents are read-only and auto-allowed; edit-mode agents
         // go through the normal approval flow (unless approvalMode is auto).
         if (def.mode === "edit" && input.approvalMode !== "auto") {
-          const approved = await confirmWithNotify({
+          const approved = await confirmAllowed({
             toolName: DISPATCH_AGENT_TOOL,
             permission: "write",
             description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
@@ -722,7 +748,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           };
         }
         if (def.mode === "edit" && input.approvalMode !== "auto") {
-          const approved = await confirmWithNotify({
+          const approved = await confirmAllowed({
             toolName: AGENT_SEND_TOOL,
             permission: "write",
             description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
@@ -782,7 +808,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // failure) falls back to the mechanical digest.
             const compacted =
               (deps.compaction === "llm"
-                ? await llmCompactMessages(provider, messages, budgetTokens)
+                ? await llmCompactMessages(
+                    provider,
+                    messages,
+                    budgetTokens,
+                    deps.compactFocus !== undefined ? { focus: deps.compactFocus } : undefined,
+                  )
                 : null) ?? compactMessages(messages, budgetTokens);
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.

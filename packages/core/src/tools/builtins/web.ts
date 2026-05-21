@@ -66,12 +66,84 @@ export function htmlToText(html: string): string {
 
 const webFetchSchema = z.object({
   url: z.string().describe("Absolute http(s) URL to fetch (docs, issues, READMEs)."),
+  extract: z
+    .string()
+    .optional()
+    .describe(
+      "Optional question/keywords. When set AND the page is too long to return " +
+        "in full, the returned text is biased toward the lines that match these " +
+        "keywords (instead of a plain head+tail truncation), so the relevant " +
+        "part survives. You still summarize the returned text yourself.",
+    ),
 });
+
+/** Tokenizes an extract query into lowercased keywords for line scoring. */
+function extractKeywords(extract: string): string[] {
+  return Array.from(
+    new Set(
+      extract
+        .toLowerCase()
+        .split(/[^a-z0-9_]+/i)
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 3),
+    ),
+  );
+}
+
+/**
+ * Relevance-biased truncation for web_fetch: when the stripped text is over
+ * the cap and an `extract` query is given, keep a head plus the highest-scoring
+ * lines (scored by how many extract keywords they contain), preserving original
+ * order. No model call — this is honest keyword selection, not summarization;
+ * full LLM-summarize-on-fetch would need a provider plumbed into tools and is a
+ * follow-up. Falls back to plain head+tail when nothing matches.
+ */
+export function extractRelevant(
+  text: string,
+  extract: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) return { text, truncated: false };
+  const keywords = extractKeywords(extract);
+  if (keywords.length === 0) return truncateHeadTail(text, maxChars);
+
+  const lines = text.split("\n");
+  // Always keep a head so the page's context/title survives; spend the rest of
+  // the budget on the best-matching lines in their original order.
+  const HEAD_LINES = 15;
+  const head = lines.slice(0, HEAD_LINES);
+  const headText = head.join("\n");
+  const marker = "\n... [non-matching sections omitted] ...\n";
+  let budget = maxChars - headText.length - marker.length;
+  if (budget <= 0) return truncateHeadTail(text, maxChars);
+
+  const scored = lines
+    .map((line, idx) => {
+      if (idx < HEAD_LINES) return { idx, score: 0 };
+      const lower = line.toLowerCase();
+      let score = 0;
+      for (const kw of keywords) if (lower.includes(kw)) score++;
+      return { idx, score };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return truncateHeadTail(text, maxChars);
+
+  const keep = new Set<number>();
+  for (const { idx } of scored) {
+    if (budget <= 0) break;
+    keep.add(idx);
+    budget -= lines[idx]!.length + 1;
+  }
+  const kept = [...keep].sort((a, b) => a - b).map((idx) => lines[idx]!);
+  return { text: `${headText}${marker}${kept.join("\n")}`, truncated: true };
+}
 
 const webFetch = defineTool({
   name: "web_fetch",
   description:
-    "Fetch a public http(s) url and return its readable text (HTML is stripped, output capped at 20k chars). Every fetch requires user confirmation and private/loopback addresses are refused — fetch only when the page genuinely adds information (docs, issues, changelogs), not for things the codebase already answers.",
+    "Fetch a public http(s) url and return its readable text (HTML is stripped, output capped at 20k chars). Pass `extract` (a question or keywords) to bias the truncation toward the most relevant lines when the page is long — you still summarize the returned text yourself. Every fetch requires user confirmation and private/loopback addresses are refused — fetch only when the page genuinely adds information (docs, issues, changelogs), not for things the codebase already answers.",
   schema: webFetchSchema,
   // "env" level: always confirmed, even in auto-approval mode — the network
   // is off by default (docs/14 §3.5) and every URL is shown raw to the user.
@@ -113,7 +185,13 @@ const webFetch = defineTool({
     let text = buf.toString("utf8");
     if (/text\/html/i.test(contentType)) text = htmlToText(text);
 
-    const { text: capped, truncated } = truncateHeadTail(text, DEFAULT_LIMITS.toolOutputMaxChars);
+    // With an `extract` query, bias the truncation toward matching lines so
+    // the relevant part survives the cap; otherwise plain head+tail.
+    const extract = args.extract?.trim();
+    const { text: capped, truncated } =
+      extract !== undefined && extract !== ""
+        ? extractRelevant(text, extract, DEFAULT_LIMITS.toolOutputMaxChars)
+        : truncateHeadTail(text, DEFAULT_LIMITS.toolOutputMaxChars);
     return {
       data: {
         url: args.url,
