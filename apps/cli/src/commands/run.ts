@@ -50,16 +50,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
 
-  // --append-system-prompt needs a core seam (the base prompt is composed inside
-  // core from project rules / memory / skills and is not reconstructable here).
-  // core only exposes systemPromptOverride (a FULL replacement), so appending is
-  // not yet supported CLI-side. Fail clearly rather than silently dropping it.
-  if (opts.appendSystemPrompt !== undefined) {
-    fail("--append-system-prompt is not supported yet", {
-      hint: "use --system-prompt for a full override; appending needs a small core hook (planned)",
-    });
-    return;
-  }
 
   const model = opts.model ?? config.model;
   if (model === "deepseek-reasoner") {
@@ -190,6 +180,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       resumeSessionId: input.resumeSessionId,
       signal: controller.signal,
       ...(opts.systemPrompt !== undefined ? { systemPromptOverride: opts.systemPrompt } : {}),
+      ...(opts.appendSystemPrompt !== undefined ? { appendSystemPrompt: opts.appendSystemPrompt } : {}),
     })) {
       render(event);
       if (event.type === "model.message") numTurns++;

@@ -288,7 +288,7 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
 
   return (
     <div
-      className="relative border-t border-zinc-800 p-3"
+      className="relative border-t border-subtle p-3"
       onDragOver={(e) => {
         e.preventDefault();
         if (!disabled) setDragOver(true);
@@ -297,7 +297,7 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
       onDrop={onDrop}
     >
       {dropdown && (
-        <div className="absolute bottom-full left-3 right-3 z-10 mb-1 max-h-64 overflow-y-auto rounded border border-zinc-700 bg-zinc-900 shadow-lg">
+        <div className="absolute bottom-full left-3 right-3 z-10 mb-1 max-h-64 overflow-y-auto rounded border border-strong bg-surface-raised shadow-lg">
           {dropdown.kind === "slash"
             ? slashItems.map((cmd, i) => (
                 <button
@@ -308,11 +308,11 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
                     pickSlash(i);
                   }}
                   className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-xs ${
-                    i === selIndex ? "bg-zinc-700 text-zinc-100" : "text-zinc-300 hover:bg-zinc-800"
+                    i === selIndex ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay"
                   }`}
                 >
                   <span className="font-mono">/{cmd.name}</span>
-                  <span className="truncate text-zinc-500">{cmd.hint}</span>
+                  <span className="truncate text-tertiary">{cmd.hint}</span>
                 </button>
               ))
             : fileResults.map((path, i) => (
@@ -324,7 +324,7 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
                     pickFile(i);
                   }}
                   className={`block w-full truncate px-3 py-1.5 text-left font-mono text-xs ${
-                    i === selIndex ? "bg-zinc-700 text-zinc-100" : "text-zinc-300 hover:bg-zinc-800"
+                    i === selIndex ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay"
                   }`}
                 >
                   {path}
@@ -374,15 +374,15 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
         disabled={disabled}
         placeholder={placeholder}
         rows={3}
-        className={`w-full resize-none rounded border bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none disabled:opacity-50 ${
-          dragOver ? "border-emerald-700" : "border-zinc-700"
+        className={`w-full resize-none rounded border bg-surface-raised px-3 py-2 text-sm text-primary placeholder:text-tertiary focus:border-accent focus:outline-none disabled:opacity-50 ${
+          dragOver ? "border-accent" : "border-strong"
         }`}
       />
 
       {(uploading > 0 || uploadError) && (
         <div className="mt-1 text-xs">
-          {uploading > 0 && <span className="text-zinc-500">uploading image…</span>}
-          {uploadError && <span className="text-red-400">upload failed: {uploadError}</span>}
+          {uploading > 0 && <span className="text-tertiary">uploading image…</span>}
+          {uploadError && <span className="text-danger">upload failed: {uploadError}</span>}
         </div>
       )}
     </div>

@@ -85,6 +85,8 @@ export function toolTitle(toolName: string, args: unknown): { verb: string; deta
       return t("Write", strField(a, "path"));
     case "apply_patch":
       return t("Update", strField(a, "path"));
+    case "glob":
+      return t("Glob", strField(a, "pattern"));
     case "list_files":
       return t("List", strField(a, "path") || ".");
     case "search_text": {

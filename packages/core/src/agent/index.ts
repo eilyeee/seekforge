@@ -20,6 +20,8 @@ export type RunAgentTaskInput = {
    * give nested subagent runs their own prompt). Not part of the public API.
    */
   systemPromptOverride?: string;
+  /** Appended verbatim after the composed system prompt (CLI --append-system-prompt). */
+  appendSystemPrompt?: string;
   /** Internal: marks this session as spawned by dispatch_agent (the agent id). */
   parentAgentId?: string;
 };

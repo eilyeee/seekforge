@@ -122,7 +122,7 @@ program
   .option("--max-turns <n>", "with -p: cap agent turns", parsePositiveInt)
   .option("--verbose", "with -p: print full tool args and results")
   .option("--system-prompt <text>", "with -p: replace the system prompt entirely")
-  .option("--append-system-prompt <text>", "with -p: append to the system prompt (not yet supported)")
+  .option("--append-system-prompt <text>", "with -p: append text to the system prompt")
   .option("--allowedTools <list>", "with -p: only allow these tools (comma-separated)")
   .option("--disallowedTools <list>", "with -p: deny these tools (comma-separated)");
 
@@ -534,7 +534,7 @@ config
   });
 config
   .command("set")
-  .argument("<key>", "apiKey | model | baseUrl")
+  .argument("<key>", "apiKey | model | baseUrl | runtimeBin | commandAllowlist")
   .argument("<value>")
   .option("-g, --global", "write to ~/.seekforge/config.json instead of the project")
   .description("set a config value")

@@ -58,18 +58,18 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const open = manualOpen ?? item.streaming;
   return (
-    <div className="rounded border border-zinc-800/80 bg-zinc-900/40">
+    <div className="rounded border border-subtle bg-surface/40">
       <button
         type="button"
         onClick={() => setManualOpen(!open)}
-        className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-zinc-500 hover:text-zinc-400"
+        className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-tertiary hover:text-secondary"
       >
         <span className={item.streaming ? "animate-pulse" : ""}>✻</span>
         <span className="italic">thinking{item.streaming ? "…" : ""}</span>
-        <span className="ml-auto text-zinc-700">{open ? "▾" : "▸"}</span>
+        <span className="ml-auto text-tertiary">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
-        <div className="whitespace-pre-wrap border-t border-zinc-800/80 px-3 py-2 text-xs italic text-zinc-500">
+        <div className="whitespace-pre-wrap border-t border-subtle px-3 py-2 text-xs italic text-tertiary">
           {item.text}
         </div>
       )}
@@ -87,12 +87,12 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
               type="button"
               onClick={() => onBacktrack(item.id)}
               title="Rewind the conversation to just before this message"
-              className="mt-1 rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-500 opacity-0 hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100"
+              className="mt-1 rounded border border-strong px-1.5 py-0.5 text-xs text-tertiary opacity-0 hover:bg-surface-overlay hover:text-primary group-hover:opacity-100"
             >
               ↺
             </button>
           )}
-          <div className="max-w-[85%] whitespace-pre-wrap rounded-lg border border-emerald-900/60 bg-emerald-950/40 px-3 py-2 text-zinc-100">
+          <div className="max-w-[85%] whitespace-pre-wrap rounded-lg border border-accent/40 bg-accent-muted px-3 py-2 text-primary">
             <TextWithImages text={item.text} />
           </div>
         </div>
@@ -101,7 +101,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       return (
         <div className="max-w-[95%]">
           <Markdown source={item.text} />
-          {item.streaming && <span className="ml-0.5 animate-pulse text-emerald-400">▌</span>}
+          {item.streaming && <span className="ml-0.5 animate-pulse text-accent">▌</span>}
         </div>
       );
     case "thinking":
@@ -112,15 +112,15 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       return <PlanCard items={item.items} />;
     case "substep":
       return (
-        <div className="rounded border border-violet-900/60 bg-violet-950/20 px-3 py-1.5 text-xs">
-          <span className="font-mono font-semibold text-violet-300">⤷ {item.agentId}</span>
-          <span className="ml-2 font-mono text-zinc-500">{item.steps.join(" · ")}</span>
+        <div className="rounded border border-accent/40 bg-accent-muted/40 px-3 py-1.5 text-xs">
+          <span className="font-mono font-semibold text-accent">⤷ {item.agentId}</span>
+          <span className="ml-2 font-mono text-tertiary">{item.steps.join(" · ")}</span>
         </div>
       );
     case "file": {
       const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
       return (
-        <div className="inline-flex items-center gap-1.5 rounded-full border border-sky-900 bg-sky-950/40 px-2.5 py-0.5 font-mono text-xs text-sky-300">
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-muted px-2.5 py-0.5 font-mono text-xs text-accent">
           <span aria-hidden>{isImage ? "🖼" : "±"}</span>
           <span>{item.path}</span>
         </div>
@@ -128,20 +128,20 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
     }
     case "compacted":
       return (
-        <div className="rounded border border-dashed border-zinc-700 px-3 py-1.5 text-center text-xs text-zinc-500">
+        <div className="rounded border border-dashed border-strong px-3 py-1.5 text-center text-xs text-tertiary">
           context compacted — {item.droppedTurns} turns summarized into ~{item.summaryTokens} tokens
         </div>
       );
     case "microcompacted":
       return (
-        <div className="rounded border border-dashed border-zinc-800 px-3 py-1 text-center text-xs text-zinc-600">
+        <div className="rounded border border-dashed border-subtle px-3 py-1 text-center text-xs text-tertiary">
           context micro-compacted — {item.clearedResults} old tool result(s) cleared
         </div>
       );
     case "report":
       return (
-        <div className="rounded border border-emerald-900/60 bg-emerald-950/20 px-3 py-2 text-xs text-zinc-400">
-          <span className="font-semibold text-emerald-400">session completed</span>
+        <div className="rounded border border-accent/40 bg-accent-muted/60 px-3 py-2 text-xs text-secondary">
+          <span className="font-semibold text-accent">session completed</span>
           {item.report.changedFiles.length > 0 && (
             <span> · {item.report.changedFiles.length} file(s) changed</span>
           )}
@@ -150,7 +150,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
             · {formatTokens(item.report.usage.promptTokens + item.report.usage.completionTokens)} tokens ·{" "}
             {formatUsd(item.report.usage.costUsd)}
           </span>
-          <div className="mt-1 font-mono text-zinc-500">{item.report.verification}</div>
+          <div className="mt-1 font-mono text-tertiary">{item.report.verification}</div>
         </div>
       );
     case "failed": {
@@ -158,13 +158,13 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       // command; the loop sets recoverable + sessionId on the error.
       const resumeId = item.error.recoverable ? item.error.sessionId : undefined;
       return (
-        <div className="rounded border border-red-900 bg-red-950/40 px-3 py-2 text-sm">
-          <span className="font-mono text-xs text-red-400">[{item.error.code}]</span>{" "}
-          <span className="text-red-200">{item.error.message}</span>
-          {item.error.hint && <div className="mt-1 text-xs text-red-300/80">→ {item.error.hint}</div>}
+        <div className="rounded border border-danger/50 bg-danger/10 px-3 py-2 text-sm">
+          <span className="font-mono text-xs text-danger">[{item.error.code}]</span>{" "}
+          <span className="text-danger">{item.error.message}</span>
+          {item.error.hint && <div className="mt-1 text-xs text-danger/80">→ {item.error.hint}</div>}
           {resumeId && (
-            <div className="mt-1 text-xs text-red-300/80">
-              → resume with <span className="font-mono text-red-200">/resume {resumeId}</span> (your file
+            <div className="mt-1 text-xs text-danger/80">
+              → resume with <span className="font-mono text-danger">/resume {resumeId}</span> (your file
               changes and completed steps are preserved; checkpoints intact)
             </div>
           )}

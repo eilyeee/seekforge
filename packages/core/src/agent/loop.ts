@@ -208,6 +208,11 @@ function toolResultForModel(result: ToolResult, maxChars: number): string {
   return text;
 }
 
+/** Appends a user-supplied system-prompt suffix (CLI --append-system-prompt). */
+function appendUserPrompt(base: string, append?: string): string {
+  return append && append.trim() ? `${base}\n\n${append.trim()}` : base;
+}
+
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
   const windowTokens = deps.contextWindowTokens ?? 131_072;
@@ -289,14 +294,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             role: "system",
             content:
               input.systemPromptOverride ??
-              buildSystemPrompt({
-                workspace: input.projectPath,
-                mode: input.mode,
-                plan: input.plan,
-                projectRules: collectProjectRules(input.projectPath),
-                memoryBrief: buildMemoryBrief(input.projectPath, input.task),
-                subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
-              }),
+              appendUserPrompt(
+                buildSystemPrompt({
+                  workspace: input.projectPath,
+                  mode: input.mode,
+                  plan: input.plan,
+                  projectRules: collectProjectRules(input.projectPath),
+                  memoryBrief: buildMemoryBrief(input.projectPath, input.task),
+                  subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+                }),
+                input.appendSystemPrompt,
+              ),
           };
         }
         const continuation: ChatMessage = { role: "user", content: task };
@@ -322,15 +330,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             title: `skills: ${skillSelections.map((s) => s.skill.id).join(", ")}`,
           });
         }
-        const systemPrompt = buildSystemPrompt({
-          workspace: input.projectPath,
-          mode: input.mode,
-          plan: input.plan,
-          projectRules: collectProjectRules(input.projectPath),
-          memoryBrief,
-          skillBrief: buildSkillBrief(skillSelections),
-          subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
-        });
+        const systemPrompt = appendUserPrompt(
+          buildSystemPrompt({
+            workspace: input.projectPath,
+            mode: input.mode,
+            plan: input.plan,
+            projectRules: collectProjectRules(input.projectPath),
+            memoryBrief,
+            skillBrief: buildSkillBrief(skillSelections),
+            subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+          }),
+          input.appendSystemPrompt,
+        );
         messages = [
           { role: "system", content: systemPrompt },
           { role: "user", content: task },
