@@ -116,12 +116,15 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
 /**
  * Spawns the configured MCP servers and builds their ToolSpecs. Callers must
  * invoke dispose() when the session ends. No servers configured -> no-op.
+ * `workspacePath` (absolute) is advertised to each server via the roots
+ * capability, so servers answer roots/list with the real workspace.
  */
 export async function prepareMcp(
   config: TuiConfig,
+  workspacePath?: string,
 ): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
   if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
     return { specs: [], entries: [], dispose: () => {} };
   }
-  return loadMcpToolSpecs(config.mcpServers);
+  return loadMcpToolSpecs(config.mcpServers, workspacePath ? [workspacePath] : undefined);
 }

@@ -131,7 +131,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
           ? renderer.render
           : () => {}; // json: swallow events, emit one final object at the end
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
-  const mcp = await prepareMcp(config);
+  const mcp = await prepareMcp(config, projectPath);
 
   // --allowedTools/--disallowedTools synthesize per-run permission rules,
   // prepended to any config rules. undefined when neither flag is used.
