@@ -17,6 +17,7 @@ import {
   titleFromTask,
   updateTab,
   DEFAULT_TAB_TITLE,
+  type ApprovalChoice,
   type ChatTab,
   type PendingPermission,
   type PendingQuestion,
@@ -29,7 +30,7 @@ import type { SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
 export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
 
-export type { ChatTab, PendingPermission, PendingQuestion, StartMode };
+export type { ApprovalChoice, ChatTab, PendingPermission, PendingQuestion, StartMode };
 export { activeTab };
 
 function readTokenFromLocation(): string {
@@ -94,7 +95,7 @@ type AppStore = {
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   setMode: (mode: StartMode) => void;
-  setAutoApprove: (on: boolean) => void;
+  setApprovalMode: (approvalMode: ApprovalChoice) => void;
   /** Chat-header run controls (per tab, sent with each start/send). */
   setModel: (model: string) => void;
   setThinking: (on: boolean) => void;
@@ -108,7 +109,7 @@ type AppStore = {
   executePlan: () => void;
   cancel: () => void;
   newSession: () => void;
-  respondPermission: (approved: boolean) => void;
+  respondPermission: (approved: boolean, remember?: "session") => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
   continueSession: (meta: SessionMeta, messages: ChatMessage[]) => void;
@@ -265,7 +266,8 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setMode: (mode) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { mode }) })),
 
-    setAutoApprove: (on) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { autoApprove: on }) })),
+    setApprovalMode: (approvalMode) =>
+      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { approvalMode }) })),
 
     setModel: (model) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { model }) })),
 
@@ -304,7 +306,7 @@ export const useStore = create<AppStore>()((set, get) => {
       } else {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
-        client.send(buildStartFrame(task, tab.mode, tab.autoApprove, tab.ws, overrides));
+        client.send(buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides));
       }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
     },
@@ -342,11 +344,17 @@ export const useStore = create<AppStore>()((set, get) => {
       }));
     },
 
-    respondPermission: (approved) => {
+    respondPermission: (approved, remember) => {
       const tab = activeTab(get().tabs);
       const pending = tab.pendingPermission;
       if (!pending) return;
-      wsByTab.get(tab.tabId)?.send({ type: "permission.response", requestId: pending.requestId, approved });
+      wsByTab.get(tab.tabId)?.send({
+        type: "permission.response",
+        requestId: pending.requestId,
+        approved,
+        // "session" grows the run's session allowlist (core ConfirmResult).
+        ...(remember ? { remember } : {}),
+      });
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingPermission: null }) }));
     },
 

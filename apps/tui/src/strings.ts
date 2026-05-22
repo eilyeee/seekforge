@@ -55,6 +55,7 @@ const EN: Record<string, string> = {
 
   // ── Mode line under the composer ────────────────────────────────────────
   "mode.autoApprove": "⏵⏵ auto-approve on",
+  "mode.acceptEdits": "⏵ accept-edits on",
   "mode.plan": "⏸ plan mode on",
   "mode.cycleHint": "(shift+tab to cycle)",
   "mode.runningShell": "running:",
@@ -114,6 +115,7 @@ const ZH_CN: Record<string, string> = {
   "permission.deny": "其他键拒绝",
 
   "mode.autoApprove": "⏵⏵ 自动批准已开启",
+  "mode.acceptEdits": "⏵ 自动接受编辑已开启",
   "mode.plan": "⏸ 计划模式已开启",
   "mode.cycleHint": "(shift+tab 切换)",
   "mode.runningShell": "运行中:",
