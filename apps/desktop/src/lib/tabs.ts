@@ -11,6 +11,9 @@ import type { ConnState, ServerFrame } from "./ws-types";
 /** Mode selector for the NEXT start frame ("plan" = ask mode + plan flag). */
 export type StartMode = "edit" | "plan" | "ask";
 
+/** Approval selector for the NEXT start frame (maps to the run's approvalMode). */
+export type ApprovalChoice = "confirm" | "acceptEdits" | "auto";
+
 export type PendingPermission = { requestId: string; request: PermissionRequest };
 
 /** ask_user question awaiting an answer (question.request frame). */
@@ -57,8 +60,8 @@ export type ChatTab = {
   /** Last protocol-level WS error ({"type":"error"} frame) on this tab. */
   wsError: string | null;
   mode: StartMode;
-  /** approvalMode "auto" for the next start when true. */
-  autoApprove: boolean;
+  /** Approval mode for the next start ("confirm" prompts; "auto" never does). */
+  approvalMode: ApprovalChoice;
   /** The current run was started with plan: true. */
   planPending: boolean;
   /** A plan run completed — offer the "Execute plan" button. */
@@ -99,7 +102,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     pendingQuestion: null,
     wsError: null,
     mode: "edit",
-    autoApprove: false,
+    approvalMode: "confirm",
     planPending: false,
     planReady: false,
     model: "",

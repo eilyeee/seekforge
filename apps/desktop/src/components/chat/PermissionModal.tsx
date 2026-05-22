@@ -15,7 +15,8 @@ const PERMISSION_TONE: Record<string, BadgeTone> = {
 
 type Props = {
   request: PermissionRequest;
-  onRespond: (approved: boolean) => void;
+  /** remember "session" allows this (and similar) for the rest of the session. */
+  onRespond: (approved: boolean, remember?: "session") => void;
 };
 
 /**
@@ -35,6 +36,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (e.key === "y") onRespond(true);
+      if (e.key === "a") onRespond(true, "session");
       if (e.key === "n") onRespond(false);
     };
     window.addEventListener("keydown", onKey);
@@ -90,8 +92,12 @@ export function PermissionModal({ request, onRespond }: Props) {
             Deny
             <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
           </Button>
+          <Button onClick={() => onRespond(true, "session")}>
+            Allow for session
+            <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">a</kbd>
+          </Button>
           <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
-            Allow
+            Allow once
             <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
           </Button>
         </>

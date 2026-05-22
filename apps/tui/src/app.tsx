@@ -22,19 +22,23 @@ import {
   sessionTitle,
   truncateSessionAtUserTurn,
   writeSessionMeta,
-  loadSessionMessages,
-  rewriteSessionMessages,
-  llmCompactMessages,
-  estimateMessagesTokens,
+  llmCompactSessionNow,
   createDeepSeekProvider,
   BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
   type McpClientEntry,
   type ToolSpec,
 } from "@seekforge/core";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
-import { type ApprovalSetting, type ChatAction, type ChatState, type Overlay } from "./model.js";
+import {
+  approvalModeFor,
+  nextApproval,
+  permissionResultForKey,
+  type ChatAction,
+  type ChatState,
+  type Overlay,
+} from "./model.js";
 import { activeChat, activeTabId, initialTabs, tabLabels, tabsReducer } from "./tabs.js";
 import { buildTree, moveCursor, toggleDir, visibleNodes, type TreeState } from "./file-tree.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -154,7 +158,7 @@ export type AppProps = {
 
 type PendingPermission = {
   request: PermissionRequest;
-  resolve: (approved: boolean) => void;
+  resolve: (result: ConfirmResult) => void;
 };
 
 /** Items scrolled per PageUp/PageDown press. */
@@ -164,8 +168,6 @@ const VIEW_ITEMS = 40;
 
 const EXECUTE_PLAN_PROMPT =
   "Execute the plan you produced above, step by step. Make the changes and run the verification.";
-
-const APPROVAL_CYCLE: ApprovalSetting[] = ["confirm", "auto", "plan"];
 
 export function App({
   config,
@@ -548,7 +550,7 @@ export function App({
           mcpToolSpecs,
           mode: opts?.mode ?? "edit",
           plan: opts?.plan ?? false,
-          approvalMode: approvalRef.current === "auto" ? "auto" : "confirm",
+          approvalMode: approvalModeFor(approvalRef.current),
           background: bgRef.current as BackgroundTasks,
           dispatch: (a: ChatAction) => {
             if (a.type === "event" && a.event.type === "session.created") ownSessionId.current = a.event.sessionId;
@@ -556,7 +558,7 @@ export function App({
           },
           getSessionId: () => ownSessionId.current,
           confirm: (req) =>
-            new Promise<boolean>((resolve) => {
+            new Promise<ConfirmResult>((resolve) => {
               if (detached()) {
                 dispatchTab({
                   type: "notice",
@@ -787,14 +789,19 @@ export function App({
           break;
         case "approve": {
           if (!command.arg) {
-            notice(`approval mode: ${approvalRef.current} (auto | confirm | plan — Shift+Tab cycles)`);
+            notice(`approval mode: ${approvalRef.current} (confirm | acceptEdits | auto | plan — Shift+Tab cycles)`);
             break;
           }
-          if (command.arg === "auto" || command.arg === "confirm" || command.arg === "plan") {
+          if (
+            command.arg === "auto" ||
+            command.arg === "acceptEdits" ||
+            command.arg === "confirm" ||
+            command.arg === "plan"
+          ) {
             dispatch({ type: "set-approval", approval: command.arg });
             notice(`approval mode: ${command.arg}`);
           } else {
-            notice("usage: /approve [auto|confirm|plan]", "error");
+            notice("usage: /approve [confirm|acceptEdits|auto|plan]", "error");
           }
           break;
         }
@@ -1118,30 +1125,22 @@ export function App({
             notice(`compacting with focus: ${focus} …`);
             void (async () => {
               try {
-                const messages = loadSessionMessages(projectPath, sessionId);
-                const before = estimateMessagesTokens(messages);
+                // Build a provider via the same path the factory uses, then let
+                // CORE's llmCompactSessionNow load → summarize (focus-steered) →
+                // rewrite the session messages in one canonical call.
                 const provider = createDeepSeekProvider({
                   apiKey: runConfigRef.current.apiKey ?? "",
                   baseUrl: runConfigRef.current.baseUrl,
                   model: modelRef.current,
                 });
-                const focused = {
-                  chat: (req: { messages: Parameters<typeof provider.chat>[0]["messages"] }) =>
-                    provider.chat({
-                      messages: req.messages.map((m, i) =>
-                        i === 0 ? { ...m, content: `${m.content}\n\nFocus especially on: ${focus}` } : m,
-                      ),
-                    }),
-                };
-                const result = await llmCompactMessages(focused, messages, 0);
+                const result = await llmCompactSessionNow(projectPath, sessionId, provider, focus);
                 if (!result) {
                   notice("nothing to compact — the session is still short (or the model call failed)");
                   return;
                 }
-                rewriteSessionMessages(projectPath, sessionId, result.messages);
                 notice(
                   `compacted (LLM, focused): dropped ${result.droppedTurns} earlier messages, ` +
-                    `${kfmt(before)} → ${kfmt(estimateMessagesTokens(result.messages))} tokens`,
+                    `${kfmt(result.beforeTokens)} → ${kfmt(result.afterTokens)} tokens`,
                 );
               } catch (err) {
                 notice(`compact failed: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -1494,8 +1493,7 @@ export function App({
   );
 
   const cycleApproval = useCallback(() => {
-    const idx = APPROVAL_CYCLE.indexOf(approvalRef.current);
-    const next = APPROVAL_CYCLE[(idx + 1) % APPROVAL_CYCLE.length] ?? "confirm";
+    const next = nextApproval(approvalRef.current);
     dispatch({ type: "set-approval", approval: next });
     notice(`approval mode: ${next}`);
   }, [notice]);
@@ -1575,25 +1573,25 @@ export function App({
     }
 
     // 1. Permission prompt: y allow once / a allow for session / anything else deny.
+    //    "a" returns the richer { allow, remember: "session" } so CORE grows
+    //    its canonical sessionAllowlist (the local allowlistRef is also kept in
+    //    sync for /permissions display and command-prefix matching).
     if (pendingPermissionRef.current) {
       const pending = pendingPermissionRef.current;
-      const choice = rawInput.toLowerCase();
-      let approved = false;
-      if (choice === "y") {
-        approved = true;
-      } else if (choice === "a") {
-        approved = true;
-        if (pending.request.command) {
-          const prefix = sessionAllowPrefix(pending.request.command);
-          if (prefix && !allowlistRef.current.includes(prefix)) {
-            allowlistRef.current.push(prefix);
-            notice(`allowed for this session: ${prefix} …`);
-          }
+      const result: ConfirmResult = permissionResultForKey(rawInput);
+      // "a" (allow for session) also mirrors the command prefix into the local
+      // allowlist for /permissions display and command-prefix matching; CORE's
+      // canonical sessionAllowlist grows from the remember:"session" result.
+      if (typeof result === "object" && result.remember === "session" && pending.request.command) {
+        const prefix = sessionAllowPrefix(pending.request.command);
+        if (prefix && !allowlistRef.current.includes(prefix)) {
+          allowlistRef.current.push(prefix);
+          notice(`allowed for this session: ${prefix} …`);
         }
       }
       pendingPermissionByTabRef.current.delete(activeIdRef.current);
       dispatch({ type: "permission-resolved" });
-      pending.resolve(approved);
+      pending.resolve(result);
       return;
     }
 
@@ -2148,8 +2146,12 @@ export function App({
         />
         {/* Claude Code-style mode line under the input box. */}
         {state.approval !== "confirm" ? (
-          <Text color={state.approval === "auto" ? "yellow" : "magenta"}>
-            {state.approval === "auto" ? `⏵⏵ ${t("mode.autoApprove")}` : `⏸ ${t("mode.plan")}`}
+          <Text color={state.approval === "auto" ? "yellow" : state.approval === "acceptEdits" ? "green" : "magenta"}>
+            {state.approval === "auto"
+              ? `⏵⏵ ${t("mode.autoApprove")}`
+              : state.approval === "acceptEdits"
+                ? `⏵ ${t("mode.acceptEdits")}`
+                : `⏸ ${t("mode.plan")}`}
             <Text dimColor> {t("mode.cycleHint")}</Text>
           </Text>
         ) : null}

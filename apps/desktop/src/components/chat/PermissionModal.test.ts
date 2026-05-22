@@ -119,4 +119,35 @@ describe("PermissionModal — edit-review preview", () => {
     expect(joined).toContain("Deny");
     expect(joined).toContain("rm -rf build");
   });
+
+  const plainReq: PermissionRequest = {
+    toolName: "run_command",
+    permission: "execute",
+    description: "Run a command",
+    command: "rm -rf build",
+  };
+
+  it("renders three buttons: Deny / Allow for session / Allow once", () => {
+    const { text } = inspect(plainReq);
+    const joined = text.join("");
+    expect(joined).toContain("Deny");
+    expect(joined).toContain("Allow for session");
+    expect(joined).toContain("Allow once");
+  });
+
+  it("'Allow for session' calls onRespond(true, 'session')", () => {
+    const calls: Array<[boolean, "session" | undefined]> = [];
+    const onRespond = (approved: boolean, remember?: "session"): void => {
+      calls.push([approved, remember]);
+    };
+    const acc: Collected = { text: [], types: [], clicks: [] };
+    // Collect the footer button handlers, then invoke each and inspect calls.
+    walk(PermissionModal({ request: plainReq, onRespond }), acc);
+    for (const click of acc.clicks) click();
+    // Deny -> (false, undefined); Allow for session -> (true, "session");
+    // Allow once -> (true, undefined); Modal onDismiss -> (false, undefined).
+    expect(calls).toContainEqual([true, "session"]);
+    expect(calls).toContainEqual([true, undefined]);
+    expect(calls).toContainEqual([false, undefined]);
+  });
 });

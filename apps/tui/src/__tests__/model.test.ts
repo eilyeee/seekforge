@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, FinalReport } from "@seekforge/shared";
-import { chatReducer, initialState, type ChatItem, type ChatState } from "../model.js";
+import {
+  approvalModeFor,
+  chatReducer,
+  initialState,
+  nextApproval,
+  permissionResultForKey,
+  APPROVAL_CYCLE,
+  type ApprovalSetting,
+  type ChatItem,
+  type ChatState,
+} from "../model.js";
 
 function reduce(state: ChatState, ...events: AgentEvent[]): ChatState {
   return events.reduce((s, event) => chatReducer(s, { type: "event", event }), state);
@@ -395,5 +405,46 @@ describe("chatReducer session.failed recovery hint", () => {
     });
     const notice = s.items.at(-1) as ChatItem & { kind: "notice" };
     expect(notice.text).not.toContain("/resume");
+  });
+});
+
+describe("approval-mode cycle (Shift+Tab / /approve)", () => {
+  it("includes acceptEdits and cycles confirm → acceptEdits → auto → plan → confirm", () => {
+    expect(APPROVAL_CYCLE).toEqual(["confirm", "acceptEdits", "auto", "plan"]);
+    expect(nextApproval("confirm")).toBe("acceptEdits");
+    expect(nextApproval("acceptEdits")).toBe("auto");
+    expect(nextApproval("auto")).toBe("plan");
+    expect(nextApproval("plan")).toBe("confirm");
+  });
+
+  it("maps each setting to the run's core ApprovalMode", () => {
+    expect(approvalModeFor("confirm")).toBe("confirm");
+    expect(approvalModeFor("acceptEdits")).toBe("acceptEdits");
+    expect(approvalModeFor("auto")).toBe("auto");
+    // plan runs read-only; its tools still confirm.
+    expect(approvalModeFor("plan")).toBe("confirm");
+  });
+
+  it("the set-approval action stores acceptEdits", () => {
+    const s = chatReducer(base(), { type: "set-approval", approval: "acceptEdits" as ApprovalSetting });
+    expect(s.approval).toBe("acceptEdits");
+  });
+});
+
+describe("permission-panel keypress → confirm result", () => {
+  it("y allows once (bare true)", () => {
+    expect(permissionResultForKey("y")).toBe(true);
+    expect(permissionResultForKey("Y")).toBe(true);
+  });
+
+  it("a returns the richer remember:session result (grows the core allowlist)", () => {
+    expect(permissionResultForKey("a")).toEqual({ allow: true, remember: "session" });
+    expect(permissionResultForKey("A")).toEqual({ allow: true, remember: "session" });
+  });
+
+  it("any other key denies", () => {
+    expect(permissionResultForKey("n")).toBe(false);
+    expect(permissionResultForKey("x")).toBe(false);
+    expect(permissionResultForKey("")).toBe(false);
   });
 });

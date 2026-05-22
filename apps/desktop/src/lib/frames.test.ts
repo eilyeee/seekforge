@@ -3,7 +3,7 @@ import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EX
 
 describe("buildStartFrame", () => {
   it("plan mode sends mode:ask with the plan flag", () => {
-    expect(buildStartFrame("do it", "plan", false)).toEqual({
+    expect(buildStartFrame("do it", "plan", "confirm")).toEqual({
       type: "start",
       task: "do it",
       mode: "ask",
@@ -13,13 +13,13 @@ describe("buildStartFrame", () => {
   });
 
   it("edit/ask send their mode without a plan flag", () => {
-    expect(buildStartFrame("do it", "edit", false)).toEqual({
+    expect(buildStartFrame("do it", "edit", "confirm")).toEqual({
       type: "start",
       task: "do it",
       mode: "edit",
       approvalMode: "confirm",
     });
-    expect(buildStartFrame("why?", "ask", false)).toEqual({
+    expect(buildStartFrame("why?", "ask", "confirm")).toEqual({
       type: "start",
       task: "why?",
       mode: "ask",
@@ -27,17 +27,22 @@ describe("buildStartFrame", () => {
     });
   });
 
-  it("auto-approve maps to approvalMode auto", () => {
-    expect(buildStartFrame("go", "edit", true)).toMatchObject({ approvalMode: "auto" });
-    expect(buildStartFrame("go", "plan", true)).toMatchObject({ approvalMode: "auto", plan: true });
+  it("threads the chosen approvalMode (confirm/acceptEdits/auto) into the frame", () => {
+    expect(buildStartFrame("go", "edit", "auto")).toMatchObject({ approvalMode: "auto" });
+    expect(buildStartFrame("go", "edit", "acceptEdits")).toMatchObject({ approvalMode: "acceptEdits" });
+    expect(buildStartFrame("go", "plan", "auto")).toMatchObject({ approvalMode: "auto", plan: true });
+    expect(buildStartFrame("go", "plan", "acceptEdits")).toMatchObject({
+      approvalMode: "acceptEdits",
+      plan: true,
+    });
   });
 
   it("includes ws when a workspace id is given, omits it when empty", () => {
-    expect(buildStartFrame("go", "edit", false, "ws-a")).toMatchObject({ ws: "ws-a" });
-    expect(buildStartFrame("go", "plan", false, "ws-a")).toMatchObject({ ws: "ws-a", plan: true });
+    expect(buildStartFrame("go", "edit", "confirm", "ws-a")).toMatchObject({ ws: "ws-a" });
+    expect(buildStartFrame("go", "plan", "confirm", "ws-a")).toMatchObject({ ws: "ws-a", plan: true });
     // An empty/omitted id leaves ws off the frame (server -> default workspace).
-    expect(buildStartFrame("go", "edit", false, "")).not.toHaveProperty("ws");
-    expect(buildStartFrame("go", "edit", false)).not.toHaveProperty("ws");
+    expect(buildStartFrame("go", "edit", "confirm", "")).not.toHaveProperty("ws");
+    expect(buildStartFrame("go", "edit", "confirm")).not.toHaveProperty("ws");
   });
 });
 
@@ -87,13 +92,13 @@ describe("frame builders carry per-run overrides", () => {
   const overrides = { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" } as const;
 
   it("buildStartFrame spreads overrides into the frame (plan mode too)", () => {
-    expect(buildStartFrame("go", "edit", false, "", overrides)).toMatchObject(overrides);
-    expect(buildStartFrame("go", "plan", false, "ws-a", overrides)).toMatchObject({
+    expect(buildStartFrame("go", "edit", "confirm", "", overrides)).toMatchObject(overrides);
+    expect(buildStartFrame("go", "plan", "confirm", "ws-a", overrides)).toMatchObject({
       ...overrides,
       plan: true,
       ws: "ws-a",
     });
-    expect(buildStartFrame("go", "edit", false)).not.toHaveProperty("model");
+    expect(buildStartFrame("go", "edit", "confirm")).not.toHaveProperty("model");
   });
 
   it("buildSendFrame and buildExecutePlanFrame carry overrides per message", () => {
