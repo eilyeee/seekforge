@@ -319,3 +319,15 @@ describe("GET /api/mcp/resources", () => {
     ]);
   });
 });
+
+describe("GET /api/mcp/prompts", () => {
+  it("lists prompts of reachable servers; broken servers contribute none", async () => {
+    const res = await authed("/api/mcp/prompts");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.prompts).toEqual([
+      { server: "fake", name: "greet", description: "Greet someone.", arguments: [{ name: "who", required: true }] },
+      { server: "fake", name: "summarize" },
+    ]);
+  });
+});

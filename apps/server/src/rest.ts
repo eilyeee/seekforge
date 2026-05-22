@@ -14,6 +14,7 @@ import {
   createMcpClient,
   fetchBalance,
   listEvolutionProposals,
+  listMcpPrompts,
   listMcpResources,
   listMemoryCandidates,
   listSessions,
@@ -448,11 +449,28 @@ export async function handleApi(
       const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
       const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
         serverName,
-        client: createMcpClient({ name: serverName, config }),
+        client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
         trusted: config.trusted === true,
       }));
       try {
         return sendJson(res, 200, { resources: await listMcpResources(entries) });
+      } finally {
+        for (const e of entries) e.client.dispose();
+      }
+    }
+
+    // Prompts of every configured MCP server (prompts/list), spawned on
+    // demand. Mirrors /api/mcp/resources: a server that fails or lacks prompt
+    // support contributes zero entries (listMcpPrompts never throws).
+    if (method === "GET" && path === "/api/mcp/prompts") {
+      const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
+      const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
+        serverName,
+        client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
+        trusted: config.trusted === true,
+      }));
+      try {
+        return sendJson(res, 200, { prompts: await listMcpPrompts(entries) });
       } finally {
         for (const e of entries) e.client.dispose();
       }

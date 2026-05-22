@@ -67,7 +67,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const mcp = await prepareMcp(config); // MCP servers live for the whole REPL
+  const mcp = await prepareMcp(config, projectPath); // MCP servers live for the whole REPL
   let model = opts.model ?? config.model ?? "deepseek-v4-flash";
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };

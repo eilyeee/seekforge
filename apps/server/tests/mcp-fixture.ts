@@ -8,7 +8,8 @@ import { join } from "node:path";
  * across packages). A node script speaking newline-delimited JSON-RPC 2.0:
  * - answers the initialize handshake and requires it before anything else,
  * - tools/list → two tools: echo (with a description) and boom,
- * - resources/list → two resources (one named, one bare uri).
+ * - resources/list → two resources (one named, one bare uri),
+ * - prompts/list → two prompts (one with an argument, one bare).
  */
 const FAKE_MCP_SERVER = `#!/usr/bin/env node
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -42,6 +43,13 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", id: msg.id, result: { resources: [
       { uri: "file:///docs/readme.md", name: "readme" },
       { uri: "file:///docs/plain.txt" },
+    ] } });
+    return;
+  }
+  if (msg.method === "prompts/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { prompts: [
+      { name: "greet", description: "Greet someone.", arguments: [{ name: "who", required: true }] },
+      { name: "summarize" },
     ] } });
     return;
   }

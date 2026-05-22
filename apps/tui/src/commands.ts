@@ -54,6 +54,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
   { name: "skills", summary: "list installed skills and their status" , group: "tools" },
   { name: "mcp", summary: "list configured MCP servers and their tools" , group: "tools" },
+  { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)" , group: "tools" },
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" , group: "tools" },
   { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" , group: "info" },
   { name: "vim", summary: "toggle vim mode for the composer" , group: "settings" },
@@ -97,6 +98,7 @@ export type SlashCommand =
   | { name: "agents" }
   | { name: "skills" }
   | { name: "mcp" }
+  | { name: "prompts" }
   | { name: "init" }
   | { name: "doctor" }
   | { name: "vim" }
@@ -139,6 +141,7 @@ const NO_ARG = new Set([
   "agents",
   "skills",
   "mcp",
+  "prompts",
   "init",
   "doctor",
   "vim",

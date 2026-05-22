@@ -14,6 +14,8 @@ import {
   projectMemoryPath,
   fetchBalance,
   forkSession,
+  getMcpPrompt,
+  listMcpPrompts,
   listMcpResources,
   readMcpResource,
   readSessionMeta,
@@ -30,6 +32,7 @@ import {
   BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
   type McpClientEntry,
+  type McpPromptRef,
   type ToolSpec,
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
@@ -124,6 +127,12 @@ import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
 import { attachSkillContent, expandSkillCommand, findSkillByCommand, skillCommandSpecs } from "./skill-commands.js";
 import { applyVimKey, initialVim, type VimState } from "./vim.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
+import {
+  findPromptByCommand,
+  formatMcpPromptLines,
+  mcpPromptCommandSpecs,
+  promptArgsFromText,
+} from "./mcp-prompt-commands.js";
 import { openInExternalEditor } from "./external-editor.js";
 import { copyToClipboard } from "./clipboard.js";
 import { Header, ACCENT, setAccent } from "./components/Header.js";
@@ -276,6 +285,26 @@ export function App({
   const skillRowsRef = useRef<ReturnType<typeof loadSkillsWithStatus> | null>(null);
   if (skillRowsRef.current === null) skillRowsRef.current = loadSkillsWithStatus(projectPath);
   const appStartRef = useRef(Date.now());
+
+  // MCP prompts double as "/mcp:<server>:<prompt>" palette commands. Fetched
+  // lazily once on mount (prompts/list per server) into a ref; a state bump
+  // re-renders the palette once they arrive. Empty/no servers → stays [].
+  const mcpPromptsRef = useRef<McpPromptRef[]>([]);
+  const [mcpPromptsLoaded, setMcpPromptsLoaded] = useState(false);
+  useEffect(() => {
+    if (mcpEntries.length === 0) return;
+    let cancelled = false;
+    void listMcpPrompts(mcpEntries)
+      .then((prompts) => {
+        if (cancelled) return;
+        mcpPromptsRef.current = prompts;
+        setMcpPromptsLoaded(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mcpEntries]);
 
   // Extra read-only roots for @ references (/add-dir).
   const extraDirsRef = useRef<string[]>([]);
@@ -477,9 +506,10 @@ export function App({
       ...COMMANDS,
       ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
       ...skillCommandSpecs(skillRowsRef.current ?? []),
+      ...mcpPromptCommandSpecs(mcpPromptsRef.current),
     ];
     return rankCommands(state.overlay.query, all, usageRef.current, 24);
-  }, [state.overlay]);
+  }, [state.overlay, mcpPromptsLoaded]);
 
   const pickerFiles = useMemo(() => {
     if (state.overlay?.kind !== "files") return [];
@@ -710,6 +740,7 @@ export function App({
             ...COMMANDS,
             ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
             ...skillCommandSpecs(skillRowsRef.current ?? []),
+            ...mcpPromptCommandSpecs(mcpPromptsRef.current),
           ];
           const rows = helpRows(specs);
           const selectable = selectableIndices(rows);
@@ -1097,6 +1128,15 @@ export function App({
               .catch(() => {});
           }
           break;
+        case "prompts": {
+          // /mcp:<server>:<prompt> commands surface here; arguments are passed
+          // best-effort (see mcp-prompt-commands.ts).
+          for (const line of formatMcpPromptLines(mcpPromptsRef.current)) notice(line);
+          if (mcpPromptsRef.current.length > 0) {
+            notice("invoke with /mcp:<server>:<prompt> [args] (args bind to the prompt's first declared argument)");
+          }
+          break;
+        }
         case "context":
           dispatch({ type: "overlay", overlay: { kind: "context" } });
           break;
@@ -1356,10 +1396,37 @@ export function App({
             void runTask(expandSkillCommand(skill, rest.join(" ").trim()), { echoUser: false });
             break;
           }
+          // MCP prompts are invocable as /mcp:<server>:<prompt> [args].
+          const prompt = findPromptByCommand(mcpPromptsRef.current, (head ?? "").toLowerCase());
+          if (prompt) {
+            if (controllerRef.current) {
+              notice("a task is already running — wait for it to finish", "error");
+              break;
+            }
+            const argText = rest.join(" ").trim();
+            dispatch({ type: "user", text: command.raw });
+            void (async () => {
+              let task: string;
+              try {
+                task = await getMcpPrompt(
+                  prompt.server,
+                  prompt.name,
+                  promptArgsFromText(prompt, argText),
+                  mcpEntries,
+                );
+              } catch (err) {
+                notice(`mcp prompt ${prompt.server}:${prompt.name} failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+                return;
+              }
+              void runTask(task, { echoUser: false });
+            })();
+            break;
+          }
           const suggestion = didYouMean(head ?? "", [
             ...COMMANDS,
             ...customCommandSpecs(customCommandsRef.current ?? []),
             ...skillCommandSpecs(skillRowsRef.current ?? []),
+            ...mcpPromptCommandSpecs(mcpPromptsRef.current),
           ]);
           notice(
             `unknown command ${command.raw}${suggestion ? ` — did you mean /${suggestion}?` : ""} (/help lists all)`,
@@ -1369,7 +1436,7 @@ export function App({
         }
       }
     },
-    [notice, projectPath, config.mcpServers, mcpToolSpecs, runTask, openExternalEditor, quit, syncBg, setRawMode],
+    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, openExternalEditor, quit, syncBg, setRawMode],
   );
 
   // ---------------------------------------------------------------------
@@ -1445,6 +1512,12 @@ export function App({
         if (custom) {
           dispatch({ type: "user", text: `/${spec.name}` });
           void runTask(expandCustomCommand(custom, ""), { echoUser: false });
+          return;
+        }
+        // MCP prompt commands (and other dynamic names) aren't built-in
+        // SlashCommands; route them through the unknown-command resolver.
+        if (findPromptByCommand(mcpPromptsRef.current, spec.name)) {
+          handleSlash({ name: "unknown", raw: `/${spec.name}` });
           return;
         }
         handleSlash({ name: spec.name } as SlashCommand);
