@@ -41,4 +41,4 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 };
 
 /** Pricing used when the model id is not in the table. */
-export const FALLBACK_PRICING_MODEL = "deepseek-chat";
+export const FALLBACK_PRICING_MODEL = DEFAULT_MODEL;

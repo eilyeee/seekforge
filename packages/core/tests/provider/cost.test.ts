@@ -43,10 +43,12 @@ describe("estimateCostUsd", () => {
     expect(cost).toBeCloseTo((100 * 0.028) / 1_000_000, 12);
   });
 
-  it("falls back to deepseek-chat pricing for unknown models", () => {
+  it("falls back to the default model's pricing for unknown models", () => {
     const usage = { promptTokens: 1_000_000, completionTokens: 0, cacheHitTokens: 0 };
+    // FALLBACK_PRICING_MODEL tracks DEFAULT_MODEL (deepseek-v4-flash), not the
+    // deprecated deepseek-chat — so unknown ids price like the current default.
     expect(estimateCostUsd(usage, "deepseek-unknown")).toBe(
-      estimateCostUsd(usage, "deepseek-chat"),
+      estimateCostUsd(usage, "deepseek-v4-flash"),
     );
   });
 

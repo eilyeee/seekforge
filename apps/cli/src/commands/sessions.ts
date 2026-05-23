@@ -56,7 +56,7 @@ export function statusCommand(): void {
   console.log(`project:   ${projectPath}`);
   console.log(`config:    ${existsSync(join(projectPath, ".seekforge")) ? ".seekforge/ present" : "not initialized (run seekforge init)"}`);
   console.log(`api key:   ${config.apiKey ? `${config.apiKey.slice(0, 6)}**** ` : "MISSING"}`);
-  console.log(`model:     ${config.model ?? "deepseek-chat (default)"}`);
+  console.log(`model:     ${config.model ?? "deepseek-v4-flash (default)"}`);
   console.log(`global:    ${join(homedir(), ".seekforge", "config.json")}`);
   console.log(`sessions:  ${sessions.length}`);
   if (last) {
