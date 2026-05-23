@@ -2,6 +2,33 @@
 
 ## 0.7.0 (2026-06-13)
 
+### round 17: detail-audit closeout (wire core capabilities into the UIs)
+- Image thumbnails end-to-end: `GET /api/raw` serves uploaded image bytes
+  (hard-confined to `.seekforge/uploads/`, symlink-guarded, token-checked);
+  desktop chat + composer render real `<img>` thumbnails with click-to-open
+  and onError fallback.
+- MCP prompts as slash commands: `mcp:<server>:<prompt>` in the TUI palette +
+  `/prompts` + `GET /api/mcp/prompts`; workspace path now passed as MCP roots
+  at every connect site.
+- Permission UX reachable: `acceptEdits` mode in the TUI Shift+Tab cycle and a
+  desktop Confirm/Accept-edits/Auto selector; allow-for-session via core's
+  richer confirm result (TUI "a", desktop 3-button modal, ws protocol);
+  `/compact <focus>` runs LLM-summarized compaction.
+- Integrator fixes from the audit: chat surfaces (Composer/ChatItems/TabBar/
+  Sidebar) tokenized so light theme works; `--append-system-prompt` wired via
+  a core seam; glob tool row title; CLI completion list + `config set` help.
+
+### round 16: detail-audit gap closure
+- Engine: `glob` tool; grep parity (context lines / glob filter / files-only /
+  multiline / maxMatches); run_command `cwd`. MCP prompts + roots + protocol
+  2025-06-18. acceptEdits permission mode + allow-for-session confirm channel
+  + `/compact` focus + llmCompactSessionNow + web_fetch extract.
+- Desktop: GFM markdown (links/tables/bold/italic), code + diff syntax
+  highlighting, inline image markers.
+- CLI: Claude-compatible `--output-format json`/`stream-json` envelopes,
+  `--system-prompt`, `--allowedTools`/`--disallowedTools`.
+
+
 ### round 15: polish pass (CLI output + desktop design system)
 
 - Desktop: all 8 views adopt the whale-blue semantic tokens + ui/ primitives
