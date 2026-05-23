@@ -11,6 +11,12 @@ export type RetryInfo = {
   maxAttempts: number;
   delayMs: number;
   reason: string;
+  /**
+   * Set only on the final fallback notice (see ProviderConfig.fallbackModel):
+   * the model id the request is being retried with after the primary model
+   * exhausted its retry budget. Absent on ordinary same-model retries.
+   */
+  fallbackModel?: string;
 };
 
 export type ProviderConfig = {
@@ -32,6 +38,15 @@ export type ProviderConfig = {
   thinking?: boolean;
   /** V4 reasoning effort ("low"/"medium" map to "high" server-side). */
   reasoningEffort?: "high" | "max";
+  /**
+   * If set, after the primary `model` exhausts its retry budget on a *retryable*
+   * error (HTTP 429 / 5xx / network), the request makes ONE final attempt with
+   * `model` swapped to this fallback id. The swap is skipped when the fallback
+   * equals the active model. When the fallback attempt is made, `onRetry` fires
+   * once more with `fallbackModel` set; if it too fails, the ORIGINAL
+   * (pre-fallback) error is thrown. Leaving this unset keeps behavior identical.
+   */
+  fallbackModel?: string;
 };
 
 export type ChatRequest = {

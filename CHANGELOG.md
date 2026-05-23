@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### round 18: CLI headless parity (Claude Code flag closeout)
+- `--permission-mode <mode>`: Claude-compatible names (`default`/`acceptEdits`/
+  `plan`/`bypassPermissions`) plus native (`confirm`/`auto`) map onto the core
+  ApprovalMode; `plan` forces plan-first. Reaches `acceptEdits` from headless
+  for the first time. Overrides `-y` when set.
+- `--fallback-model <model>`: provider retries the request once with an
+  alternate model after the primary exhausts retries on a retryable error
+  (429/5xx/network); surfaced via the retry event, original error rethrown on
+  double failure. No-op when unset.
+- `--output-style <style>`: `concise`/`explanatory`/`learning` presets appended
+  to the system prompt (combine with `--append-system-prompt`).
+- `--input-format stream-json`: drive a multi-turn headless session from
+  line-delimited user envelopes on stdin (Claude SDK shapes accepted), chaining
+  each turn onto the prior session id, emitting the Claude-style result envelope.
+- Audit honesty: dropped the phantom `manual` ApprovalMode from the CLI surface
+  — it has no distinct behavior in core (aliases `confirm`) and the server WS
+  rejects it; not exposed rather than faked.
+- Fixed stale help text: `run --model` example (now v4), `--append-system-prompt`
+  no longer labelled "not yet supported", `ask` gains `--output-style`/
+  `--fallback-model`.
+
 ## 0.7.0 (2026-06-13)
 
 ### round 17: detail-audit closeout (wire core capabilities into the UIs)

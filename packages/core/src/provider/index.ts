@@ -11,8 +11,8 @@ import type { ChatResponse } from "@seekforge/shared";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
 import { buildRequestBody, mapChatResponse, mapUsage, type WireChatCompletion } from "./mapping.js";
 import { createSseAccumulator, feedSseChunk, finalizeSse } from "./sse.js";
-import { DeepSeekApiError, fetchWithRetry } from "./http.js";
-import type { ChatProvider, ChatRequest, ProviderConfig } from "./types.js";
+import { DeepSeekApiError, fetchWithRetry, isRetryableError } from "./http.js";
+import type { ChatProvider, ChatRequest, ProviderConfig, RetryInfo } from "./types.js";
 
 export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo } from "./types.js";
 export { estimateCostUsd, type UsageTokens } from "./cost.js";
@@ -42,17 +42,51 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
   const retryOpts = config.onRetry ? { onRetry: config.onRetry } : {};
+  // Fallback only engages when configured AND it names a different model than
+  // the active primary; otherwise the request path is byte-for-byte unchanged.
+  const fallbackModel =
+    config.fallbackModel && config.fallbackModel !== model ? config.fallbackModel : undefined;
+
+  /**
+   * Run the request against the primary model with the normal retry loop. If
+   * `fallbackModel` is configured and the retries exhaust on a *retryable*
+   * error, make exactly ONE more attempt with the body rebuilt for the
+   * fallback model, announcing it via onRetry. The fallback attempt does not
+   * retry; if it fails (for any reason) the ORIGINAL error is rethrown.
+   */
+  async function fetchWithFallback(req: ChatRequest, stream: boolean): Promise<Response> {
+    const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking));
+    try {
+      return await fetchWithRetry(url, { method: "POST", headers, body: primaryBody }, retryOpts);
+    } catch (err) {
+      if (fallbackModel === undefined || !isRetryableError(err)) throw err;
+      try {
+        config.onRetry?.({
+          attempt: 0,
+          maxAttempts: 0,
+          delayMs: 0,
+          reason: "falling back to alternate model",
+          fallbackModel,
+        } satisfies RetryInfo);
+      } catch {
+        // A misbehaving frontend callback must never break the request path.
+      }
+      const fallbackBody = JSON.stringify(buildRequestBody(fallbackModel, req, stream, thinking));
+      try {
+        // maxRetries: 0 → exactly one fallback attempt, no retry storm.
+        return await fetchWithRetry(
+          url,
+          { method: "POST", headers, body: fallbackBody },
+          { maxRetries: 0 },
+        );
+      } catch {
+        throw err; // Surface the original (pre-fallback) failure.
+      }
+    }
+  }
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
-    const res = await fetchWithRetry(
-      url,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(buildRequestBody(model, req, false, thinking)),
-      },
-      retryOpts,
-    );
+    const res = await fetchWithFallback(req, false);
     const json = (await res.json()) as WireChatCompletion;
     return mapChatResponse(json, model);
   }
@@ -62,15 +96,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     onDelta: (chunk: string) => void,
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    const res = await fetchWithRetry(
-      url,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(buildRequestBody(model, req, true, thinking)),
-      },
-      retryOpts,
-    );
+    const res = await fetchWithFallback(req, true);
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
     }

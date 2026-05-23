@@ -124,7 +124,14 @@ program
   .option("--system-prompt <text>", "with -p: replace the system prompt entirely")
   .option("--append-system-prompt <text>", "with -p: append text to the system prompt")
   .option("--allowedTools <list>", "with -p: only allow these tools (comma-separated)")
-  .option("--disallowedTools <list>", "with -p: deny these tools (comma-separated)");
+  .option("--disallowedTools <list>", "with -p: deny these tools (comma-separated)")
+  .option(
+    "--permission-mode <mode>",
+    "with -p: default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
+  )
+  .option("--fallback-model <model>", "with -p: model to retry with if the primary is overloaded")
+  .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
+  .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)");
 
 type SharedRunOpts = {
   yes?: boolean;
@@ -140,13 +147,16 @@ type SharedRunOpts = {
   appendSystemPrompt?: string;
   allowedTools?: string;
   disallowedTools?: string;
+  permissionMode?: string;
+  fallbackModel?: string;
+  outputStyle?: string;
 };
 
 program
   .command("run")
   .argument("<task>", "development task to perform (@path tokens inline file contents)")
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
-  .option("-m, --model <model>", "override model (deepseek-chat | deepseek-reasoner)")
+  .option("-m, --model <model>", "override model (deepseek-v4-flash | deepseek-v4-pro)")
   .option(
     "--output-format <fmt>",
     "text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
@@ -158,9 +168,15 @@ program
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
   .option("--system-prompt <text>", "replace the system prompt entirely")
-  .option("--append-system-prompt <text>", "append to the system prompt (not yet supported)")
+  .option("--append-system-prompt <text>", "append to the system prompt")
   .option("--allowedTools <list>", "only allow these tools (comma-separated)")
   .option("--disallowedTools <list>", "deny these tools (comma-separated)")
+  .option(
+    "--permission-mode <mode>",
+    "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
+  )
+  .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
+  .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
   .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
@@ -178,6 +194,9 @@ program
       appendSystemPrompt: opts.appendSystemPrompt,
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
+      permissionMode: opts.permissionMode,
+      fallbackModel: opts.fallbackModel,
+      outputStyle: opts.outputStyle,
       plan: opts.plan,
     });
   });
@@ -197,9 +216,11 @@ program
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
   .option("--system-prompt <text>", "replace the system prompt entirely")
-  .option("--append-system-prompt <text>", "append to the system prompt (not yet supported)")
+  .option("--append-system-prompt <text>", "append to the system prompt")
   .option("--allowedTools <list>", "only allow these tools (comma-separated)")
   .option("--disallowedTools <list>", "deny these tools (comma-separated)")
+  .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
+  .option("--output-style <style>", "default | concise | explanatory | learning")
   .description("read-only Q&A about the codebase (no writes, no commands)")
   .action(async (question: string, opts: SharedRunOpts) => {
     await runTaskCommand(question, {
@@ -215,6 +236,8 @@ program
       appendSystemPrompt: opts.appendSystemPrompt,
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
+      fallbackModel: opts.fallbackModel,
+      outputStyle: opts.outputStyle,
     });
   });
 
@@ -573,6 +596,10 @@ program
       appendSystemPrompt?: string;
       allowedTools?: string;
       disallowedTools?: string;
+      permissionMode?: string;
+      fallbackModel?: string;
+      outputStyle?: string;
+      inputFormat?: string;
     }>();
     if (root.print !== undefined) {
       const inline = typeof root.print === "string" ? root.print : undefined;
@@ -591,6 +618,10 @@ program
         appendSystemPrompt: root.appendSystemPrompt,
         allowedTools: root.allowedTools,
         disallowedTools: root.disallowedTools,
+        permissionMode: root.permissionMode,
+        fallbackModel: root.fallbackModel,
+        outputStyle: root.outputStyle,
+        inputFormat: root.inputFormat,
       });
       return;
     }

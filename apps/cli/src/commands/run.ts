@@ -14,6 +14,8 @@ import {
   type ResultOutcome,
 } from "../output-format.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
+import { outputStylePrompt } from "../output-style.js";
+import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "../workspace-dirs.js";
 
@@ -42,6 +44,19 @@ export type RunOptions = {
   allowedTools?: string;
   /** Comma-separated deny-list of tools (CLI --disallowedTools). */
   disallowedTools?: string;
+  /**
+   * Permission mode (CLI --permission-mode). Claude-compatible names map onto
+   * the core ApprovalMode: default→confirm, acceptEdits→acceptEdits,
+   * bypassPermissions→auto, plan→confirm+plan. Native names also accepted.
+   * Overrides -y when set.
+   */
+  permissionMode?: string;
+  /** Model to retry with if the primary is overloaded (CLI --fallback-model). */
+  fallbackModel?: string;
+  /** Output style preset appended to the system prompt (CLI --output-style). */
+  outputStyle?: string;
+  /** Input format (CLI --input-format). "stream-json" drives multi-turn from stdin. */
+  inputFormat?: string;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -130,7 +145,52 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
         : renderer
           ? renderer.render
           : () => {}; // json: swallow events, emit one final object at the end
-  const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
+  // --permission-mode maps Claude-compatible (and native) names onto ApprovalMode;
+  // "plan" additionally forces plan-first. When unset, -y → auto, else confirm.
+  let approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
+  let planFromMode = false;
+  if (opts.permissionMode) {
+    switch (opts.permissionMode) {
+      case "default":
+      case "confirm":
+        approvalMode = "confirm";
+        break;
+      case "acceptEdits":
+        approvalMode = "acceptEdits";
+        break;
+      case "bypassPermissions":
+      case "auto":
+        approvalMode = "auto";
+        break;
+      case "plan":
+        approvalMode = "confirm";
+        planFromMode = true;
+        break;
+      default:
+        fail(`unknown --permission-mode "${opts.permissionMode}"`, {
+          hint: "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
+        });
+        return;
+    }
+  }
+  const planMode = (opts.plan ?? false) || planFromMode;
+
+  // --output-style appends a communication-style preset to the system prompt,
+  // combined with any explicit --append-system-prompt.
+  let styleAddendum: string | undefined;
+  if (opts.outputStyle) {
+    try {
+      styleAddendum = outputStylePrompt(opts.outputStyle);
+    } catch {
+      fail(`unknown --output-style "${opts.outputStyle}"`, {
+        hint: "default | concise | explanatory | learning",
+      });
+      return;
+    }
+  }
+  const effectiveAppend =
+    [styleAddendum, opts.appendSystemPrompt].filter((s): s is string => !!s).join("\n\n") || undefined;
+
   const mcp = await prepareMcp(config, projectPath);
 
   // --allowedTools/--disallowedTools synthesize per-run permission rules,
@@ -152,6 +212,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     subagents: loadAgentDefinitions(projectPath),
     ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
     ...(permissionRules ? { permissionRules } : {}),
+    ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
   });
 
   // @-references resolve against the workspace first, then any extra dirs.
@@ -180,7 +241,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       resumeSessionId: input.resumeSessionId,
       signal: controller.signal,
       ...(opts.systemPrompt !== undefined ? { systemPromptOverride: opts.systemPrompt } : {}),
-      ...(opts.appendSystemPrompt !== undefined ? { appendSystemPrompt: opts.appendSystemPrompt } : {}),
+      ...(effectiveAppend !== undefined ? { appendSystemPrompt: effectiveAppend } : {}),
     })) {
       render(event);
       if (event.type === "model.message") numTurns++;
@@ -215,9 +276,31 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   };
 
   try {
+    // --input-format stream-json: read line-delimited user turns from stdin and
+    // drive a multi-turn session, chaining each turn onto the prior session id.
+    if (opts.inputFormat === "stream-json") {
+      let sid = resumeSessionId;
+      let turns = 0;
+      let lastCompleted = true;
+      for await (const turnText of readStreamJsonInput(process.stdin)) {
+        turns++;
+        const r = await runOnce({ task: expand(turnText), mode, resumeSessionId: sid });
+        sid = r.sessionId ?? sid;
+        lastCompleted = r.completed;
+        if (!r.completed) break;
+      }
+      if (turns === 0) {
+        fail("stream-json input: no user turns received on stdin");
+        return;
+      }
+      emitResult(sid);
+      if (!lastCompleted) process.exitCode = 1;
+      return;
+    }
+
     // Plan mode requires interactive confirmation, so only the human text
     // format supports it (machine formats run straight through).
-    if (opts.plan && !machine) {
+    if (planMode && !machine) {
       const planRun = await runOnce({ task: expand(task), mode: "ask", plan: true });
       if (!planRun.completed || !planRun.sessionId) {
         process.exitCode = 1;
