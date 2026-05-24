@@ -33,6 +33,7 @@ import { runTaskCommand } from "./commands/run.js";
 import { resolveOutputFormat } from "./output-format.js";
 import { serveCommand } from "./commands/serve.js";
 import { updateCommand } from "./commands/update.js";
+import { modelsCommand } from "./commands/models.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
 import {
   skillCreateCommand,
@@ -291,6 +292,13 @@ program
   .description("show project, config, and last-session status")
   .action(() => {
     statusCommand();
+  });
+
+program
+  .command("models")
+  .description("list available DeepSeek models and their pricing")
+  .action(() => {
+    modelsCommand();
   });
 
 program
