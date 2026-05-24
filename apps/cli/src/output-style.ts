@@ -24,29 +24,39 @@ export function isOutputStyle(s: string): s is OutputStyle {
 // Addendum text per style. "default" is intentionally absent — it yields no
 // addendum. Wording is imperative and terse, matching how a coding-agent system
 // prompt reads.
+// These addenda are deliberately forceful and prescriptive: a soft "prefer
+// brevity" note gets ignored, so each style states hard rules that visibly
+// change the SHAPE of the response. This block overrides any default verbosity
+// guidance in the base prompt.
 const ADDENDA: Readonly<Record<Exclude<OutputStyle, "default">, string>> = {
   concise: [
-    "## Output style: Concise",
+    "## Output style: Concise (overrides default verbosity)",
     "",
-    "Minimize prose. Lead with the answer or result, then stop.",
-    "Drop preamble, restatements of the request, and closing summaries unless the user asks for them.",
-    "Prefer the shortest response that is still correct and complete. When a one-line answer suffices, give one line.",
+    "Be maximally terse. Hard rules:",
+    "- Lead with the answer on the FIRST line, then stop. No preamble, no restating the question, no closing summary.",
+    "- Default to ONE to THREE sentences. Use a one-line answer whenever it is correct and complete.",
+    "- No filler (\"Great question\", \"Sure\", \"I'll help…\"). No reasoning narration — give the conclusion, not the path to it.",
+    "- Use a bullet list only when the answer is inherently a list; otherwise plain sentences.",
   ].join("\n"),
 
   explanatory: [
-    "## Output style: Explanatory",
+    "## Output style: Explanatory (overrides default verbosity)",
     "",
-    "While doing the task, surface your reasoning so the user learns the why, not just the what.",
-    "Call out non-obvious decisions, trade-offs you weighed, and insights about the codebase as you work.",
-    "Keep explanations brief and woven into the work — short notes alongside the changes, not a separate essay.",
+    "Teach as you answer — the user wants the WHY, not just the what. Hard rules:",
+    "- Give the answer, then ALWAYS explain the reasoning behind it: why this and not the alternatives.",
+    "- Explicitly call out non-obvious decisions, trade-offs, and insights about how the codebase works.",
+    "- When relevant, add a short \"Why this works\" or \"Trade-off\" note. Aim noticeably richer than a bare answer.",
+    "- Keep it structured and readable; do not pad with filler, but do not under-explain either.",
   ].join("\n"),
 
   learning: [
-    "## Output style: Learning",
+    "## Output style: Learning (overrides default behavior)",
     "",
-    "Work collaboratively and favor learn-by-doing. Do the task, but when a piece is a good learning opportunity, leave it for the user.",
-    "Mark such hand-offs with a clearly labeled `TODO(human)` comment and briefly explain what to implement and why.",
-    "Ask the user to make some of the changes themselves rather than completing 100% of the work yourself.",
+    "Collaborate and favor learn-by-doing. Hard rules:",
+    "- Do most of the task, but deliberately leave 1–3 well-chosen pieces for the user to implement themselves.",
+    "- Mark each hand-off with a clearly labeled `TODO(human):` comment that states exactly what to implement and why it's a good thing to learn.",
+    "- Briefly explain the surrounding code so the user can complete the TODO unaided.",
+    "- Do not silently finish the parts you handed off — leaving them for the user is the point.",
   ].join("\n"),
 };
 

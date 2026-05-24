@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
-import { fail } from "../colors.js";
+import { colorIsEnabled, fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import {
@@ -129,7 +129,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   // skipped entirely below — but it documents intent and guards the delta sinks.
   const renderer = machine
     ? undefined
-    : createRenderer({ streaming: true, verbose: opts.verbose, color: !machine });
+    : createRenderer({ streaming: true, verbose: opts.verbose, color: colorIsEnabled() });
   // stream-json: Claude-style SDK envelopes (system/assistant/user) per line via
   // the mapper, with the final result envelope appended after the stream.
   // stream-json-raw: the OLD behavior — one raw AgentEvent per line.

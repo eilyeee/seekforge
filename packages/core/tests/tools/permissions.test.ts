@@ -90,6 +90,19 @@ describe("permission flow", () => {
     expect(allow.requests[0]?.command).toBe("echo hi"); // raw command surfaced
   });
 
+  it("auto mode runs unknown (non-env) commands without confirming", async () => {
+    const ws = makeWorkspace();
+    const allow = scriptedConfirm(true);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "auto" }, confirm: allow.confirm });
+
+    // "auto" is the full-bypass tier: a non-allowlisted execute command runs
+    // without a prompt (matches the -y / bypassPermissions contract and lets
+    // headless runs execute commands instead of auto-denying).
+    const unknown = await dispatcher.execute(call("run_command", { command: "echo hi" }), ctx);
+    expect(unknown.ok).toBe(true);
+    expect(allow.requests).toHaveLength(0); // never prompted
+  });
+
   it("env-level commands always confirm, even with approvalMode auto", async () => {
     const ws = makeWorkspace();
     const deny = scriptedConfirm(false);

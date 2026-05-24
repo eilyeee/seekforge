@@ -35,8 +35,40 @@ const COMMANDS = [
 
 const WORDS = [...COMMANDS, "--help"].join(" ");
 
+/** Flags offered for the `seekforge run` subcommand (keep in sync with index.ts). */
+const RUN_FLAGS = [
+  "-y",
+  "--yes",
+  "-m",
+  "--model",
+  "--output-format",
+  "--json",
+  "-c",
+  "--continue",
+  "--resume",
+  "--add-dir",
+  "--max-turns",
+  "--verbose",
+  "--system-prompt",
+  "--append-system-prompt",
+  "--allowedTools",
+  "--disallowedTools",
+  "--permission-mode",
+  "--fallback-model",
+  "--output-style",
+  "--plan",
+] as const;
+
 const BASH_SCRIPT = `# bash completion for seekforge — source <(seekforge completion bash)
-complete -W "${WORDS}" seekforge
+_seekforge() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=($(compgen -W "${WORDS}" -- "$cur"))
+  elif (( COMP_CWORD >= 2 )) && [[ "\${COMP_WORDS[1]}" == "run" ]]; then
+    COMPREPLY=($(compgen -W "${RUN_FLAGS.join(" ")}" -- "$cur"))
+  fi
+}
+complete -F _seekforge seekforge
 `;
 
 const ZSH_SCRIPT = `#compdef seekforge
@@ -46,6 +78,10 @@ _seekforge() {
   commands=(${[...COMMANDS, "--help"].map((w) => `"${w}"`).join(" ")})
   if (( CURRENT == 2 )); then
     compadd -- $commands
+  elif (( CURRENT >= 3 )) && [[ \${words[2]} == "run" ]]; then
+    local -a run_flags
+    run_flags=(${RUN_FLAGS.map((f) => `"${f}"`).join(" ")})
+    compadd -- $run_flags
   fi
 }
 compdef _seekforge seekforge

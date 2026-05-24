@@ -164,6 +164,14 @@ export async function enforcePermission(
       if (cls.allowlisted) {
         return { allowed: true, decision: "allowlist" };
       }
+      // "auto" is the full-bypass tier (CLI -y / --permission-mode
+      // bypassPermissions, desktop "auto"): it runs every tool without
+      // prompting, including command execution. This matches the documented
+      // contract ("auto-approve write/execute") and lets headless `-p -y` runs
+      // actually run commands instead of auto-denying them.
+      if (ctx.policy.approvalMode === "auto") {
+        return { allowed: true, decision: "auto_policy" };
+      }
       // acceptEdits deliberately does NOT auto-allow command execution — it
       // still confirms, so the user approves anything that runs.
       return confirmWithUser(toolName, cls, ctx);

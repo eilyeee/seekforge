@@ -320,9 +320,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         for (const m of messages) trace.message(m);
       } else {
         const memoryBrief = buildMemoryBrief(input.projectPath, input.task);
-        const skillSelections = selectSkills(input.task, loadSkills(input.projectPath), {
-          workspace: input.projectPath,
-        });
+        // Skills are task-execution procedures (e.g. test-failure-fix); they have
+        // no place in read-only Q&A, where they're just noise. Plan runs still get
+        // them (a plan benefits from the procedure).
+        const skillSelections =
+          input.mode === "ask" && !input.plan
+            ? []
+            : selectSkills(input.task, loadSkills(input.projectPath), {
+                workspace: input.projectPath,
+              });
         if (skillSelections.length > 0) {
           logSkillUsage(input.projectPath, sessionId, skillSelections);
           yield emit({
