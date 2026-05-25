@@ -12,9 +12,54 @@ import { DiffCard } from "./DiffCard.js";
  * Edit-review: when `request.preview` is present (write tools), the proposed
  * diff is rendered above the y/a/n line and the prompt becomes an explicit
  * accept/reject review. Non-preview requests keep the raw command/path display.
+ *
+ * Multi-hunk: when `hunks` has length > 1 and `hunkSelection` is provided,
+ * render each hunk with a togglable checkbox and let the user choose specific
+ * edits. Single-hunk and no-hunk requests behave exactly as before.
  */
-export function PermissionPanel({ request }: { request: PermissionRequest }): React.ReactElement {
+export function PermissionPanel({
+  request,
+  hunkSelection,
+}: {
+  request: PermissionRequest;
+  hunkSelection?: number[];
+}): React.ReactElement {
   const preview = request.preview;
+  const hunks = request.hunks;
+  const isMultiHunk = hunks && hunks.length > 1;
+
+  // Multi-hunk edit-review: render per-hunk previews with selection checkboxes.
+  if (isMultiHunk && preview) {
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
+        <Text color="yellow" bold>
+          Review change: <Text bold>{preview.path}</Text>{" "}
+          <Text dimColor>
+            [{request.permission}] {request.toolName}
+          </Text>
+        </Text>
+        {hunks.map((hunk) => {
+          const selected = hunkSelection?.includes(hunk.index) ?? true;
+          return (
+            <Box key={hunk.index} flexDirection="column">
+              <Text>
+                <Text color={selected ? "green" : "red"}>{selected ? "[x]" : "[ ]"}</Text>
+                <Text> </Text>
+                <Text bold>Hunk {hunk.index + 1}</Text>
+              </Text>
+              <Box paddingLeft={4}>
+                <Text dimColor>{hunk.preview.slice(0, 200)}{hunk.preview.length > 200 ? "…" : ""}</Text>
+              </Box>
+            </Box>
+          );
+        })}
+        <Text dimColor>
+          number key toggle hunk · a select all · y confirm · n deny
+        </Text>
+      </Box>
+    );
+  }
+
   if (preview) {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
