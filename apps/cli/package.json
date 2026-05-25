@@ -37,7 +37,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/__tests__/helpers.test.ts && tsx src/__tests__/stream-input.test.ts && tsx src/__tests__/output-style.test.ts",
+    "test": "tsx src/__tests__/helpers.test.ts && tsx src/__tests__/stream-input.test.ts && tsx src/__tests__/output-style.test.ts && tsx src/__tests__/config.test.ts",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {

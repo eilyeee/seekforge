@@ -55,13 +55,23 @@ export type RunOptions = {
   fallbackModel?: string;
   /** Output style preset appended to the system prompt (CLI --output-style). */
   outputStyle?: string;
+  /** Path to a JSON settings file (CLI --settings). */
+  settingsFile?: string;
   /** Input format (CLI --input-format). "stream-json" drives multi-turn from stdin. */
   inputFormat?: string;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
   const projectPath = process.cwd();
-  const config = loadConfig(projectPath);
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(projectPath, opts.settingsFile);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const hint = (err as { hint?: string }).hint;
+    fail(msg, hint ? { hint } : undefined);
+    return;
+  }
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
 

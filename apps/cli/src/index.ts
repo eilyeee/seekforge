@@ -132,9 +132,12 @@ program
   )
   .option("--fallback-model <model>", "with -p: model to retry with if the primary is overloaded")
   .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
+  .option("--settings <file>", "with -p: path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)");
 
 type SharedRunOpts = {
+  // commander camelCases hyphenated flags, but "--settings" is one word → `settings`.
+  settings?: string;
   yes?: boolean;
   model?: string;
   json?: boolean;
@@ -178,6 +181,7 @@ program
   )
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
+  .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
   .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
@@ -197,6 +201,7 @@ program
       disallowedTools: opts.disallowedTools,
       permissionMode: opts.permissionMode,
       fallbackModel: opts.fallbackModel,
+      settingsFile: opts.settings,
       outputStyle: opts.outputStyle,
       plan: opts.plan,
     });
@@ -222,6 +227,7 @@ program
   .option("--disallowedTools <list>", "deny these tools (comma-separated)")
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
+  .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
   .description("read-only Q&A about the codebase (no writes, no commands)")
   .action(async (question: string, opts: SharedRunOpts) => {
     await runTaskCommand(question, {
@@ -237,6 +243,7 @@ program
       appendSystemPrompt: opts.appendSystemPrompt,
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
+      settingsFile: opts.settings,
       fallbackModel: opts.fallbackModel,
       outputStyle: opts.outputStyle,
     });
@@ -607,6 +614,7 @@ program
       permissionMode?: string;
       fallbackModel?: string;
       outputStyle?: string;
+      settings?: string;
       inputFormat?: string;
     }>();
     if (root.print !== undefined) {
@@ -628,12 +636,13 @@ program
         disallowedTools: root.disallowedTools,
         permissionMode: root.permissionMode,
         fallbackModel: root.fallbackModel,
+        settingsFile: root.settings,
         outputStyle: root.outputStyle,
         inputFormat: root.inputFormat,
       });
       return;
     }
-    await replCommand({ yes: opts.yes, model: opts.model });
+    await replCommand({ yes: opts.yes, model: opts.model, settingsFile: root.settings });
   });
 
 // Non-blocking update check: fire-and-forget at start, print the notice (to

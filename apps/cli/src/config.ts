@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
@@ -44,25 +44,66 @@ function readJson(path: string): CliConfig {
   }
 }
 
-/** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
-export function loadConfig(projectPath: string): CliConfig {
+/**
+ * Read and parse a settings file, throwing a descriptive error on missing or
+ * malformed JSON. The error carries a `hint` property so the CLI layer can
+ * render it via fail(message, { hint }).
+ */
+function readSettingsFile(settingsPath: string): CliConfig {
+  const absPath = resolve(settingsPath);
+  let raw: string;
+  try {
+    raw = readFileSync(absPath, "utf8");
+  } catch {
+    throw Object.assign(new Error(`settings file not found: ${absPath}`), {
+      hint: "check the path and try again",
+    });
+  }
+  try {
+    return JSON.parse(raw) as CliConfig;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw Object.assign(new Error(`invalid JSON in settings file ${absPath}: ${msg}`), {
+      hint: "ensure the file contains valid JSON",
+    });
+  }
+}
+
+/**
+ * Precedence: env > CLI flags > --settings file > project .seekforge/config.json > ~/.seekforge/config.json
+ *
+ * The --settings layer slots between project config (below) and env vars (above).
+ * For deep-merge fields (mcpServers, permissionRules, hooks), the settings
+ * layer is merged into the existing logic rather than replacing wholesale.
+ */
+export function loadConfig(projectPath: string, settingsPath?: string): CliConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
-  // mcpServers merges per server name (project wins) instead of replacing wholesale.
-  const mcpServers = { ...global.mcpServers, ...project.mcpServers };
-  // permissionRules concatenates project-then-global: first match wins, so
-  // project rules take precedence over global ones.
-  const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
-  // hooks concatenate per stage, global-then-project: every hook runs
-  // (sequentially), global ones first.
+  const settings = settingsPath ? readSettingsFile(settingsPath) : {};
+
+  // mcpServers merges per server name (later wins): settings > project > global.
+  const mcpServers = { ...global.mcpServers, ...project.mcpServers, ...settings.mcpServers };
+  // permissionRules concatenates settings-then-project-then-global: first match
+  // wins, so settings rules take highest precedence among file layers.
+  const permissionRules = [
+    ...(settings.permissionRules ?? []),
+    ...(project.permissionRules ?? []),
+    ...(global.permissionRules ?? []),
+  ];
+  // hooks concatenate per stage: global first, then project, then settings.
   const hooks: HookConfig = {};
   for (const stage of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
-    const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
+    const merged = [
+      ...(global.hooks?.[stage] ?? []),
+      ...(project.hooks?.[stage] ?? []),
+      ...(settings.hooks?.[stage] ?? []),
+    ];
     if (merged.length > 0) hooks[stage] = merged;
   }
   return {
     ...global,
     ...project,
+    ...settings,
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(Object.keys(hooks).length > 0 ? { hooks } : {}),

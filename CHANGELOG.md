@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### round 20: features built by dogfooding (SeekForge implementing SeekForge)
+- **`seekforge models`** — lists each DeepSeek model with cache-miss/cache-hit
+  input and output pricing (sourced from MODEL_PRICING), marking the default.
+  Written by SeekForge in an edit dogfood, then reviewed.
+- **`--settings <file>`** (Claude-Code style) — loads a JSON settings file and
+  layers it into the resolved config, slotting between project config (below)
+  and env vars / CLI flags (above); mcpServers/permissionRules/hooks keep their
+  deep-merge semantics. Implemented by SeekForge via a full plan→execute
+  dogfood. Review caught one integration bug the unit tests missed: the flag was
+  read as `opts.settingsFile` but commander exposes single-word `--settings` as
+  `opts.settings`, so the flag was silently ignored — fixed and verified live.
+
 ### round 19: dogfood fixes (bugs found by running SeekForge on SeekForge)
 Four parallel dogfood sessions (3 read-only investigations + 1 live edit run)
 surfaced real bugs only running the agent could expose:

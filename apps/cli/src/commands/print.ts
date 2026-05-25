@@ -25,6 +25,7 @@ export type PrintCliOptions = {
   permissionMode?: string;
   fallbackModel?: string;
   outputStyle?: string;
+  settingsFile?: string;
   inputFormat?: string;
 };
 
@@ -81,6 +82,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     allowedTools: opts.allowedTools,
     disallowedTools: opts.disallowedTools,
     permissionMode: opts.permissionMode,
+    settingsFile: opts.settingsFile,
     fallbackModel: opts.fallbackModel,
     outputStyle: opts.outputStyle,
     ...(streamInput ? { inputFormat: "stream-json" } : {}),
