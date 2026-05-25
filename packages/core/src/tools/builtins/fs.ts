@@ -567,6 +567,14 @@ const applyPatchSchema = z.object({
     .describe("Search/replace edits, applied in order, all-or-nothing."),
 });
 
+function previewHunk(text: string): string {
+  const first = text
+    .split("\n")
+    .find((l) => l.trim().length > 0);
+  if (!first) return "(empty)";
+  return first.length > 80 ? first.slice(0, 80) + "…" : first;
+}
+
 const applyPatch = defineTool({
   name: "apply_patch",
   description:
@@ -578,14 +586,29 @@ const applyPatch = defineTool({
     const preview = buildPreview(ctx, args.path, (before) =>
       applyEdits(before ?? "", args.edits),
     );
+    // Per-hunk previews for multi-edit patches, so frontends can offer
+    // per-hunk selection. Single-edit calls omit hunks (backward compatible).
+    const hunks =
+      args.edits.length > 1
+        ? args.edits.map((e, i) => ({
+            index: i,
+            preview: `- ${previewHunk(e.oldString)} → + ${previewHunk(e.newString)}`,
+          }))
+        : undefined;
     return {
       permission: "write",
       description: `Apply ${args.edits.length} edit(s) to ${args.path}`,
       path: args.path,
       ...(preview ? { preview } : {}),
+      ...(hunks ? { hunks } : {}),
     };
   },
   async run(args, ctx) {
+    // Per-hunk selection: when the user approved only a subset of edits,
+    // filter to just those indices. Empty selection = apply nothing.
+    if (ctx.selectedHunks !== undefined) {
+      args = { ...args, edits: args.edits.filter((_, i) => ctx.selectedHunks!.includes(i)) };
+    }
     if (ctx.runtime) {
       if (ctx.checkpoint) {
         ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));

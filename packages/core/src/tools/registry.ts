@@ -28,6 +28,12 @@ export type ClassifiedCall = {
    * render an Accept/Reject diff review. Best-effort; omitted on any failure.
    */
   preview?: { path: string; diff: string };
+  /**
+   * Per-edit hunks for multi-edit apply_patch calls, forwarded onto the
+   * PermissionRequest. Populated by apply_patch.classify when >1 edit;
+   * single-edit calls omit this so frontends keep their old behavior.
+   */
+  hunks?: { index: number; preview: string }[];
 };
 
 export type ToolRunOutput = {
@@ -95,6 +101,10 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
           if (!outcome.allowed) {
             result = fail(outcome.errorCode, outcome.errorMessage);
           } else {
+            // Thread per-hunk selection from the permission outcome onto the
+            // tool context so apply_patch.run can filter edits. Cleared by
+            // the caller after each execute (not persisted across calls).
+            ctx.selectedHunks = outcome.selectedHunks;
             // Hooks fire only for calls that passed permission enforcement.
             // Model-controlled content goes into the payload (stdin), never
             // into the hook command line.
@@ -132,6 +142,8 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                 result: { ok: result.ok, errorCode: result.error?.code ?? null },
               });
             }
+            // Clear per-hunk selection so it never leaks to the next call.
+            delete ctx.selectedHunks;
           }
         }
       }

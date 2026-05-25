@@ -16,7 +16,7 @@ export type PermissionDecision =
   | "allow_rule"; // a policy allow rule matched — runs without prompting
 
 export type PermissionOutcome =
-  | { allowed: true; decision: PermissionDecision }
+  | { allowed: true; decision: PermissionDecision; selectedHunks?: number[] }
   | { allowed: false; decision: PermissionDecision; errorCode: string; errorMessage: string };
 
 /**
@@ -56,11 +56,15 @@ async function confirmWithUser(
     ...(cls.command !== undefined ? { command: cls.command } : {}),
     ...(cls.path !== undefined ? { path: cls.path } : {}),
     ...(cls.preview !== undefined ? { preview: cls.preview } : {}),
+    ...(cls.hunks !== undefined ? { hunks: cls.hunks } : {}),
   });
-  // Normalize the boolean | { allow, remember } contract. A bare boolean is
-  // treated exactly as before (allow-once / deny, no allowlist growth).
+  // Normalize the boolean | { allow, remember } | { allow, selectedHunks }
+  // contract. A bare boolean is treated exactly as before.
   const allow = typeof answer === "boolean" ? answer : answer.allow;
-  const remember = typeof answer === "boolean" ? undefined : answer.remember;
+  const remember =
+    typeof answer !== "boolean" && "remember" in answer ? answer.remember : undefined;
+  const selectedHunks =
+    typeof answer !== "boolean" && "selectedHunks" in answer ? answer.selectedHunks : undefined;
   if (allow) {
     if (remember === "session") {
       // Grow the run's in-memory session allowlist in place so the next
@@ -70,7 +74,7 @@ async function confirmWithUser(
       const list = (ctx.policy.sessionAllowlist ??= []);
       if (token !== "" && !list.includes(token)) list.push(token);
     }
-    return { allowed: true, decision: "user_approved" };
+    return { allowed: true, decision: "user_approved", ...(selectedHunks !== undefined ? { selectedHunks } : {}) };
   }
   return {
     allowed: false,

@@ -54,6 +54,14 @@ export type PermissionRequest = {
    * failure so the write path is never blocked).
    */
   preview?: { path: string; diff: string };
+  /**
+   * Per-edit hunks for multi-edit apply_patch calls. Populated when the diff
+   * contains more than one hunk (edit index + short preview each). Frontends
+   * MAY use this to offer per-hunk selection; the confirm result can then
+   * return `{ allow: true, selectedHunks: number[] }`. Single-hunk calls
+   * omit this field — behavior is unchanged.
+   */
+  hunks?: { index: number; preview: string }[];
 };
 
 /**
@@ -65,8 +73,15 @@ export type PermissionRequest = {
  * (run_command/task_kill) or the tool name into policy.sessionAllowlist so
  * subsequent matching calls auto-allow. `remember` is ignored when allow is
  * false. Additive: the boolean form keeps working unchanged.
+ *
+ * When a frontend supports per-hunk selection for apply_patch, it may return
+ * `{ allow: true, selectedHunks: number[] }` to apply only the chosen edits.
+ * `selectedHunks` is ignored when allow is false.
  */
-export type ConfirmResult = boolean | { allow: boolean; remember?: "session" };
+export type ConfirmResult =
+  | boolean
+  | { allow: boolean; remember?: "session" }
+  | { allow: true; selectedHunks: number[] };
 
 /**
  * Fine-grained permission rule. Evaluation: first matching rule of each

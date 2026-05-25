@@ -11,7 +11,7 @@ import {
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
-import type { PermissionRequest, PermissionRule } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import type { CliConfig } from "./config.js";
 
 export type CliAgentOptions = {
@@ -19,7 +19,7 @@ export type CliAgentOptions = {
   model?: string;
   /** Model to retry the request with if the primary is overloaded (CLI --fallback-model). */
   fallbackModel?: string;
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (V4 thinking mode). */
   onReasoningDelta?: (chunk: string) => void;
