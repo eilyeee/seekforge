@@ -252,13 +252,20 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       }
 
       case "permission.response": {
-        const { requestId, approved, remember } = frame;
+        const { requestId, approved, remember, selectedHunks } = frame;
         const settle = typeof requestId === "string" ? pending.get(requestId) : undefined;
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
         const allow = approved === true;
-        // remember:"session" forwards the richer ConfirmResult so core grows
-        // its session allowlist; a plain allow/deny stays a bare boolean.
-        settle(allow && remember === "session" ? { allow: true, remember: "session" } : allow);
+        // selectedHunks: per-hunk selection for multi-hunk apply_patch calls.
+        if (allow && Array.isArray(selectedHunks) && selectedHunks.length > 0) {
+          settle({ allow: true, selectedHunks });
+        } else if (allow && remember === "session") {
+          // remember:"session" forwards the richer ConfirmResult so core grows
+          // its session allowlist; a plain allow/deny stays a bare boolean.
+          settle({ allow: true, remember: "session" });
+        } else {
+          settle(allow);
+        }
         return;
       }
 

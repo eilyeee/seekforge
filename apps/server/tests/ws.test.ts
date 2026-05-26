@@ -478,6 +478,128 @@ describe("permission bridge", () => {
     expect(err.code).toBe("unknown_request");
   });
 
+  it("permission.request forwards hunks when present", async () => {
+    let seenRequest: (import("@seekforge/shared").PermissionRequest) | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "perm-hunks" };
+        await opts.confirm({
+          toolName: "apply_patch",
+          permission: "write",
+          description: "Apply 3 edits to src/a.ts",
+          path: "src/a.ts",
+          hunks: [
+            { index: 0, preview: "@@ -1,5 +1,6 @@\n+new" },
+            { index: 1, preview: "@@ -10,3 +10,4 @@\n change" },
+            { index: 2, preview: "@@ -20,2 +21,3 @@\n+another" },
+          ],
+        });
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
+    const req = (await rx.waitFor(
+      (f) => f.type === "permission.request",
+    )) as { type: "permission.request"; requestId: string; request: import("@seekforge/shared").PermissionRequest };
+    expect(req.request.hunks!).toHaveLength(3);
+    expect(req.request.hunks![0]).toEqual({ index: 0, preview: "@@ -1,5 +1,6 @@\n+new" });
+    expect(req.request.hunks![2]).toEqual({ index: 2, preview: "@@ -20,2 +21,3 @@\n+another" });
+    // Acknowledge so the run finishes.
+    sendFrame(ws, { type: "permission.response", requestId: req.requestId, approved: true });
+    await rx.waitFor((f) => f.type === "idle");
+  });
+
+  it("selectedHunks in response returns { allow: true, selectedHunks }", async () => {
+    let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "perm-sel" };
+        resultSeen = await opts.confirm({
+          toolName: "apply_patch",
+          permission: "write",
+          description: "Apply edits",
+          path: "src/a.ts",
+        });
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: true,
+      selectedHunks: [0, 2],
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toEqual({ allow: true, selectedHunks: [0, 2] });
+  });
+
+  it("selectedHunks with approved:false is ignored (bare false returned)", async () => {
+    let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "perm-sel-deny" };
+        resultSeen = await opts.confirm({
+          toolName: "apply_patch",
+          permission: "write",
+          description: "Apply edits",
+          path: "src/a.ts",
+        });
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: false,
+      selectedHunks: [0, 2],
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toBe(false);
+  });
+
+  it("selectedHunks takes precedence over remember:session", async () => {
+    let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "perm-sel-rem" };
+        resultSeen = await opts.confirm({
+          toolName: "apply_patch",
+          permission: "write",
+          description: "Apply edits",
+          path: "src/a.ts",
+        });
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: true,
+      remember: "session",
+      selectedHunks: [1],
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    // selectedHunks wins over remember:session.
+    expect(resultSeen).toEqual({ allow: true, selectedHunks: [1] });
+  });
+
   it("denies pending permissions and aborts the run when the socket closes", async () => {
     let approvedSeen: ConfirmResult | undefined;
     let abortedSeen: boolean | undefined;

@@ -124,6 +124,64 @@ describe("store: respondPermission carries the remember flag", () => {
   });
 });
 
+describe("store: respondPermission with selectedHunks", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        tabs: s.tabs.tabs.map((t, i) =>
+          i === 0
+            ? {
+                ...t,
+                pendingPermission: {
+                  requestId: "p2",
+                  request: {
+                    toolName: "apply_patch",
+                    permission: "write",
+                    description: "Apply edits",
+                    path: "src/a.ts",
+                  },
+                },
+              }
+            : t,
+        ),
+      },
+    }));
+    useStore.getState().connect();
+  });
+
+  it("sends selectedHunks in the frame when provided", () => {
+    useStore.getState().respondPermission(true, undefined, [0, 2]);
+    const resp = sent.find((f) => f.type === "permission.response");
+    expect(resp).toEqual({
+      type: "permission.response",
+      requestId: "p2",
+      approved: true,
+      selectedHunks: [0, 2],
+    });
+  });
+
+  it("omits selectedHunks when not provided", () => {
+    useStore.getState().respondPermission(true);
+    const resp = sent.find((f) => f.type === "permission.response");
+    expect(resp).toEqual({ type: "permission.response", requestId: "p2", approved: true });
+    expect((resp as Record<string, unknown>).selectedHunks).toBeUndefined();
+  });
+
+  it("can combine selectedHunks with remember:session", () => {
+    useStore.getState().respondPermission(true, "session", [1]);
+    const resp = sent.find((f) => f.type === "permission.response");
+    expect(resp).toEqual({
+      type: "permission.response",
+      requestId: "p2",
+      approved: true,
+      remember: "session",
+      selectedHunks: [1],
+    });
+  });
+});
+
 // Reference lastHandlers so unused-var lint stays quiet; the handler hook is
 // exercised indirectly when a real frame round-trip test is added later.
 void lastHandlers;

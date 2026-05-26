@@ -5,9 +5,15 @@ import type { PermissionRequest } from "@seekforge/shared";
 // Desktop tests run in the node environment with no react-dom, so the keyboard
 // useEffect cannot run through React's hook dispatcher. Stub it to a no-op — we
 // only assert the returned element tree (presentation), not effect behaviour.
+// useState is also stubbed to avoid dispatcher errors in function-call testing.
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
-  return { ...actual, useEffect: () => {}, default: { ...actual, useEffect: () => {} } };
+  return {
+    ...actual,
+    useEffect: () => {},
+    useState: <T>() => [null as unknown as T, vi.fn()] as const,
+    default: { ...actual, useEffect: () => {} },
+  };
 });
 
 const { PermissionModal } = await import("./PermissionModal");
@@ -45,12 +51,24 @@ function walk(node: unknown, acc: Collected): void {
 
 function inspect(request: PermissionRequest): Collected & { onResponds: boolean[] } {
   const onResponds: boolean[] = [];
-  const onRespond = (approved: boolean): void => {
-    onResponds.push(approved);
+  const onRespond = (...args: unknown[]): void => {
+    onResponds.push(args[0] as boolean);
   };
   const acc: Collected = { text: [], types: [], clicks: [] };
   walk(PermissionModal({ request, onRespond }), acc);
   return { ...acc, onResponds };
+}
+
+// Helper: collect all onRespond calls with full args (approved, remember, selectedHunks).
+function inspectCalls(request: PermissionRequest): Array<[boolean, undefined | "session", undefined | number[]]> {
+  const calls: Array<[boolean, undefined | "session", undefined | number[]]> = [];
+  const onRespond = (approved: boolean, remember?: "session", selectedHunks?: number[]): void => {
+    calls.push([approved, remember, selectedHunks]);
+  };
+  const acc: Collected = { text: [], types: [], clicks: [] };
+  walk(PermissionModal({ request, onRespond }), acc);
+  for (const click of acc.clicks) click();
+  return calls;
 }
 
 describe("PermissionModal — edit-review preview", () => {
@@ -149,5 +167,78 @@ describe("PermissionModal — edit-review preview", () => {
     expect(calls).toContainEqual([true, "session"]);
     expect(calls).toContainEqual([true, undefined]);
     expect(calls).toContainEqual([false, undefined]);
+  });
+});
+
+describe("PermissionModal — multi-hunk selection", () => {
+  const multiReq: PermissionRequest = {
+    toolName: "apply_patch",
+    permission: "write",
+    description: "Apply 3 edits to src/a.ts",
+    path: "src/a.ts",
+    preview: {
+      path: "src/a.ts",
+      diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,5 +1,6 @@\n+new\n@@ -10,3 +10,4 @@\n change\n@@ -20,2 +21,3 @@\n+another",
+    },
+    hunks: [
+      { index: 0, preview: "@@ -1,5 +1,6 @@\n+new" },
+      { index: 1, preview: "@@ -10,3 +10,4 @@\n change" },
+      { index: 2, preview: "@@ -20,2 +21,3 @@\n+another" },
+    ],
+  };
+
+  it("shows a 'Review N edits' title with DiffBlock and per-hunk checkboxes", () => {
+    const { text, types } = inspect(multiReq);
+    const joined = text.join("");
+    // Title mentions the edit count
+    expect(joined).toContain("Review 3 edits");
+    // DiffBlock is shown for the full diff
+    expect(types).toContain(DiffBlock);
+    // Each hunk preview appears
+    expect(joined).toContain("Edit #1");
+    expect(joined).toContain("Edit #2");
+    expect(joined).toContain("Edit #3");
+    expect(joined).toContain("@@ -1,5 +1,6 @@");
+    expect(joined).toContain("@@ -10,3 +10,4 @@");
+    expect(joined).toContain("@@ -20,2 +21,3 @@");
+    // Checkboxes rendered (input elements in the tree)
+    expect(types.filter((t) => t === "input").length).toBeGreaterThanOrEqual(3);
+    // Buttons
+    expect(joined).toContain("Skip all");
+    expect(joined).toContain("Apply all");
+    expect(joined).toContain("Apply selected");
+  });
+
+  it("'Skip all' calls onRespond(false)", () => {
+    const calls = inspectCalls(multiReq);
+    expect(calls).toContainEqual([false, undefined, undefined]);
+  });
+
+  it("'Apply all' calls onRespond(true, undefined, [0,1,2])", () => {
+    const calls = inspectCalls(multiReq);
+    expect(calls).toContainEqual([true, undefined, [0, 1, 2]]);
+  });
+
+  it("falls back to single-preview UI when hunks has one item", () => {
+    const singleHunkReq: PermissionRequest = {
+      toolName: "apply_patch",
+      permission: "write",
+      description: "Apply 1 edit",
+      path: "src/a.ts",
+      preview: {
+        path: "src/a.ts",
+        diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new",
+      },
+      hunks: [{ index: 0, preview: "@@ -1,1 +1,1 @@" }],
+    };
+    const { text } = inspect(singleHunkReq);
+    const joined = text.join("");
+    // Falls back to the standard preview UI (Accept/Reject), not multi-hunk
+    expect(joined).toContain("Review change: src/a.ts");
+    expect(joined).toContain("Accept");
+    expect(joined).toContain("Reject");
+    // Multi-hunk labels should not appear
+    expect(joined).not.toContain("Skip all");
+    expect(joined).not.toContain("Apply all");
   });
 });
