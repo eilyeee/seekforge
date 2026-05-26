@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### round 22: per-hunk UI everywhere + a dogfood bug fix (parallel dogfood)
+- **Per-hunk partial-apply now reaches the TUI and desktop** (completing the
+  round-21 core+CLI contract). Two SeekForge dogfood sessions ran in parallel on
+  disjoint dirs:
+  - TUI `PermissionPanel`: multi-hunk requests render `[x]/[ ]` per-hunk
+    checkboxes (number key toggles, `a` selects all, `y`/`n` confirm/deny),
+    state in app.tsx; single-/no-hunk unchanged.
+  - Desktop + ws: the `permission.response` frame carries optional
+    `selectedHunks`; the server maps it to the core ConfirmResult and forwards
+    `hunks` to the client; the desktop PermissionModal renders per-hunk
+    selection. Backward compatible (boolean all-or-nothing when ≤1 hunk).
+- **Bug fix: `seekforge models` flagged deprecated models.** It listed
+  deepseek-chat/reasoner as plainly available; now a `DEPRECATED_MODELS` set in
+  core (re-exported) drives a `(deprecated)` tag and sorts current models first.
+- All built by SeekForge, then reviewed and independently verified: 7 packages
+  typecheck; tui 662, desktop 217, server 119, cli 74, core 743 tests green.
+
 ### round 21: per-hunk partial-apply (hardest dogfood — cross-layer contract)
 - **`apply_patch` per-hunk partial-apply (core + CLI).** When a patch has more
   than one edit, you can now approve/reject individual hunks instead of
