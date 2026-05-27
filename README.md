@@ -60,6 +60,7 @@ export DEEPSEEK_API_KEY=sk-...
 | Command | What it does |
 | --- | --- |
 | `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
+| `seekforge completion bash\|zsh` | print a static shell completion script to source from your rc file |
 | `seekforge-tui` | **terminal UI** (Ink): full Claude-Code-parity daily driver — command palette + argument pickers, vim mode, steering queue, run detach (Ctrl+B), per-turn backtrack with file restore, thinking display, opt-in OS sandbox, MCP over HTTP, custom commands and skills as slash commands; full list in [apps/tui/README.md](apps/tui/README.md) |
 | `seekforge serve [paths...] [--port 7373]` | local web UI + agent API; pass multiple workspace paths to host them together (127.0.0.1 only, token-protected) |
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation. More flags: [`--permission-mode`, `--output-style`, `--fallback-model`, `--settings`, `--system-prompt`, `--append-system-prompt`, `--allowedTools`, `--disallowedTools`, `--add-dir`, `--verbose`](docs/cli-reference.md) |
@@ -71,13 +72,19 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge rewind [session-id] [--dry-run]` | undo all file changes a session made (pre-write checkpoints) |
 | `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
 | `seekforge status` | project / config / last-session overview |
+| `seekforge update` | check npm for a newer seekforge version and print the install command |
 | `seekforge diff` | show the current git diff |
+| `seekforge doctor` | run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
+| `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |
+| `seekforge mcp-serve [--allow-write]` | run SeekForge as an MCP server on stdio (read-only tool set by default); `--allow-write` exposes write tools (TRUSTED callers only) |
 | `seekforge skill list\|show <id>\|create <id>` | procedure skills (project > global > builtin) |
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
-| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > project `.seekforge/config.json` > global `~/.seekforge/config.json` |
+| `seekforge memory compact [--dry-run]` | collapse duplicate and near-duplicate facts in project.md (deterministic) |
+| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
 
 Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `seekforge run` plus `--ask`, `--input-format` (text | stream-json),
@@ -117,7 +124,8 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
   and preToolUse can block a tool with a reason or allow it outright.
 - **MCP client** speaks stdio and streamable HTTP (`url` + optional bearer
   `headers`); server resources are listable and `@mcp:<server>:<uri>` inlines
-  one into a message.
+  one into a message. SeekForge can also run *as* an MCP server
+  (`seekforge mcp-serve`). Full guide: [docs/mcp.md](docs/mcp.md).
 - **`ask_user`**: the agent can ask you a multiple-choice question mid-run
   (never available to subagents or backgrounded runs, so they can't block).
 - **Skills** are procedure briefs (never permissions) selected per task by
