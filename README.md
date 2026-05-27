@@ -62,8 +62,9 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
 | `seekforge-tui` | **terminal UI** (Ink): full Claude-Code-parity daily driver — command palette + argument pickers, vim mode, steering queue, run detach (Ctrl+B), per-turn backtrack with file restore, thinking display, opt-in OS sandbox, MCP over HTTP, custom commands and skills as slash commands; full list in [apps/tui/README.md](apps/tui/README.md) |
 | `seekforge serve [paths...] [--port 7373]` | local web UI + agent API; pass multiple workspace paths to host them together (127.0.0.1 only, token-protected) |
-| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation |
-| `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
+| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation. More flags: [`--permission-mode`, `--output-style`, `--fallback-model`, `--settings`, `--system-prompt`, `--append-system-prompt`, `--allowedTools`, `--disallowedTools`, `--add-dir`, `--verbose`](docs/cli-reference.md) |
+| `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled); supports `--add-dir`, `--settings`, `--verbose` and [most run flags](docs/cli-reference.md) |
+| `seekforge models` | list available DeepSeek models, their pricing (cache miss/hit, output per 1M tokens), default (`deepseek-v4-flash`), and deprecated entries |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
 | `seekforge sessions` | list sessions with status and cost (subagent runs hidden) |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | delete old session traces to keep `.seekforge/sessions/` bounded |
@@ -76,7 +77,11 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
-| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers` |
+| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > project `.seekforge/config.json` > global `~/.seekforge/config.json` |
+
+Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
+`seekforge run` plus `--ask`, `--input-format` (text | stream-json),
+[see the full list](docs/cli-reference.md).
 
 `Ctrl+C` cancels a running session cooperatively (the trace is kept, so
 `seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
@@ -89,6 +94,9 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
 
 - **Edits are search/replace patches** (`oldString` must match uniquely),
   applied atomically — far more reliable than unified diffs for LLMs.
+  When `apply_patch` contains **more than one edit**, the permission prompt
+  offers per-hunk selection (approve/reject individual hunks in the CLI, TUI
+  checkboxes, or desktop modal). Single-edit calls stay all-or-nothing.
 - **Context manager** keeps long sessions inside the model window:
   micro-compaction clears old tool outputs first, then the middle is folded
   into a digest — mechanically, or by the model with `"compaction": "llm"`
@@ -139,6 +147,9 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
   dangerous commands (`rm -rf`, `sudo`, `git push`, pipe-to-shell, `bash -c`…)
   are always refused.
 - Permission prompts show the **raw command/path**, never a model paraphrase.
+  For `apply_patch` with multiple edits, a per-hunk preview is shown and you
+  can approve/reject individual edits (CLI: `Pick hunks (e.g. 0,2)`;
+  TUI/desktop: per-hunk checkboxes). Single-edit calls stay all-or-nothing.
 - Workspace sandbox (realpath containment, symlink-escape checks);
   `.env`/`*.pem`/SSH keys are unreadable; secrets are redacted from output.
 - Tool results are treated as data, not instructions (prompt-injection defense),
