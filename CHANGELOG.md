@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### round 26: model-selection polish + REPL commands (Claude detail parity)
+An audit vs Claude found stale deprecated-model defaults users would hit:
+- **Desktop Settings could only pick `deepseek-chat`** — the dropdown omitted the
+  actual default `deepseek-v4-flash` and `deepseek-v4-pro` entirely. Added a
+  `GET /api/models` endpoint (server, sourced from core MODEL_PRICING/
+  DEFAULT_MODEL/DEPRECATED_MODELS) that the SettingsView fetches: active models
+  selectable (default marked), deprecated ones disabled and labelled.
+- **`seekforge init`** scaffolded `model: "deepseek-chat"` (deprecated); now uses
+  `DEFAULT_MODEL` from core (deepseek-v4-flash).
+- **REPL** `/model` help no longer suggests the deprecated model, and the bare
+  REPL gains `/clear`, `/diff`, `/status`, `/compact` (it was far thinner than
+  the TUI). Single source of truth: all model lists come from core, not hardcode.
+
 ### round 22: per-hunk UI everywhere + a dogfood bug fix (parallel dogfood)
 - **Per-hunk partial-apply now reaches the TUI and desktop** (completing the
   round-21 core+CLI contract). Two SeekForge dogfood sessions ran in parallel on

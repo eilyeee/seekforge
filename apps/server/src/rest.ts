@@ -30,6 +30,9 @@ import {
   setEvolutionProposalStatus,
   truncateSessionAtUserTurn,
   type McpClientEntry,
+  DEFAULT_MODEL,
+  DEPRECATED_MODELS,
+  MODEL_PRICING,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
 import { listWorkspaceFiles, readRawUpload, RawFileError, saveUpload, UploadError } from "./files.js";
@@ -148,6 +151,16 @@ export async function handleApi(
         workspace: ctx.registry.default.path,
         workspaces: ctx.registry.summary,
       });
+    }
+
+    if (method === "GET" && path === "/api/models") {
+      const models = Object.entries(MODEL_PRICING).map(([id, pricing]) => ({
+        id,
+        isDefault: id === DEFAULT_MODEL,
+        deprecated: DEPRECATED_MODELS.includes(id as never),
+        pricing,
+      }));
+      return sendJson(res, 200, models);
     }
 
     if (method === "GET" && path === "/api/workspaces") {

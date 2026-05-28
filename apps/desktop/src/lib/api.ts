@@ -13,6 +13,7 @@ import type {
   McpTool,
   MemoryCandidate,
   MemoryResponse,
+  ModelInfo,
   RewindResult,
   ServerConfig,
   SessionMeta,
@@ -200,4 +201,5 @@ export const api = {
     request<Todo[]>("POST", withWorkspace("/api/todos"), op),
   balance: () => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance")),
   mcpResources: () => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources")),
+  models: () => request<ModelInfo[]>("GET", "/api/models"),
 };
