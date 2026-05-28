@@ -68,7 +68,7 @@ export function MemoryView() {
         ) : (
           <div className="space-y-6">
             <section>
-              <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">
                 pending candidates ({pending.length})
               </h2>
               {pending.length === 0 ? (
@@ -83,7 +83,7 @@ export function MemoryView() {
             </section>
 
             <section>
-              <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">project.md</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">project.md</h2>
               {memory.projectMd ? (
                 <Card className="bg-surface-raised/40 px-4 py-3">
                   <Markdown source={memory.projectMd} />
@@ -95,7 +95,7 @@ export function MemoryView() {
 
             {resolved.length > 0 && (
               <section>
-                <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">resolved</h2>
+                <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">resolved</h2>
                 <div className="space-y-2 opacity-60">
                   {resolved.map((c) => (
                     <CandidateCard key={c.id} candidate={c} onAct={act} />
@@ -121,12 +121,12 @@ function CandidateCard({
     <Card flush className="bg-surface-raised/60 px-3 py-2">
       <div className="flex items-center gap-2">
         <Badge tone={TYPE_TONE[candidate.type]}>[{candidate.type}]</Badge>
-        <span className="font-mono text-[11px] text-tertiary">
+        <span className="font-mono text-2xs text-tertiary">
           confidence {(candidate.confidence * 100).toFixed(0)}%
         </span>
         {candidate.status !== "pending" && (
           <span
-            className={`ml-auto text-[10px] uppercase ${
+            className={`ml-auto text-2xs uppercase ${
               candidate.status === "approved" ? "text-ok" : "text-danger"
             }`}
           >

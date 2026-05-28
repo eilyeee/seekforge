@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { transitionProposal, type EvolutionAction } from "../lib/evolution";
-import { Badge, Button, Card, EmptyState, IconEvolution, type BadgeTone } from "../components/ui";
+import { Badge, Button, Card, EmptyState, IconArrowRight, IconEvolution, type BadgeTone } from "../components/ui";
 import type { EvolutionProposal, EvolutionProposalRisk, EvolutionProposalType } from "../types";
 
 const TYPE_TONE: Record<EvolutionProposalType, BadgeTone> = {
@@ -90,7 +90,7 @@ export function EvolutionView() {
         ) : (
           <div className="max-w-3xl space-y-6">
             <section>
-              <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">pending proposals</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">pending proposals</h2>
               {pending.length === 0 ? (
                 <p className="text-sm text-tertiary">No pending proposals.</p>
               ) : (
@@ -133,7 +133,7 @@ export function EvolutionView() {
             </section>
 
             <section>
-              <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">history</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">history</h2>
               {history.length === 0 ? (
                 <p className="text-sm text-tertiary">Nothing reviewed yet.</p>
               ) : (
@@ -147,7 +147,7 @@ export function EvolutionView() {
                       <Badge tone={TYPE_TONE[p.type]}>{p.type}</Badge>
                       <span className="text-secondary">{p.title}</span>
                       {p.status === "applied" && changedPaths[p.id] && (
-                        <span className="font-mono text-[11px] text-accent">→ {changedPaths[p.id]}</span>
+                        <span className="inline-flex items-center gap-0.5 font-mono text-2xs text-accent"><IconArrowRight size={10} />{changedPaths[p.id]}</span>
                       )}
                       {p.status === "accepted" && (
                         <Button

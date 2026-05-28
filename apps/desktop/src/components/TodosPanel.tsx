@@ -47,7 +47,7 @@ export function TodosPanel() {
     <aside className="flex w-72 shrink-0 flex-col border-l border-zinc-800 bg-zinc-900/40">
       <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
         <span className="text-sm font-semibold text-zinc-100">Todos</span>
-        <span className="font-mono text-[10px] text-zinc-600">.seekforge/todos.md</span>
+        <span className="font-mono text-2xs text-zinc-600">.seekforge/todos.md</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">

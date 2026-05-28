@@ -22,7 +22,7 @@ function ScopeChip({ scope }: { scope: AgentScope }) {
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-tertiary">{label}</div>
+      <div className="text-2xs uppercase tracking-wider text-tertiary">{label}</div>
       <div className="font-mono text-xs text-secondary">{value}</div>
     </div>
   );

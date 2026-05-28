@@ -52,7 +52,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
           sub-agents and memory in one desktop workbench. Add your DeepSeek API key to get started.
         </p>
 
-        <label className="mb-1 block text-[10px] uppercase tracking-wider text-tertiary">
+        <label className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">
           DeepSeek API key
         </label>
         <Input
@@ -72,7 +72,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
         />
         {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
 
-        <p className="mt-2 text-[11px] text-tertiary">
+        <p className="mt-2 text-2xs text-tertiary">
           Stored in your global config (~/.seekforge). Get a key at{" "}
           <a
             href={DEEPSEEK_URL}

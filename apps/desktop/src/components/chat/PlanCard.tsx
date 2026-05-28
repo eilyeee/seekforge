@@ -16,7 +16,7 @@ const STATUS_CLASS: Record<PlanItem["status"], string> = {
 export function PlanCard({ items }: { items: PlanItem[] }) {
   return (
     <div className="rounded-xl border border-subtle bg-surface-raised/70 px-3 py-2">
-      <div className="mb-1.5 text-[10px] uppercase tracking-wider text-tertiary">plan</div>
+      <div className="mb-1.5 text-2xs uppercase tracking-wider text-tertiary">plan</div>
       <ul className="space-y-1">
         {items.map((item, i) => (
           <li key={i} className="flex items-start gap-2 text-xs leading-5">

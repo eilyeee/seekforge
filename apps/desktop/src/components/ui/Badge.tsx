@@ -16,7 +16,7 @@ type Props = HTMLAttributes<HTMLSpanElement> & { tone?: BadgeTone };
 export function Badge({ tone = "neutral", className = "", ...rest }: Props) {
   return (
     <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${TONE[tone]} ${className}`}
+      className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-2xs uppercase tracking-wide ${TONE[tone]} ${className}`}
       {...rest}
     />
   );

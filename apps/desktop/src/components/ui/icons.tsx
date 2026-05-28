@@ -114,6 +114,46 @@ export function IconSettings(props: IconProps) {
   );
 }
 
+/** Chevron pointing right (▸). Add `className="rotate-90"` for the open (▾) state. */
+export function IconChevron(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 4l4 4-4 4" />
+    </Svg>
+  );
+}
+
+/** Six-line asterisk (✻) — thinking / reasoning. */
+export function IconSparkle(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 3v10" />
+      <path d="M3.7 5.5l8.6 5" />
+      <path d="M12.3 5.5l-8.6 5" />
+    </Svg>
+  );
+}
+
+/** Down-then-right corner arrow (⤷) — a dispatched subagent. */
+export function IconCornerDownRight(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 4v4a2 2 0 002 2h5" />
+      <path d="M9 7l3 3-3 3" />
+    </Svg>
+  );
+}
+
+/** Rightward arrow (→) — hints, continuations. */
+export function IconArrowRight(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 8h10" />
+      <path d="M9 4l4 4-4 4" />
+    </Svg>
+  );
+}
+
 /** SeekForge whale mark (filled, scales with `size`). */
 export function LogoMark({ size = 20, ...rest }: IconProps) {
   return (

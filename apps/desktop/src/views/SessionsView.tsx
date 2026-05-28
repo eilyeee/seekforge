@@ -148,7 +148,7 @@ export function SessionsView() {
                     <span className="font-mono text-xs text-tertiary">{s.id}</span>
                     <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
                     {rewindNotes[s.id] && (
-                      <span className="font-mono text-[11px] text-warn">{rewindNotes[s.id]}</span>
+                      <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>
                     )}
                     <span className="ml-auto flex items-center gap-2">
                       {s.usage && <span className="font-mono text-xs text-tertiary">{formatUsd(s.usage.costUsd)}</span>}
@@ -190,7 +190,7 @@ export function SessionsView() {
               <>
                 {rewindPreview.result.restored.length > 0 && (
                   <div>
-                    <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">would restore</div>
+                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">would restore</div>
                     <ul className="space-y-0.5 font-mono text-accent">
                       {rewindPreview.result.restored.map((p) => (
                         <li key={p}>{p}</li>
@@ -200,7 +200,7 @@ export function SessionsView() {
                 )}
                 {rewindPreview.result.deleted.length > 0 && (
                   <div>
-                    <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">would delete</div>
+                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">would delete</div>
                     <ul className="space-y-0.5 font-mono text-danger">
                       {rewindPreview.result.deleted.map((p) => (
                         <li key={p}>{p}</li>

@@ -61,7 +61,7 @@ function McpSection() {
 
   return (
     <div>
-      <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">mcp servers</h2>
+      <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">mcp servers</h2>
       {loadError && (
         <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{loadError}</div>
       )}
@@ -146,7 +146,7 @@ function McpResourcesSection() {
   return (
     <div className="mt-4">
       <div className="flex items-center gap-2">
-        <h3 className="text-[10px] uppercase tracking-wider text-tertiary">mcp resources</h3>
+        <h3 className="text-2xs uppercase tracking-wider text-tertiary">mcp resources</h3>
         <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={load}>
           {state === "loading" ? "Listing…" : state === null ? "List resources" : "Refresh"}
         </Button>
@@ -195,14 +195,14 @@ function PreferencesSection() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">appearance</h2>
+        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">appearance</h2>
         <div className="flex items-center gap-3">
           <ThemeSwitcher />
-          <span className="text-[11px] text-tertiary">Dark, light, or follow your system.</span>
+          <span className="text-2xs text-tertiary">Dark, light, or follow your system.</span>
         </div>
       </div>
       <div>
-        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-tertiary">notifications</h2>
+        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">notifications</h2>
         <label className="flex items-center gap-2 text-xs text-secondary">
           <input
             type="checkbox"
@@ -220,7 +220,7 @@ function PreferencesSection() {
   );
 }
 
-const FIELD_LABEL = "mb-1 block text-[10px] uppercase tracking-wider text-tertiary";
+const FIELD_LABEL = "mb-1 block text-2xs uppercase tracking-wider text-tertiary";
 
 export function SettingsView() {
   const [error, setError] = useState<string | null>(null);
@@ -386,7 +386,7 @@ export function SettingsView() {
                   }}
                 />
               </div>
-              <p className="mt-1 text-[11px] text-tertiary">
+              <p className="mt-1 text-2xs text-tertiary">
                 Shown masked. Type a new key and press Save to replace it.
               </p>
             </div>

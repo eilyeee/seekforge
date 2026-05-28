@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { worktreeLabel, type ChatTab } from "../../lib/tabs";
 import { formatUsd } from "../../lib/usage";
+import { IconChevron } from "../ui";
 
 type Props = {
   tabs: ChatTab[];
@@ -79,7 +80,7 @@ export function TabBar({
             </span>
             {tab.worktree && (
               <span
-                className="flex shrink-0 items-center gap-1 rounded bg-accent-muted px-1 text-[10px] text-accent"
+                className="flex shrink-0 items-center gap-1 rounded bg-surface-overlay px-1 text-2xs text-secondary"
                 title={`worktree branch: ${tab.worktree.branch}${tab.worktree.dirty ? " (uncommitted changes)" : ""}`}
               >
                 ⎇ {worktreeLabel(tab.worktree)}
@@ -90,7 +91,7 @@ export function TabBar({
             )}
             {showWs && tab.ws && !tab.worktree && (
               <span
-                className="shrink-0 rounded bg-surface-overlay px-1 text-[9px] uppercase tracking-wide text-secondary"
+                className="shrink-0 rounded bg-surface-overlay px-1 text-2xs uppercase tracking-wide text-secondary"
                 title={`workspace: ${workspaceName?.(tab.ws) ?? tab.ws}`}
               >
                 {workspaceName?.(tab.ws) ?? tab.ws}
@@ -107,7 +108,7 @@ export function TabBar({
                 onMouseDown={(e) => e.stopPropagation()}
                 className="rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
               >
-                ▾
+                <IconChevron size={12} className="rotate-90" />
               </button>
             )}
             <button
