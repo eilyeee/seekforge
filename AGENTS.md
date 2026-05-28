@@ -46,3 +46,19 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
 - Run `pnpm typecheck` and `pnpm test` after changes.
 - Commit messages: English, conventional commits (feat/fix/chore/test/docs).
 - Report changed files and verification results at the end.
+
+### Commit discipline
+
+- Verify against a **clean checkout, not just the dirty working tree** — local
+  `typecheck`/`test` pass with uncommitted changes present can mask a commit
+  that is incomplete or wires a flag wrong. When in doubt, `git stash` your
+  pending edits and re-run, or check what a fresh clone would see.
+- Before committing, run `git status` and stage with `git add -A` (or otherwise
+  confirm completeness). Do **not** cherry-pick paths and risk leaving a
+  related file behind — e.g. an export in `provider/index.ts` for a new symbol,
+  a re-export in a package `index.ts`, or a test wired into `package.json`.
+- A new symbol consumed across packages must be exported all the way out
+  (`constants.ts` → `provider/index.ts` → `core/src/index.ts`); committing the
+  consumer without the export breaks a clean build even though local passes.
+- After committing, confirm the tree is clean (`git status --short` empty) so
+  nothing related is accidentally left uncommitted.
