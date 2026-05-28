@@ -327,9 +327,9 @@ export function ChatView() {
         {config && (
           <span
             title="OS command sandbox (config: sandbox)"
-            className={`rounded px-1.5 py-0.5 font-mono text-2xs uppercase ${
+            className={`rounded px-1.5 py-0.5 font-mono text-2xs ${
               config.sandbox && config.sandbox !== "off"
-                ? "bg-ok/15 text-ok"
+                ? "bg-ok/10 text-ok/80"
                 : "bg-surface-overlay text-tertiary"
             }`}
           >
