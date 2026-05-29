@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
+import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import { Badge, Button, Card, Input, TextArea } from "../components/ui";
@@ -192,6 +193,8 @@ function McpResourcesSection() {
 /** Appearance (theme) + native notification on/off. Both persist locally. */
 function PreferencesSection() {
   const [notify, setNotify] = useState(notificationsEnabled());
+  const t = useT();
+  const locale = useLocale();
   return (
     <div className="space-y-3">
       <div>
@@ -200,6 +203,17 @@ function PreferencesSection() {
           <ThemeSwitcher />
           <span className="text-2xs text-tertiary">Dark, light, or follow your system.</span>
         </div>
+      </div>
+      <div>
+        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("lang.label")}</h2>
+        <select
+          value={locale}
+          onChange={(e) => setLocale(e.target.value as Locale)}
+          className="focus-ring rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70"
+        >
+          <option value="en">{t("lang.en")}</option>
+          <option value="zh-CN">{t("lang.zh")}</option>
+        </select>
       </div>
       <div>
         <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">notifications</h2>

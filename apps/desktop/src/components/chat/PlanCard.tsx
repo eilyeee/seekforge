@@ -1,3 +1,4 @@
+import { useT } from "../../lib/i18n";
 import type { PlanItem } from "../../lib/events";
 
 const STATUS_GLYPH: Record<PlanItem["status"], string> = {
@@ -14,9 +15,10 @@ const STATUS_CLASS: Record<PlanItem["status"], string> = {
 
 /** The update_plan checklist; a single card updated in place. */
 export function PlanCard({ items }: { items: PlanItem[] }) {
+  const t = useT();
   return (
     <div className="rounded-xl border border-subtle bg-surface-raised/70 px-3 py-2">
-      <div className="mb-1.5 text-2xs uppercase tracking-wider text-tertiary">plan</div>
+      <div className="mb-1.5 text-2xs uppercase tracking-wider text-tertiary">{t("chat.plan.title")}</div>
       <ul className="space-y-1">
         {items.map((item, i) => (
           <li key={i} className="flex items-start gap-2 text-xs leading-5">

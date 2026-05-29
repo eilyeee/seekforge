@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### round 29: desktop i18n (English + 简体中文)
+The desktop app had no i18n (all hardcoded English) while the TUI did. Added a
+matching lightweight layer — no deps, a flat key→string table per locale with an
+English fallback chain — now covering the whole desktop UI in **en + zh-CN**:
+- `lib/i18n.ts` engine: `t()` / `useT()` (live re-render via `useSyncExternalStore`),
+  `detectLocale` (stored choice > browser language > en), localStorage-persisted.
+  String tables split by feature (i18n/common, i18n/views, i18n/chat).
+- Every desktop component/view translated (sidebar, chat toolbar/stream/composer,
+  permission + question modals, all 8 views, onboarding, todos, theme switcher).
+- A language picker in Settings (en / 中文（简体）), live-switching like the theme.
+- Built in parallel (3 dogfood sessions on disjoint file-groups) then reviewed:
+  fixed a `t`/Todo variable shadow and pinned the locale in the renderer-free
+  PermissionModal test (Node's navigator.language follows the OS, so the default
+  was non-deterministic). Verified by screenshotting the running app in zh-CN.
+- CLI i18n is the next wave.
+
 ### round 28: ship the web UI in the npm package + dev server resolution
 Found by actually running the native desktop app (`pnpm tauri dev`): it printed
 "web UI is not built" because the Tauri shell spawned the globally-installed

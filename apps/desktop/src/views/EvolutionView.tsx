@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { transitionProposal, type EvolutionAction } from "../lib/evolution";
+import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconArrowRight, IconEvolution, type BadgeTone } from "../components/ui";
 import type { EvolutionProposal, EvolutionProposalRisk, EvolutionProposalType } from "../types";
 
@@ -25,6 +26,7 @@ const STATUS_TONE: Record<EvolutionProposal["status"], BadgeTone> = {
 };
 
 export function EvolutionView() {
+  const t = useT();
   const [proposals, setProposals] = useState<EvolutionProposal[] | null>(null);
   const [changedPaths, setChangedPaths] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -73,26 +75,26 @@ export function EvolutionView() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Evolution</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("evolution.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
         )}
         {proposals === null ? (
-          <p className="text-tertiary">Loading…</p>
+          <p className="text-tertiary">{t("evolution.loading")}</p>
         ) : proposals.length === 0 ? (
           <EmptyState
             icon={<IconEvolution size={28} />}
-            title="No proposals"
-            description="SeekForge surfaces self-improvement proposals here after sessions."
+            title={t("evolution.emptyTitle")}
+            description={t("evolution.emptyDescription")}
           />
         ) : (
           <div className="max-w-3xl space-y-6">
             <section>
-              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">pending proposals</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("evolution.pendingSection")}</h2>
               {pending.length === 0 ? (
-                <p className="text-sm text-tertiary">No pending proposals.</p>
+                <p className="text-sm text-tertiary">{t("evolution.pendingEmpty")}</p>
               ) : (
                 <div className="space-y-3">
                   {pending.map((p) => (
@@ -101,7 +103,7 @@ export function EvolutionView() {
                         <Badge tone={TYPE_TONE[p.type]}>{p.type}</Badge>
                         <span className="text-sm font-semibold text-primary">{p.title}</span>
                         <Badge tone={RISK_TONE[p.risk]} className="ml-auto">
-                          {p.risk} risk
+                          {t("evolution.riskLabel", { level: p.risk })}
                         </Badge>
                       </div>
                       <p className="mt-2 text-xs text-secondary">{p.problem}</p>
@@ -115,7 +117,7 @@ export function EvolutionView() {
                           disabled={busyId !== null}
                           onClick={() => void act(p.id, "reject")}
                         >
-                          Reject
+                          {t("evolution.rejectBtn")}
                         </Button>
                         <Button
                           size="sm"
@@ -123,7 +125,7 @@ export function EvolutionView() {
                           disabled={busyId !== null}
                           onClick={() => void act(p.id, "accept")}
                         >
-                          Accept
+                          {t("evolution.acceptBtn")}
                         </Button>
                       </div>
                     </Card>
@@ -133,9 +135,9 @@ export function EvolutionView() {
             </section>
 
             <section>
-              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">history</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("evolution.historySection")}</h2>
               {history.length === 0 ? (
-                <p className="text-sm text-tertiary">Nothing reviewed yet.</p>
+                <p className="text-sm text-tertiary">{t("evolution.historyEmpty")}</p>
               ) : (
                 <ul className="space-y-1.5">
                   {history.map((p) => (
@@ -157,7 +159,7 @@ export function EvolutionView() {
                           disabled={busyId !== null}
                           onClick={() => void act(p.id, "apply")}
                         >
-                          Apply
+                          {t("evolution.applyBtn")}
                         </Button>
                       )}
                     </li>

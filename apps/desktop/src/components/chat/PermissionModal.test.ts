@@ -12,12 +12,19 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useEffect: () => {},
     useState: <T>() => [null as unknown as T, vi.fn()] as const,
+    // useT() uses these; in renderer-free mode resolve them synchronously.
+    useMemo: <T>(fn: () => T) => fn(),
+    useSyncExternalStore: <T>(_sub: unknown, getSnapshot: () => T) => getSnapshot(),
     default: { ...actual, useEffect: () => {} },
   };
 });
 
 const { PermissionModal } = await import("./PermissionModal");
 const { DiffBlock } = await import("../DiffBlock");
+// Pin English so assertions are deterministic regardless of the machine locale
+// (Node's navigator.language follows the OS, which detectLocale would honor).
+const { setLocale } = await import("../../lib/i18n");
+setLocale("en");
 
 /**
  * Renderer-free assertions (desktop tests run in the node environment with no

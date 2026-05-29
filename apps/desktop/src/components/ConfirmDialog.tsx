@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useT } from "../lib/i18n";
 import { Button } from "./ui/Button";
 import { Modal } from "./ui/Modal";
 
@@ -13,16 +14,18 @@ type Props = {
 };
 
 /** Small confirm modal (Escape / backdrop = cancel). */
-export function ConfirmDialog({ title, children, confirmLabel = "Confirm", danger, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm, onCancel }: Props) {
+  const t = useT();
+  const label = confirmLabel ?? t("action.confirm");
   return (
     <Modal
       title={title}
       onDismiss={onCancel}
       footer={
         <>
-          <Button onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>{t("action.cancel")}</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} autoFocus>
-            {confirmLabel}
+            {label}
           </Button>
         </>
       }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useT } from "../../lib/i18n";
 import { worktreeLabel, type ChatTab } from "../../lib/tabs";
 import { formatUsd } from "../../lib/usage";
 import { IconChevron } from "../ui";
@@ -41,6 +42,7 @@ export function TabBar({
   onDiscardWorktree,
   workspaceName,
 }: Props) {
+  const t = useT();
   // Only label tabs by workspace when more than one workspace is in play
   // (worktree tabs always carry their branch chip instead).
   const distinctWs = new Set(tabs.map((t) => t.ws).filter(Boolean));
@@ -54,7 +56,7 @@ export function TabBar({
   return (
     <div
       className="flex items-center gap-1 overflow-x-auto border-b border-subtle bg-surface/40 px-2 pt-1.5"
-      title={`${tabs.length} tab(s) · total ${formatUsd(totalCost)}`}
+      title={t("chat.tab.tabsSummary", { count: tabs.length, cost: formatUsd(totalCost) })}
     >
       {tabs.map((tab) => {
         const active = tab.tabId === activeTabId;
@@ -69,9 +71,9 @@ export function TabBar({
             }`}
           >
             {tab.pendingPermission ? (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" title="waiting for approval" />
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" title={t("chat.tab.waitingApproval")} />
             ) : tab.chat.running ? (
-              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn" title="running" />
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn" title={t("chat.tab.running")} />
             ) : (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-surface-overlay" />
             )}
@@ -81,18 +83,18 @@ export function TabBar({
             {tab.worktree && (
               <span
                 className="flex shrink-0 items-center gap-1 rounded bg-surface-overlay px-1 text-2xs text-secondary"
-                title={`worktree branch: ${tab.worktree.branch}${tab.worktree.dirty ? " (uncommitted changes)" : ""}`}
+                title={tab.worktree.dirty ? t("chat.tab.worktreeBranchDirty", { branch: tab.worktree.branch }) : t("chat.tab.worktreeBranch", { branch: tab.worktree.branch })}
               >
                 ⎇ {worktreeLabel(tab.worktree)}
                 {tab.worktree.dirty && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-warn" title="uncommitted changes" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-warn" title={t("chat.tab.uncommitted")} />
                 )}
               </span>
             )}
             {showWs && tab.ws && !tab.worktree && (
               <span
                 className="shrink-0 rounded bg-surface-overlay px-1 text-2xs uppercase tracking-wide text-secondary"
-                title={`workspace: ${workspaceName?.(tab.ws) ?? tab.ws}`}
+                title={t("chat.tab.workspace", { name: workspaceName?.(tab.ws) ?? tab.ws })}
               >
                 {workspaceName?.(tab.ws) ?? tab.ws}
               </span>
@@ -100,7 +102,7 @@ export function TabBar({
             {tab.worktree && (
               <button
                 type="button"
-                aria-label={`worktree menu for ${tab.title}`}
+                aria-label={t("chat.tab.worktreeMenuLabel", { title: tab.title })}
                 onClick={(e) => {
                   e.stopPropagation();
                   setMenu(menu === tab.tabId ? null : tab.tabId);
@@ -113,7 +115,7 @@ export function TabBar({
             )}
             <button
               type="button"
-              aria-label={`close ${tab.title}`}
+              aria-label={t("chat.tab.closeLabel", { title: tab.title })}
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(tab.tabId);
@@ -136,7 +138,7 @@ export function TabBar({
                   }}
                   className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
                 >
-                  Merge back
+                  {t("chat.tab.mergeBack")}
                 </button>
                 <button
                   type="button"
@@ -146,7 +148,7 @@ export function TabBar({
                   }}
                   className="block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
                 >
-                  Discard…
+                  {t("chat.tab.discard")}
                 </button>
               </div>
             )}
@@ -156,7 +158,7 @@ export function TabBar({
       <div className="relative">
         <button
           type="button"
-          aria-label="new tab menu"
+          aria-label={t("chat.tab.newTabMenuLabel")}
           onClick={() => setMenu(menu === "new" ? null : "new")}
           onMouseDown={(e) => e.stopPropagation()}
           className="ml-0.5 mb-1 rounded px-2 py-0.5 text-sm text-tertiary hover:bg-surface-overlay hover:text-primary"
@@ -176,7 +178,7 @@ export function TabBar({
               }}
               className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
             >
-              New tab
+              {t("chat.tab.newTab")}
             </button>
             <button
               type="button"
@@ -185,9 +187,9 @@ export function TabBar({
                 onNewWorktree();
               }}
               className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
-              title="Run this session on an isolated git worktree branch; merge back when done"
+              title={t("chat.tab.newWorktreeTitle")}
             >
-              New worktree session
+              {t("chat.tab.newWorktreeSession")}
             </button>
           </div>
         )}

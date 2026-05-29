@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconMemory, type BadgeTone } from "../components/ui";
 import type { MemoryCandidate, MemoryResponse } from "../types";
 
@@ -14,6 +15,7 @@ const TYPE_TONE: Record<MemoryCandidate["type"], BadgeTone> = {
 };
 
 export function MemoryView() {
+  const t = useT();
   const [memory, setMemory] = useState<MemoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
@@ -51,28 +53,28 @@ export function MemoryView() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Memory</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("memory.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</div>
         )}
         {memory === null ? (
-          !error && <p className="text-tertiary">Loading…</p>
+          !error && <p className="text-tertiary">{t("memory.loading")}</p>
         ) : isEmpty ? (
           <EmptyState
             icon={<IconMemory size={28} />}
-            title="No memory yet"
-            description="Approved facts and project memory will collect here as you work."
+            title={t("memory.emptyTitle")}
+            description={t("memory.emptyDescription")}
           />
         ) : (
           <div className="space-y-6">
             <section>
               <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">
-                pending candidates ({pending.length})
+                {t("memory.pendingSection", { count: pending.length })}
               </h2>
               {pending.length === 0 ? (
-                <p className="text-xs text-tertiary">Nothing awaiting review.</p>
+                <p className="text-xs text-tertiary">{t("memory.pendingEmpty")}</p>
               ) : (
                 <div className="space-y-2">
                   {pending.map((c) => (
@@ -83,19 +85,19 @@ export function MemoryView() {
             </section>
 
             <section>
-              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">project.md</h2>
+              <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("memory.projectMdSection")}</h2>
               {memory.projectMd ? (
                 <Card className="bg-surface-raised/40 px-4 py-3">
                   <Markdown source={memory.projectMd} />
                 </Card>
               ) : (
-                <p className="text-xs text-tertiary">No project memory yet.</p>
+                <p className="text-xs text-tertiary">{t("memory.projectMdEmpty")}</p>
               )}
             </section>
 
             {resolved.length > 0 && (
               <section>
-                <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">resolved</h2>
+                <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("memory.resolvedSection")}</h2>
                 <div className="space-y-2 opacity-60">
                   {resolved.map((c) => (
                     <CandidateCard key={c.id} candidate={c} onAct={act} />
@@ -117,12 +119,13 @@ function CandidateCard({
   candidate: MemoryCandidate;
   onAct: (id: string, action: "approve" | "reject") => void;
 }) {
+  const t = useT();
   return (
     <Card flush className="bg-surface-raised/60 px-3 py-2">
       <div className="flex items-center gap-2">
         <Badge tone={TYPE_TONE[candidate.type]}>[{candidate.type}]</Badge>
         <span className="font-mono text-2xs text-tertiary">
-          confidence {(candidate.confidence * 100).toFixed(0)}%
+          {t("memory.confidence", { pct: (candidate.confidence * 100).toFixed(0) })}
         </span>
         {candidate.status !== "pending" && (
           <span
@@ -138,10 +141,10 @@ function CandidateCard({
       {candidate.status === "pending" && (
         <div className="mt-2 flex gap-2">
           <Button variant="primary" size="sm" onClick={() => onAct(candidate.id, "approve")}>
-            Approve
+            {t("memory.approveBtn")}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => onAct(candidate.id, "reject")}>
-            Reject
+            {t("memory.rejectBtn")}
           </Button>
         </div>
       )}
