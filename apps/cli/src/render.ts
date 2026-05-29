@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, ConfirmResult, PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
+import { t } from "./i18n.js";
 
 function summarizeArgs(args: unknown, verbose = false): string {
   const text = JSON.stringify(args, null, verbose ? 2 : undefined) ?? "";
@@ -17,8 +18,7 @@ function summarizeResult(data: unknown): string {
 export function formatUsage(usage: TokenUsage): string {
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
   return (
-    `Tokens: ${k(usage.promptTokens)} prompt (${k(usage.cacheHitTokens)} cache hit) / ` +
-    `${k(usage.completionTokens)} completion   Cost: $${usage.costUsd.toFixed(4)}`
+    `${t("render.tokensLabel", { prompt: k(usage.promptTokens), cacheHit: k(usage.cacheHitTokens), completion: k(usage.completionTokens) })}   ${t("render.costLabel", { cost: usage.costUsd.toFixed(4) })}`
   );
 }
 
@@ -86,7 +86,7 @@ export function createRenderer(opts: RendererOptions = {}): Renderer {
     },
     reasoningDelta: (chunk) => {
       if (!inThinking) {
-        process.stdout.write(`${c.dimItalic("✻ thinking")}\n`);
+        process.stdout.write(`${c.dimItalic(t("render.thinkingLabel"))}\n`);
         inThinking = true;
       }
       // Wrap every chunk so interleaved writes can never leak the style.
@@ -98,10 +98,10 @@ export function createRenderer(opts: RendererOptions = {}): Renderer {
 function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
   switch (e.type) {
     case "session.created":
-      console.log(c.dim(`session ${e.sessionId}`));
+      console.log(c.dim(t("render.session", { id: e.sessionId })));
       break;
     case "step.started":
-      console.log(c.dim(`· ${e.title}`));
+      console.log(c.dim(t("render.step", { title: e.title })));
       break;
     case "model.message":
       if (opts.streaming) {
@@ -116,7 +116,7 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
     case "tool.completed": {
       if (e.toolName === "update_plan" && e.result.ok) {
         const items = (e.result.data as { items?: Array<{ step: string; status: string }> })?.items ?? [];
-        console.log(c.yellow("Plan"));
+        console.log(c.yellow(t("render.planLabel")));
         for (const item of items) {
           const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
           console.log(`  ${box} ${item.step}`);
@@ -133,7 +133,7 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
       break;
     }
     case "file.changed":
-      console.log(`${c.yellow("● changed")} ${e.path}`);
+      console.log(`${c.yellow(t("render.changedLabel"))} ${e.path}`);
       break;
     case "command.output":
       // Live run_command output, streamed as it arrives. Dimmed so it reads
@@ -141,28 +141,23 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
       process.stdout.write(c.dim(e.chunk));
       break;
     case "context.microcompacted":
-      console.log(c.dim(`context: cleared ${e.clearedResults} old tool outputs`));
+      console.log(c.dim(t("render.contextMicrocompacted", { count: e.clearedResults })));
       break;
     case "context.compacted":
-      console.log(c.dim(`(context compacted: dropped ${e.droppedTurns} earlier messages)`));
+      console.log(c.dim(t("render.contextCompacted", { count: e.droppedTurns })));
       break;
     case "provider.retry":
       // Transient retry progress: dim stderr so it never pollutes piped stdout.
       console.error(
-        c.dim(`⟳ retrying (${e.attempt}/${e.maxAttempts}) in ${(e.delayMs / 1000).toFixed(1)}s — ${e.reason}`),
+        c.dim(t("render.retrying", { attempt: e.attempt, maxAttempts: e.maxAttempts, delay: (e.delayMs / 1000).toFixed(1), reason: e.reason })),
       );
       break;
     case "session.failed": {
-      console.error(c.red(`failed: ${e.error.code} — ${e.error.message}`));
+      console.error(c.red(t("render.failedLabel", { code: e.error.code, message: e.error.message })));
       if (e.error.hint) console.error(c.dim(`  → ${e.error.hint}`));
       // Genuine, recoverable failures: point at the exact resume command.
       if (e.error.recoverable && e.error.sessionId) {
-        console.error(
-          c.dim(
-            `  → resume with \`seekforge resume ${e.error.sessionId}\` ` +
-              `(your file changes and completed steps are preserved; checkpoints intact)`,
-          ),
-        );
+        console.error(c.dim(t("render.resumeHint", { sessionId: e.error.sessionId })));
       }
       break;
     }
@@ -182,21 +177,21 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
  */
 export async function confirmInTerminal(req: PermissionRequest): Promise<ConfirmResult> {
   const c = makeColorizer(colorIsEnabled());
-  console.log(`\n${c.yellow("Permission required")} [${req.permission}] ${req.toolName}`);
+  console.log(`\n${c.yellow(t("render.permissionRequired"))} [${req.permission}] ${req.toolName}`);
   if (req.command) console.log(`  command: ${req.command}`);
   if (req.path) console.log(`  path:    ${req.path}`);
   if (!req.command && !req.path) console.log(`  ${req.description}`);
   // Multi-hunk selection: offer per-hunk choice when the request carries
   // individual hunk previews (apply_patch with >1 edit).
   if (req.hunks && req.hunks.length > 1) {
-    console.log(c.dim("  Edits:"));
+    console.log(c.dim(`  ${t("render.edits")}:`));
     for (const hunk of req.hunks) {
       console.log(`    [${hunk.index}] ${hunk.preview}`);
     }
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       const answer = await new Promise<string>((resolve) => {
-        rl.question("  Apply all [y], skip all [N], or pick hunks (e.g. 0,2): ").then(resolve, () => resolve("n"));
+        rl.question(`  ${t("render.applyPrompt")}`).then(resolve, () => resolve("n"));
         rl.once("SIGINT", () => {
           resolve("n");
           process.emit("SIGINT" as never);
@@ -218,7 +213,7 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<Confirm
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await new Promise<string>((resolve) => {
-      rl.question("Allow? [y/N] ").then(resolve, () => resolve("n"));
+      rl.question(t("render.allowPrompt")).then(resolve, () => resolve("n"));
       rl.once("SIGINT", () => {
         resolve("n");
         process.emit("SIGINT" as never);

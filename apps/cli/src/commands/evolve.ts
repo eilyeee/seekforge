@@ -10,6 +10,7 @@ import {
   setEvolutionProposalStatus,
   type EvolutionProposal,
 } from "@seekforge/core";
+import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
 
 function truncate(text: string, max: number): string {
@@ -31,7 +32,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
       (s) => s.status === "completed" || s.status === "failed",
     );
     if (!finished) {
-      console.error("No completed or failed sessions to analyze. See `seekforge sessions`.");
+      console.error(t("err.noCompletedSessions"));
       process.exitCode = 1;
       return;
     }
@@ -40,10 +41,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
 
   const config = loadConfig(workspace);
   if (!config.apiKey) {
-    console.error(
-      "No DeepSeek API key found. Set DEEPSEEK_API_KEY, or put {\"apiKey\": \"...\"} in " +
-        ".seekforge/config.json (project) or ~/.seekforge/config.json (global).",
-    );
+    console.error(t("err.noApiKeyHint2"));
     process.exitCode = 1;
     return;
   }
@@ -58,13 +56,19 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
   }
 
   const m = score.metrics;
-  console.log(`session:  ${target} [${m.status}]`);
-  console.log(`score:    ${score.score}/100`);
+  console.log(t("cmd.evolve.session", { id: target, status: m.status }));
+  console.log(t("cmd.evolve.score", { score: score.score }));
   console.log(
-    `metrics:  turns=${m.turns} toolCalls=${m.toolCalls} failed=${m.failedToolCalls} ` +
-      `retried=${m.retriedCommands} cost=$${m.costUsd.toFixed(4)} verification=${m.verificationRan ? "yes" : "no"}`,
+    t("cmd.evolve.metrics", {
+      turns: m.turns,
+      toolCalls: m.toolCalls,
+      failedToolCalls: m.failedToolCalls,
+      retriedCommands: m.retriedCommands,
+      cost: m.costUsd.toFixed(4),
+      verification: m.verificationRan ? t("cmd.evolve.metricsYes") : t("cmd.evolve.metricsNo"),
+    }),
   );
-  for (const note of score.notes) console.log(`  - ${note}`);
+  for (const note of score.notes) console.log(t("cmd.evolve.note", { note }));
 
   const provider = createDeepSeekProvider({
     apiKey: config.apiKey,
@@ -73,19 +77,19 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
   });
 
   const result = await reflectOnSession(provider, { workspace, sessionId: target });
-  console.log(`\nreflection written to ${sessionReflectionPath(workspace, target)}`);
+  console.log(`\n${t("cmd.evolve.reflectionWritten", { path: sessionReflectionPath(workspace, target) })}`);
   if (result.proposals.length === 0) {
-    console.log("No new evolution proposals.");
+    console.log(t("cmd.evolve.noNewProposals"));
     return;
   }
-  console.log(`\nNew proposals (review with \`seekforge evolve show <id>\`):`);
+  console.log(`\n${t("cmd.evolve.newProposals")}`);
   for (const p of result.proposals) console.log(`  ${proposalLine(p)}`);
 }
 
 export function evolveListCommand(): void {
   const proposals = listEvolutionProposals(process.cwd());
   if (proposals.length === 0) {
-    console.log("No evolution proposals yet. Run `seekforge evolve analyze` after a session.");
+    console.log(t("cmd.evolve.none"));
     return;
   }
   const pending = proposals.filter((p) => p.status === "pending");
@@ -126,7 +130,7 @@ export function evolveShowCommand(id: string): void {
 export function evolveAcceptCommand(id: string): void {
   try {
     const p = setEvolutionProposalStatus(process.cwd(), id, "accepted");
-    console.log(`accepted ${p.id} — apply with \`seekforge evolve apply ${p.id}\``);
+    console.log(t("cmd.evolve.accepted", { id: p.id }));
   } catch (err) {
     console.error((err as Error).message);
     process.exitCode = 1;
@@ -136,7 +140,7 @@ export function evolveAcceptCommand(id: string): void {
 export function evolveRejectCommand(id: string): void {
   try {
     const p = setEvolutionProposalStatus(process.cwd(), id, "rejected");
-    console.log(`rejected ${p.id}`);
+    console.log(t("cmd.evolve.rejected", { id: p.id }));
   } catch (err) {
     console.error((err as Error).message);
     process.exitCode = 1;
@@ -146,8 +150,8 @@ export function evolveRejectCommand(id: string): void {
 export function evolveApplyCommand(id: string): void {
   try {
     const { proposal, changedPath } = applyProposal(process.cwd(), id);
-    console.log(`applied ${proposal.id} [${proposal.type}] → ${changedPath}`);
-    console.log("Review the change with `git diff` (or `seekforge diff`).");
+    console.log(t("cmd.evolve.applied", { id: proposal.id, type: proposal.type, path: changedPath }));
+    console.log(t("cmd.evolve.appliedMore"));
   } catch (err) {
     console.error((err as Error).message);
     process.exitCode = 1;

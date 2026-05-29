@@ -6,28 +6,11 @@ import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
+import { t } from "../i18n.js";
 import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
 
-const HELP = `
-Slash commands:
-  /help              show this help
-  /new               start a fresh session (next message opens it)
-  /sessions          list sessions of this project
-  /resume <id>       continue an existing session
-  /plan <task>       plan read-only first, confirm, then execute
-  /model <name>      switch model (e.g. deepseek-v4-flash, deepseek-v4-pro)
-  /think [on|off|high|max]  V4 thinking mode and reasoning effort
-  /remember <fact>   save a fact to project memory (project.md)
-  /usage             cumulative token usage and cost for this REPL
-  /clear             clear the terminal screen
-  /diff              show current git diff
-  /status            project/config/session overview
-  /compact [focus]   compact the current session (mechanical digest)
-  /context           context-window occupancy of the last turn
-  /quit              exit (Ctrl+D also works)
-Anything else is sent to the agent. @path tokens inline file contents.
-`.trim();
+const HELP = t("repl.help");
 
 function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   return {
@@ -41,11 +24,11 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 /** Permission prompt sharing the REPL's readline (no competing stdin readers). */
 function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean> {
   return async (req) => {
-    console.log(`\n${yellow("Permission required")} [${req.permission}] ${req.toolName}`);
+    console.log(`\n${yellow(t("repl.permissionRequired"))} [${req.permission}] ${req.toolName}`);
     if (req.command) console.log(`  command: ${req.command}`);
     if (req.path) console.log(`  path:    ${req.path}`);
     if (!req.command && !req.path) console.log(`  ${req.description}`);
-    const answer = await rl.question("Allow? [y/N] ");
+    const answer = await rl.question(t("repl.allowPrompt"));
     return answer.trim().toLowerCase() === "y";
   };
 }
@@ -53,11 +36,11 @@ function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean
 /** ask_user channel over the REPL's readline: numbered options, pick by index. */
 function makeAskUser(rl: Interface): (q: { question: string; options: string[] }) => Promise<string> {
   return async (q) => {
-    console.log(`\n${yellow("Question")} ${q.question}`);
+    console.log(`\n${yellow(t("repl.question"))} ${q.question}`);
     q.options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
-    const answer = (await rl.question(`answer [1-${q.options.length}]: `)).trim();
+    const answer = (await rl.question(t("repl.answerPrompt", { max: q.options.length }))).trim();
     const n = Number.parseInt(answer, 10);
-    if (!Number.isInteger(n) || n < 1 || n > q.options.length) return "(the user declined to answer)";
+    if (!Number.isInteger(n) || n < 1 || n > q.options.length) return t("repl.userDeclined");
     return q.options[n - 1] as string;
   };
 }
@@ -74,8 +57,8 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
     return;
   }
   if (!config.apiKey) {
-    fail("no DeepSeek API key found", {
-      hint: "set DEEPSEEK_API_KEY or run: seekforge config set apiKey <key> --global",
+    fail(t("err.noApiKey"), {
+      hint: t("err.noApiKeyHint"),
     });
     return;
   }
@@ -88,8 +71,8 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
   let lastContext: { usedTokens: number; budgetTokens: number; percent: number } | undefined;
   const renderer = createRenderer({ streaming: true });
 
-  console.log(`SeekForge — interactive session  ${dim(`(${model}, ${projectPath})`)}`);
-  console.log(`${dim("Type a task, or /help for commands. Ctrl+C cancels a running task.")}\n`);
+  console.log(`${t("repl.welcome", { model, path: projectPath })}`);
+  console.log(`${dim(t("repl.welcomeHint"))}\n`);
 
   const runOnce = async (task: string, runOpts?: { mode?: "ask" | "edit"; plan?: boolean }): Promise<void> => {
     const { agent, dispose } = createCliAgent({
@@ -105,7 +88,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
     });
     const controller = new AbortController();
     const onSigint = (): void => {
-      console.error("\ncancelling…");
+      console.error(t("render.cancellingRepl"));
       controller.abort();
     };
     process.on("SIGINT", onSigint);
@@ -139,7 +122,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
   for (;;) {
     let line: string;
     try {
-      line = (await rl.question("seekforge ❯ ")).trim();
+      line = (await rl.question(t("repl.prompt"))).trim();
     } catch {
       break; // Ctrl+D / closed stdin
     }
@@ -158,12 +141,12 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
           return;
         case "/new":
           sessionId = undefined;
-          console.log("next message starts a fresh session");
+          console.log(t("repl.nextMessageFresh"));
           break;
         case "/clear":
           // clear terminal and reset on-screen history
           process.stdout.write("\x1b[2J\x1b[H");
-          console.log(`SeekForge — ${dim("screen cleared")}`);
+          console.log(`SeekForge — ${dim(t("repl.screenCleared"))}`);
           break;
         case "/diff":
           spawn("git", ["diff"], { stdio: "inherit" });
@@ -173,75 +156,74 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
           break;
         case "/compact": {
           if (!sessionId) {
-            console.log("no active session to compact — run a task first");
+            console.log(t("repl.noActiveSession"));
             break;
           }
           const result = compactSessionNow(projectPath, sessionId);
           if (!result) {
-            console.log("session is too short to compact or has no messages file");
+            console.log(t("repl.sessionTooShort"));
           } else {
             console.log(
-              `compacted: dropped ${result.droppedTurns} turn(s), ` +
-                `${result.beforeTokens} → ${result.afterTokens} tokens`,
+              t("repl.compacted", { dropped: result.droppedTurns, before: result.beforeTokens, after: result.afterTokens }),
             );
           }
           break;
         }
         case "/sessions":
           for (const s of listSessions(projectPath).slice(0, 15)) {
-            console.log(`${s.id}  [${s.status}]  ${s.task.replace(/\s+/g, " ").slice(0, 60)}`);
+            console.log(t("cmd.sessions.output", { id: s.id, status: s.status, cost: "", task: s.task.replace(/\s+/g, " ").slice(0, 60) }));
           }
           break;
         case "/resume": {
           const id = rest[0];
           if (!id || !readSessionMeta(projectPath, id)) {
-            console.log("usage: /resume <session-id> (see /sessions)");
+            console.log(t("repl.resumeUsage"));
             break;
           }
           sessionId = id;
-          console.log(`continuing session ${id} — your next message resumes it`);
+          console.log(t("repl.continuingSession", { id }));
           break;
         }
         case "/plan": {
           const planTask = rest.join(" ").trim();
           if (!planTask) {
-            console.log("usage: /plan <task>");
+            console.log(t("repl.planUsage"));
             break;
           }
           try {
             await runOnce(planTask, { mode: "ask", plan: true });
-            const answer = (await rl.question("\nExecute this plan? [y/N] ")).trim().toLowerCase();
+            const answer = (await rl.question(t("repl.executeQuestion"))).trim().toLowerCase();
             if (answer === "y") {
               await runOnce(
                 "Execute the plan you produced above, step by step. Make the changes and run the verification.",
                 { mode: "edit" },
               );
             } else {
-              console.log("plan kept; the session continues — refine it or /new");
+              console.log(t("repl.planKept"));
             }
           } catch (err) {
-            console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+            console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
           }
           break;
         }
         case "/model":
           if (rest[0] === "deepseek-reasoner") {
-            console.log("deepseek-reasoner has no tool calling and cannot drive the agent yet");
+            console.log(t("repl.reasonerBlocked"));
             break;
           }
           if (!rest[0]) {
-            console.log(`model: ${model} (try deepseek-v4-flash, deepseek-v4-pro)`);
+            console.log(t("repl.modelCurrent", { model }));
             break;
           }
           model = rest[0];
-          console.log(`model: ${model}`);
+          console.log(t("repl.modelSet", { model }));
           break;
         case "/think": {
           const arg = rest[0];
           if (!arg) {
-            console.log(
-              `thinking: ${config.thinking === false ? "off" : "on"}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""} (V4 models only — /think on|off|high|max)`,
-            );
+            const state = config.thinking === false ? "off" : "on";
+            const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
+            console.log(t("repl.thinkingCurrent", { state, effortSuffix }));
             break;
           }
           if (arg === "on") config.thinking = true;
@@ -250,26 +232,26 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
             config.thinking = true;
             config.reasoningEffort = arg;
           } else {
-            console.log("usage: /think [on|off|high|max]");
+            console.log(t("repl.modelUsage"));
             break;
           }
-          console.log(
-            `thinking ${config.thinking === false ? "off" : "on"}${config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : ""} — applies from the next message` +
-              (model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)"),
-          );
+          const state = config.thinking === false ? "off" : "on";
+          const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
+          const modelSuffix = model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)";
+          console.log(t("repl.thinkingSet", { state, effortSuffix, modelSuffix }));
           break;
         }
         case "/remember": {
           const fact = rest.join(" ").trim();
           if (!fact) {
-            console.log("usage: /remember <fact>");
+            console.log(t("repl.rememberUsage"));
             break;
           }
           try {
             const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
-            console.log(`remembered → project.md: ${c.content}`);
+            console.log(t("repl.remembered", { content: c.content }));
           } catch (err) {
-            console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+            console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
           }
           break;
         }
@@ -280,17 +262,15 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
           if (lastContext) {
             const { usedTokens, budgetTokens, percent } = lastContext;
             const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
-            console.log(`context: ${k(usedTokens)} of ${k(budgetTokens)} budget tokens used (${percent}%)`);
+            console.log(t("repl.contextInfo", { used: k(usedTokens), budget: k(budgetTokens), percent }));
           } else {
-            console.log("context: no turn run yet this REPL");
+            console.log(t("repl.contextNone"));
           }
-          console.log(
-            dim("When usage exceeds the budget, older turns are compacted into a short digest automatically."),
-          );
+          console.log(dim(t("repl.contextAutoCompaction")));
           break;
         }
         default:
-          console.log(`unknown command ${cmd} — /help for the list`);
+          console.log(t("err.unknownCommand", { cmd: cmd ?? "" }));
       }
       continue;
     }
@@ -298,7 +278,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
     try {
       await runOnce(line);
     } catch (err) {
-      console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
     }
   }
   rl.close();

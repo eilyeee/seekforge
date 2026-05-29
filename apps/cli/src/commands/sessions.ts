@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { listSessions, pruneSessions } from "@seekforge/core";
 import { loadConfig } from "../config.js";
+import { t } from "../i18n.js";
 import { formatUsage } from "../render.js";
 
 function truncate(text: string, max: number): string {
@@ -13,12 +14,12 @@ function truncate(text: string, max: number): string {
 export function sessionsCommand(): void {
   const sessions = listSessions(process.cwd());
   if (sessions.length === 0) {
-    console.log("No sessions yet. Run `seekforge run \"<task>\"` to start one.");
+    console.log(t("cmd.sessions.none"));
     return;
   }
   for (const s of sessions) {
     const cost = s.usage ? ` $${s.usage.costUsd.toFixed(4)}` : "";
-    console.log(`${s.id}  [${s.status}]${cost}  ${truncate(s.task, 60)}`);
+    console.log(t("cmd.sessions.output", { id: s.id, status: s.status, cost, task: truncate(s.task, 60) }));
   }
 }
 
@@ -28,22 +29,22 @@ export function sessionsPruneCommand(opts: PruneOptions): void {
   const olderThanDays = opts.olderThan !== undefined ? Number.parseInt(opts.olderThan, 10) : undefined;
   const keepLast = opts.keepLast !== undefined ? Number.parseInt(opts.keepLast, 10) : undefined;
   if (olderThanDays === undefined && keepLast === undefined) {
-    console.error("Specify --older-than <days> and/or --keep-last <n> (use --dry-run to preview).");
+    console.error(t("cmd.sessions.pruneSpecify"));
     process.exitCode = 1;
     return;
   }
   if ((olderThanDays !== undefined && Number.isNaN(olderThanDays)) || (keepLast !== undefined && Number.isNaN(keepLast))) {
-    console.error("--older-than and --keep-last must be numbers.");
+    console.error(t("cmd.sessions.pruneNumbers"));
     process.exitCode = 1;
     return;
   }
   const result = pruneSessions(process.cwd(), { olderThanDays, keepLast, dryRun: opts.dryRun });
   if (result.removed.length === 0) {
-    console.log("Nothing to prune.");
+    console.log(t("cmd.sessions.pruneNone"));
     return;
   }
-  const verb = opts.dryRun ? "would remove" : "removed";
-  console.log(`${verb} ${result.removed.length} session(s); ${result.kept} kept.`);
+  const verb = opts.dryRun ? t("cmd.sessions.pruneWouldRemove") : t("cmd.sessions.pruneRemoved");
+  console.log(t("cmd.sessions.pruneResult", { verb, removed: result.removed.length, kept: result.kept }));
   if (opts.dryRun) for (const id of result.removed) console.log(`  ${id}`);
 }
 
@@ -53,14 +54,18 @@ export function statusCommand(): void {
   const sessions = listSessions(projectPath);
   const last = sessions[0];
 
-  console.log(`project:   ${projectPath}`);
-  console.log(`config:    ${existsSync(join(projectPath, ".seekforge")) ? ".seekforge/ present" : "not initialized (run seekforge init)"}`);
-  console.log(`api key:   ${config.apiKey ? `${config.apiKey.slice(0, 6)}**** ` : "MISSING"}`);
-  console.log(`model:     ${config.model ?? "deepseek-v4-flash (default)"}`);
-  console.log(`global:    ${join(homedir(), ".seekforge", "config.json")}`);
-  console.log(`sessions:  ${sessions.length}`);
+  console.log(t("cmd.status.project", { path: projectPath }));
+  console.log(t("cmd.status.config", {
+    path: existsSync(join(projectPath, ".seekforge"))
+      ? t("cmd.status.configInitialized")
+      : t("cmd.status.configNotInit"),
+  }));
+  console.log(t("cmd.status.apiKey", { key: config.apiKey ? `${config.apiKey.slice(0, 6)}**** ` : t("cmd.status.apiKeyMasked") }));
+  console.log(t("cmd.status.model", { model: config.model ?? t("cmd.status.modelDefault") }));
+  console.log(t("cmd.status.global", { path: join(homedir(), ".seekforge", "config.json") }));
+  console.log(t("cmd.status.sessions", { count: sessions.length }));
   if (last) {
-    console.log(`last:      ${last.id} [${last.status}] ${truncate(last.task, 50)}`);
+    console.log(t("cmd.status.last", { id: last.id, status: last.status, task: truncate(last.task, 50) }));
     if (last.usage) console.log(`           ${formatUsage(last.usage)}`);
   }
 }

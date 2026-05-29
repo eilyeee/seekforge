@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_MODEL } from "@seekforge/core";
+import { t } from "../i18n.js";
 
 const AGENTS_TEMPLATE = `# AGENTS.md
 
@@ -40,15 +41,15 @@ export function initCommand(): void {
   if (!existsSync(configPath)) {
     // 0600: users often put apiKey in here later.
     writeFileSync(configPath, `${JSON.stringify({ model: DEFAULT_MODEL }, null, 2)}\n`, { mode: 0o600 });
-    console.log("created .seekforge/config.json");
+    console.log(t("cmd.init.createdConfig"));
   }
 
   const agentsPath = join(root, "AGENTS.md");
   if (existsSync(agentsPath)) {
-    console.log("AGENTS.md already exists — left untouched");
+    console.log(t("cmd.init.agentsExists"));
   } else {
     writeFileSync(agentsPath, AGENTS_TEMPLATE);
-    console.log("created AGENTS.md");
+    console.log(t("cmd.init.createdAgents"));
   }
-  console.log("initialized .seekforge/");
+  console.log(t("cmd.init.initialized"));
 }

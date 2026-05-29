@@ -3,6 +3,7 @@
 // runTaskCommand (the same engine as `run`) but adds stdin composition.
 
 import { fail } from "../colors.js";
+import { t } from "../i18n.js";
 import { resolveOutputFormat, type OutputFormat } from "../output-format.js";
 import { composePrompt, readStdin } from "../stdin-prompt.js";
 import { runTaskCommand } from "./run.js";
@@ -39,7 +40,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
   }
 
   if (opts.inputFormat !== undefined && opts.inputFormat !== "text" && opts.inputFormat !== "stream-json") {
-    fail(`--input-format must be "text" or "stream-json" (got "${opts.inputFormat}")`);
+    fail(t("err.inputFormatTextStream", { format: opts.inputFormat }));
     return;
   }
   const streamInput = opts.inputFormat === "stream-json";
@@ -54,8 +55,8 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     const stdin = await readStdin();
     prompt = composePrompt(inlinePrompt, stdin) ?? "";
     if (!prompt) {
-      fail("no prompt provided", {
-        hint: 'pass one inline (seekforge -p "…") or pipe it (cat task.md | seekforge -p)',
+      fail(t("err.noPrompt"), {
+        hint: t("err.noPromptHint"),
       });
       return;
     }
@@ -63,7 +64,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
 
   const maxTurns = opts.maxTurns !== undefined ? Number.parseInt(opts.maxTurns, 10) : undefined;
   if (maxTurns !== undefined && (Number.isNaN(maxTurns) || maxTurns <= 0)) {
-    fail("--max-turns must be a positive integer");
+    fail(t("err.maxTurnsPositive"));
     return;
   }
 

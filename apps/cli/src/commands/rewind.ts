@@ -1,4 +1,5 @@
 import { listSessions, readCheckpoints, rewindSession } from "@seekforge/core";
+import { t } from "../i18n.js";
 
 export type RewindOptions = { dryRun?: boolean };
 
@@ -16,26 +17,24 @@ export function rewindCommand(sessionId: string | undefined, opts: RewindOptions
       (s) => s.status !== "running" && readCheckpoints(workspace, s.id).length > 0,
     );
     if (!candidate) {
-      console.error("No session with checkpoints found. Nothing to rewind.");
+      console.error(t("err.noSessionsFound"));
       process.exitCode = 1;
       return;
     }
     id = candidate.id;
   } else if (readCheckpoints(workspace, id).length === 0) {
-    console.error(`Session ${id} has no checkpoints; nothing to rewind.`);
+    console.error(t("err.sessionNoCheckpoints", { id }));
     process.exitCode = 1;
     return;
   }
 
   const result = rewindSession(workspace, id, { dryRun: opts.dryRun });
   const prefix = opts.dryRun ? "[dry-run] " : "";
-  for (const p of result.restored) console.log(`${prefix}restore  ${p}`);
-  for (const p of result.deleted) console.log(`${prefix}delete   ${p}`);
-  for (const s of result.skipped) console.log(`${prefix}skip     ${s.path} (${s.reason})`);
+  for (const p of result.restored) console.log(`${prefix}${t("status.restoredFile", { path: p })}`);
+  for (const p of result.deleted) console.log(`${prefix}${t("status.deletedFile", { path: p })}`);
+  for (const s of result.skipped) console.log(`${prefix}${t("status.skippedFile", { path: s.path, reason: s.reason })}`);
 
-  const verb = opts.dryRun ? "would rewind" : "rewound";
-  console.log(
-    `${verb} session ${id}: ${result.restored.length} restored, ${result.deleted.length} deleted, ${result.skipped.length} skipped.`,
-  );
-  console.log("Review the working tree with `seekforge diff`.");
+  const tKey = opts.dryRun ? "status.dryRunRewound" : "status.rewound";
+  console.log(t(tKey, { id, restored: result.restored.length, deleted: result.deleted.length, skipped: result.skipped.length }));
+  console.log(t("status.reviewDiff"));
 }
