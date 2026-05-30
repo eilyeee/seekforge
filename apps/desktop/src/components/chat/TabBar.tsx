@@ -55,10 +55,13 @@ export function TabBar({
 
   return (
     <div
-      className="flex items-center gap-1 overflow-x-auto border-b border-subtle bg-surface/40 px-2 pt-1.5"
+      className="flex items-center gap-1 border-b border-subtle bg-surface/40 px-2 pt-1.5"
       title={t("chat.tab.tabsSummary", { count: tabs.length, cost: formatUsd(totalCost) })}
     >
-      {tabs.map((tab) => {
+      {/* Only the tab list scrolls; the "+" menu lives outside so its dropdown
+          floats over the content instead of being clipped by overflow-x. */}
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+        {tabs.map((tab) => {
         const active = tab.tabId === activeTabId;
         return (
           <div
@@ -113,17 +116,19 @@ export function TabBar({
                 <IconChevron size={12} className="rotate-90" />
               </button>
             )}
-            <button
-              type="button"
-              aria-label={t("chat.tab.closeLabel", { title: tab.title })}
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose(tab.tabId);
-              }}
-              className="ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
-            >
-              ×
-            </button>
+            {tabs.length > 1 && (
+              <button
+                type="button"
+                aria-label={t("chat.tab.closeLabel", { title: tab.title })}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(tab.tabId);
+                }}
+                className="ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
+              >
+                ×
+              </button>
+            )}
             {menu === tab.tabId && tab.worktree && (
               <div
                 className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-strong bg-surface-raised py-1 shadow-lg"
@@ -153,8 +158,9 @@ export function TabBar({
               </div>
             )}
           </div>
-        );
-      })}
+          );
+        })}
+      </div>
       <div className="relative">
         <button
           type="button"
