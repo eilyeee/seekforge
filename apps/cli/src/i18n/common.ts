@@ -26,6 +26,7 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns must be a positive integer",
     "err.inputFormatTextStream": "--input-format must be \"text\" or \"stream-json\" (got \"{format}\")",
     "err.configSetUnknown": "Unknown key \"{key}\". Allowed: {allowed}",
+    "err.configSetBadValue": "Invalid value for \"{key}\". Allowed: {allowed}",
     "err.configInvalidJson": "warning: {path} contained invalid JSON, rewriting",
     "err.excludedDirSkipped":
       "warning: --add-dir \"{dir}\" skipped (not an existing dir outside the project)",
@@ -121,6 +122,7 @@ export const common = {
     "err.maxTurnsPositive": "--max-turns 必须是正整数",
     "err.inputFormatTextStream": "--input-format 必须是 \"text\" 或 \"stream-json\"（当前为 \"{format}\"）",
     "err.configSetUnknown": "未知键 \"{key}\"。允许的键：{allowed}",
+    "err.configSetBadValue": "\"{key}\" 的值无效。允许的值：{allowed}",
     "err.configInvalidJson": "警告：{path} 包含无效 JSON，正在重写",
     "err.excludedDirSkipped":
       "警告：--add-dir \"{dir}\" 已跳过（不是项目外存在的目录）",

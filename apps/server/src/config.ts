@@ -30,7 +30,25 @@ export type ServerConfig = {
   mcpServers?: Record<string, McpServerConfig>;
 };
 
-export const CONFIG_KEYS = ["apiKey", "model", "baseUrl", "runtimeBin", "commandAllowlist"] as const;
+export const CONFIG_KEYS = [
+  "apiKey",
+  "model",
+  "baseUrl",
+  "runtimeBin",
+  "commandAllowlist",
+  // Engine knobs (UI-settable; also editable in the file directly).
+  "sandbox",
+  "compaction",
+  "thinking",
+  "reasoningEffort",
+] as const;
+
+/** Allowed values for the enum-typed config keys. */
+const ENUM_VALUES: Record<string, readonly string[]> = {
+  sandbox: ["off", "workspace-write", "restricted"],
+  compaction: ["mechanical", "llm"],
+  reasoningEffort: ["high", "max"],
+};
 
 export class ConfigValueError extends Error {}
 
@@ -96,6 +114,18 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
     } else {
       throw new ConfigValueError("commandAllowlist must be a string[] or a comma-separated string");
     }
+  } else if (key === "thinking") {
+    // Desktop sends strings ("true"/"false"); also accept real booleans.
+    if (value === true || value === "true") stored = true;
+    else if (value === false || value === "false") stored = false;
+    else throw new ConfigValueError("thinking must be true or false");
+  } else if (key in ENUM_VALUES) {
+    if (typeof value !== "string") throw new ConfigValueError(`${key} must be a string`);
+    // reasoningEffort: empty clears it (back to the API default).
+    if (key === "reasoningEffort" && value.trim() === "") stored = undefined;
+    else if (!ENUM_VALUES[key]!.includes(value)) {
+      throw new ConfigValueError(`${key} must be one of: ${ENUM_VALUES[key]!.join(", ")}`);
+    } else stored = value;
   } else {
     if (typeof value !== "string") {
       throw new ConfigValueError(`${key} must be a string`);
@@ -112,7 +142,8 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
       // invalid JSON: rewrite from scratch (same behaviour as the CLI)
     }
   }
-  current[key] = stored;
+  if (stored === undefined) delete current[key];
+  else current[key] = stored;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
 }

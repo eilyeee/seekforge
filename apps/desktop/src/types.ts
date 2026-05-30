@@ -93,7 +93,16 @@ export type ServerConfig = {
   reasoningEffort?: "high" | "max" | null;
 };
 
-export type ConfigKey = "apiKey" | "model" | "baseUrl" | "runtimeBin" | "commandAllowlist";
+export type ConfigKey =
+  | "apiKey"
+  | "model"
+  | "baseUrl"
+  | "runtimeBin"
+  | "commandAllowlist"
+  | "sandbox"
+  | "compaction"
+  | "thinking"
+  | "reasoningEffort";
 
 export type AgentScope = "global" | "project" | "builtin";
 
