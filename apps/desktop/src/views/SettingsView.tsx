@@ -267,7 +267,7 @@ export function SettingsView() {
       .then(([modelList, config]) => {
         if (modelList) setModels(modelList);
         const defaultModel =
-          modelList?.find((m) => m.isDefault)?.id ?? config.model ?? "deepseek-chat";
+          modelList?.find((m) => m.isDefault)?.id ?? config.model ?? "deepseek-v4-flash";
         setModel(config.model ?? defaultModel);
         setBaseUrl(config.baseUrl ?? "");
         setRuntimeBin(config.runtimeBin ?? "");
@@ -310,33 +310,27 @@ export function SettingsView() {
             <div>
               <label className={FIELD_LABEL}>model</label>
               <div className="flex gap-2">
-                <select
+                <input
+                  list="settings-model-suggestions"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                >
-                  {models === null ? (
-                    <option value="deepseek-chat">deepseek-chat</option>
-                  ) : (
-                    [
-                      ...models
-                        .filter((m) => !m.deprecated)
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.id}
-                            {m.isDefault ? " (default)" : ""}
-                          </option>
-                        )),
-                      ...models.filter((m) => m.deprecated).map((m) => (
-                        <option key={m.id} value={m.id} disabled>
-                          {m.id} (deprecated)
-                        </option>
-                      )),
-                    ]
-                  )}
-                </select>
+                  placeholder="deepseek-v4-flash"
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary placeholder:text-tertiary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                />
+                <datalist id="settings-model-suggestions">
+                  {(models ?? [])
+                    .filter((m) => !m.deprecated)
+                    .map((m) => (
+                      <option key={m.id} value={m.id} />
+                    ))}
+                </datalist>
                 <SaveButton state={states.model ?? "idle"} onClick={() => void save("model", model, global)} />
               </div>
+              <p className="mt-1 text-2xs text-tertiary">
+                Type any model id or pick a suggestion. For another OpenAI-compatible provider, set
+                baseUrl + apiKey too.
+              </p>
             </div>
 
             <div>
