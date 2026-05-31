@@ -577,7 +577,10 @@ config
   });
 config
   .command("set")
-  .argument("<key>", "apiKey | model | baseUrl | runtimeBin | commandAllowlist")
+  .argument(
+    "<key>",
+    "apiKey | model | baseUrl | runtimeBin | commandAllowlist | models | sandbox | compaction | thinking | reasoningEffort",
+  )
   .argument("<value>")
   .option("-g, --global", "write to ~/.seekforge/config.json instead of the project")
   .description("set a config value")

@@ -5,7 +5,7 @@ import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import { Badge, Button, Card, Input, TextArea } from "../components/ui";
-import type { ConfigKey, McpResource, McpServer, McpTool, ModelInfo, ServerConfig } from "../types";
+import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
