@@ -27,15 +27,17 @@ function useFieldSave() {
 }
 
 function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void }) {
+  const t = useT();
   return (
     <Button variant="ghost" size="md" onClick={onClick} disabled={state === "saving"} className="shrink-0">
-      {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Failed ✗" : "Save"}
+      {state === "saving" ? t("settings.saveSaving") : state === "saved" ? t("settings.saveSaved") : state === "error" ? t("settings.saveFailed") : t("settings.saveBtn")}
     </Button>
   );
 }
 
 /** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools). */
 function McpSection() {
+  const t = useT();
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Per server: tool list, an error string, or "loading". */
@@ -62,14 +64,14 @@ function McpSection() {
 
   return (
     <div>
-      <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">mcp servers</h2>
+      <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
       {loadError && (
         <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{loadError}</div>
       )}
       {servers === null ? (
-        !loadError && <p className="text-sm text-tertiary">Loading…</p>
+        !loadError && <p className="text-sm text-tertiary">{t("settings.loading")}</p>
       ) : servers.length === 0 ? (
-        <p className="text-sm text-tertiary">No MCP servers configured.</p>
+        <p className="text-sm text-tertiary">{t("settings.mcpEmpty")}</p>
       ) : (
         <div className="space-y-3">
           {servers.map((srv) => {
@@ -78,8 +80,8 @@ function McpSection() {
               <Card key={srv.name} flush className="bg-surface-raised/60 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm text-primary">{srv.name}</span>
-                  <Badge tone={srv.trusted ? "ok" : "neutral"}>{srv.trusted ? "trusted" : "untrusted"}</Badge>
-                  {srv.envKeys !== undefined && <Badge tone="neutral">env: {srv.envKeys.length}</Badge>}
+                  <Badge tone={srv.trusted ? "ok" : "neutral"}>{t(srv.trusted ? "settings.mcpTrusted" : "settings.mcpUntrusted")}</Badge>
+                  {srv.envKeys !== undefined && <Badge tone="neutral">{t("settings.mcpEnv", { count: srv.envKeys.length })}</Badge>}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -87,7 +89,7 @@ function McpSection() {
                     disabled={state === "loading"}
                     onClick={() => listTools(srv.name)}
                   >
-                    {state === "loading" ? "Listing…" : "List tools"}
+                    {state === "loading" ? t("settings.mcpListing") : t("settings.mcpListTools")}
                   </Button>
                 </div>
                 <div className="mt-1.5 font-mono text-xs text-tertiary">
@@ -125,6 +127,7 @@ function McpSection() {
  * reference syntax (paste it into a task to pull the resource in).
  */
 function McpResourcesSection() {
+  const t = useT();
   const [state, setState] = useState<McpResource[] | { error: string } | "loading" | null>(null);
   const [copiedUri, setCopiedUri] = useState<string | null>(null);
 
@@ -147,16 +150,16 @@ function McpResourcesSection() {
   return (
     <div className="mt-4">
       <div className="flex items-center gap-2">
-        <h3 className="text-2xs uppercase tracking-wider text-tertiary">mcp resources</h3>
+        <h3 className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpResources")}</h3>
         <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={load}>
-          {state === "loading" ? "Listing…" : state === null ? "List resources" : "Refresh"}
+          {state === "loading" ? t("settings.mcpListing") : state === null ? t("settings.mcpListResources") : t("settings.mcpRefresh")}
         </Button>
       </div>
       {state !== null && state !== "loading" && (
         <div className="mt-2">
           {Array.isArray(state) ? (
             state.length === 0 ? (
-              <p className="text-xs text-tertiary">No resources exposed by the configured servers.</p>
+              <p className="text-xs text-tertiary">{t("settings.mcpResourcesEmpty")}</p>
             ) : (
               <ul className="space-y-1">
                 {state.map((r) => (
@@ -175,7 +178,7 @@ function McpResourcesSection() {
                       onClick={() => copy(r.server, r.uri)}
                       title={`copy @mcp:${r.server}:${r.uri}`}
                     >
-                      {copiedUri === `${r.server}:${r.uri}` ? "Copied ✓" : "Copy @mcp:…"}
+                      {copiedUri === `${r.server}:${r.uri}` ? t("settings.mcpCopied") : t("settings.mcpCopyBtn")}
                     </Button>
                   </li>
                 ))}
@@ -198,10 +201,10 @@ function PreferencesSection() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">appearance</h2>
+        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.appearance")}</h2>
         <div className="flex items-center gap-3">
           <ThemeSwitcher />
-          <span className="text-2xs text-tertiary">Dark, light, or follow your system.</span>
+          <span className="text-2xs text-tertiary">{t("settings.appearanceHint")}</span>
         </div>
       </div>
       <div>
@@ -216,7 +219,7 @@ function PreferencesSection() {
         </select>
       </div>
       <div>
-        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">notifications</h2>
+        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.notifications")}</h2>
         <label className="flex items-center gap-2 text-xs text-secondary">
           <input
             type="checkbox"
@@ -227,7 +230,7 @@ function PreferencesSection() {
             }}
             className="accent-accent"
           />
-          Notify on permission requests (when unfocused) and finished tasks
+          {t("settings.notifyLabel")}
         </label>
       </div>
     </div>
@@ -237,6 +240,7 @@ function PreferencesSection() {
 const FIELD_LABEL = "mb-1 block text-2xs uppercase tracking-wider text-tertiary";
 
 export function SettingsView() {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [global, setGlobal] = useState(false);
@@ -282,14 +286,14 @@ export function SettingsView() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Settings</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("settings.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</div>
         )}
         {loading && !error ? (
-          <p className="text-tertiary">Loading…</p>
+          <p className="text-tertiary">{t("settings.loading")}</p>
         ) : (
           <div className="max-w-xl space-y-5">
             <label className="flex items-center gap-2 text-xs text-secondary">
@@ -299,7 +303,7 @@ export function SettingsView() {
                 onChange={(e) => setGlobal(e.target.checked)}
                 className="accent-accent"
               />
-              Save to global config (~/.seekforge) instead of this project
+              {t("settings.configScope")}
             </label>
 
             <PreferencesSection />
@@ -313,14 +317,14 @@ export function SettingsView() {
               return (
                 <>
                   <div>
-                    <label className={FIELD_LABEL}>model (default for new chats)</label>
+                    <label className={FIELD_LABEL}>{t("settings.modelLabel")}</label>
                     <div className="flex gap-2">
                       <select
                         value={model}
                         onChange={(e) => setModel(e.target.value)}
                         className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
                       >
-                        {options.length === 0 && <option value="">(set a model list below)</option>}
+                        {options.length === 0 && <option value="">{t("settings.modelListEmpty")}</option>}
                         {options.map((m) => (
                           <option key={m} value={m}>
                             {m}
@@ -334,12 +338,12 @@ export function SettingsView() {
                     </div>
                   </div>
                   <div>
-                    <label className={FIELD_LABEL}>models (selectable list, comma-separated)</label>
+                    <label className={FIELD_LABEL}>{t("settings.modelsLabel")}</label>
                     <div className="flex gap-2">
                       <TextArea
                         value={modelsList}
                         onChange={(e) => setModelsList(e.target.value)}
-                        placeholder="deepseek-v4-flash, deepseek-v4-pro, gpt-4o"
+                        placeholder={t("settings.modelsPlaceholder")}
                         rows={2}
                         spellCheck={false}
                         className="resize-y font-mono"
@@ -349,22 +353,19 @@ export function SettingsView() {
                         onClick={() => void save("models", modelsList, global)}
                       />
                     </div>
-                    <p className="mt-1 text-2xs text-tertiary">
-                      The models offered in the chat-box picker. Add any id (other OpenAI-compatible
-                      providers too — set baseUrl + apiKey for those).
-                    </p>
+                    <p className="mt-1 text-2xs text-tertiary">{t("settings.modelsHint")}</p>
                   </div>
                 </>
               );
             })()}
 
             <div>
-              <label className={FIELD_LABEL}>baseUrl</label>
+              <label className={FIELD_LABEL}>{t("settings.baseUrlLabel")}</label>
               <div className="flex gap-2">
                 <Input
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.deepseek.com"
+                  placeholder={t("settings.baseUrlPlaceholder")}
                   className="font-mono"
                 />
                 <SaveButton state={states.baseUrl ?? "idle"} onClick={() => void save("baseUrl", baseUrl, global)} />
@@ -372,12 +373,12 @@ export function SettingsView() {
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>runtimeBin</label>
+              <label className={FIELD_LABEL}>{t("settings.runtimeBinLabel")}</label>
               <div className="flex gap-2">
                 <Input
                   value={runtimeBin}
                   onChange={(e) => setRuntimeBin(e.target.value)}
-                  placeholder="/path/to/seekforge-runtime (optional)"
+                  placeholder={t("settings.runtimeBinPlaceholder")}
                   className="font-mono"
                 />
                 <SaveButton
@@ -388,12 +389,12 @@ export function SettingsView() {
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>commandAllowlist (comma-separated prefixes)</label>
+              <label className={FIELD_LABEL}>{t("settings.commandAllowlistLabel")}</label>
               <div className="flex gap-2">
                 <TextArea
                   value={allowlist}
                   onChange={(e) => setAllowlist(e.target.value)}
-                  placeholder="pnpm test, pnpm typecheck, git status"
+                  placeholder={t("settings.allowlistPlaceholder")}
                   rows={3}
                   className="resize-y font-mono"
                 />
@@ -405,34 +406,32 @@ export function SettingsView() {
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>sandbox (OS command sandbox)</label>
+              <label className={FIELD_LABEL}>{t("settings.sandboxLabel")}</label>
               <div className="flex gap-2">
                 <select
                   value={sandbox}
                   onChange={(e) => setSandbox(e.target.value)}
                   className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
                 >
-                  <option value="off">off (no sandbox)</option>
-                  <option value="workspace-write">workspace-write (writes confined to the workspace)</option>
-                  <option value="restricted">restricted (workspace-write + no network)</option>
+                  <option value="off">{t("settings.sandboxOff")}</option>
+                  <option value="workspace-write">{t("settings.sandboxWorkspaceWrite")}</option>
+                  <option value="restricted">{t("settings.sandboxRestricted")}</option>
                 </select>
                 <SaveButton state={states.sandbox ?? "idle"} onClick={() => void save("sandbox", sandbox, global)} />
               </div>
-              <p className="mt-1 text-2xs text-tertiary">
-                Wraps commands in seatbelt (macOS) / bwrap (Linux). Hard-fails if requested but unavailable.
-              </p>
+              <p className="mt-1 text-2xs text-tertiary">{t("settings.sandboxHint")}</p>
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>compaction (long-context strategy)</label>
+              <label className={FIELD_LABEL}>{t("settings.compactionLabel")}</label>
               <div className="flex gap-2">
                 <select
                   value={compaction}
                   onChange={(e) => setCompaction(e.target.value)}
                   className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
                 >
-                  <option value="mechanical">mechanical (drop old tool output)</option>
-                  <option value="llm">llm (summarize via the model)</option>
+                  <option value="mechanical">{t("settings.compactionMechanical")}</option>
+                  <option value="llm">{t("settings.compactionLlm")}</option>
                 </select>
                 <SaveButton
                   state={states.compaction ?? "idle"}
@@ -442,16 +441,16 @@ export function SettingsView() {
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>reasoningEffort (V4 thinking depth)</label>
+              <label className={FIELD_LABEL}>{t("settings.reasoningEffortLabel")}</label>
               <div className="flex gap-2">
                 <select
                   value={reasoningEffort}
                   onChange={(e) => setReasoningEffort(e.target.value)}
                   className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
                 >
-                  <option value="">(API default)</option>
-                  <option value="high">high</option>
-                  <option value="max">max</option>
+                  <option value="">{t("settings.reasoningDefault")}</option>
+                  <option value="high">{t("settings.reasoningHigh")}</option>
+                  <option value="max">{t("settings.reasoningMax")}</option>
                 </select>
                 <SaveButton
                   state={states.reasoningEffort ?? "idle"}
@@ -471,18 +470,18 @@ export function SettingsView() {
                   }}
                   className="accent-accent"
                 />
-                thinking — enable DeepSeek V4 reasoning by default
+                {t("settings.thinkingLabel")}
               </label>
             </div>
 
             <div>
-              <label className={FIELD_LABEL}>apiKey</label>
+              <label className={FIELD_LABEL}>{t("settings.apiKeyLabel")}</label>
               <div className="flex gap-2">
                 <Input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={apiKeyMask || "sk-…"}
+                  placeholder={apiKeyMask || t("settings.apiKeyPlaceholder")}
                   autoComplete="off"
                   className="font-mono"
                 />
@@ -499,9 +498,7 @@ export function SettingsView() {
                   }}
                 />
               </div>
-              <p className="mt-1 text-2xs text-tertiary">
-                Shown masked. Type a new key and press Save to replace it.
-              </p>
+              <p className="mt-1 text-2xs text-tertiary">{t("settings.apiKeyHint")}</p>
             </div>
 
             <McpSection />
