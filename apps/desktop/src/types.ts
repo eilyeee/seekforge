@@ -84,6 +84,8 @@ export type ServerConfig = {
   baseUrl?: string;
   runtimeBin?: string;
   commandAllowlist?: string[];
+  /** Selectable model ids for the pickers (always present on GET /api/config). */
+  models?: string[];
   /** Masked by the server (`sk-xxx****`). */
   apiKey?: string;
   /** Engine knobs — always present on GET /api/config (effective defaults). */
@@ -99,6 +101,7 @@ export type ConfigKey =
   | "baseUrl"
   | "runtimeBin"
   | "commandAllowlist"
+  | "models"
   | "sandbox"
   | "compaction"
   | "thinking"

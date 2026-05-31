@@ -281,20 +281,29 @@ export function ChatView() {
           })}
         </div>
 
-        <input
-          list="model-suggestions"
-          value={tab.model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={tab.chat.running}
-          placeholder={config?.model ?? t("chat.modelDefaultFallback")}
-          title={t("chat.modelTitle")}
-          className="w-44 rounded border border-strong bg-surface px-2 py-1 font-mono text-xs text-primary placeholder:text-tertiary focus:border-accent/70 focus:outline-none disabled:opacity-50"
-        />
-        <datalist id="model-suggestions">
-          {MODEL_SUGGESTIONS.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
+        {(() => {
+          // Strict picker over the configured model list (config.models, set in
+          // Settings). Ensure the active value is always an option, even if it
+          // was an id no longer in the list.
+          const list = config?.models && config.models.length > 0 ? config.models : MODEL_SUGGESTIONS;
+          const selected = tab.model || config?.model || list[0] || "";
+          const options = selected && !list.includes(selected) ? [selected, ...list] : list;
+          return (
+            <select
+              value={selected}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={tab.chat.running}
+              title={t("chat.modelTitle")}
+              className="w-44 rounded border border-strong bg-surface px-2 py-1 font-mono text-xs text-primary focus:border-accent/70 focus:outline-none disabled:opacity-50"
+            >
+              {options.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          );
+        })()}
 
         <label
           className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### round 32: configurable model list (pickers read it, not just DeepSeek)
+- New `models` config key (string[]) — your own list of selectable model ids.
+  Server `setConfigValue` + CLI `config set` accept it (comma-separated, like
+  commandAllowlist); GET /api/config returns it, defaulting to core's
+  non-deprecated ids when unset so a picker is never empty.
+- The desktop **chat-box model control is now a strict dropdown** reading
+  `config.models` (no longer a hardcoded deepseek-v4 list); the active value
+  stays selectable even if it's not in the list.
+- Settings gains a **models list editor** (comma-separated) and the default
+  `model` is now picked from that list. Add any id — including other
+  OpenAI-compatible providers (set baseUrl + apiKey for those).
+
 ### round 31: native top-bar clicks + sandbox/engine settings in the UI
 Two issues found running the native desktop app:
 - **macOS overlay title bar ate clicks on the top toolbar** (tab bar, mode

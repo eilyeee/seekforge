@@ -248,7 +248,8 @@ export function SettingsView() {
   const [allowlist, setAllowlist] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyMask, setApiKeyMask] = useState("");
-  const [models, setModels] = useState<ModelInfo[] | null>(null);
+  // The selectable model list (config.models), edited as comma-separated text.
+  const [modelsList, setModelsList] = useState("");
   // Engine knobs (effective values are always present on GET /api/config).
   const [sandbox, setSandbox] = useState("off");
   const [compaction, setCompaction] = useState("mechanical");
@@ -259,16 +260,12 @@ export function SettingsView() {
   useEffect(() => {
     setError(null);
     setLoading(true);
-    setModels(null);
-    Promise.all([
-      api.models().catch(() => null as ModelInfo[] | null),
-      api.config(),
-    ])
-      .then(([modelList, config]) => {
-        if (modelList) setModels(modelList);
-        const defaultModel =
-          modelList?.find((m) => m.isDefault)?.id ?? config.model ?? "deepseek-v4-flash";
-        setModel(config.model ?? defaultModel);
+    api
+      .config()
+      .then((config) => {
+        const list = config.models ?? [];
+        setModelsList(list.join(", "));
+        setModel(config.model ?? list[0] ?? "deepseek-v4-flash");
         setBaseUrl(config.baseUrl ?? "");
         setRuntimeBin(config.runtimeBin ?? "");
         setAllowlist((config.commandAllowlist ?? []).join(", "));
@@ -307,31 +304,59 @@ export function SettingsView() {
 
             <PreferencesSection />
 
-            <div>
-              <label className={FIELD_LABEL}>model</label>
-              <div className="flex gap-2">
-                <input
-                  list="settings-model-suggestions"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="deepseek-v4-flash"
-                  spellCheck={false}
-                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary placeholder:text-tertiary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                />
-                <datalist id="settings-model-suggestions">
-                  {(models ?? [])
-                    .filter((m) => !m.deprecated)
-                    .map((m) => (
-                      <option key={m.id} value={m.id} />
-                    ))}
-                </datalist>
-                <SaveButton state={states.model ?? "idle"} onClick={() => void save("model", model, global)} />
-              </div>
-              <p className="mt-1 text-2xs text-tertiary">
-                Type any model id or pick a suggestion. For another OpenAI-compatible provider, set
-                baseUrl + apiKey too.
-              </p>
-            </div>
+            {(() => {
+              // The model list (config.models) is the source of truth for every
+              // picker. The default model is chosen from it; ensure the current
+              // default stays selectable even if not in the list.
+              const parsed = modelsList.split(",").map((s) => s.trim()).filter(Boolean);
+              const options = model && !parsed.includes(model) ? [model, ...parsed] : parsed;
+              return (
+                <>
+                  <div>
+                    <label className={FIELD_LABEL}>model (default for new chats)</label>
+                    <div className="flex gap-2">
+                      <select
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                      >
+                        {options.length === 0 && <option value="">(set a model list below)</option>}
+                        {options.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                      <SaveButton
+                        state={states.model ?? "idle"}
+                        onClick={() => void save("model", model, global)}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={FIELD_LABEL}>models (selectable list, comma-separated)</label>
+                    <div className="flex gap-2">
+                      <TextArea
+                        value={modelsList}
+                        onChange={(e) => setModelsList(e.target.value)}
+                        placeholder="deepseek-v4-flash, deepseek-v4-pro, gpt-4o"
+                        rows={2}
+                        spellCheck={false}
+                        className="resize-y font-mono"
+                      />
+                      <SaveButton
+                        state={states.models ?? "idle"}
+                        onClick={() => void save("models", modelsList, global)}
+                      />
+                    </div>
+                    <p className="mt-1 text-2xs text-tertiary">
+                      The models offered in the chat-box picker. Add any id (other OpenAI-compatible
+                      providers too — set baseUrl + apiKey for those).
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
 
             <div>
               <label className={FIELD_LABEL}>baseUrl</label>

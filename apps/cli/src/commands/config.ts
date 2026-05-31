@@ -10,6 +10,7 @@ const ALLOWED_KEYS = [
   "baseUrl",
   "runtimeBin",
   "commandAllowlist",
+  "models",
   "sandbox",
   "compaction",
   "thinking",
@@ -54,8 +55,8 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
       console.error(t("err.configInvalidJson", { path }));
     }
   }
-  if (key === "commandAllowlist") {
-    // Array of prefixes: accept comma-separated.
+  if (key === "commandAllowlist" || key === "models") {
+    // Array of strings: accept comma-separated.
     current[key] = value.split(",").map((s) => s.trim()).filter(Boolean);
   } else if (key === "thinking") {
     if (value !== "true" && value !== "false") {

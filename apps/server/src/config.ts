@@ -8,7 +8,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { McpServerConfig } from "@seekforge/core";
+import { DEPRECATED_MODELS, MODEL_PRICING, type McpServerConfig } from "@seekforge/core";
+
+/** Default selectable model list (core's non-deprecated ids) when none configured. */
+const DEFAULT_MODEL_LIST = Object.keys(MODEL_PRICING).filter(
+  (id) => !(DEPRECATED_MODELS as readonly string[]).includes(id),
+);
 
 export type ServerConfig = {
   apiKey?: string;
@@ -18,6 +23,8 @@ export type ServerConfig = {
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
   commandAllowlist?: string[];
+  /** Selectable model ids offered in the UI pickers (your own list). */
+  models?: string[];
   /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
   sandbox?: "off" | "workspace-write" | "restricted";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
@@ -36,6 +43,7 @@ export const CONFIG_KEYS = [
   "baseUrl",
   "runtimeBin",
   "commandAllowlist",
+  "models",
   // Engine knobs (UI-settable; also editable in the file directly).
   "sandbox",
   "compaction",
@@ -83,6 +91,9 @@ export function maskedConfig(workspace: string): Record<string, unknown> {
   return {
     ...merged,
     apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined,
+    // Selectable model list: the user's configured ids, or core's non-deprecated
+    // defaults so the picker is never empty.
+    models: merged.models && merged.models.length > 0 ? merged.models : DEFAULT_MODEL_LIST,
     // Engine knobs are always present (with their effective defaults) so the
     // UI can render the sandbox badge / thinking controls without guessing.
     sandbox: merged.sandbox ?? "off",
@@ -102,8 +113,8 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
   }
 
   let stored: unknown;
-  if (key === "commandAllowlist") {
-    // Array of prefixes, or a comma-separated string (CLI parity).
+  if (key === "commandAllowlist" || key === "models") {
+    // Array of strings, or a comma-separated string (CLI parity).
     if (Array.isArray(value) && value.every((v): v is string => typeof v === "string")) {
       stored = value.map((s) => s.trim()).filter(Boolean);
     } else if (typeof value === "string") {
@@ -112,7 +123,7 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
         .map((s) => s.trim())
         .filter(Boolean);
     } else {
-      throw new ConfigValueError("commandAllowlist must be a string[] or a comma-separated string");
+      throw new ConfigValueError(`${key} must be a string[] or a comma-separated string`);
     }
   } else if (key === "thinking") {
     // Desktop sends strings ("true"/"false"); also accept real booleans.
