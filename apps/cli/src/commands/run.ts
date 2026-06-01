@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
@@ -60,6 +61,16 @@ export type RunOptions = {
   settingsFile?: string;
   /** Input format (CLI --input-format). "stream-json" drives multi-turn from stdin. */
   inputFormat?: string;
+  /** Alias for `yes` (CLI --dangerously-skip-permissions) → approvalMode auto. */
+  dangerouslySkipPermissions?: boolean;
+  /** Path to a JSON file of MCP servers (CLI --mcp-config); merged over config. */
+  mcpConfig?: string;
+  /** Use only --mcp-config servers, ignore config-file ones (CLI --strict-mcp-config). */
+  strictMcpConfig?: boolean;
+  /** stream-json input: echo each user turn back as a stream event (--replay-user-messages). */
+  replayUserMessages?: boolean;
+  /** stream-json output: emit partial assistant text deltas (--include-partial-messages). */
+  includePartialMessages?: boolean;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -146,6 +157,18 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   // stream-json-raw: the OLD behavior — one raw AgentEvent per line.
   // json: buffer everything, emit one result envelope at the end.
   const streamMapper = format === "stream-json" ? createStreamJsonMapper() : undefined;
+  // --include-partial-messages: with stream-json, emit each assistant text delta
+  // as a Claude-style content_block_delta stream event (for SDK consumers).
+  const emitPartial =
+    format === "stream-json" && opts.includePartialMessages
+      ? (chunk: string) =>
+          console.log(
+            JSON.stringify({
+              type: "stream_event",
+              event: { type: "content_block_delta", delta: { type: "text_delta", text: chunk } },
+            }),
+          )
+      : undefined;
   const render =
     format === "stream-json"
       ? (e: AgentEvent) => {
@@ -158,7 +181,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
           : () => {}; // json: swallow events, emit one final object at the end
   // --permission-mode maps Claude-compatible (and native) names onto ApprovalMode;
   // "plan" additionally forces plan-first. When unset, -y → auto, else confirm.
-  let approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
+  // -y and --dangerously-skip-permissions both mean "run everything" (auto).
+  let approvalMode: ApprovalMode = opts.yes || opts.dangerouslySkipPermissions ? "auto" : "confirm";
   let planFromMode = false;
   if (opts.permissionMode) {
     switch (opts.permissionMode) {
@@ -202,7 +226,26 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const effectiveAppend =
     [styleAddendum, opts.appendSystemPrompt].filter((s): s is string => !!s).join("\n\n") || undefined;
 
-  const mcp = await prepareMcp(config, projectPath);
+  // --mcp-config: load MCP servers from a JSON file ({mcpServers:{…}} or a bare
+  // {name:server} map). --strict-mcp-config uses ONLY those, ignoring the config
+  // file's servers; otherwise they merge over the config's (file wins per name).
+  let mcpConfigForRun = config;
+  if (opts.mcpConfig) {
+    let fileServers: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(readFileSync(opts.mcpConfig, "utf8")) as Record<string, unknown>;
+      fileServers = (parsed.mcpServers as Record<string, unknown>) ?? parsed;
+    } catch {
+      fail(t("err.mcpConfigRead", { path: opts.mcpConfig }), { hint: t("err.mcpConfigReadHint") });
+      return;
+    }
+    const merged = opts.strictMcpConfig ? fileServers : { ...config.mcpServers, ...fileServers };
+    mcpConfigForRun = { ...config, mcpServers: merged as typeof config.mcpServers };
+  } else if (opts.strictMcpConfig) {
+    // strict with no --mcp-config means: no MCP servers at all.
+    mcpConfigForRun = { ...config, mcpServers: {} };
+  }
+  const mcp = await prepareMcp(mcpConfigForRun, projectPath);
 
   // --allowedTools/--disallowedTools synthesize per-run permission rules,
   // prepended to any config rules. undefined when neither flag is used.
@@ -217,7 +260,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     model,
     mcpToolSpecs: mcp.specs,
     confirm: machine ? async () => false : confirmInTerminal,
-    onModelDelta: renderer?.modelDelta,
+    onModelDelta: emitPartial ?? renderer?.modelDelta,
     onReasoningDelta: renderer?.reasoningDelta,
     extractMemory: mode === "edit",
     subagents: loadAgentDefinitions(projectPath),
@@ -295,6 +338,16 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       let lastCompleted = true;
       for await (const turnText of readStreamJsonInput(process.stdin)) {
         turns++;
+        // --replay-user-messages: echo the user turn as a stream-json event before
+        // processing it (SDK consumers that didn't originate the input can see it).
+        if (opts.replayUserMessages && format === "stream-json") {
+          console.log(
+            JSON.stringify({
+              type: "user",
+              message: { role: "user", content: [{ type: "text", text: turnText }] },
+            }),
+          );
+        }
         const r = await runOnce({ task: expand(turnText), mode, resumeSessionId: sid });
         sid = r.sessionId ?? sid;
         lastCompleted = r.completed;

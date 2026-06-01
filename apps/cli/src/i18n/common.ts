@@ -27,6 +27,8 @@ export const common = {
     "err.inputFormatTextStream": "--input-format must be \"text\" or \"stream-json\" (got \"{format}\")",
     "err.configSetUnknown": "Unknown key \"{key}\". Allowed: {allowed}",
     "err.configSetBadValue": "Invalid value for \"{key}\". Allowed: {allowed}",
+    "err.mcpConfigRead": "could not read --mcp-config file: {path}",
+    "err.mcpConfigReadHint": "expected JSON: {\"mcpServers\": {…}} or a {name: server} map",
     "err.configInvalidJson": "warning: {path} contained invalid JSON, rewriting",
     "err.excludedDirSkipped":
       "warning: --add-dir \"{dir}\" skipped (not an existing dir outside the project)",
@@ -123,6 +125,8 @@ export const common = {
     "err.inputFormatTextStream": "--input-format 必须是 \"text\" 或 \"stream-json\"（当前为 \"{format}\"）",
     "err.configSetUnknown": "未知键 \"{key}\"。允许的键：{allowed}",
     "err.configSetBadValue": "\"{key}\" 的值无效。允许的值：{allowed}",
+    "err.mcpConfigRead": "无法读取 --mcp-config 文件：{path}",
+    "err.mcpConfigReadHint": "需要 JSON：{\"mcpServers\": {…}} 或 {名称: 服务器} 映射",
     "err.configInvalidJson": "警告：{path} 包含无效 JSON，正在重写",
     "err.excludedDirSkipped":
       "警告：--add-dir \"{dir}\" 已跳过（不是项目外存在的目录）",

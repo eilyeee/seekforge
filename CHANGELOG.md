@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### round 33: headless/SDK-parity CLI flags
+Closes the remaining Claude-CLI flag gaps (all SDK/automation-oriented):
+- `--dangerously-skip-permissions` — alias for `-y` (auto-approve everything).
+- `--mcp-config <file>` — load MCP servers from a JSON file for the run
+  (`{mcpServers:{…}}` or a bare `{name:server}` map), merged over the config
+  file's servers; `--strict-mcp-config` uses ONLY the file's (ignores config).
+- `--replay-user-messages` — with `--input-format stream-json`, echo each user
+  turn back as a `{type:"user"}` stream event.
+- `--include-partial-messages` — with `--output-format stream-json`, emit
+  assistant text deltas as `content_block_delta` stream events.
+- `--permission-prompt-tool` is intentionally NOT added: it requires routing the
+  permission-confirm path through an MCP tool execution (architecturally
+  invasive) for the lowest-value, SDK-only case, and can't be verified against
+  Claude's exact protocol here.
+
 ### round 32: configurable model list (pickers read it, not just DeepSeek)
 - New `models` config key (string[]) — your own list of selectable model ids.
   Server `setConfigValue` + CLI `config set` accept it (comma-separated, like

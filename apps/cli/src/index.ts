@@ -138,7 +138,12 @@ program
   .option("--fallback-model <model>", "with -p: model to retry with if the primary is overloaded")
   .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
   .option("--settings <file>", "with -p: path to JSON settings file (layered over project config but below env/CLI flags)")
-  .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)");
+  .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)")
+  .option("--dangerously-skip-permissions", "with -p: alias for -y — run every tool without prompting")
+  .option("--mcp-config <file>", "with -p: load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option("--strict-mcp-config", "with -p: use only --mcp-config servers, ignore config-file MCP servers")
+  .option("--replay-user-messages", "with -p + --input-format stream-json: echo each user turn back as a stream-json event")
+  .option("--include-partial-messages", "with -p + --output-format stream-json: emit partial assistant text deltas");
 
 type SharedRunOpts = {
   // commander camelCases hyphenated flags, but "--settings" is one word → `settings`.
@@ -159,6 +164,11 @@ type SharedRunOpts = {
   permissionMode?: string;
   fallbackModel?: string;
   outputStyle?: string;
+  dangerouslySkipPermissions?: boolean;
+  mcpConfig?: string;
+  strictMcpConfig?: boolean;
+  replayUserMessages?: boolean;
+  includePartialMessages?: boolean;
 };
 
 program
@@ -187,6 +197,9 @@ program
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
+  .option("--dangerously-skip-permissions", "alias for -y — run every tool without prompting")
+  .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
   .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
@@ -208,6 +221,9 @@ program
       fallbackModel: opts.fallbackModel,
       settingsFile: opts.settings,
       outputStyle: opts.outputStyle,
+      dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
+      mcpConfig: opts.mcpConfig,
+      strictMcpConfig: opts.strictMcpConfig,
       plan: opts.plan,
     });
   });
@@ -624,6 +640,11 @@ program
       outputStyle?: string;
       settings?: string;
       inputFormat?: string;
+      dangerouslySkipPermissions?: boolean;
+      mcpConfig?: string;
+      strictMcpConfig?: boolean;
+      replayUserMessages?: boolean;
+      includePartialMessages?: boolean;
     }>();
     if (root.print !== undefined) {
       const inline = typeof root.print === "string" ? root.print : undefined;
@@ -647,6 +668,11 @@ program
         settingsFile: root.settings,
         outputStyle: root.outputStyle,
         inputFormat: root.inputFormat,
+        dangerouslySkipPermissions: root.dangerouslySkipPermissions,
+        mcpConfig: root.mcpConfig,
+        strictMcpConfig: root.strictMcpConfig,
+        replayUserMessages: root.replayUserMessages,
+        includePartialMessages: root.includePartialMessages,
       });
       return;
     }

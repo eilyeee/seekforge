@@ -28,6 +28,11 @@ export type PrintCliOptions = {
   outputStyle?: string;
   settingsFile?: string;
   inputFormat?: string;
+  dangerouslySkipPermissions?: boolean;
+  mcpConfig?: string;
+  strictMcpConfig?: boolean;
+  replayUserMessages?: boolean;
+  includePartialMessages?: boolean;
 };
 
 export async function printCommand(inlinePrompt: string | undefined, opts: PrintCliOptions): Promise<void> {
@@ -86,6 +91,11 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     settingsFile: opts.settingsFile,
     fallbackModel: opts.fallbackModel,
     outputStyle: opts.outputStyle,
+    dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
+    mcpConfig: opts.mcpConfig,
+    strictMcpConfig: opts.strictMcpConfig,
+    replayUserMessages: opts.replayUserMessages,
+    includePartialMessages: opts.includePartialMessages,
     ...(streamInput ? { inputFormat: "stream-json" } : {}),
   });
 }
