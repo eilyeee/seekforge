@@ -36,6 +36,9 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--append-system-prompt <text>` | Append text to the system prompt |
 | `--allowedTools <list>` | Only allow these tools (comma-separated) |
 | `--disallowedTools <list>` | Deny these tools (comma-separated) |
+| `--dangerously-skip-permissions` | Alias for `-y` — run every tool without prompting |
+| `--mcp-config <file>` | Load MCP servers from a JSON file (merged over config, unless `--strict-mcp-config`) |
+| `--strict-mcp-config` | Use only `--mcp-config` servers, ignore config-file MCP servers |
 | `--verbose` | Print full tool args and results |
 
 ## Ask-specific flags
@@ -60,7 +63,12 @@ In addition to the common flags above:
 | `--append-system-prompt <text>` | See run-specific |
 | `--allowedTools <list>` | See run-specific |
 | `--disallowedTools <list>` | See run-specific |
+| `--dangerously-skip-permissions` | See run-specific — alias for `-y` |
+| `--include-partial-messages` | With `-p` + `--output-format stream-json`: emit partial assistant text deltas |
 | `--input-format <fmt>` | `text` (default) or `stream-json` (line-delimited user turns on stdin) |
+| `--mcp-config <file>` | See run-specific |
+| `--replay-user-messages` | With `-p` + `--input-format stream-json`: echo each user turn back as a stream-json event |
+| `--strict-mcp-config` | See run-specific |
 | `--verbose` | See run-specific |
 
 ## Per-hunk partial-apply
