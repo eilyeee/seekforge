@@ -140,8 +140,15 @@ export async function handleApi(
 ): Promise<void> {
   const method = req.method ?? "GET";
   const path = url.pathname;
-  // ["api", ...rest] — path params are URL-decoded per segment.
-  const segs = path.split("/").filter(Boolean).map(decodeURIComponent);
+  // ["api", ...rest] — path params are URL-decoded per segment. Malformed
+  // percent-encoding (e.g. "/api/%E0%A4%A") makes decodeURIComponent throw, so
+  // guard it and answer 400 rather than rejecting before the try below.
+  let segs: string[];
+  try {
+    segs = path.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return sendApiError(res, 400, "bad_request", "malformed URL path");
+  }
 
   try {
     // Global routes (not scoped to a workspace).

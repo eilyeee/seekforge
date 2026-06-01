@@ -20,8 +20,14 @@ export function normalizeCommand(command: string): string {
 
 /** Destructive / escape-hatch commands. Never run, never prompt. */
 const DENYLIST: Array<{ re: RegExp; reason: string }> = [
-  { re: /\brm\s+(-[^\s]+\s+)*-[^\s]*(rf|fr)[^\s]*\b/, reason: "rm -rf" },
-  { re: /\brm\s+(-[^\s]+\s+)*-[^\s]*r[^\s]*\s+(-[^\s]+\s+)*-[^\s]*f[^\s]*\b/, reason: "rm -r -f" },
+  // rm with BOTH a recursive flag (-r/-R/-rf/--recursive, any case/order) AND a
+  // force flag (-f/--force). Order-independent so "rm -R -f", "rm -Rf",
+  // "rm --recursive --force", "rm -fr" etc. are all caught (commands are
+  // whitespace-normalized to a single line before matching).
+  {
+    re: /\brm\b(?=.*(?:\s-[a-zA-Z]*[rR][a-zA-Z]*\b|\s--recursive\b))(?=.*(?:\s-[a-zA-Z]*[fF][a-zA-Z]*\b|\s--force\b))/,
+    reason: "rm recursive+force",
+  },
   { re: /\bsudo\b/, reason: "sudo" },
   { re: /\bchmod\s+(-[^\s]+\s+)*-R\b/, reason: "chmod -R" },
   { re: /\bchown\b/, reason: "chown" },

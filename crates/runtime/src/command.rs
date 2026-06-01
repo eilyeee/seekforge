@@ -105,13 +105,19 @@ fn check_rm(s: &str) -> Option<&'static str> {
             .take_while(|t| t.starts_with('-'))
             .copied()
             .collect();
-        if flags.iter().any(|f| f.contains("rf") || f.contains("fr")) {
-            return Some("rm -rf");
-        }
-        if let Some(ri) = flags.iter().position(|f| f.contains('r')) {
-            if flags.iter().skip(ri + 1).any(|f| f.contains('f')) {
-                return Some("rm -r -f");
-            }
+        // Dangerous when the flags carry BOTH a recursive and a force flag, in
+        // any order/case. Short bundles (-rf/-Rf/-fr) are checked char-by-char;
+        // long flags only by exact match so "--force" (which contains 'r') is
+        // not mistaken for recursive.
+        let is_short = |f: &str| f.starts_with('-') && !f.starts_with("--");
+        let recursive = flags
+            .iter()
+            .any(|f| *f == "--recursive" || (is_short(f) && f.chars().any(|c| c == 'r' || c == 'R')));
+        let force = flags
+            .iter()
+            .any(|f| *f == "--force" || (is_short(f) && f.chars().any(|c| c == 'f' || c == 'F')));
+        if recursive && force {
+            return Some("rm recursive+force");
         }
     }
     None
@@ -318,10 +324,16 @@ mod tests {
     #[test]
     fn denylist_catches_dangerous_commands() {
         let denied = [
-            ("rm -rf /", "rm -rf"),
-            ("rm -fr build", "rm -rf"),
-            ("rm -r -f build", "rm -r -f"),
-            ("rm -r --force build", "rm -r -f"),
+            ("rm -rf /", "rm recursive+force"),
+            ("rm -fr build", "rm recursive+force"),
+            ("rm -r -f build", "rm recursive+force"),
+            ("rm -r --force build", "rm recursive+force"),
+            ("rm -Rf /tmp/x", "rm recursive+force"),
+            ("rm -R -f build", "rm recursive+force"),
+            ("rm -f -R build", "rm recursive+force"),
+            ("rm --recursive --force dir", "rm recursive+force"),
+            ("rm --force --recursive dir", "rm recursive+force"),
+            ("rm -fR .", "rm recursive+force"),
             ("sudo ls", "sudo"),
             ("echo hi && sudo make install", "sudo"),
             ("chmod -R 777 .", "chmod -R"),
@@ -352,6 +364,8 @@ mod tests {
             "ls -la",
             "rm file.txt",
             "rm -r build",          // recursive without force is not denylisted
+            "rm -f file.txt",       // force without recursive is not denylisted
+            "rm --force file.txt",  // long force-only, not recursive
             "echo sudoku",          // word boundary: not "sudo"
             "git pushy",            // not "git push"
             "git status",

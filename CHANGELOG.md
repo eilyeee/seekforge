@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### round 34: security/correctness audit fixes
+- **High — `rm -R -f` / `rm -Rf` bypassed the dangerous-command denylist.** Both
+  the TS classifier and the Rust runtime only matched lowercase `rm -rf`/`-r -f`
+  in order, so capital-R, reordered, or long-form (`--recursive --force`)
+  recursive force-deletes could run as ordinary `execute` (auto-approved under
+  `-y`). Replaced with an order-independent, case-aware, long-form-aware check
+  (short bundles parsed char-by-char; long flags by exact match so `--force`,
+  which contains an "r", isn't read as recursive). Added positive + negative
+  tests on both sides.
+- **Medium — malformed URL paths could hang an API request.** `decodeURIComponent`
+  ran before the request handler's try/catch, and the dispatch used
+  `void handleApi(...)` with no catch, so a bad percent-encoding (e.g.
+  `/api/%E0%A4%A`) rejected without ever answering the client. Now the decode is
+  guarded (→ 400 bad_request) and the dispatch has a defensive `.catch` (→ 500).
+- **Low — npm tarball omitted the LICENSE.** Added `LICENSE` to apps/cli and its
+  `files[]`; `npm pack` now ships `package/LICENSE`.
+
 ### round 33: headless/SDK-parity CLI flags
 Closes the remaining Claude-CLI flag gaps (all SDK/automation-oriented):
 - `--dangerously-skip-permissions` — alias for `-y` (auto-approve everything).

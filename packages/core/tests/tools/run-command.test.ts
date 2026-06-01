@@ -20,6 +20,12 @@ describe("classifyCommand", () => {
       "rm -rf /tmp/x",
       "rm -fr .",
       "rm -r -f build",
+      "rm -Rf /tmp/x",
+      "rm -R -f build",
+      "rm -f -R build",
+      "rm --recursive --force dir",
+      "rm --force --recursive dir",
+      "rm -fR .",
       "sudo apt install x",
       "chmod -R 777 .",
       "chown user file",
@@ -34,6 +40,13 @@ describe("classifyCommand", () => {
       "python -c 'print(1)'",
     ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
+    }
+  });
+
+  it("does NOT denylist rm without both recursive and force", () => {
+    // force-only or recursive-only rm is destructive-but-confirmable, not denied.
+    for (const cmd of ["rm file.txt", "rm -f file.txt", "rm --force file.txt", "rm -r build"]) {
+      expect(classifyCommand(cmd).permission, cmd).not.toBe("dangerous");
     }
   });
 
