@@ -7,6 +7,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { pagerWindow } from "../pager-source.js";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
 type PagerProps = {
@@ -26,11 +27,11 @@ export function Pager({ lines, offset, height }: PagerProps): React.ReactElement
     <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
       <Box justifyContent="space-between">
         <Text color={ACCENT} bold>
-          Transcript <Text dimColor>(q/Esc close · ↑↓/PgUp/PgDn/g/G scroll)</Text>
+          {t("pager.title")} <Text dimColor>{t("pager.hint")}</Text>
         </Text>
         <Text dimColor>{percent}%</Text>
       </Box>
-      {lines.length === 0 ? <Text dimColor>(transcript is empty)</Text> : null}
+      {lines.length === 0 ? <Text dimColor>{t("pager.empty")}</Text> : null}
       {lines.slice(win.start, win.end).map((line, i) => (
         <Text key={win.start + i} wrap="truncate-end">
           {line === "" ? " " : line}

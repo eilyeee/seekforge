@@ -133,6 +133,6 @@ describe("compactProjectMemory", () => {
   it("returns zeros when project.md does not exist", () => {
     const ws = makeWorkspace();
     const res = compactProjectMemory(ws);
-    expect(res).toEqual({ before: 0, after: 0, removed: [], merged: [] });
+    expect(res).toEqual({ before: 0, after: 0, removed: [], merged: [], archived: [] });
   });
 });

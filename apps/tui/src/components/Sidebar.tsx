@@ -7,6 +7,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { TreeNode } from "../file-tree.js";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 import { listWindow } from "./Palette.js";
 
@@ -37,9 +38,9 @@ export function Sidebar({ visible, cursor, focused, width }: SidebarProps): Reac
       paddingX={1}
     >
       <Text color={ACCENT} bold dimColor={!focused}>
-        Files
+        {t("sidebar.title")}
       </Text>
-      {visible.length === 0 ? <Text dimColor>(empty)</Text> : null}
+      {visible.length === 0 ? <Text dimColor>{t("sidebar.empty")}</Text> : null}
       {visible.slice(start, end).map((node, i) => {
         const absolute = start + i;
         const selected = absolute === cursor;
@@ -60,7 +61,7 @@ export function Sidebar({ visible, cursor, focused, width }: SidebarProps): Reac
         );
       })}
       {end < visible.length ? <Text dimColor>… {visible.length - end} more</Text> : null}
-      <Text dimColor>↑↓ · Enter insert @path · ←→ fold · Ctrl+E close</Text>
+      <Text dimColor>{t("sidebar.footer")}</Text>
     </Box>
   );
 }

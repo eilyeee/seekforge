@@ -1,0 +1,13 @@
+{
+  "id": "memory-convention-recall",
+  "title": "Apply a project convention that only lives in memory",
+  "fixture": "memory-convention-recall",
+  "mode": "edit",
+  "task": "Add a `createdAt` timestamp field to the object returned by `logEvent` in src/log.js.",
+  "checks": [
+    { "type": "file_contains", "path": "src/log.js", "pattern": "createdAt" },
+    { "type": "file_contains", "path": "src/log.js", "pattern": "nowIso" },
+    { "type": "file_not_contains", "path": "src/log.js", "pattern": "new Date" }
+  ],
+  "notes": "The nowIso() (never new Date()) convention exists ONLY in .seekforge/memory/project.md. With memory injected the agent should use nowIso(); the `no-memory` variant should fail the nowIso / new-Date checks. Measure with: eval --ab control,no-memory --task memory-convention-recall."
+}

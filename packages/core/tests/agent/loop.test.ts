@@ -97,6 +97,51 @@ describe("agent loop", () => {
     expect(events.some((e) => e.type === "tool.completed")).toBe(true);
   });
 
+  it("returns an invalid_json tool result for malformed argumentsJson", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{not json" }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "final" }),
+    ]);
+    const dispatcher = fakeDispatcher({ ok: true });
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+
+    // The dispatcher is never reached — the parse error short-circuits.
+    expect(dispatcher.calls).toHaveLength(0);
+    const completed = events.find((e) => e.type === "tool.completed");
+    const result =
+      completed && completed.type === "tool.completed" ? completed.result : undefined;
+    expect(result?.ok).toBe(false);
+    expect(result?.error?.code).toBe("invalid_json");
+  });
+
+  it("fails with max_tool_calls_exceeded when the tool-call budget is blown", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "read_file", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+      response({
+        toolCalls: [{ id: "c2", name: "read_file", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "unreached" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      limits: { maxToolCalls: 1 },
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const failed = events.find((e) => e.type === "session.failed");
+    expect(failed && failed.type === "session.failed" && failed.error.code).toBe("max_tool_calls_exceeded");
+    expect(listSessions(workspace)[0]!.status).toBe("failed");
+  });
+
   it("cancels via AbortSignal and marks the session cancelled", async () => {
     const controller = new AbortController();
     controller.abort();

@@ -12,6 +12,7 @@ import type {
   McpServer,
   McpTool,
   MemoryCandidate,
+  MemoryCandidateType,
   MemoryResponse,
   ModelInfo,
   RewindResult,
@@ -136,6 +137,14 @@ export const api = {
   memory: () => request<MemoryResponse>("GET", withWorkspace("/api/memory")),
   memoryAction: (id: string, action: "approve" | "reject") =>
     request<MemoryCandidate>("POST", withWorkspace(`/api/memory/${encodeURIComponent(id)}/${action}`)),
+  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean) =>
+    request<MemoryCandidate>("POST", withWorkspace("/api/memory/fact"), {
+      content,
+      type,
+      ...(pending ? { pending: true } : {}),
+    }),
+  memoryDeleteFact: (selector: { index: number } | { match: string }) =>
+    request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact"), selector),
   diff: (staged?: boolean) =>
     request<{ diff: string; truncated: boolean }>("GET", withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`)),
   config: () => request<ServerConfig>("GET", withWorkspace("/api/config")),

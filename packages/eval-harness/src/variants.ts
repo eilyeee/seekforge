@@ -28,6 +28,12 @@ export type AgentBuildOptions = {
    * unaffected.
    */
   taskSuffix?: string;
+  /** Failure escalation (AgentCoreDeps); needs planModel. See docs/configuration.md. */
+  escalateOnFailure?: boolean;
+  /** Stronger model for plan/escalation; required for escalateOnFailure. */
+  planModel?: string;
+  /** Inject project-memory brief (default true). The no-memory variant sets false. */
+  injectMemory?: boolean;
 };
 
 export type Variant = {
@@ -64,6 +70,11 @@ export const VARIANTS: Variant[] = [
     name: "llm-compaction",
     describe: "Uses LLM summarization for full context compaction (vs mechanical).",
     apply: (base) => ({ ...base, compaction: "llm" }),
+  },
+  {
+    name: "no-memory",
+    describe: "Disables project-memory injection — pair with a memory-seeded task to measure memory's value.",
+    apply: (base) => ({ ...base, injectMemory: false }),
   },
 ];
 

@@ -89,6 +89,22 @@ seekforge config set commandAllowlist "pnpm test, cargo build"
 
 Settable via `config set`? **Yes** (as comma-separated string).
 
+### `models`
+
+The selectable model list offered by the desktop/server model picker (and the
+TUI `/model` argument completion). A plain array of model IDs; the first entry is
+treated as the default suggestion. The CLI itself accepts any model string via
+`--model` / `/model`, so this key mainly shapes the picker UI — but it is shared
+config, so setting it once applies everywhere.
+
+```json
+{ "models": ["deepseek-v4-flash", "deepseek-v4-pro"] }
+```
+
+When unset, the server falls back to a built-in default model list.
+
+Settable via `config set`? **Yes** (as comma-separated string).
+
 ### `sandbox`
 
 OS-level command sandboxing. When unset, sandboxing is off.
@@ -107,7 +123,8 @@ denial-looking sandbox failure prompts once before retrying unsandboxed.
 { "sandbox": "workspace-write" }
 ```
 
-Settable via `config set`? **No** — edit the file directly.
+Settable via `config set`? **Yes** — validated against `off` / `workspace-write`
+/ `restricted`.
 
 ### `compaction`
 
@@ -127,7 +144,7 @@ input is ~10× cheaper).
 { "compaction": "llm" }
 ```
 
-Settable via `config set`? **No** — edit the file directly.
+Settable via `config set`? **Yes** — validated against `mechanical` / `llm`.
 
 ### `thinking`
 
@@ -141,7 +158,7 @@ In the REPL, `/think on|off|high|max` toggles this at runtime.
 { "thinking": true }
 ```
 
-Settable via `config set`? **No** — edit the file directly.
+Settable via `config set`? **Yes** — accepts `true` / `false`.
 
 ### `reasoningEffort`
 
@@ -156,7 +173,49 @@ V4 reasoning effort level. Only meaningful when thinking is enabled.
 { "reasoningEffort": "max" }
 ```
 
+Settable via `config set`? **Yes** — validated against `high` / `max`.
+
+### `planModel`
+
+Stronger model used for plan runs (`/plan` / `--plan`) and failure escalation,
+resolved on the same key/endpoint as `model` (e.g. plan/escalate on a `pro`
+model while edits run on a `flash` one).
+
+```json
+{ "model": "deepseek-v4-flash", "planModel": "deepseek-v4-pro" }
+```
+
+`planModel` **must support tool/function calling** — do not set it to
+`deepseek-reasoner` (no function calling). The agent falls back to the default
+model for it rather than break the tool loop.
+
 Settable via `config set`? **No** — edit the file directly.
+
+### `escalateOnFailure`
+
+**Default off.** Once the model loops on an identical failed tool call, hand the
+rest of the run to `planModel` (requires `planModel` set) — a stronger model
+takes over only when the default is clearly stuck, so it never adds overhead to
+runs that are going fine.
+
+```json
+{ "planModel": "deepseek-v4-pro", "escalateOnFailure": true }
+```
+
+A related **always-on** safeguard needs no config: if a tool call fails again
+with identical arguments, the harness injects a one-time reflection nudge telling
+the model to stop looping and re-read.
+
+> Note: two other experimental levers (`autoReview`, `planFirst`) were prototyped
+> and **removed** — an eval A/B (`control` vs them) showed they regressed quality
+> and raised cost on every edit without converting any failures to passes. See
+> CHANGELOG round 36.
+
+Settable via `config set`? **No** — edit the file directly.
+
+### `memoryAutoApproveConfidence`
+
+**Default off.** When set to a number in `0..1`, auto-extracted memory facts whose model confidence is `>= ` the threshold are written directly to `project.md` as approved (instead of being queued as pending candidates for review); facts below the threshold still wait for `seekforge memory approve`. Inspect extraction quality first with `seekforge memory stats`. Edit the file directly; not settable via `config set`.
 
 ### `permissionRules`
 
@@ -303,12 +362,11 @@ prevents the tool call or run from proceeding. All other stages are advisory
 }
 ```
 
-Hook entries are concatenated per stage across config layers for three stages
-that `loadConfig` explicitly merges (`preToolUse`, `postToolUse`, `sessionEnd`):
-**global → project → settings**. The settings-layer hooks run last for these
-stages. For all other stages (`sessionStart`, `userPromptSubmit`, `preCompact`,
-`stop`, `subagentStop`, `notification`), the highest layer's hooks entirely
-replace the lower layers (scalar spread semantics).
+Hook entries are concatenated per stage across config layers for **all** stages
+(`loadConfig` merges every stage the agent supports): **global → project →
+settings**. The settings-layer hooks run last, and a hook defined in a lower
+layer is never silently dropped when a higher layer also defines hooks for a
+different stage.
 
 Settable via `config set`? **No** — edit the file directly.
 
@@ -339,7 +397,7 @@ Three fields merge across layers rather than replace:
 | --- | --- |
 | `mcpServers` | Per-server key merge: `{ ...global, ...project, ...settings }`. Later layers override individual server entries but keep servers from earlier layers that aren't redefined. |
 | `permissionRules` | Concatenated: `[...settings, ...project, ...global]`. First match wins per action category, so settings-layer rules take highest file-layer precedence. |
-| `hooks` | Per-stage concatenation for 3 stages (`preToolUse`, `postToolUse`, `sessionEnd`): global → project → settings. Other stages follow scalar spread (highest layer wins). |
+| `hooks` | Per-stage concatenation for every stage: global → project → settings. No stage is dropped when only some stages are configured in a given layer. |
 
 ---
 
@@ -371,12 +429,17 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `baseUrl` | string | String |
 | `runtimeBin` | string | String |
 | `commandAllowlist` | string[] | Comma-separated string (`"pnpm test, cargo build"`) |
+| `models` | string[] | Comma-separated string (`"deepseek-v4-flash, deepseek-v4-pro"`) |
+| `sandbox` | enum | `off` / `workspace-write` / `restricted` |
+| `compaction` | enum | `mechanical` / `llm` |
+| `thinking` | boolean | `true` / `false` |
+| `reasoningEffort` | enum | `high` / `max` |
 
-All other keys — `permissionRules`, `mcpServers`, `hooks`, `sandbox`,
-`compaction`, `thinking`, `reasoningEffort` — are **not settable** via
-`config set`. They must be edited directly in the JSON config file,
-or managed through their dedicated subcommands (`seekforge mcp add|list|remove`
-for MCP servers).
+The remaining keys — `planModel`, `escalateOnFailure`,
+`memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
+**not settable** via `config set`. They must be edited directly in the JSON
+config file, or managed through their dedicated subcommands (`seekforge mcp
+add|list|remove` for MCP servers).
 
 Attempting `config set` with an unlisted key prints an error and lists the
 allowed keys.

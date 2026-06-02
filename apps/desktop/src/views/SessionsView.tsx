@@ -8,8 +8,19 @@ import { useStore } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
-import { Badge, Button, Card, EmptyState, IconSessions, Input, type BadgeTone } from "../components/ui";
+import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, type BadgeTone } from "../components/ui";
 import type { RewindResult, SessionMeta } from "../types";
+
+/** Short, human time for a card corner: today → "10:24", else a compact date. */
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
   idle: "neutral",
@@ -83,12 +94,12 @@ export function SessionsView() {
 
   if (detail) {
     return (
-      <div className="flex h-full flex-col">
-        <header className="flex items-center gap-3 border-b border-subtle px-4 py-2">
+      <div className="flex h-full flex-col bg-surface">
+        <header className="flex items-center gap-3 border-b border-subtle px-6 py-3">
           <Button variant="ghost" size="sm" onClick={() => setDetail(null)}>
             {t("sessions.backBtn")}
           </Button>
-          <span className="font-mono text-xs text-secondary">{detail.meta.id}</span>
+          <span className="font-mono text-xs text-tertiary">{detail.meta.id}</span>
           <Badge tone={STATUS_TONE[detail.meta.status]}>{detail.meta.status}</Badge>
           <Button
             variant="primary"
@@ -99,7 +110,7 @@ export function SessionsView() {
             {t("sessions.continueBtn")}
           </Button>
         </header>
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           <ChatItems items={messagesToItems(detail.messages)} />
         </div>
       </div>
@@ -109,19 +120,24 @@ export function SessionsView() {
   const visible = filterSessions(sessions ?? [], query);
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">{t("sessions.title")}</h1>
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t("sessions.searchPlaceholder")}
-          className="ml-auto w-64"
-        />
+    <div className="flex h-full flex-col bg-surface">
+      <header className="border-b border-subtle px-6 py-4">
+        <h1 className="text-lg font-semibold text-primary">{t("sessions.title")}</h1>
+        <div className="mt-3 flex items-center gap-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("sessions.searchPlaceholder")}
+            className="max-w-md flex-1"
+          />
+          <Button variant="ghost" size="md" className="shrink-0">
+            <IconSessions size={15} />
+          </Button>
+        </div>
       </header>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto px-6 py-5">
         {error && (
-          <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</div>
+          <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</div>
         )}
         {sessions === null ? (
           !error && <p className="text-tertiary">{t("sessions.loading")}</p>
@@ -138,38 +154,64 @@ export function SessionsView() {
             description={t("sessions.noMatchDescription", { query: query.trim() })}
           />
         ) : (
-          <ul className="space-y-2">
+          <ul className="flex flex-col gap-3">
             {visible.map((s) => (
               <li key={s.id}>
                 <Card
-                  flush
                   onClick={() => openSession(s.id)}
-                  className="cursor-pointer bg-surface-raised/60 px-3 py-2 transition-colors hover:border-strong hover:bg-surface-overlay"
+                  className="group cursor-pointer p-5 transition-colors hover:border-strong hover:bg-surface-overlay"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-tertiary">{s.id}</span>
-                    <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
-                    {rewindNotes[s.id] && (
-                      <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>
-                    )}
-                    <span className="ml-auto flex items-center gap-2">
-                      {s.usage && <span className="font-mono text-xs text-tertiary">{formatUsd(s.usage.costUsd)}</span>}
-                      {s.status !== "running" && (
+                  <div className="flex items-start gap-4">
+                    <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                      <IconChat size={18} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-primary">{s.task}</h2>
+                        <Badge tone={STATUS_TONE[s.status]}>{s.status}</Badge>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="truncate font-mono text-2xs text-tertiary">{s.id}</span>
+                        {rewindNotes[s.id] && (
+                          <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <div className="flex items-center gap-3">
+                        {s.usage && (
+                          <span className="font-mono text-xs text-secondary">{formatUsd(s.usage.costUsd)}</span>
+                        )}
+                        <span className="text-2xs text-tertiary">{formatWhen(s.updatedAt)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {s.status !== "running" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startRewind(s.id);
+                            }}
+                            title={t("sessions.rewindBtnTitle")}
+                          >
+                            {t("sessions.rewindBtn")}
+                          </Button>
+                        )}
                         <Button
-                          variant="ghost"
+                          variant="primary"
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
-                            startRewind(s.id);
+                            openSession(s.id);
                           }}
-                          title={t("sessions.rewindBtnTitle")}
                         >
-                          {t("sessions.rewindBtn")}
+                          {t("sessions.continueBtn")}
+                          <IconChevron size={14} />
                         </Button>
-                      )}
-                    </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-1 truncate text-sm text-secondary">{s.task}</div>
                 </Card>
               </li>
             ))}

@@ -1,0 +1,14 @@
+{
+  "id": "extend-without-regress",
+  "title": "Add CSV quoting support without regressing the existing parser tests",
+  "fixture": "extend-without-regress",
+  "mode": "edit",
+  "task": "Add double-quote support to parseLine in src/csv.js as described in its docstring and exercised by test/quoted.test.js (quoted fields protect commas, surrounding quotes are stripped, doubled \"\" becomes one quote, a field that does not START with a quote is left verbatim and not trimmed). The existing behavior in test/existing.test.js (comma splitting, preserved spaces, empty/leading/trailing fields, verbatim stray quotes) must NOT regress. `npm test` must pass everything. Do NOT modify any file under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test >/tmp/ewr.out 2>&1; code=$?; tail -c 4000 /tmp/ewr.out 1>&2; exit $code" },
+    { "type": "command_succeeds", "command": "node --test test/existing.test.js >/tmp/ewr_e.out 2>&1; code=$?; tail -c 4000 /tmp/ewr_e.out 1>&2; exit $code" },
+    { "type": "file_contains", "path": "test/existing.test.js", "pattern": "spaces around unquoted fields are preserved verbatim" },
+    { "type": "file_contains", "path": "test/quoted.test.js", "pattern": "doubled quotes inside a quoted field become one quote" }
+  ],
+  "notes": "Don't-break-neighbors task. The pristine parser passes existing.test.js but not quoted.test.js. A naive quote-stripping/trimming rewrite passes some quoted cases but regresses the locked-in space-preservation and stray-quote behavior (4 fails). The second command_succeeds independently re-runs the neighbor suite, and the file_contains pin keeps the neighbor assertions from being edited away."
+}

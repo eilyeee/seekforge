@@ -1,2 +1,7 @@
 # Tauri build artifacts (workspace target/ is ignored at the repo root)
 /gen/schemas
+
+# Compiled sidecar binaries (regenerated per-release via `pnpm --filter
+# seekforge build:sidecar`; ~70MB each, not tracked). Tauri requires the
+# `-<target-triple>` suffix on the file (externalBin = "binaries/seekforge-server").
+/binaries

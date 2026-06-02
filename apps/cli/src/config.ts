@@ -36,6 +36,25 @@ export type CliConfig = {
   reasoningEffort?: "high" | "max";
   /** UI language for CLI chrome (errors, prompts, command output). */
   locale?: "en" | "zh-CN";
+  /**
+   * Stronger model for plan runs (`/plan`) and failure escalation, resolved on
+   * the same key/endpoint (e.g. "deepseek-v4-pro" while edits run on flash).
+   * Edit the file directly; not settable via `config set`.
+   */
+  planModel?: string;
+  /**
+   * Default-off: once the model loops on an identical failed tool call, hand the
+   * rest of the run to `planModel`. Edit the file directly; not settable via
+   * `config set`. (autoReview/planFirst were removed — eval-negative.)
+   */
+  escalateOnFailure?: boolean;
+  /**
+   * Default-off: confidence threshold (0..1) above which auto-extracted memory
+   * facts are written DIRECTLY to project.md as approved, instead of queued as
+   * pending candidates. Unset = every extracted fact stays pending for review.
+   * Edit the file directly; not settable via `config set`.
+   */
+  memoryAutoApproveConfidence?: number;
 };
 
 function readJson(path: string): CliConfig {
@@ -94,7 +113,17 @@ export function loadConfig(projectPath: string, settingsPath?: string): CliConfi
   ];
   // hooks concatenate per stage: global first, then project, then settings.
   const hooks: HookConfig = {};
-  for (const stage of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
+  for (const stage of [
+    "preToolUse",
+    "postToolUse",
+    "sessionStart",
+    "userPromptSubmit",
+    "preCompact",
+    "stop",
+    "subagentStop",
+    "notification",
+    "sessionEnd",
+  ] as const) {
     const merged = [
       ...(global.hooks?.[stage] ?? []),
       ...(project.hooks?.[stage] ?? []),

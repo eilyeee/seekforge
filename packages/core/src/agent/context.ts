@@ -148,8 +148,11 @@ const LLM_TOOL_RESULT_PREVIEW_CHARS = 200;
 /** Total cap for the serialized segment (≈6K tokens of summarizer input). */
 const LLM_SEGMENT_CAP_CHARS = 24_000;
 const LLM_SUMMARY_INSTRUCTION =
-  "Summarize this conversation segment for an AI coding agent resuming work: " +
-  "decisions made, files touched, commands run + outcomes, open problems. Be dense, ≤500 words.";
+  "Summarize this conversation segment for an AI coding agent resuming work. Preserve, densely: " +
+  "what still needs doing (remaining steps); decisions made and WHY; files/symbols touched with " +
+  "exact paths; commands run + their outcomes; constraints/gotchas discovered; and any failed " +
+  "approaches (so they are not retried). Keep concrete identifiers (paths, line refs, command " +
+  "names) verbatim. Be dense, ≤500 words.";
 
 /** Minimal provider surface needed for summarization (ChatProvider satisfies it). */
 export type SummaryProvider = {

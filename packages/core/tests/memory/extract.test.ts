@@ -218,6 +218,58 @@ describe("extractMemoryFromSession (happy path)", () => {
   });
 });
 
+describe("extractMemoryFromSession (auto-approval, opt-in)", () => {
+  function readProjectMd(ws: string): string {
+    return fs.readFileSync(path.join(ws, ".seekforge", "memory", "project.md"), "utf8");
+  }
+
+  it("DEFAULT OFF: every fact stays pending and project.md is not written", async () => {
+    const ws = makeWorkspace();
+    const provider = makeFakeProvider([
+      fencedResponse([
+        { content: "high conf fact", type: "tech", confidence: 0.95 },
+        { content: "low conf fact", type: "tech", confidence: 0.4 },
+      ]),
+    ]);
+    const result = await extractMemoryFromSession(provider, makeInput(ws));
+    expect(result.candidates.every((c) => c.status === "pending")).toBe(true);
+    // No threshold => project.md must not be created by extraction.
+    expect(fs.existsSync(path.join(ws, ".seekforge", "memory", "project.md"))).toBe(false);
+  });
+
+  it("splits high-confidence facts to approved (project.md) and keeps low ones pending", async () => {
+    const ws = makeWorkspace();
+    const provider = makeFakeProvider([
+      fencedResponse([
+        { content: "high conf fact", type: "tech", confidence: 0.95 },
+        { content: "exactly at threshold", type: "tech", confidence: 0.8 },
+        { content: "low conf fact", type: "convention", confidence: 0.4 },
+      ]),
+    ]);
+    const result = await extractMemoryFromSession(provider, {
+      ...makeInput(ws),
+      autoApproveConfidence: 0.8,
+    });
+
+    const byContent = Object.fromEntries(result.candidates.map((c) => [c.content, c.status]));
+    expect(byContent["high conf fact"]).toBe("approved");
+    expect(byContent["exactly at threshold"]).toBe("approved"); // >= threshold
+    expect(byContent["low conf fact"]).toBe("pending");
+
+    const md = readProjectMd(ws);
+    expect(md).toContain("- [tech] high conf fact");
+    expect(md).toContain("- [tech] exactly at threshold");
+    expect(md).not.toContain("low conf fact");
+
+    // The approved facts record fact-meta (addedAt/uses) via appendProjectFact.
+    const meta = JSON.parse(
+      fs.readFileSync(path.join(ws, ".seekforge", "memory", "fact-meta.json"), "utf8"),
+    );
+    expect(meta["[tech] high conf fact"]).toBeDefined();
+    expect(meta["[tech] high conf fact"].uses).toBe(0);
+  });
+});
+
 describe("extractMemoryFromSession (degraded path)", () => {
   async function expectDegraded(ws: string, provider: Parameters<typeof extractMemoryFromSession>[0]) {
     const result = await extractMemoryFromSession(provider, makeInput(ws));

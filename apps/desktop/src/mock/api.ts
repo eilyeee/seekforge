@@ -4,6 +4,7 @@ import {
   mockCandidates,
   mockConfig,
   mockEvolutionProposals,
+  mockFacts,
   mockMcpServers,
   mockMcpTools,
   mockModels,
@@ -14,10 +15,18 @@ import {
   mockSkillContent,
   mockSkills,
 } from "./fixtures";
-import type { EvolutionProposal, MemoryCandidate, ServerConfig, Todo } from "../types";
+import type {
+  EvolutionProposal,
+  MemoryCandidate,
+  MemoryCandidateType,
+  MemoryFact,
+  ServerConfig,
+  Todo,
+} from "../types";
 
 // Mutable copies so approve/reject and config saves stick for the page lifetime.
 const candidates: MemoryCandidate[] = mockCandidates.map((c) => ({ ...c }));
+const facts: MemoryFact[] = mockFacts.map((f) => ({ ...f }));
 const config: ServerConfig = { ...mockConfig, commandAllowlist: [...(mockConfig.commandAllowlist ?? [])] };
 const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p }));
 const todos: Todo[] = [
@@ -140,7 +149,54 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     };
   }
 
-  if (method === "GET" && path === "/api/memory") return { projectMd: mockProjectMd, candidates };
+  if (method === "GET" && path === "/api/memory") {
+    return { projectMd: mockProjectMd, candidates, facts: facts.map((f) => ({ ...f })) };
+  }
+  if (method === "POST" && path === "/api/memory/fact") {
+    const { content, type, pending } = (body ?? {}) as {
+      content?: unknown;
+      type?: unknown;
+      pending?: unknown;
+    };
+    if (typeof content !== "string" || content.trim() === "") {
+      throw mockError(400, "bad_request", "content must be a non-empty string");
+    }
+    const factType = (typeof type === "string" ? type : "convention") as MemoryCandidateType;
+    if (!pending) {
+      facts.push({
+        index: facts.length + 1,
+        type: factType,
+        content: content.trim(),
+        addedAt: new Date().toISOString(),
+        uses: 0,
+      });
+    }
+    return {
+      id: `mc-user-${Date.now()}`,
+      content: content.trim(),
+      type: factType,
+      confidence: 1,
+      sourceSessionId: "manual",
+      createdAt: new Date().toISOString(),
+      status: pending ? "pending" : "approved",
+    };
+  }
+  if (method === "DELETE" && path === "/api/memory/fact") {
+    const { index, match } = (body ?? {}) as { index?: unknown; match?: unknown };
+    let pos = -1;
+    if (typeof index === "number") {
+      pos = facts.findIndex((f) => f.index === index);
+    } else if (typeof match === "string" && match.trim() !== "") {
+      pos = facts.findIndex((f) => f.content.includes(match));
+    } else {
+      throw mockError(400, "bad_request", "provide exactly one of: index or match");
+    }
+    if (pos === -1) throw mockError(400, "bad_request", "no matching fact");
+    const [removed] = facts.splice(pos, 1);
+    // Renumber so 1-based indexes stay contiguous, mirroring the server.
+    facts.forEach((f, i) => (f.index = i + 1));
+    return { removed: `- [${removed!.type}] ${removed!.content}` };
+  }
   m = /^\/api\/memory\/([^/]+)\/(approve|reject)$/.exec(path);
   if (method === "POST" && m) {
     const candidate = candidates.find((c) => c.id === m![1]);

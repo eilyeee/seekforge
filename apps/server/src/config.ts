@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DEPRECATED_MODELS, MODEL_PRICING, type McpServerConfig } from "@seekforge/core";
+import { DEPRECATED_MODELS, MODEL_PRICING, type HookConfig, type McpServerConfig } from "@seekforge/core";
+import type { PermissionRule } from "@seekforge/shared";
 
 /** Default selectable model list (core's non-deprecated ids) when none configured. */
 const DEFAULT_MODEL_LIST = Object.keys(MODEL_PRICING).filter(
@@ -33,8 +34,29 @@ export type ServerConfig = {
   thinking?: boolean;
   /** Reasoning effort for thinking mode. */
   reasoningEffort?: "high" | "max";
+  /** Stronger model for plan runs + failure escalation (same key/endpoint). */
+  planModel?: string;
+  /**
+   * Default-off: hand the run to `planModel` once it loops on a failed tool
+   * call. Edit the file directly; not settable via `config set`.
+   */
+  escalateOnFailure?: boolean;
+  /**
+   * Default-off: confidence threshold (0..1) above which auto-extracted memory
+   * facts are written directly to project.md as approved instead of pending.
+   * Edit the file directly; not settable via `config set`.
+   */
+  memoryAutoApproveConfidence?: number;
+  /** Shell hooks fired around tool calls / lifecycle. Edit the file directly. */
+  hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Fine-grained allow/deny permission rules. First match of each action
+   * category wins (deny scanned before allow); project rules are merged
+   * before global ones. Edit the file directly; not settable via `config set`.
+   */
+  permissionRules?: PermissionRule[];
 };
 
 export const CONFIG_KEYS = [
@@ -74,9 +96,13 @@ export function loadConfig(workspace: string): ServerConfig {
   const project = readJson(join(workspace, ".seekforge", "config.json"));
   // mcpServers merges per server name (project wins) instead of replacing wholesale.
   const mcpServers = { ...global.mcpServers, ...project.mcpServers };
+  // permissionRules concatenates project-then-global (first match wins), so
+  // project rules take precedence — mirrors the CLI minus the --settings layer.
+  const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
   return {
     ...global,
     ...project,
+    ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),

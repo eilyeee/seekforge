@@ -333,6 +333,80 @@ describe("REST endpoints", () => {
     expect(res.status).toBe(404);
   });
 
+  it("GET /api/memory includes approved facts with lifecycle metadata", async () => {
+    const res = await authed("/api/memory");
+    const body = await jsonOf(res);
+    expect(Array.isArray(body.facts)).toBe(true);
+    const existing = body.facts.find((f: { content: string }) => f.content === "existing fact");
+    expect(existing).toBeDefined();
+    expect(existing.type).toBe("tech");
+    expect(existing.index).toBe(1);
+    expect(typeof existing.uses).toBe("number");
+  });
+
+  it("POST /api/memory/fact adds an approved fact to project.md", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "run pnpm lint before push", type: "command" }),
+    });
+    expect(res.status).toBe(201);
+    const body = await jsonOf(res);
+    expect(body.status).toBe("approved");
+    expect(body.type).toBe("command");
+    const projectMd = readFileSync(join(workspace, ".seekforge", "memory", "project.md"), "utf8");
+    expect(projectMd).toContain("run pnpm lint before push");
+  });
+
+  it("POST /api/memory/fact rejects an invalid type", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "x", type: "bogus" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /api/memory/fact rejects empty content", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "   " }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("DELETE /api/memory/fact removes an approved fact by match", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ match: "run pnpm lint before push" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.removed).toContain("run pnpm lint before push");
+    const projectMd = readFileSync(join(workspace, ".seekforge", "memory", "project.md"), "utf8");
+    expect(projectMd).not.toContain("run pnpm lint before push");
+  });
+
+  it("DELETE /api/memory/fact 400s when neither index nor match is given", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("DELETE /api/memory/fact 400s for a non-existent index", async () => {
+    const res = await authed("/api/memory/fact", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ index: 999 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("GET /api/config masks the apiKey", async () => {
     const res = await authed("/api/config");
     const body = await jsonOf(res);

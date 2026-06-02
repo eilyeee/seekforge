@@ -83,8 +83,9 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
-| `seekforge memory compact [--dry-run]` | collapse duplicate and near-duplicate facts in project.md (deterministic) |
-| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
+| `seekforge memory compact [--dry-run] [--prune-unused <days>]` | collapse duplicate and near-duplicate facts in project.md (deterministic); `--prune-unused` archives never-used facts older than `<days>` to `project-archive.md` |
+| `seekforge memory stats` | print memory extraction-quality stats — approved/pending/rejected counts, used fraction, rejection rate (read-only); inspect this before tuning `memoryAutoApproveConfidence` |
+| `seekforge config show\|set <key> <value> [-g]` | `set` accepts the scalar/array keys: `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `models`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`. Structured keys (`permissionRules`, `hooks`, `mcpServers`, `planModel`) are **edited directly in `.seekforge/config.json`** — not via `config set`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
 
 Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `seekforge run` plus `--ask`, `--input-format` (text | stream-json),
@@ -96,6 +97,31 @@ Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 The agent can also: publish a live plan checklist (`update_plan`), commit its
 work (`git_commit` — push stays impossible), and fetch public docs pages
 (`web_fetch` — every URL needs explicit confirmation; private addresses refused).
+
+## Desktop workbench
+
+`seekforge serve` opens a local, token-protected web workbench (React) — on
+`127.0.0.1` only — that the Tauri shell wraps as a native macOS app. It drives
+the **same** agent/API as the CLI, in a light, Codex-style UI (dark mode opt-in;
+language follows en / zh-CN), with every surface in one window:
+
+- **Chat** — multi-tab sessions with a home screen (quick-action starters +
+  recent sessions/skills/agents), streaming tool-run cards, per-hunk diff
+  approval, plan execution, and a composer with `@` file mentions, `/` commands,
+  image attach/paste, and a thinking toggle.
+- **Sessions · Changes · Skills · Subagents · Memory · Evolution · Settings** —
+  resume sessions, review the working-tree diff, toggle skills, inspect
+  subagents, approve memory candidates, gate self-evolution proposals, and edit
+  config (model list, sandbox, theme, language…).
+- **Todos** — a side panel backed by `.seekforge/todos.md`.
+
+```bash
+seekforge serve                                     # open the printed URL in a browser
+pnpm --filter @seekforge/desktop build && pnpm tauri dev   # or the native app (dev)
+```
+
+The bundled app needs the `seekforge` CLI reachable (it spawns `seekforge serve`);
+see [apps/desktop/src-tauri/README.md](apps/desktop/src-tauri/README.md).
 
 ## How it works
 
@@ -144,7 +170,10 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
 - **Memory**: after each edit session one extra model call distills durable
   facts as *candidates*; nothing enters long-term memory (`.seekforge/memory/project.md`)
   until you `seekforge memory approve` it. Relevant memory is injected into
-  later sessions as a short brief.
+  later sessions as a short brief, and the agent can pull more on demand with
+  the read-only `search_memory` tool. Inspect extraction quality with
+  `seekforge memory stats`; set `memoryAutoApproveConfidence` to auto-approve
+  high-confidence facts.
 - **Sessions** are JSONL traces under `.seekforge/sessions/<id>/` —
   messages, tool calls, and events are fully auditable.
 

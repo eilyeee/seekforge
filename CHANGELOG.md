@@ -2,6 +2,272 @@
 
 ## Unreleased
 
+### round 44: low-end-model audit — fix every finding, cross-entry parity
+Ran the `docs/low-end-model-audit.md` deep procedure (config wiring, cross-entry
+consistency, permission/security, agent loop/trace, release, UI state, deps,
+docs) and fixed all P1/P2/P3 findings via parallel agents.
+
+- **P1 — trace fidelity (regression introduced in round 38).** The agent loop
+  traced the reflection nudge and the escalation note as `role:"user"` messages,
+  breaking the *one-user-message-per-run* invariant (corrupting
+  `truncateSessionAtUserTurn` / checkpoint-turn indexing on resume/backtrack).
+  Both are now transient (`messages.push` only, no `trace.message`), like the
+  wrap-up nudge. Added tests asserting the trace holds exactly one user message.
+- **P1 — CLI dropped 6 of 9 hook stages.** `loadConfig` merged only
+  `preToolUse`/`postToolUse`/`sessionEnd` then spread the result last, silently
+  dropping `sessionStart`, `userPromptSubmit` (a blocking/context-injecting
+  stage), `preCompact`, `stop`, `subagentStop`, `notification`. Now merges all
+  nine, mirroring the TUI. (+regression test.)
+- **P1 — server ignored `permissionRules`.** The desktop/web path never read,
+  merged, or passed users' deny rules to the agent — a deny they relied on did
+  nothing. `ServerConfig` now carries `permissionRules`, `loadConfig`
+  concatenates them across layers (project-first), and `createDefaultAgent`
+  passes them to `createAgentCore`. (+tests.)
+- **P2 — TUI config parity.** Reads the documented flat `planModel` key (was
+  only nested `routing.planModel`; flat now wins, nested kept for back-compat)
+  and wires `memoryAutoApproveConfidence` into the core deps like the CLI.
+- **P2 — skip memory usage bump on resume.** `recordFactUse` no longer fires
+  when resuming a session, so resumes don't inflate the usage stats `memory
+  stats` reports.
+- **Desktop resilience.** Global server-unreachable banner with Retry
+  (`bootError`/`retryBoot`), fail-loud on missing bundled web resource (was a
+  silent fallthrough), chat-header/footer/tool-row overflow fixes, `boot.*`
+  i18n (en+zh).
+- **Release.** `bundle.targets` scoped to `["app","dmg"]`; `build:sidecar`
+  honors `SIDECAR_TARGET` for cross-arch builds (+RELEASING.md note).
+- **Docs.** `configuration.md`: `sandbox`/`compaction`/`thinking`/
+  `reasoningEffort` *are* settable via `config set` (corrected the false "No"),
+  documented the `models` key, and fixed the hooks-merge description (all stages
+  concatenate now). `apps/cli/README.md`: default model is `deepseek-v4-flash`
+  (`deepseek-chat` is deprecated). README: documented `search_memory`, `memory
+  stats`, and `memory compact --prune-unused`.
+- **Deps.** Removed dead `ink-text-input` from the TUI.
+- Verified: typecheck clean across all 8 packages; tests core 805 / tui 667 /
+  server 131 / desktop 217 / eval-harness 45 / cli all suites; `pnpm audit`
+  clean.
+
+### round 43: memory extraction — measure first, then the safe levers
+- **`memory stats` (the gate).** New core `memoryStats(workspace)` + `seekforge
+  memory stats` command: extraction **precision proxy** (% of approved facts ever
+  used, via fact-meta), candidate **rejection rate**, and **confidence↔usage**
+  (avg model confidence of used vs unused facts) — the empirical calibration
+  signal. This subsumes the "feedback loop" and "confidence calibration" ideas
+  as *data for a human* rather than speculative auto-tuning/calibrators.
+- **Better long-session digest.** `buildTranscriptDigest` now keeps HEAD + TAIL
+  and prioritizes signal lines (errors/decisions/tool results) within the same
+  6 KB cap, so facts buried in long sessions aren't dropped (short sessions stay
+  byte-identical).
+- **Confidence auto-approval (opt-in, default OFF).** `memoryAutoApproveConfidence`
+  (config + `AgentCoreDeps`): extracted facts with confidence ≥ threshold (after
+  injection + dedup filters) go straight to project.md; below stay pending. Off
+  by default — **enable only after `memory stats` shows extraction precision
+  holds**, or you'd scale noise.
+- Deliberately **not** done: automatic prompt-tuning from rejections, a
+  confidence calibrator (both need ground truth — `memory stats` gives the human
+  the data instead), and the doc-bootstrap bulk-distiller (uses the same
+  distillation — do it once `memory stats` validates extraction quality).
+- Verified: core 801 / cli 74 / server 127 tests; typecheck clean; `memory
+  stats` smoke-tested on this repo.
+
+### round 42: memory — close the last Claude-parity gaps
+- **`search_memory` tool (agentic memory access).** A read-only (L0, available in
+  ask + edit) builtin that lets the agent query its memory ON DEMAND mid-task —
+  not just via the auto-injected brief at session start. Merges project + global
+  + subdir facts, ranks against the query (reusing the brief's scorer, no
+  char-cap), tags each hit with its source. This is Claude's "memory tool"
+  pattern — and the right scaling answer instead of embeddings.
+- **Path-scoped subdir `AGENTS.md` cascade.** Rules from a subdirectory's
+  `AGENTS.md` are now merged, but ONLY when the task references a path under that
+  subdir (via task path tokens) — closing Claude's monorepo per-directory rules
+  behavior without bloating the always-loaded rules prompt. `collectProjectRules`
+  gained an optional `task` arg (back-compat; caller threads `input.task`).
+- Held the line: **semantic/embedding retrieval** stays deferred (eval-gate;
+  `search_memory` covers the same need the Claude way), and an **enterprise/
+  managed-policy tier** is not built (no real demand). Inline `#` capture is
+  already covered by `/remember` + the desktop add-fact form.
+- Net vs Claude Code: structure (global/subdir/import), lifecycle, measurement,
+  and now agentic access are all at parity or ahead; SeekForge additionally
+  auto-extracts facts, tracks usage/age, prunes, and is eval-measurable.
+
+### round 41: memory growth + eval discrimination + TUI/desktop polish + release wiring
+- **Memory (A):** subdirectory-cascade — `buildMemoryBrief` now also merges
+  `*/.seekforge/memory/project.md` from subdirectories (bounded scan, excludes
+  node_modules/.git/dist/etc.), so monorepo packages can carry their own facts
+  (path-token relevance surfaces the right one). Raised the injection budget
+  (SMALL_CORPUS 12→20, MAX_BULLETS 8→12, MAX_CHARS 800→1200) as the corpus grows.
+  Also bootstrapped the corpus by distilling ~/.claude project notes into
+  `.seekforge/memory/project.md` (12 facts) + global `~/.seekforge/...` (3).
+- **Eval (B):** +5 discriminating tasks (32 total) — staged-rollout refactor,
+  half-even rounding, buried feature flag, cross-module settlement bug,
+  extend-without-regress — each verified fail-on-pristine / pass-on-solution, so
+  the eval set can finally show A/B signal. (Live discrimination run = paid
+  follow-up.)
+- **Desktop polish (B):** fixed two real light-theme color bugs (`UsageFooter`
+  `bg-zinc-800`, `TabBar` `bg-orange-400`), added `focus-ring`/`aria-label`
+  across TabBar/Sidebar/ChatView/PermissionModal, wired the retry banner to i18n,
+  aligned Diff/Evolution/Settings titles. Zero hardcoded colors remain.
+- **TUI polish (B):** routed hardcoded chrome strings through the i18n layer
+  (incl. a previously-unused `permission.*` key set), en/zh parity 70/70,
+  verified all keybinding hints match the keymap.
+- **Release (C):** the desktop release workflow now bun-compiles the per-target
+  CLI sidecar before `tauri-action` (cross-platform self-contained bundles). The
+  sidecar was re-verified to serve standalone after the core changes.
+- Verified: `pnpm -r typecheck` 0; core 772 / desktop 217 / tui 662 / server 127
+  / eval-harness 45 tests; `pnpm audit` clean.
+- Deferred (with reasons): updater real signing key (user secret); a full
+  `pnpm tauri build` / end-to-end DMG launch (heavy + GUI — runs in CI on tag, or
+  locally); desktop Settings toggles for the experimental engine flags (gated on
+  eval proving them); memory confidence-auto-approve / doc-bootstrap script /
+  `search_memory` tool (corpus-growth levers — do when the corpus warrants).
+
+### round 40: memory — close the Claude/Codex gaps
+- **Global (cross-project) fact memory** (`memory/brief.ts` + `store.ts`):
+  `buildMemoryBrief` now merges the project's `project.md` with a global
+  `~/.seekforge/memory/project.md` (overridable via `SEEKFORGE_HOME` for tests),
+  deduped, project-wins-ties. Global facts are included by relevance only (the
+  always-include `[command]`/`[tech]` rule stays project-scoped) to avoid
+  cross-project noise.
+- **`@import` composition**: memory files may inline other files via `@<path>`
+  (resolved relative to the file; absolute/`..`-escape refused, missing skipped,
+  cycle- and depth/size-capped).
+- **fact-meta reconcile**: compaction now drops orphaned `fact-meta.json` entries
+  whose bullet no longer exists (after dedupe/merge/hand-edit).
+- **CLI `memory compact --prune-unused <days>`**: surfaces the P2 archive of old,
+  never-used facts (+ en/zh i18n).
+- **Desktop Memory page**: shows each approved fact's lifecycle (used N · added
+  age, with subtle never-used/stale flags) and lets you delete a fact or add one
+  directly. New server routes: `GET /api/memory` returns `facts` with lifecycle;
+  `POST`/`DELETE /api/memory/fact`.
+- Deliberately **not** done (with reasons): subdirectory-scoped fact cascade
+  (needs a file-vs-task scoping design decision), semantic/embedding retrieval
+  (premature for the current small corpus — eval-gate first, per round 36's
+  lesson), and code-validation of facts (research-grade; a weakness shared with
+  Claude/Codex, not a gap).
+
+### round 39: self-contained desktop bundle + dependency-audit to zero
+- **Dependency audit: 9 → 0 vulnerabilities** (`pnpm audit` vs the official
+  registry). Desktop bumped `vite` 5→8 (rolldown, drops the bundled esbuild),
+  `@vitejs/plugin-react` 4→5, `vitest` 3→4; `vitest` 3→4 across core / tui /
+  server / eval-harness; `tsx` →4.22, `tsup` →8.5; and a root
+  `pnpm.overrides: { "esbuild": ">=0.28.1" }` to unify the rest. All 7 packages
+  typecheck; every suite passes; the desktop build + screenshot smoke-test pass.
+- **Self-contained desktop bundle (CLI sidecar).** The DMG no longer needs a
+  system-installed `seekforge`: the CLI is compiled to a single native binary
+  with `bun build --compile` and shipped as a Tauri `externalBin` sidecar
+  (`apps/cli` gained a `build:sidecar` script; binary is git-ignored ~70MB). The
+  Rust shell prefers the sidecar (env override > sidecar > dev repo/PATH
+  fallbacks — dev unaffected). Two compile blockers fixed: `package.json`
+  version reads made fail-soft (don't exist on bun's virtual FS), and the web UI
+  is shipped as a Tauri resource with the shell passing `SEEKFORGE_STATIC_DIR`
+  to the sidecar (a compiled binary can't find dist via `import.meta.url`). The
+  sidecar was verified to serve the full UI standalone; `cargo check` + 20 Rust
+  tests pass. NOT yet verified: a full `pnpm tauri build` / end-to-end DMG launch
+  (the in-bundle layout relies on Tauri's documented convention).
+
+### round 38: audit fixes — parity, fidelity, and honest defaults
+- **Server/desktop now wire hooks** (#1): `ServerConfig.hooks` is read and passed
+  to the agent, so the 9 hook stages fire on the desktop path too (was CLI/TUI
+  only).
+- **README `config set` corrected** (#2): only scalar/array keys are settable;
+  `permissionRules`/`hooks`/`mcpServers`/`planModel` are edited in
+  `config.json` (they were never accepted by `config set`).
+- **Desktop updater no longer pretends** (#4): a `UPDATER_ENABLED` const (false)
+  skips the per-launch update check while the placeholder pubkey ships, so there
+  are no misleading "checking/failed" update logs for a non-updatable build.
+- **planModel reasoner guard on the server** (#5): `deepseek-reasoner` (no tool
+  calling) now falls back to the default model on the server too, matching
+  CLI/TUI; documented in `docs/configuration.md`.
+- **Harness nudges are traced** (#6): the stuck-reflection and escalation
+  messages are written to the JSONL trace, so replay/audit matches what the
+  model actually received.
+- **Stuck detection is order-independent** (#7): the repeated-failure signature
+  canonicalizes argument JSON (sorted keys), so reordered-but-equal args still
+  match. Test added.
+- **TUI gained `escalateOnFailure`** (#8): config + factory parity with
+  CLI/server/eval.
+
+### round 37: memory — measure it, then close the Claude/Codex gaps
+Prioritized by value ÷ (cost × risk), and measured (the lesson from round 36).
+- **P0 — made memory measurable.** Added an `injectMemory` dep (default on;
+  `AgentCoreDeps` + eval `no-memory` variant) and a memory-discriminating eval
+  fixture/task (`memory-convention-recall`): a `nowIso()`-not-`new Date()`
+  convention that exists ONLY in seeded `.seekforge/memory/project.md`. A/B
+  result: **memory-on passed 3/3, memory-off failed** (used `new Date()`) — a
+  feature that demonstrably helps on a task built to need it. Loop test:
+  `tests/agent/memory-inject.test.ts`.
+- **P1 — recall: small-corpus inject-all** (`memory/brief.ts`). When the whole
+  approved-fact set is small (≤12 bullets, fits the budget) the relevance floor
+  is skipped and everything is injected — a lexically-missed-but-relevant fact
+  is worse than a little extra context (matches how Claude/Codex always load
+  their file). The floor still applies once memory grows large.
+- **P2 — fact lifecycle** (`memory/store.ts` + `compact.ts`). A sidecar
+  `fact-meta.json` records `addedAt` on approval and `uses`/`lastUsedAt` whenever
+  a fact is injected; `compactProjectMemory({ pruneUnusedDays })` archives old,
+  never-used facts to `project-archive.md` (facts without metadata or with uses
+  are left alone). Tests: `tests/memory/lifecycle.test.ts`. (Payoff is gated on
+  memory growing large — same reasoning that deprioritized embeddings/RAG, which
+  stay deferred until the corpus warrants them.)
+
+### round 36: "think more" — harness levers to lift a weaker model
+Prompt/loop changes to make the model reason more before acting. The always-on
+parts are conservative; the behavior-changing parts are **opt-in (default off)**
+and should be eval-gated before enabling.
+- **System prompt** (`agent/prompt.ts`): edit mode now asks for a one-line
+  hypothesis + minimal change before the first edit; plan mode weighs 2–3
+  approaches and picks one with a rationale.
+- **Tool docs** (`tools/builtins/{fs,command}.ts`): `apply_patch` spells out the
+  exact-match/unique-match contract with a worked example (cuts malformed
+  patches); `run_command` clarifies `background:true` usage.
+- **Skills** (`skills/builtins.ts`): sharper procedures for bugfix /
+  test-failure-fix / verify-change / code-review / small-code-change.
+- **Compaction digest** (`agent/context.ts`): preserves remaining work, the
+  *why* of decisions, exact identifiers, and failed approaches.
+- **Stuck detection** (`agent/loop.ts`, always on): a tool call that fails again
+  with identical args injects a one-time reflection nudge ("you're looping —
+  re-read, change approach"), mirroring the transient wrap-up nudge.
+- **Failure escalation** (config, default off): wired `planModel` from config
+  (also fixes `/plan` routing, previously unwired in the CLI) on **both** the CLI
+  (`CliConfig` → agent-factory) and the **server** (`ServerConfig` →
+  `apps/server/src/agent.ts`, so the desktop honors it), plus `escalateOnFailure`
+  — hand the run to `planModel` once it loops on an identical failed call. Tested
+  in `tests/agent/escalation.test.ts`.
+- **Measured everything, then pruned.** Ran the eval harness A/B:
+  - `control` vs a prototype `autoReview`+`planFirst` variant: the levers **lost
+    26/0/0** — same pass rate (already 100%), equal-or-worse scores, ~+60% turns
+    and cost, and `autoReview` sometimes degraded a correct solution. **Removed
+    both** (kept the failure-only `escalateOnFailure`, which can't add overhead to
+    healthy runs).
+  - current `control` vs the 2026-06-12 baseline: the always-on changes above
+    show **no score regressions** (a couple +1/+2) and **lower cost**, so they
+    stay.
+
+### round 35: desktop UI redesign (Codex-style light theme)
+- **Light theme is now the default.** Inverted the palette so `:root` is light
+  and dark is opt-in via `<html data-theme="dark">` (theme switcher + tests
+  updated). Retuned to the spec palette: blue accent `#2563eb`/`#3b82f6`,
+  surfaces `#f8fafc`/`#ffffff`, gray text/borders. The native window's initial
+  background now matches (`#f8fafc`) so there's no dark first-frame flash.
+- **Redesigned every screen** to a Codex/Linear/Raycast feel: a new chat home
+  (welcome card + quick-action starters + live recents), card-based Sessions,
+  Diff, Skills, Agents, Memory, Evolution and grouped Settings, a styled right
+  todo panel, and a cleaner toolbar (pill mode/approval groups). Sidebar widened
+  to 220px with a blue active-nav highlight.
+- **Composer action bar.** Surfaced the previously keyboard-only features as
+  labelled pills (`@` files, `/` commands, a thinking toggle) plus an attach
+  button and a real send button — all wired to the existing palettes/upload.
+- **Cross-page consistency pass.** Standardized header padding/title sizes,
+  left-aligned all page content with its header (removed mismatched centering),
+  and added a `stacked` Settings row so multi-line fields (models, allowlist)
+  render full-width instead of a cramped sliver. Home grids use CSS container
+  queries so they collapse to one column when the content area is narrow.
+- **Desktop robustness.** The serve-command PATH search is augmented with the
+  common global-bin dirs (npm-global/homebrew/volta/yarn/bun/nvm) so a bundled
+  app finds an `npm i -g seekforge` install despite the minimal macOS GUI PATH;
+  the error dialog now suggests `npm install -g seekforge`. The auto-updater is
+  opt-in (`createUpdaterArtifacts: false` + placeholder pubkey) so `tauri build`
+  succeeds without a signing key — see `apps/desktop/docs/RELEASING.md` to
+  enable it. i18n (en + zh) added for all new strings.
+
 ### round 34: security/correctness audit fixes
 - **High — `rm -R -f` / `rm -Rf` bypassed the dangerous-command denylist.** Both
   the TS classifier and the Rust runtime only matched lowercase `rm -rf`/`-r -f`

@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { api } from "../../lib/api";
+import { IconSparkle } from "../ui/icons";
 import {
   atBottomEdge,
   atToken,
@@ -39,10 +40,17 @@ export type ComposerProps = {
   commands: ComposerCommand[];
   /** Workspace id this tab is bound to ("" = the server's default). */
   workspaceId: string;
+  /** Thinking-mode toggle surfaced as a composer pill (omit to hide it). */
+  thinking?: boolean;
+  onToggleThinking?: () => void;
 };
 
 const MAX_VISIBLE = 8;
 const FILE_QUERY_DEBOUNCE_MS = 150;
+
+/** Shared style for the composer's labeled trigger pills (@ files, / commands). */
+const PILL =
+  "focus-ring inline-flex items-center gap-1 rounded-lg border border-subtle px-2 py-1 text-xs text-secondary transition-colors hover:bg-surface-overlay hover:text-primary disabled:opacity-50";
 
 /** Maps a pasted blob without a usable filename to an upload name by MIME. */
 function uploadName(file: File): string | null {
@@ -125,9 +133,20 @@ function PendingImageChip({
   );
 }
 
-export function Composer({ value, onChange, onSend, disabled, placeholder, commands, workspaceId }: ComposerProps) {
+export function Composer({
+  value,
+  onChange,
+  onSend,
+  disabled,
+  placeholder,
+  commands,
+  workspaceId,
+  thinking,
+  onToggleThinking,
+}: ComposerProps) {
   const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [caret, setCaret] = useState(0);
   /** Esc dismissed the dropdown; cleared on the next text change. */
   const [dismissed, setDismissed] = useState(false);
@@ -274,6 +293,24 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
     }
   };
 
+  /** Insert a trigger token (/ or @) at the caret and open its palette. */
+  const insertToken = (token: string) => {
+    if (disabled) return;
+    const el = textareaRef.current;
+    const start = el ? el.selectionStart : value.length;
+    const end = el ? el.selectionEnd : start;
+    const before = value.slice(0, start);
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
+    const insert = (needsSpace ? " " : "") + token;
+    setDismissed(false);
+    applyChange(before + insert + value.slice(end), start + insert.length);
+    el?.focus();
+  };
+
+  const openFilePicker = () => {
+    if (!disabled) fileInputRef.current?.click();
+  };
+
   // --- DOM events -----------------------------------------------------------
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -361,7 +398,7 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
       onDrop={onDrop}
     >
       {dropdown && (
-        <div className="absolute bottom-full left-3 right-3 z-10 mb-1 max-h-64 overflow-y-auto rounded border border-strong bg-surface-raised shadow-lg">
+        <div className="absolute bottom-full left-3 right-3 z-10 mb-1 max-h-64 overflow-y-auto rounded-lg border border-strong bg-surface-raised shadow-lg">
           {dropdown.kind === "slash"
             ? slashItems.map((cmd, i) => (
                 <button
@@ -410,27 +447,109 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
         </div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={onTextChange}
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-        disabled={disabled}
-        placeholder={placeholder}
-        rows={3}
-        className={`w-full resize-none rounded border bg-surface-raised px-3 py-2 text-sm text-primary placeholder:text-tertiary focus:border-accent focus:outline-none disabled:opacity-50 ${
+      <div
+        className={`flex flex-col rounded-xl border bg-surface-raised transition-colors focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/40 ${
           dragOver ? "border-accent" : "border-strong"
-        }`}
-      />
+        } ${disabled ? "opacity-60" : ""}`}
+      >
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={onTextChange}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          disabled={disabled}
+          placeholder={placeholder}
+          rows={3}
+          className="w-full resize-none bg-transparent px-3 pt-2.5 text-sm text-primary placeholder:text-tertiary focus:outline-none"
+        />
 
-      {(uploading > 0 || uploadError) && (
-        <div className="mt-1 text-xs">
-          {uploading > 0 && <span className="text-tertiary">{t("chat.composer.uploading")}</span>}
-          {uploadError && <span className="text-danger">{t("chat.composer.uploadFailed", { error: uploadError })}</span>}
+        <div className="flex items-center gap-1.5 px-2 pb-2 pt-1">
+          <button
+            type="button"
+            onClick={() => insertToken("@")}
+            disabled={disabled}
+            title={t("chat.composer.mention")}
+            className={PILL}
+          >
+            <span className="font-mono text-accent">@</span>
+            {t("chat.composer.fileLabel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => insertToken("/")}
+            disabled={disabled}
+            title={t("chat.composer.slash")}
+            className={PILL}
+          >
+            <span className="font-mono text-accent">/</span>
+            {t("chat.composer.cmdLabel")}
+          </button>
+          {onToggleThinking && (
+            <button
+              type="button"
+              onClick={onToggleThinking}
+              disabled={disabled}
+              aria-pressed={thinking}
+              title={t("chat.composer.thinkLabel")}
+              className={`focus-ring inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-50 ${
+                thinking
+                  ? "border-accent/60 bg-accent-muted text-accent-hover"
+                  : "border-subtle text-secondary hover:bg-surface-overlay hover:text-primary"
+              }`}
+            >
+              <IconSparkle size={13} />
+              {t("chat.composer.thinkLabel")}
+            </button>
+          )}
+
+          {(uploading > 0 || uploadError) && (
+            <span className="ml-1 truncate text-2xs">
+              {uploading > 0 && <span className="text-tertiary">{t("chat.composer.uploading")}</span>}
+              {uploadError && <span className="text-danger">{t("chat.composer.uploadFailed", { error: uploadError })}</span>}
+            </span>
+          )}
+
+          <span className="ml-auto hidden pr-1 text-2xs text-tertiary sm:inline">{t("chat.composer.sendHint")}</span>
+          <button
+            type="button"
+            onClick={openFilePicker}
+            disabled={disabled}
+            title={t("chat.composer.attach")}
+            aria-label={t("chat.composer.attach")}
+            className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg border border-subtle text-tertiary hover:bg-surface-overlay hover:text-secondary disabled:opacity-50"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={send}
+            disabled={disabled || value.trim().length === 0}
+            title={t("chat.composer.send")}
+            aria-label={t("chat.composer.send")}
+            className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
         </div>
-      )}
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files) void uploadImages(e.target.files);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }

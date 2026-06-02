@@ -152,7 +152,8 @@ export function PermissionModal({ request, onRespond }: Props) {
         <div className="mb-1 flex items-center gap-2 text-2xs uppercase tracking-wider text-tertiary">
           <span>{tModal("chat.permission.individualEdits")}</span>
           <button
-            className="ml-auto text-2xs text-accent hover:text-accent-hover disabled:text-tertiary disabled:no-underline"
+            type="button"
+            className="focus-ring ml-auto rounded text-2xs text-accent hover:text-accent-hover disabled:text-tertiary disabled:no-underline"
             disabled={selectedHunks !== null && selectedHunks.size === hunks!.length}
             onClick={() => setSelectedHunks(new Set(hunks!.map((h) => h.index)))}
           >

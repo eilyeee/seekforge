@@ -151,6 +151,27 @@ test("settings hooks are appended after project hooks", () => {
   cleanup();
 });
 
+test("non-default-stage hooks (sessionStart) survive alongside preToolUse in the same layer", () => {
+  // Regression: loadConfig previously merged only 3 stages, so a sessionStart
+  // (or userPromptSubmit) hook was dropped whenever a preToolUse hook existed
+  // in any layer. Security-relevant: userPromptSubmit can block/inject context.
+  const { projectPath, cleanup } = setupProject({
+    hooks: {
+      preToolUse: [{ command: "echo pre" }],
+      sessionStart: [{ command: "echo session-start" }],
+      userPromptSubmit: [{ command: "echo prompt-submit" }],
+    },
+  });
+  const config = loadConfig(projectPath);
+  assert.ok(config.hooks);
+  // The preToolUse hook is preserved...
+  assert.deepEqual(config.hooks.preToolUse, [{ command: "echo pre" }]);
+  // ...and so is sessionStart (would be dropped under the old 3-stage list).
+  assert.deepEqual(config.hooks.sessionStart, [{ command: "echo session-start" }]);
+  assert.deepEqual(config.hooks.userPromptSubmit, [{ command: "echo prompt-submit" }]);
+  cleanup();
+});
+
 // ── Error handling ───────────────────────────────────────────────────────────
 
 test("missing settings file throws a descriptive error", () => {

@@ -3,19 +3,45 @@
 @tailwind utilities;
 
 /*
- * SeekForge theme — deep cool-zinc dark with a single "whale blue" accent.
- * Values are space-separated RGB so Tailwind alpha modifiers work
- * (see tailwind.config.js for the semantic token names).
+ * SeekForge theme — Codex-inspired light surfaces with a single blue accent.
+ * Light is now the default palette (`:root`); dark is opt-in via
+ * <html data-theme="dark">. Values are space-separated RGB so Tailwind alpha
+ * modifiers work (see tailwind.config.js for the semantic token names).
+ *
+ * Palette reference: bg #f8fafc/#ffffff, text #111827/#6b7280/#94a3b8,
+ * borders #e5e7eb/#cbd5e1, accent blue #2563eb/#3b82f6.
  */
 @layer base {
   :root {
+    --sf-surface: 248 250 252; /* #f8fafc app background (slate-50) */
+    --sf-surface-raised: 255 255 255; /* #ffffff cards, sidebar */
+    --sf-surface-overlay: 241 245 249; /* #f1f5f9 hover, popovers (slate-100) */
+    --sf-border-subtle: 229 231 235; /* #e5e7eb (gray-200) */
+    --sf-border-strong: 203 213 225; /* #cbd5e1 (slate-300) */
+    --sf-accent: 37 99 235; /* #2563eb (blue-600) */
+    --sf-accent-hover: 29 78 216; /* #1d4ed8 (blue-700) */
+    --sf-accent-muted: 239 246 255; /* #eff6ff tinted background (blue-50) */
+    --sf-text-primary: 17 24 39; /* #111827 (gray-900) */
+    --sf-text-secondary: 107 114 128; /* #6b7280 (gray-500) */
+    --sf-text-tertiary: 148 163 184; /* #94a3b8 (slate-400) */
+    --sf-ok: 5 150 105; /* emerald-600 */
+    --sf-warn: 217 119 6; /* amber-600 */
+    --sf-danger: 220 38 38; /* red-600 */
+  }
+
+  /*
+   * Dark theme — deep cool-zinc surfaces with the blue accent lightened so it
+   * stays legible on near-black. Applied via <html data-theme="dark">
+   * (ThemeSwitcher; "system" resolves to this when prefers-color-scheme: dark).
+   */
+  :root[data-theme="dark"] {
     --sf-surface: 14 15 18; /* #0e0f12 app background */
     --sf-surface-raised: 22 23 28; /* #16171c cards, sidebar */
     --sf-surface-overlay: 30 31 38; /* #1e1f26 hover, popovers */
     --sf-border-subtle: 39 40 48; /* #272830 */
     --sf-border-strong: 56 58 68; /* #383a44 */
-    --sf-accent: 80 150 255; /* #5096ff whale blue */
-    --sf-accent-hover: 110 169 255; /* #6ea9ff */
+    --sf-accent: 59 130 246; /* #3b82f6 (blue-500, brighter on dark) */
+    --sf-accent-hover: 96 165 250; /* #60a5fa (blue-400) */
     --sf-accent-muted: 30 45 72; /* #1e2d48 tinted background */
     --sf-text-primary: 235 236 240; /* #ebecf0 */
     --sf-text-secondary: 160 162 172; /* #a0a2ac */
@@ -23,29 +49,6 @@
     --sf-ok: 52 211 153; /* emerald-400 */
     --sf-warn: 251 191 36; /* amber-400 */
     --sf-danger: 248 113 113; /* red-400 */
-  }
-
-  /*
-   * Light theme — same semantic tokens, warm-neutral paper surfaces with the
-   * whale blue darkened so it stays legible as text/accent on white. Applied
-   * via <html data-theme="light"> (ThemeSwitcher; "system" resolves to this
-   * when prefers-color-scheme: light).
-   */
-  :root[data-theme="light"] {
-    --sf-surface: 250 250 251; /* #fafafb app background */
-    --sf-surface-raised: 255 255 255; /* #ffffff cards, sidebar */
-    --sf-surface-overlay: 240 241 244; /* #f0f1f4 hover, popovers */
-    --sf-border-subtle: 226 228 233; /* #e2e4e9 */
-    --sf-border-strong: 200 203 211; /* #c8cbd3 */
-    --sf-accent: 40 110 230; /* #286ee6 whale blue (darker for white bg) */
-    --sf-accent-hover: 30 92 200; /* #1e5cc8 */
-    --sf-accent-muted: 220 232 252; /* #dce8fc tinted background */
-    --sf-text-primary: 24 26 32; /* #181a20 */
-    --sf-text-secondary: 82 86 96; /* #525660 */
-    --sf-text-tertiary: 130 134 144; /* #828690 */
-    --sf-ok: 5 150 105; /* emerald-600 */
-    --sf-warn: 217 119 6; /* amber-600 */
-    --sf-danger: 220 38 38; /* red-600 */
   }
 
   html,
@@ -79,5 +82,30 @@
   /* Shared keyboard-focus treatment; put on any interactive element. */
   .focus-ring {
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface;
+  }
+
+  /*
+   * Home-page responsive grids keyed to the *content* width, not the viewport:
+   * the chat content area shrinks when the sidebar (220px) and todos panel
+   * (288px) are open, so viewport breakpoints would keep multi-column layouts
+   * at unreadable widths. Container queries collapse them to one column first.
+   */
+  .sf-cq {
+    container-type: inline-size;
+  }
+  .sf-home-grid-2,
+  .sf-home-grid-3 {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @container (min-width: 460px) {
+    .sf-home-grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @container (min-width: 560px) {
+    .sf-home-grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 }

@@ -49,18 +49,26 @@ export function ToolRow({ item }: { item: ToolItem }) {
   const diff = item.result?.ok ? extractDiff(item.result.data) : null;
 
   return (
-    <div className="py-0.5">
+    <div className="rounded-xl border border-subtle bg-surface-raised px-3 py-2">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="focus-ring group flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay/60"
+        className="focus-ring group flex w-full items-center gap-2 rounded-lg text-left font-mono text-xs"
       >
         <StatusDot status={item.status} />
-        <span className="text-primary">{item.name}</span>
+        <span className="truncate text-primary">{item.name}</span>
         {item.status === "error" && item.result?.error && (
-          <span className="truncate text-danger/80">{item.result.error.message}</span>
+          // Wrap (don't hard-truncate) when expanded so the full error is
+          // readable on touchpad/no-hover; collapsed it stays a single line.
+          <span className={`text-danger/80 ${open ? "min-w-0 break-words" : "truncate"}`}>
+            {item.result.error.message}
+          </span>
         )}
-        <span className="ml-auto text-tertiary opacity-0 transition-opacity group-hover:opacity-100">
+        <span
+          className={`ml-auto shrink-0 text-tertiary transition-opacity ${
+            item.status === "error" ? "opacity-100" : "opacity-60 group-hover:opacity-100"
+          }`}
+        >
           <IconChevron size={14} className={open ? "rotate-90" : ""} />
         </span>
       </button>

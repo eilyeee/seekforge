@@ -73,10 +73,19 @@ export const commands = {
     "cmd.memory.compactedLabel": "compacted",
     "cmd.memory.duplicatesHeader": "Exact duplicates removed ({count}):",
     "cmd.memory.mergedHeader": "Near-duplicates merged ({count}):",
+    "cmd.memory.archivedHeader": "Unused facts archived ({count}):",
     "cmd.memory.mergedKeep": "  keep: {line}",
     "cmd.memory.mergedDrop": "  drop: {line}",
     "cmd.memory.nothingToCompact": "Nothing to compact.",
     "cmd.memory.dryRunNote": "(dry run \u2014 project.md unchanged)",
+    "cmd.memory.statsHeader": "Memory extraction stats:",
+    "cmd.memory.statsApproved":
+      "  approved facts: {total} ({auto} auto-extracted, {direct} direct-added)",
+    "cmd.memory.statsUsed": "  used fraction (precision proxy): {percent}%",
+    "cmd.memory.statsRejection": "  candidate rejection rate: {percent}%",
+    "cmd.memory.statsCandidates": "  candidates: {pending} pending, {approved} approved, {rejected} rejected",
+    "cmd.memory.statsConfidence": "  avg confidence \u2014 used: {used} / unused: {unused}",
+    "cmd.memory.statsNa": "n/a",
 
     // ── cmd.agent.* ─────────────────────────────────────────────────────
     "cmd.agent.none": "No agents available. Import one with `seekforge agent import <path>`.",
@@ -234,10 +243,19 @@ export const commands = {
     "cmd.memory.compactedLabel": "已压缩",
     "cmd.memory.duplicatesHeader": "已移除的完全重复项（{count}）：",
     "cmd.memory.mergedHeader": "已合并的近似重复项（{count}）：",
+    "cmd.memory.archivedHeader": "已归档的未使用事实（{count}）：",
     "cmd.memory.mergedKeep": "  保留：{line}",
     "cmd.memory.mergedDrop": "  丢弃：{line}",
     "cmd.memory.nothingToCompact": "没有需要压缩的内容。",
     "cmd.memory.dryRunNote": "（试运行 — project.md 未更改）",
+    "cmd.memory.statsHeader": "记忆提取统计：",
+    "cmd.memory.statsApproved":
+      "  已批准事实：{total} 条（{auto} 条自动提取，{direct} 条手动添加）",
+    "cmd.memory.statsUsed": "  使用占比（精确度代理）：{percent}%",
+    "cmd.memory.statsRejection": "  候选拒绝率：{percent}%",
+    "cmd.memory.statsCandidates": "  候选：{pending} 待定，{approved} 已批准，{rejected} 已拒绝",
+    "cmd.memory.statsConfidence": "  平均置信度 — 已使用：{used} / 未使用：{unused}",
+    "cmd.memory.statsNa": "暂无",
 
     // ── cmd.agent.* ─────────────────────────────────────────────────────
     "cmd.agent.none": "没有可用代理。使用 `seekforge agent import <path>` 导入一个。",

@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
 type QuestionPanelProps = {
@@ -18,7 +19,7 @@ export function QuestionPanel({ question, options, index }: QuestionPanelProps):
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginY={1}>
       <Text color="magenta" bold>
-        Question from the agent
+        {t("question.title")}
       </Text>
       <Text>{question}</Text>
       {options.map((option, i) => {
@@ -30,7 +31,11 @@ export function QuestionPanel({ question, options, index }: QuestionPanelProps):
           </Text>
         );
       })}
-      <Text dimColor>↑↓ or 1-{options.length} select · Enter answer · Esc declines</Text>
+      <Text dimColor>
+        {t("question.footerPrefix")}
+        {options.length}
+        {t("question.footerSuffix")}
+      </Text>
     </Box>
   );
 }

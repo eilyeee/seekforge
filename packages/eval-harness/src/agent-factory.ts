@@ -36,6 +36,16 @@ export function createDefaultAgentFactory(
       ...(options.contextWindowTokens !== undefined
         ? { contextWindowTokens: options.contextWindowTokens }
         : {}),
+      ...(options.escalateOnFailure ? { escalateOnFailure: true } : {}),
+      ...(options.injectMemory === false ? { injectMemory: false } : {}),
+      ...(options.planModel ? { planModel: options.planModel } : {}),
+      // Same key/endpoint, different model — needed for plan/escalation.
+      ...(options.planModel
+        ? {
+            providerForModel: (m: string) =>
+              createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model: m }),
+          }
+        : {}),
     });
     return { agent };
   };

@@ -13,7 +13,12 @@ import { t } from "../i18n.js";
 import { checkForUpdate } from "../version-check.js";
 
 export async function updateCommand(): Promise<void> {
-  const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
+  let version = "0.0.0";
+  try {
+    version = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
+  } catch {
+    // No package.json on the virtual FS in a bun --compile binary; keep fallback.
+  }
   const latest = await checkForUpdate(version);
   if (!latest) {
     console.log(t("status.upToDate", { version }));

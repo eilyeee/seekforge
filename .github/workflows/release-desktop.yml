@@ -129,6 +129,22 @@ jobs:
           security find-identity -v -p codesigning build.keychain
           rm -f certificate.p12
 
+      # The desktop bundle embeds the CLI as a self-contained sidecar (so a
+      # DMG-only user needs no system `seekforge`). It must exist BEFORE the
+      # Tauri build, since tauri.conf.json references it via `externalBin`. Built
+      # for THIS matrix arch (host == matrix.target on the native macOS runners).
+      - name: Setup bun (for the CLI sidecar)
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build the CLI sidecar (externalBin)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/src-tauri/binaries
+          bun build --compile apps/cli/src/index.ts \
+            --outfile "apps/desktop/src-tauri/binaries/seekforge-server-${{ matrix.target }}"
+          test -f "apps/desktop/src-tauri/binaries/seekforge-server-${{ matrix.target }}"
+
       - name: Build, sign, and publish desktop release
         uses: tauri-apps/tauri-action@v0
         env:

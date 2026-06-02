@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 import { listWindow } from "./Palette.js";
 
@@ -21,7 +22,7 @@ export function ListOverlay({ title, lines, index, footer }: ListOverlayProps): 
       <Text color={ACCENT} bold>
         {title}
       </Text>
-      {lines.length === 0 ? <Text dimColor>nothing to show</Text> : null}
+      {lines.length === 0 ? <Text dimColor>{t("picker.emptyList")}</Text> : null}
       {lines.slice(start, end).map((line, i) => {
         const absolute = start + i;
         const selected = absolute === index;
@@ -32,7 +33,7 @@ export function ListOverlay({ title, lines, index, footer }: ListOverlayProps): 
           </Text>
         );
       })}
-      <Text dimColor>{footer ?? "↑↓ select · Enter accept · Esc dismiss"}</Text>
+      <Text dimColor>{footer ?? t("picker.list")}</Text>
     </Box>
   );
 }

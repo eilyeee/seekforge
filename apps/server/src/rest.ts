@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import { promisify } from "node:util";
 import {
+  addMemoryFact,
   applyProposal,
   approveMemoryCandidate,
   createDefaultDispatcher,
@@ -17,19 +18,24 @@ import {
   listMcpPrompts,
   listMcpResources,
   listMemoryCandidates,
+  listProjectFacts,
   listSessions,
   loadAgentDefinitions,
   loadSessionMessages,
   loadSkills,
   readCheckpoints,
+  readFactMeta,
   readProjectMemory,
   readSessionMeta,
   rejectMemoryCandidate,
+  removeProjectFact,
   rewindSession,
   rewindSessionToTurn,
   setEvolutionProposalStatus,
   truncateSessionAtUserTurn,
+  MEMORY_CANDIDATE_TYPES,
   type McpClientEntry,
+  type MemoryCandidateType,
   DEFAULT_MODEL,
   DEPRECATED_MODELS,
   MODEL_PRICING,
@@ -59,6 +65,39 @@ export function sendApiError(res: ServerResponse, status: number, code: string, 
 /** Rejects ids that could escape .seekforge/sessions/<id>/. */
 function isSafeId(id: string): boolean {
   return id.length > 0 && !/[/\\]/.test(id) && !id.includes("..");
+}
+
+export type ApprovedFact = {
+  index: number;
+  type: string | null;
+  content: string;
+  addedAt?: string;
+  uses: number;
+  lastUsedAt?: string;
+};
+
+/**
+ * Approved project-memory facts joined with their lifecycle metadata.
+ * Each fact bullet is `- [type] content`; fact-meta is keyed by the bullet
+ * body (`[type] content`, i.e. the line without the leading `- `).
+ */
+function buildApprovedFacts(workspace: string): ApprovedFact[] {
+  const meta = readFactMeta(workspace);
+  return listProjectFacts(workspace).map(({ index, line }) => {
+    const body = line.replace(/^-\s*/, "").trim();
+    const match = /^\[([^\]]+)\]\s*(.*)$/.exec(body);
+    const type = match ? match[1]! : null;
+    const content = match ? match[2]! : body;
+    const m = meta[body];
+    return {
+      index,
+      type,
+      content,
+      addedAt: m?.addedAt,
+      uses: m?.uses ?? 0,
+      lastUsedAt: m?.lastUsedAt,
+    };
+  });
 }
 
 // One readonly dispatcher instance for GET /api/project.
@@ -363,7 +402,80 @@ export async function handleApi(
       return sendJson(res, 200, {
         projectMd: readProjectMemory(workspace) ?? null,
         candidates: listMemoryCandidates(workspace),
+        facts: buildApprovedFacts(workspace),
       });
+    }
+
+    // Add an approved fact directly to project memory (CLI `memory add` parity).
+    if (method === "POST" && path === "/api/memory/fact") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { content, type, pending } = (body ?? {}) as {
+        content?: unknown;
+        type?: unknown;
+        pending?: unknown;
+      };
+      if (typeof content !== "string" || content.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "content must be a non-empty string");
+      }
+      if (type !== undefined && !MEMORY_CANDIDATE_TYPES.includes(type as MemoryCandidateType)) {
+        return sendApiError(
+          res,
+          400,
+          "bad_request",
+          `type must be one of: ${MEMORY_CANDIDATE_TYPES.join(", ")}`,
+        );
+      }
+      if (pending !== undefined && typeof pending !== "boolean") {
+        return sendApiError(res, 400, "bad_request", "pending must be a boolean");
+      }
+      try {
+        const created = addMemoryFact(workspace, {
+          content,
+          ...(type !== undefined ? { type: type as MemoryCandidateType } : {}),
+          // `pending: true` queues the fact instead of writing it to project.md.
+          approve: pending === true ? false : true,
+        });
+        return sendJson(res, 201, created);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return sendApiError(res, 400, "bad_request", message);
+      }
+    }
+
+    // Remove an approved fact from project memory, by index or by match.
+    if (method === "DELETE" && path === "/api/memory/fact") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { index, match } = (body ?? {}) as { index?: unknown; match?: unknown };
+      const hasIndex = typeof index === "number" && Number.isInteger(index);
+      const hasMatch = typeof match === "string" && match.trim() !== "";
+      if (hasIndex === hasMatch) {
+        return sendApiError(
+          res,
+          400,
+          "bad_request",
+          "provide exactly one of: index (integer) or match (non-empty string)",
+        );
+      }
+      try {
+        const removed = hasIndex
+          ? removeProjectFact(workspace, { index: index as number })
+          : removeProjectFact(workspace, { match: match as string });
+        return sendJson(res, 200, { removed });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // No-such-fact / ambiguous-match are client errors, not 500s.
+        return sendApiError(res, 400, "bad_request", message);
+      }
     }
 
     if (

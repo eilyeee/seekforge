@@ -7,6 +7,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { EditorState } from "../editor.js";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
 type MultilineComposerProps = {
@@ -45,7 +46,7 @@ export function MultilineComposer({
         <Text color={ACCENT} bold>
           ❯{" "}
         </Text>
-        <Text dimColor>answer the permission prompt above (y · a · any other key denies)</Text>
+        <Text dimColor>{t("composer.permissionWait")}</Text>
       </Box>
     );
   }

@@ -91,6 +91,82 @@ describe("rules-file hierarchy", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Path-scoped subdir AGENTS.md cascade.
+// ---------------------------------------------------------------------------
+
+describe("path-scoped subdir AGENTS.md", () => {
+  let home: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "seekforge-home-"));
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-subrules-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const writeSubdir = (relDir: string, content: string): void => {
+    mkdirSync(join(workspace, relDir), { recursive: true });
+    writeFileSync(join(workspace, relDir, "AGENTS.md"), content);
+  };
+
+  it("includes a subdir AGENTS.md when the task names a path under it", () => {
+    writeSubdir("packages/api", "SUBDIR-API-RULE: api conventions");
+    const merged = collectProjectRules(workspace, home, "fix the bug in packages/api/src/handler.ts");
+    expect(merged).toContain("SUBDIR-API-RULE: api conventions");
+    expect(merged).toContain("<!-- from: packages/api/AGENTS.md -->");
+  });
+
+  it("excludes a subdir AGENTS.md when the task does not reference it", () => {
+    writeSubdir("packages/api", "SUBDIR-API-RULE: api conventions");
+    const merged = collectProjectRules(workspace, home, "update packages/web/src/app.ts");
+    expect(merged ?? "").not.toContain("SUBDIR-API-RULE");
+  });
+
+  it("excludes all subdir rules when the task has no path tokens", () => {
+    writeSubdir("packages/api", "SUBDIR-API-RULE: api conventions");
+    const merged = collectProjectRules(workspace, home, "make the code faster");
+    expect(merged ?? "").not.toContain("SUBDIR-API-RULE");
+  });
+
+  it("excludes subdir rules when no task is passed (back-compat)", () => {
+    writeSubdir("packages/api", "SUBDIR-API-RULE: api conventions");
+    writeFileSync(join(workspace, "AGENTS.md"), "root rules");
+    const merged = collectProjectRules(workspace, home);
+    expect(merged).toContain("root rules");
+    expect(merged ?? "").not.toContain("SUBDIR-API-RULE");
+  });
+
+  it("keeps global/project/local merging unchanged alongside a matched subdir", () => {
+    mkdirSync(join(home, ".seekforge"), { recursive: true });
+    writeFileSync(join(home, ".seekforge", "AGENTS.md"), "be terse");
+    writeFileSync(join(workspace, "AGENTS.md"), "use pnpm");
+    writeFileSync(join(workspace, "AGENTS.local.md"), "personal");
+    writeSubdir("packages/api", "api rules");
+
+    const merged = collectProjectRules(workspace, home, "edit packages/api/index.ts")!;
+    // Global → project → local appear first and in order; subdir is appended last.
+    expect(merged.indexOf("be terse")).toBeLessThan(merged.indexOf("use pnpm"));
+    expect(merged.indexOf("use pnpm")).toBeLessThan(merged.indexOf("personal"));
+    expect(merged.indexOf("personal")).toBeLessThan(merged.indexOf("api rules"));
+  });
+
+  it("does not scan into node_modules", () => {
+    // A planted AGENTS.md under node_modules must never be included, even when
+    // the task path token would otherwise match.
+    writeSubdir("node_modules/some-pkg", "NODE-MODULES-RULE: should never load");
+    const merged = collectProjectRules(
+      workspace,
+      home,
+      "look at node_modules/some-pkg/index.js",
+    );
+    expect(merged ?? "").not.toContain("NODE-MODULES-RULE");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Loop integration: global + local rules content reaches the system prompt.
 // ---------------------------------------------------------------------------
 

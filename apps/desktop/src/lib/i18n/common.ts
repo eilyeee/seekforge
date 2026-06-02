@@ -15,6 +15,9 @@ export const common = {
     "status.connected": "connected",
     "status.connecting": "connecting",
     "status.disconnected": "disconnected",
+    // Global server-unreachable recovery banner
+    "boot.unreachable": "Can't reach the SeekForge server. Actions will fail until it's back.",
+    "boot.retry": "Retry",
     "todos.title": "cross-session todo list (.seekforge/todos.md)",
     // Common actions
     "action.save": "Save",
@@ -40,6 +43,8 @@ export const common = {
     "todos.empty": "No todos yet.",
     "todos.removeTitle": "remove this todo",
     "todos.addPlaceholder": "Add a todo… (Enter)",
+    "todos.active": "In progress",
+    "todos.done": "Completed",
     // Theme switcher
     "theme.dark": "Dark",
     "theme.light": "Light",
@@ -61,6 +66,9 @@ export const common = {
     "status.connected": "已连接",
     "status.connecting": "连接中",
     "status.disconnected": "未连接",
+    // Global server-unreachable recovery banner
+    "boot.unreachable": "无法连接到 SeekForge 服务器。在恢复之前，操作将会失败。",
+    "boot.retry": "重试",
     "todos.title": "跨会话待办清单（.seekforge/todos.md）",
     "action.save": "保存",
     "action.cancel": "取消",
@@ -84,6 +92,8 @@ export const common = {
     "todos.empty": "暂无待办",
     "todos.removeTitle": "删除此待办",
     "todos.addPlaceholder": "添加待办…（回车）",
+    "todos.active": "进行中",
+    "todos.done": "已完成",
     // Theme switcher
     "theme.dark": "深色",
     "theme.light": "浅色",

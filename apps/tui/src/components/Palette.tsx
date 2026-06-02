@@ -7,6 +7,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { CommandSpec } from "../commands.js";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
 const MAX_VISIBLE = 8;
@@ -30,7 +31,7 @@ export function Palette({
   return (
     <Box borderStyle="round" borderColor={ACCENT} paddingX={1} flexDirection="column">
       {visible.length === 0 ? (
-        <Text dimColor>no matching commands</Text>
+        <Text dimColor>{t("picker.emptyCommands")}</Text>
       ) : (
         visible.map((cmd, i) => {
           const selected = start + i === index;
@@ -44,7 +45,7 @@ export function Palette({
           );
         })
       )}
-      <Text dimColor>↑↓ select · Tab/Enter complete · Esc dismiss</Text>
+      <Text dimColor>{t("picker.palette")}</Text>
     </Box>
   );
 }

@@ -6,6 +6,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
+import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 import { listWindow } from "./Palette.js";
 
@@ -27,7 +28,7 @@ export function FilePicker({
     <Box borderStyle="round" borderColor={ACCENT} paddingX={1} flexDirection="column">
       <Text dimColor>@{query}</Text>
       {visible.length === 0 ? (
-        <Text dimColor>no matching files</Text>
+        <Text dimColor>{t("picker.emptyFiles")}</Text>
       ) : (
         visible.map((file, i) => {
           const selected = start + i === index;
@@ -39,7 +40,7 @@ export function FilePicker({
           );
         })
       )}
-      <Text dimColor>↑↓ select · Tab/Enter complete · Esc dismiss</Text>
+      <Text dimColor>{t("picker.palette")}</Text>
     </Box>
   );
 }

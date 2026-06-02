@@ -6,6 +6,7 @@ import type {
   McpServer,
   McpTool,
   MemoryCandidate,
+  MemoryFact,
   ModelInfo,
   RewindResult,
   ServerConfig,
@@ -211,6 +212,32 @@ export const mockProjectMd = `# Project memory
 - \`pnpm test\` runs the vitest suite
 - \`pnpm typecheck\` runs tsc across the workspace
 `;
+
+export const mockFacts: MemoryFact[] = [
+  {
+    index: 1,
+    type: "convention",
+    content: "TypeScript strict, NodeNext modules — relative imports need .js",
+    addedAt: "2026-05-20T10:00:00.000Z",
+    uses: 14,
+    lastUsedAt: "2026-06-14T08:00:00.000Z",
+  },
+  {
+    index: 2,
+    type: "command",
+    content: "`pnpm test` runs the vitest suite",
+    addedAt: "2026-06-12T09:00:00.000Z",
+    uses: 3,
+    lastUsedAt: "2026-06-15T11:00:00.000Z",
+  },
+  {
+    index: 3,
+    type: "tech",
+    content: "Server is a plain node http server, no framework",
+    addedAt: "2026-03-01T09:00:00.000Z",
+    uses: 0,
+  },
+];
 
 export const mockCandidates: MemoryCandidate[] = [
   {

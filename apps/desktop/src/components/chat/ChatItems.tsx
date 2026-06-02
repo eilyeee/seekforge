@@ -111,13 +111,13 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const open = manualOpen ?? item.streaming;
   return (
-    <div className="rounded border border-subtle bg-surface/40">
+    <div className="rounded-xl border border-subtle bg-surface-raised">
       <button
         type="button"
         onClick={() => setManualOpen(!open)}
-        className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-tertiary hover:text-secondary"
+        className="focus-ring flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-tertiary hover:text-secondary"
       >
-        <IconSparkle size={14} className={item.streaming ? "animate-pulse" : ""} />
+        <IconSparkle size={14} className={item.streaming ? "animate-pulse text-accent" : ""} />
         <span className="italic">{item.streaming ? t("chat.thinking.streaming") : t("chat.thinking")}</span>
         <span className="ml-auto text-tertiary">
           <IconChevron size={14} className={open ? "rotate-90" : ""} />
@@ -143,19 +143,19 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
               type="button"
               onClick={() => onBacktrack(item.id)}
               title={t("chat.rewindTitle")}
-              className="mt-1 rounded border border-strong px-1.5 py-0.5 text-xs text-tertiary opacity-0 hover:bg-surface-overlay hover:text-primary group-hover:opacity-100"
+              className="focus-ring mt-1 rounded-lg border border-subtle px-1.5 py-0.5 text-xs text-tertiary opacity-0 hover:bg-surface-overlay hover:text-primary group-hover:opacity-100"
             >
               ↺
             </button>
           )}
-          <div className="max-w-[85%] whitespace-pre-wrap rounded-lg border border-accent/40 bg-accent-muted px-3 py-2 text-primary">
+          <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-accent px-4 py-2.5 text-white shadow-sm">
             <TextWithImages text={item.text} />
           </div>
         </div>
       );
     case "assistant":
       return (
-        <div className="max-w-[95%]">
+        <div className="max-w-[95%] leading-relaxed text-primary">
           <Markdown source={item.text} />
           {item.streaming && <span className="ml-0.5 animate-pulse text-accent">▌</span>}
         </div>
@@ -168,9 +168,9 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       return <PlanCard items={item.items} />;
     case "substep":
       return (
-        <div className="rounded border border-subtle bg-surface/40 px-3 py-1.5 text-xs">
+        <div className="rounded-xl border border-subtle bg-surface-raised px-3 py-2 text-xs">
           <span className="font-mono font-semibold text-secondary">
-            <IconCornerDownRight size={14} className="inline-block align-middle" /> {item.agentId}
+            <IconCornerDownRight size={14} className="inline-block align-middle text-tertiary" /> {item.agentId}
           </span>
           <span className="ml-2 font-mono text-tertiary">{item.steps.join(" · ")}</span>
         </div>
@@ -180,36 +180,39 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       if (isImage) return <ImageFileChip path={item.path} />;
       return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-subtle bg-surface-overlay px-2.5 py-0.5 font-mono text-xs text-secondary">
-          <span aria-hidden>±</span>
+          <span aria-hidden className="text-tertiary">±</span>
           <span>{item.path}</span>
         </div>
       );
     }
     case "compacted":
       return (
-        <div className="rounded border border-dashed border-strong px-3 py-1.5 text-center text-xs text-tertiary">
+        <div className="rounded-xl border border-dashed border-strong px-3 py-2 text-center text-xs text-tertiary">
           {t("chat.contextCompacted", { droppedTurns: item.droppedTurns, summaryTokens: item.summaryTokens })}
         </div>
       );
     case "microcompacted":
       return (
-        <div className="rounded border border-dashed border-subtle px-3 py-1 text-center text-xs text-tertiary">
+        <div className="rounded-xl border border-dashed border-subtle px-3 py-1.5 text-center text-xs text-tertiary">
           {t("chat.microCompacted", { clearedResults: item.clearedResults })}
         </div>
       );
     case "report":
       return (
-        <div className="rounded border border-ok/40 bg-ok/10 px-3 py-2 text-xs text-secondary">
-          <span className="font-semibold text-ok">{t("chat.sessionCompleted")}</span>
-          {item.report.changedFiles.length > 0 && (
-            <span> · {t("chat.filesChanged", { n: item.report.changedFiles.length })}</span>
-          )}
-          <span>
-            {" "}
-            · {formatTokens(item.report.usage.promptTokens + item.report.usage.completionTokens)} {t("chat.tokens")} ·{" "}
-            {formatUsd(item.report.usage.costUsd)}
-          </span>
-          <div className="mt-1 font-mono text-tertiary">{item.report.verification}</div>
+        <div className="rounded-xl border border-ok/40 bg-ok/10 px-4 py-3 text-xs text-secondary">
+          <div className="flex items-center gap-1.5">
+            <span aria-hidden className="text-ok">⏺</span>
+            <span className="font-semibold text-ok">{t("chat.sessionCompleted")}</span>
+            {item.report.changedFiles.length > 0 && (
+              <span className="text-tertiary"> · {t("chat.filesChanged", { n: item.report.changedFiles.length })}</span>
+            )}
+            <span className="text-tertiary">
+              {" "}
+              · {formatTokens(item.report.usage.promptTokens + item.report.usage.completionTokens)} {t("chat.tokens")} ·{" "}
+              {formatUsd(item.report.usage.costUsd)}
+            </span>
+          </div>
+          <div className="mt-1.5 font-mono text-tertiary">{item.report.verification}</div>
         </div>
       );
     case "failed": {
@@ -217,7 +220,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       // command; the loop sets recoverable + sessionId on the error.
       const resumeId = item.error.recoverable ? item.error.sessionId : undefined;
       return (
-        <div className="rounded border border-danger/50 bg-danger/10 px-3 py-2 text-sm">
+        <div className="rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-sm">
           <span className="font-mono text-xs text-danger">[{item.error.code}]</span>{" "}
           <span className="text-danger">{item.error.message}</span>
           {item.error.hint && <div className="mt-1 text-xs text-danger/80">→ {item.error.hint}</div>}
@@ -246,7 +249,7 @@ export function ChatItems({
 }) {
   const firstUserId = items.find((i) => i.kind === "user")?.id;
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {items.map((item) => (
         <ItemView
           key={item.id}

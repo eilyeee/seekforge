@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
 import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
+import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
@@ -11,7 +12,7 @@ import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Button, EmptyState } from "../components/ui";
+import { Button } from "../components/ui";
 import type { AccountBalance, ServerConfig } from "../types";
 
 const MODES: { mode: StartMode; key: string; hintKey: string }[] = [
@@ -223,7 +224,7 @@ export function ChatView() {
         workspaceName={workspaceName}
       />
 
-      <header className="flex flex-wrap items-center gap-3 border-b border-subtle px-4 py-2">
+      <header className="flex flex-wrap items-center gap-2.5 border-b border-subtle px-4 py-2.5">
         <h1 className="text-sm font-semibold text-primary">{t("chat.title")}</h1>
         {tab.chat.sessionId && (
           <span className="rounded bg-surface-overlay px-2 py-0.5 font-mono text-2xs text-secondary">
@@ -237,7 +238,7 @@ export function ChatView() {
           </span>
         )}
 
-        <div className="flex items-center rounded border border-strong" title={t("chat.modeTitle")}>
+        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
           {MODES.map(({ mode, key, hintKey }) => (
             <button
               key={mode}
@@ -245,8 +246,8 @@ export function ChatView() {
               disabled={!modeSelectable}
               title={t(hintKey)}
               onClick={() => setMode(mode)}
-              className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
-                tab.mode === mode ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay"
+              className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
               }`}
             >
               {t(key)}
@@ -254,7 +255,7 @@ export function ChatView() {
           ))}
         </div>
 
-        <div className="flex items-center rounded border border-strong" title={t("chat.approvalTitle")}>
+        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.approvalTitle")}>
           {APPROVALS.map(({ value, key, hintKey }) => {
             const active = tab.approvalMode === value;
             const activeClass =
@@ -262,7 +263,7 @@ export function ChatView() {
                 ? "bg-warn/15 text-warn"
                 : value === "acceptEdits"
                   ? "bg-accent-muted text-accent-hover"
-                  : "bg-surface-overlay text-primary";
+                  : "bg-accent-muted text-accent";
             return (
               <button
                 key={value}
@@ -270,8 +271,8 @@ export function ChatView() {
                 disabled={!modeSelectable}
                 title={t(hintKey)}
                 onClick={() => setApprovalMode(value)}
-                className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
-                  active ? activeClass : "text-secondary hover:bg-surface-overlay"
+                className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  active ? activeClass : "text-secondary hover:bg-accent-muted/60"
                 }`}
               >
                 {t(key)}
@@ -294,7 +295,8 @@ export function ChatView() {
               onChange={(e) => setModel(e.target.value)}
               disabled={tab.chat.running}
               title={t("chat.modelTitle")}
-              className="w-44 rounded border border-strong bg-surface px-2 py-1 font-mono text-xs text-primary focus:border-accent/70 focus:outline-none disabled:opacity-50"
+              aria-label={t("chat.modelTitle")}
+              className="focus-ring w-44 min-w-0 max-w-full flex-shrink rounded-lg border border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-primary focus:border-accent/70 disabled:opacity-50"
             >
               {options.map((m) => (
                 <option key={m} value={m}>
@@ -306,10 +308,10 @@ export function ChatView() {
         })()}
 
         <label
-          className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${
+          className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
             (tab.thinking ?? config?.thinking ?? false)
               ? "border-accent/60 bg-accent-muted text-accent-hover"
-              : "border-strong text-secondary"
+              : "border-strong text-secondary hover:bg-accent-muted/60"
           }`}
           title={t("chat.think")}
         >
@@ -328,7 +330,8 @@ export function ChatView() {
             onChange={(e) => setReasoningEffort(e.target.value as "high" | "max")}
             disabled={tab.chat.running}
             title={t("chat.reasoningTitle")}
-            className="rounded border border-strong bg-surface px-1.5 py-1 text-xs text-secondary focus:border-accent/70 focus:outline-none disabled:opacity-50"
+            aria-label={t("chat.reasoningTitle")}
+            className="focus-ring rounded-lg border border-strong bg-surface px-2 py-1.5 text-xs text-secondary focus:border-accent/70 disabled:opacity-50"
           >
             <option value="high">{t("chat.reasoning.high")}</option>
             <option value="max">{t("chat.reasoning.max")}</option>
@@ -348,7 +351,7 @@ export function ChatView() {
           </span>
         )}
 
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
           {tab.planReady && !tab.chat.running && tab.chat.sessionId && (
             <Button size="sm" variant="primary" onClick={executePlan}>
               {t("chat.executePlan")}
@@ -379,16 +382,10 @@ export function ChatView() {
         className="flex-1 overflow-y-auto px-4 py-4"
       >
         {tab.chat.items.length === 0 ? (
-          <EmptyState
-            icon={<div className="font-mono text-2xl text-tertiary">&gt;_</div>}
-            title={t("chat.emptyTitle")}
-            description={
-              <>
-                {t("chat.emptyLine1")}
-                <br />
-                {t("chat.emptyLine2")}
-              </>
-            }
+          <HomeWelcome
+            onQuickAction={setDraft}
+            onNavigate={setView}
+            workspaceId={activeWorkspaceId}
           />
         ) : (
           <ChatItems
@@ -414,8 +411,13 @@ export function ChatView() {
 
       {tab.chat.retry && (
         <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 font-mono text-xs text-warn">
-          ⟳ retrying ({tab.chat.retry.attempt}/{tab.chat.retry.maxAttempts}) in{" "}
-          {(tab.chat.retry.delayMs / 1000).toFixed(1)}s — {tab.chat.retry.reason}
+          <span aria-hidden>⟳</span>{" "}
+          {t("chat.retryLabel", {
+            attempt: tab.chat.retry.attempt,
+            max: tab.chat.retry.maxAttempts,
+            delay: (tab.chat.retry.delayMs / 1000).toFixed(1),
+            reason: tab.chat.retry.reason,
+          })}
         </div>
       )}
 
@@ -433,6 +435,8 @@ export function ChatView() {
         placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
         commands={composerCommands}
         workspaceId={tab.ws ?? ""}
+        thinking={tab.thinking ?? config?.thinking ?? false}
+        onToggleThinking={() => setThinking(!(tab.thinking ?? config?.thinking ?? false))}
       />
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />

@@ -44,16 +44,16 @@ describe("resolveTheme", () => {
 });
 
 describe("dataThemeAttr", () => {
-  it("maps light -> 'light' and dark -> null (default :root)", () => {
-    expect(dataThemeAttr("light")).toBe("light");
-    expect(dataThemeAttr("dark")).toBeNull();
+  it("maps dark -> 'dark' and light -> null (default :root)", () => {
+    expect(dataThemeAttr("dark")).toBe("dark");
+    expect(dataThemeAttr("light")).toBeNull();
   });
 
   it("every resolved system outcome yields a valid attribute", () => {
     const choices: ThemeChoice[] = ["dark", "light", "system"];
     for (const c of choices) {
       const attr = dataThemeAttr(resolveTheme(c, true));
-      expect(attr === null || attr === "light").toBe(true);
+      expect(attr === null || attr === "dark").toBe(true);
     }
   });
 });

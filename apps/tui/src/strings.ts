@@ -44,6 +44,29 @@ const EN: Record<string, string> = {
   "picker.slash":
     "↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval",
   "picker.theme": "↑↓ select · Enter apply · Esc dismiss",
+  "picker.emptyCommands": "no matching commands",
+  "picker.emptyFiles": "no matching files",
+  "picker.emptyList": "nothing to show",
+  "picker.titleSessions": "Sessions",
+  "picker.titleBacktrack": "Backtrack — rewind the conversation to…",
+  "picker.titleModel": "Model",
+  "picker.titleTheme": "Theme",
+  "picker.titleCommands": "Commands",
+
+  // ── ask_user question overlay ─────────────────────────────────────────────
+  "question.title": "Question from the agent",
+  "question.footerPrefix": "↑↓ or 1-",
+  "question.footerSuffix": " select · Enter answer · Esc declines",
+
+  // ── Sidebar file tree (Ctrl+E) ────────────────────────────────────────────
+  "sidebar.title": "Files",
+  "sidebar.empty": "(empty)",
+  "sidebar.footer": "↑↓ · Enter insert @path · ←→ fold · Ctrl+E close",
+
+  // ── Transcript pager (Ctrl+L) ─────────────────────────────────────────────
+  "pager.title": "Transcript",
+  "pager.hint": "(q/Esc close · ↑↓/PgUp/PgDn/g/G scroll)",
+  "pager.empty": "(transcript is empty)",
 
   // ── Permission panel ────────────────────────────────────────────────────
   "permission.title": "Permission required",
@@ -52,6 +75,10 @@ const EN: Record<string, string> = {
   "permission.allowOnce": "y allow once",
   "permission.allowSession": "a allow similar commands this session",
   "permission.deny": "any other key deny",
+  "permission.reviewChange": "Review change:",
+  "permission.applyChange": "Apply this change? y accept · n reject",
+  "permission.hunk": "Hunk",
+  "permission.hunkFooter": "number key toggle hunk · a select all · y confirm · n deny",
 
   // ── Mode line under the composer ────────────────────────────────────────
   "mode.autoApprove": "⏵⏵ auto-approve on",
@@ -69,6 +96,7 @@ const EN: Record<string, string> = {
   // ── Composer placeholders (app-level; integrator adopts) ───────────────
   "composer.idle": "Ask SeekForge to do something…  (/ commands · @ files · # remember · ! shell)",
   "composer.running": "working… type to queue a follow-up · Esc cancels · ! runs shell",
+  "composer.permissionWait": "answer the permission prompt above (y · a · any other key denies)",
 
   // ── Rotating tips (render-helpers TIPS) ────────────────────────────────
   "tips.0": "Type @ to attach files to your message",
@@ -106,6 +134,26 @@ const ZH_CN: Record<string, string> = {
   "picker.history": "↑↓ 选择 · Tab 填入 · Enter 执行 · Esc 关闭",
   "picker.slash": "↑↓ 选择 · Enter 插入 · Esc 关闭 — @ 文件 · # 记忆 · ! shell · Shift+Tab 审批",
   "picker.theme": "↑↓ 选择 · Enter 应用 · Esc 关闭",
+  "picker.emptyCommands": "无匹配命令",
+  "picker.emptyFiles": "无匹配文件",
+  "picker.emptyList": "暂无内容",
+  "picker.titleSessions": "会话",
+  "picker.titleBacktrack": "回退 — 将对话回退到…",
+  "picker.titleModel": "模型",
+  "picker.titleTheme": "主题",
+  "picker.titleCommands": "命令",
+
+  "question.title": "来自代理的提问",
+  "question.footerPrefix": "↑↓ 或 1-",
+  "question.footerSuffix": " 选择 · Enter 回答 · Esc 拒绝",
+
+  "sidebar.title": "文件",
+  "sidebar.empty": "（空）",
+  "sidebar.footer": "↑↓ · Enter 插入 @path · ←→ 折叠 · Ctrl+E 关闭",
+
+  "pager.title": "记录",
+  "pager.hint": "(q/Esc 关闭 · ↑↓/PgUp/PgDn/g/G 滚动)",
+  "pager.empty": "（记录为空）",
 
   "permission.title": "需要授权",
   "permission.command": "命令:",
@@ -113,6 +161,10 @@ const ZH_CN: Record<string, string> = {
   "permission.allowOnce": "y 允许一次",
   "permission.allowSession": "a 本会话允许同类命令",
   "permission.deny": "其他键拒绝",
+  "permission.reviewChange": "审查变更:",
+  "permission.applyChange": "应用此变更? y 接受 · n 拒绝",
+  "permission.hunk": "代码块",
+  "permission.hunkFooter": "数字键切换代码块 · a 全选 · y 确认 · n 拒绝",
 
   "mode.autoApprove": "⏵⏵ 自动批准已开启",
   "mode.acceptEdits": "⏵ 自动接受编辑已开启",
@@ -128,6 +180,7 @@ const ZH_CN: Record<string, string> = {
 
   "composer.idle": "让 SeekForge 做点什么…  (/ 命令 · @ 文件 · # 记忆 · ! shell)",
   "composer.running": "处理中… 输入可排队后续消息 · Esc 取消 · ! 运行 shell",
+  "composer.permissionWait": "请回答上方的授权提示（y · a · 其他键拒绝）",
 
   "tips.0": "输入 @ 将文件附加到消息",
   "tips.1": "按 / 打开命令面板",

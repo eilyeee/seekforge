@@ -67,17 +67,33 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
   // Retry bus: routes provider retries into this run's provider.retry events,
   // forwarded to the client over the WS by the generic event forwarder.
   const retryBus = createRetryBus();
+  const thinkingOpts = {
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+  const provider = createDeepSeekProvider({
+    apiKey: config.apiKey ?? "",
+    baseUrl: config.baseUrl,
+    model,
+    onRetry: retryBus.onRetry,
+    ...thinkingOpts,
+  });
   const agent = createAgentCore({
-    provider: createDeepSeekProvider({
-      apiKey: config.apiKey ?? "",
-      baseUrl: config.baseUrl,
-      model,
-      onRetry: retryBus.onRetry,
-      // Thinking mode + effort passthrough (mirrors apps/tui agent factory).
-      ...(thinking !== undefined ? { thinking } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    }),
+    provider,
     retryBus,
+    // Same key/endpoint, different model — used for plan runs + failure
+    // escalation (mirrors the CLI agent factory). deepseek-reasoner cannot
+    // drive the tool-call loop, so fall back to the default model for it.
+    providerForModel: (m) => {
+      if (m === "deepseek-reasoner") return provider;
+      return createDeepSeekProvider({
+        apiKey: config.apiKey ?? "",
+        baseUrl: config.baseUrl,
+        model: m,
+        onRetry: retryBus.onRetry,
+        ...thinkingOpts,
+      });
+    },
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
@@ -86,8 +102,15 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
+    ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
+    ...(config.hooks ? { hooks: config.hooks } : {}),
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
     ...(config.compaction ? { compaction: config.compaction } : {}),
+    ...(config.planModel ? { planModel: config.planModel } : {}),
+    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+    ...(config.memoryAutoApproveConfidence !== undefined
+      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
+      : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

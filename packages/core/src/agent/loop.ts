@@ -20,7 +20,7 @@ import {
   type ToolContext,
   type ToolDispatcher,
 } from "../tools/index.js";
-import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
+import { buildMemoryBrief, extractMemoryFromSession, recordFactUse } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
   AGENT_RESULT_TOOL,
@@ -101,6 +101,12 @@ export type AgentCoreDeps = {
   onReasoningDelta?: (chunk: string) => void;
   /** Post-task memory extraction (one extra model call) for edit sessions. */
   extractMemory?: boolean;
+  /**
+   * Opt-in (default OFF): confidence threshold above which auto-extracted facts
+   * are written DIRECTLY to project.md as approved (instead of queued pending).
+   * Threaded into extractMemoryFromSession; unset = every fact stays pending.
+   */
+  memoryAutoApproveConfidence?: number;
   /** Rust execution backend; passed through to tools via ToolContext. */
   runtime?: RuntimeClient;
   /**
@@ -133,6 +139,20 @@ export type AgentCoreDeps = {
    * providerForModel is unset or input.plan is false.
    */
   planModel?: string;
+  /**
+   * Default-off failure escalation: after the model loops on an identical failed
+   * tool call, route the rest of the run through `planModel` (needs
+   * providerForModel + planModel set) — a stronger model takes over once it's
+   * clearly stuck. (autoReview/planFirst levers were removed: an eval A/B showed
+   * they regressed quality and cost on every edit — see CHANGELOG round 36.)
+   */
+  escalateOnFailure?: boolean;
+  /**
+   * Inject the task-relevant project-memory brief into the system prompt.
+   * Default true; set false to run without memory (used by the eval A/B that
+   * measures whether memory actually helps — see the `no-memory` variant).
+   */
+  injectMemory?: boolean;
   /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
@@ -176,6 +196,40 @@ function buildWrapupNudge(turnsLeft: number): string {
     "Stop exploring; finish the most important remaining edit and produce the final report now. " +
     "If work remains, list it under ## Notes as next steps."
   );
+}
+
+/** Turns to wait before another reflection nudge can fire (avoid nagging). */
+const REFLECTION_COOLDOWN_TURNS = 3;
+
+function buildReflectionNudge(): string {
+  return (
+    "[harness] You just repeated a tool call that already failed earlier with the same arguments — " +
+    "you are looping. Stop guessing: re-read the relevant code/output to understand WHY it fails, " +
+    "then take a different approach. Do not issue that identical call again."
+  );
+}
+
+/** Recursively sorts object keys so equal args produce an equal signature. */
+function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(
+      Object.keys(v as Record<string, unknown>)
+        .sort()
+        .map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]),
+    );
+  }
+  return v;
+}
+
+/** Order-independent canonical form of a tool call's arguments JSON. */
+function canonicalArgs(argumentsJson: string | undefined): string {
+  if (!argumentsJson) return "";
+  try {
+    return JSON.stringify(sortKeys(JSON.parse(argumentsJson)));
+  } catch {
+    return argumentsJson;
+  }
 }
 
 /**
@@ -236,10 +290,25 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
       // on v4-pro) while regular runs keep the default provider. Run-local —
       // resuming the session in execute mode goes back to deps.provider.
-      const provider =
+      // `let` so escalateOnFailure can swap in the stronger planModel provider
+      // mid-run once the model is clearly stuck (see the turn loop below).
+      let provider =
         input.plan === true && deps.planModel !== undefined
           ? (deps.providerForModel?.(deps.planModel) ?? deps.provider)
           : deps.provider;
+
+      // Task-relevant memory brief. Gated by deps.injectMemory (default on; the
+      // eval's `no-memory` variant flips it off to measure memory's value), and
+      // records fact usage when a brief is actually injected (P2 lifecycle).
+      // Resume is a replay: it still builds + injects the brief, but does NOT
+      // bump fact usage (recordFactUse writes fact-meta.json uses/lastUsedAt) —
+      // otherwise resuming would double-count usage and make resume non-idempotent.
+      const memoryFor = (taskText: string): string | undefined => {
+        if (deps.injectMemory === false) return undefined;
+        const brief = buildMemoryBrief(input.projectPath, taskText);
+        if (brief && !resuming) recordFactUse(input.projectPath, brief);
+        return brief;
+      };
 
       const startedAt = new Date().toISOString();
       const meta = {
@@ -299,8 +368,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   workspace: input.projectPath,
                   mode: input.mode,
                   plan: input.plan,
-                  projectRules: collectProjectRules(input.projectPath),
-                  memoryBrief: buildMemoryBrief(input.projectPath, input.task),
+                  projectRules: collectProjectRules(input.projectPath, undefined, input.task),
+                  memoryBrief: memoryFor(input.task),
                   subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
                 }),
                 input.appendSystemPrompt,
@@ -319,7 +388,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         ];
         for (const m of messages) trace.message(m);
       } else {
-        const memoryBrief = buildMemoryBrief(input.projectPath, input.task);
+        const memoryBrief = memoryFor(input.task);
         // Skills are task-execution procedures (e.g. test-failure-fix); they have
         // no place in read-only Q&A, where they're just noise. Plan runs still get
         // them (a plan benefits from the procedure).
@@ -341,7 +410,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             workspace: input.projectPath,
             mode: input.mode,
             plan: input.plan,
-            projectRules: collectProjectRules(input.projectPath),
+            projectRules: collectProjectRules(input.projectPath, undefined, input.task),
             memoryBrief,
             skillBrief: buildSkillBrief(skillSelections),
             subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
@@ -797,6 +866,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
 
         const wrapupInjected = new Set<number>();
+        // Stuck detection: signatures (name+args) of tool calls that have
+        // FAILED, so an identical re-failure can be caught as a loop.
+        const seenFailedSigs = new Set<string>();
+        let reflectionCooldown = 0;
+        // Default-off failure escalation (see AgentCoreDeps): one-shot.
+        let escalated = false;
+
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
           throwIfCancelled();
           // Surface events from background dispatches between turns.
@@ -1015,6 +1091,55 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             messages.push(toolMsg);
             trace.message(toolMsg);
           }
+
+          // Stuck detection: if a tool call failed with the SAME (name+args) as
+          // one that already failed this run, the model is looping. The arg
+          // signature is canonicalized (sorted keys) so reordered-but-equal
+          // args still match. Inject a one-time reflection nudge — TRANSIENT
+          // (pushed to messages so the model sees it in-context, NOT traced),
+          // mirroring the wrap-up nudge. Tracing it would write an extra
+          // role:"user" message and break the one-user-message-per-run invariant
+          // that truncateSessionAtUserTurn, checkpoint `turn` tagging, and the
+          // TUI/desktop backtrack targets all depend on (they count user
+          // messages). A resumed run simply replays without it.
+          if (reflectionCooldown > 0) reflectionCooldown--;
+          let repeatedFailure = false;
+          for (let i = 0; i < turnCalls.length; i++) {
+            const r = callResults[i];
+            if (!r || r.ok) continue;
+            const sig = `${turnCalls[i]!.name}:${canonicalArgs(turnCalls[i]!.argumentsJson)}`;
+            if (seenFailedSigs.has(sig)) repeatedFailure = true;
+            seenFailedSigs.add(sig);
+          }
+          if (repeatedFailure && reflectionCooldown === 0) {
+            reflectionCooldown = REFLECTION_COOLDOWN_TURNS;
+            messages.push({ role: "user", content: buildReflectionNudge() });
+          }
+
+          // escalateOnFailure: once the model is clearly looping, hand the rest
+          // of the run to the stronger planModel (one-time, needs the routing
+          // deps). Pairs with the reflection nudge above.
+          if (
+            repeatedFailure &&
+            deps.escalateOnFailure &&
+            !escalated &&
+            deps.planModel !== undefined &&
+            deps.providerForModel !== undefined
+          ) {
+            const stronger = deps.providerForModel(deps.planModel);
+            if (stronger !== provider) {
+              provider = stronger;
+              escalated = true;
+              // TRANSIENT (pushed, not traced), like the reflection/wrap-up
+              // nudges: the model sees it in-context this run, but tracing it
+              // would add an extra role:"user" message and break the
+              // one-user-message-per-run invariant that backtrack/resume rely on.
+              messages.push({
+                role: "user",
+                content: `[harness] Escalated to ${deps.planModel} for the rest of this run.`,
+              });
+            }
+          }
         }
 
         for (const ev of queue.drainNow()) yield ev;
@@ -1047,6 +1172,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               task: input.task,
               report,
               messages,
+              ...(deps.memoryAutoApproveConfidence !== undefined
+                ? { autoApproveConfidence: deps.memoryAutoApproveConfidence }
+                : {}),
             });
             yield emit({ type: "step.completed", title: "extracting memory" });
           } catch {

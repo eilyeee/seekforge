@@ -22,7 +22,16 @@ export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 export type { MergeResult, WorktreeStatus } from "./worktrees.js";
 
-const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+// Normally reads @seekforge/server's package version. In a bun --compile
+// binary (the Tauri sidecar) the package.json isn't on the virtual FS, so
+// fall back to a constant — version is only surfaced via the /api endpoint.
+const version = ((): string => {
+  try {
+    return (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 export type StartServerOptions = {
   /**

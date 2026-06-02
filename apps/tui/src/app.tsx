@@ -2220,36 +2220,36 @@ export function App({
         ) : null}
         {state.overlay?.kind === "sessions" ? (
           <ListOverlay
-            title="Sessions"
+            title={t("picker.titleSessions")}
             lines={state.overlay.lines}
             index={state.overlay.index}
-            footer="↑↓ select · Enter resume · f fork · Esc dismiss"
+            footer={t("picker.resume")}
           />
         ) : null}
         {state.overlay?.kind === "backtrack" ? (
           <ListOverlay
-            title="Backtrack — rewind the conversation to…"
+            title={t("picker.titleBacktrack")}
             lines={state.overlay.targets.map(
               (t) => `turn ${t.turn}: ${t.text.replace(/\s+/g, " ").slice(0, 64)}${t.text.length > 64 ? "…" : ""}`,
             )}
             index={state.overlay.index}
-            footer="↑↓ select · Enter rewind conversation+files · c conversation only · Esc dismiss"
+            footer={t("picker.rewind")}
           />
         ) : null}
         {state.overlay?.kind === "model" ? (
           <ListOverlay
-            title="Model"
+            title={t("picker.titleModel")}
             lines={state.overlay.lines}
             index={state.overlay.index}
-            footer="↑↓ select · Enter switch · Esc dismiss"
+            footer={t("picker.model")}
           />
         ) : null}
         {state.overlay?.kind === "theme" ? (
           <ListOverlay
-            title="Theme"
+            title={t("picker.titleTheme")}
             lines={state.overlay.lines}
             index={state.overlay.index}
-            footer="↑↓ select · Enter apply · Esc dismiss"
+            footer={t("picker.theme")}
           />
         ) : null}
         {state.overlay?.kind === "args" ? (
@@ -2259,15 +2259,15 @@ export function App({
               (c) => `${(c.value || "(no argument)").padEnd(26)} ${c.hint ?? ""}`.trimEnd(),
             )}
             index={state.overlay.index}
-            footer="↑↓ select · Tab fill · Enter run · Esc dismiss"
+            footer={t("picker.history")}
           />
         ) : null}
         {state.overlay?.kind === "help" ? (
           <ListOverlay
-            title="Commands"
+            title={t("picker.titleCommands")}
             lines={state.overlay.lines}
             index={state.overlay.selectable[state.overlay.index] ?? 0}
-            footer="↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval"
+            footer={t("picker.slash")}
           />
         ) : null}
         {search ? (

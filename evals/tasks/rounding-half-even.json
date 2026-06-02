@@ -1,0 +1,13 @@
+{
+  "id": "rounding-half-even",
+  "title": "Implement money rounding correctly across the tricky edge cases",
+  "fixture": "rounding-half-even",
+  "mode": "edit",
+  "task": "Implement roundCents(amount) in src/round.js per the docstring: round a monetary amount to whole cents, with halfway values rounding away from zero. `npm test` must pass. Do NOT modify test/round.test.js.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test >/tmp/rhe.out 2>&1; code=$?; tail -c 4000 /tmp/rhe.out 1>&2; exit $code" },
+    { "type": "file_not_contains", "path": "src/round.js", "pattern": "TODO" },
+    { "type": "file_contains", "path": "test/round.test.js", "pattern": "ties round away from zero \\(negative" }
+  ],
+  "notes": "Under-specified-feeling task whose naive reading (Math.round(amount*100)/100) fails hidden edge cases: Math.round breaks ties toward +Infinity so negatives are wrong, and binary FP under-representation drops a cent for 1.005 / 1.255 / 2.675. The naive impl passes only 3/5 tests; a correct sign-aware, epsilon-nudged implementation passes all. The file_not_contains TODO guards against a no-op submission."
+}

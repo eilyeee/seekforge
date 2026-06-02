@@ -5,7 +5,8 @@
  */
 
 import * as fs from "node:fs";
-import { projectMemoryPath, readProjectMemory } from "./store.js";
+import * as path from "node:path";
+import { projectMemoryPath, readFactMeta, readProjectMemory, reconcileFactMeta } from "./store.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
 const NEAR_DUP_JACCARD = 0.8;
@@ -21,6 +22,8 @@ export type CompactResult = {
   removed: string[];
   /** Near-duplicate merges (longer kept, shorter dropped). */
   merged: CompactMerge[];
+  /** Stale bullets moved to project-archive.md (old + never injected). */
+  archived: string[];
 };
 
 type Bullet = { raw: string; type: string | undefined; words: Set<string> };
@@ -130,25 +133,80 @@ export function computeCompaction(raw: string): { result: CompactResult; content
     after: entries.length - removed.length - merged.length,
     removed,
     merged,
+    archived: [],
   };
   return { result, content: outLines.join("\n") };
 }
 
-export type CompactOptions = { dryRun?: boolean };
+export type CompactOptions = {
+  dryRun?: boolean;
+  /**
+   * Archive bullets first added more than this many days ago that have NEVER
+   * been injected into a session (uses === 0, per the fact-meta sidecar) to
+   * project-archive.md. Facts without metadata are left untouched (we can't tell
+   * their age). Omit to skip pruning.
+   */
+  pruneUnusedDays?: number;
+};
 
 /**
- * Compacts a project's project.md. When dryRun, reports the plan without
- * writing. The header and any non-bullet lines are preserved verbatim.
+ * Identifies stale bullets in `content`: those whose fact-meta says addedAt is
+ * older than `days` AND uses === 0. Returns the kept content + archived lines.
+ */
+function pruneUnused(
+  content: string,
+  meta: Record<string, { addedAt: string; uses: number }>,
+  days: number,
+): { content: string; archived: string[] } {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const archived: string[] = [];
+  const kept = content.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("- ")) return true;
+    const key = trimmed.replace(/^-\s*/, "");
+    const m = meta[key];
+    if (!m || m.uses > 0) return true; // unknown age or used → keep
+    if (Date.parse(m.addedAt) >= cutoff) return true; // recent → keep
+    archived.push(trimmed);
+    return false;
+  });
+  return { content: kept.join("\n"), archived };
+}
+
+/**
+ * Compacts a project's project.md (dedupe + near-dup merge). With
+ * `pruneUnusedDays`, also archives stale, never-used facts. When dryRun, reports
+ * the plan without writing. Header / non-bullet lines are preserved verbatim.
  */
 export function compactProjectMemory(workspace: string, opts: CompactOptions = {}): CompactResult {
   const raw = readProjectMemory(workspace);
   if (raw === undefined) {
-    return { before: 0, after: 0, removed: [], merged: [] };
+    return { before: 0, after: 0, removed: [], merged: [], archived: [] };
   }
   const { result, content } = computeCompaction(raw);
-  const changed = result.removed.length > 0 || result.merged.length > 0;
+
+  let finalContent = content;
+  if (opts.pruneUnusedDays !== undefined && opts.pruneUnusedDays >= 0) {
+    const pruned = pruneUnused(content, readFactMeta(workspace), opts.pruneUnusedDays);
+    finalContent = pruned.content;
+    result.archived = pruned.archived;
+    result.after -= pruned.archived.length;
+  }
+
+  const changed = result.removed.length > 0 || result.merged.length > 0 || result.archived.length > 0;
   if (!opts.dryRun && changed) {
-    fs.writeFileSync(projectMemoryPath(workspace), content, "utf8");
+    fs.writeFileSync(projectMemoryPath(workspace), finalContent, "utf8");
+    // Drop fact-meta entries orphaned by the rewrite (dropped dup/merge/prune).
+    reconcileFactMeta(workspace, finalContent);
+    if (result.archived.length > 0) {
+      const archiveFile = path.join(path.dirname(projectMemoryPath(workspace)), "project-archive.md");
+      const block = `${result.archived.join("\n")}\n`;
+      try {
+        fs.appendFileSync(archiveFile, block, "utf8");
+      } catch {
+        /* archiving is best-effort; the prune from project.md already happened */
+      }
+    }
   }
   return result;
 }

@@ -41,7 +41,7 @@ export function Sidebar() {
   const conn = useStore((s) => activeTab(s.tabs).conn);
 
   return (
-    <aside className="flex w-48 shrink-0 flex-col border-r border-subtle bg-surface-raised/60">
+    <aside className="flex w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised/60">
       <div
         data-tauri-drag-region
         className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
@@ -79,14 +79,14 @@ export function Sidebar() {
               type="button"
               onClick={() => setView(v)}
               aria-current={active ? "page" : undefined}
-              className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+              className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                 active
-                  ? "bg-accent-muted/70 font-medium text-primary"
+                  ? "bg-accent-muted font-medium text-accent"
                   : "text-secondary hover:bg-surface-overlay hover:text-primary"
               }`}
             >
               <Icon
-                size={15}
+                size={16}
                 className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
               />
               {t(key)}
@@ -99,11 +99,12 @@ export function Sidebar() {
           type="button"
           onClick={toggleTodos}
           title={t("todos.title")}
-          className={`flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
+          aria-pressed={todosOpen}
+          className={`focus-ring flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
             todosOpen ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay/50 hover:text-primary"
           }`}
         >
-          <span className="w-5 font-mono text-xs text-tertiary">☑</span>
+          <span aria-hidden className="w-5 font-mono text-xs text-tertiary">☑</span>
           {t("nav.todos")}
         </button>
       </div>

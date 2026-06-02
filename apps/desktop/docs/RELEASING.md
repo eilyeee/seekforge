@@ -25,7 +25,13 @@ Both paths require the **updater signing keypair** below.
 
 ---
 
-## 0. One-time: generate the updater signing keypair
+## 0. One-time: enable + generate the updater signing keypair
+
+The auto-updater ships **opt-in**: `tauri.conf.json` keeps a `plugins.updater`
+block (so the registered plugin initializes) but with a disabled placeholder
+`pubkey`, and `bundle.createUpdaterArtifacts` is `false` — so `pnpm tauri build`
+succeeds out of the box and produces a (non-updatable) bundle, and the running
+app just logs "updater unavailable". To turn auto-update on, do the steps below.
 
 The updater verifies every downloaded update against an Ed25519 public key
 baked into the app. Generate the keypair once:
@@ -37,12 +43,25 @@ pnpm tauri signer generate -w ~/.tauri/seekforge.key
 This writes the **private key** to `~/.tauri/seekforge.key` (and the public key
 to `~/.tauri/seekforge.key.pub`) and also prints the public key.
 
-1. **Public key** → paste it into
-   `apps/desktop/src-tauri/tauri.conf.json` → `plugins.updater.pubkey`
-   (replacing the `REPLACE_WITH_UPDATER_PUBKEY ...` placeholder) and **commit**.
-   Until this is done, `pnpm tauri build` fails with
-   `failed to decode pubkey: ... Invalid symbol` **after** producing the
-   bundles, and the runtime updater logs "updater unavailable".
+1. **Enable signing + public key** → in
+   `apps/desktop/src-tauri/tauri.conf.json` set `bundle.createUpdaterArtifacts`
+   to `true` and replace the placeholder `plugins.updater.pubkey` with the
+   printed public key, then **commit**:
+
+   ```json
+   "plugins": {
+     "updater": {
+       "endpoints": [
+         "https://github.com/eilyeee/seekforge/releases/latest/download/latest.json"
+       ],
+       "pubkey": "<paste the printed public key>"
+     }
+   }
+   ```
+
+   With `createUpdaterArtifacts: true` but the placeholder/invalid pubkey, `pnpm
+   tauri build` fails with `failed to decode pubkey: ... Invalid symbol`
+   **after** producing the bundles.
 2. **Private key** (`~/.tauri/seekforge.key`) → **never commit it**. For CI it
    goes into the `TAURI_SIGNING_PRIVATE_KEY` repo secret (see below). Back it
    up: losing it means shipped apps can no longer verify your updates and users
@@ -141,8 +160,24 @@ step 0 committed into `tauri.conf.json`.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/seekforge.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # or the password you chose
 pnpm install
+pnpm --filter seekforge build:sidecar          # host-arch sidecar
 pnpm tauri build
 ```
+
+> **Build the sidecar for each `--target` first.** The bundled
+> `seekforge-server` sidecar is a native binary and must match the arch you pass
+> to `tauri build`. `build:sidecar` derives its triple from `SIDECAR_TARGET` (or
+> the `rustc -vV` host when unset), so a **cross/manual** build must set
+> `SIDECAR_TARGET` to the same triple **before** `tauri build` — otherwise the
+> DMG launches but the embedded server can't exec on the target machine:
+>
+> ```sh
+> # cross-building for Apple Silicon from an Intel host (and vice versa):
+> SIDECAR_TARGET=aarch64-apple-darwin pnpm --filter seekforge build:sidecar
+> pnpm tauri build --target aarch64-apple-darwin
+> ```
+>
+> CI is already correct: it builds the sidecar per matrix `--target`.
 
 `tauri build` runs `pnpm --filter @seekforge/desktop build` first (Vite),
 compiles the Rust shell, and because `bundle.createUpdaterArtifacts` is true
@@ -157,7 +192,8 @@ target/release/bundle/macos/SeekForge.app.tar.gz.sig          # updater signatur
 
 (`<arch>` is `x64` on Intel, `aarch64` on Apple Silicon; cross-build the other
 with `pnpm tauri build --target aarch64-apple-darwin` /
-`x86_64-apple-darwin` after `rustup target add <target>`.)
+`x86_64-apple-darwin` after `rustup target add <target>` — remembering to
+rebuild the sidecar with a matching `SIDECAR_TARGET` first, per the note above.)
 
 ### B.2 macOS code signing & notarization (separate from updater signing)
 

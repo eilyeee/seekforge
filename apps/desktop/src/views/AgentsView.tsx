@@ -1,9 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
-import { Badge, Button, Card, EmptyState, IconAgents, type BadgeTone } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  IconAgents,
+  IconArrowRight,
+  IconChevron,
+  IconSparkle,
+  Input,
+  type BadgeTone,
+} from "../components/ui";
 import type { AgentInfo, AgentScope } from "../types";
 
 const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
@@ -21,11 +32,12 @@ function ScopeChip({ scope }: { scope: AgentScope }) {
   return <Badge tone={SCOPE_TONE[scope]}>{scope}</Badge>;
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+/** One labelled cell in the detail overview card. Mono value for triggers/tools/ids. */
+function Field({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
+    <div className="space-y-1">
       <div className="text-2xs uppercase tracking-wider text-tertiary">{label}</div>
-      <div className="font-mono text-xs text-secondary">{value}</div>
+      <div className={`text-xs text-secondary ${mono ? "font-mono break-words" : ""}`}>{value}</div>
     </div>
   );
 }
@@ -35,6 +47,7 @@ export function AgentsView() {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [detail, setDetail] = useState<AgentInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
 
@@ -42,6 +55,7 @@ export function AgentsView() {
     setAgents(null);
     setDetail(null);
     setError(null);
+    setQuery("");
     api
       .agents()
       .then(setAgents)
@@ -56,35 +70,65 @@ export function AgentsView() {
       .catch((e: unknown) => setError(String(e)));
   };
 
+  const filtered = useMemo(() => {
+    if (!agents) return null;
+    const q = query.trim().toLowerCase();
+    if (!q) return agents;
+    return agents.filter(
+      (a) =>
+        a.id.toLowerCase().includes(q) ||
+        a.name.toLowerCase().includes(q) ||
+        a.description.toLowerCase().includes(q),
+    );
+  }, [agents, query]);
+
   if (detail) {
     return (
-      <div className="flex h-full flex-col">
-        <header className="flex items-center gap-3 border-b border-subtle px-4 py-2">
+      <div className="flex h-full flex-col bg-surface">
+        <header className="flex items-center gap-3 border-b border-subtle px-6 py-3">
           <Button size="sm" onClick={() => setDetail(null)}>
             {t("agents.backBtn")}
           </Button>
-          <span className="text-sm font-semibold text-primary">{detail.name}</span>
+          <h1 className="text-sm font-semibold text-primary">{detail.name}</h1>
           <span className="font-mono text-xs text-tertiary">{detail.id}</span>
           <ScopeChip scope={detail.scope} />
           <ModeChip mode={detail.mode} />
         </header>
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="max-w-2xl space-y-4">
-            <p className="text-sm text-secondary">{detail.description}</p>
-            <Card className="grid grid-cols-2 gap-3">
-              <Field label={t("agents.fieldModel")} value={detail.model ?? t("agents.defaultModel")} />
-              <Field label={t("agents.fieldMaxTurns")} value={String(detail.maxTurns ?? 15)} />
-              <Field label={t("agents.fieldTriggers")} value={detail.triggers.join(", ") || "—"} />
-              <Field label={t("agents.fieldTools")} value={detail.tools?.join(", ") ?? t("agents.allTools")} />
-              {detail.own && <Field label={t("agents.fieldOwns")} value={detail.own} />}
-              {detail.doNotTouch && <Field label={t("agents.fieldDoNotTouch")} value={detail.doNotTouch} />}
-              {detail.boundary && <Field label={t("agents.fieldBoundary")} value={detail.boundary} />}
+        <div className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="space-y-5">
+            <p className="text-sm leading-relaxed text-secondary">{detail.description}</p>
+
+            <Card className="p-5">
+              <div className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.title")}</div>
+              <div className="mt-4 grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                <Field label={t("agents.fieldModel")} value={detail.model ?? t("agents.defaultModel")} />
+                <Field label={t("agents.fieldMaxTurns")} value={String(detail.maxTurns ?? 15)} />
+                <Field label={t("agents.fieldTriggers")} value={detail.triggers.join("  ·  ") || "—"} />
+                <Field label={t("agents.fieldTools")} value={detail.tools?.join("  ·  ") ?? t("agents.allTools")} />
+                {detail.own && <Field label={t("agents.fieldOwns")} value={detail.own} mono={false} />}
+                {detail.doNotTouch && <Field label={t("agents.fieldDoNotTouch")} value={detail.doNotTouch} mono={false} />}
+                {detail.boundary && <Field label={t("agents.fieldBoundary")} value={detail.boundary} mono={false} />}
+              </div>
             </Card>
+
             {detail.body && (
-              <Card className="text-sm text-secondary">
-                <Markdown source={detail.body} />
+              <Card className="p-5">
+                <div className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.procedure")}</div>
+                <div className="mt-3 text-sm text-secondary">
+                  <Markdown source={detail.body} />
+                </div>
               </Card>
             )}
+
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button variant="primary" size="sm" onClick={() => openAgent(detail.id)}>
+                <IconSparkle size={14} />
+                {t("chat.mode.ask")}
+              </Button>
+              <Button size="sm" onClick={() => setDetail(null)}>
+                {t("agents.backBtn")}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -92,38 +136,68 @@ export function AgentsView() {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">{t("agents.title")}</h1>
+    <div className="flex h-full flex-col bg-surface">
+      <header className="border-b border-subtle px-6 py-4">
+        <h1 className="text-lg font-semibold text-primary">{t("agents.title")}</h1>
+        <p className="mt-1 text-xs text-tertiary">{t("agents.emptyDescription")}</p>
+        <div className="mt-3 max-w-md">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("sessions.searchPlaceholder")}
+          />
+        </div>
       </header>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto px-6 py-5">
         {error && (
           <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
         )}
-        {agents === null ? (
-          <p className="text-tertiary">{t("agents.loading")}</p>
-        ) : agents.length === 0 ? (
+        {filtered === null ? (
+          <p className="text-sm text-tertiary">{t("agents.loading")}</p>
+        ) : agents && agents.length === 0 ? (
           <EmptyState
             icon={<IconAgents size={28} />}
             title={t("agents.emptyTitle")}
             description={t("agents.emptyDescription")}
           />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={<IconAgents size={28} />}
+            title={t("agents.emptyTitle")}
+            description={t("sessions.noMatchDescription").replace("{query}", query)}
+          />
         ) : (
-          <div className="max-w-3xl space-y-2">
-            {agents.map((a) => (
+          <div className="space-y-2.5">
+            {filtered.map((a) => (
               <Card
                 key={a.id}
-                flush
                 onClick={() => openAgent(a.id)}
-                className="cursor-pointer p-3 transition-colors hover:bg-surface-overlay"
+                className="group flex cursor-pointer items-center gap-4 p-4 transition-colors hover:border-strong hover:bg-surface-overlay"
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-primary">{a.id}</span>
-                  <ScopeChip scope={a.scope} />
-                  <ModeChip mode={a.mode} />
-                  {a.model && <span className="font-mono text-xs text-tertiary">{a.model}</span>}
+                <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-accent/10 text-accent">
+                  <IconAgents size={18} />
                 </div>
-                <p className="mt-1.5 truncate text-xs text-secondary">{a.description}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-primary">{a.name}</span>
+                    <span className="font-mono text-2xs text-tertiary">{a.id}</span>
+                    <ScopeChip scope={a.scope} />
+                    <ModeChip mode={a.mode} />
+                  </div>
+                  <p className="mt-1 truncate text-xs text-secondary">{a.description}</p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openAgent(a.id);
+                  }}
+                  className="shrink-0"
+                >
+                  {t("chat.mode.ask")}
+                  <IconArrowRight size={14} />
+                </Button>
+                <IconChevron size={16} className="shrink-0 text-tertiary" />
               </Card>
             ))}
           </div>

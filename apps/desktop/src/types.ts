@@ -74,9 +74,22 @@ export type MemoryCandidate = {
   status: "pending" | "approved" | "rejected";
 };
 
+/** An approved project-memory fact joined with its lifecycle metadata. */
+export type MemoryFact = {
+  /** 1-based position among the bullets of project.md. */
+  index: number;
+  /** Bullet type, or null when the bullet has no `[type]` prefix. */
+  type: MemoryCandidateType | null;
+  content: string;
+  addedAt?: string;
+  uses: number;
+  lastUsedAt?: string;
+};
+
 export type MemoryResponse = {
   projectMd: string | null;
   candidates: MemoryCandidate[];
+  facts: MemoryFact[];
 };
 
 export type ServerConfig = {

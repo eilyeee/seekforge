@@ -1,4 +1,6 @@
 import { useStore } from "./store";
+import { useT } from "./lib/i18n";
+import { Button } from "./components/ui";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
@@ -18,10 +20,13 @@ import { SkillsView } from "./views/SkillsView";
 const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
 export function App() {
+  const t = useT();
   const view = useStore((s) => s.view);
   const todosOpen = useStore((s) => s.todosOpen);
   const onboarding = useStore((s) => s.onboarding);
   const finishOnboarding = useStore((s) => s.finishOnboarding);
+  const bootError = useStore((s) => s.bootError);
+  const retryBoot = useStore((s) => s.retryBoot);
 
   // First-run welcome ahead of the workbench when no API key is configured.
   if (onboarding === "needed") {
@@ -33,6 +38,14 @@ export function App() {
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col">
         {IS_MAC && <div data-tauri-drag-region className="h-9 shrink-0" />}
+        {bootError && (
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+            <span className="min-w-0 flex-1 break-words">{t("boot.unreachable")}</span>
+            <Button size="sm" onClick={retryBoot}>
+              {t("boot.retry")}
+            </Button>
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {view === "chat" && <ChatView />}
           {view === "sessions" && <SessionsView />}

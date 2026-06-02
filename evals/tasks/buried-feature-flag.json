@@ -1,0 +1,14 @@
+{
+  "id": "buried-feature-flag",
+  "title": "Find and fix a case-sensitivity bug buried in a many-file router",
+  "fixture": "buried-feature-flag",
+  "mode": "edit",
+  "task": "A small URL router in src/ resolves request paths against route patterns. Static route segments are supposed to be CASE-SENSITIVE, but `/users/42` is wrongly matching the pattern `/Users/:id`. Two tests in test/router.test.js fail. Find the responsible module among the many helpers in src/ and fix it so the whole suite passes. Do NOT modify test/router.test.js, and do NOT weaken any other behavior (param capture, query stripping, decoding).",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test >/tmp/bff.out 2>&1; code=$?; tail -c 4000 /tmp/bff.out 1>&2; exit $code" },
+    { "type": "file_contains", "path": "src/matchStatic.js", "pattern": "routeSeg === reqSeg" },
+    { "type": "file_not_contains", "path": "src/matchStatic.js", "pattern": "lower\\(routeSeg\\) === lower\\(reqSeg\\)" },
+    { "type": "file_contains", "path": "test/router.test.js", "pattern": "static segment is case-sensitive" }
+  ],
+  "notes": "Long-context navigation: 18 modules in src/, only matchStatic.js is wrong (it lower-cases both sides). The symptom shows up via resolve()/matchRoute() in index.js/router.js, several hops from the root cause. The file_contains/file_not_contains on matchStatic.js confirm the fix is in the right place, not papered over upstream."
+}

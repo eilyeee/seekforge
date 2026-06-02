@@ -55,8 +55,9 @@ fn start_server_and_open_window(handle: tauri::AppHandle) {
                 .title("SeekForge")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 560.0)
-                // Matches --sf-surface (#0e0f12) to avoid a flash before load.
-                .background_color(tauri::webview::Color(14, 15, 18, 255));
+                // Matches the default (light) --sf-surface (#f8fafc) to avoid a
+                // flash before the web UI loads.
+                .background_color(tauri::webview::Color(248, 250, 252, 255));
             // macOS: transparent overlay title bar — traffic lights float over
             // the sidebar (which pads for them); content runs edge-to-edge.
             #[cfg(target_os = "macos")]
@@ -75,31 +76,92 @@ fn start_server_and_open_window(handle: tauri::AppHandle) {
 /// Resolves the serve command, spawns it, and waits for the workbench URL.
 fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
     let env_cmd = std::env::var("SEEKFORGE_SERVE_CMD").ok();
-    let path_var = std::env::var("PATH").ok();
+    let home = std::env::home_dir();
+    // macOS GUI apps inherit a minimal launchd PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+    // that omits the dirs where `npm i -g seekforge` actually installs, so a
+    // DMG-only user would otherwise never find the CLI. Append the common
+    // global-bin locations before resolving.
+    let path_var = augmented_path(std::env::var("PATH").ok().as_deref(), home.as_deref());
     let repo_root = discover_repo_root();
 
-    let cmd = serve::resolve_serve_command(
-        env_cmd.as_deref(),
-        path_var.as_deref(),
-        repo_root.as_deref(),
-        // Dev builds (run from a source checkout via `tauri dev`) prefer the
-        // repo's own server over an older `seekforge` on PATH.
-        cfg!(debug_assertions),
-    )
-    .ok_or_else(|| {
-        "could not resolve the serve command.\n\
-         Set SEEKFORGE_SERVE_CMD, put `seekforge` on PATH, or run from the \
-         SeekForge repo (dev fallback needs node_modules/.bin/tsx)."
-            .to_string()
-    })?;
+    // The bundled sidecar (a self-contained `seekforge-server` compiled with
+    // bun, shipped via `externalBin`) is the first choice: a DMG-only user has
+    // no system `seekforge`. It sits next to the app binary. When absent
+    // (`tauri dev`), `sidecar_command` returns None and we fall through to the
+    // existing env/repo/PATH resolution, so dev is unaffected. An explicit
+    // SEEKFORGE_SERVE_CMD still wins (debugging override), so we honor it first.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf));
+    let (cmd, from_sidecar) = if env_cmd.is_none() {
+        match serve::sidecar_command(exe_dir.as_deref()) {
+            Some(c) => (Some(c), true),
+            None => (None, false),
+        }
+    } else {
+        (None, false)
+    };
+
+    let cmd = match cmd {
+        Some(c) => c,
+        None => serve::resolve_serve_command(
+            env_cmd.as_deref(),
+            Some(&path_var),
+            repo_root.as_deref(),
+            // Dev builds (run from a source checkout via `tauri dev`) prefer the
+            // repo's own server over an older `seekforge` on PATH.
+            cfg!(debug_assertions),
+        )
+        .ok_or_else(|| {
+            "could not resolve the `seekforge serve` command.\n\n\
+             Install the CLI with `npm install -g seekforge`, set SEEKFORGE_SERVE_CMD \
+             to its full command line, or run from a SeekForge source checkout."
+                .to_string()
+        })?,
+    };
+
+    // When running the bundled sidecar, point it at the web UI shipped as an app
+    // resource (Contents/Resources/web). A bun --compile binary cannot find the
+    // dist via import.meta.url, so this env var is how it locates the UI.
+    //
+    // The sidecar can ONLY find the UI through this env var, so if the bundled
+    // run can't locate the `web` resource we must fail loudly: booting anyway
+    // would serve a UI-less API info page that looks like a broken/blank app.
+    let static_dir: Option<PathBuf> = if from_sidecar {
+        let web = handle
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|r| r.join("web"))
+            .filter(|p| p.join("index.html").is_file());
+        match web {
+            Some(p) => Some(p),
+            None => {
+                return Err(
+                    "this SeekForge bundle is missing its web UI resource \
+                     (expected `Contents/Resources/web/index.html`).\n\n\
+                     The bundled server cannot locate the workbench, so it would \
+                     only serve a UI-less API page. Reinstall from a complete \
+                     release, or rebuild the bundle (the `web` resource is laid \
+                     out by `tauri build`)."
+                        .to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let extra_env: Vec<(&str, &std::path::Path)> = match static_dir.as_deref() {
+        Some(p) => vec![("SEEKFORGE_STATIC_DIR", p)],
+        None => Vec::new(),
+    };
 
     let env_ws = std::env::var("SEEKFORGE_WORKSPACE").ok();
     let cwd = std::env::current_dir().ok();
-    let home = std::env::home_dir();
     let workspace = serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref())
         .ok_or_else(|| "could not resolve a workspace directory".to_string())?;
 
-    let mut child = ServeChild::spawn(&cmd, &workspace).map_err(|e| {
+    let mut child = ServeChild::spawn(&cmd, &workspace, &extra_env).map_err(|e| {
         format!(
             "failed to start the server (`{} {}` in {}): {e}",
             cmd.program,
@@ -133,10 +195,19 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
     }
 }
 
+/// Whether auto-update is configured. Ships `false` because tauri.conf.json
+/// carries a disabled placeholder pubkey + `createUpdaterArtifacts: false`;
+/// flip to `true` once a real updater keypair is wired (see docs/RELEASING.md).
+/// While false we skip the check entirely so we don't emit misleading
+/// "checking/failed" update logs for a release that can't actually update.
+const UPDATER_ENABLED: bool = false;
+
 /// Background update check against GitHub releases (see docs/RELEASING.md).
-/// Failures are logged and never block the app: with the placeholder pubkey
-/// in tauri.conf.json the updater simply reports itself unavailable.
+/// No-op while [`UPDATER_ENABLED`] is false. Failures are logged, never block.
 fn spawn_update_check(handle: tauri::AppHandle) {
+    if !UPDATER_ENABLED {
+        return;
+    }
     use tauri_plugin_updater::UpdaterExt;
     tauri::async_runtime::spawn(async move {
         let updater = match handle.updater() {
@@ -163,6 +234,43 @@ fn spawn_update_check(handle: tauri::AppHandle) {
     });
 }
 
+/// Global-bin locations to search in addition to the inherited PATH. macOS GUI
+/// apps get a minimal launchd PATH, so `npm i -g` / homebrew / volta / nvm bin
+/// dirs are appended here as best-effort fallbacks.
+fn extra_bin_dirs(home: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+    ];
+    if let Some(home) = home {
+        for rel in [".npm-global/bin", ".local/bin", ".volta/bin", ".yarn/bin", ".bun/bin"] {
+            dirs.push(home.join(rel));
+        }
+        // nvm installs each node version under ~/.nvm/versions/node/<v>/bin.
+        if let Ok(entries) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+            for entry in entries.flatten() {
+                let bin = entry.path().join("bin");
+                if bin.is_dir() {
+                    dirs.push(bin);
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Returns the inherited PATH with [`extra_bin_dirs`] appended (PATH entries
+/// keep priority; the extras are only consulted when PATH misses).
+fn augmented_path(path_var: Option<&str>, home: Option<&std::path::Path>) -> String {
+    let mut parts: Vec<PathBuf> = path_var
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
+    parts.extend(extra_bin_dirs(home));
+    std::env::join_paths(parts)
+        .map(|os| os.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path_var.unwrap_or_default().to_string())
+}
+
 /// Locates the monorepo root by walking up from the executable dir and then
 /// from the cwd (dev runs sit inside the repo; bundled apps simply find none).
 fn discover_repo_root() -> Option<PathBuf> {
@@ -186,4 +294,33 @@ fn fail(handle: &tauri::AppHandle, message: &str) {
         .title("SeekForge failed to start")
         .blocking_show();
     handle.exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn augmented_path_appends_global_bin_dirs_after_inherited_path() {
+        let home = Path::new("/home/dev");
+        let out = augmented_path(Some("/usr/bin:/bin"), Some(home));
+        let dirs: Vec<PathBuf> = std::env::split_paths(&out).collect();
+        // Inherited entries keep priority (come first).
+        assert_eq!(dirs[0], PathBuf::from("/usr/bin"));
+        assert_eq!(dirs[1], PathBuf::from("/bin"));
+        // The common global-bin locations are appended.
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(dirs.contains(&home.join(".npm-global/bin")));
+    }
+
+    #[test]
+    fn augmented_path_handles_missing_path_and_home() {
+        let out = augmented_path(None, None);
+        let dirs: Vec<PathBuf> = std::env::split_paths(&out).collect();
+        // Still yields the absolute fallbacks even with nothing inherited.
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+    }
 }

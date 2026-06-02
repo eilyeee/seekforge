@@ -109,6 +109,11 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     hooks: config.hooks,
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
     ...(config.compaction ? { compaction: config.compaction } : {}),
+    ...(config.planModel ? { planModel: config.planModel } : {}),
+    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+    ...(config.memoryAutoApproveConfidence !== undefined
+      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
+      : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

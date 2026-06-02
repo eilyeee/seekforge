@@ -5,12 +5,61 @@ import type { ChatResponse, FinalReport, TokenUsage } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { MemoryCandidate } from "../../src/memory/index.js";
 
+/**
+ * Isolate the GLOBAL memory path from the developer's real ~/.seekforge.
+ * buildMemoryBrief reads ~/.seekforge/memory/project.md via seekforgeHome(),
+ * which honors SEEKFORGE_HOME. Point it at a fresh empty temp dir at import time
+ * so every memory test is deterministic and never touches the real home dir.
+ */
+const SEEKFORGE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-home-"));
+process.env.SEEKFORGE_HOME = SEEKFORGE_HOME;
+
 export function makeWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-memory-test-"));
 }
 
+/** Path to the isolated global SeekForge home used by these tests. */
+export function globalHome(): string {
+  return SEEKFORGE_HOME;
+}
+
+/** Writes the global (cross-project) memory file under the isolated home. */
+export function writeGlobalMemory(content: string): void {
+  const file = path.join(SEEKFORGE_HOME, ".seekforge", "memory", "project.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, "utf8");
+}
+
+/** Removes the global memory file (resets to "no global file" state). */
+export function clearGlobalMemory(): void {
+  const file = path.join(SEEKFORGE_HOME, ".seekforge", "memory", "project.md");
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function writeProjectMemory(workspace: string, content: string): void {
   const file = path.join(workspace, ".seekforge", "memory", "project.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, "utf8");
+}
+
+/**
+ * Writes a `.seekforge/memory/project.md` inside a SUBDIRECTORY of the workspace
+ * (the subdir cascade source for monorepo per-package facts). `relDir` is the
+ * package directory relative to the workspace, e.g. "packages/api".
+ */
+export function writeSubdirMemory(workspace: string, relDir: string, content: string): void {
+  const file = path.join(workspace, relDir, ".seekforge", "memory", "project.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, "utf8");
+}
+
+/** Creates an arbitrary file under the workspace (e.g. to plant node_modules junk). */
+export function writeWorkspaceFile(workspace: string, relPath: string, content: string): void {
+  const file = path.join(workspace, relPath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content, "utf8");
 }

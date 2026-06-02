@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ChatMessage } from "@seekforge/shared";
-import { api, setTokenProvider, setWorkspaceProvider } from "./lib/api";
+import { api, ApiError, setTokenProvider, setWorkspaceProvider } from "./lib/api";
 import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
 import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./lib/frames";
@@ -67,6 +67,15 @@ type AppStore = {
   /** Marks onboarding complete (after a successful key save or a skip). */
   finishOnboarding: () => void;
 
+  /**
+   * Set when a boot loader (`loadWorkspaces`/`checkOnboarding`) fails to reach
+   * the REST server. Drives the global "server unreachable" banner; null while
+   * healthy. `retryBoot()` clears it and re-runs both loaders.
+   */
+  bootError: string | null;
+  /** Re-runs the boot loaders (workspaces + onboarding) after a failure. */
+  retryBoot: () => void;
+
   /** Whether the todos drawer is open (global, not per-tab). */
   todosOpen: boolean;
   toggleTodos: () => void;
@@ -121,6 +130,18 @@ type AppStore = {
  */
 const wsByTab = new Map<string, WsClient>();
 
+/**
+ * Tells "the server is down" apart from "this is an old server missing the
+ * endpoint". A 404 (and other 4xx) means the endpoint isn't there — that's the
+ * expected back-compat case the boot loaders tolerate silently. Anything else
+ * (a thrown TypeError from `fetch` when the connection fails, or a 5xx) means
+ * the REST server is unreachable and the user should see a recoverable banner.
+ */
+function isUnreachable(e: unknown): boolean {
+  if (e instanceof ApiError) return e.status >= 500;
+  return true;
+}
+
 export const useStore = create<AppStore>()((set, get) => {
   const handleFrame = (tabId: string, frame: ServerFrame): void => {
     // Title is read before routing; it does not change mid-run.
@@ -172,9 +193,11 @@ export const useStore = create<AppStore>()((set, get) => {
                 : updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: workspaces[0]!.id }),
           }));
         })
-        .catch(() => {
+        .catch((e: unknown) => {
           // Single-workspace / old server without /api/workspaces: stay on the
-          // default workspace (empty id -> server's first).
+          // default workspace (empty id -> server's first). A real connection
+          // failure (server down) instead surfaces the global recovery banner.
+          if (isUnreachable(e)) set({ bootError: String(e instanceof Error ? e.message : e) });
         });
     },
 
@@ -185,12 +208,22 @@ export const useStore = create<AppStore>()((set, get) => {
       api
         .config()
         .then((config) => set({ onboarding: needsOnboarding(config) ? "needed" : "done" }))
-        .catch(() => {
-          // Can't reach config (offline/old server) — don't block the app.
+        .catch((e: unknown) => {
+          // Can't reach config (offline/old server) — don't block the app. A
+          // real connection failure (server down) surfaces the recovery banner
+          // so the user knows actions will fail and can retry.
           set({ onboarding: "done" });
+          if (isUnreachable(e)) set({ bootError: String(e instanceof Error ? e.message : e) });
         });
     },
     finishOnboarding: () => set({ onboarding: "done" }),
+
+    bootError: null,
+    retryBoot: () => {
+      set({ bootError: null });
+      get().loadWorkspaces();
+      get().checkOnboarding();
+    },
 
     setView: (view) => set({ view }),
 

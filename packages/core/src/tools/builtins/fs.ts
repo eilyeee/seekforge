@@ -578,7 +578,7 @@ function previewHunk(text: string): string {
 const applyPatch = defineTool({
   name: "apply_patch",
   description:
-    "Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Each oldString must be copied verbatim from the CURRENT file content (your latest read) and match exactly once. If a patch fails, re-read the file before retrying; prefer several small targeted edits over one large one.",
+    "Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read the file first; each oldString must be copied VERBATIM from its current content (exact whitespace/indentation) and match EXACTLY ONCE — add surrounding lines to make it unique. newString is the replacement. Prefer several small targeted edits over one large rewrite. Example edit: {oldString:\"const port = 3000;\", newString:\"const port = 8080;\"}. If a patch fails (no_match/ambiguous), re-read the file and retry with the latest content.",
   schema: applyPatchSchema,
   classify: (args, ctx) => {
     // applyEdits throws on no_match/ambiguous; buildPreview swallows it and the

@@ -39,6 +39,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "tsx src/__tests__/helpers.test.ts && tsx src/__tests__/stream-input.test.ts && tsx src/__tests__/output-style.test.ts && tsx src/__tests__/config.test.ts",
+    "build:sidecar": "bun build --compile src/index.ts --outfile ../desktop/src-tauri/binaries/seekforge-server-${SIDECAR_TARGET:-$(rustc -vV | sed -n 's/host: //p')}",
     "prepublishOnly": "pnpm --filter @seekforge/desktop build && pnpm build"
   },
   "dependencies": {
@@ -54,8 +55,8 @@
     "@seekforge/server": "workspace:*",
     "@seekforge/shared": "workspace:*",
     "@types/node": "^22.10.0",
-    "tsup": "^8.3.0",
-    "tsx": "^4.19.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.0"
   }
 }

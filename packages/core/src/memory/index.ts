@@ -8,17 +8,29 @@
  */
 
 export {
+  appendProjectFact,
   approveMemoryCandidate,
   candidatesPath,
+  factMetaPath,
   formatFactBullet,
+  globalMemoryPath,
   listMemoryCandidates,
   MEMORY_CANDIDATE_TYPES,
   projectMemoryPath,
+  readFactMeta,
+  readGlobalMemory,
   readProjectMemory,
+  readSubdirMemories,
+  recordFactAdded,
+  recordFactUse,
+  reconcileFactMeta,
   rejectMemoryCandidate,
+  seekforgeHome,
   sessionSummaryPath,
+  type FactMeta,
   type MemoryCandidate,
   type MemoryCandidateType,
+  type SubdirMemory,
 } from "./store.js";
 
 export {
@@ -31,7 +43,17 @@ export {
   type ProjectFactSelector,
 } from "./direct.js";
 
-export { buildMemoryBrief } from "./brief.js";
+export {
+  ALWAYS_INCLUDE_TYPES,
+  buildMemoryBrief,
+  parseMemoryBullet,
+  rankMemoryBullets,
+  RELEVANCE_FLOOR,
+  taskKeywords,
+  taskPathTokens,
+  type MemoryCandidateBullet,
+  type RankedMemoryBullet,
+} from "./brief.js";
 
 export {
   compactProjectMemory,
@@ -46,3 +68,5 @@ export {
   type ExtractMemoryInput,
   type ExtractMemoryResult,
 } from "./extract.js";
+
+export { DIRECT_SOURCE_MARKER, memoryStats, type MemoryStats } from "./stats.js";

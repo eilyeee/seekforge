@@ -74,7 +74,7 @@ export function TabBar({
             }`}
           >
             {tab.pendingPermission ? (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" title={t("chat.tab.waitingApproval")} />
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" title={t("chat.tab.waitingApproval")} />
             ) : tab.chat.running ? (
               <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn" title={t("chat.tab.running")} />
             ) : (
@@ -111,7 +111,7 @@ export function TabBar({
                   setMenu(menu === tab.tabId ? null : tab.tabId);
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
+                className="focus-ring rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
               >
                 <IconChevron size={12} className="rotate-90" />
               </button>
@@ -124,7 +124,7 @@ export function TabBar({
                   e.stopPropagation();
                   onClose(tab.tabId);
                 }}
-                className="ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
+                className="focus-ring ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
               >
                 ×
               </button>
@@ -141,7 +141,7 @@ export function TabBar({
                     setMenu(null);
                     onMergeWorktree(tab.tabId);
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
+                  className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
                 >
                   {t("chat.tab.mergeBack")}
                 </button>
@@ -151,7 +151,7 @@ export function TabBar({
                     setMenu(null);
                     onDiscardWorktree(tab.tabId);
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
+                  className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
                 >
                   {t("chat.tab.discard")}
                 </button>
@@ -167,7 +167,7 @@ export function TabBar({
           aria-label={t("chat.tab.newTabMenuLabel")}
           onClick={() => setMenu(menu === "new" ? null : "new")}
           onMouseDown={(e) => e.stopPropagation()}
-          className="ml-0.5 mb-1 rounded px-2 py-0.5 text-sm text-tertiary hover:bg-surface-overlay hover:text-primary"
+          className="focus-ring ml-0.5 mb-1 rounded px-2 py-0.5 text-sm text-tertiary hover:bg-surface-overlay hover:text-primary"
         >
           +
         </button>
@@ -182,7 +182,7 @@ export function TabBar({
                 setMenu(null);
                 onNew();
               }}
-              className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
+              className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
             >
               {t("chat.tab.newTab")}
             </button>
@@ -192,7 +192,7 @@ export function TabBar({
                 setMenu(null);
                 onNewWorktree();
               }}
-              className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
+              className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
               title={t("chat.tab.newWorktreeTitle")}
             >
               {t("chat.tab.newWorktreeSession")}

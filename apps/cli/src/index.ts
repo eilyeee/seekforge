@@ -28,6 +28,7 @@ import {
   memoryListCommand,
   memoryRejectCommand,
   memoryRemoveCommand,
+  memoryStatsCommand,
 } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
@@ -49,7 +50,17 @@ import {
 
 const program = new Command();
 
-const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+// In a normal install/dev run this reads the package version. In a bun
+// --compile sidecar binary (the Tauri-bundled `seekforge-server`) the
+// package.json isn't on the virtual FS, so fall back to a constant rather
+// than crashing — the version string is only used for display.
+const version = ((): string => {
+  try {
+    return (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 // A machine output mode is requested when argv asks for json/stream-json (via
 // --json or --output-format json|stream-json). Used to gate BOTH color (must
@@ -532,11 +543,25 @@ memory
     memoryRejectCommand(id);
   });
 memory
+  .command("stats")
+  .description("print memory extraction-quality stats (read-only)")
+  .action(() => {
+    memoryStatsCommand();
+  });
+memory
   .command("compact")
   .option("--dry-run", "show what would be merged/removed without rewriting project.md")
+  .option(
+    "--prune-unused <days>",
+    "archive facts never used and older than <days> to project-archive.md",
+    (value: string) => {
+      const n = Number.parseInt(value, 10);
+      return Number.isInteger(n) && n >= 0 && String(n) === value.trim() ? n : undefined;
+    },
+  )
   .description("collapse duplicate and near-duplicate facts in project.md (deterministic)")
-  .action((opts: { dryRun?: boolean }) => {
-    memoryCompactCommand(opts);
+  .action((opts: { dryRun?: boolean; pruneUnused?: number }) => {
+    memoryCompactCommand({ dryRun: opts.dryRun, pruneUnusedDays: opts.pruneUnused });
   });
 
 const evolve = program

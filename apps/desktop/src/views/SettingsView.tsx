@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
-import { Badge, Button, Card, Input, TextArea } from "../components/ui";
+import { Badge, Button, Card, IconSettings, Input, TextArea } from "../components/ui";
 import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -35,6 +35,56 @@ function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void 
   );
 }
 
+/** A card wrapping a related group of settings under a small uppercase header. */
+function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <h2 className="mb-2 px-1 text-2xs uppercase tracking-wider text-tertiary">{title}</h2>
+      <Card flush className="divide-y divide-subtle">{children}</Card>
+    </section>
+  );
+}
+
+/**
+ * One settings row: a left-hand label + optional description, and a right-hand
+ * control. Stacks the control under the label on narrow widths.
+ */
+function SettingsRow({
+  label,
+  description,
+  children,
+  stacked = false,
+}: {
+  label: ReactNode;
+  description?: ReactNode;
+  children: ReactNode;
+  /** Place the control full-width under the label (for multi-line inputs). */
+  stacked?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col gap-2 p-4 ${
+        stacked ? "" : "sm:flex-row sm:items-start sm:justify-between sm:gap-6"
+      }`}
+    >
+      <div className="min-w-0 sm:pt-1.5">
+        <div className="text-sm font-medium text-primary">{label}</div>
+        {description && <p className="mt-0.5 text-2xs text-tertiary">{description}</p>}
+      </div>
+      <div
+        className={`flex w-full shrink-0 gap-2 ${
+          stacked ? "" : "sm:w-auto sm:max-w-md sm:flex-1 sm:justify-end"
+        }`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const SELECT_CLASS =
+  "focus-ring w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70";
+
 /** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools). */
 function McpSection() {
   const t = useT();
@@ -63,21 +113,21 @@ function McpSection() {
   };
 
   return (
-    <div>
-      <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
+    <section>
+      <h2 className="mb-2 px-1 text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
       {loadError && (
         <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{loadError}</div>
       )}
       {servers === null ? (
-        !loadError && <p className="text-sm text-tertiary">{t("settings.loading")}</p>
+        !loadError && <p className="px-1 text-sm text-tertiary">{t("settings.loading")}</p>
       ) : servers.length === 0 ? (
-        <p className="text-sm text-tertiary">{t("settings.mcpEmpty")}</p>
+        <p className="px-1 text-sm text-tertiary">{t("settings.mcpEmpty")}</p>
       ) : (
         <div className="space-y-3">
           {servers.map((srv) => {
             const state = tools[srv.name];
             return (
-              <Card key={srv.name} flush className="bg-surface-raised/60 p-3">
+              <Card key={srv.name} className="p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm text-primary">{srv.name}</span>
                   <Badge tone={srv.trusted ? "ok" : "neutral"}>{t(srv.trusted ? "settings.mcpTrusted" : "settings.mcpUntrusted")}</Badge>
@@ -117,7 +167,7 @@ function McpSection() {
         </div>
       )}
       {servers !== null && servers.length > 0 && <McpResourcesSection />}
-    </div>
+    </section>
   );
 }
 
@@ -149,7 +199,7 @@ function McpResourcesSection() {
 
   return (
     <div className="mt-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 px-1">
         <h3 className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpResources")}</h3>
         <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={load}>
           {state === "loading" ? t("settings.mcpListing") : state === null ? t("settings.mcpListResources") : t("settings.mcpRefresh")}
@@ -159,13 +209,13 @@ function McpResourcesSection() {
         <div className="mt-2">
           {Array.isArray(state) ? (
             state.length === 0 ? (
-              <p className="text-xs text-tertiary">{t("settings.mcpResourcesEmpty")}</p>
+              <p className="px-1 text-xs text-tertiary">{t("settings.mcpResourcesEmpty")}</p>
             ) : (
               <ul className="space-y-1">
                 {state.map((r) => (
                   <li
                     key={`${r.server}:${r.uri}`}
-                    className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised/60 px-2 py-1 text-xs"
+                    className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised px-2 py-1 text-xs"
                   >
                     <span className="font-mono text-accent">{r.server}</span>
                     <span className="min-w-0 flex-1 truncate font-mono text-secondary" title={r.uri}>
@@ -193,34 +243,28 @@ function McpResourcesSection() {
   );
 }
 
-/** Appearance (theme) + native notification on/off. Both persist locally. */
+/** Appearance (theme) + language + native notification on/off. All persist locally. */
 function PreferencesSection() {
   const [notify, setNotify] = useState(notificationsEnabled());
   const t = useT();
   const locale = useLocale();
   return (
-    <div className="space-y-3">
-      <div>
-        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.appearance")}</h2>
-        <div className="flex items-center gap-3">
-          <ThemeSwitcher />
-          <span className="text-2xs text-tertiary">{t("settings.appearanceHint")}</span>
-        </div>
-      </div>
-      <div>
-        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("lang.label")}</h2>
+    <SettingsGroup title={t("settings.appearance")}>
+      <SettingsRow label={t("settings.appearance")} description={t("settings.appearanceHint")}>
+        <ThemeSwitcher />
+      </SettingsRow>
+      <SettingsRow label={t("lang.label")}>
         <select
           value={locale}
           onChange={(e) => setLocale(e.target.value as Locale)}
-          className="focus-ring rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70"
+          className="focus-ring w-full rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70"
         >
           <option value="en">{t("lang.en")}</option>
           <option value="zh-CN">{t("lang.zh")}</option>
         </select>
-      </div>
-      <div>
-        <h2 className="mb-2 text-2xs uppercase tracking-wider text-tertiary">{t("settings.notifications")}</h2>
-        <label className="flex items-center gap-2 text-xs text-secondary">
+      </SettingsRow>
+      <SettingsRow label={t("settings.notifications")} description={t("settings.notifyLabel")}>
+        <label className="flex items-center gap-2 self-center text-xs text-secondary">
           <input
             type="checkbox"
             checked={notify}
@@ -230,14 +274,11 @@ function PreferencesSection() {
             }}
             className="accent-accent"
           />
-          {t("settings.notifyLabel")}
         </label>
-      </div>
-    </div>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
-
-const FIELD_LABEL = "mb-1 block text-2xs uppercase tracking-wider text-tertiary";
 
 export function SettingsView() {
   const t = useT();
@@ -285,8 +326,9 @@ export function SettingsView() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">{t("settings.title")}</h1>
+      <header className="flex items-center gap-2 border-b border-subtle px-6 py-4">
+        <IconSettings className="text-tertiary" />
+        <h1 className="text-lg font-semibold text-primary">{t("settings.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
@@ -295,16 +337,19 @@ export function SettingsView() {
         {loading && !error ? (
           <p className="text-tertiary">{t("settings.loading")}</p>
         ) : (
-          <div className="max-w-xl space-y-5">
-            <label className="flex items-center gap-2 text-xs text-secondary">
+          <div className="max-w-3xl space-y-6">
+            <Card className="flex items-start gap-3 p-4">
               <input
+                id="settings-config-scope"
                 type="checkbox"
                 checked={global}
                 onChange={(e) => setGlobal(e.target.checked)}
-                className="accent-accent"
+                className="mt-0.5 accent-accent"
               />
-              {t("settings.configScope")}
-            </label>
+              <label htmlFor="settings-config-scope" className="text-sm text-secondary">
+                {t("settings.configScope")}
+              </label>
+            </Card>
 
             <PreferencesSection />
 
@@ -315,53 +360,45 @@ export function SettingsView() {
               const parsed = modelsList.split(",").map((s) => s.trim()).filter(Boolean);
               const options = model && !parsed.includes(model) ? [model, ...parsed] : parsed;
               return (
-                <>
-                  <div>
-                    <label className={FIELD_LABEL}>{t("settings.modelLabel")}</label>
-                    <div className="flex gap-2">
-                      <select
-                        value={model}
-                        onChange={(e) => setModel(e.target.value)}
-                        className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                      >
-                        {options.length === 0 && <option value="">{t("settings.modelListEmpty")}</option>}
-                        {options.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                      <SaveButton
-                        state={states.model ?? "idle"}
-                        onClick={() => void save("model", model, global)}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className={FIELD_LABEL}>{t("settings.modelsLabel")}</label>
-                    <div className="flex gap-2">
-                      <TextArea
-                        value={modelsList}
-                        onChange={(e) => setModelsList(e.target.value)}
-                        placeholder={t("settings.modelsPlaceholder")}
-                        rows={2}
-                        spellCheck={false}
-                        className="resize-y font-mono"
-                      />
-                      <SaveButton
-                        state={states.models ?? "idle"}
-                        onClick={() => void save("models", modelsList, global)}
-                      />
-                    </div>
-                    <p className="mt-1 text-2xs text-tertiary">{t("settings.modelsHint")}</p>
-                  </div>
-                </>
+                <SettingsGroup title={t("settings.model")}>
+                  <SettingsRow label={t("settings.modelLabel")}>
+                    <select
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      className={SELECT_CLASS}
+                    >
+                      {options.length === 0 && <option value="">{t("settings.modelListEmpty")}</option>}
+                      {options.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <SaveButton
+                      state={states.model ?? "idle"}
+                      onClick={() => void save("model", model, global)}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label={t("settings.modelsLabel")} description={t("settings.modelsHint")} stacked>
+                    <TextArea
+                      value={modelsList}
+                      onChange={(e) => setModelsList(e.target.value)}
+                      placeholder={t("settings.modelsPlaceholder")}
+                      rows={2}
+                      spellCheck={false}
+                      className="flex-1 resize-y font-mono"
+                    />
+                    <SaveButton
+                      state={states.models ?? "idle"}
+                      onClick={() => void save("models", modelsList, global)}
+                    />
+                  </SettingsRow>
+                </SettingsGroup>
               );
             })()}
 
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.baseUrlLabel")}</label>
-              <div className="flex gap-2">
+            <SettingsGroup title={t("settings.apiKey")}>
+              <SettingsRow label={t("settings.baseUrlLabel")}>
                 <Input
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
@@ -369,114 +406,8 @@ export function SettingsView() {
                   className="font-mono"
                 />
                 <SaveButton state={states.baseUrl ?? "idle"} onClick={() => void save("baseUrl", baseUrl, global)} />
-              </div>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.runtimeBinLabel")}</label>
-              <div className="flex gap-2">
-                <Input
-                  value={runtimeBin}
-                  onChange={(e) => setRuntimeBin(e.target.value)}
-                  placeholder={t("settings.runtimeBinPlaceholder")}
-                  className="font-mono"
-                />
-                <SaveButton
-                  state={states.runtimeBin ?? "idle"}
-                  onClick={() => void save("runtimeBin", runtimeBin, global)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.commandAllowlistLabel")}</label>
-              <div className="flex gap-2">
-                <TextArea
-                  value={allowlist}
-                  onChange={(e) => setAllowlist(e.target.value)}
-                  placeholder={t("settings.allowlistPlaceholder")}
-                  rows={3}
-                  className="resize-y font-mono"
-                />
-                <SaveButton
-                  state={states.commandAllowlist ?? "idle"}
-                  onClick={() => void save("commandAllowlist", allowlist, global)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.sandboxLabel")}</label>
-              <div className="flex gap-2">
-                <select
-                  value={sandbox}
-                  onChange={(e) => setSandbox(e.target.value)}
-                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                >
-                  <option value="off">{t("settings.sandboxOff")}</option>
-                  <option value="workspace-write">{t("settings.sandboxWorkspaceWrite")}</option>
-                  <option value="restricted">{t("settings.sandboxRestricted")}</option>
-                </select>
-                <SaveButton state={states.sandbox ?? "idle"} onClick={() => void save("sandbox", sandbox, global)} />
-              </div>
-              <p className="mt-1 text-2xs text-tertiary">{t("settings.sandboxHint")}</p>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.compactionLabel")}</label>
-              <div className="flex gap-2">
-                <select
-                  value={compaction}
-                  onChange={(e) => setCompaction(e.target.value)}
-                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                >
-                  <option value="mechanical">{t("settings.compactionMechanical")}</option>
-                  <option value="llm">{t("settings.compactionLlm")}</option>
-                </select>
-                <SaveButton
-                  state={states.compaction ?? "idle"}
-                  onClick={() => void save("compaction", compaction, global)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.reasoningEffortLabel")}</label>
-              <div className="flex gap-2">
-                <select
-                  value={reasoningEffort}
-                  onChange={(e) => setReasoningEffort(e.target.value)}
-                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                >
-                  <option value="">{t("settings.reasoningDefault")}</option>
-                  <option value="high">{t("settings.reasoningHigh")}</option>
-                  <option value="max">{t("settings.reasoningMax")}</option>
-                </select>
-                <SaveButton
-                  state={states.reasoningEffort ?? "idle"}
-                  onClick={() => void save("reasoningEffort", reasoningEffort, global)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="flex items-center gap-2 text-xs text-secondary">
-                <input
-                  type="checkbox"
-                  checked={thinking}
-                  onChange={(e) => {
-                    setThinking(e.target.checked);
-                    void save("thinking", String(e.target.checked), global);
-                  }}
-                  className="accent-accent"
-                />
-                {t("settings.thinkingLabel")}
-              </label>
-            </div>
-
-            <div>
-              <label className={FIELD_LABEL}>{t("settings.apiKeyLabel")}</label>
-              <div className="flex gap-2">
+              </SettingsRow>
+              <SettingsRow label={t("settings.apiKeyLabel")} description={t("settings.apiKeyHint")}>
                 <Input
                   type="password"
                   value={apiKey}
@@ -497,9 +428,90 @@ export function SettingsView() {
                     });
                   }}
                 />
-              </div>
-              <p className="mt-1 text-2xs text-tertiary">{t("settings.apiKeyHint")}</p>
-            </div>
+              </SettingsRow>
+              <SettingsRow label={t("settings.runtimeBinLabel")}>
+                <Input
+                  value={runtimeBin}
+                  onChange={(e) => setRuntimeBin(e.target.value)}
+                  placeholder={t("settings.runtimeBinPlaceholder")}
+                  className="font-mono"
+                />
+                <SaveButton
+                  state={states.runtimeBin ?? "idle"}
+                  onClick={() => void save("runtimeBin", runtimeBin, global)}
+                />
+              </SettingsRow>
+            </SettingsGroup>
+
+            <SettingsGroup title={t("settings.sandboxLabel")}>
+              <SettingsRow label={t("settings.commandAllowlistLabel")} stacked>
+                <TextArea
+                  value={allowlist}
+                  onChange={(e) => setAllowlist(e.target.value)}
+                  placeholder={t("settings.allowlistPlaceholder")}
+                  rows={3}
+                  className="flex-1 resize-y font-mono"
+                />
+                <SaveButton
+                  state={states.commandAllowlist ?? "idle"}
+                  onClick={() => void save("commandAllowlist", allowlist, global)}
+                />
+              </SettingsRow>
+              <SettingsRow label={t("settings.sandboxLabel")} description={t("settings.sandboxHint")}>
+                <select
+                  value={sandbox}
+                  onChange={(e) => setSandbox(e.target.value)}
+                  className={SELECT_CLASS}
+                >
+                  <option value="off">{t("settings.sandboxOff")}</option>
+                  <option value="workspace-write">{t("settings.sandboxWorkspaceWrite")}</option>
+                  <option value="restricted">{t("settings.sandboxRestricted")}</option>
+                </select>
+                <SaveButton state={states.sandbox ?? "idle"} onClick={() => void save("sandbox", sandbox, global)} />
+              </SettingsRow>
+              <SettingsRow label={t("settings.compactionLabel")}>
+                <select
+                  value={compaction}
+                  onChange={(e) => setCompaction(e.target.value)}
+                  className={SELECT_CLASS}
+                >
+                  <option value="mechanical">{t("settings.compactionMechanical")}</option>
+                  <option value="llm">{t("settings.compactionLlm")}</option>
+                </select>
+                <SaveButton
+                  state={states.compaction ?? "idle"}
+                  onClick={() => void save("compaction", compaction, global)}
+                />
+              </SettingsRow>
+              <SettingsRow label={t("settings.reasoningEffortLabel")}>
+                <select
+                  value={reasoningEffort}
+                  onChange={(e) => setReasoningEffort(e.target.value)}
+                  className={SELECT_CLASS}
+                >
+                  <option value="">{t("settings.reasoningDefault")}</option>
+                  <option value="high">{t("settings.reasoningHigh")}</option>
+                  <option value="max">{t("settings.reasoningMax")}</option>
+                </select>
+                <SaveButton
+                  state={states.reasoningEffort ?? "idle"}
+                  onClick={() => void save("reasoningEffort", reasoningEffort, global)}
+                />
+              </SettingsRow>
+              <SettingsRow label={t("settings.thinkingLabel")}>
+                <label className="flex items-center gap-2 self-center text-xs text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={thinking}
+                    onChange={(e) => {
+                      setThinking(e.target.checked);
+                      void save("thinking", String(e.target.checked), global);
+                    }}
+                    className="accent-accent"
+                  />
+                </label>
+              </SettingsRow>
+            </SettingsGroup>
 
             <McpSection />
           </div>

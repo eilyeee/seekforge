@@ -3,7 +3,7 @@
  *
  * `ThemeChoice` is what the user picks (and what we persist); `ResolvedTheme`
  * is the concrete palette to paint ("system" follows the OS). The applied
- * value is written to `<html data-theme="…">` (only for light — dark is the
+ * value is written to `<html data-theme="…">` (only for dark — light is the
  * default `:root`, so we omit the attribute to keep the markup clean).
  */
 
@@ -36,9 +36,9 @@ export function resolveTheme(choice: ThemeChoice, systemPrefersDark: boolean): R
 }
 
 /**
- * The `data-theme` attribute value for a resolved theme. Dark is the default
+ * The `data-theme` attribute value for a resolved theme. Light is the default
  * (`:root`), so it maps to null — meaning "remove the attribute".
  */
-export function dataThemeAttr(resolved: ResolvedTheme): "light" | null {
-  return resolved === "light" ? "light" : null;
+export function dataThemeAttr(resolved: ResolvedTheme): "dark" | null {
+  return resolved === "dark" ? "dark" : null;
 }

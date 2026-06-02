@@ -12,6 +12,7 @@ import type { ChatMessage, FinalReport } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import {
   appendCandidates,
+  appendProjectFact,
   MEMORY_CANDIDATE_TYPES,
   readCandidates,
   readProjectMemory,
@@ -27,6 +28,14 @@ export type ExtractMemoryInput = {
   report: FinalReport;
   /** Full session messages (already compacted upstream if needed). */
   messages: ChatMessage[];
+  /**
+   * Opt-in (default OFF): when set, extracted facts whose model confidence is
+   * >= this threshold (and which pass the injection + dedup filters) are
+   * appended DIRECTLY to project.md as APPROVED candidates (fact-meta recorded
+   * via appendProjectFact). Facts below the threshold stay pending as usual.
+   * Undefined = current behavior (every fact queued as pending).
+   */
+  autoApproveConfidence?: number;
 };
 
 export type ExtractMemoryResult = {
@@ -86,22 +95,78 @@ const SYSTEM_PROMPT = [
   "confidence is 0..1. Output nothing outside the ```json fence.",
 ].join("\n");
 
-/** Compact transcript digest: roles + first ~200 chars per message. */
+/**
+ * Lines whose body carries durable signal (tool results, file changes,
+ * decisions, errors) — these are preferred over filler when a long session
+ * exceeds the char budget. Deterministic, case-insensitive.
+ */
+const SIGNAL_PATTERN =
+  /\b(error|fail(?:ed|ure)?|because|decided?|chose|instead|fix(?:ed|es)?|test|verif|warn|config|requires?|must|cannot|gotcha|note)\b|tool:|"ok":\s*false|✗|→/i;
+
+/**
+ * Compact transcript digest: roles + first ~200 chars per message, capped at
+ * DIGEST_MAX_CHARS. Deterministic.
+ *
+ * Long sessions used to keep only the tail, dropping facts buried earlier. We
+ * now keep BOTH the HEAD (the task + early turns) and the TAIL (recent turns),
+ * and when the head+tail anchors still leave room we fill the gap by priority:
+ * signal-carrying middle lines (tool results, errors, decisions) before filler.
+ * Output preserves original chronological order. When everything fits, this is
+ * exactly "every line in order" (no behavior change for short sessions).
+ */
 export function buildTranscriptDigest(messages: ChatMessage[]): string {
   const lines = messages.map((m) => {
     const snippet = m.content.replace(/\s+/g, " ").trim().slice(0, MESSAGE_SNIPPET_CHARS);
     return `${m.role}: ${snippet}`;
   });
-  // Keep the most recent lines when over budget.
-  const kept: string[] = [];
+
+  // Fast path: everything fits (join cost = sum of line lengths + newlines).
+  const totalCost = lines.reduce((n, l) => n + l.length + 1, lines.length > 0 ? -1 : 0);
+  if (totalCost <= DIGEST_MAX_CHARS) return lines.join("\n");
+
+  // Over budget. Greedily select indices to KEEP, then emit them in order.
+  const n = lines.length;
+  const selected = new Array<boolean>(n).fill(false);
   let chars = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i] as string;
-    const cost = line.length + (kept.length > 0 ? 1 : 0);
-    if (chars + cost > DIGEST_MAX_CHARS) break;
-    kept.unshift(line);
+  let count = 0;
+  const tryAdd = (i: number): boolean => {
+    if (selected[i]) return true;
+    const cost = (lines[i] as string).length + (count > 0 ? 1 : 0);
+    if (chars + cost > DIGEST_MAX_CHARS) return false;
+    selected[i] = true;
     chars += cost;
+    count++;
+    return true;
+  };
+
+  // 1) Anchor the HEAD and TAIL by interleaving from both ends so neither end
+  //    starves the other, until adding the next anchor would overflow.
+  let head = 0;
+  let tail = n - 1;
+  while (head <= tail) {
+    if (!tryAdd(head)) break;
+    head++;
+    if (head > tail) break;
+    if (!tryAdd(tail)) break;
+    tail--;
   }
+
+  // 2) Fill remaining budget with signal-carrying middle lines first, then any
+  //    remaining lines — both scanned in order for determinism.
+  for (const wantSignal of [true, false]) {
+    for (let i = 0; i < n; i++) {
+      if (selected[i]) continue;
+      const isSignal = SIGNAL_PATTERN.test(lines[i] as string);
+      if (wantSignal !== isSignal) continue;
+      if (!tryAdd(i)) {
+        // Keep scanning: a later (shorter) line might still fit.
+        continue;
+      }
+    }
+  }
+
+  const kept: string[] = [];
+  for (let i = 0; i < n; i++) if (selected[i]) kept.push(lines[i] as string);
   return kept.join("\n");
 }
 
@@ -226,21 +291,32 @@ export async function extractMemoryFromSession(
     const sessionOffset = existing.filter((c) => c.sourceSessionId === input.sessionId).length;
 
     const createdAt = new Date().toISOString();
+    // Opt-in auto-approval (default off): a finite, in-range threshold enables it.
+    const threshold = input.autoApproveConfidence;
+    const autoApproveEnabled =
+      typeof threshold === "number" && Number.isFinite(threshold);
+
     const candidates: MemoryCandidate[] = [];
     for (const fact of parsed.facts) {
       if (INJECTION_PATTERN.test(fact.content)) continue;
       if (knownContents.has(fact.content)) continue;
       if (projectMemory.includes(fact.content)) continue;
       if (candidates.some((c) => c.content === fact.content)) continue;
-      candidates.push({
+      const autoApprove = autoApproveEnabled && fact.confidence >= (threshold as number);
+      const candidate: MemoryCandidate = {
         id: `mc-${input.sessionId}-${sessionOffset + candidates.length + 1}`,
         content: fact.content,
         type: fact.type,
         confidence: fact.confidence,
         sourceSessionId: input.sessionId,
         createdAt,
-        status: "pending",
-      });
+        status: autoApprove ? "approved" : "pending",
+      };
+      // High-confidence facts go straight to project.md (records fact-meta);
+      // low-confidence ones stay pending for review. Both are audited in
+      // candidates.jsonl with their resolved status.
+      if (autoApprove) appendProjectFact(input.workspace, candidate);
+      candidates.push(candidate);
     }
 
     appendCandidates(input.workspace, candidates);

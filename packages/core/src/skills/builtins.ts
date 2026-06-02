@@ -24,16 +24,17 @@ Reproduce first, locate the root cause, fix minimally, prove it stays fixed.
 
 ## Procedure
 
-1. Reproduce first. Use search_text on the error message or symptom to find the
-   failing path, then run the failing command or test with run_command. Do not
-   edit anything until you have seen the failure yourself.
-2. Locate the root cause. Use search_text and read_file on the involved files;
-   follow the data flow rather than trusting only the top stack frame.
-3. Apply the smallest fix that addresses the cause, not the symptom, using
-   apply_patch (oldString must match uniquely — include surrounding lines).
-4. If list_scripts shows a test setup, add or adjust a regression test that
-   fails before the fix and passes after it (write_file or apply_patch).
-5. Re-run the original reproduction and the test suite with run_command.
+1. Reproduce the failure first. search_text the error/symptom to find the path,
+   then run_command the failing command or test. Do not edit until you have seen
+   the failure with your own eyes.
+2. Find the REAL root cause: read_file the implicated code and follow the data
+   flow backward from the failure. Do not guess from the stack top — confirm in
+   the source why the wrong value/branch happens.
+3. apply_patch the SMALLEST fix that removes the cause, not the symptom (a null
+   check that hides a bad value is a symptom fix). oldString must match uniquely.
+4. Add or adjust a regression guard: a test that fails before your fix and
+   passes after (apply_patch/write_file), if the project has a test setup.
+5. Verify by re-running the exact failing case with run_command, then the suite.
 
 ## Verification
 
@@ -72,16 +73,18 @@ test or the production code is wrong before touching either.
 
 ## Procedure
 
-1. Run the failing test in isolation with run_command (use the runner's file or
-   name filter) and read the actual error output — never rely on a paraphrase.
-2. read_file both the test and the code under test. Use git_status and git_diff
-   to see what changed recently; the failure usually points at the newest edit.
-3. Decide which side is broken:
-   - broken code: the test encodes the intended behavior and the code drifted;
-   - broken test: the behavior changed on purpose and the assertion is stale.
-4. Fix only the broken side with apply_patch. Never weaken an assertion just to
-   make it pass; if intent is unclear, search_text for related docs or usages.
-5. Re-run the specific test with run_command, then the whole suite.
+1. Run the failing test in isolation with run_command (runner's file/name
+   filter) and read the REAL error output — the actual assertion diff or stack,
+   never a paraphrase.
+2. read_file both the test and the code under test; git_status/git_diff to see
+   the newest edit, which usually caused it.
+3. Decide which side is wrong before touching either:
+   - code is wrong: the test encodes intended behavior and the code drifted;
+   - test is wrong: behavior changed on purpose and the assertion is stale.
+4. Apply the MINIMAL fix to that one side with apply_patch. Never weaken an
+   assertion just to pass; if intent is unclear, search_text for usages/docs.
+5. Re-run the specific test to confirm it is green, then the whole suite to
+   confirm you did not break neighbors.
 
 ## Verification
 
@@ -121,16 +124,16 @@ project's own check command.
 
 ## Procedure
 
-1. Locate all occurrences with search_text, including tests, docs, comments,
-   and config files — not just the first hit. Use list_files when the term is
-   too generic to search reliably.
+1. Find EVERY occurrence with search_text — including tests, docs, comments, and
+   config, not just the first hit. Use list_files when the term is too generic
+   to search reliably.
 2. read_file around each hit to confirm it is the same concept, not a
    coincidental name collision.
-3. Make targeted edits with apply_patch; keep oldString unique per edit and
-   preserve the surrounding style (quotes, naming convention, formatting).
+3. Change them all consistently with apply_patch: keep oldString unique per edit
+   and preserve the surrounding style (quotes, naming convention, formatting).
 4. If a file is renamed or created, use write_file and update its importers.
-5. Run the project's check command (typecheck/lint/test from list_scripts)
-   with run_command.
+5. Run the project's checks (typecheck/lint/test from list_scripts) with
+   run_command, then search_text the old text again to catch any leftover.
 
 ## Verification
 
@@ -231,20 +234,19 @@ do not fix them unless asked.
 
 ## Procedure
 
-1. Collect the change set with git_diff (and git_status); read every touched
-   file's surrounding context with read_file - never judge a hunk in isolation.
-2. First pass - correctness only: logic errors, off-by-ones, broken error paths,
-   race conditions, missing await, wrong types crossing boundaries, behavior
-   changes the diff does not mention.
-3. Second pass - safety: injection, path traversal, secrets in code or logs,
-   unvalidated input reaching exec/fs/network.
-4. Third pass - quality, only where it matters: dead code, duplicated logic the
-   repo already has a helper for, misleading names, missing tests for changed
-   behavior.
-5. If the diff claims a behavior ("fixes X", "tests pass"), confirm it: run the
-   relevant test or command with run_command rather than trusting the message.
-6. For each finding: severity (bug / risk / style), file:line, one-line why,
-   and the smallest suggested fix. Skip nitpicks a formatter would catch.
+1. Collect the change set with git_diff (and git_status); read_file each touched
+   file's surrounding context — never judge a hunk in isolation.
+2. First and most important pass — correctness/security bugs: logic errors,
+   off-by-ones, broken error paths, missing await, races, wrong types crossing
+   boundaries, undocumented behavior changes, and injection / path traversal /
+   secrets in code or logs / unvalidated input reaching exec/fs/network.
+3. Second pass — quality, only where it matters: dead code, logic the repo
+   already has a helper for, misleading names, missing tests for changed behavior.
+4. If the diff claims a behavior ("fixes X", "tests pass"), confirm it by
+   running the relevant test/command with run_command — do not trust the message.
+5. Report each finding as severity (bug / risk / style) + file:line + one-line
+   why + the SMALLEST suggested fix. Review the change; do not rewrite the
+   author's style, and skip nitpicks a formatter would catch.
 
 ## Verification
 
@@ -326,16 +328,18 @@ Prove a change actually works by running the code, not by reading it.
 
 ## Procedure
 
-1. Identify the narrowest command that exercises the changed behavior: the
-   specific test file, a CLI invocation, a request against a dev server.
-   If unsure what changed, read_file the touched files (git_diff lists them).
-2. Run it with run_command. For servers/watchers use background:true, poll
-   task_output until ready, exercise the endpoint, then task_kill.
-3. If it fails: that is the result - report the failure honestly with output,
-   do not paper over it or claim partial success.
-4. Run the project's standard check (test/lint script) to catch fallout
-   beyond the targeted path.
-5. Report exactly what was run and what each command output proved.
+1. Identify the NARROWEST command that exercises the changed behavior: the
+   specific test file, a CLI invocation, a request against a dev server. If
+   unsure what changed, read_file the touched files (git_diff lists them).
+2. Actually run it with run_command — do not infer the result from the code. For
+   servers/watchers use background:true, poll task_output until ready, exercise
+   the endpoint, then task_kill.
+3. Also run the project-wide check (test/lint script) to catch fallout beyond
+   the targeted path. Both the targeted run AND this one must pass.
+4. Report the REAL output of each command and what it proved. If it failed, say
+   so plainly with the output; never paper over it or claim partial success.
+5. If you could not run the check at all, state that clearly — do not imply it
+   was verified.
 
 ## Verification
 

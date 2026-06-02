@@ -102,8 +102,9 @@ sandbox: any project command can run arbitrary code from that project.
 
 ## Notes
 
-- Model: `deepseek-chat` (default). `deepseek-reasoner` is not supported yet
-  (no function calling).
+- Model: `deepseek-v4-flash` (default). `deepseek-chat` and `deepseek-reasoner`
+  are deprecated (`deepseek-reasoner` has no function calling). Run
+  `seekforge models` to list current models.
 - Docs, source, and the optional Rust execution backend:
   https://github.com/eilyeee/seekforge
 

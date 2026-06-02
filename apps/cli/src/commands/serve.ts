@@ -33,7 +33,13 @@ function resolveWorkspaces(paths: string[]): string[] {
 /** Starts the local agent server for one or more workspaces; stays alive until Ctrl+C. */
 export async function serveCommand(opts: ServeOptions): Promise<void> {
   const workspaces = resolveWorkspaces(opts.workspaces);
-  const { port, token, close } = await startServer({ workspaces, port: opts.port });
+  // SEEKFORGE_STATIC_DIR lets an embedder point at the built web UI explicitly.
+  // The Tauri sidecar (a bun --compile binary) sets this to the bundled UI
+  // resources, because the default `import.meta.url`-relative lookup cannot find
+  // a real on-disk dist from inside a compiled binary's virtual FS.
+  const envStatic = process.env.SEEKFORGE_STATIC_DIR;
+  const staticDir = envStatic && envStatic.length > 0 ? resolve(envStatic) : undefined;
+  const { port, token, close } = await startServer({ workspaces, port: opts.port, staticDir });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));
   console.log(t("cmd.serve.workspaces", { count: workspaces.length }));

@@ -176,7 +176,7 @@ function Block({ block }: { block: MdBlock }) {
 export function Markdown({ source }: { source: string }) {
   const blocks = useMemo(() => parseMarkdown(source), [source]);
   return (
-    <div className="space-y-2 leading-relaxed text-primary/90">
+    <div className="space-y-2 break-words leading-relaxed text-primary/90">
       {blocks.map((block, i) => (
         <Block key={i} block={block} />
       ))}

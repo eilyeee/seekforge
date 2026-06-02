@@ -107,7 +107,13 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
     ...(config.compaction ? { compaction: config.compaction } : {}),
-    ...(config.routing?.planModel ? { planModel: config.routing.planModel } : {}),
+    ...((config.planModel ?? config.routing?.planModel)
+      ? { planModel: config.planModel ?? config.routing?.planModel }
+      : {}),
+    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+    ...(config.memoryAutoApproveConfidence !== undefined
+      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
+      : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

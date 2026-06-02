@@ -50,8 +50,14 @@ export type TuiConfig = {
   visionModel?: { model: string; baseUrl?: string; apiKey?: string };
   /** Cache identical non-streaming LLM calls on disk (evals/subagents). */
   llmCache?: boolean;
-  /** Model routing: /plan runs think on this model (e.g. deepseek-v4-pro). */
+  /** Flat documented key: /plan runs think on this model (e.g. deepseek-v4-pro). Takes precedence over routing.planModel. */
+  planModel?: string;
+  /** Model routing (back-compat): /plan runs think on this model (e.g. deepseek-v4-pro). */
   routing?: { planModel?: string };
+  /** Default-off: hand the run to planModel once it loops on a failure. */
+  escalateOnFailure?: boolean;
+  /** Auto-approve extracted memories at/above this confidence (0-1); unset = no auto-approve. */
+  memoryAutoApproveConfidence?: number;
 };
 
 function readJson(path: string): TuiConfig {

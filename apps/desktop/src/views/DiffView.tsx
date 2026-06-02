@@ -4,24 +4,30 @@ import { useStore } from "../store";
 import { diffTotals, splitDiffByFile, type FileDiff } from "../lib/diff-files";
 import { DiffBlock } from "../components/DiffBlock";
 import { useT } from "../lib/i18n";
-import { Button, EmptyState, IconChevron, IconDiff } from "../components/ui";
+import { Badge, Button, Card, EmptyState, IconChevron, IconDiff, IconSparkle } from "../components/ui";
 
 function FileSection({ file }: { file: FileDiff }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="overflow-hidden rounded-lg border border-subtle">
+    <Card flush className="overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="focus-ring flex w-full items-center gap-2 bg-surface-raised/60 px-3 py-1.5 text-left font-mono text-xs hover:bg-surface-overlay"
+        className="focus-ring flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-overlay/60"
       >
-        <span className="text-tertiary"><IconChevron size={10} className={open ? 'rotate-90' : ''} /></span>
-        <span className="flex-1 truncate text-primary">{file.path}</span>
-        <span className="text-ok">+{file.additions}</span>
-        <span className="text-danger">-{file.deletions}</span>
+        <span className="text-tertiary">
+          <IconChevron size={12} className={open ? "rotate-90" : ""} />
+        </span>
+        <span className="flex-1 truncate font-mono text-xs text-primary">{file.path}</span>
+        <Badge tone="ok">+{file.additions}</Badge>
+        <Badge tone="danger">-{file.deletions}</Badge>
       </button>
-      {open && <DiffBlock diff={file.text} />}
-    </div>
+      {open && (
+        <div className="px-3 pb-3">
+          <DiffBlock diff={file.text} />
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -57,36 +63,109 @@ export function DiffView() {
   }, [refresh]);
 
   const totals = files ? diffTotals(files) : null;
+  const hasChanges = !!totals && totals.files > 0;
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-sm font-semibold text-primary">{t("diff.title")}</h1>
-        <label className="flex items-center gap-1.5 text-xs text-secondary">
-          <input type="checkbox" checked={staged} onChange={(e) => setStaged(e.target.checked)} className="accent-accent" />
-          {t("diff.staged")}
-        </label>
-        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
-          {t("diff.refresh")}
-        </Button>
-        {totals && totals.files > 0 && (
-          <span className="font-mono text-xs text-tertiary">
-            {t("diff.fileCount", { count: totals.files })} <span className="text-ok">+{totals.additions}</span>{" "}
+    <div className="flex h-full flex-col bg-surface">
+      {/* Header bar */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-subtle px-6 py-4">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-muted text-accent-hover">
+            <IconDiff size={16} />
+          </span>
+          <h1 className="text-lg font-semibold text-primary">{t("diff.title")}</h1>
+        </div>
+
+        {hasChanges && (
+          <span className="flex items-center gap-2 font-mono text-xs text-tertiary">
+            {t("diff.fileCount", { count: totals.files })}
+            <span className="text-ok">+{totals.additions}</span>
             <span className="text-danger">-{totals.deletions}</span>
           </span>
         )}
-        {truncated && <span className="text-xs text-warn">{t("diff.truncated")}</span>}
+
+        {truncated && <Badge tone="warn">{t("diff.truncated")}</Badge>}
+
+        <div className="ml-auto flex items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
+            <input
+              type="checkbox"
+              checked={staged}
+              onChange={(e) => setStaged(e.target.checked)}
+              className="accent-accent"
+            />
+            {t("diff.staged")}
+          </label>
+          <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+            {t("diff.refresh")}
+          </Button>
+        </div>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>
-      )}
-      {!error && loading && files === null && <p className="text-sm text-tertiary">{t("diff.loading")}</p>}
-      {!error && !loading && files && files.length === 0 && (
-        <EmptyState icon={<IconDiff size={28} />} title={t("diff.emptyTitle")} description={t("diff.emptyDescription")} />
-      )}
-      <div className="flex-1 space-y-3 overflow-auto">
-        {files?.map((f) => <FileSection key={f.path} file={f} />)}
+      {/* Body */}
+      <div className="flex-1 space-y-4 overflow-auto px-6 py-5">
+        {error && (
+          <div className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+            {error}
+          </div>
+        )}
+
+        {!error && loading && files === null && (
+          <p className="text-sm text-tertiary">{t("diff.loading")}</p>
+        )}
+
+        {!error && !loading && files && files.length === 0 && (
+          <EmptyState
+            icon={<IconDiff size={28} />}
+            title={t("diff.emptyTitle")}
+            description={t("diff.emptyDescription")}
+          />
+        )}
+
+        {/* Summary card */}
+        {hasChanges && (
+          <Card className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-muted text-accent-hover">
+              <IconSparkle size={16} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-primary">{t("diff.title")}</p>
+              <p className="mt-0.5 font-mono text-xs text-secondary">
+                {t("diff.fileCount", { count: totals.files })}{" "}
+                <span className="text-ok">+{totals.additions}</span>{" "}
+                <span className="text-danger">-{totals.deletions}</span>
+              </p>
+            </div>
+          </Card>
+        )}
+
+        {/* Per-file diff cards */}
+        {files?.map((f) => (
+          <FileSection key={f.path} file={f} />
+        ))}
+
+        {/* Validation suggestion card */}
+        {hasChanges && (
+          <Card className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-muted text-accent-hover">
+                <IconSparkle size={16} />
+              </span>
+              <p className="text-sm text-secondary">{t("chat.home.action.runTestsTask")}</p>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                const s = useStore.getState();
+                s.setView("chat");
+                s.sendTask(t("chat.home.action.runTestsTask"));
+              }}
+            >
+              {t("chat.home.action.runTests")}
+            </Button>
+          </Card>
+        )}
       </div>
     </div>
   );

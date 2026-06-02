@@ -40,14 +40,14 @@ const runCommandSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Run without waiting; returns a taskId for task_output/task_kill. Use for dev servers and watchers.",
+      "Run without waiting; returns a taskId immediately. Use for long-running processes that do not exit on their own (dev servers, watchers); read their output via task_output and stop them with task_kill.",
     ),
 });
 
 const runCommand = defineTool({
   name: "run_command",
   description:
-    "Run a non-interactive shell command via /bin/sh -c in the workspace root (or cwd). Default timeout 30s (120s tests, 180s builds); stdout/stderr are head/tail-truncated at 20,000 chars and secrets redacted. For dev servers/watchers pass background:true and follow up with task_output/task_kill; never start editors, REPLs, or anything that waits for input. Destructive commands are refused; dependency installs require confirmation.",
+    "Run a non-interactive shell command via /bin/sh -c in the workspace root (or cwd). Default timeout 30s (120s tests, 180s builds); stdout/stderr are head/tail-truncated at 20,000 chars and secrets redacted. Pass background:true for long-running processes that never exit on their own (dev servers, watchers, `tail -f`) — it returns a taskId immediately; check its output later with task_output and stop it with task_kill. Never start editors, REPLs, or anything that waits for input. Destructive commands are refused; dependency installs require confirmation.",
   schema: runCommandSchema,
   classify: (args, ctx) => {
     const cls = classifyCommand(args.command, ctx.policy.commandAllowlist);

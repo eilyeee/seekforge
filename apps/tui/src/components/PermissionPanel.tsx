@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { PermissionRequest } from "@seekforge/shared";
 import { classifyUnifiedDiff } from "../diff.js";
+import { t } from "../strings.js";
 import { DiffCard } from "./DiffCard.js";
 
 /**
@@ -33,7 +34,7 @@ export function PermissionPanel({
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
         <Text color="yellow" bold>
-          Review change: <Text bold>{preview.path}</Text>{" "}
+          {t("permission.reviewChange")} <Text bold>{preview.path}</Text>{" "}
           <Text dimColor>
             [{request.permission}] {request.toolName}
           </Text>
@@ -45,7 +46,7 @@ export function PermissionPanel({
               <Text>
                 <Text color={selected ? "green" : "red"}>{selected ? "[x]" : "[ ]"}</Text>
                 <Text> </Text>
-                <Text bold>Hunk {hunk.index + 1}</Text>
+                <Text bold>{t("permission.hunk")} {hunk.index + 1}</Text>
               </Text>
               <Box paddingLeft={4}>
                 <Text dimColor>{hunk.preview.slice(0, 200)}{hunk.preview.length > 200 ? "…" : ""}</Text>
@@ -53,9 +54,7 @@ export function PermissionPanel({
             </Box>
           );
         })}
-        <Text dimColor>
-          number key toggle hunk · a select all · y confirm · n deny
-        </Text>
+        <Text dimColor>{t("permission.hunkFooter")}</Text>
       </Box>
     );
   }
@@ -64,13 +63,13 @@ export function PermissionPanel({
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
         <Text color="yellow" bold>
-          Review change: <Text bold>{preview.path}</Text>{" "}
+          {t("permission.reviewChange")} <Text bold>{preview.path}</Text>{" "}
           <Text dimColor>
             [{request.permission}] {request.toolName}
           </Text>
         </Text>
         <DiffCard path={preview.path} lines={classifyUnifiedDiff(preview.diff)} />
-        <Text dimColor>Apply this change? y accept · n reject</Text>
+        <Text dimColor>{t("permission.applyChange")}</Text>
       </Box>
     );
   }
@@ -78,26 +77,27 @@ export function PermissionPanel({
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
       <Text color="yellow" bold>
-        Permission required{" "}
+        {t("permission.title")}{" "}
         <Text dimColor>
           [{request.permission}] {request.toolName}
         </Text>
       </Text>
       {request.command ? (
         <Text>
-          <Text dimColor>command: </Text>
+          <Text dimColor>{t("permission.command")} </Text>
           <Text bold>{request.command}</Text>
         </Text>
       ) : null}
       {request.path ? (
         <Text>
-          <Text dimColor>path:    </Text>
+          <Text dimColor>{t("permission.path")}    </Text>
           <Text bold>{request.path}</Text>
         </Text>
       ) : null}
       {!request.command && !request.path ? <Text>{request.description}</Text> : null}
       <Text dimColor>
-        y allow once{request.command ? " · a allow similar commands this session" : ""} · any other key deny
+        {t("permission.allowOnce")}
+        {request.command ? ` · ${t("permission.allowSession")}` : ""} · {t("permission.deny")}
       </Text>
     </Box>
   );

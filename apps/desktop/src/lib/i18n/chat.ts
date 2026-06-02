@@ -6,6 +6,14 @@ export const chat = {
     "chat.composer.uploading": "uploading image…",
     "chat.composer.uploadFailed": "upload failed: {error}",
     "chat.composer.removeImage": "Remove image #{n}",
+    "chat.composer.attach": "Attach image",
+    "chat.composer.slash": "Slash commands",
+    "chat.composer.mention": "Mention a file",
+    "chat.composer.send": "Send",
+    "chat.composer.sendHint": "Enter to send · Shift+Enter for a new line",
+    "chat.composer.cmdLabel": "Commands",
+    "chat.composer.fileLabel": "Files",
+    "chat.composer.thinkLabel": "Think",
 
     // ChatItems
     "chat.thinking": "thinking",
@@ -84,6 +92,14 @@ export const chat = {
     "chat.composer.uploading": "正在上传图片…",
     "chat.composer.uploadFailed": "上传失败：{error}",
     "chat.composer.removeImage": "移除图片 #{n}",
+    "chat.composer.attach": "添加图片",
+    "chat.composer.slash": "斜杠命令",
+    "chat.composer.mention": "引用文件",
+    "chat.composer.send": "发送",
+    "chat.composer.sendHint": "Enter 发送 · Shift+Enter 换行",
+    "chat.composer.cmdLabel": "命令",
+    "chat.composer.fileLabel": "文件",
+    "chat.composer.thinkLabel": "思考",
 
     // ChatItems
     "chat.thinking": "思考",

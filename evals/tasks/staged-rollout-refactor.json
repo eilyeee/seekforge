@@ -1,0 +1,15 @@
+{
+  "id": "staged-rollout-refactor",
+  "title": "Migrate boolean feature flags to per-user staged rollout across modules",
+  "fixture": "staged-rollout-refactor",
+  "mode": "edit",
+  "task": "Feature flags in src/flags.js are stored as a rollout percentage (0-100) but isEnabled() treats any non-zero flag as on for everyone, defeating staged rollout. Make isEnabled(flagName, userId) honor the documented contract (0%=off for all, 100%=on for all, otherwise on when bucketOf(userId) < percent, unknown flags off). Then update every caller (src/checkout.js, src/search.js, src/theme.js) so the user is actually threaded into the flag check. `npm test` must fully pass. Do NOT modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test >/tmp/sr.out 2>&1; code=$?; tail -c 4000 /tmp/sr.out 1>&2; exit $code" },
+    { "type": "file_contains", "path": "src/checkout.js", "pattern": "isEnabled\\(\\s*\"new-checkout\"\\s*,\\s*user\\.id\\s*\\)" },
+    { "type": "file_contains", "path": "src/search.js", "pattern": "isEnabled\\(\\s*\"beta-search\"\\s*,\\s*user\\.id\\s*\\)" },
+    { "type": "file_contains", "path": "src/theme.js", "pattern": "isEnabled\\(\\s*\"dark-mode\"\\s*,\\s*user\\.id\\s*\\)" },
+    { "type": "file_contains", "path": "test/rollout.test.js", "pattern": "themeFor splits users for the 50% dark-mode flag" }
+  ],
+  "notes": "Multi-file refactor: fixing only isEnabled leaves the callers dropping the user (caller checks fail); fixing only callers leaves the 50% split wrong (npm test fails). A complete fix is required for all checks to pass. The themeFor split test is the discriminating assertion."
+}

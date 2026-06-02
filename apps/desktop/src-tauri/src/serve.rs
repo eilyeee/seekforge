@@ -99,6 +99,29 @@ pub fn resolve_serve_command(
     repo_dev_command(repo_root)
 }
 
+/// The bundled-sidecar command. Tauri copies the `externalBin`
+/// (`binaries/seekforge-server-<triple>`) next to the main app binary with the
+/// triple suffix stripped, so it sits at `<exe_dir>/seekforge-server`
+/// (`seekforge-server.exe` on Windows). Returns `None` when no such file is
+/// present (e.g. `tauri dev`, where there is no bundled sidecar) so the caller
+/// falls through to the env/PATH/repo resolution — this keeps dev a no-op.
+pub fn sidecar_command(exe_dir: Option<&Path>) -> Option<ServeCommand> {
+    let dir = exe_dir?;
+    let name = if cfg!(windows) {
+        "seekforge-server.exe"
+    } else {
+        "seekforge-server"
+    };
+    let candidate = dir.join(name);
+    if is_executable_file(&candidate) {
+        return Some(ServeCommand {
+            program: candidate.to_string_lossy().into_owned(),
+            args: vec!["serve".into(), "--port".into(), "0".into()],
+        });
+    }
+    None
+}
+
 /// The dev fallback command: `<repo>/node_modules/.bin/tsx
 /// <repo>/apps/cli/src/index.ts serve --port 0`. `None` unless both exist.
 fn repo_dev_command(repo_root: Option<&Path>) -> Option<ServeCommand> {
@@ -204,8 +227,14 @@ pub struct ServeChild {
 
 impl ServeChild {
     /// Spawns the serve command with `workspace` as cwd, in its own process
-    /// group, with stdout piped.
-    pub fn spawn(cmd: &ServeCommand, workspace: &Path) -> std::io::Result<Self> {
+    /// group, with stdout piped. `extra_env` adds environment variables for the
+    /// child (e.g. `SEEKFORGE_STATIC_DIR` so the bundled sidecar can find the
+    /// web UI shipped as an app resource).
+    pub fn spawn(
+        cmd: &ServeCommand,
+        workspace: &Path,
+        extra_env: &[(&str, &Path)],
+    ) -> std::io::Result<Self> {
         let mut command = Command::new(&cmd.program);
         command
             .args(&cmd.args)
@@ -213,6 +242,9 @@ impl ServeChild {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        for (key, val) in extra_env {
+            command.env(key, val);
+        }
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -336,6 +368,29 @@ mod tests {
         assert_eq!(parse_url_line("http://127.0.0.1:8080/?token="), None);
         assert_eq!(parse_url_line("http://127.0.0.1:8080/notoken"), None);
         assert_eq!(parse_url_line("http://localhost:8080/?token=t"), None);
+    }
+
+    // --- sidecar_command ---
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_found_next_to_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        make_executable(&dir.path().join("seekforge-server"));
+        let cmd = sidecar_command(Some(dir.path())).unwrap();
+        assert_eq!(
+            cmd.program,
+            dir.path().join("seekforge-server").to_string_lossy()
+        );
+        assert_eq!(cmd.args, vec!["serve", "--port", "0"]);
+    }
+
+    #[test]
+    fn sidecar_none_when_missing() {
+        // Empty dir (and None) yield no sidecar — dev/no-bundle is a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(sidecar_command(Some(dir.path())), None);
+        assert_eq!(sidecar_command(None), None);
     }
 
     // --- resolve_serve_command ---
