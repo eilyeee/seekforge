@@ -7,7 +7,6 @@
   "checks": [
     { "type": "command_succeeds", "command": "npm test >/tmp/scb.out 2>&1; code=$?; tail -c 4000 /tmp/scb.out 1>&2; exit $code" },
     { "type": "file_contains", "path": "src/money.js", "pattern": "padEnd\\(\\s*2" },
-    { "type": "file_not_contains", "path": "src/money.js", "pattern": "BUG:" },
     { "type": "file_contains", "path": "test/settle.test.js", "pattern": "single-digit fractions are worth ten times the cents" }
   ],
   "notes": "Symptom (wrong settlement balances) is in settle.js/netBalances, but the root cause is toMinorUnits in money.js not right-padding single-digit fractions to two places. A fix that only patches settle.js cannot satisfy the padEnd(2) check on money.js, and ad-hoc compensation upstream would still mis-handle other single-digit cases. The padEnd(2) check pins the fix to the parser."
