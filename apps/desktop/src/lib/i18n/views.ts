@@ -117,6 +117,9 @@ export const views = {
     "diff.loading": "Loading…",
     "diff.emptyTitle": "Working tree clean",
     "diff.emptyDescription": "No uncommitted changes.",
+    "diff.notGitTitle": "Not a git repository",
+    "diff.notGitDescription":
+      "This workspace isn't a git repo, so there's nothing to diff. Run `git init` here to start tracking changes.",
 
     // ── SkillsView ────────────────────────────────────────────────
     "skills.title": "Skills",
@@ -369,6 +372,8 @@ export const views = {
     "diff.loading": "加载中…",
     "diff.emptyTitle": "工作树清洁",
     "diff.emptyDescription": "没有未提交的更改。",
+    "diff.notGitTitle": "不是 Git 仓库",
+    "diff.notGitDescription": "该工作区不是 Git 仓库，没有可比较的差异。在此处运行 `git init` 即可开始跟踪变更。",
 
     // ── SkillsView ────────────────────────────────────────────────
     "skills.title": "技能",

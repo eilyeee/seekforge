@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### round 45: desktop workspace selection + diff resilience
+- **Open/switch/recent workspaces (desktop).** The sidebar workspace control is
+  now a full menu: switch between hosted workspaces, **Open folder…** (native
+  picker in the Tauri shell via `tauri-plugin-dialog`; manual path input as a
+  browser fallback), reopen a **Recent** project, and remove/forget entries.
+  Recents persist server-side at `~/.seekforge/workspaces.json`
+  (`SEEKFORGE_HOME`-overridable). New REST: `POST /api/workspaces` (open a
+  folder), `DELETE /api/workspaces/:id` (stop hosting), `DELETE
+  /api/workspaces/recent` (forget); `GET /api/workspaces` now returns
+  `{workspaces, recents}`. The last project is remembered (by path) and
+  auto-reopened on relaunch.
+- **Diff view no longer errors on a non-git workspace.** `GET /api/diff` returns
+  a clean `notGit` flag instead of throwing `git diff failed: …not a git
+  repository`; the desktop shows a friendly "Not a git repository" notice. A
+  missing git binary still surfaces as a real error.
+- **Bug fixes found in review:** removing a workspace no longer offers to "stop
+  hosting" a **worktree** (`wt-*`) — that would orphan its git checkout; the
+  server rejects it and the menu hides the action. Removing a hosted workspace
+  now closes any tabs bound to it (avoids 404s against a dead workspace id).
+- **Desktop bundle identifier** renamed `com.seekforge.app` → `com.seekforge.desktop`
+  (the `.app` suffix conflicts with the macOS bundle extension).
+- Verified: typecheck clean (8 packages); tests server 139 / desktop 217;
+  `cargo check` clean (capability `dialog:allow-open` valid); `pnpm tauri build`
+  produces the DMG.
+
 ### round 44: low-end-model audit — fix every finding, cross-entry parity
 Ran the `docs/low-end-model-audit.md` deep procedure (config wiring, cross-entry
 consistency, permission/security, agent loop/trace, release, UI state, deps,

@@ -24,6 +24,12 @@ function workspaceId(absPath: string): string {
   return createHash("sha256").update(absPath).digest("base64url").slice(0, 8);
 }
 
+/** Builds a Workspace record from a (possibly relative) path. */
+export function workspaceFor(path: string): Workspace {
+  const abs = resolve(path);
+  return { id: workspaceId(abs), path: abs, name: basename(abs) || abs };
+}
+
 /**
  * Builds an ordered registry from absolute (or relative) paths. Paths are
  * resolved to absolute and de-duplicated (first occurrence wins). At least one

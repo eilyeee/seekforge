@@ -12,6 +12,18 @@ export type Workspace = {
   path: string;
 };
 
+/** A recently-opened workspace path (not necessarily hosted right now). */
+export type RecentWorkspace = {
+  name: string;
+  path: string;
+};
+
+/** GET /api/workspaces response: currently-hosted workspaces + recent paths. */
+export type WorkspacesResponse = {
+  workspaces: Workspace[];
+  recents: RecentWorkspace[];
+};
+
 /** POST /api/worktrees result (the worktree is also a registered Workspace). */
 export type WorktreeCreated = {
   /** Workspace id of the worktree (`wt-<slug>`). */

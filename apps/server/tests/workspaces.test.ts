@@ -71,7 +71,12 @@ describe("workspace registry", () => {
 
     const res = await authed(base, "/api/workspaces");
     expect(res.status).toBe(200);
-    const list = (await res.json()) as Array<{ id: string; name: string; path: string }>;
+    const body = (await res.json()) as {
+      workspaces: Array<{ id: string; name: string; path: string }>;
+      recents: unknown[];
+    };
+    const list = body.workspaces;
+    expect(Array.isArray(body.recents)).toBe(true);
     expect(list).toHaveLength(2);
     expect(list.map((w) => w.path)).toEqual([a, b]);
     expect(list.map((w) => w.name)).toEqual([basename(a), basename(b)]);
@@ -104,7 +109,8 @@ describe("workspace registry", () => {
     server = await startServer({ workspaces: [a, b], port: 0, token: TOKEN, createAgent: unusedAgentFactory });
     const base = `http://127.0.0.1:${server.port}`;
 
-    const ids = (await (await authed(base, "/api/workspaces")).json()) as Array<{ id: string }>;
+    const ids = ((await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> })
+      .workspaces;
     const [idA, idB] = [ids[0]!.id, ids[1]!.id];
 
     const sessA = (await (await authed(base, `/api/sessions?ws=${idA}`)).json()) as Array<{ id: string }>;
@@ -140,7 +146,8 @@ describe("workspace registry", () => {
     writeFileIn(a, ".seekforge/memory/candidates.jsonl", `${JSON.stringify(cand)}\n`);
     server = await startServer({ workspaces: [a, b], port: 0, token: TOKEN, createAgent: unusedAgentFactory });
     const base = `http://127.0.0.1:${server.port}`;
-    const ids = (await (await authed(base, "/api/workspaces")).json()) as Array<{ id: string }>;
+    const ids = ((await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> })
+      .workspaces;
     const [idA, idB] = [ids[0]!.id, ids[1]!.id];
 
     // Workspace B has no candidates.
@@ -189,7 +196,8 @@ describe("WS workspace targeting", () => {
       createAgent: recordingAgentFactory(inputs),
     });
     const base = `http://127.0.0.1:${server.port}`;
-    const ids = (await (await authed(base, "/api/workspaces")).json()) as Array<{ id: string }>;
+    const ids = ((await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> })
+      .workspaces;
     const idB = ids[1]!.id;
 
     const { ws, rx } = await open(server.port);
@@ -214,7 +222,8 @@ describe("WS workspace targeting", () => {
       createAgent: recordingAgentFactory(inputs),
     });
     const base = `http://127.0.0.1:${server.port}`;
-    const ids = (await (await authed(base, "/api/workspaces")).json()) as Array<{ id: string }>;
+    const ids = ((await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> })
+      .workspaces;
     const idB = ids[1]!.id;
 
     const { ws, rx } = await open(server.port);

@@ -12,6 +12,7 @@ import {
   IconSkills,
   LogoMark,
 } from "./ui/icons";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 
 const NAV: { view: View; key: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
   { view: "chat", key: "nav.chat", Icon: IconChat },
@@ -32,9 +33,6 @@ export function Sidebar() {
   const t = useT();
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  const workspaces = useStore((s) => s.workspaces);
-  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
-  const setActiveWorkspace = useStore((s) => s.setActiveWorkspace);
   const todosOpen = useStore((s) => s.todosOpen);
   const toggleTodos = useStore((s) => s.toggleTodos);
   // Connection state of the active tab's socket (each tab owns one).
@@ -51,25 +49,7 @@ export function Sidebar() {
           Seek<span className="text-accent">Forge</span>
         </span>
       </div>
-      {workspaces.length > 0 && (
-        <div className="px-3 pb-3">
-          <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
-            {t("nav.workspace")}
-          </label>
-          <select
-            value={activeWorkspaceId}
-            onChange={(e) => setActiveWorkspace(e.target.value)}
-            title={workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ""}
-            className="focus-ring w-full truncate rounded-lg border border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-accent/70"
-          >
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id} title={w.path}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+      <WorkspaceMenu />
       <nav className="flex-1 space-y-0.5 px-2">
         {NAV.map(({ view: v, key, Icon }) => {
           const active = view === v;

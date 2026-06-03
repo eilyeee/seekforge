@@ -5,7 +5,7 @@
 
 import { execFile } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename } from "node:path";
+import { basename, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import {
   addMemoryFact,
@@ -44,7 +44,8 @@ import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./co
 import { listWorkspaceFiles, readRawUpload, RawFileError, saveUpload, UploadError } from "./files.js";
 import { WorktreeError, type WorktreeManager } from "./worktrees.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "./todos.js";
-import type { WorkspaceRegistry } from "./workspaces.js";
+import { workspaceFor, type WorkspaceRegistry } from "./workspaces.js";
+import { forgetRecent, isWorkspaceDir, loadRecents, rememberRecent } from "./recents.js";
 
 export type RestContext = {
   registry: WorkspaceRegistry;
@@ -65,6 +66,14 @@ export function sendApiError(res: ServerResponse, status: number, code: string, 
 /** Rejects ids that could escape .seekforge/sessions/<id>/. */
 function isSafeId(id: string): boolean {
   return id.length > 0 && !/[/\\]/.test(id) && !id.includes("..");
+}
+
+/** Recent workspaces not already hosted (so the "open recent" menu has no dupes). */
+function recentsView(registry: WorkspaceRegistry): Array<{ path: string; name: string }> {
+  const hosted = new Set(registry.summary.map((w) => resolvePath(w.path)));
+  return loadRecents()
+    .filter((r) => !hosted.has(resolvePath(r.path)))
+    .map(({ path, name }) => ({ path, name }));
 }
 
 export type ApprovedFact = {
@@ -106,7 +115,10 @@ const dispatcher = createDefaultDispatcher();
 const execFileAsync = promisify(execFile);
 
 /** Current git diff of the workspace (no shell; capped at 2 MB). */
-async function gitDiff(workspace: string, staged: boolean): Promise<{ diff: string; truncated: boolean }> {
+async function gitDiff(
+  workspace: string,
+  staged: boolean,
+): Promise<{ diff: string; truncated: boolean; notGit?: boolean }> {
   const args = staged ? ["diff", "--cached"] : ["diff"];
   try {
     const { stdout } = await execFileAsync("git", args, {
@@ -120,7 +132,16 @@ async function gitDiff(workspace: string, staged: boolean): Promise<{ diff: stri
       : { diff: stdout, truncated: false };
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
-    throw new Error(`git diff failed: ${(e.stderr ?? e.message ?? "").slice(0, 500)}`);
+    const stderr = e.stderr ?? e.message ?? "";
+    // A workspace that isn't a git repo is a normal, expected state (e.g. the
+    // desktop hosting a plain folder) — report it as an empty, non-error result
+    // so the UI shows a friendly "not a git repository" notice, not a red error.
+    // (Git missing entirely, "spawn git ENOENT", stays a real error so the user
+    // learns git isn't installed rather than seeing a misleading empty diff.)
+    if (/not a git repository/i.test(stderr)) {
+      return { diff: "", truncated: false, notGit: true };
+    }
+    throw new Error(`git diff failed: ${stderr.slice(0, 500)}`);
   }
 }
 
@@ -210,7 +231,57 @@ export async function handleApi(
     }
 
     if (method === "GET" && path === "/api/workspaces") {
-      return sendJson(res, 200, ctx.registry.summary);
+      return sendJson(res, 200, { workspaces: ctx.registry.summary, recents: recentsView(ctx.registry) });
+    }
+
+    // Open a folder as a workspace: register it (idempotent) and remember it.
+    if (method === "POST" && path === "/api/workspaces") {
+      const raw = await readBody(req);
+      let body: unknown;
+      try {
+        body = raw.trim() === "" ? {} : JSON.parse(raw);
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const p = (body as { path?: unknown }).path;
+      if (typeof p !== "string" || p.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "body must be {path: string}");
+      }
+      if (!isWorkspaceDir(p)) {
+        return sendApiError(res, 400, "bad_request", `not a directory: ${p}`);
+      }
+      const ws = workspaceFor(p);
+      if (!ctx.registry.resolve(ws.id)) ctx.registry.register(ws);
+      rememberRecent(ws.path);
+      return sendJson(res, 200, {
+        workspace: { id: ws.id, name: ws.name, path: ws.path },
+        workspaces: ctx.registry.summary,
+        recents: recentsView(ctx.registry),
+      });
+    }
+
+    // Forget a recent path (does not touch hosting). Checked before :id below.
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "workspaces" && segs[2] === "recent") {
+      const p = url.searchParams.get("path");
+      if (!p) return sendApiError(res, 400, "bad_request", "missing ?path=");
+      forgetRecent(p);
+      return sendJson(res, 200, { workspaces: ctx.registry.summary, recents: recentsView(ctx.registry) });
+    }
+
+    // Stop hosting a workspace (the launch/default workspace cannot be removed).
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "workspaces") {
+      // Worktrees register as `wt-<slug>` workspaces but own a git worktree +
+      // branch on disk — unregistering here would orphan them. They must go
+      // through the worktree merge/discard flow (DELETE /api/worktrees/:id).
+      if (segs[2]!.startsWith("wt-")) {
+        return sendApiError(res, 400, "bad_request", "use DELETE /api/worktrees/:id to remove a worktree");
+      }
+      try {
+        ctx.registry.unregister(segs[2]!);
+      } catch (e) {
+        return sendApiError(res, 400, "bad_request", e instanceof Error ? e.message : String(e));
+      }
+      return sendJson(res, 200, { workspaces: ctx.registry.summary, recents: recentsView(ctx.registry) });
     }
 
     // Every remaining route is scoped to a workspace selected by `?ws=<id>`

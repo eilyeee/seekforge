@@ -49,6 +49,12 @@ const mockWorkspaces = [
   { id: "mockws2", name: "other-project", path: "/mock/other-project" },
 ];
 
+/** Mock recent projects (not currently hosted) for the "open recent" menu. */
+let mockRecents = [
+  { name: "old-service", path: "/mock/old-service" },
+  { name: "scratch", path: "/mock/scratch" },
+];
+
 /** Fixture file index for the composer's @ picker. */
 const mockWorkspaceFiles = [
   "package.json",
@@ -78,8 +84,34 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/models") return mockModels.map((m) => ({ ...m }));
 
+  const hostedWorkspaces = () => [
+    ...mockWorkspaces,
+    ...mockWorktrees.map((w) => ({ id: w.id, name: w.branch.split("/")[1]!, path: w.path })),
+  ];
   if (method === "GET" && path === "/api/workspaces")
-    return [...mockWorkspaces, ...mockWorktrees.map((w) => ({ id: w.id, name: w.branch.split("/")[1]!, path: w.path }))];
+    return { workspaces: hostedWorkspaces(), recents: mockRecents };
+  if (method === "POST" && path === "/api/workspaces") {
+    const { path: p } = (body ?? {}) as { path?: string };
+    if (!p) throw mockError(400, "bad_request", "body must be {path: string}");
+    const name = p.split("/").filter(Boolean).pop() ?? p;
+    const id = `mock-${name}`;
+    if (!mockWorkspaces.some((w) => w.id === id)) mockWorkspaces.push({ id, name, path: p });
+    mockRecents = mockRecents.filter((r) => r.path !== p);
+    return { workspace: { id, name, path: p }, workspaces: hostedWorkspaces(), recents: mockRecents };
+  }
+  if (method === "DELETE" && path === "/api/workspaces/recent") {
+    const p = fullPath.split("?")[1]?.match(/path=([^&]+)/)?.[1];
+    if (p) mockRecents = mockRecents.filter((r) => r.path !== decodeURIComponent(p));
+    return { workspaces: hostedWorkspaces(), recents: mockRecents };
+  }
+  {
+    const wm = /^\/api\/workspaces\/([^/]+)$/.exec(path);
+    if (method === "DELETE" && wm) {
+      const idx = mockWorkspaces.findIndex((w) => w.id === wm[1]);
+      if (idx > 0) mockWorkspaces.splice(idx, 1); // index 0 is the default
+      return { workspaces: hostedWorkspaces(), recents: mockRecents };
+    }
+  }
 
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
   if (method === "POST" && path === "/api/worktrees") {

@@ -19,11 +19,21 @@ vi.mock("./lib/ws", () => ({
 
 // The store calls api.workspaces()/config() at module load; stub them to no-ops
 // (the promises resolve to empty so onboarding/workspace boot is inert).
+class MockApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 vi.mock("./lib/api", () => ({
   api: {
-    workspaces: () => Promise.resolve([]),
+    workspaces: () => Promise.resolve({ workspaces: [], recents: [] }),
     config: () => Promise.resolve({}),
   },
+  ApiError: MockApiError,
   setTokenProvider: () => {},
   setWorkspaceProvider: () => {},
 }));

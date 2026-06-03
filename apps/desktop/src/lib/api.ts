@@ -22,6 +22,7 @@ import type {
   Skill,
   Todo,
   Workspace,
+  WorkspacesResponse,
   WorktreeCreated,
   WorktreeMergeResult,
   WorktreeStatus,
@@ -109,7 +110,14 @@ const MOCK_RAW_DATA_URL =
 
 export const api = {
   // Global (not workspace-scoped).
-  workspaces: () => request<Workspace[]>("GET", "/api/workspaces"),
+  workspaces: () => request<WorkspacesResponse>("GET", "/api/workspaces"),
+  /** Open a folder as a workspace: registers it (idempotent) and remembers it. */
+  openWorkspace: (path: string) => request<{ workspace: Workspace } & WorkspacesResponse>("POST", "/api/workspaces", { path }),
+  /** Stop hosting a workspace (the launch/default workspace cannot be removed). */
+  unhostWorkspace: (id: string) => request<WorkspacesResponse>("DELETE", `/api/workspaces/${encodeURIComponent(id)}`),
+  /** Forget a recent path (does not affect hosting). */
+  forgetRecent: (path: string) =>
+    request<WorkspacesResponse>("DELETE", `/api/workspaces/recent?path=${encodeURIComponent(path)}`),
 
   /**
    * URL that serves the raw bytes of an uploaded image (GET /api/raw), for use
@@ -146,7 +154,10 @@ export const api = {
   memoryDeleteFact: (selector: { index: number } | { match: string }) =>
     request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact"), selector),
   diff: (staged?: boolean) =>
-    request<{ diff: string; truncated: boolean }>("GET", withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`)),
+    request<{ diff: string; truncated: boolean; notGit?: boolean }>(
+      "GET",
+      withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`),
+    ),
   config: () => request<ServerConfig>("GET", withWorkspace("/api/config")),
   setConfig: (key: ConfigKey, value: string, global?: boolean) =>
     request<ServerConfig>("PUT", withWorkspace("/api/config"), {

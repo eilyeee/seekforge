@@ -37,6 +37,7 @@ export function DiffView() {
   const [loading, setLoading] = useState(true);
   const [staged, setStaged] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [notGit, setNotGit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
 
@@ -47,6 +48,7 @@ export function DiffView() {
       const res = await api.diff(staged);
       setFiles(splitDiffByFile(res.diff));
       setTruncated(res.truncated);
+      setNotGit(res.notGit ?? false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setFiles(null);
@@ -114,7 +116,15 @@ export function DiffView() {
           <p className="text-sm text-tertiary">{t("diff.loading")}</p>
         )}
 
-        {!error && !loading && files && files.length === 0 && (
+        {!error && !loading && notGit && (
+          <EmptyState
+            icon={<IconDiff size={28} />}
+            title={t("diff.notGitTitle")}
+            description={t("diff.notGitDescription")}
+          />
+        )}
+
+        {!error && !loading && !notGit && files && files.length === 0 && (
           <EmptyState
             icon={<IconDiff size={28} />}
             title={t("diff.emptyTitle")}

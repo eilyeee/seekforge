@@ -26,7 +26,7 @@ import {
 } from "./lib/tabs";
 import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
-import type { SessionMeta, Workspace, WorktreeMergeResult } from "./types";
+import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
 export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
 
@@ -38,12 +38,36 @@ function readTokenFromLocation(): string {
   return new URLSearchParams(window.location.search).get("token") ?? "";
 }
 
+/**
+ * Persisted active-workspace *path*, so reopening the app restores your project.
+ * The path is the durable identity: the server re-derives the same workspace id
+ * from a path, and recents are keyed by path, so on relaunch we can re-host the
+ * last project even though the fresh server only hosts its launch cwd.
+ */
+const ACTIVE_WS_PATH_KEY = "seekforge.activeWorkspacePath";
+function readStoredActivePath(): string {
+  try {
+    return typeof window === "undefined" ? "" : (window.localStorage.getItem(ACTIVE_WS_PATH_KEY) ?? "");
+  } catch {
+    return "";
+  }
+}
+function storeActivePath(path: string): void {
+  try {
+    if (typeof window !== "undefined") window.localStorage.setItem(ACTIVE_WS_PATH_KEY, path);
+  } catch {
+    /* private-mode / quota — non-fatal */
+  }
+}
+
 type AppStore = {
   view: View;
   token: string;
   tabs: TabsState;
   /** Hosted workspaces (GET /api/workspaces); empty until loaded. */
   workspaces: Workspace[];
+  /** Recently-opened workspace paths not currently hosted (for the open menu). */
+  recents: RecentWorkspace[];
   /**
    * Active workspace id — the one new tabs bind to and workspace-scoped views
    * read from. Empty = the server's default (first) workspace.
@@ -54,6 +78,15 @@ type AppStore = {
   loadWorkspaces: () => void;
   /** Switches the active workspace (new tabs + views follow it). */
   setActiveWorkspace: (id: string) => void;
+  /**
+   * Opens a folder as a workspace (POST /api/workspaces), then switches to it.
+   * Rejects (ApiError) when the path isn't a directory.
+   */
+  openWorkspace: (path: string) => Promise<void>;
+  /** Stops hosting a workspace; falls back to the default if it was active. */
+  removeWorkspace: (id: string) => Promise<void>;
+  /** Forgets a recent path (does not affect hosting). */
+  forgetRecent: (path: string) => Promise<void>;
 
   /**
    * First-run onboarding gate. "unknown" until config is fetched; "needed"
@@ -176,22 +209,40 @@ export const useStore = create<AppStore>()((set, get) => {
     token: readTokenFromLocation(),
     tabs: initialTabsState(),
     workspaces: [],
+    recents: [],
     activeWorkspaceId: "",
 
     loadWorkspaces: () => {
       api
         .workspaces()
-        .then((workspaces) => {
-          set((s) => ({
-            workspaces,
-            // Adopt the first workspace as active (and bind the initial tab to
-            // it) unless the user already picked one.
-            activeWorkspaceId: s.activeWorkspaceId || (workspaces[0]?.id ?? ""),
-            tabs:
-              s.activeWorkspaceId || workspaces.length === 0
-                ? s.tabs
-                : updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: workspaces[0]!.id }),
-          }));
+        .then(({ workspaces, recents }) => {
+          const storedPath = readStoredActivePath();
+          const restored = storedPath ? workspaces.find((w) => w.path === storedPath) : undefined;
+          // Whether the user already picked a workspace this session (a reload
+          // after the initial boot): if so, don't override it with auto-reopen.
+          const hadPick = !!get().activeWorkspaceId;
+          set((s) => {
+            // Restore the last-used workspace if it is still hosted; otherwise
+            // adopt the first one. An explicit in-session pick always wins.
+            const next = s.activeWorkspaceId || restored?.id || (workspaces[0]?.id ?? "");
+            return {
+              workspaces,
+              recents,
+              activeWorkspaceId: next,
+              tabs:
+                !next || workspaces.length === 0
+                  ? s.tabs
+                  : updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: next }),
+            };
+          });
+          // Auto-reopen the last project on a fresh relaunch: the server only
+          // hosts its launch cwd, but if the remembered project is a known
+          // recent we re-host + switch to it (the Codex "reopen last" flow).
+          if (!hadPick && !restored && storedPath && recents.some((r) => r.path === storedPath)) {
+            void get().openWorkspace(storedPath).catch(() => {
+              /* the folder may have moved/been deleted — stay on the default */
+            });
+          }
         })
         .catch((e: unknown) => {
           // Single-workspace / old server without /api/workspaces: stay on the
@@ -201,7 +252,44 @@ export const useStore = create<AppStore>()((set, get) => {
         });
     },
 
-    setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
+    setActiveWorkspace: (id) => {
+      const ws = get().workspaces.find((w) => w.id === id);
+      if (ws) storeActivePath(ws.path);
+      set({ activeWorkspaceId: id });
+    },
+
+    openWorkspace: async (path) => {
+      const { workspace, workspaces, recents } = await api.openWorkspace(path);
+      storeActivePath(workspace.path);
+      set((s) => ({
+        workspaces,
+        recents,
+        activeWorkspaceId: workspace.id,
+        tabs: updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: workspace.id }),
+      }));
+    },
+
+    removeWorkspace: async (id) => {
+      const { workspaces, recents } = await api.unhostWorkspace(id);
+      // Close any tabs bound to the now-unhosted workspace — their sockets and
+      // REST calls would otherwise target a workspace id the server no longer
+      // knows (404s). The folder itself is untouched; reopening restores it.
+      for (const tabId of get().tabs.tabs.filter((t) => t.ws === id).map((t) => t.tabId)) {
+        get().closeTab(tabId);
+      }
+      set((s) => {
+        const stillActive = workspaces.some((w) => w.id === s.activeWorkspaceId);
+        const fallback = workspaces[0];
+        const nextActive = stillActive ? s.activeWorkspaceId : (fallback?.id ?? "");
+        if (!stillActive && fallback) storeActivePath(fallback.path);
+        return { workspaces, recents, activeWorkspaceId: nextActive };
+      });
+    },
+
+    forgetRecent: async (path) => {
+      const { workspaces, recents } = await api.forgetRecent(path);
+      set({ workspaces, recents });
+    },
 
     onboarding: "unknown",
     checkOnboarding: () => {

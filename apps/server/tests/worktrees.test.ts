@@ -79,11 +79,11 @@ describe("POST /api/worktrees", () => {
     expect(existsSync(join(wt.path, "base.txt"))).toBe(true);
 
     // Registered as a workspace -> all ?ws= scoping works against it.
-    const workspaces = (await (await authed(base, "/api/workspaces")).json()) as Array<{
-      id: string;
-      path: string;
-      name: string;
-    }>;
+    const workspaces = (
+      (await (await authed(base, "/api/workspaces")).json()) as {
+        workspaces: Array<{ id: string; path: string; name: string }>;
+      }
+    ).workspaces;
     expect(workspaces.map((w) => w.id)).toContain("wt-feature-x");
     expect(workspaces.find((w) => w.id === "wt-feature-x")!.path).toBe(wt.path);
 
@@ -171,7 +171,9 @@ describe("POST /api/worktrees/:id/merge", () => {
     expect(await del.json()).toEqual({ deleted: true });
     expect(existsSync(wt.path)).toBe(false);
     expect(gitIn(repo, "branch", "--list", "seekforge/lifecycle")).toBe("");
-    const workspaces = (await (await authed(base, "/api/workspaces")).json()) as Array<{ id: string }>;
+    const workspaces = (
+      (await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> }
+    ).workspaces;
     expect(workspaces.map((w) => w.id)).not.toContain("wt-lifecycle");
     expect((await authed(base, "/api/sessions?ws=wt-lifecycle")).status).toBe(404);
   });
