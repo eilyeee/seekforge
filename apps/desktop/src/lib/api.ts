@@ -110,7 +110,15 @@ const MOCK_RAW_DATA_URL =
 
 export const api = {
   // Global (not workspace-scoped).
-  workspaces: () => request<WorkspacesResponse>("GET", "/api/workspaces"),
+  // Normalizes the response so an older server (which returned a bare array) is
+  // tolerated as {workspaces, recents:[]} rather than crashing the boot loader
+  // and tripping the false "server unreachable" banner.
+  workspaces: async (): Promise<WorkspacesResponse> => {
+    const res = await request<WorkspacesResponse | Workspace[]>("GET", "/api/workspaces");
+    return Array.isArray(res)
+      ? { workspaces: res, recents: [] }
+      : { workspaces: res.workspaces ?? [], recents: res.recents ?? [] };
+  },
   /** Open a folder as a workspace: registers it (idempotent) and remembers it. */
   openWorkspace: (path: string) => request<{ workspace: Workspace } & WorkspacesResponse>("POST", "/api/workspaces", { path }),
   /** Stop hosting a workspace (the launch/default workspace cannot be removed). */

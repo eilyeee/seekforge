@@ -5,7 +5,8 @@
   "identifier": "com.seekforge.desktop",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "pnpm --filter @seekforge/desktop build"
+    "beforeBuildCommand": "pnpm --filter @seekforge/desktop build",
+    "beforeDevCommand": "pnpm --filter @seekforge/desktop build"
   },
   "app": {
     "windows": [],

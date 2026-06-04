@@ -10,7 +10,9 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:ui": "VITE_MOCK=1 pnpm --filter @seekforge/desktop dev"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2",
