@@ -4,17 +4,29 @@
  */
 
 import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import {
   addMemoryFact,
   applyProposal,
   approveMemoryCandidate,
+  BUILTIN_SKILLS,
+  compactProjectMemory,
   createDefaultDispatcher,
   createMcpClient,
+  createSkillScaffold,
+  deleteSession,
   fetchBalance,
+  importExternalAgent,
+  importExternalSkill,
   listEvolutionProposals,
+  memoryStats,
+  pruneSessions,
+  removeSkill,
+  setSkillEnabled,
   listMcpPrompts,
   listMcpResources,
   listMemoryCandidates,
@@ -35,6 +47,7 @@ import {
   truncateSessionAtUserTurn,
   MEMORY_CANDIDATE_TYPES,
   type McpClientEntry,
+  type McpServerConfig,
   type MemoryCandidateType,
   DEFAULT_MODEL,
   DEPRECATED_MODELS,
@@ -192,6 +205,39 @@ function readBody(req: IncomingMessage, maxBytes = 1_000_000): Promise<string> {
   });
 }
 
+/** Skills shipped in-package are immutable: refuse to mutate/delete them. */
+function isBuiltinSkill(id: string): boolean {
+  return BUILTIN_SKILLS.some((s) => s.id === id);
+}
+
+type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
+
+/**
+ * Read-merge-write the workspace .seekforge/config.json mcpServers map: applies
+ * `mutate` to the current servers object and writes the file back (mode 0o600).
+ * Other top-level keys are preserved; an empty mcpServers map is dropped.
+ */
+function mutateMcpServers(
+  workspace: string,
+  mutate: (servers: Record<string, McpServerConfig>) => void,
+): void {
+  const path = join(workspace, ".seekforge", "config.json");
+  let doc: ConfigDoc = {};
+  if (existsSync(path)) {
+    try {
+      doc = JSON.parse(readFileSync(path, "utf8")) as ConfigDoc;
+    } catch {
+      doc = {};
+    }
+  }
+  const servers = { ...(doc.mcpServers ?? {}) };
+  mutate(servers);
+  if (Object.keys(servers).length === 0) delete doc.mcpServers;
+  else doc.mcpServers = servers;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -335,6 +381,55 @@ export async function handleApi(
       return sendJson(res, 200, listSessions(workspace));
     }
 
+    // Prune old sessions. Checked before DELETE :id (and before GET :id) so
+    // "prune" is never treated as a session id.
+    if (method === "POST" && path === "/api/sessions/prune") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { olderThanDays, keepLast, dryRun } = (body ?? {}) as {
+        olderThanDays?: unknown;
+        keepLast?: unknown;
+        dryRun?: unknown;
+      };
+      if (
+        olderThanDays !== undefined &&
+        (typeof olderThanDays !== "number" || !Number.isFinite(olderThanDays) || olderThanDays < 0)
+      ) {
+        return sendApiError(res, 400, "bad_request", "olderThanDays must be a non-negative number");
+      }
+      if (
+        keepLast !== undefined &&
+        (typeof keepLast !== "number" || !Number.isInteger(keepLast) || keepLast < 0)
+      ) {
+        return sendApiError(res, 400, "bad_request", "keepLast must be a non-negative integer");
+      }
+      if (dryRun !== undefined && typeof dryRun !== "boolean") {
+        return sendApiError(res, 400, "bad_request", "dryRun must be a boolean");
+      }
+      return sendJson(
+        res,
+        200,
+        pruneSessions(workspace, {
+          ...(olderThanDays !== undefined ? { olderThanDays } : {}),
+          ...(keepLast !== undefined ? { keepLast } : {}),
+          ...(dryRun !== undefined ? { dryRun } : {}),
+        }),
+      );
+    }
+
+    // Delete a single session directory.
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "sessions") {
+      const id = segs[2]!;
+      if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+      const deleted = deleteSession(workspace, id);
+      if (!deleted) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      return sendJson(res, 200, { deleted });
+    }
+
     if (method === "GET" && path === "/api/files") {
       // @ file picker index: ignore-aware scan, capped at 2000 paths.
       return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
@@ -463,10 +558,102 @@ export async function handleApi(
       );
     }
 
+    // Import an external (Claude-Code-style) SKILL.md. Checked before the
+    // GET-by-id route so :id never captures "import".
+    if (method === "POST" && segs.length === 3 && segs[1] === "skills" && segs[2] === "import") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { path: src, global } = (body ?? {}) as { path?: unknown; global?: unknown };
+      if (typeof src !== "string" || src.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
+      }
+      const targetRoot =
+        global === true
+          ? join(homedir(), ".seekforge", "skills")
+          : join(workspace, ".seekforge", "skills");
+      try {
+        const { dir, skill } = importExternalSkill(src, { targetRoot });
+        return sendJson(res, 200, { ok: true, dir, skill });
+      } catch (err) {
+        return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // Scaffold a new project skill directory.
+    if (method === "POST" && path === "/api/skills") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { id } = (body ?? {}) as { id?: unknown };
+      if (typeof id !== "string" || id.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "body must be {id: string}");
+      }
+      try {
+        const dir = createSkillScaffold(workspace, id);
+        return sendJson(res, 200, { ok: true, dir });
+      } catch (err) {
+        return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+      }
+    }
+
     if (method === "GET" && segs.length === 3 && segs[1] === "skills") {
       const skill = loadSkills(workspace).find((s) => s.id === segs[2]);
       if (!skill) return sendApiError(res, 404, "not_found", `skill not found: ${segs[2]}`);
       return sendJson(res, 200, skill);
+    }
+
+    // Enable/disable a skill at the project (default) or global layer.
+    if (method === "PUT" && segs.length === 3 && segs[1] === "skills") {
+      const id = segs[2]!;
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { enabled, scope } = (body ?? {}) as { enabled?: unknown; scope?: unknown };
+      if (typeof enabled !== "boolean") {
+        return sendApiError(res, 400, "bad_request", "body must be {enabled: boolean, scope?: \"project\"|\"global\"}");
+      }
+      if (scope !== undefined && scope !== "project" && scope !== "global") {
+        return sendApiError(res, 400, "bad_request", 'scope must be "project" or "global"');
+      }
+      const global = scope === "global";
+      // Builtins are immutable in-package — reject mutating them.
+      if (isBuiltinSkill(id)) {
+        return sendApiError(res, 400, "bad_request", `cannot modify builtin skill "${id}"`);
+      }
+      try {
+        const result = setSkillEnabled(workspace, id, enabled, { global });
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // Remove a project (default) or global skill directory.
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "skills") {
+      const id = segs[2]!;
+      const scope = url.searchParams.get("scope");
+      if (scope !== null && scope !== "project" && scope !== "global") {
+        return sendApiError(res, 400, "bad_request", 'scope must be "project" or "global"');
+      }
+      if (isBuiltinSkill(id)) {
+        return sendApiError(res, 400, "bad_request", `cannot remove builtin skill "${id}"`);
+      }
+      try {
+        const result = removeSkill(workspace, id, { global: scope === "global" });
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+      }
     }
 
     if (method === "GET" && path === "/api/memory") {
@@ -549,6 +736,42 @@ export async function handleApi(
       }
     }
 
+    // Read-only extraction-quality stats for the workspace's memory state.
+    if (method === "GET" && path === "/api/memory/stats") {
+      return sendJson(res, 200, memoryStats(workspace));
+    }
+
+    // Deterministic project-memory compaction (dedupe/merge, optional prune).
+    if (method === "POST" && path === "/api/memory/compact") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { dryRun, pruneUnusedDays } = (body ?? {}) as {
+        dryRun?: unknown;
+        pruneUnusedDays?: unknown;
+      };
+      if (dryRun !== undefined && typeof dryRun !== "boolean") {
+        return sendApiError(res, 400, "bad_request", "dryRun must be a boolean");
+      }
+      if (
+        pruneUnusedDays !== undefined &&
+        (typeof pruneUnusedDays !== "number" || !Number.isFinite(pruneUnusedDays) || pruneUnusedDays < 0)
+      ) {
+        return sendApiError(res, 400, "bad_request", "pruneUnusedDays must be a non-negative number");
+      }
+      return sendJson(
+        res,
+        200,
+        compactProjectMemory(workspace, {
+          ...(dryRun !== undefined ? { dryRun } : {}),
+          ...(pruneUnusedDays !== undefined ? { pruneUnusedDays } : {}),
+        }),
+      );
+    }
+
     if (
       method === "POST" &&
       segs.length === 4 &&
@@ -578,6 +801,31 @@ export async function handleApi(
         200,
         loadAgentDefinitions(workspace).map(({ body: _body, ...rest }) => rest),
       );
+    }
+
+    // Import an external (Meta_Kim-style) agent .md. Checked before the
+    // GET-by-id route so :id never captures "import".
+    if (method === "POST" && segs.length === 3 && segs[1] === "agents" && segs[2] === "import") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { path: src, global } = (body ?? {}) as { path?: unknown; global?: unknown };
+      if (typeof src !== "string" || src.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
+      }
+      const targetRoot =
+        global === true
+          ? join(homedir(), ".seekforge", "agents")
+          : join(workspace, ".seekforge", "agents");
+      try {
+        const { dir, agent, droppedTools } = importExternalAgent(src, { targetRoot });
+        return sendJson(res, 200, { ok: true, dir, agent, droppedTools });
+      } catch (err) {
+        return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
+      }
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "agents") {
@@ -715,6 +963,73 @@ export async function handleApi(
       );
     }
 
+    // Add or update an MCP server in the workspace config.json.
+    if (method === "POST" && path === "/api/mcp") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { name, command, args, env, url: serverUrl, headers, trusted } = (body ?? {}) as {
+        name?: unknown;
+        command?: unknown;
+        args?: unknown;
+        env?: unknown;
+        url?: unknown;
+        headers?: unknown;
+        trusted?: unknown;
+      };
+      if (typeof name !== "string" || name.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "body must include a non-empty name");
+      }
+      if (command !== undefined && typeof command !== "string") {
+        return sendApiError(res, 400, "bad_request", "command must be a string");
+      }
+      if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === "string"))) {
+        return sendApiError(res, 400, "bad_request", "args must be a string[]");
+      }
+      if (serverUrl !== undefined && typeof serverUrl !== "string") {
+        return sendApiError(res, 400, "bad_request", "url must be a string");
+      }
+      if (trusted !== undefined && typeof trusted !== "boolean") {
+        return sendApiError(res, 400, "bad_request", "trusted must be a boolean");
+      }
+      if (env !== undefined && (typeof env !== "object" || env === null || Array.isArray(env))) {
+        return sendApiError(res, 400, "bad_request", "env must be an object");
+      }
+      if (headers !== undefined && (typeof headers !== "object" || headers === null || Array.isArray(headers))) {
+        return sendApiError(res, 400, "bad_request", "headers must be an object");
+      }
+      // Need at least a transport: command (stdio) or url (HTTP).
+      if (typeof command !== "string" && typeof serverUrl !== "string") {
+        return sendApiError(res, 400, "bad_request", "provide either command (stdio) or url (HTTP)");
+      }
+      const entry: McpServerConfig = {
+        ...(typeof command === "string" ? { command } : {}),
+        ...(Array.isArray(args) && args.length > 0 ? { args: args as string[] } : {}),
+        ...(env !== undefined ? { env: env as Record<string, string> } : {}),
+        ...(typeof serverUrl === "string" ? { url: serverUrl } : {}),
+        ...(headers !== undefined ? { headers: headers as Record<string, string> } : {}),
+        ...(trusted !== undefined ? { trusted } : {}),
+      };
+      mutateMcpServers(workspace, (servers) => {
+        servers[name] = entry;
+      });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // Remove an MCP server from the workspace config.json.
+    if (method === "DELETE" && segs.length === 3 && segs[1] === "mcp") {
+      const name = segs[2]!;
+      const config = loadConfig(workspace).mcpServers ?? {};
+      if (!config[name]) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
+      mutateMcpServers(workspace, (servers) => {
+        delete servers[name];
+      });
+      return sendJson(res, 200, { ok: true });
+    }
+
     if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
       const name = segs[2]!;
       const config = (loadConfig(workspace).mcpServers ?? {})[name];
@@ -751,6 +1066,32 @@ export async function handleApi(
         return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);
       }
       return sendJson(res, 200, rewindSession(workspace, sessionId, { dryRun: dryRun === true }));
+    }
+
+    // Lightweight environment/health check for the desktop diagnostics panel.
+    if (method === "GET" && path === "/api/doctor") {
+      const config = loadConfig(workspace);
+      let git: string | null = null;
+      try {
+        const { stdout } = await execFileAsync("git", ["--version"], { timeout: 5_000 });
+        git = stdout.trim();
+      } catch {
+        // git not installed (ENOENT) or any failure → null
+        git = null;
+      }
+      const runtimeBin = config.runtimeBin;
+      return sendJson(res, 200, {
+        apiKeyConfigured: Boolean(config.apiKey),
+        nodeVersion: process.version,
+        git,
+        runtimeBin: {
+          set: Boolean(runtimeBin),
+          exists: runtimeBin ? existsSync(runtimeBin) : false,
+        },
+        mcpServerCount: Object.keys(config.mcpServers ?? {}).length,
+        modelCount: Object.keys(MODEL_PRICING).length,
+        workspace,
+      });
     }
 
     if (method === "GET" && path === "/api/config") {

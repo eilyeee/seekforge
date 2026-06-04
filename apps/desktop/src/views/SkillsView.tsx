@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
 import {
   Badge,
@@ -54,7 +55,16 @@ export function SkillsView() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  /** "new" / "import" form dialogs, and a pending delete confirmation. */
+  const [dialog, setDialog] = useState<null | "new" | "import">(null);
+  const [pendingDelete, setPendingDelete] = useState<Skill | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
+
+  const refresh = () =>
+    api
+      .skills()
+      .then(setSkills)
+      .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
     setSkills(null);
@@ -62,10 +72,10 @@ export function SkillsView() {
     setError(null);
     setFilter("all");
     setQuery("");
-    api
-      .skills()
-      .then(setSkills)
-      .catch((e: unknown) => setError(String(e)));
+    setDialog(null);
+    setPendingDelete(null);
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
   const openSkill = (id: string) => {
@@ -74,6 +84,24 @@ export function SkillsView() {
       .skill(id)
       .then(setDetail)
       .catch((e: unknown) => setError(String(e)));
+  };
+
+  const toggleEnabled = (skill: Skill) => {
+    setError(null);
+    api
+      .skillSetEnabled(skill.id, !skill.enabled, skill.scope)
+      .then(refresh)
+      .catch((e: unknown) => setError(t("skills.actionError", { error: String(e) })));
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const { id, scope } = pendingDelete;
+    setPendingDelete(null);
+    api
+      .skillDelete(id, scope)
+      .then(refresh)
+      .catch((e: unknown) => setError(t("skills.actionError", { error: String(e) })));
   };
 
   const counts = useMemo(() => {
@@ -133,6 +161,14 @@ export function SkillsView() {
         <div>
           <h1 className="text-lg font-semibold text-primary">{t("skills.title")}</h1>
           <p className="mt-1 text-xs text-tertiary">{t("skills.subtitle")}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" onClick={() => setDialog("import")}>
+            {t("skills.importBtn")}
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setDialog("new")}>
+            {t("skills.newBtn")}
+          </Button>
         </div>
       </header>
 
@@ -216,7 +252,34 @@ export function SkillsView() {
                   </div>
                   <p className="mt-1 truncate text-xs text-secondary">{skill.description}</p>
                 </div>
-                <div className="flex shrink-0 items-center gap-3">
+                <div className="flex shrink-0 items-center gap-2">
+                  {skill.scope === "builtin" ? (
+                    <span className="text-2xs text-tertiary">{t("skills.builtinReadonly")}</span>
+                  ) : (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleEnabled(skill);
+                        }}
+                      >
+                        {skill.enabled ? t("skills.disable") : t("skills.enable")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-tertiary hover:text-danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDelete(skill);
+                        }}
+                      >
+                        {t("skills.deleteBtn")}
+                      </Button>
+                    </>
+                  )}
                   <ScopeChip scope={skill.scope} />
                   <IconChevron
                     size={16}
@@ -228,6 +291,144 @@ export function SkillsView() {
           </div>
         )}
       </div>
+
+      {dialog === "new" && (
+        <NewSkillDialog
+          onClose={() => setDialog(null)}
+          onCreate={(id) =>
+            api.skillCreate(id).then(() => {
+              setDialog(null);
+              void refresh();
+            })
+          }
+        />
+      )}
+      {dialog === "import" && (
+        <ImportSkillDialog
+          onClose={() => setDialog(null)}
+          onImport={(path, global) =>
+            api.skillImport(path, global).then(() => {
+              setDialog(null);
+              void refresh();
+            })
+          }
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={t("skills.deleteTitle", { id: pendingDelete.id })}
+          confirmLabel={t("skills.deleteConfirm")}
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        >
+          {t("skills.deleteBody", { scope: pendingDelete.scope })}
+        </ConfirmDialog>
+      )}
     </div>
+  );
+}
+
+function NewSkillDialog({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (id: string) => Promise<unknown>;
+}) {
+  const t = useT();
+  const [id, setId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const trimmed = id.trim();
+    if (trimmed === "" || busy) return;
+    setBusy(true);
+    setError(null);
+    onCreate(trimmed)
+      .catch((e: unknown) => {
+        setError(t("skills.actionError", { error: String(e) }));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <ConfirmDialog
+      title={t("skills.newTitle")}
+      confirmLabel={busy ? "…" : t("skills.newConfirm")}
+      onConfirm={submit}
+      onCancel={onClose}
+    >
+      <Input
+        value={id}
+        autoFocus
+        onChange={(e) => setId(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+        placeholder={t("skills.newIdPlaceholder")}
+        className="font-mono"
+        disabled={busy}
+      />
+      {error && <p className="mt-2 text-2xs text-danger">{error}</p>}
+    </ConfirmDialog>
+  );
+}
+
+function ImportSkillDialog({
+  onClose,
+  onImport,
+}: {
+  onClose: () => void;
+  onImport: (path: string, global: boolean) => Promise<unknown>;
+}) {
+  const t = useT();
+  const [path, setPath] = useState("");
+  const [global, setGlobal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const trimmed = path.trim();
+    if (trimmed === "" || busy) return;
+    setBusy(true);
+    setError(null);
+    onImport(trimmed, global).catch((e: unknown) => {
+      setError(t("skills.actionError", { error: String(e) }));
+      setBusy(false);
+    });
+  };
+
+  return (
+    <ConfirmDialog
+      title={t("skills.importTitle")}
+      confirmLabel={busy ? "…" : t("skills.importConfirm")}
+      onConfirm={submit}
+      onCancel={onClose}
+    >
+      <Input
+        value={path}
+        autoFocus
+        onChange={(e) => setPath(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+        placeholder={t("skills.importPathPlaceholder")}
+        className="font-mono"
+        disabled={busy}
+      />
+      <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
+        <input
+          type="checkbox"
+          checked={global}
+          onChange={(e) => setGlobal(e.target.checked)}
+          className="accent-accent"
+          disabled={busy}
+        />
+        {t("skills.importGlobal")}
+      </label>
+      {error && <p className="mt-2 text-2xs text-danger">{error}</p>}
+    </ConfirmDialog>
   );
 }

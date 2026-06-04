@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
 import { AgentsView } from "./views/AgentsView";
 import { ChatView } from "./views/ChatView";
+import { DiagnosticsView } from "./views/DiagnosticsView";
 import { DiffView } from "./views/DiffView";
 import { EvolutionView } from "./views/EvolutionView";
 import { MemoryView } from "./views/MemoryView";
@@ -55,6 +56,7 @@ export function App() {
           {view === "memory" && <MemoryView />}
           {view === "evolution" && <EvolutionView />}
           {view === "settings" && <SettingsView />}
+          {view === "diagnostics" && <DiagnosticsView />}
         </div>
       </main>
       {todosOpen && <TodosPanel />}

@@ -28,7 +28,7 @@ import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
 import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
-export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
+export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings" | "diagnostics";
 
 export type { ApprovalChoice, ChatTab, PendingPermission, PendingQuestion, StartMode };
 export { activeTab };

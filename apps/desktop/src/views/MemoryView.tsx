@@ -14,7 +14,14 @@ import {
   IconCornerDownRight,
   type BadgeTone,
 } from "../components/ui";
-import type { MemoryCandidate, MemoryCandidateType, MemoryFact, MemoryResponse } from "../types";
+import type {
+  CompactResult,
+  MemoryCandidate,
+  MemoryCandidateType,
+  MemoryFact,
+  MemoryResponse,
+  MemoryStats,
+} from "../types";
 
 const TYPE_TONE: Record<MemoryCandidate["type"], BadgeTone> = {
   command: "warn",
@@ -44,23 +51,34 @@ function relativeAge(t: T, iso: string): string {
 export function MemoryView() {
   const t = useT();
   const [memory, setMemory] = useState<MemoryResponse | null>(null);
+  const [stats, setStats] = useState<MemoryStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
 
+  const loadStats = () =>
+    api
+      .memoryStats()
+      .then(setStats)
+      .catch(() => setStats(null));
+
   useEffect(() => {
     setMemory(null);
+    setStats(null);
     setError(null);
     api
       .memory()
       .then(setMemory)
       .catch((e: unknown) => setError(String(e)));
+    void loadStats();
   }, [ws]);
 
-  const refresh = () =>
-    api
+  const refresh = () => {
+    void loadStats();
+    return api
       .memory()
       .then(setMemory)
       .catch((e: unknown) => setError(String(e)));
+  };
 
   const act = (id: string, action: "approve" | "reject") => {
     if (!memory) return;
@@ -162,8 +180,12 @@ export function MemoryView() {
               )}
             </div>
 
-            {/* Side column: approved facts (lifecycle + management) + project.md */}
+            {/* Side column: stats + compaction + approved facts + project.md */}
             <aside className="space-y-6 lg:col-span-1">
+              <StatsPanel stats={stats} />
+
+              <CompactControl onApplied={refresh} />
+
               <section>
                 <div className="mb-3 flex items-center gap-2">
                   <IconCornerDownRight size={13} className="text-tertiary" />
@@ -295,6 +317,186 @@ function FactRow({ fact, onDelete }: { fact: MemoryFact; onDelete: (fact: Memory
         ✕
       </Button>
     </li>
+  );
+}
+
+function pct(fraction: number): string {
+  return `${(fraction * 100).toFixed(0)}%`;
+}
+
+/** Read-only extraction-quality stats (counts + used fraction + rejection rate). */
+function StatsPanel({ stats }: { stats: MemoryStats | null }) {
+  const t = useT();
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("memory.stats.title")}</h2>
+        <span className="h-px flex-1 border-t border-subtle" />
+      </div>
+      <Card className="p-4">
+        {stats === null ? (
+          <p className="text-xs text-tertiary">{t("memory.stats.loading")}</p>
+        ) : (
+          <dl className="space-y-2.5 text-xs">
+            <StatRow label={t("memory.stats.approvedFacts")} value={String(stats.totalApprovedFacts)} />
+            <StatRow label={t("memory.stats.autoExtracted")} value={String(stats.autoExtractedFacts)} />
+            <StatRow label={t("memory.stats.directAdded")} value={String(stats.directAddedFacts)} />
+            <StatRow label={t("memory.stats.usedFraction")} value={pct(stats.usedFraction)} />
+            <StatRow label={t("memory.stats.rejectionRate")} value={pct(stats.rejectionRate)} />
+            <p className="border-t border-subtle pt-2 font-mono text-2xs text-tertiary">
+              {t("memory.stats.candidates", {
+                pending: stats.pending,
+                approved: stats.approved,
+                rejected: stats.rejected,
+              })}
+            </p>
+            <p className="font-mono text-2xs text-tertiary">
+              {t("memory.stats.avgConfidence", {
+                used: stats.avgConfidenceUsed === null ? t("memory.stats.na") : pct(stats.avgConfidenceUsed),
+                unused:
+                  stats.avgConfidenceUnused === null ? t("memory.stats.na") : pct(stats.avgConfidenceUnused),
+              })}
+            </p>
+          </dl>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-tertiary">{label}</dt>
+      <dd className="font-mono text-sm font-medium text-primary">{value}</dd>
+    </div>
+  );
+}
+
+/** Dry-run preview → apply compaction, with an optional prune-unused-days input. */
+function CompactControl({ onApplied }: { onApplied: () => void }) {
+  const t = useT();
+  const [pruneDays, setPruneDays] = useState("");
+  const [preview, setPreview] = useState<CompactResult | null>(null);
+  const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const optsOf = (dryRun: boolean) => {
+    const days = pruneDays.trim();
+    return {
+      dryRun,
+      ...(days !== "" && Number.isFinite(Number(days)) ? { pruneUnusedDays: Number(days) } : {}),
+    };
+  };
+
+  const runPreview = () => {
+    setBusy("preview");
+    setError(null);
+    setNote(null);
+    api
+      .memoryCompact(optsOf(true))
+      .then(setPreview)
+      .catch((e: unknown) => setError(t("memory.compact.error", { error: String(e) })))
+      .finally(() => setBusy(null));
+  };
+
+  const apply = () => {
+    setBusy("apply");
+    setError(null);
+    api
+      .memoryCompact(optsOf(false))
+      .then((r) => {
+        setPreview(null);
+        setNote(t("memory.compact.done", { before: r.before, after: r.after }));
+        onApplied();
+      })
+      .catch((e: unknown) => setError(t("memory.compact.error", { error: String(e) })))
+      .finally(() => setBusy(null));
+  };
+
+  const hasChanges =
+    preview !== null &&
+    (preview.removed.length > 0 || preview.merged.length > 0 || preview.archived.length > 0);
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("memory.compact.title")}</h2>
+        <span className="h-px flex-1 border-t border-subtle" />
+      </div>
+      <Card className="p-4">
+        <p className="text-xs leading-relaxed text-tertiary">{t("memory.compact.description")}</p>
+        <label className="mt-3 block text-2xs uppercase tracking-wider text-tertiary">
+          {t("memory.compact.pruneLabel")}
+        </label>
+        <Input
+          value={pruneDays}
+          onChange={(e) => setPruneDays(e.target.value.replace(/[^0-9]/g, ""))}
+          inputMode="numeric"
+          placeholder={t("memory.compact.prunePlaceholder")}
+          className="mt-1.5"
+          disabled={busy !== null}
+        />
+
+        {preview === null ? (
+          <Button
+            variant="primary"
+            size="sm"
+            className="mt-3"
+            onClick={runPreview}
+            disabled={busy !== null}
+          >
+            {busy === "preview" ? t("memory.compact.previewing") : t("memory.compact.previewBtn")}
+          </Button>
+        ) : (
+          <div className="mt-3 space-y-2 border-t border-subtle pt-3 text-xs">
+            <p className="font-mono text-sm text-primary">
+              {t("memory.compact.summary", { before: preview.before, after: preview.after })}
+            </p>
+            {!hasChanges && <p className="text-tertiary">{t("memory.compact.noChanges")}</p>}
+            <CompactList title={t("memory.compact.removed")} items={preview.removed} tone="text-danger" />
+            <CompactList
+              title={t("memory.compact.merged")}
+              items={preview.merged.map((m) => m.dropped)}
+              tone="text-warn"
+            />
+            <CompactList title={t("memory.compact.archived")} items={preview.archived} tone="text-tertiary" />
+            <div className="flex gap-2 pt-1">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={apply}
+                disabled={busy !== null || !hasChanges}
+              >
+                {busy === "apply" ? t("memory.compact.applying") : t("memory.compact.applyBtn")}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setPreview(null)} disabled={busy !== null}>
+                {t("memory.compact.cancelBtn")}
+              </Button>
+            </div>
+          </div>
+        )}
+        {note && <p className="mt-2 text-2xs text-ok">{note}</p>}
+        {error && <p className="mt-2 text-2xs text-danger">{error}</p>}
+      </Card>
+    </section>
+  );
+}
+
+function CompactList({ title, items, tone }: { title: string; items: string[]; tone: string }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{title}</div>
+      <ul className={`space-y-0.5 font-mono text-2xs ${tone}`}>
+        {items.map((it, i) => (
+          <li key={`${it}-${i}`} className="break-words">
+            {it}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

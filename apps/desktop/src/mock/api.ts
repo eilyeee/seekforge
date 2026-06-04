@@ -17,10 +17,13 @@ import {
 } from "./fixtures";
 import type {
   EvolutionProposal,
+  McpServer,
   MemoryCandidate,
   MemoryCandidateType,
   MemoryFact,
   ServerConfig,
+  SessionMeta,
+  Skill,
   Todo,
 } from "../types";
 
@@ -29,6 +32,11 @@ const candidates: MemoryCandidate[] = mockCandidates.map((c) => ({ ...c }));
 const facts: MemoryFact[] = mockFacts.map((f) => ({ ...f }));
 const config: ServerConfig = { ...mockConfig, commandAllowlist: [...(mockConfig.commandAllowlist ?? [])] };
 const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p }));
+// Mutable so skill toggle/create/import/delete, session delete/prune and MCP
+// add/remove stick for the page lifetime (mock mode + tests).
+const skills: Skill[] = mockSkills.map((s) => ({ ...s }));
+const sessions: SessionMeta[] = mockSessions.map((s) => ({ ...s }));
+const mcpServers: McpServer[] = mockMcpServers.map((s) => ({ ...s }));
 const todos: Todo[] = [
   { index: 1, text: "ship the v11 capability UI", done: false },
   { index: 2, text: "rerun the eval baseline", done: true },
@@ -146,19 +154,108 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
   if (method === "GET" && path === "/api/health")
     return { version: "0.2.0-mock", workspace: "/mock/workspace", workspaces: mockWorkspaces };
-  if (method === "GET" && path === "/api/sessions") return mockSessions;
+  if (method === "GET" && path === "/api/sessions") return sessions.map((s) => ({ ...s }));
+
+  // Prune old sessions (olderThanDays / keepLast, with dry-run preview).
+  if (method === "POST" && path === "/api/sessions/prune") {
+    const { olderThanDays, keepLast, dryRun } = (body ?? {}) as {
+      olderThanDays?: number;
+      keepLast?: number;
+      dryRun?: boolean;
+    };
+    // Newest first; everything beyond keepLast or older than the cutoff is pruned.
+    const ordered = [...sessions].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    const cutoff = typeof olderThanDays === "number" ? Date.now() - olderThanDays * 24 * 60 * 60 * 1000 : null;
+    const removed: string[] = [];
+    ordered.forEach((s, i) => {
+      const tooOld = cutoff !== null && Date.parse(s.updatedAt) < cutoff;
+      const beyondKeep = typeof keepLast === "number" && i >= keepLast;
+      if (tooOld || beyondKeep) removed.push(s.id);
+    });
+    if (!dryRun) {
+      for (const id of removed) {
+        const idx = sessions.findIndex((s) => s.id === id);
+        if (idx >= 0) sessions.splice(idx, 1);
+      }
+    }
+    // kept = the count that survives the prune (same whether dry-run or applied).
+    return { removed, kept: ordered.length - removed.length };
+  }
 
   let m = /^\/api\/sessions\/([^/]+)$/.exec(path);
+  if (method === "DELETE" && m) {
+    const idx = sessions.findIndex((s) => s.id === m![1]);
+    if (idx < 0) throw mockError(404, "not_found", "session not found");
+    sessions.splice(idx, 1);
+    return { deleted: true };
+  }
   if (method === "GET" && m) {
-    const meta = mockSessions.find((s) => s.id === m![1]);
+    const meta = sessions.find((s) => s.id === m![1]);
     if (!meta) throw new Error("session not found");
     return { meta, messages: mockSessionMessages[meta.id] ?? [] };
   }
 
-  if (method === "GET" && path === "/api/skills") return mockSkills;
+  if (method === "GET" && path === "/api/skills") return skills.map((s) => ({ ...s }));
+  // Create a new (empty) project skill from an id.
+  if (method === "POST" && path === "/api/skills") {
+    const { id } = (body ?? {}) as { id?: string };
+    if (typeof id !== "string" || id.trim() === "") throw mockError(400, "bad_request", "body must be {id: string}");
+    const trimmed = id.trim();
+    if (skills.some((s) => s.id === trimmed)) throw mockError(409, "exists", `skill "${trimmed}" already exists`);
+    const skill: Skill = {
+      id: trimmed,
+      scope: "project",
+      name: trimmed,
+      description: "New skill — edit its SKILL.md to describe it.",
+      tags: [],
+      triggers: [],
+      priority: 0,
+      enabled: true,
+      risk: "low",
+    };
+    skills.push(skill);
+    return { ...skill };
+  }
+  // Import a skill from a path (project, or global).
+  if (method === "POST" && path === "/api/skills/import") {
+    const { path: p, global } = (body ?? {}) as { path?: string; global?: boolean };
+    if (typeof p !== "string" || p.trim() === "") throw mockError(400, "bad_request", "body must include a path");
+    const id = (p.split("/").filter(Boolean).pop() ?? "imported-skill").replace(/[^a-z0-9-]+/gi, "-");
+    const skill: Skill = {
+      id,
+      scope: global ? "global" : "project",
+      name: id,
+      description: `Imported from ${p}`,
+      tags: [],
+      triggers: [],
+      priority: 0,
+      enabled: true,
+      risk: "low",
+    };
+    const existing = skills.findIndex((s) => s.id === id);
+    if (existing >= 0) skills[existing] = skill;
+    else skills.push(skill);
+    return { ...skill };
+  }
   m = /^\/api\/skills\/([^/]+)$/.exec(path);
+  if (method === "PUT" && m) {
+    const skill = skills.find((s) => s.id === m![1]);
+    if (!skill) throw mockError(404, "not_found", "skill not found");
+    if (skill.scope === "builtin") throw mockError(400, "read_only", "builtin skills are read-only");
+    const { enabled, scope } = (body ?? {}) as { enabled?: boolean; scope?: Skill["scope"] };
+    if (typeof enabled === "boolean") skill.enabled = enabled;
+    if (scope === "global" || scope === "project") skill.scope = scope;
+    return { ...skill };
+  }
+  if (method === "DELETE" && m) {
+    const idx = skills.findIndex((s) => s.id === m![1]);
+    if (idx < 0) throw mockError(404, "not_found", "skill not found");
+    if (skills[idx]!.scope === "builtin") throw mockError(400, "read_only", "builtin skills are read-only");
+    skills.splice(idx, 1);
+    return { deleted: true };
+  }
   if (method === "GET" && m) {
-    const skill = mockSkills.find((s) => s.id === m![1]);
+    const skill = skills.find((s) => s.id === m![1]);
     if (!skill) throw new Error("skill not found");
     return { ...skill, content: mockSkillContent[skill.id] ?? "" };
   }
@@ -183,6 +280,48 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/memory") {
     return { projectMd: mockProjectMd, candidates, facts: facts.map((f) => ({ ...f })) };
+  }
+  if (method === "GET" && path === "/api/memory/stats") {
+    const pending = candidates.filter((c) => c.status === "pending").length;
+    const approved = candidates.filter((c) => c.status === "approved").length;
+    const rejected = candidates.filter((c) => c.status === "rejected").length;
+    const total = pending + approved + rejected;
+    const used = facts.filter((f) => f.uses > 0).length;
+    return {
+      totalApprovedFacts: facts.length,
+      autoExtractedFacts: facts.filter((f) => f.addedAt !== undefined).length,
+      directAddedFacts: facts.filter((f) => f.addedAt === undefined).length,
+      usedFraction: facts.length > 0 ? used / facts.length : 0,
+      rejectionRate: total > 0 ? rejected / total : 0,
+      avgConfidenceUsed: 0.82,
+      avgConfidenceUnused: 0.61,
+      pending,
+      approved,
+      rejected,
+    };
+  }
+  if (method === "POST" && path === "/api/memory/compact") {
+    const { dryRun, pruneUnusedDays } = (body ?? {}) as { dryRun?: boolean; pruneUnusedDays?: number };
+    const before = facts.length;
+    // Pretend the last two facts are exact/near duplicates, and (when pruning)
+    // never-used facts older than the cutoff are archived.
+    const removed = before >= 2 ? [`- [convention] ${facts[before - 1]!.content}`] : [];
+    const merged =
+      before >= 3
+        ? [{ kept: `- [tech] ${facts[0]!.content}`, dropped: `- [tech] ${facts[1]!.content}` }]
+        : [];
+    const archived =
+      typeof pruneUnusedDays === "number"
+        ? facts.filter((f) => f.uses === 0).slice(0, 1).map((f) => `- [${f.type ?? "convention"}] ${f.content}`)
+        : [];
+    const after = before - removed.length - merged.length - archived.length;
+    if (!dryRun) {
+      // Reflect the compaction in the mock fact list so a refresh shows fewer.
+      const drop = removed.length + merged.length + archived.length;
+      facts.splice(facts.length - drop);
+      facts.forEach((f, i) => (f.index = i + 1));
+    }
+    return { before, after, removed, merged, archived };
   }
   if (method === "POST" && path === "/api/memory/fact") {
     const { content, type, pending } = (body ?? {}) as {
@@ -245,6 +384,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       case "model":
       case "baseUrl":
       case "runtimeBin":
+      case "planModel":
         config[key] = String(value);
         break;
       case "apiKey":
@@ -256,6 +396,15 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
           .map((s) => s.trim())
           .filter(Boolean);
         break;
+      case "escalateOnFailure":
+        config.escalateOnFailure = String(value) === "true";
+        break;
+      case "memoryAutoApproveConfidence": {
+        const v = String(value).trim();
+        if (v === "") config.memoryAutoApproveConfidence = undefined;
+        else config.memoryAutoApproveConfidence = Number(v);
+        break;
+      }
       default:
         throw new Error(`unknown config key: ${String(key)}`);
     }
@@ -265,6 +414,19 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/agents") {
     // List omits the prompt body, like the real server.
     return mockAgents.map(({ body: _body, ...rest }) => rest);
+  }
+  if (method === "POST" && path === "/api/agents/import") {
+    const { path: p, global } = (body ?? {}) as { path?: string; global?: boolean };
+    if (typeof p !== "string" || p.trim() === "") throw mockError(400, "bad_request", "body must include a path");
+    const id = (p.split("/").filter(Boolean).pop() ?? "imported-agent").replace(/[^a-z0-9-]+/gi, "-");
+    return {
+      id,
+      name: id,
+      description: `Imported from ${p}`,
+      triggers: [],
+      mode: "edit",
+      scope: global ? "global" : "project",
+    };
   }
   m = /^\/api\/agents\/([^/]+)$/.exec(path);
   if (method === "GET" && m) {
@@ -364,13 +526,43 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     };
   }
 
-  if (method === "GET" && path === "/api/mcp") return mockMcpServers.map((s) => ({ ...s }));
+  if (method === "GET" && path === "/api/mcp") return mcpServers.map((s) => ({ ...s }));
+  if (method === "POST" && path === "/api/mcp") {
+    const { name, command, args, env, url, trusted } = (body ?? {}) as {
+      name?: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      trusted?: boolean;
+    };
+    if (typeof name !== "string" || name.trim() === "") throw mockError(400, "bad_request", "body must include a name");
+    if (!command && !url) throw mockError(400, "bad_request", "provide a command (stdio) or url (http)");
+    if (mcpServers.some((s) => s.name === name)) throw mockError(409, "exists", `server "${name}" already exists`);
+    const srv: McpServer = {
+      name,
+      // stdio servers carry command+args; an http server is represented by its url.
+      command: command ?? url ?? "",
+      args: args ?? [],
+      trusted: trusted ?? false,
+      ...(env ? { envKeys: Object.keys(env) } : {}),
+    };
+    mcpServers.push(srv);
+    return { ...srv };
+  }
   m = /^\/api\/mcp\/([^/]+)\/tools$/.exec(path);
   if (method === "POST" && m) {
     const tools = mockMcpTools[decodeURIComponent(m[1]!)];
     if (!tools) throw mockError(504, "mcp_launch_failed", "failed to launch MCP server");
     await delay(400); // spawning takes a moment
     return tools;
+  }
+  m = /^\/api\/mcp\/([^/]+)$/.exec(path);
+  if (method === "DELETE" && m) {
+    const idx = mcpServers.findIndex((s) => s.name === decodeURIComponent(m![1]!));
+    if (idx < 0) throw mockError(404, "not_found", "server not found");
+    mcpServers.splice(idx, 1);
+    return { deleted: true };
   }
 
   if (method === "GET" && path === "/api/files") {
@@ -396,6 +588,18 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (!result) throw mockError(404, "no_checkpoints", "no checkpoints recorded for this session");
     // dryRun and the real run report the same paths in the mock.
     return { ...result, restored: [...result.restored], deleted: [...result.deleted], skipped: [...result.skipped] };
+  }
+
+  if (method === "GET" && path === "/api/doctor") {
+    return {
+      apiKeyConfigured: !!config.apiKey,
+      nodeVersion: "v22.11.0",
+      git: "git version 2.43.0",
+      runtimeBin: { set: !!config.runtimeBin, exists: false },
+      mcpServerCount: mcpServers.length,
+      modelCount: mockModels.length,
+      workspace: "/mock/workspace",
+    };
   }
 
   throw new Error(`mock: unhandled ${method} ${path}`);

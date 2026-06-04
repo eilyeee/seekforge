@@ -71,6 +71,9 @@ export const CONFIG_KEYS = [
   "compaction",
   "thinking",
   "reasoningEffort",
+  "planModel",
+  "escalateOnFailure",
+  "memoryAutoApproveConfidence",
 ] as const;
 
 /** Allowed values for the enum-typed config keys. */
@@ -151,11 +154,22 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
     } else {
       throw new ConfigValueError(`${key} must be a string[] or a comma-separated string`);
     }
-  } else if (key === "thinking") {
+  } else if (key === "thinking" || key === "escalateOnFailure") {
     // Desktop sends strings ("true"/"false"); also accept real booleans.
     if (value === true || value === "true") stored = true;
     else if (value === false || value === "false") stored = false;
-    else throw new ConfigValueError("thinking must be true or false");
+    else throw new ConfigValueError(`${key} must be true or false`);
+  } else if (key === "planModel") {
+    // String; empty clears it (back to using the default model).
+    if (typeof value !== "string") throw new ConfigValueError("planModel must be a string");
+    stored = value.trim() === "" ? undefined : value;
+  } else if (key === "memoryAutoApproveConfidence") {
+    // Number in 0..1; out of range (or non-numeric) is rejected.
+    const num = typeof value === "string" ? Number(value) : value;
+    if (typeof num !== "number" || !Number.isFinite(num) || num < 0 || num > 1) {
+      throw new ConfigValueError("memoryAutoApproveConfidence must be a number between 0 and 1");
+    }
+    stored = num;
   } else if (key in ENUM_VALUES) {
     if (typeof value !== "string") throw new ConfigValueError(`${key} must be a string`);
     // reasoningEffort: empty clears it (back to the API default).

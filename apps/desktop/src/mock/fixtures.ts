@@ -414,4 +414,7 @@ export const mockConfig: ServerConfig = {
   compaction: "mechanical",
   thinking: false,
   reasoningEffort: null,
+  planModel: "",
+  escalateOnFailure: false,
+  memoryAutoApproveConfidence: undefined,
 };

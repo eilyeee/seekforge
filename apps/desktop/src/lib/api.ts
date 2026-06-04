@@ -6,7 +6,9 @@ import type {
   AccountBalance,
   AgentInfo,
   BacktrackResult,
+  CompactResult,
   ConfigKey,
+  DoctorReport,
   EvolutionProposal,
   McpResource,
   McpServer,
@@ -14,12 +16,15 @@ import type {
   MemoryCandidate,
   MemoryCandidateType,
   MemoryResponse,
+  MemoryStats,
   ModelInfo,
+  PruneResult,
   RewindResult,
   ServerConfig,
   SessionMeta,
   SessionTurn,
   Skill,
+  SkillScope,
   Todo,
   Workspace,
   WorkspacesResponse,
@@ -230,4 +235,50 @@ export const api = {
   balance: () => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance")),
   mcpResources: () => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources")),
   models: () => request<ModelInfo[]>("GET", "/api/models"),
+
+  // Memory stats + compaction (workspace-scoped).
+  memoryStats: () => request<MemoryStats>("GET", withWorkspace("/api/memory/stats")),
+  memoryCompact: (opts?: { dryRun?: boolean; pruneUnusedDays?: number }) =>
+    request<CompactResult>("POST", withWorkspace("/api/memory/compact"), opts ?? {}),
+
+  // Skills lifecycle (workspace-scoped). Builtin skills are read-only.
+  skillSetEnabled: (id: string, enabled: boolean, scope?: SkillScope) =>
+    request<Skill>("PUT", withWorkspace(`/api/skills/${encodeURIComponent(id)}`), {
+      enabled,
+      ...(scope ? { scope } : {}),
+    }),
+  skillCreate: (id: string) => request<Skill>("POST", withWorkspace("/api/skills"), { id }),
+  skillImport: (path: string, global?: boolean) =>
+    request<Skill>("POST", withWorkspace("/api/skills/import"), { path, ...(global ? { global: true } : {}) }),
+  skillDelete: (id: string, scope?: SkillScope) =>
+    request<{ deleted: boolean }>(
+      "DELETE",
+      withWorkspace(`/api/skills/${encodeURIComponent(id)}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
+    ),
+
+  // Sessions lifecycle (workspace-scoped).
+  sessionDelete: (id: string) =>
+    request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/sessions/${encodeURIComponent(id)}`)),
+  sessionsPrune: (opts?: { olderThanDays?: number; keepLast?: number; dryRun?: boolean }) =>
+    request<PruneResult>("POST", withWorkspace("/api/sessions/prune"), opts ?? {}),
+
+  // Agents import (workspace-scoped).
+  agentImport: (path: string, global?: boolean) =>
+    request<AgentInfo>("POST", withWorkspace("/api/agents/import"), { path, ...(global ? { global: true } : {}) }),
+
+  // MCP server management (workspace-scoped).
+  mcpAdd: (cfg: {
+    name: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+    trusted?: boolean;
+  }) => request<McpServer>("POST", withWorkspace("/api/mcp"), cfg),
+  mcpRemove: (name: string) =>
+    request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/mcp/${encodeURIComponent(name)}`)),
+
+  // Environment diagnostics (workspace-scoped).
+  doctor: () => request<DoctorReport>("GET", withWorkspace("/api/doctor")),
 };

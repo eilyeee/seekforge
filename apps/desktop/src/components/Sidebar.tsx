@@ -23,6 +23,7 @@ const NAV: { view: View; key: string; Icon: ComponentType<{ size?: number; class
   { view: "memory", key: "nav.memory", Icon: IconMemory },
   { view: "evolution", key: "nav.evolution", Icon: IconEvolution },
   { view: "settings", key: "nav.settings", Icon: IconSettings },
+  { view: "diagnostics", key: "nav.diagnostics", Icon: IconSettings },
 ];
 
 /** Extra top padding on macOS: the window uses an overlay title bar, so the

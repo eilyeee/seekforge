@@ -49,6 +49,7 @@ export {
   appendCheckpoint,
   compactSessionNow,
   createSessionTrace,
+  deleteSession,
   forkSession,
   listSessions,
   loadSessionMessages,

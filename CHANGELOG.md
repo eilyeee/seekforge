@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### round 46: desktop capability parity with the CLI/TUI
+Closed the desktop's management gaps so the GUI can do what the CLI/TUI can.
+Built by two parallel agents on disjoint trees (server/core vs desktop) against
+one shared REST contract, then verified end-to-end (shapes aligned).
+
+- **Memory hygiene:** `GET /api/memory/stats` (extraction-quality stats) and
+  `POST /api/memory/compact` (dedup + `pruneUnusedDays`); MemoryView gains a
+  stats panel and a dry-run→apply compact control.
+- **Skill management:** `PUT /api/skills/:id` (enable/disable), `POST
+  /api/skills` (scaffold), `POST /api/skills/import`, `DELETE /api/skills/:id`
+  (builtins are read-only, enforced server-side); SkillsView gains toggles,
+  New/Import, and delete.
+- **Sessions are deletable + prunable:** `DELETE /api/sessions/:id` (new core
+  `deleteSession`) and `POST /api/sessions/prune`; SessionsView gains a per-row
+  Delete and a "Prune old…" control.
+- **Subagent import:** `POST /api/agents/import`; AgentsView gains Import.
+- **MCP server management:** `POST /api/mcp` / `DELETE /api/mcp/:name` edit the
+  workspace config; SettingsView's MCP section gains add/remove.
+- **More settable config:** `planModel`, `escalateOnFailure`,
+  `memoryAutoApproveConfidence` now accepted by `setConfigValue` and surfaced in
+  Settings (confidence validated 0..1).
+- **Diagnostics view:** `GET /api/doctor` (api key / node / git / runtime / mcp
+  / model checks) behind a new sidebar "Diagnostics" view.
+- Verified: typecheck clean (8 packages); tests core 805 / server 160 /
+  desktop 230 / tui 667 / eval-harness 45; desktop build + `pnpm audit` clean.
+
 ### round 45: desktop workspace selection + diff resilience
 - **Open/switch/recent workspaces (desktop).** The sidebar workspace control is
   now a full menu: switch between hosted workspaces, **Open folder…** (native

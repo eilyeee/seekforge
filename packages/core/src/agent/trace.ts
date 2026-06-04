@@ -132,6 +132,19 @@ export function pruneSessions(workspace: string, opts: PruneSessionsOptions = {}
   return { removed, kept: all.length - removed.length };
 }
 
+/**
+ * Removes a single session directory (.seekforge/sessions/<id>/). Returns
+ * whether the session existed before deletion. Mirrors pruneSessions' per-id
+ * removal; best-effort recursive delete.
+ */
+export function deleteSession(workspace: string, id: string): boolean {
+  const root = sessionsRoot(workspace);
+  const dir = join(root, id);
+  if (!existsSync(dir)) return false;
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
 /** Replays messages.jsonl back into ChatMessage[] for session resume. */
 export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
   const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");

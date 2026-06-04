@@ -9,7 +9,7 @@ import { ChatItems } from "../components/chat/ChatItems";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, type BadgeTone } from "../components/ui";
-import type { RewindResult, SessionMeta } from "../types";
+import type { PruneResult, RewindResult, SessionMeta } from "../types";
 
 /** Short, human time for a card corner: today → "10:24", else a compact date. */
 function formatWhen(iso: string): string {
@@ -46,17 +46,37 @@ export function SessionsView() {
   const [rewindPreview, setRewindPreview] = useState<{ sessionId: string; result: RewindResult } | null>(null);
   /** Per-session inline note ("no checkpoints" / result summary). */
   const [rewindNotes, setRewindNotes] = useState<Record<string, string>>({});
+  /** Pending per-row delete confirmation. */
+  const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
+  /** Open "Prune old…" panel. */
+  const [pruneOpen, setPruneOpen] = useState(false);
+
+  const refresh = () =>
+    api
+      .sessions()
+      .then(setSessions)
+      .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
     setSessions(null);
     setDetail(null);
     setError(null);
     setRewindNotes({});
-    api
-      .sessions()
-      .then(setSessions)
-      .catch((e: unknown) => setError(String(e)));
+    setPendingDelete(null);
+    setPruneOpen(false);
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setPendingDelete(null);
+    api
+      .sessionDelete(id)
+      .then(refresh)
+      .catch((e: unknown) => setError(t("sessions.deleteError", { error: String(e) })));
+  };
 
   const openSession = (id: string) => {
     setError(null);
@@ -133,6 +153,14 @@ export function SessionsView() {
           <Button variant="ghost" size="md" className="shrink-0">
             <IconSessions size={15} />
           </Button>
+          <Button
+            size="md"
+            className="shrink-0"
+            onClick={() => setPruneOpen(true)}
+            disabled={!sessions || sessions.length === 0}
+          >
+            {t("sessions.pruneBtn")}
+          </Button>
         </div>
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -198,6 +226,19 @@ export function SessionsView() {
                             {t("sessions.rewindBtn")}
                           </Button>
                         )}
+                        {s.status !== "running" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-tertiary hover:text-danger"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPendingDelete(s);
+                            }}
+                          >
+                            {t("sessions.deleteBtn")}
+                          </Button>
+                        )}
                         <Button
                           variant="primary"
                           size="sm"
@@ -260,6 +301,135 @@ export function SessionsView() {
           </div>
         </ConfirmDialog>
       )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={t("sessions.deleteTitle")}
+          confirmLabel={t("sessions.deleteConfirm")}
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        >
+          {t("sessions.deleteBody")}
+        </ConfirmDialog>
+      )}
+
+      {pruneOpen && (
+        <PruneDialog
+          onClose={() => setPruneOpen(false)}
+          onApplied={() => {
+            setPruneOpen(false);
+            void refresh();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** "Prune old sessions": olderThanDays / keepLast inputs, dry-run preview, apply. */
+function PruneDialog({ onClose, onApplied }: { onClose: () => void; onApplied: () => void }) {
+  const t = useT();
+  const [olderThanDays, setOlderThanDays] = useState("");
+  const [keepLast, setKeepLast] = useState("");
+  const [preview, setPreview] = useState<PruneResult | null>(null);
+  const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const optsOf = (dryRun: boolean) => {
+    const days = olderThanDays.trim();
+    const keep = keepLast.trim();
+    return {
+      dryRun,
+      ...(days !== "" ? { olderThanDays: Number(days) } : {}),
+      ...(keep !== "" ? { keepLast: Number(keep) } : {}),
+    };
+  };
+
+  const runPreview = () => {
+    setBusy("preview");
+    setError(null);
+    setNote(null);
+    api
+      .sessionsPrune(optsOf(true))
+      .then(setPreview)
+      .catch((e: unknown) => setError(t("sessions.pruneError", { error: String(e) })))
+      .finally(() => setBusy(null));
+  };
+
+  const apply = () => {
+    setBusy("apply");
+    setError(null);
+    api
+      .sessionsPrune(optsOf(false))
+      .then((r) => {
+        setNote(t("sessions.pruneDone", { count: r.removed.length }));
+        onApplied();
+      })
+      .catch((e: unknown) => setError(t("sessions.pruneError", { error: String(e) })))
+      .finally(() => setBusy(null));
+  };
+
+  const hasPreview = preview !== null;
+  const willPrune = preview ? preview.removed.length : 0;
+
+  return (
+    <ConfirmDialog
+      title={t("sessions.pruneTitle")}
+      confirmLabel={
+        !hasPreview
+          ? busy === "preview"
+            ? t("sessions.prunePreviewing")
+            : t("sessions.prunePreviewBtn")
+          : busy === "apply"
+            ? t("sessions.pruneApplying")
+            : t("sessions.pruneApplyBtn", { count: willPrune })
+      }
+      danger={hasPreview && willPrune > 0}
+      onConfirm={!hasPreview ? runPreview : apply}
+      onCancel={onClose}
+    >
+      <div className="space-y-3 text-xs">
+        <label className="block">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("sessions.pruneOlderThan")}</span>
+          <Input
+            value={olderThanDays}
+            onChange={(e) => {
+              setOlderThanDays(e.target.value.replace(/[^0-9]/g, ""));
+              setPreview(null);
+            }}
+            inputMode="numeric"
+            placeholder={t("sessions.pruneOlderThanPlaceholder")}
+            className="mt-1"
+            disabled={busy !== null}
+          />
+        </label>
+        <label className="block">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("sessions.pruneKeepLast")}</span>
+          <Input
+            value={keepLast}
+            onChange={(e) => {
+              setKeepLast(e.target.value.replace(/[^0-9]/g, ""));
+              setPreview(null);
+            }}
+            inputMode="numeric"
+            placeholder={t("sessions.pruneKeepLastPlaceholder")}
+            className="mt-1"
+            disabled={busy !== null}
+          />
+        </label>
+        {hasPreview &&
+          (willPrune > 0 ? (
+            <p className="text-secondary">
+              {t("sessions.prunePreview", { count: willPrune, kept: preview!.kept })}
+            </p>
+          ) : (
+            <p className="text-tertiary">{t("sessions.pruneNone")}</p>
+          ))}
+        {note && <p className="text-ok">{note}</p>}
+        {error && <p className="text-danger">{error}</p>}
+      </div>
+    </ConfirmDialog>
   );
 }

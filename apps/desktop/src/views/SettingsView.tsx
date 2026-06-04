@@ -4,6 +4,7 @@ import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, TextArea } from "../components/ui";
 import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
@@ -85,23 +86,32 @@ function SettingsRow({
 const SELECT_CLASS =
   "focus-ring w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70";
 
-/** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools). */
+/** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools),
+ * with an add form (stdio command/args OR url) and per-server remove. */
 function McpSection() {
   const t = useT();
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Per server: tool list, an error string, or "loading". */
   const [tools, setTools] = useState<Record<string, McpTool[] | { error: string } | "loading">>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
+
+  const refresh = () =>
+    api
+      .mcp()
+      .then(setServers)
+      .catch((e: unknown) => setLoadError(String(e)));
 
   useEffect(() => {
     setServers(null);
     setLoadError(null);
     setTools({});
-    api
-      .mcp()
-      .then(setServers)
-      .catch((e: unknown) => setLoadError(String(e)));
+    setAddOpen(false);
+    setPendingRemove(null);
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
   const listTools = (name: string) => {
@@ -112,9 +122,24 @@ function McpSection() {
       .catch((e: unknown) => setTools((t) => ({ ...t, [name]: { error: String(e) } })));
   };
 
+  const confirmRemove = () => {
+    if (!pendingRemove) return;
+    const name = pendingRemove;
+    setPendingRemove(null);
+    api
+      .mcpRemove(name)
+      .then(refresh)
+      .catch((e: unknown) => setLoadError(String(e)));
+  };
+
   return (
     <section>
-      <h2 className="mb-2 px-1 text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
+        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
+          {t("settings.mcpAddBtn")}
+        </Button>
+      </div>
       {loadError && (
         <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-2 text-xs text-danger">{loadError}</div>
       )}
@@ -140,6 +165,14 @@ function McpSection() {
                     onClick={() => listTools(srv.name)}
                   >
                     {state === "loading" ? t("settings.mcpListing") : t("settings.mcpListTools")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-tertiary hover:text-danger"
+                    onClick={() => setPendingRemove(srv.name)}
+                  >
+                    {t("settings.mcpRemoveBtn")}
                   </Button>
                 </div>
                 <div className="mt-1.5 font-mono text-xs text-tertiary">
@@ -167,7 +200,147 @@ function McpSection() {
         </div>
       )}
       {servers !== null && servers.length > 0 && <McpResourcesSection />}
+
+      {addOpen && (
+        <AddMcpDialog
+          onClose={() => setAddOpen(false)}
+          onAdded={() => {
+            setAddOpen(false);
+            void refresh();
+          }}
+        />
+      )}
+      {pendingRemove && (
+        <ConfirmDialog
+          title={t("settings.mcpRemoveTitle", { name: pendingRemove })}
+          confirmLabel={t("settings.mcpRemoveConfirm")}
+          danger
+          onConfirm={confirmRemove}
+          onCancel={() => setPendingRemove(null)}
+        >
+          {t("settings.mcpRemoveBody")}
+        </ConfirmDialog>
+      )}
     </section>
+  );
+}
+
+/** Add-MCP form: name + a stdio transport (command/args) OR an http url. */
+function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const t = useT();
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<"stdio" | "http">("stdio");
+  const [command, setCommand] = useState("");
+  const [args, setArgs] = useState("");
+  const [url, setUrl] = useState("");
+  const [trusted, setTrusted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit =
+    name.trim() !== "" && (transport === "stdio" ? command.trim() !== "" : url.trim() !== "");
+
+  const submit = () => {
+    if (!canSubmit || busy) return;
+    setBusy(true);
+    setError(null);
+    const cfg =
+      transport === "stdio"
+        ? {
+            name: name.trim(),
+            command: command.trim(),
+            args: args.trim() === "" ? [] : args.trim().split(/\s+/),
+            trusted,
+          }
+        : { name: name.trim(), url: url.trim(), trusted };
+    api
+      .mcpAdd(cfg)
+      .then(onAdded)
+      .catch((e: unknown) => {
+        setError(t("settings.mcpAddError", { error: String(e) }));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <ConfirmDialog
+      title={t("settings.mcpAddTitle")}
+      confirmLabel={busy ? "…" : t("settings.mcpAddConfirm")}
+      onConfirm={submit}
+      onCancel={onClose}
+    >
+      <div className="space-y-3 text-xs">
+        <label className="block">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddName")}</span>
+          <Input
+            value={name}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t("settings.mcpAddNamePlaceholder")}
+            className="mt-1 font-mono"
+            disabled={busy}
+          />
+        </label>
+        <label className="block">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddTransport")}</span>
+          <select
+            value={transport}
+            onChange={(e) => setTransport(e.target.value as "stdio" | "http")}
+            disabled={busy}
+            className="mt-1 w-full rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70 focus:outline-none"
+          >
+            <option value="stdio">{t("settings.mcpAddStdio")}</option>
+            <option value="http">{t("settings.mcpAddHttp")}</option>
+          </select>
+        </label>
+        {transport === "stdio" ? (
+          <>
+            <label className="block">
+              <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddCommand")}</span>
+              <Input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={t("settings.mcpAddCommandPlaceholder")}
+                className="mt-1 font-mono"
+                disabled={busy}
+              />
+            </label>
+            <label className="block">
+              <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddArgs")}</span>
+              <Input
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                placeholder={t("settings.mcpAddArgsPlaceholder")}
+                className="mt-1 font-mono"
+                disabled={busy}
+              />
+            </label>
+          </>
+        ) : (
+          <label className="block">
+            <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddUrl")}</span>
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={t("settings.mcpAddUrlPlaceholder")}
+              className="mt-1 font-mono"
+              disabled={busy}
+            />
+          </label>
+        )}
+        <label className="flex items-center gap-2 text-secondary">
+          <input
+            type="checkbox"
+            checked={trusted}
+            onChange={(e) => setTrusted(e.target.checked)}
+            className="accent-accent"
+            disabled={busy}
+          />
+          {t("settings.mcpAddTrusted")}
+        </label>
+        {error && <p className="text-danger">{error}</p>}
+      </div>
+    </ConfirmDialog>
   );
 }
 
@@ -300,6 +473,10 @@ export function SettingsView() {
   const [compaction, setCompaction] = useState("mechanical");
   const [thinking, setThinking] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
+  // Agent behaviour knobs.
+  const [planModel, setPlanModel] = useState("");
+  const [escalateOnFailure, setEscalateOnFailure] = useState(false);
+  const [memoryAutoApprove, setMemoryAutoApprove] = useState("");
   const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
@@ -319,6 +496,13 @@ export function SettingsView() {
         setCompaction(config.compaction ?? "mechanical");
         setThinking(config.thinking ?? false);
         setReasoningEffort(config.reasoningEffort ?? "");
+        setPlanModel(config.planModel ?? "");
+        setEscalateOnFailure(config.escalateOnFailure ?? false);
+        setMemoryAutoApprove(
+          config.memoryAutoApproveConfidence === undefined || config.memoryAutoApproveConfidence === null
+            ? ""
+            : String(config.memoryAutoApproveConfidence),
+        );
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -506,6 +690,50 @@ export function SettingsView() {
                     onChange={(e) => {
                       setThinking(e.target.checked);
                       void save("thinking", String(e.target.checked), global);
+                    }}
+                    className="accent-accent"
+                  />
+                </label>
+              </SettingsRow>
+            </SettingsGroup>
+
+            <SettingsGroup title={t("settings.behaviorLabel")}>
+              <SettingsRow label={t("settings.planModelLabel")} description={t("settings.planModelHint")}>
+                <Input
+                  value={planModel}
+                  onChange={(e) => setPlanModel(e.target.value)}
+                  placeholder={t("settings.planModelPlaceholder")}
+                  className="font-mono"
+                />
+                <SaveButton
+                  state={states.planModel ?? "idle"}
+                  onClick={() => void save("planModel", planModel, global)}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label={t("settings.memoryAutoApproveLabel")}
+                description={t("settings.memoryAutoApproveHint")}
+              >
+                <Input
+                  value={memoryAutoApprove}
+                  onChange={(e) => setMemoryAutoApprove(e.target.value)}
+                  inputMode="decimal"
+                  placeholder={t("settings.memoryAutoApprovePlaceholder")}
+                  className="font-mono"
+                />
+                <SaveButton
+                  state={states.memoryAutoApproveConfidence ?? "idle"}
+                  onClick={() => void save("memoryAutoApproveConfidence", memoryAutoApprove, global)}
+                />
+              </SettingsRow>
+              <SettingsRow label={t("settings.escalateOnFailureLabel")}>
+                <label className="flex items-center gap-2 self-center text-xs text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={escalateOnFailure}
+                    onChange={(e) => {
+                      setEscalateOnFailure(e.target.checked);
+                      void save("escalateOnFailure", String(e.target.checked), global);
                     }}
                     className="accent-accent"
                   />

@@ -10,6 +10,7 @@ export const common = {
     "nav.memory": "Memory",
     "nav.evolution": "Evolve",
     "nav.settings": "Settings",
+    "nav.diagnostics": "Diagnostics",
     "nav.workspace": "WORKSPACE",
     "nav.todos": "Todos",
     // Workspace menu
@@ -69,6 +70,7 @@ export const common = {
     "nav.memory": "记忆",
     "nav.evolution": "进化",
     "nav.settings": "设置",
+    "nav.diagnostics": "诊断",
     "nav.workspace": "工作区",
     "nav.todos": "待办",
     // Workspace menu

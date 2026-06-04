@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
 import {
   Badge,
@@ -48,18 +49,26 @@ export function AgentsView() {
   const [detail, setDetail] = useState<AgentInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
+
+  const refresh = () =>
+    api
+      .agents()
+      .then(setAgents)
+      .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
     setAgents(null);
     setDetail(null);
     setError(null);
     setQuery("");
-    api
-      .agents()
-      .then(setAgents)
-      .catch((e: unknown) => setError(String(e)));
+    setImportOpen(false);
+    setNote(null);
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
   const openAgent = (id: string) => {
@@ -138,8 +147,15 @@ export function AgentsView() {
   return (
     <div className="flex h-full flex-col bg-surface">
       <header className="border-b border-subtle px-6 py-4">
-        <h1 className="text-lg font-semibold text-primary">{t("agents.title")}</h1>
-        <p className="mt-1 text-xs text-tertiary">{t("agents.emptyDescription")}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-lg font-semibold text-primary">{t("agents.title")}</h1>
+            <p className="mt-1 text-xs text-tertiary">{t("agents.emptyDescription")}</p>
+          </div>
+          <Button size="sm" className="shrink-0" onClick={() => setImportOpen(true)}>
+            {t("agents.importBtn")}
+          </Button>
+        </div>
         <div className="mt-3 max-w-md">
           <Input
             value={query}
@@ -147,6 +163,7 @@ export function AgentsView() {
             placeholder={t("sessions.searchPlaceholder")}
           />
         </div>
+        {note && <p className="mt-2 text-2xs text-ok">{note}</p>}
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {error && (
@@ -203,6 +220,76 @@ export function AgentsView() {
           </div>
         )}
       </div>
+
+      {importOpen && (
+        <ImportAgentDialog
+          onClose={() => setImportOpen(false)}
+          onImport={(path, global) =>
+            api.agentImport(path, global).then((agent) => {
+              setImportOpen(false);
+              setNote(t("agents.importDone", { id: agent.id }));
+              void refresh();
+            })
+          }
+        />
+      )}
     </div>
+  );
+}
+
+function ImportAgentDialog({
+  onClose,
+  onImport,
+}: {
+  onClose: () => void;
+  onImport: (path: string, global: boolean) => Promise<unknown>;
+}) {
+  const t = useT();
+  const [path, setPath] = useState("");
+  const [global, setGlobal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const trimmed = path.trim();
+    if (trimmed === "" || busy) return;
+    setBusy(true);
+    setError(null);
+    onImport(trimmed, global).catch((e: unknown) => {
+      setError(t("agents.importError", { error: String(e) }));
+      setBusy(false);
+    });
+  };
+
+  return (
+    <ConfirmDialog
+      title={t("agents.importTitle")}
+      confirmLabel={busy ? "…" : t("agents.importConfirm")}
+      onConfirm={submit}
+      onCancel={onClose}
+    >
+      <Input
+        value={path}
+        autoFocus
+        onChange={(e) => setPath(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+        placeholder={t("agents.importPathPlaceholder")}
+        className="font-mono"
+        disabled={busy}
+      />
+      <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
+        <input
+          type="checkbox"
+          checked={global}
+          onChange={(e) => setGlobal(e.target.checked)}
+          className="accent-accent"
+          disabled={busy}
+        />
+        {t("agents.importGlobal")}
+      </label>
+      {error && <p className="mt-2 text-2xs text-danger">{error}</p>}
+    </ConfirmDialog>
   );
 }

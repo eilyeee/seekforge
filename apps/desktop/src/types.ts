@@ -118,6 +118,12 @@ export type ServerConfig = {
   compaction?: "mechanical" | "llm";
   thinking?: boolean;
   reasoningEffort?: "high" | "max" | null;
+  /** Model used for plan-mode generation (empty = follow the default model). */
+  planModel?: string;
+  /** Re-run a failed task with a stronger model/effort once before giving up. */
+  escalateOnFailure?: boolean;
+  /** Auto-approve extracted memory candidates at/above this confidence (0..1). */
+  memoryAutoApproveConfidence?: number;
 };
 
 export type ConfigKey =
@@ -130,7 +136,54 @@ export type ConfigKey =
   | "sandbox"
   | "compaction"
   | "thinking"
-  | "reasoningEffort";
+  | "reasoningEffort"
+  | "planModel"
+  | "escalateOnFailure"
+  | "memoryAutoApproveConfidence";
+
+/** GET /api/memory/stats — mirror of @seekforge/core MemoryStats. */
+export type MemoryStats = {
+  totalApprovedFacts: number;
+  autoExtractedFacts: number;
+  directAddedFacts: number;
+  /** Fraction (0..1) of approved facts used at least once. */
+  usedFraction: number;
+  /** Candidate rejection rate (0..1). */
+  rejectionRate: number;
+  avgConfidenceUsed: number | null;
+  avgConfidenceUnused: number | null;
+  pending: number;
+  approved: number;
+  rejected: number;
+};
+
+/** POST /api/memory/compact — mirror of @seekforge/core CompactResult. */
+export type CompactResult = {
+  /** Bullet count before compaction. */
+  before: number;
+  /** Bullet count after compaction. */
+  after: number;
+  /** Bullet lines removed as exact duplicates. */
+  removed: string[];
+  /** Near-duplicate merges (longer kept, shorter dropped). */
+  merged: Array<{ kept: string; dropped: string }>;
+  /** Stale bullets moved to project-archive.md. */
+  archived: string[];
+};
+
+/** POST /api/sessions/prune result. */
+export type PruneResult = { removed: string[]; kept: number };
+
+/** GET /api/doctor — environment health checks. */
+export type DoctorReport = {
+  apiKeyConfigured: boolean;
+  nodeVersion: string;
+  git: string | null;
+  runtimeBin: { set: boolean; exists: boolean };
+  mcpServerCount: number;
+  modelCount: number;
+  workspace: string;
+};
 
 export type AgentScope = "global" | "project" | "builtin";
 
