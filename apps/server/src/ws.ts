@@ -219,12 +219,20 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { sessionId, task, mode, ws: wsId } = frame;
+        const { sessionId, task, mode, approvalMode, ws: wsId } = frame;
         if (typeof sessionId !== "string" || typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "send needs sessionId and a non-empty task");
         }
         if (mode !== undefined && mode !== "edit" && mode !== "ask") {
           return fail("bad_frame", 'send.mode must be "edit" or "ask" when present');
+        }
+        if (
+          approvalMode !== undefined &&
+          approvalMode !== "auto" &&
+          approvalMode !== "acceptEdits" &&
+          approvalMode !== "confirm"
+        ) {
+          return fail("bad_frame", 'send.approvalMode must be "auto", "acceptEdits", or "confirm" when present');
         }
         if (wsId !== undefined && typeof wsId !== "string") {
           return fail("bad_frame", "send.ws must be a string when present");
@@ -239,11 +247,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
             : readSessionMeta(workspace.path, sessionId);
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
         // A resumed session keeps its original ask/edit mode unless the frame
-        // overrides it (plan -> execute); approvals stay interactive.
+        // overrides it (plan -> execute). Approvals default to interactive
+        // ("confirm") but the client may change them per follow-up message.
         void run({
           task,
           mode: mode ?? meta.mode,
-          approvalMode: "confirm",
+          approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
           resumeSessionId: sessionId,
           workspace: workspace.path,
           ...parsed,

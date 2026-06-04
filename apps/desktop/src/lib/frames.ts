@@ -55,14 +55,22 @@ export function buildStartFrame(
   return withWs({ type: "start", task, mode, approvalMode, ...overrides }, ws);
 }
 
-/** Continue a session; per-message overrides apply exactly like on start. */
+/**
+ * Continue a session; per-message overrides apply exactly like on start. The
+ * approval mode and (edit/ask) run mode can change between turns — they ride
+ * along on each send so the header controls stay live mid-conversation. "plan"
+ * is a start-only concept, so it is never sent as a follow-up mode.
+ */
 export function buildSendFrame(
   sessionId: string,
   task: string,
+  approvalMode: ApprovalChoice,
+  mode: StartMode,
   ws?: string,
   overrides: RunOverrides = {},
 ): ClientFrame {
-  return withWs({ type: "send", sessionId, task, ...overrides }, ws);
+  const modeOverride = mode === "edit" || mode === "ask" ? { mode } : {};
+  return withWs({ type: "send", sessionId, task, approvalMode, ...modeOverride, ...overrides }, ws);
 }
 
 /** Continue the plan session with an edit-mode override, in the tab's workspace. */

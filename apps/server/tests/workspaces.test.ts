@@ -238,6 +238,26 @@ describe("WS workspace targeting", () => {
     expect(inputs[0]!.resumeSessionId).toBe("b1");
   });
 
+  it("send honors a per-message approvalMode and defaults to confirm when omitted", async () => {
+    const ws0 = makeWorkspace();
+    seedSession(ws0, "s1", "task");
+    const inputs: RunAgentTaskInput[] = [];
+    server = await startServer({
+      workspace: ws0,
+      port: 0,
+      token: TOKEN,
+      createAgent: recordingAgentFactory(inputs),
+    });
+    const { ws, rx } = await open(server.port);
+    ws.send(JSON.stringify({ type: "send", sessionId: "s1", task: "go", approvalMode: "auto" }));
+    await rx.waitFor((f) => f.type === "idle");
+    expect(inputs[0]!.approvalMode).toBe("auto");
+
+    ws.send(JSON.stringify({ type: "send", sessionId: "s1", task: "again" }));
+    await rx.waitFor((f) => f.type === "idle");
+    expect(inputs[1]!.approvalMode).toBe("confirm");
+  });
+
   it("start with an unknown ws id is a protocol error", async () => {
     const a = makeWorkspace();
     server = await startServer({ workspace: a, port: 0, token: TOKEN, createAgent: recordingAgentFactory([]) });

@@ -19,7 +19,16 @@ export type ClientFrame =
       /** Workspace id (default: first workspace when omitted). */
       ws?: string;
     } & RunOverrides)
-  | ({ type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string } & RunOverrides)
+  | ({
+      type: "send";
+      sessionId: string;
+      task: string;
+      /** edit/ask switchable per follow-up; absent keeps the session's mode. */
+      mode?: "edit" | "ask";
+      /** Approval mode can change between turns; absent defaults to "confirm". */
+      approvalMode?: "auto" | "acceptEdits" | "confirm";
+      ws?: string;
+    } & RunOverrides)
   | {
       type: "permission.response";
       requestId: string;

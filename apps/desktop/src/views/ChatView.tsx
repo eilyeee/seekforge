@@ -208,7 +208,9 @@ export function ChatView() {
     else closeTab(tabId);
   };
 
-  const modeSelectable = !tab.chat.sessionId && !tab.chat.running;
+  // Approval mode can change any time the tab is idle (it rides on each send).
+  // Run mode: edit/ask switchable between turns; "plan" is start-only.
+  const inSession = !!tab.chat.sessionId;
 
   return (
     <div className="flex h-full flex-col">
@@ -243,7 +245,7 @@ export function ChatView() {
             <button
               key={mode}
               type="button"
-              disabled={!modeSelectable}
+              disabled={running || (mode === "plan" && inSession)}
               title={t(hintKey)}
               onClick={() => setMode(mode)}
               className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
@@ -268,7 +270,7 @@ export function ChatView() {
               <button
                 key={value}
                 type="button"
-                disabled={!modeSelectable}
+                disabled={running}
                 title={t(hintKey)}
                 onClick={() => setApprovalMode(value)}
                 className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${

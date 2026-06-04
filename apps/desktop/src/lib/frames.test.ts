@@ -101,15 +101,23 @@ describe("frame builders carry per-run overrides", () => {
     expect(buildStartFrame("go", "edit", "confirm")).not.toHaveProperty("model");
   });
 
-  it("buildSendFrame and buildExecutePlanFrame carry overrides per message", () => {
-    expect(buildSendFrame("s-1", "more", "ws-a", overrides)).toEqual({
+  it("buildSendFrame carries approvalMode + (edit/ask) mode and overrides per message", () => {
+    expect(buildSendFrame("s-1", "more", "auto", "edit", "ws-a", overrides)).toEqual({
       type: "send",
       sessionId: "s-1",
       task: "more",
+      approvalMode: "auto",
+      mode: "edit",
       ws: "ws-a",
       ...overrides,
     });
-    expect(buildSendFrame("s-1", "more")).toEqual({ type: "send", sessionId: "s-1", task: "more" });
+    // "plan" is start-only — it is never sent as a follow-up mode.
+    expect(buildSendFrame("s-1", "more", "confirm", "plan")).toEqual({
+      type: "send",
+      sessionId: "s-1",
+      task: "more",
+      approvalMode: "confirm",
+    });
     expect(buildExecutePlanFrame("s-1", "", { thinking: false })).toMatchObject({ thinking: false });
   });
 });

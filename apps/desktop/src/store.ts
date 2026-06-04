@@ -423,7 +423,7 @@ export const useStore = create<AppStore>()((set, get) => {
         planReady: false,
       };
       if (tab.chat.sessionId) {
-        client.send(buildSendFrame(tab.chat.sessionId, task, tab.ws, overrides));
+        client.send(buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides));
       } else {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
