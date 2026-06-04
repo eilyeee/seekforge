@@ -5,7 +5,7 @@ import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { Badge, Button, Card, IconSettings, Input, TextArea } from "../components/ui";
+import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
 import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -82,9 +82,6 @@ function SettingsRow({
     </div>
   );
 }
-
-const SELECT_CLASS =
-  "focus-ring w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70";
 
 /** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools),
  * with an add form (stdio command/args OR url) and per-server remove. */
@@ -283,15 +280,16 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
         </label>
         <label className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddTransport")}</span>
-          <select
+          <Select
             value={transport}
-            onChange={(e) => setTransport(e.target.value as "stdio" | "http")}
+            onChange={(v) => setTransport(v as "stdio" | "http")}
             disabled={busy}
-            className="mt-1 w-full rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70 focus:outline-none"
-          >
-            <option value="stdio">{t("settings.mcpAddStdio")}</option>
-            <option value="http">{t("settings.mcpAddHttp")}</option>
-          </select>
+            className="mt-1 w-full"
+            options={[
+              { value: "stdio", label: t("settings.mcpAddStdio") },
+              { value: "http", label: t("settings.mcpAddHttp") },
+            ]}
+          />
         </label>
         {transport === "stdio" ? (
           <>
@@ -427,14 +425,15 @@ function PreferencesSection() {
         <ThemeSwitcher />
       </SettingsRow>
       <SettingsRow label={t("lang.label")}>
-        <select
+        <Select
           value={locale}
-          onChange={(e) => setLocale(e.target.value as Locale)}
-          className="focus-ring w-full rounded-lg border border-strong bg-surface px-3 py-1.5 text-sm text-primary focus:border-accent/70"
-        >
-          <option value="en">{t("lang.en")}</option>
-          <option value="zh-CN">{t("lang.zh")}</option>
-        </select>
+          onChange={(v) => setLocale(v as Locale)}
+          className="w-full"
+          options={[
+            { value: "en", label: t("lang.en") },
+            { value: "zh-CN", label: t("lang.zh") },
+          ]}
+        />
       </SettingsRow>
       <SettingsRow label={t("settings.notifications")} description={t("settings.notifyLabel")}>
         <label className="flex items-center gap-2 self-center text-xs text-secondary">
@@ -546,18 +545,13 @@ export function SettingsView() {
               return (
                 <SettingsGroup title={t("settings.model")}>
                   <SettingsRow label={t("settings.modelLabel")}>
-                    <select
+                    <Select
                       value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      className={SELECT_CLASS}
-                    >
-                      {options.length === 0 && <option value="">{t("settings.modelListEmpty")}</option>}
-                      {options.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setModel}
+                      className="w-full"
+                      placeholder={t("settings.modelListEmpty")}
+                      options={options.map((m) => ({ value: m, label: m }))}
+                    />
                     <SaveButton
                       state={states.model ?? "idle"}
                       onClick={() => void save("model", model, global)}
@@ -642,41 +636,45 @@ export function SettingsView() {
                 />
               </SettingsRow>
               <SettingsRow label={t("settings.sandboxLabel")} description={t("settings.sandboxHint")}>
-                <select
+                <Select
                   value={sandbox}
-                  onChange={(e) => setSandbox(e.target.value)}
-                  className={SELECT_CLASS}
-                >
-                  <option value="off">{t("settings.sandboxOff")}</option>
-                  <option value="workspace-write">{t("settings.sandboxWorkspaceWrite")}</option>
-                  <option value="restricted">{t("settings.sandboxRestricted")}</option>
-                </select>
+                  onChange={setSandbox}
+                  className="w-full"
+                  options={[
+                    { value: "off", label: t("settings.sandboxOff") },
+                    { value: "workspace-write", label: t("settings.sandboxWorkspaceWrite") },
+                    { value: "restricted", label: t("settings.sandboxRestricted") },
+                  ]}
+                />
                 <SaveButton state={states.sandbox ?? "idle"} onClick={() => void save("sandbox", sandbox, global)} />
               </SettingsRow>
               <SettingsRow label={t("settings.compactionLabel")}>
-                <select
+                <Select
                   value={compaction}
-                  onChange={(e) => setCompaction(e.target.value)}
-                  className={SELECT_CLASS}
-                >
-                  <option value="mechanical">{t("settings.compactionMechanical")}</option>
-                  <option value="llm">{t("settings.compactionLlm")}</option>
-                </select>
+                  onChange={setCompaction}
+                  className="w-full"
+                  options={[
+                    { value: "mechanical", label: t("settings.compactionMechanical") },
+                    { value: "llm", label: t("settings.compactionLlm") },
+                  ]}
+                />
                 <SaveButton
                   state={states.compaction ?? "idle"}
                   onClick={() => void save("compaction", compaction, global)}
                 />
               </SettingsRow>
               <SettingsRow label={t("settings.reasoningEffortLabel")}>
-                <select
+                <Select
                   value={reasoningEffort}
-                  onChange={(e) => setReasoningEffort(e.target.value)}
-                  className={SELECT_CLASS}
-                >
-                  <option value="">{t("settings.reasoningDefault")}</option>
-                  <option value="high">{t("settings.reasoningHigh")}</option>
-                  <option value="max">{t("settings.reasoningMax")}</option>
-                </select>
+                  onChange={setReasoningEffort}
+                  className="w-full"
+                  placeholder={t("settings.reasoningDefault")}
+                  options={[
+                    { value: "", label: t("settings.reasoningDefault") },
+                    { value: "high", label: t("settings.reasoningHigh") },
+                    { value: "max", label: t("settings.reasoningMax") },
+                  ]}
+                />
                 <SaveButton
                   state={states.reasoningEffort ?? "idle"}
                   onClick={() => void save("reasoningEffort", reasoningEffort, global)}

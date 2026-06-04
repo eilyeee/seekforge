@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### round 47: desktop chat UX — live controls, run toolbar, unified dropdowns
+- **Approval mode (and edit/ask) changeable mid-conversation.** The selectors
+  were locked for the whole session and the server's `send` hardcoded
+  `approvalMode:"confirm"`; now the send frame carries `approvalMode`/`mode`,
+  the server honors them, and the controls stay live whenever the tab is idle
+  ("plan" remains start-only).
+- **Run controls moved below the composer.** Workspace, model, thinking,
+  sandbox, run mode, and approval now live in one toolbar under the chat input
+  (the header keeps only title/session/status + actions); the workspace menu
+  left the sidebar for this toolbar. Sandbox is a dropdown that writes the
+  `sandbox` config; thinking collapses on/off + effort into one control.
+- **Unified dropdown.** New `Select` component (a styled popover, not a native
+  `<select>`) used everywhere — every dropdown across Chat/Settings/Memory now
+  shares one modern, theme-consistent look.
+- **Resume actually continues.** A session's primary action now loads the full
+  transcript into a live chat tab so you can keep asking (it previously opened a
+  read-only preview); a separate "View details" button keeps the read-only view.
+- **Agents "Ask" works.** It was a no-op (opened details); it now seeds the chat
+  composer with a delegation prompt for that subagent and jumps to chat.
+- (Session delete shipped in round 46; verified present.)
+- Verified: typecheck clean (8 packages); tests server 161 / desktop 230 /
+  core 805 / tui 667 / eval 45; desktop build clean.
+
 ### round 46: desktop capability parity with the CLI/TUI
 Closed the desktop's management gaps so the GUI can do what the CLI/TUI can.
 Built by two parallel agents on disjoint trees (server/core vs desktop) against

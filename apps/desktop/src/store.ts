@@ -114,6 +114,13 @@ type AppStore = {
   toggleTodos: () => void;
 
   setView: (view: View) => void;
+  /**
+   * Cross-view composer seed: another view (e.g. "Ask this subagent") stashes a
+   * draft here and switches to chat; ChatView applies it to the active tab once.
+   */
+  chatDraft: string | null;
+  composeInChat: (text: string) => void;
+  clearChatDraft: () => void;
   /** Ensures the active tab has a (re)connecting WS client. */
   connect: () => void;
   openTab: () => void;
@@ -314,6 +321,10 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     setView: (view) => set({ view }),
+
+    chatDraft: null,
+    composeInChat: (text) => set({ chatDraft: text, view: "chat" }),
+    clearChatDraft: () => set({ chatDraft: null }),
 
     connect: () => {
       ensureWs(get().tabs.activeTabId);

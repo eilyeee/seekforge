@@ -19,7 +19,7 @@ function useCloseOnOutsideClick(open: boolean, close: () => void) {
  * (native picker in the Tauri shell, manual path input in a browser), reopen a
  * recent project, and remove/forget entries.
  */
-export function WorkspaceMenu() {
+export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
   const t = useT();
   const workspaces = useStore((s) => s.workspaces);
   const recents = useStore((s) => s.recents);
@@ -77,23 +77,39 @@ export function WorkspaceMenu() {
   }, [doOpen]);
 
   return (
-    <div className="relative px-3 pb-3" onMouseDown={(e) => e.stopPropagation()}>
-      <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
-        {t("nav.workspace")}
-      </label>
+    <div
+      className={compact ? "relative" : "relative px-3 pb-3"}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {!compact && (
+        <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
+          {t("nav.workspace")}
+        </label>
+      )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         title={active?.path ?? ""}
         aria-expanded={open}
-        className="focus-ring flex w-full items-center gap-1.5 rounded-lg border border-strong bg-surface px-2 py-1.5 text-left text-xs text-primary hover:border-accent/60"
+        className={
+          compact
+            ? "focus-ring inline-flex h-7 items-center gap-1.5 rounded-lg border border-strong bg-surface px-2 text-xs font-medium text-primary hover:border-accent/60"
+            : "focus-ring flex w-full items-center gap-1.5 rounded-lg border border-strong bg-surface px-2 py-1.5 text-left text-xs text-primary hover:border-accent/60"
+        }
       >
-        <span className="flex-1 truncate">{active?.name ?? t("workspace.openProject")}</span>
+        {compact && <span aria-hidden className="text-tertiary">📁</span>}
+        <span className={compact ? "max-w-[10rem] truncate" : "flex-1 truncate"}>
+          {active?.name ?? t("workspace.openProject")}
+        </span>
         <IconChevron size={12} className={`shrink-0 text-tertiary ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (
-        <div className="absolute left-3 right-3 top-full z-40 mt-1 overflow-hidden rounded-lg border border-strong bg-surface-raised shadow-lg">
+        <div
+          className={`absolute z-50 overflow-hidden rounded-lg border border-strong bg-surface-raised shadow-lg ${
+            compact ? "bottom-full left-0 mb-1 w-72" : "left-3 right-3 top-full mt-1"
+          }`}
+        >
           <div className="max-h-72 overflow-auto py-1">
             {/* Hosted workspaces */}
             {workspaces.map((w) => (

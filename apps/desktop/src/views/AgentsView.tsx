@@ -53,6 +53,7 @@ export function AgentsView() {
   const [note, setNote] = useState<string | null>(null);
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
+  const composeInChat = useStore((s) => s.composeInChat);
 
   const refresh = () =>
     api
@@ -78,6 +79,11 @@ export function AgentsView() {
       .then(setDetail)
       .catch((e: unknown) => setError(String(e)));
   };
+
+  // "Ask": seed the chat composer with a delegation prompt for this subagent
+  // (the main agent dispatches it via dispatch_agent) and jump to chat.
+  const askAgent = (agent: { id: string; name: string }) =>
+    composeInChat(t("agents.askPrefill", { name: agent.name, id: agent.id }));
 
   const filtered = useMemo(() => {
     if (!agents) return null;
@@ -130,9 +136,9 @@ export function AgentsView() {
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
-              <Button variant="primary" size="sm" onClick={() => openAgent(detail.id)}>
+              <Button variant="primary" size="sm" onClick={() => askAgent(detail)}>
                 <IconSparkle size={14} />
-                {t("chat.mode.ask")}
+                {t("agents.askBtn")}
               </Button>
               <Button size="sm" onClick={() => setDetail(null)}>
                 {t("agents.backBtn")}
@@ -207,11 +213,11 @@ export function AgentsView() {
                   size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openAgent(a.id);
+                    askAgent(a);
                   }}
                   className="shrink-0"
                 >
-                  {t("chat.mode.ask")}
+                  {t("agents.askBtn")}
                   <IconArrowRight size={14} />
                 </Button>
                 <IconChevron size={16} className="shrink-0 text-tertiary" />

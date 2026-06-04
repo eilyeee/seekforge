@@ -78,11 +78,24 @@ export function SessionsView() {
       .catch((e: unknown) => setError(t("sessions.deleteError", { error: String(e) })));
   };
 
+  /** Read-only preview of the transcript (the "View details" action). */
   const openSession = (id: string) => {
     setError(null);
     api
       .session(id)
       .then(setDetail)
+      .catch((e: unknown) => setError(String(e)));
+  };
+
+  /**
+   * Resume into a live chat: loads the full transcript into a new chat tab bound
+   * to this session, so the user can keep asking questions (not a dead preview).
+   */
+  const doContinue = (id: string) => {
+    setError(null);
+    api
+      .session(id)
+      .then(({ meta, messages }) => continueSession(meta, messages))
       .catch((e: unknown) => setError(String(e)));
   };
 
@@ -186,7 +199,7 @@ export function SessionsView() {
             {visible.map((s) => (
               <li key={s.id}>
                 <Card
-                  onClick={() => openSession(s.id)}
+                  onClick={() => doContinue(s.id)}
                   className="group cursor-pointer p-5 transition-colors hover:border-strong hover:bg-surface-overlay"
                 >
                   <div className="flex items-start gap-4">
@@ -240,11 +253,21 @@ export function SessionsView() {
                           </Button>
                         )}
                         <Button
-                          variant="primary"
+                          variant="ghost"
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
                             openSession(s.id);
+                          }}
+                        >
+                          {t("sessions.viewDetailsBtn")}
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            doContinue(s.id);
                           }}
                         >
                           {t("sessions.continueBtn")}

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { activeTab, useStore, type ApprovalChoice, type StartMode } from "../store";
+import { activeTab, useStore } from "../store";
 import { api } from "../lib/api";
 import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
 import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
 import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
+import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
@@ -15,26 +16,11 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button } from "../components/ui";
 import type { AccountBalance, ServerConfig } from "../types";
 
-const MODES: { mode: StartMode; key: string; hintKey: string }[] = [
-  { mode: "edit", key: "chat.mode.edit", hintKey: "chat.mode.editHint" },
-  { mode: "plan", key: "chat.mode.plan", hintKey: "chat.mode.planHint" },
-  { mode: "ask", key: "chat.mode.ask", hintKey: "chat.mode.askHint" },
-];
-
-const APPROVALS: { value: ApprovalChoice; key: string; hintKey: string }[] = [
-  { value: "confirm", key: "chat.approval.confirm", hintKey: "chat.approval.confirmHint" },
-  { value: "acceptEdits", key: "chat.approval.acceptEdits", hintKey: "chat.approval.acceptEditsHint" },
-  { value: "auto", key: "chat.approval.auto", hintKey: "chat.approval.autoHint" },
-];
-
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
 type WorktreeDialog =
   | { kind: "discard"; tabId: string }
   | { kind: "merged"; tabId: string }
   | { kind: "conflict"; files: string[] };
-
-/** Known DeepSeek V4 models (the input also accepts any free-text model id). */
-const MODEL_SUGGESTIONS = ["deepseek-v4-flash", "deepseek-v4-pro"];
 
 export function ChatView() {
   const t = useT();
@@ -51,6 +37,17 @@ export function ChatView() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draft = drafts[tab.tabId] ?? "";
   const setDraft = (text: string) => setDrafts((d) => ({ ...d, [tab.tabId]: text }));
+
+  // A seed from another view ("Ask this subagent") prefills the active tab once.
+  const chatDraft = useStore((s) => s.chatDraft);
+  const clearChatDraft = useStore((s) => s.clearChatDraft);
+  useEffect(() => {
+    if (chatDraft != null) {
+      setDrafts((d) => ({ ...d, [tab.tabId]: chatDraft }));
+      clearChatDraft();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatDraft]);
 
   /** Tab id pending close confirmation (running tab — closing cancels the run). */
   const [confirmClose, setConfirmClose] = useState<string | null>(null);
@@ -208,10 +205,6 @@ export function ChatView() {
     else closeTab(tabId);
   };
 
-  // Approval mode can change any time the tab is idle (it rides on each send).
-  // Run mode: edit/ask switchable between turns; "plan" is start-only.
-  const inSession = !!tab.chat.sessionId;
-
   return (
     <div className="flex h-full flex-col">
       <TabBar
@@ -237,119 +230,6 @@ export function ChatView() {
           <span className="flex items-center gap-1.5 text-xs text-warn">
             <span className="h-2 w-2 animate-pulse rounded-full bg-warn" />
             {t("chat.running")}
-          </span>
-        )}
-
-        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.modeTitle")}>
-          {MODES.map(({ mode, key, hintKey }) => (
-            <button
-              key={mode}
-              type="button"
-              disabled={running || (mode === "plan" && inSession)}
-              title={t(hintKey)}
-              onClick={() => setMode(mode)}
-              className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                tab.mode === mode ? "bg-accent-muted text-accent" : "text-secondary hover:bg-accent-muted/60"
-              }`}
-            >
-              {t(key)}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center rounded-lg border border-subtle p-0.5" title={t("chat.approvalTitle")}>
-          {APPROVALS.map(({ value, key, hintKey }) => {
-            const active = tab.approvalMode === value;
-            const activeClass =
-              value === "auto"
-                ? "bg-warn/15 text-warn"
-                : value === "acceptEdits"
-                  ? "bg-accent-muted text-accent-hover"
-                  : "bg-accent-muted text-accent";
-            return (
-              <button
-                key={value}
-                type="button"
-                disabled={running}
-                title={t(hintKey)}
-                onClick={() => setApprovalMode(value)}
-                className={`focus-ring rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                  active ? activeClass : "text-secondary hover:bg-accent-muted/60"
-                }`}
-              >
-                {t(key)}
-                {value === "auto" && active ? " ⚠" : ""}
-              </button>
-            );
-          })}
-        </div>
-
-        {(() => {
-          // Strict picker over the configured model list (config.models, set in
-          // Settings). Ensure the active value is always an option, even if it
-          // was an id no longer in the list.
-          const list = config?.models && config.models.length > 0 ? config.models : MODEL_SUGGESTIONS;
-          const selected = tab.model || config?.model || list[0] || "";
-          const options = selected && !list.includes(selected) ? [selected, ...list] : list;
-          return (
-            <select
-              value={selected}
-              onChange={(e) => setModel(e.target.value)}
-              disabled={tab.chat.running}
-              title={t("chat.modelTitle")}
-              aria-label={t("chat.modelTitle")}
-              className="focus-ring w-44 min-w-0 max-w-full flex-shrink rounded-lg border border-strong bg-surface px-2.5 py-1.5 font-mono text-xs text-primary focus:border-accent/70 disabled:opacity-50"
-            >
-              {options.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          );
-        })()}
-
-        <label
-          className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
-            (tab.thinking ?? config?.thinking ?? false)
-              ? "border-accent/60 bg-accent-muted text-accent-hover"
-              : "border-strong text-secondary hover:bg-accent-muted/60"
-          }`}
-          title={t("chat.think")}
-        >
-          <input
-            type="checkbox"
-            checked={tab.thinking ?? config?.thinking ?? false}
-            onChange={(e) => setThinking(e.target.checked)}
-            disabled={tab.chat.running}
-            className="accent-accent"
-          />
-          {t("chat.think")}
-        </label>
-        {(tab.thinking ?? config?.thinking ?? false) && (
-          <select
-            value={tab.reasoningEffort}
-            onChange={(e) => setReasoningEffort(e.target.value as "high" | "max")}
-            disabled={tab.chat.running}
-            title={t("chat.reasoningTitle")}
-            aria-label={t("chat.reasoningTitle")}
-            className="focus-ring rounded-lg border border-strong bg-surface px-2 py-1.5 text-xs text-secondary focus:border-accent/70 disabled:opacity-50"
-          >
-            <option value="high">{t("chat.reasoning.high")}</option>
-            <option value="max">{t("chat.reasoning.max")}</option>
-          </select>
-        )}
-
-        {config && (
-          <span
-            title={t("chat.sandboxTitle")}
-            className={`rounded px-1.5 py-0.5 font-mono text-2xs ${
-              config.sandbox && config.sandbox !== "off"
-                ? "bg-ok/10 text-ok/80"
-                : "bg-surface-overlay text-tertiary"
-            }`}
-          >
-            {t("chat.sandboxLabel", { mode: config.sandbox ?? "off" })}
           </span>
         )}
 
@@ -439,6 +319,19 @@ export function ChatView() {
         workspaceId={tab.ws ?? ""}
         thinking={tab.thinking ?? config?.thinking ?? false}
         onToggleThinking={() => setThinking(!(tab.thinking ?? config?.thinking ?? false))}
+      />
+
+      <RunControls
+        tab={tab}
+        config={config}
+        onSetModel={setModel}
+        onSetThinking={setThinking}
+        onSetReasoningEffort={setReasoningEffort}
+        onSetMode={setMode}
+        onSetApprovalMode={setApprovalMode}
+        onSetSandbox={(value) => {
+          void api.setConfig("sandbox", value).then(setConfig).catch(() => {});
+        }}
       />
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />

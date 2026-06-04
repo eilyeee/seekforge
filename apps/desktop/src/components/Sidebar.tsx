@@ -12,7 +12,6 @@ import {
   IconSkills,
   LogoMark,
 } from "./ui/icons";
-import { WorkspaceMenu } from "./WorkspaceMenu";
 
 const NAV: { view: View; key: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
   { view: "chat", key: "nav.chat", Icon: IconChat },
@@ -50,7 +49,6 @@ export function Sidebar() {
           Seek<span className="text-accent">Forge</span>
         </span>
       </div>
-      <WorkspaceMenu />
       <nav className="flex-1 space-y-0.5 px-2">
         {NAV.map(({ view: v, key, Icon }) => {
           const active = view === v;

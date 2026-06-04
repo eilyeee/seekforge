@@ -9,6 +9,7 @@ import {
   Card,
   EmptyState,
   Input,
+  Select,
   IconMemory,
   IconSparkle,
   IconCornerDownRight,
@@ -535,18 +536,14 @@ function AddFactForm({
         disabled={busy}
       />
       <div className="mt-2 flex items-center gap-2">
-        <select
+        <Select
           value={type}
-          onChange={(e) => setType(e.target.value as MemoryCandidateType)}
+          onChange={(v) => setType(v as MemoryCandidateType)}
           disabled={busy}
-          className="rounded-lg border border-strong bg-surface px-2 py-1.5 text-xs text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {FACT_TYPES.map((ft) => (
-            <option key={ft} value={ft}>
-              {ft}
-            </option>
-          ))}
-        </select>
+          size="sm"
+          options={FACT_TYPES.map((ft) => ({ value: ft, label: ft }))}
+          className="w-36"
+        />
         <Button
           variant="primary"
           size="sm"
