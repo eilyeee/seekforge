@@ -623,10 +623,11 @@ config
     "apiKey | model | baseUrl | runtimeBin | commandAllowlist | models | sandbox | compaction | thinking | reasoningEffort",
   )
   .argument("<value>")
-  .option("-g, --global", "write to ~/.seekforge/config.json instead of the project")
-  .description("set a config value")
-  .action((key: string, value: string, opts: { global?: boolean }) => {
-    configSetCommand(key, value, opts);
+  .option("-g, --global", "write to your user config (~/.seekforge/config.json) instead of the project")
+  .option("-u, --user", "alias for --global: write to your user config (~/.seekforge/config.json)")
+  .description("set a config value (default: this project; --user/--global for all projects)")
+  .action((key: string, value: string, opts: { global?: boolean; user?: boolean }) => {
+    configSetCommand(key, value, { global: opts.global || opts.user });
   });
 
 program

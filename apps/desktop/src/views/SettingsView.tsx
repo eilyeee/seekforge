@@ -521,17 +521,32 @@ export function SettingsView() {
           <p className="text-tertiary">{t("settings.loading")}</p>
         ) : (
           <div className="max-w-3xl space-y-6">
-            <Card className="flex items-start gap-3 p-4">
-              <input
-                id="settings-config-scope"
-                type="checkbox"
-                checked={global}
-                onChange={(e) => setGlobal(e.target.checked)}
-                className="mt-0.5 accent-accent"
-              />
-              <label htmlFor="settings-config-scope" className="text-sm text-secondary">
-                {t("settings.configScope")}
-              </label>
+            <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-primary">{t("settings.scopeTitle")}</p>
+                <p className="mt-0.5 text-xs text-tertiary">
+                  {global ? t("settings.scopeUserHint") : t("settings.scopeProjectHint")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center rounded-lg border border-subtle p-0.5">
+                {[
+                  { user: false, label: t("settings.scopeProject") },
+                  { user: true, label: t("settings.scopeUser") },
+                ].map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => setGlobal(opt.user)}
+                    className={`focus-ring rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      global === opt.user
+                        ? "bg-accent-muted text-accent"
+                        : "text-secondary hover:bg-accent-muted/60"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </Card>
 
             <PreferencesSection />
