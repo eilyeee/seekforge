@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, IconSettings } from "../components/ui";
@@ -61,7 +61,15 @@ export function DiagnosticsView() {
     api
       .doctor()
       .then(setReport)
-      .catch((e: unknown) => setError(t("diagnostics.error", { error: String(e) })))
+      .catch((e: unknown) =>
+        // An older server predates /api/doctor — say so plainly instead of a
+        // raw ApiError (it means the running server needs updating).
+        setError(
+          e instanceof ApiError && e.status === 404
+            ? t("diagnostics.unsupported")
+            : t("diagnostics.error", { error: String(e) }),
+        ),
+      )
       .finally(() => setLoading(false));
   };
 

@@ -390,6 +390,7 @@ export const views = {
     "diagnostics.modelsNone": "no models configured",
     "diagnostics.workspace": "workspace",
     "diagnostics.error": "Could not run diagnostics: {error}",
+    "diagnostics.unsupported": "Diagnostics aren't available on the running server — it predates this feature. Restart the desktop app (or rebuild the server) to update it.",
   },
   zh: {
     // ── ChatView ──────────────────────────────────────────────────
@@ -778,5 +779,6 @@ export const views = {
     "diagnostics.modelsNone": "未配置模型",
     "diagnostics.workspace": "工作区",
     "diagnostics.error": "无法运行诊断：{error}",
+    "diagnostics.unsupported": "当前运行的服务器不支持诊断——它早于此功能。请重启桌面应用（或重新构建服务器）以更新。",
   },
 } as { en: Record<string, string>; zh: Record<string, string> };
