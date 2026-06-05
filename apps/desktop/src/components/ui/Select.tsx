@@ -23,6 +23,8 @@ type SelectProps = {
   ariaLabel?: string;
   /** Trigger width; defaults to auto. Toolbar chips usually leave this unset. */
   className?: string;
+  /** Open the panel upward (for controls near the bottom of the viewport). */
+  up?: boolean;
 };
 
 const TRIGGER_SIZE = {
@@ -47,6 +49,7 @@ export function Select({
   title,
   ariaLabel,
   className,
+  up,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -100,7 +103,9 @@ export function Select({
         <ul
           id={listId}
           role="listbox"
-          className="absolute left-0 z-50 mt-1 max-h-72 min-w-full overflow-auto rounded-lg border border-strong bg-surface-raised p-1 shadow-lg"
+          className={`absolute left-0 z-50 max-h-72 min-w-full overflow-auto rounded-lg border border-strong bg-surface-raised p-1 shadow-lg ${
+            up ? "bottom-full mb-1" : "top-full mt-1"
+          }`}
         >
           {options.map((o) => {
             const active = o.value === value;

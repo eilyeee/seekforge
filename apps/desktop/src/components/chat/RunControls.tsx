@@ -72,6 +72,7 @@ export function RunControls({
       <WorkspaceMenu compact />
 
       <Select
+        up
         value={model}
         options={modelOptions}
         onChange={onSetModel}
@@ -83,6 +84,7 @@ export function RunControls({
       />
 
       <Select
+        up
         value={thinkValue}
         options={thinkOptions}
         onChange={(v) => (v === "off" ? onSetThinking(false) : (onSetThinking(true), onSetReasoningEffort(v as "high" | "max")))}
@@ -94,6 +96,7 @@ export function RunControls({
       />
 
       <Select
+        up
         value={sandbox}
         options={sandboxOptions}
         onChange={(v) => onSetSandbox(v as Sandbox)}
@@ -123,6 +126,7 @@ export function RunControls({
       </div>
 
       <Select
+        up
         value={tab.approvalMode}
         options={approvalOptions}
         onChange={(v) => onSetApprovalMode(v as ApprovalChoice)}
