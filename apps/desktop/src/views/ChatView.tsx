@@ -299,28 +299,31 @@ export function ChatView() {
       <div
         ref={scrollRef}
         onScroll={(e) => scrollPos.current.set(tab.tabId, e.currentTarget.scrollTop)}
-        className="flex-1 overflow-y-auto px-4 py-4"
+        className="flex-1 overflow-y-auto px-4 py-6"
       >
-        {tab.chat.items.length === 0 ? (
-          <HomeWelcome
-            onQuickAction={setDraft}
-            onNavigate={setView}
-            workspaceId={activeWorkspaceId}
-          />
-        ) : (
-          <ChatItems
-            items={tab.chat.items}
-            onBacktrack={
-              tab.chat.sessionId && !tab.chat.running
-                ? (itemId) => {
-                    setRestoreFiles(false);
-                    setBacktrackError(null);
-                    setBacktrackItem(itemId);
-                  }
-                : undefined
-            }
-          />
-        )}
+        {/* Codex-style centered conversation column. */}
+        <div className="mx-auto w-full max-w-3xl">
+          {tab.chat.items.length === 0 ? (
+            <HomeWelcome
+              onQuickAction={setDraft}
+              onNavigate={setView}
+              workspaceId={activeWorkspaceId}
+            />
+          ) : (
+            <ChatItems
+              items={tab.chat.items}
+              onBacktrack={
+                tab.chat.sessionId && !tab.chat.running
+                  ? (itemId) => {
+                      setRestoreFiles(false);
+                      setBacktrackError(null);
+                      setBacktrackItem(itemId);
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </div>
       </div>
 
       {backtrackError && (
@@ -347,30 +350,33 @@ export function ChatView() {
         </div>
       )}
 
-      <Composer
-        value={draft}
-        onChange={setDraft}
-        onSend={submit}
-        disabled={tab.chat.running}
-        placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
-        commands={composerCommands}
-        workspaceId={tab.ws ?? ""}
-        thinking={tab.thinking ?? config?.thinking ?? false}
-        onToggleThinking={() => setThinking(!(tab.thinking ?? config?.thinking ?? false))}
-      />
+      {/* Codex-style centered input column (composer + run controls). */}
+      <div className="mx-auto w-full max-w-3xl">
+        <Composer
+          value={draft}
+          onChange={setDraft}
+          onSend={submit}
+          disabled={tab.chat.running}
+          placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
+          commands={composerCommands}
+          workspaceId={tab.ws ?? ""}
+          thinking={tab.thinking ?? config?.thinking ?? false}
+          onToggleThinking={() => setThinking(!(tab.thinking ?? config?.thinking ?? false))}
+        />
 
-      <RunControls
-        tab={tab}
-        config={config}
-        onSetModel={setModel}
-        onSetThinking={setThinking}
-        onSetReasoningEffort={setReasoningEffort}
-        onSetMode={setMode}
-        onSetApprovalMode={setApprovalMode}
-        onSetSandbox={(value) => {
-          void api.setConfig("sandbox", value).then(setConfig).catch(() => {});
-        }}
-      />
+        <RunControls
+          tab={tab}
+          config={config}
+          onSetModel={setModel}
+          onSetThinking={setThinking}
+          onSetReasoningEffort={setReasoningEffort}
+          onSetMode={setMode}
+          onSetApprovalMode={setApprovalMode}
+          onSetSandbox={(value) => {
+            void api.setConfig("sandbox", value).then(setConfig).catch(() => {});
+          }}
+        />
+      </div>
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />
 
