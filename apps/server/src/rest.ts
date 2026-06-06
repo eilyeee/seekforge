@@ -4,10 +4,10 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath, sep } from "node:path";
 import { promisify } from "node:util";
 import {
   addMemoryFact,
@@ -22,6 +22,8 @@ import {
   fetchBalance,
   importExternalAgent,
   importExternalSkill,
+  loadUserCommands,
+  compactSessionNow,
   listEvolutionProposals,
   memoryStats,
   pruneSessions,
@@ -54,7 +56,17 @@ import {
   MODEL_PRICING,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
-import { listWorkspaceFiles, readRawUpload, RawFileError, saveUpload, UploadError } from "./files.js";
+import {
+  FileBrowseError,
+  listTree,
+  listWorkspaceFiles,
+  readRawUpload,
+  readTextFile,
+  writeTextFile,
+  RawFileError,
+  saveUpload,
+  UploadError,
+} from "./files.js";
 import { WorktreeError, type WorktreeManager } from "./worktrees.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import { workspaceFor, type WorkspaceRegistry } from "./workspaces.js";
@@ -127,6 +139,18 @@ const dispatcher = createDefaultDispatcher();
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * execFile options for git, forcing the C locale so stderr messages (e.g.
+ * "not a git repository") are in English regardless of the host's language —
+ * our notGit detection matches on those English strings.
+ */
+const GIT_EXEC = (cwd: string): { cwd: string; timeout: number; maxBuffer: number; env: NodeJS.ProcessEnv } => ({
+  cwd,
+  timeout: 30_000,
+  maxBuffer: 10_000_000,
+  env: { ...process.env, LC_ALL: "C", LANG: "C" },
+});
+
 /** Current git diff of the workspace (no shell; capped at 2 MB). */
 async function gitDiff(
   workspace: string,
@@ -134,11 +158,7 @@ async function gitDiff(
 ): Promise<{ diff: string; truncated: boolean; notGit?: boolean }> {
   const args = staged ? ["diff", "--cached"] : ["diff"];
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: workspace,
-      maxBuffer: 10_000_000,
-      timeout: 30_000,
-    });
+    const { stdout } = await execFileAsync("git", args, GIT_EXEC(workspace));
     const MAX = 2_000_000;
     return stdout.length > MAX
       ? { diff: stdout.slice(0, MAX), truncated: true }
@@ -156,6 +176,82 @@ async function gitDiff(
     }
     throw new Error(`git diff failed: ${stderr.slice(0, 500)}`);
   }
+}
+
+type GitFileStatus = {
+  path: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  staged: boolean;
+};
+
+type GitStatusResult = {
+  notGit?: boolean;
+  branch: string;
+  files: GitFileStatus[];
+};
+
+/** Maps a single porcelain status code letter to our coarse status enum. */
+function mapStatusCode(code: string): GitFileStatus["status"] {
+  switch (code) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+    case "C":
+      return "renamed";
+    default:
+      // "M", "T", "U" and anything else collapse to "modified".
+      return "modified";
+  }
+}
+
+/**
+ * Working-tree status of the workspace via `git status --porcelain=v1 -b`.
+ * A non-repo (or git missing) is reported as {notGit:true, branch:"", files:[]}
+ * — never thrown — mirroring gitDiff's notGit handling.
+ */
+async function gitStatus(workspace: string): Promise<GitStatusResult> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-b"], GIT_EXEC(workspace)));
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    const stderr = e.stderr ?? e.message ?? "";
+    if (/not a git repository/i.test(stderr) || /spawn git ENOENT/i.test(stderr)) {
+      return { notGit: true, branch: "", files: [] };
+    }
+    throw new Error(`git status failed: ${stderr.slice(0, 500)}`);
+  }
+  let branch = "";
+  const files: GitFileStatus[] = [];
+  for (const line of stdout.split("\n")) {
+    if (line === "") continue;
+    if (line.startsWith("## ")) {
+      // "## main...origin/main [ahead 1]" or "## HEAD (no branch)".
+      const rest = line.slice(3);
+      branch = rest.split(/\.\.\.| /)[0] ?? "";
+      continue;
+    }
+    const x = line[0] ?? " ";
+    const y = line[1] ?? " ";
+    let pathPart = line.slice(3);
+    // Renames are "R  old -> new"; report the new path.
+    if (pathPart.includes(" -> ")) pathPart = pathPart.split(" -> ")[1] ?? pathPart;
+    if (x === "?" && y === "?") {
+      files.push({ path: pathPart, status: "untracked", staged: false });
+      continue;
+    }
+    // A path can be both staged (index, X) and unstaged (worktree, Y); emit
+    // one entry per side so the UI can show staged/unstaged separately.
+    if (x !== " " && x !== "?") {
+      files.push({ path: pathPart, status: mapStatusCode(x), staged: true });
+    }
+    if (y !== " " && y !== "?") {
+      files.push({ path: pathPart, status: mapStatusCode(y), staged: false });
+    }
+  }
+  return { branch, files };
 }
 
 async function detectProject(workspace: string): Promise<unknown> {
@@ -421,6 +517,16 @@ export async function handleApi(
       );
     }
 
+    // Manual compaction of a stored session (folds the middle into a digest).
+    if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "compact") {
+      const id = segs[2]!;
+      if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+      if (!readSessionMeta(workspace, id)) {
+        return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      }
+      return sendJson(res, 200, compactSessionNow(workspace, id));
+    }
+
     // Delete a single session directory.
     if (method === "DELETE" && segs.length === 3 && segs[1] === "sessions") {
       const id = segs[2]!;
@@ -433,6 +539,47 @@ export async function handleApi(
     if (method === "GET" && path === "/api/files") {
       // @ file picker index: ignore-aware scan, capped at 2000 paths.
       return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
+    }
+
+    // File browser: one directory listing (dirs first then files, alphabetical;
+    // .git/denylisted/dot-dirs and sensitive files hidden). ?path empty = root.
+    if (method === "GET" && path === "/api/tree") {
+      try {
+        return sendJson(res, 200, listTree(workspace, url.searchParams.get("path") ?? ""));
+      } catch (err) {
+        if (err instanceof FileBrowseError) return sendApiError(res, err.status, err.code, err.message);
+        throw err;
+      }
+    }
+
+    // File viewer/editor.
+    if (method === "GET" && path === "/api/file") {
+      try {
+        return sendJson(res, 200, readTextFile(workspace, url.searchParams.get("path") ?? ""));
+      } catch (err) {
+        if (err instanceof FileBrowseError) return sendApiError(res, err.status, err.code, err.message);
+        throw err;
+      }
+    }
+
+    if (method === "PUT" && path === "/api/file") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req, 4_000_000));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { path: rel, content } = (body ?? {}) as { path?: unknown; content?: unknown };
+      if (typeof rel !== "string" || rel.trim() === "" || typeof content !== "string") {
+        return sendApiError(res, 400, "bad_request", "body must be {path: string, content: string}");
+      }
+      try {
+        writeTextFile(workspace, rel, content);
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        if (err instanceof FileBrowseError) return sendApiError(res, err.status, err.code, err.message);
+        throw err;
+      }
     }
 
     // Raw bytes of an agent-uploaded image (so the UI renders real <img>
@@ -484,6 +631,100 @@ export async function handleApi(
     if (method === "GET" && path === "/api/diff") {
       const staged = url.searchParams.get("staged") === "1";
       return sendJson(res, 200, await gitDiff(workspace, staged));
+    }
+
+    // Source control (git). A non-repo is a normal state ({notGit:true}).
+    if (method === "GET" && path === "/api/git/status") {
+      return sendJson(res, 200, await gitStatus(workspace));
+    }
+
+    if (
+      method === "POST" &&
+      segs.length === 3 &&
+      segs[1] === "git" &&
+      (segs[2] === "stage" || segs[2] === "unstage" || segs[2] === "discard")
+    ) {
+      const action = segs[2]!;
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { paths } = (body ?? {}) as { paths?: unknown };
+      if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === "string" && p !== "")) {
+        return sendApiError(res, 400, "bad_request", "body must be {paths: non-empty string[]}");
+      }
+      const relPaths = paths as string[];
+      try {
+        if (action === "stage") {
+          await execFileAsync("git", ["add", "--", ...relPaths], GIT_EXEC(workspace));
+        } else if (action === "unstage") {
+          await execFileAsync("git", ["restore", "--staged", "--", ...relPaths], GIT_EXEC(workspace));
+        } else {
+          // discard: tracked changes via `git restore`; untracked files removed.
+          // Determine which of the given paths are untracked, then handle both.
+          const { stdout } = await execFileAsync(
+            "git",
+            ["status", "--porcelain=v1", "--", ...relPaths],
+            GIT_EXEC(workspace),
+          );
+          const untracked = new Set<string>();
+          for (const line of stdout.split("\n")) {
+            if (line.startsWith("?? ")) untracked.add(line.slice(3));
+          }
+          const tracked = relPaths.filter((p) => !untracked.has(p));
+          if (tracked.length > 0) {
+            await execFileAsync("git", ["restore", "--", ...tracked], GIT_EXEC(workspace));
+          }
+          for (const p of relPaths) {
+            if (!untracked.has(p)) continue;
+            // Only remove a file that resolves inside the workspace (no traversal).
+            const resolved = resolvePath(workspace, p);
+            const wsResolved = resolvePath(workspace);
+            if (resolved === wsResolved || !resolved.startsWith(wsResolved + sep)) {
+              return sendApiError(res, 400, "bad_request", `path escapes the workspace: ${p}`);
+            }
+            rmSync(resolved, { force: true, recursive: true });
+          }
+        }
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        const e = err as { stderr?: string; message?: string };
+        const stderr = e.stderr ?? e.message ?? "";
+        return sendApiError(res, 400, "bad_request", `git ${action} failed: ${stderr.slice(0, 500)}`);
+      }
+    }
+
+    if (method === "POST" && path === "/api/git/commit") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { message: msg } = (body ?? {}) as { message?: unknown };
+      if (typeof msg !== "string" || msg.trim() === "") {
+        return sendApiError(res, 400, "bad_request", "commit message must be a non-empty string");
+      }
+      // Refuse to commit when nothing is staged (git would error anyway, but a
+      // clear 400 is friendlier than a raw git failure).
+      const status = await gitStatus(workspace);
+      if (status.notGit) {
+        return sendApiError(res, 400, "bad_request", "not a git repository");
+      }
+      if (!status.files.some((f) => f.staged)) {
+        return sendApiError(res, 400, "bad_request", "nothing staged to commit");
+      }
+      try {
+        await execFileAsync("git", ["commit", "-m", msg], GIT_EXEC(workspace));
+        const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], GIT_EXEC(workspace));
+        return sendJson(res, 200, { ok: true, commit: stdout.trim() });
+      } catch (err) {
+        const e = err as { stderr?: string; message?: string };
+        const stderr = e.stderr ?? e.message ?? "";
+        return sendApiError(res, 400, "bad_request", `git commit failed: ${stderr.slice(0, 500)}`);
+      }
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "sessions") {
@@ -870,6 +1111,11 @@ export async function handleApi(
         // Wrong-state transitions and apply failures (e.g. skill_exists) are conflicts.
         return sendApiError(res, 409, "conflict", message);
       }
+    }
+
+    // Custom user-defined slash commands (project + user layers; project wins).
+    if (method === "GET" && path === "/api/commands") {
+      return sendJson(res, 200, { commands: loadUserCommands(workspace) });
     }
 
     // Cross-session todo list (.seekforge/todos.md, TUI-compatible format).

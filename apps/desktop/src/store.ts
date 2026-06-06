@@ -28,7 +28,18 @@ import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
 import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
-export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings" | "diagnostics";
+export type View =
+  | "chat"
+  | "sessions"
+  | "diff"
+  | "files"
+  | "git"
+  | "skills"
+  | "agents"
+  | "memory"
+  | "evolution"
+  | "settings"
+  | "diagnostics";
 
 export type { ApprovalChoice, ChatTab, PendingPermission, PendingQuestion, StartMode };
 export { activeTab };
@@ -112,6 +123,10 @@ type AppStore = {
   /** Whether the todos drawer is open (global, not per-tab). */
   todosOpen: boolean;
   toggleTodos: () => void;
+
+  /** Whether the ⌘K command palette overlay is open. */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
 
   setView: (view: View) => void;
   /**
@@ -410,6 +425,9 @@ export const useStore = create<AppStore>()((set, get) => {
 
     todosOpen: false,
     toggleTodos: () => set((s) => ({ todosOpen: !s.todosOpen })),
+
+    paletteOpen: false,
+    setPaletteOpen: (open) => set({ paletteOpen: open }),
 
     truncateAtItem: (itemId) =>
       set((s) => ({

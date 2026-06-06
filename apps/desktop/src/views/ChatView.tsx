@@ -14,7 +14,7 @@ import { UsageFooter } from "../components/chat/UsageFooter";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button } from "../components/ui";
-import type { AccountBalance, ServerConfig } from "../types";
+import type { AccountBalance, ServerConfig, SlashCommand } from "../types";
 
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
 type WorktreeDialog =
@@ -105,6 +105,28 @@ export function ChatView() {
     };
   }, [running, activeWorkspaceId]);
 
+  /** Custom slash commands (GET /api/commands), merged into the composer palette. */
+  const [customCommands, setCustomCommands] = useState<SlashCommand[]>([]);
+  useEffect(() => {
+    api
+      .commands()
+      .then((r) => setCustomCommands(r.commands))
+      .catch(() => setCustomCommands([]));
+  }, [activeWorkspaceId]);
+
+  /** Manual /compact: POST the active tab's session, then refresh on success. */
+  const compactSession = () => {
+    const sessionId = tab.chat.sessionId;
+    if (!sessionId) {
+      showToast(t("chat.compactNoSession"));
+      return;
+    }
+    api
+      .sessionCompact(sessionId)
+      .then(() => showToast(t("chat.compactDone")))
+      .catch((e: unknown) => showToast(t("chat.compactError", { error: e instanceof Error ? e.message : String(e) })));
+  };
+
   /** Backtrack dialog state (user item pending the rewind confirmation). */
   const [backtrackItem, setBacktrackItem] = useState<number | null>(null);
   const [restoreFiles, setRestoreFiles] = useState(false);
@@ -174,8 +196,9 @@ export function ChatView() {
     setDraft("");
   };
 
-  // Slash-command registry for the composer palette. Pure UI/store actions —
-  // anything needing server support stays out (e.g. /compact has no endpoint).
+  // Slash-command registry for the composer palette: built-in UI/store actions,
+  // the manual /compact action, and any project/user custom commands from the
+  // server (choosing a custom command inserts its `body` into the draft).
   const tabMode = tab.mode;
   const composerCommands = useMemo<ComposerCommand[]>(
     () => [
@@ -190,13 +213,23 @@ export function ChatView() {
       { name: "model", hint: t("chat.cmdModelHint"), run: () => setView("settings") },
       { name: "sessions", hint: t("chat.cmdSessionsHint"), run: () => setView("sessions") },
       { name: "diff", hint: t("chat.cmdDiffHint"), run: () => setView("diff") },
+      { name: "files", hint: t("chat.cmdFilesHint"), run: () => setView("files") },
+      { name: "git", hint: t("chat.cmdGitHint"), run: () => setView("git") },
       { name: "skills", hint: t("chat.cmdSkillsHint"), run: () => setView("skills") },
       { name: "agents", hint: t("chat.cmdAgentsHint"), run: () => setView("agents") },
       { name: "memory", hint: t("chat.cmdMemoryHint"), run: () => setView("memory") },
       { name: "evolution", hint: t("chat.cmdEvolutionHint"), run: () => setView("evolution") },
       { name: "settings", hint: t("chat.cmdSettingsHint"), run: () => setView("settings") },
+      { name: "compact", hint: t("chat.cmdCompactHint"), run: compactSession },
+      // Custom commands insert their template body into the composer draft.
+      ...customCommands.map((c) => ({
+        name: c.name,
+        hint: c.description,
+        run: () => setDraft(c.body),
+      })),
     ],
-    [newSession, setMode, setView, tabMode],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [newSession, setMode, setView, tabMode, customCommands, compactSession],
   );
 
   const requestClose = (tabId: string) => {
@@ -252,6 +285,11 @@ export function ChatView() {
           >
             {t("chat.handoff")}
           </Button>
+          {tab.chat.sessionId && !tab.chat.running && (
+            <Button size="sm" onClick={compactSession} title={t("chat.cmdCompactHint")}>
+              {t("chat.compact")}
+            </Button>
+          )}
           <Button size="sm" onClick={newSession}>
             {t("chat.newSession")}
           </Button>

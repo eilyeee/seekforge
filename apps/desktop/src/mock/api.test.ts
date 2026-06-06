@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { mockRequest } from "./api";
 import type {
+  CommandsResponse,
   CompactResult,
   DoctorReport,
+  FileContent,
+  GitStatus,
   McpServer,
   MemoryStats,
   PruneResult,
   SessionMeta,
   Skill,
+  TreeResponse,
 } from "../types";
 
 describe("mockRequest — memory stats + compact", () => {
@@ -113,6 +117,121 @@ describe("mockRequest — mcp add/remove + agents import + doctor", () => {
     expect(typeof report.apiKeyConfigured).toBe("boolean");
     expect(report.nodeVersion).toMatch(/^v/);
     expect(report.modelCount).toBeGreaterThan(0);
+  });
+});
+
+describe("mockRequest — files tree + read/write", () => {
+  it("lists the root tree with dirs before files", async () => {
+    const tree = (await mockRequest("GET", "/api/tree")) as TreeResponse;
+    expect(tree.path).toBe("");
+    expect(tree.entries.length).toBeGreaterThan(0);
+    expect(tree.entries.some((e) => e.type === "dir")).toBe(true);
+    expect(tree.entries.some((e) => e.name === "AGENTS.md")).toBe(true);
+  });
+
+  it("lazily lists a subdirectory by path", async () => {
+    const tree = (await mockRequest("GET", "/api/tree?path=src")) as TreeResponse;
+    expect(tree.path).toBe("src");
+    expect(tree.entries.some((e) => e.path === "src/app.ts")).toBe(true);
+  });
+
+  it("reads a file's content", async () => {
+    const file = (await mockRequest("GET", "/api/file?path=AGENTS.md")) as FileContent;
+    expect(file.path).toBe("AGENTS.md");
+    expect(file.truncated).toBe(false);
+    expect(file.content.length).toBeGreaterThan(0);
+  });
+
+  it("flags an oversized file as truncated", async () => {
+    const file = (await mockRequest("GET", "/api/file?path=src/big.bin")) as FileContent;
+    expect(file.truncated).toBe(true);
+  });
+
+  it("404s an unknown file", async () => {
+    await expect(mockRequest("GET", "/api/file?path=nope.txt")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("writes a file and reads the new content back", async () => {
+    const res = (await mockRequest("PUT", "/api/file", { path: "AGENTS.md", content: "# Updated\n" })) as {
+      ok: boolean;
+    };
+    expect(res.ok).toBe(true);
+    const file = (await mockRequest("GET", "/api/file?path=AGENTS.md")) as FileContent;
+    expect(file.content).toBe("# Updated\n");
+  });
+});
+
+describe("mockRequest — source control", () => {
+  it("returns a status with staged + unstaged files", async () => {
+    const status = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    expect(status.notGit).toBeFalsy();
+    expect(status.branch).toBe("main");
+    expect(status.files.some((f) => f.staged)).toBe(true);
+    expect(status.files.some((f) => !f.staged)).toBe(true);
+  });
+
+  it("stages and unstages a file", async () => {
+    const before = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    const target = before.files.find((f) => !f.staged)!;
+    await mockRequest("POST", "/api/git/stage", { paths: [target.path] });
+    let status = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    expect(status.files.find((f) => f.path === target.path)!.staged).toBe(true);
+    await mockRequest("POST", "/api/git/unstage", { paths: [target.path] });
+    status = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    expect(status.files.find((f) => f.path === target.path)!.staged).toBe(false);
+  });
+
+  it("commits staged files and clears them", async () => {
+    const status = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    const target = status.files.find((f) => !f.staged)!;
+    await mockRequest("POST", "/api/git/stage", { paths: [target.path] });
+    const res = (await mockRequest("POST", "/api/git/commit", { message: "test commit" })) as {
+      ok: boolean;
+      commit: string;
+    };
+    expect(res.ok).toBe(true);
+    expect(res.commit).toMatch(/^mockcommit/);
+    const after = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    expect(after.files.some((f) => f.staged)).toBe(false);
+  });
+
+  it("rejects committing an empty message", async () => {
+    await expect(mockRequest("POST", "/api/git/commit", { message: "  " })).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it("discards a file (removes it from the working tree)", async () => {
+    const status = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    const target = status.files[0]!;
+    await mockRequest("POST", "/api/git/discard", { paths: [target.path] });
+    const after = (await mockRequest("GET", "/api/git/status")) as GitStatus;
+    expect(after.files.some((f) => f.path === target.path)).toBe(false);
+  });
+});
+
+describe("mockRequest — commands + session compact", () => {
+  it("returns custom slash commands with bodies", async () => {
+    const res = (await mockRequest("GET", "/api/commands")) as CommandsResponse;
+    expect(res.commands.length).toBeGreaterThan(0);
+    for (const c of res.commands) {
+      expect(typeof c.name).toBe("string");
+      expect(typeof c.body).toBe("string");
+      expect(["project", "user"]).toContain(c.scope);
+    }
+  });
+
+  it("compacts an existing session", async () => {
+    const sessions = (await mockRequest("GET", "/api/sessions")) as SessionMeta[];
+    const id = sessions[0]!.id;
+    const res = (await mockRequest("POST", `/api/sessions/${id}/compact`)) as { ok: boolean };
+    expect(res.ok).toBe(true);
+  });
+
+  it("404s compacting an unknown session", async () => {
+    await expect(mockRequest("POST", "/api/sessions/does-not-exist/compact")).rejects.toMatchObject({
+      status: 404,
+    });
   });
 });
 

@@ -6,10 +6,13 @@ import type {
   AccountBalance,
   AgentInfo,
   BacktrackResult,
+  CommandsResponse,
   CompactResult,
   ConfigKey,
   DoctorReport,
   EvolutionProposal,
+  FileContent,
+  GitStatus,
   McpResource,
   McpServer,
   McpTool,
@@ -26,6 +29,7 @@ import type {
   Skill,
   SkillScope,
   Todo,
+  TreeResponse,
   Workspace,
   WorkspacesResponse,
   WorktreeCreated,
@@ -281,4 +285,27 @@ export const api = {
 
   // Environment diagnostics (workspace-scoped).
   doctor: () => request<DoctorReport>("GET", withWorkspace("/api/doctor")),
+
+  // Files browser + editor (workspace-scoped). `path` is workspace-relative.
+  tree: (path?: string) =>
+    request<TreeResponse>("GET", withWorkspace(`/api/tree${path ? `?path=${encodeURIComponent(path)}` : ""}`)),
+  readFile: (path: string) =>
+    request<FileContent>("GET", withWorkspace(`/api/file?path=${encodeURIComponent(path)}`)),
+  writeFile: (path: string, content: string) =>
+    request<{ ok: true }>("PUT", withWorkspace("/api/file"), { path, content }),
+
+  // Source control (workspace-scoped).
+  gitStatus: () => request<GitStatus>("GET", withWorkspace("/api/git/status")),
+  gitStage: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/stage"), { paths }),
+  gitUnstage: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/unstage"), { paths }),
+  gitDiscard: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/discard"), { paths }),
+  gitCommit: (message: string) =>
+    request<{ ok: boolean; commit: string }>("POST", withWorkspace("/api/git/commit"), { message }),
+
+  // Custom slash commands surfaced in the composer (workspace-scoped).
+  commands: () => request<CommandsResponse>("GET", withWorkspace("/api/commands")),
+
+  // Manual session compaction (workspace-scoped). Result is treated as opaque.
+  sessionCompact: (id: string) =>
+    request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`)),
 };

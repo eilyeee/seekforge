@@ -154,6 +154,38 @@ export function IconArrowRight(props: IconProps) {
   );
 }
 
+/** Folder — Files. */
+export function IconFiles(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 4.5A1.5 1.5 0 013.5 3h2.6l1.4 1.6h5A1.5 1.5 0 0114 6.1v5.4A1.5 1.5 0 0112.5 13h-9A1.5 1.5 0 012 11.5z" />
+    </Svg>
+  );
+}
+
+/** Branch — Source Control. */
+export function IconGit(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="4" cy="4" r="1.6" />
+      <circle cx="4" cy="12" r="1.6" />
+      <circle cx="12" cy="6" r="1.6" />
+      <path d="M4 5.6v4.8" />
+      <path d="M12 7.6c0 2-1.8 2.9-4 2.9" />
+    </Svg>
+  );
+}
+
+/** Magnifier — search / command palette. */
+export function IconSearch(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="7" cy="7" r="4" />
+      <path d="M10 10l3.5 3.5" />
+    </Svg>
+  );
+}
+
 /** SeekForge whale mark (filled, scales with `size`). */
 export function LogoMark({ size = 20, ...rest }: IconProps) {
   return (

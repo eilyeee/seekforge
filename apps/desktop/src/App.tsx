@@ -1,6 +1,7 @@
 import { useStore } from "./store";
 import { useT } from "./lib/i18n";
 import { Button } from "./components/ui";
+import { CommandPalette } from "./components/CommandPalette";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
@@ -9,6 +10,8 @@ import { ChatView } from "./views/ChatView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
 import { DiffView } from "./views/DiffView";
 import { EvolutionView } from "./views/EvolutionView";
+import { FilesView } from "./views/FilesView";
+import { GitView } from "./views/GitView";
 import { MemoryView } from "./views/MemoryView";
 import { SessionsView } from "./views/SessionsView";
 import { SettingsView } from "./views/SettingsView";
@@ -51,6 +54,8 @@ export function App() {
           {view === "chat" && <ChatView />}
           {view === "sessions" && <SessionsView />}
           {view === "diff" && <DiffView />}
+          {view === "files" && <FilesView />}
+          {view === "git" && <GitView />}
           {view === "skills" && <SkillsView />}
           {view === "agents" && <AgentsView />}
           {view === "memory" && <MemoryView />}
@@ -60,6 +65,7 @@ export function App() {
         </div>
       </main>
       {todosOpen && <TodosPanel />}
+      <CommandPalette />
     </div>
   );
 }

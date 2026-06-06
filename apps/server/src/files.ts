@@ -4,9 +4,17 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, type Dirent } from "node:fs";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
-import { DEFAULT_IGNORE_DIRS } from "@seekforge/core";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { DEFAULT_IGNORE_DIRS, isSensitiveBasename, resolveInsideWorkspace } from "@seekforge/core";
 
 /** Hard cap on the number of paths GET /api/files returns. */
 export const FILE_LIST_LIMIT = 2000;
@@ -191,4 +199,148 @@ export function readRawUpload(root: string, path: string): { data: Buffer; conte
     throw new RawFileError(413, "too_large", `file exceeds ${MAX_RAW_BYTES} bytes`);
   }
   return { data: readFileSync(real), contentType };
+}
+
+// --- File browser / viewer / editor (GET /api/tree, /api/file, PUT /api/file) ---
+
+/** Browser/viewer/editor failure carrying the HTTP status/code to respond with. */
+export class FileBrowseError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "FileBrowseError";
+  }
+}
+
+/** Read cap for GET /api/file; past this `truncated` is true. */
+export const MAX_FILE_BYTES = 1_000_000;
+
+export type TreeEntry = { name: string; path: string; type: "file" | "dir" };
+export type Tree = { path: string; entries: TreeEntry[] };
+
+/**
+ * Resolves a workspace-relative path, asserting containment (no traversal /
+ * symlink escape) and rejecting denylisted/.git paths. Throws FileBrowseError
+ * with a 400 on any violation.
+ */
+function resolveBrowsePath(workspace: string, rel: string): string {
+  if (typeof rel !== "string" || rel.includes("\0")) {
+    throw new FileBrowseError(400, "bad_request", "invalid path");
+  }
+  let resolved: string;
+  try {
+    resolved = resolveInsideWorkspace(workspace, rel);
+  } catch {
+    throw new FileBrowseError(400, "bad_request", "path escapes the workspace");
+  }
+  const wsReal = realpathSync(resolve(workspace));
+  const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
+  // Reject .git anywhere in the path, denylisted directory names, and
+  // sensitive basenames (.env, *.key, *.pem, ...).
+  const parts = relPosix === "" ? [] : relPosix.split("/");
+  for (const part of parts) {
+    if (part === ".git" || DEFAULT_IGNORE_DIRS.has(part)) {
+      throw new FileBrowseError(400, "bad_request", `path is not browsable: ${rel}`);
+    }
+  }
+  if (parts.length > 0 && isSensitiveBasename(parts[parts.length - 1]!)) {
+    throw new FileBrowseError(400, "bad_request", `path is not browsable: ${rel}`);
+  }
+  return resolved;
+}
+
+/**
+ * Lists a single directory for the file browser. `rel` empty = workspace root.
+ * Directories first, then files, each alphabetical. Hides .git, denylisted
+ * directories, dot-directories, sensitive files, and symlinks.
+ */
+export function listTree(workspace: string, rel: string): Tree {
+  const dir = resolveBrowsePath(workspace, rel);
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(dir);
+  } catch {
+    throw new FileBrowseError(404, "not_found", "directory not found");
+  }
+  if (!stat.isDirectory()) {
+    throw new FileBrowseError(400, "bad_request", "path is not a directory");
+  }
+  const wsReal = realpathSync(resolve(workspace));
+  const relRoot = relative(wsReal, dir).split(/[/\\]/).join("/");
+  let dirents: Dirent[];
+  try {
+    dirents = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    throw new FileBrowseError(404, "not_found", "directory not readable");
+  }
+  const dirs: TreeEntry[] = [];
+  const files: TreeEntry[] = [];
+  for (const ent of dirents) {
+    if (ent.isSymbolicLink()) continue;
+    const childRel = relRoot === "" ? ent.name : `${relRoot}/${ent.name}`;
+    if (ent.isDirectory()) {
+      if (ent.name === ".git" || ent.name.startsWith(".") || DEFAULT_IGNORE_DIRS.has(ent.name)) continue;
+      dirs.push({ name: ent.name, path: childRel, type: "dir" });
+    } else if (ent.isFile()) {
+      if (isSensitiveBasename(ent.name)) continue;
+      files.push({ name: ent.name, path: childRel, type: "file" });
+    }
+  }
+  const byName = (a: TreeEntry, b: TreeEntry) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  dirs.sort(byName);
+  files.sort(byName);
+  return { path: relRoot, entries: [...dirs, ...files] };
+}
+
+/** Heuristic: a NUL byte in the leading bytes marks the file as binary. */
+function looksBinary(buf: Buffer): boolean {
+  const sample = buf.subarray(0, Math.min(buf.length, 8000));
+  return sample.includes(0);
+}
+
+export type FileView = { path: string; content: string; truncated: boolean };
+
+/**
+ * Reads a text file for the viewer/editor. Rejects denylisted/binary files
+ * with a 400. Content is capped at ~1 MB (truncated:true past the cap).
+ */
+export function readTextFile(workspace: string, rel: string): FileView {
+  const resolved = resolveBrowsePath(workspace, rel);
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(resolved);
+  } catch {
+    throw new FileBrowseError(404, "not_found", "file not found");
+  }
+  if (!stat.isFile()) {
+    throw new FileBrowseError(400, "bad_request", "path is not a file");
+  }
+  const buf = readFileSync(resolved);
+  if (looksBinary(buf)) {
+    throw new FileBrowseError(400, "bad_request", "file is binary, not text");
+  }
+  const wsReal = realpathSync(resolve(workspace));
+  const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
+  if (buf.length > MAX_FILE_BYTES) {
+    return { path: relPosix, content: buf.subarray(0, MAX_FILE_BYTES).toString("utf8"), truncated: true };
+  }
+  return { path: relPosix, content: buf.toString("utf8"), truncated: false };
+}
+
+/**
+ * Writes a text file from the editor. Containment + denylist enforced; parent
+ * directories are created. Refuses .git and sensitive paths.
+ */
+export function writeTextFile(workspace: string, rel: string, content: string): void {
+  const resolved = resolveBrowsePath(workspace, rel);
+  // resolveBrowsePath already rejects .git / sensitive basenames; double-check
+  // the basename in case rel was empty (root) which has no basename.
+  if (basename(resolved) === "" || resolved === realpathSync(resolve(workspace))) {
+    throw new FileBrowseError(400, "bad_request", "invalid file path");
+  }
+  mkdirSync(dirname(resolved), { recursive: true });
+  writeFileSync(resolved, content, "utf8");
 }

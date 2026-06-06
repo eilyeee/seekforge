@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### round 48: desktop file browser, source control, ⌘K palette, custom commands
+Closes the remaining desktop gaps vs Claude Code / Codex. Built by two parallel
+agents on disjoint trees (backend+TUI / desktop) against one REST contract.
+
+- **File browser + viewer + editor.** New Files view: a workspace file tree
+  (`GET /api/tree`, lazy-expand), a text viewer (`GET /api/file`), and edit/save
+  (`PUT /api/file`) — all containment- and denylist-checked (no `.env`/keys, no
+  escaping the workspace). Doubles as the rules editor (open `AGENTS.md`).
+- **Source control.** New Git view: `git status` grouped staged/unstaged with
+  stage/unstage, commit, and (confirmed) discard — `GET /api/git/status` +
+  `POST /api/git/{stage,unstage,discard,commit}` (never pushes; "not a git repo"
+  empty state).
+- **Custom slash commands.** Core `loadUserCommands` reads `.seekforge/commands/
+  *.md` (project + user); `GET /api/commands` surfaces them; the desktop
+  composer merges them into its slash menu. (The TUI already supported these.)
+- **Manual `/compact`** in the desktop chat (`POST /api/sessions/:id/compact`),
+  matching the TUI/CLI.
+- **⌘K command palette**: fuzzy quick-switcher over views + actions (matches the
+  label and the id, so "git" finds Source Control).
+- Localization (en + zh) for all new surfaces; mock API covers every endpoint.
+- Verified: typecheck clean (8 packages); tests core 810 / server 180 /
+  desktop 249 / tui 667 / eval 45; desktop build clean.
+
 ### round 47: desktop chat UX — live controls, run toolbar, unified dropdowns
 - **Approval mode (and edit/ask) changeable mid-conversation.** The selectors
   were locked for the whole session and the server's `send` hardcoded

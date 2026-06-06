@@ -264,6 +264,40 @@ export type AccountBalance = { currency: string; totalBalance: string };
 /** GET /api/mcp/resources entry. Inline reference syntax: @mcp:<server>:<uri>. */
 export type McpResource = { server: string; uri: string; name?: string };
 
+/** GET /api/tree entry (one file or directory in a workspace-relative dir). */
+export type TreeEntry = { name: string; path: string; type: "file" | "dir" };
+
+/** GET /api/tree?path=<reldir> response (a single directory's listing). */
+export type TreeResponse = { path: string; entries: TreeEntry[] };
+
+/** GET /api/file?path=<rel> response (text content; truncated when too large). */
+export type FileContent = { path: string; content: string; truncated: boolean };
+
+/** A single changed file in GET /api/git/status. */
+export type GitFileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+/** GET /api/git/status entry. */
+export type GitFile = { path: string; status: GitFileStatus; staged: boolean };
+
+/** GET /api/git/status response (notGit set when the workspace is not a repo). */
+export type GitStatus = {
+  notGit?: boolean;
+  branch: string;
+  files: GitFile[];
+};
+
+/** A custom slash command (GET /api/commands). */
+export type SlashCommand = {
+  name: string;
+  description: string;
+  scope: "project" | "user";
+  /** Template text inserted into the composer draft when chosen. */
+  body: string;
+};
+
+/** GET /api/commands response. */
+export type CommandsResponse = { commands: SlashCommand[] };
+
 /** GET /api/models entry (mirror of core MODEL_PRICING with metadata). */
 export type ModelInfo = {
   id: string;

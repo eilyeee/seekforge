@@ -78,6 +78,75 @@ const mockWorkspaceFiles = [
 
 let uploadCounter = 0;
 
+/**
+ * In-memory file tree for the Files view. Files carry editable content; the
+ * /api/tree listing is derived from the keys so a directory appears once any
+ * file under it exists. Edits via PUT /api/file stick for the page lifetime.
+ */
+const mockFiles: Record<string, string> = {
+  "AGENTS.md": "# Agent rules\n\n- Prefer small, reviewable diffs.\n- Keep tests green.\n",
+  "README.md": "# Mock workspace\n\nThis is a fixture project used in mock mode.\n",
+  "package.json": '{\n  "name": "mock-workspace",\n  "version": "0.0.0"\n}\n',
+  "src/app.ts": 'export const title = "New";\n\nexport function render() {\n  return title;\n}\n',
+  "src/index.css": ":root {\n  color-scheme: dark;\n}\n",
+  "src/lib/api.ts": "export const api = {};\n",
+};
+
+/** A binary/oversized fixture so the Files view's "truncated" badge is testable. */
+const TRUNCATED_PATH = "src/big.bin";
+
+/** Derives one directory's listing (dirs + files) from the flat file map. */
+function mockTree(dir: string): { name: string; path: string; type: "file" | "dir" }[] {
+  const prefix = dir === "" ? "" : `${dir.replace(/\/+$/, "")}/`;
+  const dirs = new Set<string>();
+  const files: { name: string; path: string; type: "file" | "dir" }[] = [];
+  for (const full of Object.keys(mockFiles)) {
+    if (!full.startsWith(prefix)) continue;
+    const rest = full.slice(prefix.length);
+    const slash = rest.indexOf("/");
+    if (slash === -1) {
+      files.push({ name: rest, path: full, type: "file" });
+    } else {
+      dirs.add(rest.slice(0, slash));
+    }
+  }
+  const dirEntries = [...dirs]
+    .sort()
+    .map((name) => ({ name, path: `${prefix}${name}`, type: "dir" as const }));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return [...dirEntries, ...files];
+}
+
+/** In-memory git working tree for the Source Control view. */
+type MockGitFile = { path: string; status: "modified" | "added" | "deleted" | "renamed" | "untracked"; staged: boolean };
+let mockGit: { notGit: boolean; branch: string; files: MockGitFile[] } = {
+  notGit: false,
+  branch: "main",
+  files: [
+    { path: "src/app.ts", status: "modified", staged: false },
+    { path: "src/feature.ts", status: "added", staged: true },
+    { path: "old.txt", status: "deleted", staged: false },
+    { path: "notes.md", status: "untracked", staged: false },
+  ],
+};
+let mockCommitSeq = 0;
+
+/** Custom slash commands for the composer palette. */
+const mockCommands = [
+  {
+    name: "review",
+    description: "Review the current diff for bugs",
+    scope: "project" as const,
+    body: "Please review the current diff and point out any correctness bugs.",
+  },
+  {
+    name: "test",
+    description: "Run the test suite and fix failures",
+    scope: "user" as const,
+    body: "Run the test suite, then fix any failing tests.",
+  },
+];
+
 /** In-memory worktree sessions (mock of the git-backed real server). */
 type MockWorktree = { id: string; branch: string; path: string; dirty: boolean; ahead: number };
 const mockWorktrees: MockWorktree[] = [];
@@ -600,6 +669,66 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       modelCount: mockModels.length,
       workspace: "/mock/workspace",
     };
+  }
+
+  // --- Files browser + editor ----------------------------------------------
+  if (method === "GET" && path === "/api/tree") {
+    const dir = new URLSearchParams(fullPath.split("?")[1] ?? "").get("path") ?? "";
+    return { path: dir, entries: mockTree(dir) };
+  }
+  if (method === "GET" && path === "/api/file") {
+    const rel = new URLSearchParams(fullPath.split("?")[1] ?? "").get("path") ?? "";
+    if (rel === TRUNCATED_PATH) return { path: rel, content: "<binary preview>\n", truncated: true };
+    if (!(rel in mockFiles)) throw mockError(404, "not_found", `file not found: ${rel}`);
+    return { path: rel, content: mockFiles[rel]!, truncated: false };
+  }
+  if (method === "PUT" && path === "/api/file") {
+    const { path: rel, content } = (body ?? {}) as { path?: unknown; content?: unknown };
+    if (typeof rel !== "string" || rel.trim() === "") throw mockError(400, "bad_request", "body must include a path");
+    if (typeof content !== "string") throw mockError(400, "bad_request", "content must be a string");
+    mockFiles[rel] = content;
+    return { ok: true };
+  }
+
+  // --- Source control ------------------------------------------------------
+  if (method === "GET" && path === "/api/git/status") {
+    if (mockGit.notGit) return { notGit: true, branch: "", files: [] };
+    return { branch: mockGit.branch, files: mockGit.files.map((f) => ({ ...f })) };
+  }
+  if (method === "POST" && (path === "/api/git/stage" || path === "/api/git/unstage")) {
+    const { paths } = (body ?? {}) as { paths?: unknown };
+    if (!Array.isArray(paths)) throw mockError(400, "bad_request", "body must be {paths: string[]}");
+    const staged = path === "/api/git/stage";
+    for (const f of mockGit.files) if (paths.includes(f.path)) f.staged = staged;
+    return { ok: true };
+  }
+  if (method === "POST" && path === "/api/git/discard") {
+    const { paths } = (body ?? {}) as { paths?: unknown };
+    if (!Array.isArray(paths)) throw mockError(400, "bad_request", "body must be {paths: string[]}");
+    mockGit.files = mockGit.files.filter((f) => !paths.includes(f.path));
+    return { ok: true };
+  }
+  if (method === "POST" && path === "/api/git/commit") {
+    const { message } = (body ?? {}) as { message?: unknown };
+    if (typeof message !== "string" || message.trim() === "") {
+      throw mockError(400, "bad_request", "commit message must be a non-empty string");
+    }
+    if (!mockGit.files.some((f) => f.staged)) throw mockError(400, "nothing_staged", "nothing staged to commit");
+    mockGit.files = mockGit.files.filter((f) => !f.staged);
+    return { ok: true, commit: `mockcommit${++mockCommitSeq}` };
+  }
+
+  // --- Custom slash commands -----------------------------------------------
+  if (method === "GET" && path === "/api/commands") {
+    return { commands: mockCommands.map((c) => ({ ...c })) };
+  }
+
+  // --- Manual session compaction -------------------------------------------
+  m = /^\/api\/sessions\/([^/]+)\/compact$/.exec(path);
+  if (method === "POST" && m) {
+    const meta = sessions.find((s) => s.id === m![1]);
+    if (!meta) throw mockError(404, "not_found", "session not found");
+    return { ok: true, sessionId: meta.id, before: 42, after: 12, summary: "Mock compaction summary." };
   }
 
   throw new Error(`mock: unhandled ${method} ${path}`);
