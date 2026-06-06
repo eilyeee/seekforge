@@ -15,18 +15,43 @@ import {
   LogoMark,
 } from "./ui/icons";
 
-const NAV: { view: View; key: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
-  { view: "chat", key: "nav.chat", Icon: IconChat },
-  { view: "sessions", key: "nav.sessions", Icon: IconSessions },
-  { view: "diff", key: "nav.diff", Icon: IconDiff },
-  { view: "files", key: "nav.files", Icon: IconFiles },
-  { view: "git", key: "nav.git", Icon: IconGit },
-  { view: "skills", key: "nav.skills", Icon: IconSkills },
-  { view: "agents", key: "nav.agents", Icon: IconAgents },
-  { view: "memory", key: "nav.memory", Icon: IconMemory },
-  { view: "evolution", key: "nav.evolution", Icon: IconEvolution },
-  { view: "settings", key: "nav.settings", Icon: IconSettings },
-  { view: "diagnostics", key: "nav.diagnostics", Icon: IconSettings },
+type NavItem = { view: View; key: string; Icon: ComponentType<{ size?: number; className?: string }> };
+
+/**
+ * Grouped navigation (Codex-style calm sidebar). The first group has no header
+ * (the primary conversation surface); the rest carry a quiet section label.
+ */
+const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
+  {
+    items: [
+      { view: "chat", key: "nav.chat", Icon: IconChat },
+      { view: "sessions", key: "nav.sessions", Icon: IconSessions },
+    ],
+  },
+  {
+    titleKey: "nav.group.code",
+    items: [
+      { view: "files", key: "nav.files", Icon: IconFiles },
+      { view: "diff", key: "nav.diff", Icon: IconDiff },
+      { view: "git", key: "nav.git", Icon: IconGit },
+    ],
+  },
+  {
+    titleKey: "nav.group.agent",
+    items: [
+      { view: "skills", key: "nav.skills", Icon: IconSkills },
+      { view: "agents", key: "nav.agents", Icon: IconAgents },
+      { view: "memory", key: "nav.memory", Icon: IconMemory },
+      { view: "evolution", key: "nav.evolution", Icon: IconEvolution },
+    ],
+  },
+  {
+    titleKey: "nav.group.system",
+    items: [
+      { view: "settings", key: "nav.settings", Icon: IconSettings },
+      { view: "diagnostics", key: "nav.diagnostics", Icon: IconSettings },
+    ],
+  },
 ];
 
 /** Extra top padding on macOS: the window uses an overlay title bar, so the
@@ -53,29 +78,38 @@ export function Sidebar() {
           Seek<span className="text-accent">Forge</span>
         </span>
       </div>
-      <nav className="flex-1 space-y-0.5 px-2">
-        {NAV.map(({ view: v, key, Icon }) => {
-          const active = view === v;
-          return (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              aria-current={active ? "page" : undefined}
-              className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
-                active
-                  ? "bg-accent-muted font-medium text-accent"
-                  : "text-secondary hover:bg-surface-overlay hover:text-primary"
-              }`}
-            >
-              <Icon
-                size={16}
-                className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
-              />
-              {t(key)}
-            </button>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto px-2 pb-2">
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.titleKey ?? `g${gi}`} className={gi === 0 ? "space-y-0.5" : "mt-4 space-y-0.5"}>
+            {group.titleKey && (
+              <div className="px-2.5 pb-1 text-2xs font-medium uppercase tracking-wider text-tertiary">
+                {t(group.titleKey)}
+              </div>
+            )}
+            {group.items.map(({ view: v, key, Icon }) => {
+              const active = view === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  aria-current={active ? "page" : undefined}
+                  className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                    active
+                      ? "bg-accent-muted font-medium text-accent"
+                      : "text-secondary hover:bg-surface-overlay hover:text-primary"
+                  }`}
+                >
+                  <Icon
+                    size={16}
+                    className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
+                  />
+                  {t(key)}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
       <div className="px-2 pb-1">
         <button

@@ -13,6 +13,9 @@ export const common = {
     "nav.evolution": "Evolve",
     "nav.settings": "Settings",
     "nav.diagnostics": "Diagnostics",
+    "nav.group.code": "Code",
+    "nav.group.agent": "Agent",
+    "nav.group.system": "System",
     "nav.workspace": "WORKSPACE",
     "nav.todos": "Todos",
     // Workspace menu
@@ -75,6 +78,9 @@ export const common = {
     "nav.evolution": "进化",
     "nav.settings": "设置",
     "nav.diagnostics": "诊断",
+    "nav.group.code": "代码",
+    "nav.group.agent": "智能体",
+    "nav.group.system": "系统",
     "nav.workspace": "工作区",
     "nav.todos": "待办",
     // Workspace menu
