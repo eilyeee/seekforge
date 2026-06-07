@@ -63,7 +63,7 @@ export function TodosPanel() {
       />
       <span
         className={`flex-1 text-sm leading-snug ${
-          todo.done ? "text-tertiary line-through" : "text-primary"
+          todo.done ? "text-tertiary line-through" : "text-secondary"
         }`}
       >
         {todo.text}

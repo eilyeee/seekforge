@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { CodeEditor } from "../components/CodeEditor";
 import { highlightLines, isKnownLang, langFromPath, type TokenClass } from "../lib/highlight";
 import { useT } from "../lib/i18n";
 import { Badge, Button, EmptyState, IconChevron, IconFiles } from "../components/ui";
@@ -321,12 +322,7 @@ function FilePane({ path }: { path: string }) {
         ) : file === null ? (
           <p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>
         ) : editing ? (
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            spellCheck={false}
-            className="h-full w-full resize-none bg-transparent px-4 py-3 font-mono text-xs leading-relaxed text-primary focus:outline-none"
-          />
+          <CodeEditor path={path} value={draft} onChange={setDraft} />
         ) : isMarkdown ? (
           <div className="px-4 py-3 text-sm leading-relaxed text-secondary">
             <Markdown source={file.content} />
