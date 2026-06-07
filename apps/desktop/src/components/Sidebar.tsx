@@ -99,7 +99,9 @@ export function Sidebar() {
     >
       <div
         data-tauri-drag-region
-        className={`flex items-center gap-2 ${collapsed ? "justify-center px-0" : "px-4"} pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
+        className={`flex gap-2 pb-3 ${IS_MAC ? "pt-9" : "pt-4"} ${
+          collapsed ? "flex-col items-center px-0" : "items-center px-4"
+        }`}
       >
         <LogoMark size={18} className="text-accent" />
         {!collapsed && (
@@ -107,6 +109,17 @@ export function Sidebar() {
             Seek<span className="text-accent">Forge</span>
           </span>
         )}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          title={t(collapsed ? "nav.expand" : "nav.collapse")}
+          aria-label={t(collapsed ? "nav.expand" : "nav.collapse")}
+          className={`focus-ring rounded p-1 text-tertiary hover:bg-surface-overlay hover:text-secondary ${
+            collapsed ? "" : "ml-auto"
+          }`}
+        >
+          <IconChevron size={14} className={collapsed ? "rotate-90" : "-rotate-90"} />
+        </button>
       </div>
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
         {NAV_GROUPS.map((group, gi) => (
@@ -162,10 +175,10 @@ export function Sidebar() {
           {!collapsed && t("nav.todos")}
         </button>
       </div>
-      {/* Collapse toggle + connection status. */}
+      {/* Connection status (collapse toggle lives in the header now). */}
       <div
         className={`flex items-center border-t border-subtle py-2.5 font-mono text-2xs text-tertiary ${
-          collapsed ? "flex-col gap-2 px-0" : "gap-1.5 px-4"
+          collapsed ? "justify-center px-0" : "gap-1.5 px-4"
         }`}
       >
         <span
@@ -175,15 +188,6 @@ export function Sidebar() {
           }`}
         />
         {!collapsed && <span className="flex-1">{t(`status.${conn}`)}</span>}
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          title={t(collapsed ? "nav.expand" : "nav.collapse")}
-          aria-label={t(collapsed ? "nav.expand" : "nav.collapse")}
-          className="focus-ring rounded p-1 text-tertiary hover:bg-surface-overlay hover:text-secondary"
-        >
-          <IconChevron size={14} className={collapsed ? "" : "rotate-180"} />
-        </button>
       </div>
     </aside>
   );

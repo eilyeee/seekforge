@@ -1,10 +1,46 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { highlightLines, isKnownLang, langFromPath, type TokenClass } from "../lib/highlight";
 import { useT } from "../lib/i18n";
 import { Badge, Button, EmptyState, IconChevron, IconFiles } from "../components/ui";
 import type { FileContent, TreeEntry } from "../types";
+
+/** Highlighter token class → semantic-token color (mirrors Markdown). */
+const TOKEN_CLASS: Record<TokenClass, string> = {
+  comment: "text-tertiary italic",
+  string: "text-ok",
+  number: "text-warn",
+  keyword: "text-accent",
+  literal: "text-warn",
+};
+
+/** Read-only file content with dependency-free syntax highlighting by extension. */
+function CodeView({ path, content }: { path: string; content: string }) {
+  const lang = langFromPath(path);
+  const lines = useMemo(() => highlightLines(content, lang), [content, lang]);
+  if (!isKnownLang(lang)) {
+    return <pre className="px-4 py-3 font-mono text-xs leading-relaxed text-primary">{content}</pre>;
+  }
+  return (
+    <pre className="px-4 py-3 font-mono text-xs leading-relaxed text-primary">
+      <code>
+        {lines.map((tokens, i) => (
+          <div key={i}>
+            {tokens.length === 0
+              ? "\n"
+              : tokens.map((tk, j) => (
+                  <span key={j} className={tk.cls ? TOKEN_CLASS[tk.cls] : undefined}>
+                    {tk.text}
+                  </span>
+                ))}
+          </div>
+        ))}
+      </code>
+    </pre>
+  );
+}
 
 /** A directory node in the lazy-loaded tree: its children + load/expand state. */
 type DirState = {
@@ -296,7 +332,7 @@ function FilePane({ path }: { path: string }) {
             <Markdown source={file.content} />
           </div>
         ) : (
-          <pre className="px-4 py-3 font-mono text-xs leading-relaxed text-primary">{file.content}</pre>
+          <CodeView path={path} content={file.content} />
         )}
       </div>
     </div>
