@@ -16,6 +16,8 @@ export const common = {
     "nav.group.code": "Code",
     "nav.group.agent": "Agent",
     "nav.group.system": "System",
+    "nav.collapse": "Collapse sidebar",
+    "nav.expand": "Expand sidebar",
     "nav.workspace": "WORKSPACE",
     "nav.todos": "Todos",
     // Workspace menu
@@ -81,6 +83,8 @@ export const common = {
     "nav.group.code": "代码",
     "nav.group.agent": "智能体",
     "nav.group.system": "系统",
+    "nav.collapse": "收起侧边栏",
+    "nav.expand": "展开侧边栏",
     "nav.workspace": "工作区",
     "nav.todos": "待办",
     // Workspace menu
