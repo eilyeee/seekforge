@@ -6,6 +6,7 @@ import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
 import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
+import { ModelBar } from "../components/chat/ModelBar";
 import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
@@ -350,8 +351,17 @@ export function ChatView() {
         </div>
       )}
 
-      {/* Codex-style centered input column (composer + run controls). */}
+      {/* Codex-style centered input column: model+thinking above, composer,
+          then the run-context controls below. */}
       <div className="mx-auto w-full max-w-3xl">
+        <ModelBar
+          tab={tab}
+          config={config}
+          onSetModel={setModel}
+          onSetThinking={setThinking}
+          onSetReasoningEffort={setReasoningEffort}
+        />
+
         <Composer
           value={draft}
           onChange={setDraft}
@@ -360,16 +370,11 @@ export function ChatView() {
           placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
           commands={composerCommands}
           workspaceId={tab.ws ?? ""}
-          thinking={tab.thinking ?? config?.thinking ?? false}
-          onToggleThinking={() => setThinking(!(tab.thinking ?? config?.thinking ?? false))}
         />
 
         <RunControls
           tab={tab}
           config={config}
-          onSetModel={setModel}
-          onSetThinking={setThinking}
-          onSetReasoningEffort={setReasoningEffort}
           onSetMode={setMode}
           onSetApprovalMode={setApprovalMode}
           onSetSandbox={(value) => {

@@ -4,55 +4,27 @@ import { WorkspaceMenu } from "../WorkspaceMenu";
 import type { ApprovalChoice, ChatTab, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
 
-const MODEL_SUGGESTIONS = ["deepseek-v4-flash", "deepseek-v4-pro"];
 const MODES: StartMode[] = ["edit", "ask", "plan"];
 type Sandbox = "off" | "workspace-write" | "restricted";
 
 type Props = {
   tab: ChatTab;
   config: ServerConfig | null;
-  onSetModel: (m: string) => void;
-  onSetThinking: (on: boolean) => void;
-  onSetReasoningEffort: (e: "high" | "max") => void;
   onSetMode: (m: StartMode) => void;
   onSetApprovalMode: (a: ApprovalChoice) => void;
   onSetSandbox: (s: Sandbox) => void;
 };
 
 /**
- * The run-context toolbar that sits directly under the composer: workspace,
- * model, thinking, sandbox, run mode, and approval mode. Approval + edit/ask
- * stay changeable mid-conversation (they ride on each send); "plan" is
- * start-only and run controls lock while a message is in flight.
+ * The run-context toolbar BELOW the composer: workspace, sandbox, run mode, and
+ * approval mode. (Model + thinking live in ModelBar above the input.) Approval +
+ * edit/ask stay changeable mid-conversation; "plan" is start-only and the
+ * controls lock while a message is in flight. Dropdowns open upward.
  */
-export function RunControls({
-  tab,
-  config,
-  onSetModel,
-  onSetThinking,
-  onSetReasoningEffort,
-  onSetMode,
-  onSetApprovalMode,
-  onSetSandbox,
-}: Props) {
+export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSandbox }: Props) {
   const t = useT();
   const running = tab.chat.running;
   const inSession = !!tab.chat.sessionId;
-
-  // Model picker over the configured list (ensure the active value is present).
-  const list = config?.models && config.models.length > 0 ? config.models : MODEL_SUGGESTIONS;
-  const model = tab.model || config?.model || list[0] || "";
-  const modelValues = model && !list.includes(model) ? [model, ...list] : list;
-  const modelOptions: SelectOption[] = modelValues.map((m) => ({ value: m, label: m }));
-
-  // Thinking collapses on/off + effort into one control: off / high / max.
-  const thinkingOn = tab.thinking ?? config?.thinking ?? false;
-  const thinkValue = thinkingOn ? tab.reasoningEffort : "off";
-  const thinkOptions: SelectOption[] = [
-    { value: "off", label: t("chat.thinkOff") },
-    { value: "high", label: t("chat.reasoning.high") },
-    { value: "max", label: t("chat.reasoning.max") },
-  ];
 
   const sandbox = (config?.sandbox ?? "off") as Sandbox;
   const sandboxOptions: SelectOption[] = [
@@ -70,30 +42,6 @@ export function RunControls({
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-subtle bg-surface-raised/40 px-4 py-2">
       <WorkspaceMenu compact />
-
-      <Select
-        up
-        value={model}
-        options={modelOptions}
-        onChange={onSetModel}
-        size="sm"
-        disabled={running}
-        leading={<span aria-hidden>⚙</span>}
-        title={t("chat.modelTitle")}
-        className="w-40"
-      />
-
-      <Select
-        up
-        value={thinkValue}
-        options={thinkOptions}
-        onChange={(v) => (v === "off" ? onSetThinking(false) : (onSetThinking(true), onSetReasoningEffort(v as "high" | "max")))}
-        size="sm"
-        disabled={running}
-        leading={<span aria-hidden>🧠</span>}
-        title={t("chat.reasoningTitle")}
-        className="w-28"
-      />
 
       <Select
         up
