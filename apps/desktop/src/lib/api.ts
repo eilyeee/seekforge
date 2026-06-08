@@ -160,13 +160,19 @@ export const api = {
   skills: () => request<Skill[]>("GET", withWorkspace("/api/skills")),
   skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
   memory: () => request<MemoryResponse>("GET", withWorkspace("/api/memory")),
-  memoryAction: (id: string, action: "approve" | "reject") =>
-    request<MemoryCandidate>("POST", withWorkspace(`/api/memory/${encodeURIComponent(id)}/${action}`)),
-  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean) =>
+  memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user") =>
+    request<MemoryCandidate>(
+      "POST",
+      withWorkspace(
+        `/api/memory/${encodeURIComponent(id)}/${action}${scope === "user" ? "?scope=user" : ""}`,
+      ),
+    ),
+  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean, scope?: "project" | "user") =>
     request<MemoryCandidate>("POST", withWorkspace("/api/memory/fact"), {
       content,
       type,
       ...(pending ? { pending: true } : {}),
+      ...(scope === "user" ? { scope: "user" } : {}),
     }),
   memoryDeleteFact: (selector: { index: number } | { match: string }) =>
     request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact"), selector),

@@ -405,9 +405,39 @@ function setCandidateStatus(
 }
 
 /** Appends the fact to project.md and marks the candidate approved. */
-export function approveMemoryCandidate(workspace: string, id: string): MemoryCandidate {
+/**
+ * Appends a fact bullet to the USER-level memory (~/.seekforge/memory/project.md,
+ * SEEKFORGE_HOME-overridable) — facts that apply across all projects. No
+ * fact-meta tracking (that sidecar is project-scoped).
+ */
+export function appendGlobalFact(candidate: MemoryCandidate): void {
+  const file = globalMemoryPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bullet = formatFactBullet(candidate);
+  const existing = readFileIfExists(file);
+  if (existing === undefined) {
+    fs.writeFileSync(file, `# Global Memory\n${bullet}\n`, "utf8");
+    return;
+  }
+  if (existing.split("\n").some((line) => line.trim() === bullet)) return;
+  const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+  fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
+}
+
+/**
+ * Approves a candidate into long-term memory. `scope:"user"` promotes it to the
+ * user-level file (applies to all projects); default "project" writes to the
+ * project's project.md. The candidate is marked approved in the project store
+ * either way.
+ */
+export function approveMemoryCandidate(
+  workspace: string,
+  id: string,
+  scope: "project" | "user" = "project",
+): MemoryCandidate {
   const candidate = setCandidateStatus(workspace, id, "approved");
-  appendProjectFact(workspace, candidate);
+  if (scope === "user") appendGlobalFact(candidate);
+  else appendProjectFact(workspace, candidate);
   return candidate;
 }
 

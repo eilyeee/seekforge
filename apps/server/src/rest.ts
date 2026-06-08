@@ -913,10 +913,11 @@ export async function handleApi(
       } catch {
         return sendApiError(res, 400, "bad_request", "body must be valid JSON");
       }
-      const { content, type, pending } = (body ?? {}) as {
+      const { content, type, pending, scope } = (body ?? {}) as {
         content?: unknown;
         type?: unknown;
         pending?: unknown;
+        scope?: unknown;
       };
       if (typeof content !== "string" || content.trim() === "") {
         return sendApiError(res, 400, "bad_request", "content must be a non-empty string");
@@ -932,12 +933,16 @@ export async function handleApi(
       if (pending !== undefined && typeof pending !== "boolean") {
         return sendApiError(res, 400, "bad_request", "pending must be a boolean");
       }
+      if (scope !== undefined && scope !== "project" && scope !== "user") {
+        return sendApiError(res, 400, "bad_request", 'scope must be "project" or "user"');
+      }
       try {
         const created = addMemoryFact(workspace, {
           content,
           ...(type !== undefined ? { type: type as MemoryCandidateType } : {}),
           // `pending: true` queues the fact instead of writing it to project.md.
           approve: pending === true ? false : true,
+          ...(scope === "user" ? { scope: "user" as const } : {}),
         });
         return sendJson(res, 201, created);
       } catch (err) {
@@ -1020,10 +1025,11 @@ export async function handleApi(
       (segs[3] === "approve" || segs[3] === "reject")
     ) {
       const id = segs[2]!;
+      const approveScope = url.searchParams.get("scope") === "user" ? "user" : "project";
       try {
         const candidate =
           segs[3] === "approve"
-            ? approveMemoryCandidate(workspace, id)
+            ? approveMemoryCandidate(workspace, id, approveScope)
             : rejectMemoryCandidate(workspace, id);
         return sendJson(res, 200, candidate);
       } catch (err) {

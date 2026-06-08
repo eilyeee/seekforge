@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import { INJECTION_PATTERN } from "./extract.js";
 import {
   appendCandidates,
+  appendGlobalFact,
   appendProjectFact,
   projectMemoryPath,
   readCandidates,
@@ -24,10 +25,16 @@ export type AddMemoryFactOptions = {
   content: string;
   /** Defaults to "convention". */
   type?: MemoryCandidateType;
-  /** Default true: write to project.md now. False queues a pending candidate. */
+  /** Default true: write to memory now. False queues a pending candidate. */
   approve?: boolean;
   /** Defaults to "manual". */
   sourceSessionId?: string;
+  /**
+   * "user" writes the approved fact to the user-level file (~/.seekforge,
+   * applies to all projects); default "project" writes to this project's
+   * project.md. User scope is always approved (no per-project candidate queue).
+   */
+  scope?: "project" | "user";
 };
 
 export type ProjectFact = {
@@ -56,7 +63,10 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
   if (INJECTION_PATTERN.test(content)) {
     throw new Error("memory fact rejected: content looks like an instruction to the agent");
   }
-  const approve = options.approve ?? true;
+  const scope = options.scope ?? "project";
+  // User-scope facts are direct, cross-project statements — always approved, and
+  // not tracked in the per-project candidate queue.
+  const approve = scope === "user" ? true : (options.approve ?? true);
   const candidate: MemoryCandidate = {
     id: nextUserFactId(readCandidates(workspace)),
     content,
@@ -64,9 +74,14 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
     confidence: 1, // User-stated, not model-assessed.
     sourceSessionId: options.sourceSessionId ?? "manual",
     createdAt: new Date().toISOString(),
-    status: approve ? "approved" : "pending",
+    status: "approved",
   };
+  if (scope === "user") {
+    appendGlobalFact(candidate); // Dedupes identical lines.
+    return candidate;
+  }
   if (approve) appendProjectFact(workspace, candidate); // Dedupes identical lines.
+  else candidate.status = "pending";
   appendCandidates(workspace, [candidate]);
   return candidate;
 }

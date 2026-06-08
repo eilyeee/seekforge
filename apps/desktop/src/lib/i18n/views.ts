@@ -213,6 +213,11 @@ export const views = {
 
     // ── MemoryView ────────────────────────────────────────────────
     "memory.title": "Memory",
+    "memory.scopeLabel": "New memory →",
+    "memory.scopeProject": "Project",
+    "memory.scopeUser": "User",
+    "memory.scopeProjectHint": "Writes to this project's .seekforge/memory/project.md.",
+    "memory.scopeUserHint": "Writes to your user memory (~/.seekforge), applied across all projects.",
     "memory.description": "Manage the project knowledge, preferences, and working context SeekForge remembers, so every conversation starts sharper.",
     "memory.loading": "Loading…",
     "memory.emptyTitle": "No memory yet",
@@ -669,6 +674,11 @@ export const views = {
 
     // ── MemoryView ────────────────────────────────────────────────
     "memory.title": "记忆",
+    "memory.scopeLabel": "新记忆写入 →",
+    "memory.scopeProject": "项目",
+    "memory.scopeUser": "用户",
+    "memory.scopeProjectHint": "写入本项目的 .seekforge/memory/project.md。",
+    "memory.scopeUserHint": "写入你的用户记忆（~/.seekforge），对所有项目生效。",
     "memory.description": "管理 SeekForge 记住的项目知识、你的偏好和工作上下文，让每次对话都更高效。",
     "memory.loading": "加载中…",
     "memory.emptyTitle": "暂无记忆",

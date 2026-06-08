@@ -62,6 +62,7 @@ export const commands = {
     "cmd.memory.addedQueued":
       "queued pending candidate {id}: [{type}] {content}\napprove with `seekforge memory approve {id}`",
     "cmd.memory.addedTo": "added to {path}:",
+    "cmd.memory.addedUser": "added to user memory (~/.seekforge): [{type}] {content}",
     "cmd.memory.addedFact": "  - [{type}] {content}",
     "cmd.memory.auditCandidate": "audit candidate: {id}",
     "cmd.memory.removedFact": "removed fact {selector}: {content}",
@@ -231,6 +232,7 @@ export const commands = {
       "  {id}  [{type}]（{confidence}）  {content}",
     "cmd.memory.addedQueued":
       "已排队待定候选 {id}：[{type}] {content}\n使用 `seekforge memory approve {id}` 批准",
+    "cmd.memory.addedUser": "已添加到用户记忆（~/.seekforge）：[{type}] {content}",
     "cmd.memory.addedTo": "已添加到 {path}：",
     "cmd.memory.addedFact": "  - [{type}] {content}",
     "cmd.memory.auditCandidate": "审计候选：{id}",

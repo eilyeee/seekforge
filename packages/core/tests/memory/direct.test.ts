@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   addMemoryFact,
@@ -8,6 +10,7 @@ import {
   removeProjectFact,
 } from "../../src/memory/index.js";
 import {
+  globalHome,
   makeCandidate,
   makeWorkspace,
   readCandidatesRaw,
@@ -33,6 +36,18 @@ describe("addMemoryFact", () => {
     const stored = listMemoryCandidates(ws);
     expect(stored).toHaveLength(1);
     expect(stored[0]).toEqual(candidate);
+  });
+
+  it("scope:user writes to the user-level file, not the project, and skips the project candidate queue", () => {
+    const ws = makeWorkspace();
+    const candidate = addMemoryFact(ws, { content: "always use 2-space indent", type: "convention", scope: "user" });
+    expect(candidate.status).toBe("approved");
+    // Project memory + candidate queue are untouched (no project.md created).
+    expect(() => readProjectMd(ws)).toThrow();
+    expect(listMemoryCandidates(ws)).toHaveLength(0);
+    // The fact lands in the isolated user-level memory file.
+    const userMd = readFileSync(join(globalHome(), ".seekforge", "memory", "project.md"), "utf8");
+    expect(userMd).toBe("# Global Memory\n- [convention] always use 2-space indent\n");
   });
 
   it("defaults type to convention and trims content", () => {

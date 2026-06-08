@@ -64,7 +64,10 @@ export function memoryStatsCommand(): void {
   );
 }
 
-export function memoryAddCommand(words: string[], opts: { type?: string; pending?: boolean }): void {
+export function memoryAddCommand(
+  words: string[],
+  opts: { type?: string; pending?: boolean; user?: boolean },
+): void {
   const type = opts.type ?? "convention";
   if (!MEMORY_CANDIDATE_TYPES.includes(type as MemoryCandidateType)) {
     console.error(t("err.invalidMemoryType", { type, expected: MEMORY_CANDIDATE_TYPES.join(" | ") }));
@@ -77,8 +80,11 @@ export function memoryAddCommand(words: string[], opts: { type?: string; pending
       content: words.join(" "),
       type: type as MemoryCandidateType,
       approve: !opts.pending,
+      ...(opts.user ? { scope: "user" as const } : {}),
     });
-    if (opts.pending) {
+    if (opts.user) {
+      console.log(t("cmd.memory.addedUser", { type: candidate.type, content: candidate.content }));
+    } else if (opts.pending) {
       console.log(
         t("cmd.memory.addedQueued", { id: candidate.id, type: candidate.type, content: candidate.content }),
       );
@@ -112,9 +118,9 @@ export function memoryRemoveCommand(selector: string): void {
   }
 }
 
-export function memoryApproveCommand(id: string): void {
+export function memoryApproveCommand(id: string, opts: { user?: boolean } = {}): void {
   try {
-    const c = approveMemoryCandidate(process.cwd(), id);
+    const c = approveMemoryCandidate(process.cwd(), id, opts.user ? "user" : "project");
     console.log(t("cmd.memory.approved", { content: c.content }));
   } catch (err) {
     console.error((err as Error).message);

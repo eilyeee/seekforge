@@ -517,8 +517,9 @@ memory
   .argument("<content...>", "fact text (words are joined with spaces)")
   .option("--type <type>", "command | path | convention | tech | task_pattern", "convention")
   .option("--pending", "queue as a pending candidate instead of writing to project.md")
-  .description("add a fact directly to project memory (user statement = approval)")
-  .action((content: string[], opts: { type?: string; pending?: boolean }) => {
+  .option("--user", "write to user memory (~/.seekforge, all projects) instead of this project")
+  .description("add a fact directly to memory (user statement = approval)")
+  .action((content: string[], opts: { type?: string; pending?: boolean; user?: boolean }) => {
     memoryAddCommand(content, opts);
   });
 memory
@@ -531,9 +532,10 @@ memory
 memory
   .command("approve")
   .argument("<candidate-id>")
-  .description("approve a candidate into project.md")
-  .action((id: string) => {
-    memoryApproveCommand(id);
+  .option("--user", "approve into user memory (~/.seekforge, all projects)")
+  .description("approve a candidate into project (or user) memory")
+  .action((id: string, opts: { user?: boolean }) => {
+    memoryApproveCommand(id, opts);
   });
 memory
   .command("reject")
