@@ -666,7 +666,9 @@ export async function handleApi(
           // Determine which of the given paths are untracked, then handle both.
           const { stdout } = await execFileAsync(
             "git",
-            ["status", "--porcelain=v1", "--", ...relPaths],
+            // core.quotepath=false: don't octal-escape non-ASCII filenames, so
+            // the untracked-path match below works for e.g. Chinese names.
+            ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--", ...relPaths],
             GIT_EXEC(workspace),
           );
           const untracked = new Set<string>();
