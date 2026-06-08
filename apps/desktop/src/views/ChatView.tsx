@@ -351,9 +351,10 @@ export function ChatView() {
         </div>
       )}
 
-      {/* Codex-style centered input column: model+thinking above, composer,
-          then the run-context controls below. */}
-      <div className="mx-auto w-full max-w-3xl">
+      {/* Codex-style centered input column under a full-width divider:
+          model+thinking, composer, then the run-context controls. */}
+      <div className="border-t border-subtle">
+        <div className="mx-auto w-full max-w-3xl">
         <ModelBar
           tab={tab}
           config={config}
@@ -381,6 +382,7 @@ export function ChatView() {
             void api.setConfig("sandbox", value).then(setConfig).catch(() => {});
           }}
         />
+        </div>
       </div>
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />

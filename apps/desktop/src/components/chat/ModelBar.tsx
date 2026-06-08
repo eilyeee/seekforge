@@ -35,7 +35,7 @@ export function ModelBar({ tab, config, onSetModel, onSetThinking, onSetReasonin
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-1 pb-1.5">
+    <div className="flex flex-wrap items-center gap-2 px-1 pb-1.5 pt-2">
       <Select
         up
         value={model}
@@ -56,7 +56,7 @@ export function ModelBar({ tab, config, onSetModel, onSetThinking, onSetReasonin
         disabled={running}
         leading={<span aria-hidden>🧠</span>}
         title={t("chat.reasoningTitle")}
-        className="w-28"
+        className="w-44"
       />
     </div>
   );

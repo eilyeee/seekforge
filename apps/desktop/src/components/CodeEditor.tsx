@@ -3,6 +3,7 @@ import { EditorView, basicSetup } from "codemirror";
 import { EditorState, Compartment, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
+import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
@@ -81,6 +82,31 @@ function isDark(): boolean {
 }
 
 /**
+ * Always-on completion source: suggests identifiers already present in the file.
+ * This guarantees per-file suggestions even for languages whose CM package has no
+ * dedicated completion source; language sources (JS/TS/Python/HTML/CSS/SQL/…)
+ * still augment it where available.
+ */
+function documentWords(context: CompletionContext): CompletionResult | null {
+  const before = context.matchBefore(/[\w$]+/);
+  if (!before || (before.from === before.to && !context.explicit)) return null;
+  const typed = before.text;
+  const seen = new Set<string>([typed]);
+  const options: { label: string; type: string }[] = [];
+  const re = /[A-Za-z_$][\w$]{1,}/g;
+  const text = context.state.doc.toString();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) && options.length < 250) {
+    const w = m[0];
+    if (seen.has(w)) continue;
+    seen.add(w);
+    options.push({ label: w, type: "text" });
+  }
+  if (options.length === 0) return null;
+  return { from: before.from, options, validFor: /^[\w$]*$/ };
+}
+
+/**
  * CodeMirror 6 editor for the Files view: in-editor syntax highlighting,
  * language-aware autocompletion (basicSetup), tab-indent, and light/dark theme
  * synced to the app's data-theme. Mounts per edit session (keyed by file path).
@@ -110,6 +136,8 @@ export function CodeEditor({
           basicSetup,
           keymap.of([indentWithTab]),
           ...languageFor(path),
+          // Document-word suggestions for every file type (augments language ones).
+          EditorState.languageData.of(() => [{ autocomplete: documentWords }]),
           themeComp.current.of(isDark() ? oneDark : []),
           EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { fontFamily: "inherit" } }),
           EditorView.updateListener.of((u) => {
