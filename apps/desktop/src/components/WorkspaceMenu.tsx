@@ -3,7 +3,7 @@ import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { canPickDirectory, pickDirectory } from "../lib/pickDirectory";
 import { ApiError } from "../lib/api";
-import { IconChevron } from "./ui/icons";
+import { IconChevron, IconFiles } from "./ui/icons";
 
 function useCloseOnOutsideClick(open: boolean, close: () => void) {
   useEffect(() => {
@@ -97,7 +97,7 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
             : "focus-ring flex w-full items-center gap-1.5 rounded-lg border border-strong bg-surface px-2 py-1.5 text-left text-xs text-primary hover:border-accent/60"
         }
       >
-        {compact && <span aria-hidden className="text-tertiary">📁</span>}
+        {compact && <IconFiles size={13} className="shrink-0 text-tertiary" />}
         <span className={compact ? "max-w-[10rem] truncate" : "flex-1 truncate"}>
           {active?.name ?? t("workspace.openProject")}
         </span>

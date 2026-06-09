@@ -1,5 +1,5 @@
 import { useT } from "../../lib/i18n";
-import { Select, IconThinking, type SelectOption } from "../ui";
+import { Select, IconModel, IconThinking, type SelectOption } from "../ui";
 import type { ChatTab } from "../../store";
 import type { ServerConfig } from "../../types";
 
@@ -43,7 +43,7 @@ export function ModelBar({ tab, config, onSetModel, onSetThinking, onSetReasonin
         onChange={onSetModel}
         size="sm"
         disabled={running}
-        leading={<span aria-hidden>⚙</span>}
+        leading={<IconModel size={14} />}
         title={t("chat.modelTitle")}
         className="w-40"
       />

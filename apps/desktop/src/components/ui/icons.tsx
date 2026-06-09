@@ -145,6 +145,26 @@ export function IconThinking(props: IconProps) {
   );
 }
 
+/** Chip / CPU — the model picker. */
+export function IconModel(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1" />
+      <path d="M6.5 2v2.5M9.5 2v2.5M6.5 11.5V14M9.5 11.5V14" />
+      <path d="M2 6.5h2.5M2 9.5h2.5M11.5 6.5H14M11.5 9.5H14" />
+    </Svg>
+  );
+}
+
+/** Shield — the OS command sandbox. */
+export function IconShield(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2l5 2v3.7c0 3-2 5.3-5 6.3-3-1-5-3.3-5-6.3V4l5-2Z" />
+    </Svg>
+  );
+}
+
 /** Down-then-right corner arrow (⤷) — a dispatched subagent. */
 export function IconCornerDownRight(props: IconProps) {
   return (

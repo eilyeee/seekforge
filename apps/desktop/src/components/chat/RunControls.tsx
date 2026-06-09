@@ -1,5 +1,5 @@
 import { useT } from "../../lib/i18n";
-import { Select, type SelectOption } from "../ui";
+import { Select, IconShield, type SelectOption } from "../ui";
 import { WorkspaceMenu } from "../WorkspaceMenu";
 import type { ApprovalChoice, ChatTab, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
@@ -50,7 +50,7 @@ export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSa
         onChange={(v) => onSetSandbox(v as Sandbox)}
         size="sm"
         disabled={running}
-        leading={<span aria-hidden>🛡</span>}
+        leading={<IconShield size={14} />}
         title={t("chat.sandboxTitle")}
         className="w-36"
       />
