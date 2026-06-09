@@ -7,6 +7,7 @@ import {
   createRuntimeClient,
   loadMcpToolSpecs,
   type AgentCore,
+  type AgentCoreDeps,
   type AgentDefinition,
   type RuntimeClient,
   type ToolSpec,
@@ -45,8 +46,19 @@ export type CliAgent = {
   dispose: () => void;
 };
 
-/** Assembles AgentCore from CLI config; shared by run/ask/repl/serve paths. */
-export function createCliAgent(opts: CliAgentOptions): CliAgent {
+export type CliAgentDeps = {
+  deps: AgentCoreDeps;
+  dispose: () => void;
+};
+
+/**
+ * Builds the AgentCoreDeps from CLI config — the same wiring (provider,
+ * dispatcher, confirm, runtime, allowlist, permission rules, hooks, sandbox,
+ * planModel/escalation, …) that createAgentCore would receive. Callers that
+ * need the deps object directly (e.g. `seekforge loop` → runAutoLoop) use this;
+ * createCliAgent layers createAgentCore on top. dispose() releases the runtime.
+ */
+export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   const { config } = opts;
 
   let runtime: RuntimeClient | undefined;
@@ -75,7 +87,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     ...thinkingOpts,
   });
 
-  const agent = createAgentCore({
+  const deps: AgentCoreDeps = {
     provider,
     retryBus,
     // Per-agent model override (AgentDefinition.model): same key/endpoint,
@@ -114,9 +126,15 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),
-  });
+  };
 
-  return { agent, dispose: () => runtime?.dispose() };
+  return { deps, dispose: () => runtime?.dispose() };
+}
+
+/** Assembles AgentCore from CLI config; shared by run/ask/repl/serve paths. */
+export function createCliAgent(opts: CliAgentOptions): CliAgent {
+  const { deps, dispose } = createCliAgentDeps(opts);
+  return { agent: createAgentCore(deps), dispose };
 }
 
 /**

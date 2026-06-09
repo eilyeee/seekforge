@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### round 49: loop engineering (auto-loop) — core + CLI
+- **Autonomous run → verify → continue.** New core `runAutoLoop` (`@seekforge/core`)
+  drives one task to "green" across multiple runs: it runs the agent, runs a
+  verification command, and if it fails feeds the output back and continues —
+  fully autonomously — until the command exits 0 or a guardrail trips. The whole
+  loop is one resumed session (auditable, rewindable).
+- **Guardrails (all default-on):** max iterations (default 8), a cumulative cost
+  cap (`--budget`), no-progress detection (identical verify output → stop), and
+  cooperative cancel (`Ctrl-C`/AbortSignal). Result status is one of passed /
+  exhausted / no_progress / budget / cancelled / verify_error.
+- **CLI:** `seekforge loop "<task>" --verify "<cmd>" [--max-iters N] [--budget $X]
+  [-y]` — streams per-iteration progress; runs at `acceptEdits` (edits
+  auto-approved, dangerous commands still refused); exits non-zero unless the
+  verify passed. Built by two parallel agents (core / cli) against a fixed
+  exported contract. See `docs/loop-engineering.md`.
+- Verified: typecheck clean; core 819 (+8) / cli loop 11 tests; `loop --help` wired.
+  TUI/desktop surfaces deferred.
+
 ### round 48: desktop file browser, source control, ⌘K palette, custom commands
 Closes the remaining desktop gaps vs Claude Code / Codex. Built by two parallel
 agents on disjoint trees (backend+TUI / desktop) against one REST contract.

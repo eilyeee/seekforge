@@ -171,6 +171,20 @@ export const commands = {
 
     // ── cmd.completion.* ────────────────────────────────────────────────
     "cmd.completion.unsupportedShell": "unsupported shell: {shell} (expected bash or zsh)",
+
+    // ── cmd.loop.* ──────────────────────────────────────────────────────
+    "cmd.loop.autoApproveNote":
+      "note: loop is autonomous — it auto-approves edits (acceptEdits). Pass -y to silence this.",
+    "cmd.loop.iterationStart": "── iteration {n} ──",
+    "cmd.loop.runCompleted": "iteration {n}: run completed (${cost})",
+    "cmd.loop.verifyPassed": "iteration {n}: verify PASSED",
+    "cmd.loop.verifyFailed": "iteration {n}: verify FAILED (exit {code})",
+    "cmd.loop.summaryHeader": "── loop done ──",
+    "cmd.loop.summaryStatus": "status:     {status}",
+    "cmd.loop.summaryIterations": "iterations: {n}",
+    "cmd.loop.summaryCost": "cost:       ${cost}",
+    "cmd.loop.summarySession": "session:    {id}",
+    "cmd.loop.summaryHint": "resume: seekforge resume {id}  |  rewind: seekforge rewind {id}",
   },
   zh: {
     // ── cmd.models.* ────────────────────────────────────────────────────
@@ -342,5 +356,19 @@ export const commands = {
 
     // ── cmd.completion.* ────────────────────────────────────────────────
     "cmd.completion.unsupportedShell": "不支持的 shell：{shell}（期望 bash 或 zsh）",
+
+    // ── cmd.loop.* ──────────────────────────────────────────────────────
+    "cmd.loop.autoApproveNote":
+      "提示：loop 为自主模式，会自动批准编辑（acceptEdits）。加 -y 可隐藏此提示。",
+    "cmd.loop.iterationStart": "── 第 {n} 轮 ──",
+    "cmd.loop.runCompleted": "第 {n} 轮：运行完成（${cost}）",
+    "cmd.loop.verifyPassed": "第 {n} 轮：校验通过",
+    "cmd.loop.verifyFailed": "第 {n} 轮：校验失败（退出码 {code}）",
+    "cmd.loop.summaryHeader": "── loop 结束 ──",
+    "cmd.loop.summaryStatus": "状态：    {status}",
+    "cmd.loop.summaryIterations": "轮数：    {n}",
+    "cmd.loop.summaryCost": "费用：    ${cost}",
+    "cmd.loop.summarySession": "会话：    {id}",
+    "cmd.loop.summaryHint": "恢复：seekforge resume {id}  |  回退：seekforge rewind {id}",
   },
 };

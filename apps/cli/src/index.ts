@@ -32,6 +32,7 @@ import {
 } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
+import { loopCommand } from "./commands/loop.js";
 import { runTaskCommand } from "./commands/run.js";
 import { resolveOutputFormat } from "./output-format.js";
 import { serveCommand } from "./commands/serve.js";
@@ -100,6 +101,13 @@ const collect = (val: string, prev: string[]): string[] => [...prev, val];
 function parsePositiveInt(val: string): number {
   const n = Number.parseInt(val, 10);
   if (Number.isNaN(n) || n <= 0) throw new InvalidArgumentError("must be a positive integer");
+  return n;
+}
+
+/** Parse a positive-float option string (e.g. a USD budget); throws on bad input. */
+function parsePositiveFloat(val: string): number {
+  const n = Number.parseFloat(val);
+  if (Number.isNaN(n) || n <= 0) throw new InvalidArgumentError("must be a positive number");
   return n;
 }
 
@@ -238,6 +246,30 @@ program
       plan: opts.plan,
     });
   });
+
+program
+  .command("loop")
+  .argument("<task>", "task to drive to green (the verify command's exit 0)")
+  .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
+  .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
+  .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
+  .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
+  .option("-m, --model <model>", "override model")
+  .description("autonomously run → verify → continue until the verify command passes")
+  .action(
+    async (
+      task: string,
+      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string },
+    ) => {
+      await loopCommand(task, {
+        verify: opts.verify,
+        maxIters: opts.maxIters,
+        budget: opts.budget,
+        yes: opts.yes,
+        model: opts.model,
+      });
+    },
+  );
 
 program
   .command("ask")

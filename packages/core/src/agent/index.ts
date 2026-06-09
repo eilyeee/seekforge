@@ -31,6 +31,13 @@ export interface AgentCore {
 }
 
 export { createAgentCore, createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
+export {
+  runAutoLoop,
+  type LoopOptions,
+  type LoopResult,
+  type LoopEvent,
+  type LoopStatus,
+} from "./auto-loop.js";
 export { classifyAgentError } from "./errors.js";
 export type { AgentErrorKind, ClassifiedAgentError } from "./errors.js";
 export { buildSystemPrompt } from "./prompt.js";
