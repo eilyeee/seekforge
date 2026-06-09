@@ -134,6 +134,17 @@ export function IconSparkle(props: IconProps) {
   );
 }
 
+/** Lightbulb — thinking / reasoning effort. */
+export function IconThinking(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5.6 9.4a4 4 0 1 1 4.8 0c-.6.5-1 1-1 1.7v.4h-2.8v-.4c0-.7-.4-1.2-1-1.7Z" />
+      <path d="M6.2 13.3h3.6" />
+      <path d="M6.9 15h2.2" />
+    </Svg>
+  );
+}
+
 /** Down-then-right corner arrow (⤷) — a dispatched subagent. */
 export function IconCornerDownRight(props: IconProps) {
   return (

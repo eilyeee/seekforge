@@ -1,5 +1,5 @@
 import { useT } from "../../lib/i18n";
-import { Select, type SelectOption } from "../ui";
+import { Select, IconThinking, type SelectOption } from "../ui";
 import type { ChatTab } from "../../store";
 import type { ServerConfig } from "../../types";
 
@@ -54,7 +54,7 @@ export function ModelBar({ tab, config, onSetModel, onSetThinking, onSetReasonin
         onChange={(v) => (v === "off" ? onSetThinking(false) : (onSetThinking(true), onSetReasoningEffort(v as "high" | "max")))}
         size="sm"
         disabled={running}
-        leading={<span aria-hidden>🧠</span>}
+        leading={<IconThinking size={14} />}
         title={t("chat.reasoningTitle")}
         className="w-44"
       />
