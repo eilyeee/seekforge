@@ -1,0 +1,16 @@
+[package]
+name = "seekforge-runtime"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "Sandboxed execution runtime for SeekForge (stdio JSONL protocol)"
+
+[[bin]]
+name = "seekforge-runtime"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"

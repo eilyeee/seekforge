@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConfig } from "../config.js";
 
-const ALLOWED_KEYS = ["apiKey", "model", "baseUrl"] as const;
+const ALLOWED_KEYS = ["apiKey", "model", "baseUrl", "runtimeBin"] as const;
 
 function configPath(global: boolean): string {
   const base = global ? homedir() : process.cwd();

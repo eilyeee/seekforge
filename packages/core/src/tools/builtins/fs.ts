@@ -12,6 +12,7 @@ import {
   resolveInsideWorkspace,
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
+import { callRuntime } from "../runtime-backend.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 const MAX_LIST_ENTRIES = 500;
@@ -72,6 +73,18 @@ const listFiles = defineTool({
     path: args.path ?? ".",
   }),
   async run(args, ctx) {
+    if (ctx.runtime) {
+      const res = await callRuntime<{ entries: string[]; truncated: boolean }>(
+        ctx.runtime,
+        "list_files",
+        ctx.workspace,
+        { path: args.path ?? ".", maxDepth: args.maxDepth ?? 10 },
+      );
+      return {
+        data: { entries: res.entries, count: res.entries.length, truncated: res.truncated },
+        meta: { truncated: res.truncated },
+      };
+    }
     const root = resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       throw new ToolError("not_found", `Not a directory: ${args.path ?? "."}`);
@@ -106,14 +119,22 @@ const readFile = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
-    const resolved = resolveForRead(ctx.workspace, args.path);
-    if (!fs.existsSync(resolved)) {
-      throw new ToolError("not_found", `File not found: ${args.path}`);
+    let content: string;
+    if (ctx.runtime) {
+      const res = await callRuntime<{ content: string }>(ctx.runtime, "read_file", ctx.workspace, {
+        path: args.path,
+      });
+      content = res.content;
+    } else {
+      const resolved = resolveForRead(ctx.workspace, args.path);
+      if (!fs.existsSync(resolved)) {
+        throw new ToolError("not_found", `File not found: ${args.path}`);
+      }
+      if (!fs.statSync(resolved).isFile()) {
+        throw new ToolError("not_a_file", `Not a regular file: ${args.path}`);
+      }
+      content = fs.readFileSync(resolved, "utf8");
     }
-    if (!fs.statSync(resolved).isFile()) {
-      throw new ToolError("not_a_file", `Not a regular file: ${args.path}`);
-    }
-    let content = fs.readFileSync(resolved, "utf8");
     const totalLines = content.split("\n").length;
     if (args.offset !== undefined || args.limit !== undefined) {
       const lines = content.split("\n");
@@ -248,6 +269,14 @@ const writeFile = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
+    if (ctx.runtime) {
+      await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
+        path: args.path,
+        content: args.content,
+        overwrite: args.overwrite ?? false,
+      });
+      return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
+    }
     const resolved = resolveForWrite(ctx.workspace, args.path);
     if (fs.existsSync(resolved) && !args.overwrite) {
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
@@ -285,6 +314,15 @@ const applyPatch = defineTool({
     path: args.path,
   }),
   async run(args, ctx) {
+    if (ctx.runtime) {
+      const res = await callRuntime<{ path: string; editsApplied: number }>(
+        ctx.runtime,
+        "apply_patch",
+        ctx.workspace,
+        { path: args.path, edits: args.edits },
+      );
+      return { data: res };
+    }
     const resolved = resolveForWrite(ctx.workspace, args.path);
     // Editing implies reading current content back into hints: same read rules apply.
     resolveForRead(ctx.workspace, args.path);

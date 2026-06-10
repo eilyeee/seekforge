@@ -5,6 +5,7 @@ import { redactSecrets } from "../redact.js";
 import { resolveInsideWorkspace } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
 import { classifyCommand, normalizeCommand, runShellCommand } from "../run-command.js";
+import { callRuntime } from "../runtime-backend.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 const runCommandSchema = z.object({
@@ -37,6 +38,37 @@ const runCommand = defineTool({
     const cls = classifyCommand(args.command, ctx.policy.commandAllowlist);
     const cwd = resolveInsideWorkspace(ctx.workspace, args.cwd ?? ".");
     const timeoutMs = args.timeoutMs ?? cls.defaultTimeoutMs;
+
+    if (ctx.runtime) {
+      const r = await callRuntime<{
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+        durationMs: number;
+        timedOut: boolean;
+      }>(
+        ctx.runtime,
+        "run_command",
+        ctx.workspace,
+        { command: args.command, cwd: args.cwd ?? ".", timeoutMs },
+        { timeoutMs: timeoutMs + 30_000 }, // runtime enforces the command timeout itself
+      );
+      if (r.timedOut) {
+        throw new ToolError("timeout", `command timed out after ${timeoutMs}ms`, {
+          timeoutMs,
+          stdout: redactSecrets(r.stdout),
+          stderr: redactSecrets(r.stderr),
+        });
+      }
+      return {
+        data: {
+          exitCode: r.exitCode,
+          stdout: redactSecrets(r.stdout),
+          stderr: redactSecrets(r.stderr),
+          durationMs: r.durationMs,
+        },
+      };
+    }
 
     let res;
     try {
