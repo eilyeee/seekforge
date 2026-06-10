@@ -3,8 +3,6 @@
  *
  * Contract (see packages/shared/src/index.ts for the types):
  *   createDefaultDispatcher(): ToolDispatcher
- *
- * Implemented in the tools work stream; placeholder until merged.
  */
 
 import type {
@@ -14,6 +12,8 @@ import type {
   ToolDefinitionForModel,
   ToolResult,
 } from "@seekforge/shared";
+import { createDispatcher } from "./registry.js";
+import { builtinTools } from "./builtins/index.js";
 
 export type ToolContext = {
   sessionId: string;
@@ -33,5 +33,31 @@ export interface ToolDispatcher {
 }
 
 export function createDefaultDispatcher(): ToolDispatcher {
-  throw new Error("not implemented yet (tools work stream)");
+  return createDispatcher(builtinTools());
 }
+
+// Additional exports for tests / other modules.
+export { ToolError } from "./errors.js";
+export { createDispatcher, defineTool } from "./registry.js";
+export type { ClassifiedCall, ToolRunOutput, ToolSpec } from "./registry.js";
+export { enforcePermission } from "./permissions.js";
+export type { PermissionDecision, PermissionOutcome } from "./permissions.js";
+export {
+  DEFAULT_IGNORE_DIRS,
+  isSensitiveBasename,
+  resolveForRead,
+  resolveForWrite,
+  resolveInsideWorkspace,
+} from "./sandbox.js";
+export { redactSecrets } from "./redact.js";
+export {
+  BUILTIN_COMMAND_ALLOWLIST,
+  classifyCommand,
+  normalizeCommand,
+  runShellCommand,
+} from "./run-command.js";
+export { applyEdits, closestRegion } from "./edits.js";
+export type { SearchReplaceEdit } from "./edits.js";
+export { zodToJsonSchema } from "./json-schema.js";
+export { builtinTools } from "./builtins/index.js";
+export { truncateHeadTail } from "./text.js";
