@@ -40,12 +40,13 @@ export type ClientFrame =
       selectedHunks?: number[];
     }
   | { type: "question.answer"; id: string; answer: string }
-  | {
+  | ({
       /**
        * Loop mode: run the task, then `verifyCommand`; if it fails, keep fixing
        * and re-running until it passes — autonomously (the server forces
        * acceptEdits), within the iteration/budget limits. Streamed back as
-       * `loop.event` frames; the existing `cancel` frame stops it.
+       * `loop.event` frames; the existing `cancel` frame stops it. model/
+       * thinking/reasoningEffort overrides (from the run-toolbar) ride along.
        */
       type: "loop";
       task: string;
@@ -55,7 +56,7 @@ export type ClientFrame =
       /** Optional total USD budget; the loop stops once exceeded. */
       budget?: number;
       ws?: string;
-    }
+    } & RunOverrides)
   | { type: "cancel" };
 
 export type ServerFrame =

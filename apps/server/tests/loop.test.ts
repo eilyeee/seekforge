@@ -109,24 +109,52 @@ describe("loop -> loop.event -> idle", () => {
     });
   });
 
-  it("validates task and verifyCommand", async () => {
+  it("threads model/thinking overrides onto the agent options", async () => {
+    let seenAgent: { overrides?: unknown } | undefined;
+    const { server } = await boot({
+      runLoop: fakeLoopFactory(async (agentOpts, loopOpts) => {
+        seenAgent = agentOpts as { overrides?: unknown };
+        const result = loopResult();
+        loopOpts.onEvent?.({ type: "loop.done", result });
+        return result;
+      }),
+    });
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, {
+      type: "loop",
+      task: "go",
+      verifyCommand: "x",
+      model: "deepseek-v4-pro",
+      thinking: true,
+      reasoningEffort: "max",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seenAgent?.overrides).toEqual({ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" });
+  });
+
+  it("validates task, verifyCommand, and numeric limits", async () => {
     const { server } = await boot({ runLoop: unusedLoopFactory });
     const { ws, rx } = await open(server.port);
 
-    sendFrame(ws, { type: "loop", task: "", verifyCommand: "pnpm test" });
-    let err = await rx.waitFor((f) => f.type === "error");
-    expect(err.code).toBe("bad_frame");
+    const expectBadFrame = async (frame: unknown) => {
+      sendFrame(ws, frame);
+      const err = await rx.waitFor((f) => f.type === "error");
+      expect(err.code).toBe("bad_frame");
+    };
 
-    sendFrame(ws, { type: "loop", task: "go", verifyCommand: "" });
-    err = await rx.waitFor((f) => f.type === "error");
-    expect(err.code).toBe("bad_frame");
-
-    sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", maxIterations: "nope" });
-    err = await rx.waitFor((f) => f.type === "error");
-    expect(err.code).toBe("bad_frame");
+    await expectBadFrame({ type: "loop", task: "", verifyCommand: "pnpm test" });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "" });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: "nope" });
+    // Non-positive / non-integer limits are rejected at the protocol entry.
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 0 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: -3 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 1.5 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: 0 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: -1 });
 
     sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", ws: "unknown-ws" });
-    err = await rx.waitFor((f) => f.type === "error");
+    const err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("unknown_workspace");
   });
 });

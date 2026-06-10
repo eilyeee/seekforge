@@ -480,6 +480,8 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         ...(budget !== undefined ? { budget } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
+        // Per-loop model/thinking overrides from the run-toolbar, same as a run.
+        ...overridesOf(tab),
       });
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {

@@ -91,6 +91,19 @@ describe("runAutoLoop", () => {
     expect(events.filter((e) => e.type === "iteration.start")).toHaveLength(2);
   });
 
+  it("ignores invalid limits: maxIterations<=0 falls back to default, budget<=0 is no cap", async () => {
+    const { deps } = mkDeps();
+    // verify fails (pre-check + iter1), passes iter2. maxIterations:0 and
+    // budget:0 are invalid — they must NOT short-circuit to exhausted/budget.
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, failNTimes(2)),
+      maxIterations: 0,
+      costBudgetUsd: 0,
+    });
+    expect(result.status).toBe("passed");
+    expect(result.iterations).toBe(2);
+  });
+
   it("reuses ONE session across iterations (resumeSessionId)", async () => {
     const { deps, provider } = mkDeps();
     const result = await runAutoLoop(deps, baseOpts(workspace, failNTimes(3)));

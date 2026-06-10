@@ -183,6 +183,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     verifyCommand: string;
     maxIterations?: number;
     budget?: number;
+    overrides?: RunOverrides;
   }): Promise<void> => {
     running = true;
     controller = new AbortController();
@@ -192,6 +193,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           workspace: input.workspace,
           confirm,
           askUser,
+          // Per-loop model/thinking overrides (from the run-toolbar) win over
+          // config, just like a normal run.
+          ...(input.overrides ? { overrides: input.overrides } : {}),
           // Loop progress is reported via loop.event (the desktop Loop panel).
           // The inner runs' streaming text/structured events are NOT forwarded
           // as `event` frames — doing so would push partial, never-finalized
@@ -314,15 +318,23 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (typeof verifyCommand !== "string" || verifyCommand.length === 0) {
           return fail("bad_frame", "loop.verifyCommand must be a non-empty string");
         }
-        if (maxIterations !== undefined && typeof maxIterations !== "number") {
-          return fail("bad_frame", "loop.maxIterations must be a number when present");
+        if (
+          maxIterations !== undefined &&
+          (typeof maxIterations !== "number" || !Number.isInteger(maxIterations) || maxIterations <= 0)
+        ) {
+          return fail("bad_frame", "loop.maxIterations must be a positive integer when present");
         }
-        if (budget !== undefined && typeof budget !== "number") {
-          return fail("bad_frame", "loop.budget must be a number when present");
+        if (
+          budget !== undefined &&
+          (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)
+        ) {
+          return fail("bad_frame", "loop.budget must be a finite positive number when present");
         }
         if (wsId !== undefined && typeof wsId !== "string") {
           return fail("bad_frame", "loop.ws must be a string when present");
         }
+        const parsedOverrides = parseRunOverrides(frame);
+        if ("error" in parsedOverrides) return fail("bad_frame", `loop.${parsedOverrides.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         void loop({
@@ -331,6 +343,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           verifyCommand,
           ...(maxIterations !== undefined ? { maxIterations } : {}),
           ...(budget !== undefined ? { budget } : {}),
+          ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
         });
         return;
       }

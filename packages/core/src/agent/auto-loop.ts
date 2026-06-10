@@ -112,7 +112,16 @@ function defaultVerify(workspace: string, command: string): Promise<{ code: numb
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
   const emit = (event: LoopEvent): void => opts.onEvent?.(event);
   const verify = opts.verify ?? defaultVerify;
-  const maxIterations = opts.maxIterations ?? 8;
+  // Defensive: ignore non-positive / non-integer / non-finite limits (the WS
+  // entry validates too, but core may be called directly).
+  const maxIterations =
+    Number.isInteger(opts.maxIterations) && (opts.maxIterations as number) > 0
+      ? (opts.maxIterations as number)
+      : 8;
+  const costBudgetUsd =
+    typeof opts.costBudgetUsd === "number" && Number.isFinite(opts.costBudgetUsd) && opts.costBudgetUsd > 0
+      ? opts.costBudgetUsd
+      : undefined;
   const approvalMode: ApprovalMode = opts.approvalMode ?? "acceptEdits";
 
   const agent = createAgentCore({
@@ -215,7 +224,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     if (opts.signal?.aborted) {
       return done({ status: "cancelled", iterations: i, costUsd, sessionId, finalVerify: v });
     }
-    if (opts.costBudgetUsd !== undefined && costUsd >= opts.costBudgetUsd) {
+    if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
       return done({ status: "budget", iterations: i, costUsd, sessionId, finalVerify: v });
     }
     if (prevOutput !== null && v.output === prevOutput) {
