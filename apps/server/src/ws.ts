@@ -192,10 +192,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           workspace: input.workspace,
           confirm,
           askUser,
-          onModelDelta: (chunk) =>
-            send({ type: "event", sessionId: "", event: { type: "model.delta", chunk } }),
-          onReasoningDelta: (chunk) =>
-            send({ type: "event", sessionId: "", event: { type: "reasoning.delta", chunk } }),
+          // Loop progress is reported via loop.event (the desktop Loop panel).
+          // The inner runs' streaming text/structured events are NOT forwarded
+          // as `event` frames — doing so would push partial, never-finalized
+          // assistant bubbles into the chat transcript (the finalizing
+          // session/message events are consumed inside runAutoLoop).
           extractMemory: true,
         },
         {
