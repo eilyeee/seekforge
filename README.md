@@ -56,7 +56,7 @@ export DEEPSEEK_API_KEY=sk-...
 
 | Command | What it does |
 | --- | --- |
-| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model |
+| `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
 | `seekforge sessions` | list sessions with status and cost |
@@ -65,10 +65,14 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge skill list\|show <id>\|create <id>` | procedure skills (project > global > builtin) |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
-| `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin` |
+| `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist` (comma-separated prefixes) |
 
 `Ctrl+C` cancels a running session cooperatively (the trace is kept, so
 `seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
+`@path` tokens in a task inline that file's content (sensitive files excluded).
+The agent can also: publish a live plan checklist (`update_plan`), commit its
+work (`git_commit` — push stays impossible), and fetch public docs pages
+(`web_fetch` — every URL needs explicit confirmation; private addresses refused).
 
 ## How it works
 

@@ -34,6 +34,8 @@ export type AgentCoreDeps = {
   extractMemory?: boolean;
   /** Rust execution backend; passed through to tools via ToolContext. */
   runtime?: RuntimeClient;
+  /** Extra command prefixes the user allows to auto-run (L2). */
+  commandAllowlist?: string[];
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -135,7 +137,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       const ctx: ToolContext = {
         sessionId,
         workspace: input.projectPath,
-        policy: { approvalMode: input.approvalMode, mode: input.mode, commandAllowlist: [] },
+        policy: {
+          approvalMode: input.approvalMode,
+          mode: input.mode,
+          commandAllowlist: deps.commandAllowlist ?? [],
+        },
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,

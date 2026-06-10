@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadConfig } from "../config.js";
 
-const ALLOWED_KEYS = ["apiKey", "model", "baseUrl", "runtimeBin"] as const;
+const ALLOWED_KEYS = ["apiKey", "model", "baseUrl", "runtimeBin", "commandAllowlist"] as const;
 
 function configPath(global: boolean): string {
   const base = global ? homedir() : process.cwd();
@@ -36,7 +36,14 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
       console.error(`warning: ${path} contained invalid JSON, rewriting`);
     }
   }
-  current[key] = value;
+  // commandAllowlist is an array: accept comma-separated prefixes.
+  current[key] =
+    key === "commandAllowlist"
+      ? value
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : value;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
   console.log(`set ${key} in ${path}`);

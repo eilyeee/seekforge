@@ -49,6 +49,15 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       process.stdout.write(`${DIM}→ ${e.toolName} ${summarizeArgs(e.args)}${RESET}\n`);
       break;
     case "tool.completed": {
+      if (e.toolName === "update_plan" && e.result.ok) {
+        const items = (e.result.data as { items?: Array<{ step: string; status: string }> })?.items ?? [];
+        console.log(`${YELLOW}Plan${RESET}`);
+        for (const item of items) {
+          const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
+          console.log(`  ${box} ${item.step}`);
+        }
+        break;
+      }
       const mark = e.result.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
       const err = e.result.ok ? "" : ` ${RED}${e.result.error?.code}: ${e.result.error?.message}${RESET}`;
       console.log(`${mark} ${e.toolName}${err}`);

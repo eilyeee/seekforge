@@ -9,6 +9,7 @@ import {
 } from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
 import { loadConfig } from "../config.js";
+import { expandFileRefs } from "../file-refs.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
 
 export type RunOptions = {
@@ -16,6 +17,8 @@ export type RunOptions = {
   yes?: boolean;
   model?: string;
   resumeSessionId?: string;
+  /** Emit one JSON event per line instead of human-readable output. */
+  json?: boolean;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -73,7 +76,12 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     }
   }
 
-  const render = createRenderer({ streaming: true });
+  // JSON mode: machine-readable JSONL events, no streaming/colors, and no
+  // interactive prompts — anything that would ask is denied (pair with -y).
+  const json = opts.json ?? false;
+  const render = json
+    ? (e: unknown) => console.log(JSON.stringify(e))
+    : createRenderer({ streaming: true });
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
   const agent = createAgentCore({
     provider: createDeepSeekProvider({
@@ -82,17 +90,18 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       model,
     }),
     dispatcher: createDefaultDispatcher(),
-    confirm: confirmInTerminal,
-    onModelDelta: (chunk) => process.stdout.write(chunk),
+    confirm: json ? async () => false : confirmInTerminal,
+    onModelDelta: json ? undefined : (chunk) => process.stdout.write(chunk),
     extractMemory: mode === "edit",
     runtime,
+    commandAllowlist: config.commandAllowlist,
   });
 
   try {
     let failed = false;
     for await (const event of agent.runTask({
       projectPath,
-      task,
+      task: expandFileRefs(task, projectPath),
       mode,
       approvalMode,
       resumeSessionId: opts.resumeSessionId,

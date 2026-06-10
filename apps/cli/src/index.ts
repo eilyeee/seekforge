@@ -19,21 +19,23 @@ program
 
 program
   .command("run")
-  .argument("<task>", "development task to perform")
+  .argument("<task>", "development task to perform (@path tokens inline file contents)")
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
   .option("-m, --model <model>", "override model (deepseek-chat | deepseek-reasoner)")
+  .option("--json", "emit one JSON event per line (CI mode; prompts are denied, pair with -y)")
   .description("run a development task in the current project")
-  .action(async (task: string, opts: { yes?: boolean; model?: string }) => {
-    await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model });
+  .action(async (task: string, opts: { yes?: boolean; model?: string; json?: boolean }) => {
+    await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, json: opts.json });
   });
 
 program
   .command("ask")
-  .argument("<question>", "question about the current project")
+  .argument("<question>", "question about the current project (@path tokens inline file contents)")
   .option("-m, --model <model>", "override model")
+  .option("--json", "emit one JSON event per line (CI mode)")
   .description("read-only Q&A about the codebase (no writes, no commands)")
-  .action(async (question: string, opts: { model?: string }) => {
-    await runTaskCommand(question, { mode: "ask", model: opts.model });
+  .action(async (question: string, opts: { model?: string; json?: boolean }) => {
+    await runTaskCommand(question, { mode: "ask", model: opts.model, json: opts.json });
   });
 
 program
