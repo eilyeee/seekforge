@@ -12,6 +12,8 @@ import {
 } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../tools/index.js";
+import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
+import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
@@ -27,6 +29,8 @@ export type AgentCoreDeps = {
   contextWindowTokens?: number;
   /** When set, model output is streamed through this callback (chatStream). */
   onModelDelta?: (chunk: string) => void;
+  /** Post-task memory extraction (one extra model call) for edit sessions. */
+  extractMemory?: boolean;
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -94,10 +98,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         messages.push(continuation);
         trace.message(continuation);
       } else {
+        const memoryBrief = buildMemoryBrief(input.projectPath, input.task);
+        const skillSelections = selectSkills(input.task, loadSkills(input.projectPath), {
+          workspace: input.projectPath,
+        });
+        if (skillSelections.length > 0) {
+          logSkillUsage(input.projectPath, sessionId, skillSelections);
+          yield emit({
+            type: "step.started",
+            title: `skills: ${skillSelections.map((s) => s.skill.id).join(", ")}`,
+          });
+        }
         const systemPrompt = buildSystemPrompt({
           workspace: input.projectPath,
           mode: input.mode,
           projectRules: readProjectRules(input.projectPath),
+          memoryBrief,
+          skillBrief: buildSkillBrief(skillSelections),
         });
         messages = [
           { role: "system", content: systemPrompt },
@@ -225,6 +242,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           updatedAt: new Date().toISOString(),
           usage,
         });
+
+        if (deps.extractMemory && input.mode === "edit") {
+          yield emit({ type: "step.started", title: "extracting memory" });
+          try {
+            await extractMemoryFromSession(deps.provider, {
+              workspace: input.projectPath,
+              sessionId,
+              task: input.task,
+              report,
+              messages,
+            });
+            yield emit({ type: "step.completed", title: "extracting memory" });
+          } catch {
+            // memory extraction must never fail the session
+          }
+        }
+
         yield emit({ type: "session.completed", report });
       } catch (err) {
         const e = err as Partial<AgentLimitError> & Error;
