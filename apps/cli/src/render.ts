@@ -35,6 +35,9 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
     case "session.created":
       console.log(`${DIM}session ${e.sessionId}${RESET}`);
       break;
+    case "step.started":
+      console.log(`${DIM}· ${e.title}${RESET}`);
+      break;
     case "model.message":
       if (opts.streaming) {
         console.log(""); // content already streamed; close the line
