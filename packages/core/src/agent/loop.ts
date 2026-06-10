@@ -11,6 +11,7 @@ import {
   type ToolResult,
 } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
+import type { RuntimeClient } from "../runtime/index.js";
 import type { ToolContext, ToolDispatcher } from "../tools/index.js";
 import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
@@ -31,6 +32,8 @@ export type AgentCoreDeps = {
   onModelDelta?: (chunk: string) => void;
   /** Post-task memory extraction (one extra model call) for edit sessions. */
   extractMemory?: boolean;
+  /** Rust execution backend; passed through to tools via ToolContext. */
+  runtime?: RuntimeClient;
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -135,6 +138,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         policy: { approvalMode: input.approvalMode, mode: input.mode, commandAllowlist: [] },
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
+        runtime: deps.runtime,
       };
 
       const toolDefs = deps.dispatcher.list();
