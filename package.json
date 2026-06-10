@@ -1,33 +1,14 @@
 {
-  "name": "seekforge",
-  "version": "0.0.1",
-  "description": "A local-first coding agent powered by DeepSeek. (placeholder release, under development)",
-  "license": "MIT",
-  "author": "eilyeee",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/eilyeee/seekforge.git"
-  },
-  "homepage": "https://github.com/eilyeee/seekforge#readme",
-  "keywords": [
-    "coding-agent",
-    "agent",
-    "deepseek",
-    "cli",
-    "ai"
-  ],
-  "bin": {
-    "seekforge": "bin/seekforge.js"
-  },
-  "files": [
-    "bin",
-    "README.md",
-    "LICENSE"
-  ],
+  "name": "seekforge-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.16.1",
   "engines": {
     "node": ">=20"
   },
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
   }
 }
