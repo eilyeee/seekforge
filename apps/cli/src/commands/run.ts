@@ -22,6 +22,18 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
 
+  const model = opts.model ?? config.model;
+  if (model === "deepseek-reasoner") {
+    // reasoner has no function calling; the fallback text protocol is not
+    // wired into the loop yet (planned). Refuse instead of failing midway.
+    console.error(
+      "deepseek-reasoner does not support tool calling and is not usable as the agent model yet. " +
+        "Use deepseek-chat (default).",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   if (!config.apiKey) {
     console.error(
       "No DeepSeek API key found. Set DEEPSEEK_API_KEY, or put {\"apiKey\": \"...\"} in " +
@@ -67,7 +79,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     provider: createDeepSeekProvider({
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
-      model: opts.model ?? config.model,
+      model,
     }),
     dispatcher: createDefaultDispatcher(),
     confirm: confirmInTerminal,
