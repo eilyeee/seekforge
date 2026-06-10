@@ -14,7 +14,7 @@ import type { ChatProvider } from "../provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../tools/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
-import { createSessionTrace, newSessionId } from "./trace.js";
+import { createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
 export type AgentCoreDeps = {
@@ -25,6 +25,8 @@ export type AgentCoreDeps = {
   limits?: Partial<AgentLimits>;
   /** Model context window in tokens. DeepSeek: 128K. */
   contextWindowTokens?: number;
+  /** When set, model output is streamed through this callback (chatStream). */
+  onModelDelta?: (chunk: string) => void;
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -66,7 +68,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
   return {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
-      const sessionId = newSessionId();
+      const resuming = input.resumeSessionId !== undefined;
+      const sessionId = input.resumeSessionId ?? newSessionId();
       const trace = createSessionTrace(input.projectPath, sessionId);
       const emit = (e: AgentEvent): AgentEvent => {
         trace.event(e);
@@ -75,17 +78,39 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
       yield emit({ type: "session.created", sessionId });
 
-      const systemPrompt = buildSystemPrompt({
-        workspace: input.projectPath,
+      const startedAt = new Date().toISOString();
+      const meta = {
+        id: sessionId,
+        task: input.task,
         mode: input.mode,
-        projectRules: readProjectRules(input.projectPath),
-      });
+        createdAt: startedAt,
+      };
+      writeSessionMeta(input.projectPath, { ...meta, status: "running", updatedAt: startedAt });
 
-      let messages: ChatMessage[] = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: input.task },
-      ];
-      for (const m of messages) trace.message(m);
+      let messages: ChatMessage[];
+      if (resuming) {
+        messages = loadSessionMessages(input.projectPath, sessionId);
+        const continuation: ChatMessage = { role: "user", content: input.task };
+        messages.push(continuation);
+        trace.message(continuation);
+      } else {
+        const systemPrompt = buildSystemPrompt({
+          workspace: input.projectPath,
+          mode: input.mode,
+          projectRules: readProjectRules(input.projectPath),
+        });
+        messages = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: input.task },
+        ];
+        for (const m of messages) trace.message(m);
+      }
+
+      const throwIfCancelled = () => {
+        if (input.signal?.aborted) {
+          throw new AgentLimitError("cancelled", "cancelled by user");
+        }
+      };
 
       const ctx: ToolContext = {
         sessionId,
@@ -104,6 +129,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
       try {
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
+          throwIfCancelled();
           const compacted = compactMessages(messages, budgetTokens);
           if (compacted) {
             messages = compacted.messages;
@@ -114,7 +140,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             });
           }
 
-          const res = await deps.provider.chat({ messages, tools: toolDefs });
+          const res = deps.onModelDelta
+            ? await deps.provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta)
+            : await deps.provider.chat({ messages, tools: toolDefs });
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
 
@@ -122,6 +150,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
           if (res.toolCalls.length === 0) {
             finalContent = res.content;
+            // Trace the final assistant message so session resume replays it.
+            trace.message({ role: "assistant", content: res.content });
             break;
           }
 
@@ -134,6 +164,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           trace.message(assistantMsg);
 
           for (const tc of res.toolCalls) {
+            throwIfCancelled();
             toolCallCount++;
             if (toolCallCount > limits.maxToolCalls) {
               throw new AgentLimitError("max_tool_calls_exceeded", `exceeded ${limits.maxToolCalls} tool calls`);
@@ -188,12 +219,25 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           usage,
         };
         trace.summary(finalContent);
+        writeSessionMeta(input.projectPath, {
+          ...meta,
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+          usage,
+        });
         yield emit({ type: "session.completed", report });
       } catch (err) {
         const e = err as Partial<AgentLimitError> & Error;
+        const code = e.code ?? "agent_error";
+        writeSessionMeta(input.projectPath, {
+          ...meta,
+          status: code === "cancelled" ? "cancelled" : "failed",
+          updatedAt: new Date().toISOString(),
+          usage,
+        });
         yield emit({
           type: "session.failed",
-          error: { code: e.code ?? "agent_error", message: e.message ?? String(err) },
+          error: { code, message: e.message ?? String(err) },
         });
       }
     },
