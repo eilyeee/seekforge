@@ -10,9 +10,9 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { readSessionMeta } from "@seekforge/core";
+import { readSessionMeta, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
-import type { CreateAgentFn, RunOverrides } from "./agent.js";
+import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
@@ -28,12 +28,14 @@ type ServerFrame =
   | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent | ReasoningDeltaEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
   | { type: "question.request"; id: string; question: string; options: string[] }
+  | { type: "loop.event"; event: LoopEvent }
   | { type: "error"; code: string; message: string }
   | { type: "idle" };
 
 export type ConnectionDeps = {
   registry: WorkspaceRegistry;
   createAgent: CreateAgentFn;
+  runLoop: RunLoopFn;
   permissionTimeoutMs?: number;
 };
 
@@ -175,6 +177,48 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
+  const loop = async (input: {
+    workspace: string;
+    task: string;
+    verifyCommand: string;
+    maxIterations?: number;
+    budget?: number;
+  }): Promise<void> => {
+    running = true;
+    controller = new AbortController();
+    try {
+      await deps.runLoop(
+        {
+          workspace: input.workspace,
+          confirm,
+          askUser,
+          onModelDelta: (chunk) =>
+            send({ type: "event", sessionId: "", event: { type: "model.delta", chunk } }),
+          onReasoningDelta: (chunk) =>
+            send({ type: "event", sessionId: "", event: { type: "reasoning.delta", chunk } }),
+          extractMemory: true,
+        },
+        {
+          workspace: input.workspace,
+          task: input.task,
+          verifyCommand: input.verifyCommand,
+          ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+          ...(input.budget !== undefined ? { costBudgetUsd: input.budget } : {}),
+          approvalMode: "acceptEdits",
+          signal: controller.signal,
+          onEvent: (event) => send({ type: "loop.event", event }),
+        },
+      );
+    } catch (err) {
+      fail("loop_error", err instanceof Error ? err.message : String(err));
+    } finally {
+      running = false;
+      controller = undefined;
+      denyAllPending();
+      if (!closed) send({ type: "idle" });
+    }
+  };
+
   ws.on("message", (data: RawData) => {
     let frame: Record<string, unknown>;
     try {
@@ -256,6 +300,36 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           resumeSessionId: sessionId,
           workspace: workspace.path,
           ...parsed,
+        });
+        return;
+      }
+
+      case "loop": {
+        if (running) return fail("busy", "a session is already running on this connection");
+        const { task, verifyCommand, maxIterations, budget, ws: wsId } = frame;
+        if (typeof task !== "string" || task.length === 0) {
+          return fail("bad_frame", "loop.task must be a non-empty string");
+        }
+        if (typeof verifyCommand !== "string" || verifyCommand.length === 0) {
+          return fail("bad_frame", "loop.verifyCommand must be a non-empty string");
+        }
+        if (maxIterations !== undefined && typeof maxIterations !== "number") {
+          return fail("bad_frame", "loop.maxIterations must be a number when present");
+        }
+        if (budget !== undefined && typeof budget !== "number") {
+          return fail("bad_frame", "loop.budget must be a number when present");
+        }
+        if (wsId !== undefined && typeof wsId !== "string") {
+          return fail("bad_frame", "loop.ws must be a string when present");
+        }
+        const workspace = deps.registry.resolve(wsId);
+        if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
+        void loop({
+          workspace: workspace.path,
+          task,
+          verifyCommand,
+          ...(maxIterations !== undefined ? { maxIterations } : {}),
+          ...(budget !== undefined ? { budget } : {}),
         });
         return;
       }

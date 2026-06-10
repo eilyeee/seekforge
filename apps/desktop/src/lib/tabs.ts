@@ -6,6 +6,7 @@
  */
 import type { PermissionRequest } from "@seekforge/shared";
 import { initialChatState, reduceEvent, type ChatState } from "./events";
+import { emptyLoopProgress, reduceLoopEvent, type LoopProgress } from "./loop";
 import type { ConnState, ServerFrame } from "./ws-types";
 
 /** Mode selector for the NEXT start frame ("plan" = ask mode + plan flag). */
@@ -72,6 +73,11 @@ export type ChatTab = {
   thinking: boolean | null;
   /** Reasoning effort; only sent while thinking is explicitly on. */
   reasoningEffort: "high" | "max";
+  /**
+   * Loop-mode progress for this tab: the streamed loop.event feed + the final
+   * result. Reset when a new loop starts or the session is reset.
+   */
+  loop: LoopProgress;
 };
 
 export type TabsState = {
@@ -108,6 +114,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     model: "",
     thinking: null,
     reasoningEffort: "high",
+    loop: emptyLoopProgress(),
   };
 }
 
@@ -202,6 +209,11 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
       return updateTab(state, tabId, {
         pendingQuestion: { id: frame.id, question: frame.question, options: frame.options },
       });
+
+    case "loop.event":
+      return updateTab(state, tabId, (tab) => ({
+        loop: reduceLoopEvent(tab.loop, frame.event),
+      }));
 
     case "error":
       return updateTab(state, tabId, (tab) => ({

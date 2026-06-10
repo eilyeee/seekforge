@@ -192,6 +192,58 @@ describe("store: respondPermission with selectedHunks", () => {
   });
 });
 
-// Reference lastHandlers so unused-var lint stays quiet; the handler hook is
-// exercised indirectly when a real frame round-trip test is added later.
-void lastHandlers;
+describe("store: loop mode", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.getState().connect();
+  });
+
+  it("startLoop sends a loop frame, marks running, and clears prior progress", () => {
+    useStore.getState().startLoop({ task: "fix it", verifyCommand: "pnpm test", maxIterations: 5, budget: 1.5 });
+    const loop = sent.find((f) => f.type === "loop");
+    expect(loop).toMatchObject({
+      type: "loop",
+      task: "fix it",
+      verifyCommand: "pnpm test",
+      maxIterations: 5,
+      budget: 1.5,
+    });
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(true);
+    expect(tab.loop.events).toEqual([]);
+    expect(tab.loop.result).toBeNull();
+  });
+
+  it("omits maxIterations/budget when not provided", () => {
+    useStore.getState().startLoop({ task: "t", verifyCommand: "v" });
+    const loop = sent.find((f) => f.type === "loop") as Record<string, unknown>;
+    expect(loop.maxIterations).toBeUndefined();
+    expect(loop.budget).toBeUndefined();
+  });
+
+  it("ignores startLoop with empty task or verify command", () => {
+    useStore.getState().startLoop({ task: "   ", verifyCommand: "pnpm test" });
+    useStore.getState().startLoop({ task: "fix", verifyCommand: "" });
+    expect(sent.find((f) => f.type === "loop")).toBeUndefined();
+  });
+
+  it("routes loop.event frames into the active tab's progress", () => {
+    useStore.getState().startLoop({ task: "fix", verifyCommand: "pnpm test" });
+    lastHandlers!.onFrame({ type: "loop.event", event: { type: "iteration.start", iteration: 1 } });
+    lastHandlers!.onFrame({ type: "loop.event", event: { type: "run.completed", iteration: 1, costUsd: 0.01 } });
+    lastHandlers!.onFrame({
+      type: "loop.event",
+      event: { type: "verify", iteration: 1, code: 0, passed: true, output: "ok" },
+    });
+    lastHandlers!.onFrame({
+      type: "loop.event",
+      event: {
+        type: "loop.done",
+        result: { status: "passed", iterations: 1, costUsd: 0.01, sessionId: "s", finalVerify: { code: 0, output: "ok" } },
+      },
+    });
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.loop.events).toHaveLength(4);
+    expect(tab.loop.result?.status).toBe("passed");
+  });
+});

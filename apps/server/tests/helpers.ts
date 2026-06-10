@@ -4,7 +4,8 @@ import { dirname, join } from "node:path";
 import WebSocket from "ws";
 import type { AgentEvent } from "@seekforge/shared";
 import type { RunAgentTaskInput } from "@seekforge/core";
-import type { CreateAgentFn, CreateAgentOptions } from "../src/index.js";
+import type { LoopOptions, LoopResult } from "@seekforge/core";
+import type { CreateAgentFn, CreateAgentOptions, RunLoopFn } from "../src/index.js";
 
 /** Creates a throwaway workspace directory (vitest cleans tmpdir lazily). */
 export function makeWorkspace(): string {
@@ -34,6 +35,18 @@ export function fakeAgentFactory(run: FakeRun): CreateAgentFn {
 export const unusedAgentFactory: CreateAgentFn = () => {
   throw new Error("createAgent must not be called in this test");
 };
+
+/** A fake loop runner for tests that never start a loop. */
+export const unusedLoopFactory: RunLoopFn = () => {
+  throw new Error("runLoop must not be called in this test");
+};
+
+export type FakeLoop = (opts: CreateAgentOptions, loopOpts: LoopOptions) => Promise<LoopResult>;
+
+/** Builds a RunLoopFn from a scripted async loop body. */
+export function fakeLoopFactory(loop: FakeLoop): RunLoopFn {
+  return loop;
+}
 
 /**
  * Fake factory that records every runTask input into `inputs` and finishes

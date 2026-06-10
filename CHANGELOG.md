@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### round 50: loop engineering — desktop loop panel
+- **Loop mode in the chat.** A collapsible Loop panel at the top of the chat
+  window: an explanation line, task + verify-command inputs, max-iterations +
+  budget, and Run/Stop. Progress streams live (per-iteration run cost + verify
+  pass/fail + output tail; a status summary on completion).
+- **Server WS:** new `{type:"loop", task, verifyCommand, maxIterations?, budget?,
+  ws?}` client frame runs `runAutoLoop` (acceptEdits) and streams
+  `{type:"loop.event", event}` back, ending with `idle`; `cancel` aborts.
+  Permission/question prompts during the loop's runs use the existing modals.
+  `createDefaultAgent` factored into `buildAgentDeps` + `runDefaultLoop` (a
+  testable `RunLoopFn`). Built by two parallel agents (server / desktop) against
+  a fixed WS contract; SERVER-API.md updated.
+- Verified: typecheck clean; server 184 (+4) / desktop 261 (+12) tests; build clean.
+
 ### round 49: loop engineering (auto-loop) — core + CLI
 - **Autonomous run → verify → continue.** New core `runAutoLoop` (`@seekforge/core`)
   drives one task to "green" across multiple runs: it runs the agent, runs a

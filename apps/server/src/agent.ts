@@ -13,7 +13,11 @@ import {
   createDefaultDispatcher,
   createRetryBus,
   createRuntimeClient,
+  runAutoLoop,
   type AgentCore,
+  type AgentCoreDeps,
+  type LoopOptions,
+  type LoopResult,
   type RuntimeClient,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
@@ -51,7 +55,20 @@ export type AgentHandle = {
 
 export type CreateAgentFn = (opts: CreateAgentOptions) => AgentHandle;
 
-export const createDefaultAgent: CreateAgentFn = (opts) => {
+/**
+ * Runs the core auto-loop for a connection-scoped agent assembly. The same
+ * confirm/askUser/onModelDelta plumbing as a normal run is reused, so the
+ * loop's inner runs emit permission.request/question.request/event frames.
+ */
+export type RunLoopFn = (opts: CreateAgentOptions, loopOpts: LoopOptions) => Promise<LoopResult>;
+
+/**
+ * Assembles the connection-scoped AgentCoreDeps from a config + the WS-tied
+ * confirm/askUser/onModelDelta bridges. Shared by createDefaultAgent (which
+ * feeds it to createAgentCore) and runDefaultLoop (which feeds it to
+ * runAutoLoop) so a loop's inner runs use the exact same plumbing as a run.
+ */
+export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runtime?: RuntimeClient } {
   const config = loadConfig(opts.workspace);
 
   let runtime: RuntimeClient | undefined;
@@ -78,7 +95,7 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
     onRetry: retryBus.onRetry,
     ...thinkingOpts,
   });
-  const agent = createAgentCore({
+  return {
     provider,
     retryBus,
     // Same key/endpoint, different model — used for plan runs + failure
@@ -111,7 +128,21 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),
-  });
+  };
+}
 
-  return { agent, dispose: () => runtime?.dispose() };
+export const createDefaultAgent: CreateAgentFn = (opts) => {
+  const deps = buildAgentDeps(opts);
+  const agent = createAgentCore(deps);
+  return { agent, dispose: () => deps.runtime?.dispose() };
+};
+
+/**
+ * Drives the core auto-loop for one task using the connection-scoped deps.
+ * The loop internally builds the agent via createAgentCore(deps), so its
+ * runs share this socket's confirm/askUser/onModelDelta bridges.
+ */
+export const runDefaultLoop: RunLoopFn = (opts, loopOpts) => {
+  const deps = buildAgentDeps(opts);
+  return runAutoLoop(deps, loopOpts).finally(() => deps.runtime?.dispose());
 };

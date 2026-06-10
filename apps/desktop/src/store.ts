@@ -4,6 +4,7 @@ import { api, ApiError, setTokenProvider, setWorkspaceProvider } from "./lib/api
 import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
 import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./lib/frames";
+import { emptyLoopProgress } from "./lib/loop";
 import { messagesToItems } from "./lib/messages";
 import { notify, requestNotifyPermission } from "./lib/notify";
 import { needsOnboarding } from "./lib/onboarding";
@@ -170,6 +171,12 @@ type AppStore = {
    */
   truncateAtItem: (itemId: number) => void;
   sendTask: (task: string) => void;
+  /**
+   * Starts loop mode on the active tab: sends a `loop` frame on the tab's WS,
+   * marks the tab running, and resets the tab's loop progress. The server runs
+   * the task→verify→fix cycle autonomously and streams `loop.event` frames.
+   */
+  startLoop: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
   executePlan: () => void;
   cancel: () => void;
   newSession: () => void;
@@ -461,6 +468,30 @@ export const useStore = create<AppStore>()((set, get) => {
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
     },
 
+    startLoop: ({ task, verifyCommand, maxIterations, budget }) => {
+      const tab = activeTab(get().tabs);
+      if (tab.chat.running || task.trim() === "" || verifyCommand.trim() === "") return;
+      const client = ensureWs(tab.tabId);
+      requestNotifyPermission();
+      client.send({
+        type: "loop",
+        task,
+        verifyCommand,
+        ...(maxIterations !== undefined ? { maxIterations } : {}),
+        ...(budget !== undefined ? { budget } : {}),
+        ...(tab.ws ? { ws: tab.ws } : {}),
+      });
+      set((s) => ({
+        tabs: updateTab(s.tabs, tab.tabId, {
+          // Mark running so every Run control (chat + loop) is disabled, and
+          // clear any prior loop feed so the panel starts fresh.
+          chat: { ...tab.chat, running: true },
+          loop: emptyLoopProgress(),
+          wsError: null,
+        }),
+      }));
+    },
+
     executePlan: () => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || !tab.chat.sessionId || !tab.planReady) return;
@@ -490,6 +521,7 @@ export const useStore = create<AppStore>()((set, get) => {
           wsError: null,
           planPending: false,
           planReady: false,
+          loop: emptyLoopProgress(),
         }),
       }));
     },

@@ -298,6 +298,38 @@ export type SlashCommand = {
 /** GET /api/commands response. */
 export type CommandsResponse = { commands: SlashCommand[] };
 
+/**
+ * Loop-mode result status (server LoopResult.status). Mirrors the server
+ * contract; not exported by @seekforge/shared.
+ * - passed: the verify command exited 0.
+ * - exhausted: maxIterations reached without passing.
+ * - no_progress: the agent stopped making changes / verify stayed failing.
+ * - budget: the USD budget was exceeded.
+ * - cancelled: the user stopped the loop (cancel frame / closed socket).
+ * - verify_error: the verify command itself could not be run.
+ */
+export type LoopStatus = "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error";
+
+/** Final summary of a loop run (server LoopResult). */
+export type LoopResult = {
+  status: LoopStatus;
+  /** Iterations actually run. */
+  iterations: number;
+  /** Total cost across all iterations. */
+  costUsd: number;
+  /** Session id of the underlying agent run. */
+  sessionId: string;
+  /** Output + exit code of the last verify command. */
+  finalVerify: { code: number; output: string };
+};
+
+/** A single streamed loop event (server LoopEvent). */
+export type LoopEvent =
+  | { type: "iteration.start"; iteration: number }
+  | { type: "run.completed"; iteration: number; costUsd: number }
+  | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
+  | { type: "loop.done"; result: LoopResult };
+
 /** GET /api/models entry (mirror of core MODEL_PRICING with metadata). */
 export type ModelInfo = {
   id: string;

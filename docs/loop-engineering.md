@@ -74,9 +74,21 @@ A `verify_error` is returned when the verify command can't be run at all.
 ~4 KB tail of stdout+stderr. On failure that tail is fed back into the next run's
 prompt ("`<verifyCommand>` still fails: …, fix the root cause").
 
+## Desktop
+
+A collapsible **Loop panel** at the top of the chat window (`LoopPanel`):
+explanation line, task + verify-command inputs, max-iterations + budget, and a
+Run/Stop button. Progress streams live (one row per iteration: run cost + verify
+pass/fail + output tail; a status summary on `loop.done`).
+
+Wire: a `loop` WS client frame `{type:"loop", task, verifyCommand, maxIterations?,
+budget?, ws?}`; the server runs `runAutoLoop` (acceptEdits) and streams
+`{type:"loop.event", event}` back, ending with `idle`. `cancel` stops it.
+Permission/question prompts during the loop's runs use the existing modals.
+
 ## Relation to existing features
 
 Reuses `runTask` + session resume, the sandbox/permission model, and
 `escalateOnFailure` (hand failing runs to `planModel`). Distinct from **Evolution**
 (which proposes rule/skill changes for a human to accept) — auto-loop just drives
-one task to green. Not yet surfaced in the TUI/desktop (CLI + core first).
+one task to green. Surfaced in CLI + desktop; TUI deferred.

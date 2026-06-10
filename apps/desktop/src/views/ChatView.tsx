@@ -6,6 +6,7 @@ import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
 import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
+import { LoopPanel } from "../components/chat/LoopPanel";
 import { ModelBar } from "../components/chat/ModelBar";
 import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
@@ -32,7 +33,7 @@ export function ChatView() {
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
-  const { setModel, setThinking, setReasoningEffort, truncateAtItem } = useStore.getState();
+  const { setModel, setThinking, setReasoningEffort, truncateAtItem, startLoop } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -296,6 +297,8 @@ export function ChatView() {
           </Button>
         </div>
       </header>
+
+      <LoopPanel progress={tab.loop} running={tab.chat.running} onRun={startLoop} onStop={cancel} />
 
       <div
         ref={scrollRef}

@@ -1,6 +1,7 @@
 /** WS frame types per SERVER-API.md (the binding contract). */
 import type { PermissionRequest } from "@seekforge/shared";
 import type { StreamEvent } from "./events";
+import type { LoopEvent } from "../types";
 
 /** Per-run model/thinking overrides (win over server config for that run only). */
 export type RunOverrides = {
@@ -39,12 +40,29 @@ export type ClientFrame =
       selectedHunks?: number[];
     }
   | { type: "question.answer"; id: string; answer: string }
+  | {
+      /**
+       * Loop mode: run the task, then `verifyCommand`; if it fails, keep fixing
+       * and re-running until it passes — autonomously (the server forces
+       * acceptEdits), within the iteration/budget limits. Streamed back as
+       * `loop.event` frames; the existing `cancel` frame stops it.
+       */
+      type: "loop";
+      task: string;
+      verifyCommand: string;
+      /** Hard cap on run→verify cycles (server default when omitted). */
+      maxIterations?: number;
+      /** Optional total USD budget; the loop stops once exceeded. */
+      budget?: number;
+      ws?: string;
+    }
   | { type: "cancel" };
 
 export type ServerFrame =
   | { type: "event"; sessionId: string; event: StreamEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
   | { type: "question.request"; id: string; question: string; options: string[] }
+  | { type: "loop.event"; event: LoopEvent }
   | { type: "error"; code: string; message: string }
   | { type: "idle" };
 

@@ -1,0 +1,117 @@
+/**
+ * Pure helpers for loop mode: per-tab progress reduction and view-model
+ * formatting for the LoopPanel. No DOM, no sockets, no i18n — unit-tested in
+ * loop.test.ts. The panel renders straight from these so the component stays a
+ * thin shell.
+ */
+import type { LoopEvent, LoopResult, LoopStatus } from "../types";
+
+/** Per-tab loop progress: the streamed events plus the final result (once done). */
+export type LoopProgress = {
+  /** Every loop.event received, in arrival order (the live feed). */
+  events: LoopEvent[];
+  /** Set once a loop.done event arrives; null while running / before any loop. */
+  result: LoopResult | null;
+};
+
+export function emptyLoopProgress(): LoopProgress {
+  return { events: [], result: null };
+}
+
+/**
+ * Folds one loop event into the tab's progress. `loop.done` also stashes the
+ * final result; every event is appended to the feed.
+ */
+export function reduceLoopEvent(progress: LoopProgress, event: LoopEvent): LoopProgress {
+  return {
+    events: [...progress.events, event],
+    result: event.type === "loop.done" ? event.result : progress.result,
+  };
+}
+
+/** Tone for a finished loop: only a clean pass is "ok"; everything else warns/danger. */
+export type LoopTone = "ok" | "warn" | "danger";
+
+export function loopStatusTone(status: LoopStatus): LoopTone {
+  switch (status) {
+    case "passed":
+      return "ok";
+    case "cancelled":
+      return "warn";
+    default:
+      // exhausted / no_progress / budget / verify_error all failed to pass.
+      return "danger";
+  }
+}
+
+/** Cost formatted as USD with 4 decimals (matches the chat usage footer style). */
+export function formatCost(costUsd: number): string {
+  return `$${costUsd.toFixed(4)}`;
+}
+
+/** Last non-empty line of a command's output, trimmed — a compact "tail". */
+function lastLine(output: string): string {
+  const lines = output.split("\n").map((l) => l.trimEnd());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trim() !== "") return lines[i]!;
+  }
+  return "";
+}
+
+/** Truncate a single line to `max` chars with an ellipsis. */
+function clip(text: string, max = 120): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/** A short tail of command output for the progress list (last line, clipped). */
+export function outputTail(output: string, max = 120): string {
+  return clip(lastLine(output), max);
+}
+
+/**
+ * Flattens the event feed into renderable rows: one row per iteration that
+ * collects its run cost (if any) and verify outcome (if any). Events for the
+ * same iteration merge; the rows stay ordered by first-seen iteration.
+ */
+export type LoopRow = {
+  iteration: number;
+  /** Run cost once run.completed arrived for this iteration. */
+  costUsd: number | null;
+  /** Verify outcome once a verify event arrived for this iteration. */
+  verify: { code: number; passed: boolean; tail: string } | null;
+};
+
+export function loopRows(events: LoopEvent[]): LoopRow[] {
+  const order: number[] = [];
+  const byIter = new Map<number, LoopRow>();
+  const ensure = (iteration: number): LoopRow => {
+    let row = byIter.get(iteration);
+    if (!row) {
+      row = { iteration, costUsd: null, verify: null };
+      byIter.set(iteration, row);
+      order.push(iteration);
+    }
+    return row;
+  };
+  for (const event of events) {
+    switch (event.type) {
+      case "iteration.start":
+        ensure(event.iteration);
+        break;
+      case "run.completed":
+        ensure(event.iteration).costUsd = event.costUsd;
+        break;
+      case "verify":
+        ensure(event.iteration).verify = {
+          code: event.code,
+          passed: event.passed,
+          tail: outputTail(event.output),
+        };
+        break;
+      case "loop.done":
+        // Summary is rendered separately from the per-iteration rows.
+        break;
+    }
+  }
+  return order.map((i) => byIter.get(i)!);
+}

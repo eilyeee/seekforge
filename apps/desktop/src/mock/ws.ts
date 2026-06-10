@@ -5,6 +5,7 @@
  */
 import type { ClientFrame, ServerFrame, WsClientHandlers, WsClient } from "../lib/ws-types";
 import type { StreamEvent } from "../lib/events";
+import type { LoopEvent } from "../types";
 
 const FINAL_TEXT =
   "Done. I added the `--json` flag to the run command and verified it:\n\n" +
@@ -226,9 +227,77 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
     }
   }
 
+  /**
+   * Loop mode: a scripted two-iteration run→verify→fix→pass cycle. Emits a
+   * couple of loop.event frames (fail then pass) so the LoopPanel and its
+   * progress reduction are exercisable without the real server.
+   */
+  async function runLoop(verifyCommand: string): Promise<void> {
+    running = true;
+    cancelled = false;
+    const loop = (event: LoopEvent) => emit({ type: "loop.event", event });
+    const out = (passed: boolean) =>
+      passed ? `> ${verifyCommand}\nTest Files  1 passed (1)` : `> ${verifyCommand}\nTest Files  1 failed (1)`;
+    try {
+      sessionId = `s-mock-loop-${++sessionCounter}`;
+      ev({ type: "session.created", sessionId });
+
+      // Iteration 1: run, then verify fails.
+      loop({ type: "iteration.start", iteration: 1 });
+      if (!(await stepLoop(400))) return;
+      loop({ type: "run.completed", iteration: 1, costUsd: 0.0042 });
+      if (!(await stepLoop(300))) return;
+      loop({ type: "verify", iteration: 1, code: 1, passed: false, output: out(false) });
+      if (!(await stepLoop(400))) return;
+
+      // Iteration 2: run again, then verify passes.
+      loop({ type: "iteration.start", iteration: 2 });
+      if (!(await stepLoop(400))) return;
+      loop({ type: "run.completed", iteration: 2, costUsd: 0.0051 });
+      if (!(await stepLoop(300))) return;
+      loop({ type: "verify", iteration: 2, code: 0, passed: true, output: out(true) });
+
+      loop({
+        type: "loop.done",
+        result: {
+          status: "passed",
+          iterations: 2,
+          costUsd: 0.0093,
+          sessionId,
+          finalVerify: { code: 0, output: out(true) },
+        },
+      });
+      emit({ type: "idle" });
+    } finally {
+      if (cancelled) {
+        loop({
+          type: "loop.done",
+          result: {
+            status: "cancelled",
+            iterations: 1,
+            costUsd: 0.0042,
+            sessionId,
+            finalVerify: { code: 1, output: out(false) },
+          },
+        });
+        emit({ type: "idle" });
+      }
+      running = false;
+    }
+  }
+
+  async function stepLoop(ms: number): Promise<boolean> {
+    await sleep(ms);
+    return !cancelled;
+  }
+
   return {
     send(frame: ClientFrame) {
       switch (frame.type) {
+        case "loop":
+          if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
+          void runLoop(frame.verifyCommand);
+          break;
         case "start":
           if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
           // plan: true scripts a plan-style completion (read-only, no edits).

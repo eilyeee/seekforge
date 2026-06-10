@@ -136,7 +136,9 @@ All frames are JSON objects with a `type` field.
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
-{"type": "cancel"}                                            // cancel the running session
+{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "ws": "<id>"?}
+                 // auto-loop: run → verify → continue until verifyCommand exits 0 (acceptEdits; guardrails)
+{"type": "cancel"}                                            // cancel the running session OR loop
 ```
 
 `model` / `thinking` / `reasoningEffort` are optional per-run overrides on
@@ -156,8 +158,9 @@ workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
 {"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
+{"type": "loop.event", "event": <LoopEvent>}                  // auto-loop progress (iteration.start/run.completed/verify/loop.done)
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
-{"type": "idle"}                                              // sent when a run finishes and a new start/send is accepted
+{"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```
 
 Rules:
