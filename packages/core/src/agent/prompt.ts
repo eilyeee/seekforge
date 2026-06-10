@@ -26,6 +26,8 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     parts.push(
       [
         "Mode: EDIT. Work the task end to end:",
+        "0. Plan: for tasks with 3+ steps, publish a checklist via update_plan and",
+        "   keep statuses current as you work (full replacement on each call).",
         "1. Explore: locate the relevant files (list_files, search_text, read_file) before editing.",
         "2. Edit: use apply_patch with search/replace edits. oldString must match the current file",
         "   content exactly and uniquely — copy it from read_file output, never reconstruct from memory.",

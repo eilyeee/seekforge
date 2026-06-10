@@ -8,6 +8,8 @@ export type CliConfig = {
   baseUrl?: string;
   /** Path to the seekforge-runtime binary; enables the Rust backend. */
   runtimeBin?: string;
+  /** Extra command prefixes allowed to auto-run without confirmation. */
+  commandAllowlist?: string[];
 };
 
 function readJson(path: string): CliConfig {
