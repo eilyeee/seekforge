@@ -5,6 +5,7 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   type AgentCore,
+  type AgentDefinition,
   type RuntimeClient,
 } from "@seekforge/core";
 import type { PermissionRequest } from "@seekforge/shared";
@@ -16,6 +17,8 @@ export type CliAgentOptions = {
   confirm: (req: PermissionRequest) => Promise<boolean>;
   onModelDelta?: (chunk: string) => void;
   extractMemory: boolean;
+  /** Specialist agents the loop may dispatch via dispatch_agent. */
+  subagents?: AgentDefinition[];
 };
 
 export type CliAgent = {
@@ -48,6 +51,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
+    subagents: opts.subagents,
   });
 
   return { agent, dispose: () => runtime?.dispose() };
