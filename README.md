@@ -65,6 +65,8 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
 | `seekforge sessions` | list sessions with status and cost (subagent runs hidden) |
 | `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | delete old session traces to keep `.seekforge/sessions/` bounded |
+| `seekforge rewind [session-id] [--dry-run]` | undo all file changes a session made (pre-write checkpoints) |
+| `seekforge memory add "<fact>" [--type] [--pending]` / `remove <n\|id\|text>` | tell the agent something directly (REPL: `/remember <fact>`) |
 | `seekforge status` | project / config / last-session overview |
 | `seekforge diff` | show the current git diff |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
