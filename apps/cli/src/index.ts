@@ -16,6 +16,7 @@ import { mcpListCommand } from "./commands/mcp.js";
 import {
   memoryAddCommand,
   memoryApproveCommand,
+  memoryCompactCommand,
   memoryListCommand,
   memoryRejectCommand,
   memoryRemoveCommand,
@@ -25,7 +26,15 @@ import { rewindCommand } from "./commands/rewind.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
-import { skillCreateCommand, skillImportCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
+import {
+  skillCreateCommand,
+  skillDisableCommand,
+  skillEnableCommand,
+  skillImportCommand,
+  skillListCommand,
+  skillRemoveCommand,
+  skillShowCommand,
+} from "./commands/skill.js";
 
 const program = new Command();
 
@@ -159,6 +168,30 @@ skill
   .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
     skillImportCommand(sourcePath, opts);
   });
+skill
+  .command("enable")
+  .argument("<skill-id>")
+  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
+  .description("enable a skill (removes a disable marker for a builtin)")
+  .action((id: string, opts: { global?: boolean }) => {
+    skillEnableCommand(id, opts);
+  });
+skill
+  .command("disable")
+  .argument("<skill-id>")
+  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
+  .description("disable a skill (writes a disable marker for a builtin)")
+  .action((id: string, opts: { global?: boolean }) => {
+    skillDisableCommand(id, opts);
+  });
+skill
+  .command("remove")
+  .argument("<skill-id>")
+  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
+  .description("delete a project/global skill dir (builtins must be disabled, not removed)")
+  .action((id: string, opts: { global?: boolean }) => {
+    skillRemoveCommand(id, opts);
+  });
 
 const agentCmd = program.command("agent").description("manage specialist subagents (dispatch_agent roster)");
 agentCmd
@@ -229,6 +262,13 @@ memory
   .description("reject a candidate")
   .action((id: string) => {
     memoryRejectCommand(id);
+  });
+memory
+  .command("compact")
+  .option("--dry-run", "show what would be merged/removed without rewriting project.md")
+  .description("collapse duplicate and near-duplicate facts in project.md (deterministic)")
+  .action((opts: { dryRun?: boolean }) => {
+    memoryCompactCommand(opts);
   });
 
 const evolve = program

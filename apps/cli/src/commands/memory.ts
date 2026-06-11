@@ -1,6 +1,7 @@
 import {
   addMemoryFact,
   approveMemoryCandidate,
+  compactProjectMemory,
   listMemoryCandidates,
   listProjectFacts,
   MEMORY_CANDIDATE_TYPES,
@@ -100,5 +101,28 @@ export function memoryRejectCommand(id: string): void {
   } catch (err) {
     console.error((err as Error).message);
     process.exitCode = 1;
+  }
+}
+
+export function memoryCompactCommand(opts: { dryRun?: boolean }): void {
+  const workspace = process.cwd();
+  const res = compactProjectMemory(workspace, { dryRun: opts.dryRun });
+  const label = opts.dryRun ? "would compact" : "compacted";
+  console.log(`${label} project.md: ${res.before} → ${res.after} facts`);
+  if (res.removed.length > 0) {
+    console.log(`\nExact duplicates removed (${res.removed.length}):`);
+    for (const line of res.removed) console.log(`  - ${line}`);
+  }
+  if (res.merged.length > 0) {
+    console.log(`\nNear-duplicates merged (${res.merged.length}):`);
+    for (const m of res.merged) {
+      console.log(`  keep: ${m.kept}`);
+      console.log(`  drop: ${m.dropped}`);
+    }
+  }
+  if (res.removed.length === 0 && res.merged.length === 0) {
+    console.log("Nothing to compact.");
+  } else if (opts.dryRun) {
+    console.log("\n(dry run — project.md unchanged)");
   }
 }
