@@ -55,6 +55,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
+    permissionRules: config.permissionRules,
     subagents: opts.subagents,
   });
 

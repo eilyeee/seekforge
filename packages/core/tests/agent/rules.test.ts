@@ -1,0 +1,165 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentEvent, ChatResponse } from "@seekforge/shared";
+import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
+import type { ToolDispatcher } from "../../src/tools/index.js";
+import { createAgentCore } from "../../src/agent/loop.js";
+import { collectProjectRules, collectRuleFiles } from "../../src/agent/rules.js";
+
+describe("rules-file hierarchy", () => {
+  let home: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "seekforge-home-"));
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-rules-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const writeGlobal = (content: string): void => {
+    mkdirSync(join(home, ".seekforge"), { recursive: true });
+    writeFileSync(join(home, ".seekforge", "AGENTS.md"), content);
+  };
+
+  it("returns undefined when no rules file exists", () => {
+    expect(collectProjectRules(workspace, home)).toBeUndefined();
+    expect(collectRuleFiles(workspace, home)).toEqual([]);
+  });
+
+  it("loads only the project AGENTS.md when it is the single layer", () => {
+    writeFileSync(join(workspace, "AGENTS.md"), "# Project rules\nuse pnpm");
+    const merged = collectProjectRules(workspace, home);
+    expect(merged).toBe("<!-- from: AGENTS.md -->\n# Project rules\nuse pnpm");
+  });
+
+  it("loads only the global AGENTS.md when present alone", () => {
+    writeGlobal("global only");
+    const merged = collectProjectRules(workspace, home);
+    expect(merged).toBe("<!-- from: ~/.seekforge/AGENTS.md -->\nglobal only");
+  });
+
+  it("loads only AGENTS.local.md when present alone", () => {
+    writeFileSync(join(workspace, "AGENTS.local.md"), "local only");
+    const merged = collectProjectRules(workspace, home);
+    expect(merged).toBe("<!-- from: AGENTS.local.md -->\nlocal only");
+  });
+
+  it("concatenates all three layers in global → project → local order with origin headers", () => {
+    writeGlobal("be terse");
+    writeFileSync(join(workspace, "AGENTS.md"), "use pnpm");
+    writeFileSync(join(workspace, "AGENTS.local.md"), "my personal notes");
+    const merged = collectProjectRules(workspace, home);
+    expect(merged).toBe(
+      [
+        "<!-- from: ~/.seekforge/AGENTS.md -->\nbe terse",
+        "<!-- from: AGENTS.md -->\nuse pnpm",
+        "<!-- from: AGENTS.local.md -->\nmy personal notes",
+      ].join("\n\n"),
+    );
+  });
+
+  it("skips missing middle layers (global + local without project AGENTS.md)", () => {
+    writeGlobal("be terse");
+    writeFileSync(join(workspace, "AGENTS.local.md"), "personal");
+    const files = collectRuleFiles(workspace, home);
+    expect(files.map((f) => f.origin)).toEqual(["~/.seekforge/AGENTS.md", "AGENTS.local.md"]);
+    expect(files.map((f) => f.content)).toEqual(["be terse", "personal"]);
+  });
+
+  it("treats whitespace-only files as absent; all empty → undefined", () => {
+    writeGlobal("  \n\t\n");
+    writeFileSync(join(workspace, "AGENTS.md"), "");
+    expect(collectProjectRules(workspace, home)).toBeUndefined();
+
+    // a single non-empty layer among empty ones still loads
+    writeFileSync(join(workspace, "AGENTS.local.md"), "only me");
+    expect(collectProjectRules(workspace, home)).toBe("<!-- from: AGENTS.local.md -->\nonly me");
+  });
+
+  it("defaults to os.homedir() when no override is given", () => {
+    // No global file under the real home is required for this assertion:
+    // just verify the workspace layers load without the override parameter.
+    writeFileSync(join(workspace, "AGENTS.md"), "ws rules");
+    const merged = collectProjectRules(workspace);
+    expect(merged).toContain("<!-- from: AGENTS.md -->\nws rules");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loop integration: global + local rules content reaches the system prompt.
+// ---------------------------------------------------------------------------
+
+const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
+
+function fakeProvider(script: ChatResponse[]): ChatProvider & { requests: ChatRequest[] } {
+  const requests: ChatRequest[] = [];
+  const next = async (req: ChatRequest) => {
+    requests.push(req);
+    const res = script.shift();
+    if (!res) throw new Error("fake provider script exhausted");
+    return res;
+  };
+  return { model: "fake", requests, chat: next, chatStream: (req) => next(req) };
+}
+
+const noopDispatcher: ToolDispatcher = {
+  list: () => [],
+  execute: async () => ({ ok: true }),
+};
+
+async function drain(events: AsyncIterable<AgentEvent>): Promise<void> {
+  for await (const _ of events) {
+    // consume
+  }
+}
+
+describe("agent loop rules integration", () => {
+  let home: string;
+  let workspace: string;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "seekforge-home-"));
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-rules-"));
+    savedHome = process.env["HOME"];
+    process.env["HOME"] = home; // os.homedir() honors $HOME on POSIX
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = savedHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("system prompt contains global, project, and local rules content", async () => {
+    mkdirSync(join(home, ".seekforge"), { recursive: true });
+    writeFileSync(join(home, ".seekforge", "AGENTS.md"), "GLOBAL-RULE-MARKER: be terse");
+    writeFileSync(join(workspace, "AGENTS.md"), "PROJECT-RULE-MARKER: use pnpm");
+    writeFileSync(join(workspace, "AGENTS.local.md"), "LOCAL-RULE-MARKER: my machine");
+
+    const provider = fakeProvider([
+      { content: "done", toolCalls: [], usage: USAGE, finishReason: "stop" },
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: noopDispatcher,
+      confirm: async () => true,
+    });
+    await drain(
+      agent.runTask({ projectPath: workspace, task: "t", mode: "edit", approvalMode: "auto" }),
+    );
+
+    const system = provider.requests[0]!.messages[0]!;
+    expect(system.role).toBe("system");
+    expect(system.content).toContain("GLOBAL-RULE-MARKER: be terse");
+    expect(system.content).toContain("PROJECT-RULE-MARKER: use pnpm");
+    expect(system.content).toContain("LOCAL-RULE-MARKER: my machine");
+    expect(system.content).toContain("<!-- from: ~/.seekforge/AGENTS.md -->");
+    expect(system.content).toContain("<!-- from: AGENTS.local.md -->");
+  });
+});
