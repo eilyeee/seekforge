@@ -225,6 +225,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           };
         }
 
+        // A read-only parent run (ask / plan mode) must not gain write access
+        // by delegating to an edit-mode agent — that would bypass the read-only
+        // guarantee. Refuse the dispatch (the agent could still run read-only,
+        // but we don't silently downgrade it; the model should pick an ask agent).
+        if (input.mode === "ask" && def.mode === "edit") {
+          return {
+            ok: false,
+            error: {
+              code: "forbidden_in_ask_mode",
+              message: `cannot dispatch edit-mode agent "${def.id}" from a read-only (ask/plan) session`,
+            },
+          };
+        }
+
         // ask-mode agents are read-only and auto-allowed; edit-mode agents
         // go through the normal approval flow (unless approvalMode is auto).
         if (def.mode === "edit" && input.approvalMode !== "auto") {
