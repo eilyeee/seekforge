@@ -48,6 +48,22 @@ describe("loadSkillsFromDirs", () => {
     expect(skills.find((s) => s.id === "test-failure-fix")).toBeDefined();
   });
 
+  it("treats an enabled:false stub without SKILL.md as a pure disable marker", () => {
+    const project = makeTempDir();
+    // No SKILL.md, minimal json — used to disable a builtin.
+    writeSkillDir(project, "bugfix", { id: "bugfix", enabled: false }, undefined);
+    const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);
+    expect(skills.find((s) => s.id === "bugfix")).toBeUndefined();
+    expect(skills.find((s) => s.id === "test-failure-fix")).toBeDefined();
+  });
+
+  it("does NOT treat an enabled:true stub without SKILL.md as a skill", () => {
+    const project = makeTempDir();
+    writeSkillDir(project, "newish", { id: "newish", enabled: true }, undefined);
+    const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);
+    expect(skills.find((s) => s.id === "newish")).toBeUndefined();
+  });
+
   it("skips malformed dirs silently and still loads valid siblings", () => {
     const project = makeTempDir();
     writeSkillDir(project, "bad-json", "{ not json", MD);
