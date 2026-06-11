@@ -34,6 +34,13 @@ Serves exactly one workspace (the cwd at start).
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
 | GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` |
+| GET /api/agents | `AgentDefinition[]` without bodies (id, scope, mode, model?, tools?, description) |
+| GET /api/agents/:id | full definition incl. prompt body |
+| GET /api/evolution | `EvolutionProposal[]` (pending first) |
+| POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`) |
+| GET /api/mcp | configured servers `{name, command, args, trusted}[]` (no spawn) |
+| POST /api/mcp/:name/tools | spawns the server, lists tools `{name, description}[]`, disposes (504-style error JSON on launch failure) |
+| POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result |
 | PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key |
 
 Errors: `{error: {code, message}}` with appropriate HTTP status.
@@ -46,8 +53,9 @@ All frames are JSON objects with a `type` field.
 ### client → server
 
 ```jsonc
-{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm"}
-{"type": "send",   "sessionId": "...", "task": "..."}        // continue (resume) a session
+{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?}
+{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?}  // continue; mode overrides the
+                                                                        // session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "cancel"}                                            // cancel the running session
 ```
