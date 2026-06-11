@@ -1,7 +1,9 @@
 import { useStore } from "./store";
 import { Sidebar } from "./components/Sidebar";
+import { AgentsView } from "./views/AgentsView";
 import { ChatView } from "./views/ChatView";
 import { DiffView } from "./views/DiffView";
+import { EvolutionView } from "./views/EvolutionView";
 import { MemoryView } from "./views/MemoryView";
 import { SessionsView } from "./views/SessionsView";
 import { SettingsView } from "./views/SettingsView";
@@ -17,7 +19,9 @@ export function App() {
         {view === "sessions" && <SessionsView />}
         {view === "diff" && <DiffView />}
         {view === "skills" && <SkillsView />}
+        {view === "agents" && <AgentsView />}
         {view === "memory" && <MemoryView />}
+        {view === "evolution" && <EvolutionView />}
         {view === "settings" && <SettingsView />}
       </main>
     </div>
