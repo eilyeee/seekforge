@@ -2,6 +2,14 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { configSetCommand, configShowCommand } from "./commands/config.js";
+import {
+  evolveAcceptCommand,
+  evolveAnalyzeCommand,
+  evolveApplyCommand,
+  evolveListCommand,
+  evolveRejectCommand,
+  evolveShowCommand,
+} from "./commands/evolve.js";
 import { initCommand } from "./commands/init.js";
 import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
@@ -135,6 +143,51 @@ memory
   .description("reject a candidate")
   .action((id: string) => {
     memoryRejectCommand(id);
+  });
+
+const evolve = program
+  .command("evolve")
+  .description("score sessions and review self-evolution proposals (human-gated)");
+evolve
+  .command("analyze")
+  .argument("[session-id]", "session to analyze (default: most recent completed/failed)")
+  .description("score a session, write its reflection, and generate proposals")
+  .action(async (sessionId?: string) => {
+    await evolveAnalyzeCommand(sessionId);
+  });
+evolve
+  .command("list", { isDefault: true })
+  .description("list evolution proposals (pending first)")
+  .action(() => {
+    evolveListCommand();
+  });
+evolve
+  .command("show")
+  .argument("<proposal-id>")
+  .description("print a proposal including the exact content to be applied")
+  .action((id: string) => {
+    evolveShowCommand(id);
+  });
+evolve
+  .command("accept")
+  .argument("<proposal-id>")
+  .description("accept a pending proposal (apply it separately)")
+  .action((id: string) => {
+    evolveAcceptCommand(id);
+  });
+evolve
+  .command("reject")
+  .argument("<proposal-id>")
+  .description("reject a pending proposal")
+  .action((id: string) => {
+    evolveRejectCommand(id);
+  });
+evolve
+  .command("apply")
+  .argument("<proposal-id>")
+  .description("apply an accepted proposal to AGENTS.md / project.md / skills")
+  .action((id: string) => {
+    evolveApplyCommand(id);
   });
 
 const config = program.command("config").description("show or change configuration");
