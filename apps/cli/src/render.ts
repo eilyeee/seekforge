@@ -25,9 +25,26 @@ export type RendererOptions = {
   streaming?: boolean;
 };
 
+function fmtK(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+}
+
 /** Creates a terminal renderer for agent events. */
 export function createRenderer(opts: RendererOptions = {}): (e: AgentEvent) => void {
-  return (e) => renderEvent(e, opts);
+  // Throttle context.usage: only print when the percentage bucket changes by
+  // >=5% from the last shown value (avoids one line per turn).
+  let lastShownPct = -100;
+  return (e) => {
+    if (e.type === "context.usage") {
+      const pct = e.budgetTokens > 0 ? Math.round((e.usedTokens / e.budgetTokens) * 100) : 0;
+      if (Math.abs(pct - lastShownPct) >= 5) {
+        lastShownPct = pct;
+        console.log(`${DIM}context: ${fmtK(e.usedTokens)}/${fmtK(e.budgetTokens)} (${pct}%)${RESET}`);
+      }
+      return;
+    }
+    renderEvent(e, opts);
+  };
 }
 
 function renderEvent(e: AgentEvent, opts: RendererOptions): void {
