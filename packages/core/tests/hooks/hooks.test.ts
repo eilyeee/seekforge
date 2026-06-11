@@ -1,100 +1,174 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isHookableTool, matchTool, runHook } from "../../src/hooks/index.js";
+import { runHooks, type HookPayload } from "../../src/hooks/index.js";
 
-describe("matchTool", () => {
-  it("matches everything with *", () => {
-    expect(matchTool("*", "run_command")).toBe(true);
-    expect(matchTool("*", "anything")).toBe(true);
-  });
-
-  it("matches by prefix with trailing *", () => {
-    expect(matchTool("git_*", "git_status")).toBe(true);
-    expect(matchTool("git_*", "git_")).toBe(true);
-    expect(matchTool("git_*", "grep")).toBe(false);
-  });
-
-  it("matches exact names otherwise", () => {
-    expect(matchTool("run_command", "run_command")).toBe(true);
-    expect(matchTool("run_command", "read_file")).toBe(false);
-  });
-});
-
-describe("isHookableTool", () => {
-  it("excludes pure-meta synthetic tools", () => {
-    expect(isHookableTool("update_plan")).toBe(false);
-    expect(isHookableTool("agent_result")).toBe(false);
-    expect(isHookableTool("task_output")).toBe(false);
-  });
-  it("includes real tools and dispatch family", () => {
-    expect(isHookableTool("run_command")).toBe(true);
-    expect(isHookableTool("dispatch_agent")).toBe(true);
-    expect(isHookableTool("agent_send")).toBe(true);
-  });
-});
-
-describe("runHook", () => {
-  let cwd: string;
+describe("runHooks", () => {
+  let workspace: string;
   beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), "seekforge-hook-"));
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-hooks-"));
   });
   afterEach(() => {
-    rmSync(cwd, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
   });
 
-  it("captures exit code and stdout/stderr", async () => {
-    const out = await runHook(
-      { command: "echo hello; echo oops 1>&2; exit 3" },
-      { event: "preToolUse", toolName: "run_command" },
-      cwd,
+  const payload = (overrides: Partial<HookPayload> = {}): HookPayload => ({
+    sessionId: "s-test",
+    workspace,
+    ...overrides,
+  });
+
+  it("delivers the JSON payload on stdin (stage + fields) with cwd = workspace", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: "cat > received.json" }],
+      payload({ toolName: "read_file", args: { path: "a.ts" }, path: "a.ts" }),
     );
-    expect(out.exitCode).toBe(3);
-    expect(out.stdout.trim()).toBe("hello");
-    expect(out.stderr.trim()).toBe("oops");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(true);
+    const written = JSON.parse(readFileSync(join(workspace, "received.json"), "utf8"));
+    expect(written).toMatchObject({
+      stage: "preToolUse",
+      toolName: "read_file",
+      args: { path: "a.ts" },
+      path: "a.ts",
+      sessionId: "s-test",
+      workspace,
+    });
   });
 
-  it("returns exit 0 for a passing hook", async () => {
-    const out = await runHook({ command: "exit 0" }, { event: "preToolUse", toolName: "x" }, cwd);
-    expect(out.exitCode).toBe(0);
-  });
-
-  it("passes the payload as JSON on stdin", async () => {
-    const file = join(cwd, "payload.json");
-    const out = await runHook(
-      { command: `cat > ${JSON.stringify(file)}` },
-      { event: "postToolUse", toolName: "read_file", args: { path: "a.ts" } },
-      cwd,
+  it("exposes SEEKFORGE_HOOK_STAGE and SEEKFORGE_TOOL in the environment", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: 'echo "$SEEKFORGE_HOOK_STAGE/$SEEKFORGE_TOOL"' }],
+      payload({ toolName: "apply_patch" }),
     );
-    expect(out.exitCode).toBe(0);
-    const written = JSON.parse(readFileSync(file, "utf8"));
-    expect(written.event).toBe("postToolUse");
-    expect(written.toolName).toBe("read_file");
-    expect(written.args).toEqual({ path: "a.ts" });
+    expect(outcomes[0]!.outputTail).toBe("postToolUse/apply_patch");
   });
 
-  it("exposes SEEKFORGE_HOOK_EVENT and SEEKFORGE_TOOL_NAME in the env", async () => {
-    const out = await runHook(
-      { command: 'echo "$SEEKFORGE_HOOK_EVENT/$SEEKFORGE_TOOL_NAME"' },
-      { event: "preToolUse", toolName: "git_commit" },
-      cwd,
+  it("kills a hook that exceeds the timeout and reports it", async () => {
+    const started = Date.now();
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: "sleep 30" }],
+      payload({ toolName: "run_command" }),
+      { timeoutMs: 300 },
     );
-    expect(out.stdout.trim()).toBe("preToolUse/git_commit");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.timedOut).toBe(true);
+    expect(outcomes[0]!.outputTail).toContain("timed out");
   });
 
-  it("kills a slow hook on timeout with a non-zero exit", async () => {
-    const out = await runHook({ command: "sleep 30" }, { event: "preToolUse", toolName: "x" }, cwd);
-    expect(out.exitCode).not.toBe(0);
-    expect(out.stderr).toContain("timed out");
-  }, 15_000);
-
-  it("caps very large stdout", async () => {
-    const out = await runHook(
-      { command: "head -c 50000 /dev/zero | tr '\\0' 'a'" },
-      { event: "preToolUse", toolName: "x" },
-      cwd,
+  it("a non-zero preToolUse hook fails with its output tail and stops later hooks", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: "echo nope; echo really 1>&2; exit 1" },
+        { command: "touch should-not-exist" },
+      ],
+      payload({ toolName: "run_command" }),
     );
-    expect(out.stdout.length).toBeLessThanOrEqual(10_000);
+    expect(outcomes).toHaveLength(1); // second hook skipped after the block
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.exitCode).toBe(1);
+    expect(outcomes[0]!.outputTail).toContain("nope");
+    expect(outcomes[0]!.outputTail).toContain("really");
+    expect(existsSync(join(workspace, "should-not-exist"))).toBe(false);
+  });
+
+  it("postToolUse failures are reported but never stop later hooks", async () => {
+    const errors: string[] = [];
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: "echo broken 1>&2; exit 7" }, { command: "touch still-ran" }],
+      payload({ toolName: "apply_patch" }),
+      { onError: (m) => errors.push(m) },
+    );
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[1]!.ok).toBe(true);
+    expect(existsSync(join(workspace, "still-ran"))).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("exit 7");
+    expect(errors[0]).toContain("broken");
+  });
+
+  it("filters by match: tool name or '*' (default '*')", async () => {
+    const hooks = [
+      { match: "run_command", command: "touch ran-command" },
+      { match: "*", command: "touch ran-star" },
+      { command: "touch ran-default" },
+    ];
+    const outcomes = await runHooks("preToolUse", hooks, payload({ toolName: "read_file" }));
+    expect(outcomes).toHaveLength(2); // run_command entry skipped
+    expect(existsSync(join(workspace, "ran-command"))).toBe(false);
+    expect(existsSync(join(workspace, "ran-star"))).toBe(true);
+    expect(existsSync(join(workspace, "ran-default"))).toBe(true);
+  });
+
+  it("filters by pattern: prefix on the classified command or path", async () => {
+    const hooks = [{ match: "run_command", pattern: "npm", command: "touch pattern-hit" }];
+    let outcomes = await runHooks(
+      "preToolUse",
+      hooks,
+      payload({ toolName: "run_command", command: "pnpm test" }),
+    );
+    expect(outcomes).toHaveLength(0);
+    expect(existsSync(join(workspace, "pattern-hit"))).toBe(false);
+
+    outcomes = await runHooks(
+      "preToolUse",
+      hooks,
+      payload({ toolName: "run_command", command: "npm run build" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(existsSync(join(workspace, "pattern-hit"))).toBe(true);
+  });
+
+  it("matches pattern against the path for fs tools", async () => {
+    const hooks = [{ pattern: "src/", command: "touch path-hit" }];
+    const outcomes = await runHooks(
+      "postToolUse",
+      hooks,
+      payload({ toolName: "apply_patch", path: "src/index.ts" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(existsSync(join(workspace, "path-hit"))).toBe(true);
+  });
+
+  it("runs hooks sequentially in config order", async () => {
+    await runHooks(
+      "postToolUse",
+      [{ command: "echo first >> order.txt" }, { command: "echo second >> order.txt" }],
+      payload({ toolName: "x" }),
+    );
+    expect(readFileSync(join(workspace, "order.txt"), "utf8")).toBe("first\nsecond\n");
+  });
+
+  it("caps the surfaced output at a 1000-char tail", async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: "head -c 5000 /dev/zero | tr '\\0' 'a'; exit 1" }],
+      payload({ toolName: "x" }),
+    );
+    expect(outcomes[0]!.outputTail.length).toBeLessThanOrEqual(1000);
+  });
+
+  it("returns no outcomes when there are no hooks", async () => {
+    expect(await runHooks("sessionEnd", undefined, payload())).toEqual([]);
+    expect(await runHooks("sessionEnd", [], payload())).toEqual([]);
+  });
+
+  it("sessionEnd entries run without a toolName and receive the status", async () => {
+    const outcomes = await runHooks(
+      "sessionEnd",
+      [{ command: "cat > end.json" }],
+      payload({ status: "completed" }),
+    );
+    expect(outcomes[0]!.ok).toBe(true);
+    const written = JSON.parse(readFileSync(join(workspace, "end.json"), "utf8"));
+    expect(written).toMatchObject({ stage: "sessionEnd", status: "completed", sessionId: "s-test" });
   });
 });

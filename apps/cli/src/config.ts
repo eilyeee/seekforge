@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HooksConfig, McpServerConfig } from "@seekforge/core";
+import type { HookConfig, McpServerConfig } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
 export type CliConfig = {
@@ -25,7 +25,7 @@ export type CliConfig = {
    * block a tool (non-zero exit); postToolUse/sessionEnd are advisory. Edit
    * the file directly; not settable via `config set`.
    */
-  hooks?: HooksConfig;
+  hooks?: HookConfig;
 };
 
 function readJson(path: string): CliConfig {
@@ -45,11 +45,12 @@ export function loadConfig(projectPath: string): CliConfig {
   // permissionRules concatenates project-then-global: first match wins, so
   // project rules take precedence over global ones.
   const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
-  // hooks merge per phase, project-then-global (project hooks run first).
-  const hooks: HooksConfig = {};
-  for (const phase of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
-    const merged = [...(project.hooks?.[phase] ?? []), ...(global.hooks?.[phase] ?? [])];
-    if (merged.length > 0) hooks[phase] = merged;
+  // hooks concatenate per stage, global-then-project: every hook runs
+  // (sequentially), global ones first.
+  const hooks: HookConfig = {};
+  for (const stage of ["preToolUse", "postToolUse", "sessionEnd"] as const) {
+    const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
+    if (merged.length > 0) hooks[stage] = merged;
   }
   return {
     ...global,

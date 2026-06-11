@@ -25,22 +25,30 @@ export type RendererOptions = {
   streaming?: boolean;
 };
 
-function fmtK(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+/**
+ * Suffix for usage lines: dim "· ctx 42%". Only shown from 50% occupancy up
+ * (below that it is noise); `always` forces it (REPL /usage, /context).
+ */
+export function formatContextSuffix(
+  ctx: { percent: number } | undefined,
+  opts: { always?: boolean } = {},
+): string {
+  if (!ctx || (!opts.always && ctx.percent < 50)) return "";
+  return ` ${DIM}· ctx ${ctx.percent}%${RESET}`;
 }
 
 /** Creates a terminal renderer for agent events. */
 export function createRenderer(opts: RendererOptions = {}): (e: AgentEvent) => void {
-  // Throttle context.usage: only print when the percentage bucket changes by
-  // >=5% from the last shown value (avoids one line per turn).
-  let lastShownPct = -100;
+  // context.usage prints no line of its own; the latest value decorates the
+  // final usage line (session.completed) once occupancy is worth mentioning.
+  let lastContext: { percent: number } | undefined;
   return (e) => {
     if (e.type === "context.usage") {
-      const pct = e.budgetTokens > 0 ? Math.round((e.usedTokens / e.budgetTokens) * 100) : 0;
-      if (Math.abs(pct - lastShownPct) >= 5) {
-        lastShownPct = pct;
-        console.log(`${DIM}context: ${fmtK(e.usedTokens)}/${fmtK(e.budgetTokens)} (${pct}%)${RESET}`);
-      }
+      lastContext = { percent: e.percent };
+      return;
+    }
+    if (e.type === "session.completed") {
+      console.log(`\n${formatUsage(e.report.usage)}${formatContextSuffix(lastContext)}`);
       return;
     }
     renderEvent(e, opts);
@@ -90,6 +98,8 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       console.error(`${RED}failed: ${e.error.code} — ${e.error.message}${RESET}`);
       break;
     case "session.completed":
+      // Reached only when called outside createRenderer (which intercepts
+      // session.completed to append the context suffix).
       console.log(`\n${formatUsage(e.report.usage)}`);
       break;
     default:
