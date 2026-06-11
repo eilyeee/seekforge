@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
-import { createCliAgent } from "../agent-factory.js";
+import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createRenderer, formatUsage } from "../render.js";
@@ -56,6 +56,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const mcp = await prepareMcp(config); // MCP servers live for the whole REPL
   let model = opts.model ?? config.model ?? "deepseek-chat";
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
@@ -72,6 +73,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
       onModelDelta: (chunk) => process.stdout.write(chunk),
       extractMemory: true,
       subagents: loadAgentDefinitions(projectPath),
+      mcpToolSpecs: mcp.specs,
     });
     const controller = new AbortController();
     const onSigint = (): void => {
@@ -117,6 +119,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
         case "/quit":
         case "/exit":
           rl.close();
+          mcp.dispose();
           return;
         case "/new":
           sessionId = undefined;
@@ -183,4 +186,5 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
     }
   }
   rl.close();
+  mcp.dispose();
 }
