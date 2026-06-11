@@ -5,6 +5,13 @@
  */
 import type { SessionStatus, TokenUsage } from "@seekforge/shared";
 
+/** GET /api/workspaces entry (one hosted workspace). */
+export type Workspace = {
+  id: string;
+  name: string;
+  path: string;
+};
+
 export type SessionMeta = {
   id: string;
   task: string;

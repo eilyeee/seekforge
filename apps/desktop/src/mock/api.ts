@@ -29,10 +29,22 @@ function mockError(status: number, code: string, message: string): Error {
   return Object.assign(new Error(message), { status, code });
 }
 
-export async function mockRequest(method: string, path: string, body?: unknown): Promise<unknown> {
+/** Two mock workspaces so the switcher is exercisable in mock mode. */
+const mockWorkspaces = [
+  { id: "mockws1", name: "workspace", path: "/mock/workspace" },
+  { id: "mockws2", name: "other-project", path: "/mock/other-project" },
+];
+
+export async function mockRequest(method: string, fullPath: string, body?: unknown): Promise<unknown> {
   await delay();
 
-  if (method === "GET" && path === "/api/health") return { version: "0.2.0-mock", workspace: "/mock/workspace" };
+  // The real server scopes routes by ?ws=; the mock serves the same fixtures
+  // for every workspace, so strip the query and match on the bare path.
+  const path = fullPath.split("?")[0]!;
+
+  if (method === "GET" && path === "/api/workspaces") return mockWorkspaces;
+  if (method === "GET" && path === "/api/health")
+    return { version: "0.2.0-mock", workspace: "/mock/workspace", workspaces: mockWorkspaces };
   if (method === "GET" && path === "/api/sessions") return mockSessions;
 
   let m = /^\/api\/sessions\/([^/]+)$/.exec(path);

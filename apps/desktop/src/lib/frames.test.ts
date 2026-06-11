@@ -31,6 +31,14 @@ describe("buildStartFrame", () => {
     expect(buildStartFrame("go", "edit", true)).toMatchObject({ approvalMode: "auto" });
     expect(buildStartFrame("go", "plan", true)).toMatchObject({ approvalMode: "auto", plan: true });
   });
+
+  it("includes ws when a workspace id is given, omits it when empty", () => {
+    expect(buildStartFrame("go", "edit", false, "ws-a")).toMatchObject({ ws: "ws-a" });
+    expect(buildStartFrame("go", "plan", false, "ws-a")).toMatchObject({ ws: "ws-a", plan: true });
+    // An empty/omitted id leaves ws off the frame (server -> default workspace).
+    expect(buildStartFrame("go", "edit", false, "")).not.toHaveProperty("ws");
+    expect(buildStartFrame("go", "edit", false)).not.toHaveProperty("ws");
+  });
 });
 
 describe("buildExecutePlanFrame", () => {
@@ -44,5 +52,10 @@ describe("buildExecutePlanFrame", () => {
     expect(EXECUTE_PLAN_TASK).toBe(
       "Execute the plan you produced above, step by step. Make the changes and run the verification.",
     );
+  });
+
+  it("carries the tab's workspace id when present", () => {
+    expect(buildExecutePlanFrame("s-1", "ws-b")).toMatchObject({ ws: "ws-b" });
+    expect(buildExecutePlanFrame("s-1")).not.toHaveProperty("ws");
   });
 });

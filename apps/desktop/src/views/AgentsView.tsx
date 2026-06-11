@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import type { AgentInfo, AgentScope } from "../types";
 
@@ -38,13 +39,17 @@ export function AgentsView() {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [detail, setDetail] = useState<AgentInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setAgents(null);
+    setDetail(null);
     api
       .agents()
       .then(setAgents)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   const openAgent = (id: string) => {
     setError(null);
