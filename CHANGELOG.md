@@ -5,6 +5,10 @@
 Phase 4 — interactive surfaces.
 
 ### Added
+- `seekforge skill import <path> [--global] [--force]`: import external
+  Claude-style SKILL.md skills (YAML frontmatter; |-separated triggers,
+  block-scalar descriptions — e.g. Meta_Kim canonical skills). Imported
+  skills are enabled with medium trust and never grant permissions.
 - Interactive REPL as the default command (`seekforge`): multi-turn sessions
   with slash commands (/new /sessions /resume /model /usage)
 - `seekforge serve`: local agent server (127.0.0.1, token-protected) with a
