@@ -7,10 +7,14 @@ Serves exactly one workspace (the cwd at start).
 
 - Binds **127.0.0.1 only**. Never 0.0.0.0.
 - On start the server generates a random token and prints
-  `http://127.0.0.1:<port>/?token=<token>`. Every HTTP request must carry
-  `Authorization: Bearer <token>` (or `?token=` for the WS upgrade and the
-  initial page load); anything else gets 401. This blocks other local
-  webpages from driving the agent (CSRF/DNS-rebinding).
+  `http://127.0.0.1:<port>/?token=<token>`. The token gates **capability**:
+  every `/api/*` request must carry `Authorization: Bearer <token>` (or
+  `?token=`), and the `/ws` upgrade must carry `?token=` — anything else
+  gets 401. This blocks other local webpages from driving the agent
+  (CSRF/DNS-rebinding). Static files (the UI bundle) are served without
+  auth: index.html's subresource requests cannot carry the token, and the
+  bundle is not a secret; the UI reads `?token=` from its URL and attaches
+  it to API/WS calls. The no-UI info page never includes the token.
 - CORS: no `Access-Control-Allow-Origin` header at all (same-origin UI only).
 - The UI (apps/desktop `vite build` output) is served statically from `/`
   when `apps/desktop/dist` exists; otherwise `/` returns a plain info page.
