@@ -31,10 +31,12 @@
   },
   "dependencies": {
     "commander": "^13.1.0",
+    "ws": "^8.18.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@seekforge/core": "workspace:*",
+    "@seekforge/server": "workspace:*",
     "@seekforge/shared": "workspace:*",
     "tsx": "^4.19.0",
     "tsup": "^8.3.0",
