@@ -5,6 +5,16 @@
 Phase 4 — interactive surfaces.
 
 ### Added
+- Subagents: `AGENT.md` definitions (project > global), `seekforge agent
+  list|show|import`, and a `dispatch_agent` tool the main agent uses to
+  delegate bounded sub-tasks (own prompt, tool whitelist, turn budget,
+  depth guard). Governance/review agents are read-only; a read-only
+  (ask/plan) session cannot dispatch an edit agent. Imports Claude-style
+  agent definitions incl. Meta_Kim's meta-agents (tool mapping + mode
+  inference). The web workbench shows nested subagent activity.
+- Evaluation harness (`packages/eval-harness`, `evals/`): four deterministic
+  tasks with fixtures, `pnpm eval` runner, markdown/JSON reports, and
+  baseline comparison for regression tracking.
 - Plan mode: `seekforge run --plan` and `/plan <task>` in the REPL —
   read-only investigation produces a concrete plan; after your confirmation
   the SAME session executes it. Resumed sessions now rebuild their system
