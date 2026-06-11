@@ -3,8 +3,16 @@ import type { PermissionRequest } from "@seekforge/shared";
 import type { StreamEvent } from "./events";
 
 export type ClientFrame =
-  | { type: "start"; task: string; mode: "edit" | "ask"; approvalMode: "auto" | "confirm"; plan?: boolean }
-  | { type: "send"; sessionId: string; task: string; mode?: "edit" }
+  | {
+      type: "start";
+      task: string;
+      mode: "edit" | "ask";
+      approvalMode: "auto" | "confirm";
+      plan?: boolean;
+      /** Workspace id (default: first workspace when omitted). */
+      ws?: string;
+    }
+  | { type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string }
   | { type: "permission.response"; requestId: string; approved: boolean }
   | { type: "cancel" };
 

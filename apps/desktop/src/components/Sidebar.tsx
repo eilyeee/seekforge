@@ -14,6 +14,9 @@ const NAV: { view: View; label: string; glyph: string }[] = [
 export function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const workspaces = useStore((s) => s.workspaces);
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const setActiveWorkspace = useStore((s) => s.setActiveWorkspace);
   // Connection state of the active tab's socket (each tab owns one).
   const conn = useStore((s) => activeTab(s.tabs).conn);
 
@@ -22,6 +25,23 @@ export function Sidebar() {
       <div className="px-4 py-3 font-mono text-sm font-bold tracking-tight text-emerald-400">
         seek<span className="text-zinc-100">forge</span>
       </div>
+      {workspaces.length > 0 && (
+        <div className="px-3 pb-2">
+          <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-600">Workspace</label>
+          <select
+            value={activeWorkspaceId}
+            onChange={(e) => setActiveWorkspace(e.target.value)}
+            title={workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ""}
+            className="w-full truncate rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-700 focus:outline-none"
+          >
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id} title={w.path}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <nav className="flex-1 space-y-0.5 px-2">
         {NAV.map((item) => (
           <button

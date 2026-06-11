@@ -63,6 +63,32 @@ describe("open/close/switch", () => {
   });
 });
 
+describe("per-tab workspace binding", () => {
+  it("the initial tab binds to the given workspace (empty by default)", () => {
+    expect(initialTabsState().tabs[0]!.ws).toBe("");
+    expect(initialTabsState("ws-a").tabs[0]!.ws).toBe("ws-a");
+  });
+
+  it("openTab binds the new tab to the active workspace", () => {
+    const s = openTab(initialTabsState("ws-a"), "ws-b");
+    expect(s.tabs[0]!.ws).toBe("ws-a"); // the original tab keeps its binding
+    expect(activeTab(s).ws).toBe("ws-b"); // the new tab uses the active workspace
+  });
+
+  it("a tab keeps its workspace binding regardless of later switches", () => {
+    // Tab opened in ws-a stays bound to ws-a even after a new tab opens in ws-b.
+    let s = initialTabsState("ws-a");
+    s = openTab(s, "ws-b");
+    s = switchTab(s, s.tabs[0]!.tabId);
+    expect(activeTab(s).ws).toBe("ws-a");
+  });
+
+  it("closing the last tab preserves its workspace binding on the replacement", () => {
+    const s = closeTab(initialTabsState("ws-a"), "t1");
+    expect(s.tabs[0]!.ws).toBe("ws-a");
+  });
+});
+
 describe("titleFromTask", () => {
   it("takes the first words and truncates", () => {
     expect(titleFromTask("Fix the bug")).toBe("Fix the bug");

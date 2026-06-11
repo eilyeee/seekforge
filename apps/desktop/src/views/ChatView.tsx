@@ -14,9 +14,11 @@ const MODES: { mode: StartMode; label: string; hint: string }[] = [
 
 export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
+  const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan } = useStore.getState();
+  const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draft = drafts[tab.tabId] ?? "";
@@ -68,6 +70,7 @@ export function ChatView() {
         onSelect={setActiveTab}
         onClose={requestClose}
         onNew={openTab}
+        workspaceName={workspaceName}
       />
 
       <header className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-2">
