@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+Phase 8 batch 4 — final harness pieces.
+
+### Added
+- Tool-call hooks (`hooks.preToolUse/postToolUse/sessionEnd` in config):
+  shell commands fired around tools; a non-zero preToolUse hook BLOCKS the
+  tool (e.g. a lint gate). Payload on stdin, never the command line.
+- Context-window visibility: `context.usage` event; the CLI shows `· ctx N%`
+  and `/context` in the REPL; the web footer shows occupancy (amber/red).
+- `web_search` tool (keyless DuckDuckGo HTML; network, always confirmed).
+- `seekforge skill enable|disable|remove <id>` (builtins disable via marker).
+- `seekforge memory compact [--dry-run]`: deterministic dedup/merge of
+  project.md facts (CJK tokenized per character).
+
 ## 0.4.0 (unreleased)
 
 Phase 8 batches 1–3 — harness ergonomics and the desktop workbench.
