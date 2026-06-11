@@ -1,0 +1,157 @@
+import { describe, expect, it } from "vitest";
+import type { AgentEvent, FinalReport } from "@seekforge/shared";
+import { chatReducer, initialState, type ChatItem, type ChatState } from "../model.js";
+
+function reduce(state: ChatState, ...events: AgentEvent[]): ChatState {
+  return events.reduce((s, event) => chatReducer(s, { type: "event", event }), state);
+}
+
+function base(): ChatState {
+  return initialState("deepseek-chat");
+}
+
+describe("chatReducer streaming deltas", () => {
+  it("coalesces consecutive deltas into one streaming assistant item", () => {
+    let s = base();
+    s = chatReducer(s, { type: "model-delta", chunk: "Hello" });
+    s = chatReducer(s, { type: "model-delta", chunk: " world" });
+    expect(s.items).toHaveLength(1);
+    const item = s.items[0] as ChatItem & { kind: "assistant" };
+    expect(item.kind).toBe("assistant");
+    expect(item.text).toBe("Hello world");
+    expect(item.streaming).toBe(true);
+  });
+
+  it("model.message closes the open streaming item without duplicating text", () => {
+    let s = base();
+    s = chatReducer(s, { type: "model-delta", chunk: "streamed" });
+    s = reduce(s, { type: "model.message", content: "streamed" });
+    expect(s.items).toHaveLength(1);
+    const item = s.items[0] as ChatItem & { kind: "assistant" };
+    expect(item.streaming).toBe(false);
+    expect(item.text).toBe("streamed");
+  });
+
+  it("model.message materializes content when nothing streamed", () => {
+    let s = base();
+    s = reduce(s, { type: "model.message", content: "full reply" });
+    expect(s.items).toHaveLength(1);
+    expect((s.items[0] as { text: string }).text).toBe("full reply");
+  });
+
+  it("run-end closes a still-open streaming item", () => {
+    let s = base();
+    s = chatReducer(s, { type: "model-delta", chunk: "partial" });
+    s = chatReducer(s, { type: "run-end" });
+    expect((s.items[0] as { streaming: boolean }).streaming).toBe(false);
+  });
+});
+
+describe("chatReducer tool pairing", () => {
+  it("pairs tool.completed with the running tool row by name", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "read_file", args: { path: "a.ts" } },
+      { type: "tool.completed", toolName: "read_file", result: { ok: true, data: {} } },
+    );
+    expect(s.items).toHaveLength(1);
+    expect((s.items[0] as { status: string }).status).toBe("ok");
+  });
+
+  it("marks failed tools as error with code/message", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "run_command", args: {} },
+      { type: "tool.completed", toolName: "run_command", result: { ok: false, error: { code: "E", message: "boom" } } },
+    );
+    const item = s.items[0] as ChatItem & { kind: "tool" };
+    expect(item.status).toBe("error");
+    expect(item.error).toEqual({ code: "E", message: "boom" });
+  });
+
+  it("pairs with the most recent matching running row", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "grep", args: { q: "1" } },
+      { type: "tool.started", toolName: "grep", args: { q: "2" } },
+      { type: "tool.completed", toolName: "grep", result: { ok: true } },
+    );
+    const rows = s.items.filter((i) => i.kind === "tool") as Array<ChatItem & { kind: "tool" }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.status).toBe("running");
+    expect(rows[1]?.status).toBe("ok");
+  });
+});
+
+describe("chatReducer plan upsert", () => {
+  it("renders update_plan as a single upserted plan card", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "update_plan", args: { items: [] } },
+      {
+        type: "tool.completed",
+        toolName: "update_plan",
+        result: { ok: true, data: { items: [{ step: "a", status: "pending" }] } },
+      },
+    );
+    let plans = s.items.filter((i) => i.kind === "plan");
+    expect(plans).toHaveLength(1);
+    // No leftover tool row for update_plan.
+    expect(s.items.some((i) => i.kind === "tool")).toBe(false);
+
+    // A second plan update mutates the same card in place.
+    s = reduce(s, {
+      type: "tool.completed",
+      toolName: "update_plan",
+      result: { ok: true, data: { items: [{ step: "a", status: "done" }, { step: "b", status: "in_progress" }] } },
+    });
+    plans = s.items.filter((i) => i.kind === "plan");
+    expect(plans).toHaveLength(1);
+    expect((plans[0] as ChatItem & { kind: "plan" }).items).toHaveLength(2);
+  });
+});
+
+describe("chatReducer context + report", () => {
+  it("captures context.usage into status state without an item", () => {
+    let s = base();
+    const before = s.items.length;
+    s = reduce(s, { type: "context.usage", usedTokens: 100, budgetTokens: 200, percent: 50 });
+    expect(s.items).toHaveLength(before);
+    expect(s.context).toEqual({ usedTokens: 100, budgetTokens: 200, percent: 50 });
+  });
+
+  it("accumulates cost on session.completed and appends a report item", () => {
+    const report: FinalReport = {
+      summary: "done",
+      changedFiles: ["x.ts"],
+      commandsRun: [],
+      verification: "ok",
+      usage: { promptTokens: 10, completionTokens: 5, cacheHitTokens: 2, costUsd: 0.01 },
+    };
+    let s = base();
+    s = reduce(s, { type: "session.completed", report });
+    s = reduce(s, { type: "session.completed", report });
+    expect(s.totalUsage.costUsd).toBeCloseTo(0.02);
+    expect(s.totalUsage.promptTokens).toBe(20);
+    expect(s.items.filter((i) => i.kind === "report")).toHaveLength(2);
+  });
+
+  it("records sessionId from session.created", () => {
+    let s = base();
+    s = reduce(s, { type: "session.created", sessionId: "sess-123" });
+    expect(s.sessionId).toBe("sess-123");
+  });
+
+  it("appends an error notice on session.failed", () => {
+    let s = base();
+    s = reduce(s, { type: "session.failed", error: { code: "X", message: "nope" } });
+    const item = s.items[0] as ChatItem & { kind: "notice" };
+    expect(item.kind).toBe("notice");
+    expect(item.tone).toBe("error");
+    expect(item.text).toContain("nope");
+  });
+});

@@ -1,7 +1,27 @@
 # seekforge serve — Local Agent Server API
 
-Started with `seekforge serve [--port 7373]` inside a project directory.
-Serves exactly one workspace (the cwd at start).
+Started with `seekforge serve [paths...] [--workspace <p> ...] [--port 7373]`.
+Hosts **one or more workspaces**: the positional paths and repeated
+`--workspace` flags are deduped and resolved to absolute paths; missing paths
+are warned about and skipped; when none are given it defaults to the cwd.
+
+## Workspaces
+
+The server holds an ordered registry of workspaces, each `{id, name, path}`
+where `id` is a short stable slug of the absolute path and `name` is the
+basename. The **first** workspace is the default.
+
+- `GET /api/workspaces` → `[{id, name, path}]` (ordered; first is the default).
+- Every workspace-scoped REST route accepts a `?ws=<id>` query param selecting
+  the workspace. When `?ws=` is omitted it resolves to the **first** workspace
+  (preserving single-workspace clients). An unknown id is `404 not_found`.
+- The WS `start`/`send` frames accept an optional `ws` field (workspace id);
+  omitted = first workspace. The session runs in that workspace's path. One
+  connection still drives at most one running session, but different
+  connections/tabs may target different workspaces.
+
+The single-workspace contract is unchanged: starting with one workspace and
+omitting `?ws=`/`ws` behaves exactly as before.
 
 ## Security
 
@@ -21,9 +41,13 @@ Serves exactly one workspace (the cwd at start).
 
 ## REST (all JSON; prefix /api)
 
+All workspace-scoped routes below take an optional `?ws=<id>` (default: first
+workspace). `GET /api/health` and `GET /api/workspaces` are global.
+
 | Method/Path | Response |
 | --- | --- |
-| GET /api/health | `{version, workspace}` |
+| GET /api/health | `{version, workspace, workspaces: [{id, name, path}]}` (global; `workspace` = default path) |
+| GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default) |
 | GET /api/project | `{path, name, detect: {languages, packageManager, frameworks, scripts}}` |
 | GET /api/sessions | `SessionMeta[]` (newest first, subagent sessions hidden) |
 | GET /api/diff[?staged=1] | `{diff, truncated}` — workspace `git diff` (2 MB cap) |
@@ -53,12 +77,16 @@ All frames are JSON objects with a `type` field.
 ### client → server
 
 ```jsonc
-{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?}
-{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?}  // continue; mode overrides the
-                                                                        // session's own (plan -> execute)
+{"type": "start",  "task": "...", "mode": "edit"|"ask", "approvalMode": "auto"|"confirm", "plan": true?, "ws": "<id>"?}
+{"type": "send",   "sessionId": "...", "task": "...", "mode": "edit"?, "ws": "<id>"?}  // continue; mode overrides
+                                                                        // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "cancel"}                                            // cancel the running session
 ```
+
+`ws` selects the workspace id (default: first workspace when omitted). The run
+executes in that workspace's path; `send` looks the session up in that
+workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 
 ### server → client
 
@@ -85,11 +113,13 @@ Rules:
 ## Implementation notes (binding)
 
 - Implementation lives in `apps/server` (package `@seekforge/server`),
-  exporting `startServer(opts: {workspace, port?, token?}): Promise<{port, token, close()}>`
+  exporting `startServer(opts: {workspaces?: string[], workspace?: string, port?, token?}): Promise<{port, token, close()}>`
   so the CLI (`seekforge serve`) and later the Tauri shell can embed it.
-  `port: 0` binds an ephemeral port (the real one is reported back).
-  Two additional optional opts exist for tests/embedding: `createAgent`
-  (agent-assembly override) and `staticDir` (UI root override).
+  Provide `workspaces` (one or more; first is the default) or the single
+  `workspace` shorthand (back-compat). `port: 0` binds an ephemeral port (the
+  real one is reported back). Two additional optional opts exist for
+  tests/embedding: `createAgent` (agent-assembly override) and `staticDir`
+  (UI root override).
 - Dependencies: `ws` only (plus workspace packages). No express.
 - The server constructs AgentCore exactly like the CLI does (provider from
   config, default dispatcher, runtime when configured, extractMemory for

@@ -8,10 +8,15 @@ type Props = {
   /** Parent confirms before closing a running tab. */
   onClose: (tabId: string) => void;
   onNew: () => void;
+  /** Workspace id -> display name, for the per-tab workspace label. */
+  workspaceName?: (ws: string) => string | undefined;
 };
 
 /** Session tab strip: running dot per tab, close ×, + for a new tab. */
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, workspaceName }: Props) {
+  // Only label tabs by workspace when more than one workspace is in play.
+  const distinctWs = new Set(tabs.map((t) => t.ws).filter(Boolean));
+  const showWs = distinctWs.size > 1;
   const totalCost = tabs.reduce((sum, t) => sum + t.chat.usage.costUsd, 0);
   return (
     <div
@@ -40,6 +45,14 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
             <span className="truncate" title={tab.title}>
               {tab.title}
             </span>
+            {showWs && tab.ws && (
+              <span
+                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-zinc-400"
+                title={`workspace: ${workspaceName?.(tab.ws) ?? tab.ws}`}
+              >
+                {workspaceName?.(tab.ws) ?? tab.ws}
+              </span>
+            )}
             <button
               type="button"
               aria-label={`close ${tab.title}`}

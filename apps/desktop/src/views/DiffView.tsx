@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import { diffTotals, splitDiffByFile, type FileDiff } from "../lib/diff-files";
 import { DiffBlock } from "../components/DiffBlock";
 
@@ -27,6 +28,7 @@ export function DiffView() {
   const [staged, setStaged] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -38,7 +40,10 @@ export function DiffView() {
       setError(err instanceof Error ? err.message : String(err));
       setFiles(null);
     }
-  }, [staged]);
+    // `ws` is read from the store closure by api.diff; it is a dep so the diff
+    // refreshes when the active workspace changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staged, ws]);
 
   useEffect(() => {
     void refresh();

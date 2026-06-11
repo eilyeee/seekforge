@@ -14,6 +14,7 @@ import type {
   ServerConfig,
   SessionMeta,
   Skill,
+  Workspace,
 } from "../types";
 
 let tokenProvider: () => string = () => "";
@@ -21,6 +22,26 @@ let tokenProvider: () => string = () => "";
 /** Wired up by the store at boot (avoids an import cycle). */
 export function setTokenProvider(fn: () => string): void {
   tokenProvider = fn;
+}
+
+/** Returns the active workspace id; empty = the server's default workspace. */
+let wsProvider: () => string = () => "";
+
+/** Wired up by the store at boot (avoids an import cycle). */
+export function setWorkspaceProvider(fn: () => string): void {
+  wsProvider = fn;
+}
+
+/**
+ * Appends `?ws=<id>` (or `&ws=`) to a workspace-scoped path using the given id,
+ * or the active workspace when `ws` is undefined. An empty id is omitted so
+ * the server falls back to its default workspace (back-compat).
+ */
+export function withWorkspace(path: string, ws?: string): string {
+  const id = ws ?? wsProvider();
+  if (!id) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}ws=${encodeURIComponent(id)}`;
 }
 
 export class ApiError extends Error {
@@ -69,31 +90,46 @@ async function request<T>(method: "GET" | "POST" | "PUT", path: string, body?: u
 }
 
 export const api = {
-  sessions: () => request<SessionMeta[]>("GET", "/api/sessions"),
+  // Global (not workspace-scoped).
+  workspaces: () => request<Workspace[]>("GET", "/api/workspaces"),
+
+  // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
+  sessions: () => request<SessionMeta[]>("GET", withWorkspace("/api/sessions")),
   session: (id: string) =>
-    request<{ meta: SessionMeta; messages: ChatMessage[] }>("GET", `/api/sessions/${encodeURIComponent(id)}`),
-  skills: () => request<Skill[]>("GET", "/api/skills"),
-  skill: (id: string) => request<Skill>("GET", `/api/skills/${encodeURIComponent(id)}`),
-  memory: () => request<MemoryResponse>("GET", "/api/memory"),
+    request<{ meta: SessionMeta; messages: ChatMessage[] }>(
+      "GET",
+      withWorkspace(`/api/sessions/${encodeURIComponent(id)}`),
+    ),
+  skills: () => request<Skill[]>("GET", withWorkspace("/api/skills")),
+  skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
+  memory: () => request<MemoryResponse>("GET", withWorkspace("/api/memory")),
   memoryAction: (id: string, action: "approve" | "reject") =>
-    request<MemoryCandidate>("POST", `/api/memory/${encodeURIComponent(id)}/${action}`),
+    request<MemoryCandidate>("POST", withWorkspace(`/api/memory/${encodeURIComponent(id)}/${action}`)),
   diff: (staged?: boolean) =>
-    request<{ diff: string; truncated: boolean }>("GET", `/api/diff${staged ? "?staged=1" : ""}`),
-  config: () => request<ServerConfig>("GET", "/api/config"),
+    request<{ diff: string; truncated: boolean }>("GET", withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`)),
+  config: () => request<ServerConfig>("GET", withWorkspace("/api/config")),
   setConfig: (key: ConfigKey, value: string, global?: boolean) =>
-    request<ServerConfig>("PUT", "/api/config", { key, value, ...(global ? { global: true } : {}) }),
-  agents: () => request<AgentInfo[]>("GET", "/api/agents"),
-  agent: (id: string) => request<AgentInfo>("GET", `/api/agents/${encodeURIComponent(id)}`),
-  evolution: () => request<EvolutionProposal[]>("GET", "/api/evolution"),
+    request<ServerConfig>("PUT", withWorkspace("/api/config"), {
+      key,
+      value,
+      ...(global ? { global: true } : {}),
+    }),
+  agents: () => request<AgentInfo[]>("GET", withWorkspace("/api/agents")),
+  agent: (id: string) => request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`)),
+  evolution: () => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution")),
   evolutionAction: (id: string, action: "accept" | "reject") =>
-    request<EvolutionProposal>("POST", `/api/evolution/${encodeURIComponent(id)}/${action}`),
+    request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`)),
   evolutionApply: (id: string) =>
     request<{ proposal: EvolutionProposal; changedPath: string }>(
       "POST",
-      `/api/evolution/${encodeURIComponent(id)}/apply`,
+      withWorkspace(`/api/evolution/${encodeURIComponent(id)}/apply`),
     ),
-  mcp: () => request<McpServer[]>("GET", "/api/mcp"),
-  mcpTools: (name: string) => request<McpTool[]>("POST", `/api/mcp/${encodeURIComponent(name)}/tools`),
+  mcp: () => request<McpServer[]>("GET", withWorkspace("/api/mcp")),
+  mcpTools: (name: string) =>
+    request<McpTool[]>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`)),
   rewind: (sessionId: string, dryRun?: boolean) =>
-    request<RewindResult>("POST", "/api/rewind", { sessionId, ...(dryRun ? { dryRun: true } : {}) }),
+    request<RewindResult>("POST", withWorkspace("/api/rewind"), {
+      sessionId,
+      ...(dryRun ? { dryRun: true } : {}),
+    }),
 };

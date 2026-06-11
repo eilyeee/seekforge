@@ -11,6 +11,7 @@ import type { RawData, WebSocket } from "ws";
 import { readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn } from "./agent.js";
+import type { WorkspaceRegistry } from "./workspaces.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -24,7 +25,7 @@ type ServerFrame =
   | { type: "idle" };
 
 export type ConnectionDeps = {
-  workspace: string;
+  registry: WorkspaceRegistry;
   createAgent: CreateAgentFn;
   permissionTimeoutMs?: number;
 };
@@ -36,6 +37,8 @@ type RunInput = {
   plan?: boolean;
   approvalMode: ApprovalMode;
   resumeSessionId?: string;
+  /** Absolute path of the workspace this run targets (resolved from `ws`). */
+  workspace: string;
 };
 
 export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
@@ -79,14 +82,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     controller = new AbortController();
     let sessionId = input.resumeSessionId ?? "";
     const handle = deps.createAgent({
-      workspace: deps.workspace,
+      workspace: input.workspace,
       confirm,
       onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
       extractMemory: input.mode === "edit",
     });
     try {
       for await (const event of handle.agent.runTask({
-        projectPath: deps.workspace,
+        projectPath: input.workspace,
         task: input.task,
         mode: input.mode,
         plan: input.plan,
@@ -126,7 +129,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     switch (frame["type"]) {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { task, mode, approvalMode, plan } = frame;
+        const { task, mode, approvalMode, plan, ws: wsId } = frame;
         if (typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "start.task must be a non-empty string");
         }
@@ -139,28 +142,45 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (plan !== undefined && typeof plan !== "boolean") {
           return fail("bad_frame", "start.plan must be a boolean when present");
         }
+        if (wsId !== undefined && typeof wsId !== "string") {
+          return fail("bad_frame", "start.ws must be a string when present");
+        }
+        // Omitted ws -> the default (first) workspace, preserving old clients.
+        const workspace = deps.registry.resolve(wsId);
+        if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
-        void run({ task, mode, approvalMode, plan });
+        void run({ task, mode, approvalMode, plan, workspace: workspace.path });
         return;
       }
 
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { sessionId, task, mode } = frame;
+        const { sessionId, task, mode, ws: wsId } = frame;
         if (typeof sessionId !== "string" || typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "send needs sessionId and a non-empty task");
         }
         if (mode !== undefined && mode !== "edit" && mode !== "ask") {
           return fail("bad_frame", 'send.mode must be "edit" or "ask" when present');
         }
+        if (wsId !== undefined && typeof wsId !== "string") {
+          return fail("bad_frame", "send.ws must be a string when present");
+        }
+        const workspace = deps.registry.resolve(wsId);
+        if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const meta =
           /[/\\]/.test(sessionId) || sessionId.includes("..")
             ? undefined
-            : readSessionMeta(deps.workspace, sessionId);
+            : readSessionMeta(workspace.path, sessionId);
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute); approvals stay interactive.
-        void run({ task, mode: mode ?? meta.mode, approvalMode: "confirm", resumeSessionId: sessionId });
+        void run({
+          task,
+          mode: mode ?? meta.mode,
+          approvalMode: "confirm",
+          resumeSessionId: sessionId,
+          workspace: workspace.path,
+        });
         return;
       }
 

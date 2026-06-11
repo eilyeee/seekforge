@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import type { MemoryCandidate, MemoryResponse } from "../types";
 
@@ -14,13 +15,15 @@ const TYPE_BADGE: Record<MemoryCandidate["type"], string> = {
 export function MemoryView() {
   const [memory, setMemory] = useState<MemoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
+    setMemory(null);
     api
       .memory()
       .then(setMemory)
       .catch((e: unknown) => setError(String(e)));
-  }, []);
+  }, [ws]);
 
   const act = (id: string, action: "approve" | "reject") => {
     if (!memory) return;

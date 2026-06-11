@@ -26,9 +26,10 @@ import {
   setEvolutionProposalStatus,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
+import type { WorkspaceRegistry } from "./workspaces.js";
 
 export type RestContext = {
-  workspace: string;
+  registry: WorkspaceRegistry;
   version: string;
 };
 
@@ -130,30 +131,48 @@ export async function handleApi(
   const segs = path.split("/").filter(Boolean).map(decodeURIComponent);
 
   try {
+    // Global routes (not scoped to a workspace).
     if (method === "GET" && path === "/api/health") {
-      return sendJson(res, 200, { version: ctx.version, workspace: ctx.workspace });
+      return sendJson(res, 200, {
+        version: ctx.version,
+        workspace: ctx.registry.default.path,
+        workspaces: ctx.registry.summary,
+      });
     }
 
+    if (method === "GET" && path === "/api/workspaces") {
+      return sendJson(res, 200, ctx.registry.summary);
+    }
+
+    // Every remaining route is scoped to a workspace selected by `?ws=<id>`
+    // (default = first workspace when omitted, preserving old clients).
+    const wsId = url.searchParams.get("ws");
+    const ws = ctx.registry.resolve(wsId);
+    if (!ws) {
+      return sendApiError(res, 404, "not_found", `unknown workspace: ${String(wsId)}`);
+    }
+    const workspace = ws.path;
+
     if (method === "GET" && path === "/api/project") {
-      return sendJson(res, 200, await detectProject(ctx.workspace));
+      return sendJson(res, 200, await detectProject(workspace));
     }
 
     if (method === "GET" && path === "/api/sessions") {
-      return sendJson(res, 200, listSessions(ctx.workspace));
+      return sendJson(res, 200, listSessions(workspace));
     }
 
     if (method === "GET" && path === "/api/diff") {
       const staged = url.searchParams.get("staged") === "1";
-      return sendJson(res, 200, await gitDiff(ctx.workspace, staged));
+      return sendJson(res, 200, await gitDiff(workspace, staged));
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "sessions") {
       const id = segs[2]!;
-      const meta = isSafeId(id) ? readSessionMeta(ctx.workspace, id) : undefined;
+      const meta = isSafeId(id) ? readSessionMeta(workspace, id) : undefined;
       if (!meta) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
       let messages: ReturnType<typeof loadSessionMessages> = [];
       try {
-        messages = loadSessionMessages(ctx.workspace, id);
+        messages = loadSessionMessages(workspace, id);
       } catch {
         // a session may exist with no messages.jsonl yet
       }
@@ -164,20 +183,20 @@ export async function handleApi(
       return sendJson(
         res,
         200,
-        loadSkills(ctx.workspace).map(({ content: _content, ...rest }) => rest),
+        loadSkills(workspace).map(({ content: _content, ...rest }) => rest),
       );
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "skills") {
-      const skill = loadSkills(ctx.workspace).find((s) => s.id === segs[2]);
+      const skill = loadSkills(workspace).find((s) => s.id === segs[2]);
       if (!skill) return sendApiError(res, 404, "not_found", `skill not found: ${segs[2]}`);
       return sendJson(res, 200, skill);
     }
 
     if (method === "GET" && path === "/api/memory") {
       return sendJson(res, 200, {
-        projectMd: readProjectMemory(ctx.workspace) ?? null,
-        candidates: listMemoryCandidates(ctx.workspace),
+        projectMd: readProjectMemory(workspace) ?? null,
+        candidates: listMemoryCandidates(workspace),
       });
     }
 
@@ -191,8 +210,8 @@ export async function handleApi(
       try {
         const candidate =
           segs[3] === "approve"
-            ? approveMemoryCandidate(ctx.workspace, id)
-            : rejectMemoryCandidate(ctx.workspace, id);
+            ? approveMemoryCandidate(workspace, id)
+            : rejectMemoryCandidate(workspace, id);
         return sendJson(res, 200, candidate);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -208,19 +227,19 @@ export async function handleApi(
       return sendJson(
         res,
         200,
-        loadAgentDefinitions(ctx.workspace).map(({ body: _body, ...rest }) => rest),
+        loadAgentDefinitions(workspace).map(({ body: _body, ...rest }) => rest),
       );
     }
 
     if (method === "GET" && segs.length === 3 && segs[1] === "agents") {
-      const def = loadAgentDefinitions(ctx.workspace).find((d) => d.id === segs[2]);
+      const def = loadAgentDefinitions(workspace).find((d) => d.id === segs[2]);
       if (!def) return sendApiError(res, 404, "not_found", `agent not found: ${segs[2]}`);
       return sendJson(res, 200, def);
     }
 
     if (method === "GET" && path === "/api/evolution") {
       // Newest first within each group, pending proposals before reviewed ones.
-      const proposals = listEvolutionProposals(ctx.workspace);
+      const proposals = listEvolutionProposals(workspace);
       const pendingFirst = [
         ...proposals.filter((p) => p.status === "pending"),
         ...proposals.filter((p) => p.status !== "pending"),
@@ -238,10 +257,10 @@ export async function handleApi(
       try {
         if (segs[3] === "apply") {
           // applyProposal returns {proposal, changedPath} (the file it wrote).
-          return sendJson(res, 200, applyProposal(ctx.workspace, id));
+          return sendJson(res, 200, applyProposal(workspace, id));
         }
         const proposal = setEvolutionProposalStatus(
-          ctx.workspace,
+          workspace,
           id,
           segs[3] === "accept" ? "accepted" : "rejected",
         );
@@ -258,7 +277,7 @@ export async function handleApi(
 
     if (method === "GET" && path === "/api/mcp") {
       // Configured servers only — never spawned here, env VALUES never exposed.
-      const servers = Object.entries(loadConfig(ctx.workspace).mcpServers ?? {});
+      const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
       return sendJson(
         res,
         200,
@@ -274,7 +293,7 @@ export async function handleApi(
 
     if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
       const name = segs[2]!;
-      const config = (loadConfig(ctx.workspace).mcpServers ?? {})[name];
+      const config = (loadConfig(workspace).mcpServers ?? {})[name];
       if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
       const client = createMcpClient({ name, config });
       try {
@@ -301,17 +320,17 @@ export async function handleApi(
       if (typeof sessionId !== "string" || sessionId.length === 0) {
         return sendApiError(res, 400, "bad_request", "body must be {sessionId, dryRun?}");
       }
-      if (!isSafeId(sessionId) || !readSessionMeta(ctx.workspace, sessionId)) {
+      if (!isSafeId(sessionId) || !readSessionMeta(workspace, sessionId)) {
         return sendApiError(res, 404, "not_found", `session not found: ${sessionId}`);
       }
-      if (readCheckpoints(ctx.workspace, sessionId).length === 0) {
+      if (readCheckpoints(workspace, sessionId).length === 0) {
         return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);
       }
-      return sendJson(res, 200, rewindSession(ctx.workspace, sessionId, { dryRun: dryRun === true }));
+      return sendJson(res, 200, rewindSession(workspace, sessionId, { dryRun: dryRun === true }));
     }
 
     if (method === "GET" && path === "/api/config") {
-      return sendJson(res, 200, maskedConfig(ctx.workspace));
+      return sendJson(res, 200, maskedConfig(workspace));
     }
 
     if (method === "PUT" && path === "/api/config") {
@@ -326,14 +345,14 @@ export async function handleApi(
         return sendApiError(res, 400, "bad_request", "body must be {key, value, global?}");
       }
       try {
-        setConfigValue(ctx.workspace, key, value, global === true);
+        setConfigValue(workspace, key, value, global === true);
       } catch (err) {
         if (err instanceof ConfigValueError) {
           return sendApiError(res, 400, "bad_request", err.message);
         }
         throw err;
       }
-      return sendJson(res, 200, maskedConfig(ctx.workspace));
+      return sendJson(res, 200, maskedConfig(workspace));
     }
 
     return sendApiError(res, 404, "not_found", `no such endpoint: ${method} ${path}`);
