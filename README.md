@@ -63,7 +63,8 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
 | `seekforge resume <session-id> [task]` | continue a session with its full history (keeps its ask/edit mode) |
-| `seekforge sessions` | list sessions with status and cost |
+| `seekforge sessions` | list sessions with status and cost (subagent runs hidden) |
+| `seekforge sessions prune [--older-than <days>] [--keep-last <n>] [--dry-run]` | delete old session traces to keep `.seekforge/sessions/` bounded |
 | `seekforge status` | project / config / last-session overview |
 | `seekforge diff` | show the current git diff |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
@@ -134,7 +135,6 @@ Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
 - `deepseek-reasoner` is not usable as the agent model yet (no function
   calling; a fallback text protocol exists in the provider but is not wired
   into the loop).
-- `.seekforge/sessions/` grows unbounded (no auto-cleanup yet).
 - macOS / Linux only.
 
 ## Monorepo layout

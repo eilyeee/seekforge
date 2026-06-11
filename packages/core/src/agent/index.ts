@@ -20,6 +20,8 @@ export type RunAgentTaskInput = {
    * give nested subagent runs their own prompt). Not part of the public API.
    */
   systemPromptOverride?: string;
+  /** Internal: marks this session as spawned by dispatch_agent (the agent id). */
+  parentAgentId?: string;
 };
 
 export interface AgentCore {
@@ -34,7 +36,11 @@ export {
   listSessions,
   loadSessionMessages,
   newSessionId,
+  pruneSessions,
   readSessionMeta,
   writeSessionMeta,
+  type ListSessionsOptions,
+  type PruneResult,
+  type PruneSessionsOptions,
   type SessionMeta,
 } from "./trace.js";

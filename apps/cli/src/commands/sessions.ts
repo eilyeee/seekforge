@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { listSessions } from "@seekforge/core";
+import { listSessions, pruneSessions } from "@seekforge/core";
 import { loadConfig } from "../config.js";
 import { formatUsage } from "../render.js";
 
@@ -20,6 +20,31 @@ export function sessionsCommand(): void {
     const cost = s.usage ? ` $${s.usage.costUsd.toFixed(4)}` : "";
     console.log(`${s.id}  [${s.status}]${cost}  ${truncate(s.task, 60)}`);
   }
+}
+
+export type PruneOptions = { olderThan?: string; keepLast?: string; dryRun?: boolean };
+
+export function sessionsPruneCommand(opts: PruneOptions): void {
+  const olderThanDays = opts.olderThan !== undefined ? Number.parseInt(opts.olderThan, 10) : undefined;
+  const keepLast = opts.keepLast !== undefined ? Number.parseInt(opts.keepLast, 10) : undefined;
+  if (olderThanDays === undefined && keepLast === undefined) {
+    console.error("Specify --older-than <days> and/or --keep-last <n> (use --dry-run to preview).");
+    process.exitCode = 1;
+    return;
+  }
+  if ((olderThanDays !== undefined && Number.isNaN(olderThanDays)) || (keepLast !== undefined && Number.isNaN(keepLast))) {
+    console.error("--older-than and --keep-last must be numbers.");
+    process.exitCode = 1;
+    return;
+  }
+  const result = pruneSessions(process.cwd(), { olderThanDays, keepLast, dryRun: opts.dryRun });
+  if (result.removed.length === 0) {
+    console.log("Nothing to prune.");
+    return;
+  }
+  const verb = opts.dryRun ? "would remove" : "removed";
+  console.log(`${verb} ${result.removed.length} session(s); ${result.kept} kept.`);
+  if (opts.dryRun) for (const id of result.removed) console.log(`  ${id}`);
 }
 
 export function statusCommand(): void {

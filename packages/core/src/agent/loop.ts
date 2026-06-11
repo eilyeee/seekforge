@@ -109,6 +109,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         task: input.task,
         mode: input.mode,
         createdAt: startedAt,
+        ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
       };
       writeSessionMeta(input.projectPath, { ...meta, status: "running", updatedAt: startedAt });
 
@@ -277,6 +278,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           approvalMode: input.approvalMode,
           signal: input.signal,
           systemPromptOverride: buildSubagentPrompt(def, input.projectPath),
+          parentAgentId: def.id,
         })) {
           switch (ev.type) {
             case "session.created":
