@@ -32,15 +32,20 @@ export { createAgentCore, type AgentCoreDeps } from "./loop.js";
 export { buildSystemPrompt } from "./prompt.js";
 export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
 export {
+  appendCheckpoint,
   createSessionTrace,
   listSessions,
   loadSessionMessages,
   newSessionId,
   pruneSessions,
+  readCheckpoints,
   readSessionMeta,
+  rewindSession,
   writeSessionMeta,
+  type CheckpointEntry,
   type ListSessionsOptions,
   type PruneResult,
   type PruneSessionsOptions,
+  type RewindResult,
   type SessionMeta,
 } from "./trace.js";
