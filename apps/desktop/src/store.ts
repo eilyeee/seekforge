@@ -12,7 +12,7 @@ import { createWsClient, type ConnState, type ServerFrame, type WsClient } from 
 import { emptyUsage } from "./lib/usage";
 import type { SessionMeta } from "./types";
 
-export type View = "chat" | "sessions" | "skills" | "memory" | "settings";
+export type View = "chat" | "sessions" | "diff" | "skills" | "memory" | "settings";
 
 export type PendingPermission = { requestId: string; request: PermissionRequest };
 
