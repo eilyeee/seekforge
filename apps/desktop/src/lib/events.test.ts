@@ -144,11 +144,22 @@ describe("reduceEvent", () => {
 
   it("ignores events without a dedicated row", () => {
     const s = play([
-      { type: "step.started", title: "t" },
+      { type: "step.started", title: "selecting skills" }, // not a subagent step
       { type: "usage.updated", usage },
       { type: "command.output", stream: "stdout", chunk: "x" },
     ]);
     expect(s.items).toHaveLength(0);
+  });
+
+  it("groups subagent step.started events into one substep card per agent", () => {
+    const s = play([
+      { type: "step.started", title: "[meta-prism] read_file" },
+      { type: "step.started", title: "[meta-prism] list_files" },
+      { type: "step.started", title: "[meta-scout] web_fetch" },
+    ]);
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ kind: "substep", agentId: "meta-prism", steps: ["read_file", "list_files"] });
+    expect(s.items[1]).toMatchObject({ kind: "substep", agentId: "meta-scout", steps: ["web_fetch"] });
   });
 
   it("appendUser adds a user item", () => {

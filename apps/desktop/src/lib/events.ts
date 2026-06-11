@@ -26,6 +26,7 @@ export type ChatItem =
       result?: ToolResult;
     }
   | { kind: "plan"; id: number; items: PlanItem[] }
+  | { kind: "substep"; id: number; agentId: string; steps: string[] }
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
   | { kind: "report"; id: number; report: FinalReport }
@@ -94,10 +95,27 @@ export function upsertPlan(state: ChatState, items: PlanItem[]): ChatState {
   return push(state, { kind: "plan", items });
 }
 
+/** Nested subagent activity arrives as step.started "[agentId] toolName". */
+const SUBSTEP_RE = /^\[([a-z0-9-]+)\]\s+(.+)$/;
+
 export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
   switch (ev.type) {
     case "session.created":
       return { ...state, sessionId: ev.sessionId };
+
+    case "step.started": {
+      const m = SUBSTEP_RE.exec(ev.title);
+      if (!m) return state;
+      const [, agentId, toolName] = m as unknown as [string, string, string];
+      // Accumulate consecutive steps of the same agent into one card.
+      const last = state.items[state.items.length - 1];
+      if (last && last.kind === "substep" && last.agentId === agentId) {
+        const next = [...state.items];
+        next[next.length - 1] = { ...last, steps: [...last.steps, toolName] };
+        return { ...state, items: next };
+      }
+      return push(state, { kind: "substep", agentId, steps: [toolName] });
+    }
 
     case "model.delta": {
       const last = state.items[state.items.length - 1];
