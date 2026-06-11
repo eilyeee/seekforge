@@ -107,6 +107,43 @@ describe("agent loop", () => {
     expect(listSessions(workspace)[0]!.status).toBe("cancelled");
   });
 
+  it("rebuilds the system prompt on resume (plan -> execute mode switch)", async () => {
+    const planProvider = fakeProvider([response({ content: "## Plan\n1. edit a.ts" })]);
+    const first = createAgentCore({
+      provider: planProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const firstEvents = await collect(
+      first.runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }),
+    );
+    expect(planProvider.requests[0]!.messages[0]!.content).toContain("Mode: PLAN");
+    const created = firstEvents.find((e) => e.type === "session.created");
+    const sessionId = created && created.type === "session.created" ? created.sessionId : "";
+
+    const execProvider = fakeProvider([response({ content: "done" })]);
+    const second = createAgentCore({
+      provider: execProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    await collect(
+      second.runTask({
+        ...baseInput,
+        projectPath: workspace,
+        mode: "edit",
+        task: "execute the plan",
+        resumeSessionId: sessionId,
+      }),
+    );
+    const replayedSystem = execProvider.requests[0]!.messages[0]!;
+    expect(replayedSystem.role).toBe("system");
+    expect(replayedSystem.content).toContain("Mode: EDIT");
+    expect(replayedSystem.content).not.toContain("Mode: PLAN");
+    // the plan itself must still be in the replayed history
+    expect(execProvider.requests[0]!.messages.some((m) => m.content.includes("## Plan"))).toBe(true);
+  });
+
   it("resumes a session with its prior messages", async () => {
     const first = createAgentCore({
       provider: fakeProvider([response({ content: "first answer" })]),

@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import { readSessionMeta } from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
 import { createCliAgent } from "../agent-factory.js";
@@ -12,6 +13,8 @@ export type RunOptions = {
   resumeSessionId?: string;
   /** Emit one JSON event per line instead of human-readable output. */
   json?: boolean;
+  /** Plan first (read-only), then ask before executing in the same session. */
+  plan?: boolean;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -75,20 +78,69 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     extractMemory: mode === "edit",
   });
 
-  try {
-    let failed = false;
+  const runOnce = async (input: {
+    task: string;
+    mode: "ask" | "edit";
+    plan?: boolean;
+    resumeSessionId?: string;
+  }): Promise<{ sessionId?: string; completed: boolean }> => {
+    let sessionId: string | undefined;
+    let completed = false;
     for await (const event of agent.runTask({
       projectPath,
-      task: expandFileRefs(task, projectPath),
-      mode,
+      task: input.task,
+      mode: input.mode,
+      plan: input.plan,
       approvalMode,
-      resumeSessionId: opts.resumeSessionId,
+      resumeSessionId: input.resumeSessionId,
       signal: controller.signal,
     })) {
       render(event);
-      if (event.type === "session.failed") failed = true;
+      if (event.type === "session.created") sessionId = event.sessionId;
+      if (event.type === "session.completed") completed = true;
     }
-    if (failed) process.exitCode = 1;
+    return { sessionId, completed };
+  };
+
+  try {
+    if (opts.plan && !json) {
+      // Plan mode: read-only investigation first, then execute on approval
+      // in the SAME session (the loop rebuilds the system prompt for edit).
+      const planRun = await runOnce({
+        task: expandFileRefs(task, projectPath),
+        mode: "ask",
+        plan: true,
+      });
+      if (!planRun.completed || !planRun.sessionId) {
+        process.exitCode = 1;
+        return;
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      let answer: string;
+      try {
+        answer = (await rl.question("\nExecute this plan? [y/N] ")).trim().toLowerCase();
+      } finally {
+        rl.close();
+      }
+      if (answer !== "y") {
+        console.log(`plan kept, nothing executed (resume later: seekforge resume ${planRun.sessionId})`);
+        return;
+      }
+      const execRun = await runOnce({
+        task: "Execute the plan you produced above, step by step. Make the changes and run the verification.",
+        mode: "edit",
+        resumeSessionId: planRun.sessionId,
+      });
+      if (!execRun.completed) process.exitCode = 1;
+      return;
+    }
+
+    const run = await runOnce({
+      task: expandFileRefs(task, projectPath),
+      mode,
+      resumeSessionId: opts.resumeSessionId,
+    });
+    if (!run.completed) process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
     dispose();
