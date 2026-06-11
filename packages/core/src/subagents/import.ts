@@ -93,6 +93,7 @@ export function parseExternalAgent(markdown: string): ParsedExternalAgent {
       own: oneLine(fields.get("own")),
       doNotTouch: oneLine(fields.get("do_not_touch")),
       boundary: oneLine(fields.get("boundary")),
+      model: oneLine(fields.get("model")),
       body: body || undefined,
     },
     droppedTools,
@@ -119,6 +120,7 @@ export function renderAgentMarkdown(def: Omit<AgentDefinition, "scope">): string
   push("own", def.own);
   push("do_not_touch", def.doNotTouch);
   push("boundary", def.boundary);
+  push("model", def.model);
   if (def.maxTurns !== undefined) lines.push(`max-turns: ${def.maxTurns}`);
   lines.push("---");
   lines.push("");

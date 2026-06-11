@@ -24,6 +24,7 @@ export function agentShowCommand(id: string): void {
   if (def.description) console.log(`description: ${def.description}`);
   if (def.triggers.length > 0) console.log(`triggers:    ${def.triggers.join(", ")}`);
   console.log(`tools:       ${def.tools ? def.tools.join(", ") : "(all tools)"}`);
+  if (def.model) console.log(`model:       ${def.model}`);
   if (def.own) console.log(`own:         ${def.own}`);
   if (def.doNotTouch) console.log(`do not touch: ${def.doNotTouch}`);
   if (def.boundary) console.log(`boundary:    ${def.boundary}`);
