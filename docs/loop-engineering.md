@@ -82,9 +82,11 @@ Run/Stop button. Progress streams live (one row per iteration: run cost + verify
 pass/fail + output tail; a status summary on `loop.done`).
 
 Wire: a `loop` WS client frame `{type:"loop", task, verifyCommand, maxIterations?,
-budget?, ws?}`; the server runs `runAutoLoop` (acceptEdits) and streams
-`{type:"loop.event", event}` back, ending with `idle`. `cancel` stops it.
-Permission/question prompts during the loop's runs use the existing modals.
+budget?, ws?, model?, thinking?, reasoningEffort?}` — the model/thinking
+overrides from the run-toolbar ride along, same as a normal run. The server runs
+`runAutoLoop` (acceptEdits) and streams `{type:"loop.event", event}` back, ending
+with `idle`. `cancel` stops it. Permission/question prompts during the loop's
+runs use the existing modals.
 
 ## Relation to existing features
 

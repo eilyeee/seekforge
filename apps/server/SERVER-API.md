@@ -136,17 +136,20 @@ All frames are JSON objects with a `type` field.
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
-{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "ws": "<id>"?}
+{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "ws": "<id>"?,
+                 "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?}
                  // auto-loop: run → verify → continue until verifyCommand exits 0 (acceptEdits; guardrails)
 {"type": "cancel"}                                            // cancel the running session OR loop
 ```
 
 `model` / `thinking` / `reasoningEffort` are optional per-run overrides on
-both `start` and `send`: when present they win over the workspace config for
-THAT run only (a fresh agent/provider is assembled per run; nothing is written
-to config). Omitted fields fall back to config. Invalid values (empty model,
+`start`, `send`, and `loop`: when present they win over the workspace config for
+that run/loop only (a fresh agent/provider is assembled; nothing is written to
+config). Omitted fields fall back to config. Invalid values (empty model,
 non-boolean thinking, an effort other than `"high"`/`"max"`) →
-`{"type":"error","code":"bad_frame"}`.
+`{"type":"error","code":"bad_frame"}`. On `loop`, `maxIterations` must be a
+positive integer and `budget` a finite positive number when present (else
+`bad_frame`).
 
 `ws` selects the workspace id (default: first workspace when omitted). The run
 executes in that workspace's path; `send` looks the session up in that
