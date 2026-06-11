@@ -1,21 +1,32 @@
 /** Mock REST backend: same paths/shapes as SERVER-API.md. */
 import {
+  mockAgents,
   mockCandidates,
   mockConfig,
+  mockEvolutionProposals,
+  mockMcpServers,
+  mockMcpTools,
   mockProjectMd,
+  mockRewindResults,
   mockSessionMessages,
   mockSessions,
   mockSkillContent,
   mockSkills,
 } from "./fixtures";
-import type { MemoryCandidate, ServerConfig } from "../types";
+import type { EvolutionProposal, MemoryCandidate, ServerConfig } from "../types";
 
 // Mutable copies so approve/reject and config saves stick for the page lifetime.
 const candidates: MemoryCandidate[] = mockCandidates.map((c) => ({ ...c }));
 const config: ServerConfig = { ...mockConfig, commandAllowlist: [...(mockConfig.commandAllowlist ?? [])] };
+const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p }));
 
 function delay(ms = 150): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Error shaped like the server's {error:{code,message}} after api.ts normalization. */
+function mockError(status: number, code: string, message: string): Error {
+  return Object.assign(new Error(message), { status, code });
 }
 
 export async function mockRequest(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -89,6 +100,59 @@ export async function mockRequest(method: string, path: string, body?: unknown):
         throw new Error(`unknown config key: ${String(key)}`);
     }
     return { ...config };
+  }
+
+  if (method === "GET" && path === "/api/agents") {
+    // List omits the prompt body, like the real server.
+    return mockAgents.map(({ body: _body, ...rest }) => rest);
+  }
+  m = /^\/api\/agents\/([^/]+)$/.exec(path);
+  if (method === "GET" && m) {
+    const agent = mockAgents.find((a) => a.id === m![1]);
+    if (!agent) throw mockError(404, "not_found", "agent not found");
+    return { ...agent };
+  }
+
+  if (method === "GET" && path === "/api/evolution") {
+    // Pending first, like the real server.
+    return [...proposals].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
+  }
+  m = /^\/api\/evolution\/([^/]+)\/(accept|reject|apply)$/.exec(path);
+  if (method === "POST" && m) {
+    const proposal = proposals.find((p) => p.id === m![1]);
+    if (!proposal) throw mockError(404, "not_found", "proposal not found");
+    const action = m[2] as "accept" | "reject" | "apply";
+    if (action === "apply") {
+      if (proposal.status !== "accepted") throw mockError(409, "invalid_status", "proposal must be accepted first");
+      proposal.status = "applied";
+      proposal.reviewedAt = new Date().toISOString();
+      const changedPath =
+        proposal.type === "skill"
+          ? `.seekforge/skills/${proposal.proposal.skillId ?? proposal.id}/SKILL.md`
+          : ".seekforge/PROJECT.md";
+      return { proposal: { ...proposal }, changedPath };
+    }
+    if (proposal.status !== "pending") throw mockError(409, "invalid_status", "proposal already reviewed");
+    proposal.status = action === "accept" ? "accepted" : "rejected";
+    proposal.reviewedAt = new Date().toISOString();
+    return { ...proposal };
+  }
+
+  if (method === "GET" && path === "/api/mcp") return mockMcpServers.map((s) => ({ ...s }));
+  m = /^\/api\/mcp\/([^/]+)\/tools$/.exec(path);
+  if (method === "POST" && m) {
+    const tools = mockMcpTools[decodeURIComponent(m[1]!)];
+    if (!tools) throw mockError(504, "mcp_launch_failed", "failed to launch MCP server");
+    await delay(400); // spawning takes a moment
+    return tools;
+  }
+
+  if (method === "POST" && path === "/api/rewind") {
+    const { sessionId } = (body ?? {}) as { sessionId?: string; dryRun?: boolean };
+    const result = sessionId ? mockRewindResults[sessionId] : undefined;
+    if (!result) throw mockError(404, "no_checkpoints", "no checkpoints recorded for this session");
+    // dryRun and the real run report the same paths in the mock.
+    return { ...result, restored: [...result.restored], deleted: [...result.deleted], skipped: [...result.skipped] };
   }
 
   throw new Error(`mock: unhandled ${method} ${path}`);
