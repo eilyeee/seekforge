@@ -5,4 +5,5 @@ export * from "./memory/index.js";
 export * from "./skills/index.js";
 export * from "./subagents/index.js";
 export * from "./runtime/index.js";
+export * from "./mcp/index.js";
 export * from "./evolution/index.js";

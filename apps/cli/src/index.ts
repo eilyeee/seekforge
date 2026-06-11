@@ -12,6 +12,7 @@ import {
   evolveShowCommand,
 } from "./commands/evolve.js";
 import { initCommand } from "./commands/init.js";
+import { mcpListCommand } from "./commands/mcp.js";
 import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
@@ -165,6 +166,15 @@ agentCmd
   .description("import an external agent definition")
   .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
     agentImportCommand(sourcePath, opts);
+  });
+
+const mcp = program.command("mcp").description("Model Context Protocol servers (mcpServers in config)");
+mcp
+  .command("list", { isDefault: true })
+  .option("--tools", "also print each tool's description")
+  .description("list configured MCP servers and the tools they expose")
+  .action(async (opts: { tools?: boolean }) => {
+    await mcpListCommand(opts);
   });
 
 const memory = program.command("memory").description("inspect and curate project memory");

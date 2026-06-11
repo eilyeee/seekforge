@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
-import { createCliAgent } from "../agent-factory.js";
+import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
@@ -70,9 +70,11 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     ? (e: unknown) => console.log(JSON.stringify(e))
     : createRenderer({ streaming: true });
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
+  const mcp = await prepareMcp(config);
   const { agent, dispose } = createCliAgent({
     config,
     model,
+    mcpToolSpecs: mcp.specs,
     confirm: json ? async () => false : confirmInTerminal,
     onModelDelta: json ? undefined : (chunk) => process.stdout.write(chunk),
     extractMemory: mode === "edit",
@@ -145,5 +147,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   } finally {
     process.removeListener("SIGINT", onSigint);
     dispose();
+    mcp.dispose();
   }
 }

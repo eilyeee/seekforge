@@ -2,7 +2,7 @@
  * Tool system module: schemas, permission policy, dispatcher, built-in tools.
  *
  * Contract (see packages/shared/src/index.ts for the types):
- *   createDefaultDispatcher(): ToolDispatcher
+ *   createDefaultDispatcher(extraTools?: ToolSpec[]): ToolDispatcher
  */
 
 import type {
@@ -12,7 +12,7 @@ import type {
   ToolDefinitionForModel,
   ToolResult,
 } from "@seekforge/shared";
-import { createDispatcher } from "./registry.js";
+import { createDispatcher, type ToolSpec } from "./registry.js";
 import { builtinTools } from "./builtins/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 
@@ -39,8 +39,8 @@ export interface ToolDispatcher {
   execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult>;
 }
 
-export function createDefaultDispatcher(): ToolDispatcher {
-  return createDispatcher(builtinTools());
+export function createDefaultDispatcher(extraTools: ToolSpec[] = []): ToolDispatcher {
+  return createDispatcher([...builtinTools(), ...extraTools]);
 }
 
 // Additional exports for tests / other modules.
