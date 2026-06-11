@@ -2,7 +2,17 @@
 
 ## 0.4.0 (unreleased)
 
-Phase 8 batches 1–2 — harness ergonomics.
+Phase 8 batches 1–3 — harness ergonomics and the desktop workbench.
+
+### Added (batch 3)
+- Desktop workbench: multi-session tabs (each tab its own WebSocket session,
+  parallel runs), Plan/Ask/Edit mode selector with an "Execute plan" step,
+  auto-approve toggle, system notifications when hidden (confirmation needed /
+  task finished), Agents and Evolution management views, an MCP panel in
+  Settings, and per-session Rewind with dry-run preview.
+- Server: /api/agents, /api/evolution (accept/reject/apply), /api/mcp
+  (config + on-demand tool listing; env values never serialized), /api/rewind;
+  WS start accepts plan, send accepts a mode override.
 
 ### Added (batch 2)
 - Subagent execution upgrade: multiple `dispatch_agent` calls in one turn
