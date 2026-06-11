@@ -31,12 +31,14 @@ function parseBullet(raw: string): Bullet {
   const typeMatch = /^\[([^\]]+)\]/.exec(body);
   const type = typeMatch ? typeMatch[1] : undefined;
   const text = typeMatch ? body.slice(typeMatch[0].length) : body;
-  const words = new Set(
-    text
-      .toLowerCase()
-      .split(/[^a-z0-9一-鿿]+/i)
-      .filter((w) => w.length > 0),
-  );
+  const lower = text.toLowerCase();
+  // CJK has no word boundaries, so split it into single characters; latin/digit
+  // runs stay as words. Otherwise different phrasings of the same Chinese fact
+  // never overlap (each clause becomes one giant token).
+  const words = new Set<string>([
+    ...(lower.match(/[\p{Script=Han}]/gu) ?? []),
+    ...lower.split(/[^a-z0-9]+/i).filter((w) => w.length > 0),
+  ]);
   return { raw, type, words };
 }
 
