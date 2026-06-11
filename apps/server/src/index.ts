@@ -50,18 +50,21 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
   const server = createServer((req, res) => {
     // Deliberately no Access-Control-Allow-Origin header (same-origin UI only).
-    if (!isAuthorized(req, token)) {
-      return sendApiError(res, 401, "unauthorized", "missing or invalid token");
-    }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+      // The token gates capability (API/WS). Static assets are public: the
+      // UI bundle is not a secret, and index.html's subresource requests
+      // cannot carry the token anyway.
+      if (!isAuthorized(req, token)) {
+        return sendApiError(res, 401, "unauthorized", "missing or invalid token");
+      }
       void handleApi(req, res, url, { workspace, version });
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       return sendApiError(res, 405, "method_not_allowed", `${req.method} not allowed for ${url.pathname}`);
     }
-    serveStatic(res, { root: staticRoot, pathname: url.pathname, port, token, workspace });
+    serveStatic(res, { root: staticRoot, pathname: url.pathname, port, workspace });
   });
 
   const wss = new WebSocketServer({ noServer: true });
