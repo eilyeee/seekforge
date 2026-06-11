@@ -158,7 +158,10 @@ program
   .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
   .option("--settings <file>", "with -p: path to JSON settings file (layered over project config but below env/CLI flags)")
   .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)")
-  .option("--dangerously-skip-permissions", "with -p: alias for -y — run every tool without prompting")
+  .option(
+    "--dangerously-skip-permissions",
+    "with -p: alias for -y — auto-approve write/execute (dangerous still refused; env still asks)",
+  )
   .option("--mcp-config <file>", "with -p: load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
   .option("--strict-mcp-config", "with -p: use only --mcp-config servers, ignore config-file MCP servers")
   .option("--replay-user-messages", "with -p + --input-format stream-json: echo each user turn back as a stream-json event")
@@ -216,7 +219,10 @@ program
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
-  .option("--dangerously-skip-permissions", "alias for -y — run every tool without prompting")
+  .option(
+    "--dangerously-skip-permissions",
+    "alias for -y — auto-approve write/execute (dangerous still refused; env still asks)",
+  )
   .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
   .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")

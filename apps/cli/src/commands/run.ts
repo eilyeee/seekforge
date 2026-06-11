@@ -181,7 +181,9 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
           : () => {}; // json: swallow events, emit one final object at the end
   // --permission-mode maps Claude-compatible (and native) names onto ApprovalMode;
   // "plan" additionally forces plan-first. When unset, -y → auto, else confirm.
-  // -y and --dangerously-skip-permissions both mean "run everything" (auto).
+  // -y and --dangerously-skip-permissions both map to approvalMode "auto"
+  // (auto-approve write/execute). "auto" is NOT literally every tool: the
+  // denylist still refuses dangerous calls and env changes still ask.
   let approvalMode: ApprovalMode = opts.yes || opts.dangerouslySkipPermissions ? "auto" : "confirm";
   let planFromMode = false;
   if (opts.permissionMode) {

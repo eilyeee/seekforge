@@ -76,12 +76,14 @@ a user who installs only the bundle can launch it with **no** system-installed
   + token-gated API all served). Without it the binary still runs but only
   shows the API info page.
 
-> **Verification status:** the sidecar binary was verified to serve the full UI
-> standalone (run directly with `SEEKFORGE_STATIC_DIR` set). Rust resolution and
-> `cargo check`/`cargo test` pass. A full `pnpm tauri build` (which produces the
-> `.app`/DMG and lays out the sidecar + `web` resource) has **not** been run
-> here, so the exact in-bundle layout relies on Tauri's documented convention
-> rather than an end-to-end DMG launch.
+> **Verification status:** the sidecar binary serves the full UI standalone
+> (run directly with `SEEKFORGE_STATIC_DIR` set); `cargo check`/`cargo test`
+> pass; and `pnpm tauri build` has been run successfully — it produces
+> `SeekForge_<ver>_<arch>.dmg` + `SeekForge.app` with the sidecar laid out at
+> `Contents/MacOS/seekforge-server` and the web resource bundled.
+> **Still pending:** installing that DMG on a clean machine and launching it
+> (the in-app `⏺ chat` connecting end-to-end) — that GUI smoke-test hasn't been
+> done here and is the last pre-release check.
 
 ## Which workspace the agent operates on
 

@@ -36,7 +36,7 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--append-system-prompt <text>` | Append text to the system prompt |
 | `--allowedTools <list>` | Only allow these tools (comma-separated) |
 | `--disallowedTools <list>` | Deny these tools (comma-separated) |
-| `--dangerously-skip-permissions` | Alias for `-y` — run every tool without prompting |
+| `--dangerously-skip-permissions` | Alias for `-y` — auto-approve write/execute (dangerous commands are still refused; env changes still ask) |
 | `--mcp-config <file>` | Load MCP servers from a JSON file (merged over config, unless `--strict-mcp-config`) |
 | `--strict-mcp-config` | Use only `--mcp-config` servers, ignore config-file MCP servers |
 | `--verbose` | Print full tool args and results |

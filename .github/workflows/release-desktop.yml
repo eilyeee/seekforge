@@ -1,20 +1,29 @@
 name: release-desktop
 
-# Builds, signs, and publishes the SeekForge desktop app (DMG + auto-update
-# artifacts) to a GitHub Release whenever a `v*` tag is pushed.
+# Builds and publishes the SeekForge desktop app (a macOS DMG) to a GitHub
+# Release whenever a `v*` tag is pushed.
+#
+# NOTE: the auto-updater is OPT-IN and OFF by default. With the shipped config
+# (`bundle.createUpdaterArtifacts: false` + a placeholder `plugins.updater.pubkey`)
+# this workflow produces a working DMG but NO updater payload / `latest.json`,
+# so installs won't self-update. To ship auto-updatable releases, first do
+# RELEASING.md step 0 (generate the keypair, set createUpdaterArtifacts: true,
+# paste the real pubkey, add the TAURI_SIGNING_* secrets); only then do the
+# updater-payload + latest.json steps below actually run.
 #
 # What this does, end to end:
 #   1. On a `v*` tag (or manual dispatch) it runs a macOS matrix
 #      (Apple Silicon + Intel).
 #   2. Each job verifies the tag matches the version in
-#      `apps/desktop/src-tauri/tauri.conf.json`, builds the Tauri bundle, signs
-#      the updater payload with the Tauri signing key, optionally code-signs +
-#      notarizes with an Apple Developer ID, and uploads the DMG / .app.tar.gz /
-#      .sig to the release for the tag.
-#   3. tauri-action also generates `latest.json` (the updater manifest). Because
-#      both matrix jobs target the same `tagName`, tauri-action APPENDS each
-#      arch's entry to the SAME `latest.json` on the release — so the published
-#      manifest ends up with both `darwin-aarch64` and `darwin-x86_64` keys.
+#      `apps/desktop/src-tauri/tauri.conf.json`, builds the Tauri bundle,
+#      (when the updater is enabled) signs the updater payload with the Tauri
+#      signing key, optionally code-signs + notarizes with an Apple Developer ID,
+#      and uploads the DMG (+ .app.tar.gz / .sig when present) to the release.
+#   3. When the updater is enabled, tauri-action also generates `latest.json`
+#      (the updater manifest). Because both matrix jobs target the same
+#      `tagName`, tauri-action APPENDS each arch's entry to the SAME
+#      `latest.json` — so the published manifest ends up with both
+#      `darwin-aarch64` and `darwin-x86_64` keys.
 #
 # Coordination with the npm release workflow:
 #   The npm release workflow (.github/workflows/release-npm.yml, owned by a

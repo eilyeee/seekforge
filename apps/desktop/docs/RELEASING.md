@@ -179,15 +179,18 @@ pnpm tauri build
 >
 > CI is already correct: it builds the sidecar per matrix `--target`.
 
-`tauri build` runs `pnpm --filter @seekforge/desktop build` first (Vite),
-compiles the Rust shell, and because `bundle.createUpdaterArtifacts` is true
-also produces signed updater artifacts. Output (workspace root, since the crate
-is a member of the root Cargo workspace):
+`tauri build` runs `pnpm --filter @seekforge/desktop build` first (Vite), then
+the sidecar (via `beforeBuildCommand`), then compiles the Rust shell. The
+updater artifacts (`.app.tar.gz` + `.sig`) are produced ONLY when
+`bundle.createUpdaterArtifacts` is `true` — which it is NOT by default (step 0
+turns it on). With the shipped default you get just the DMG (a non-updatable
+build). Output (workspace root, since the crate is a member of the root Cargo
+workspace):
 
 ```
 target/release/bundle/dmg/SeekForge_<version>_<arch>.dmg      # what users download
-target/release/bundle/macos/SeekForge.app.tar.gz              # updater payload
-target/release/bundle/macos/SeekForge.app.tar.gz.sig          # updater signature
+target/release/bundle/macos/SeekForge.app.tar.gz              # updater payload (only if updater enabled)
+target/release/bundle/macos/SeekForge.app.tar.gz.sig          # updater signature (only if updater enabled)
 ```
 
 (`<arch>` is `x64` on Intel, `aarch64` on Apple Silicon; cross-build the other
