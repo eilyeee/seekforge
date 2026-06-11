@@ -32,3 +32,13 @@ export {
   buildSubagentRoster,
   whitelistDispatcher,
 } from "./dispatch.js";
+export { createEventQueue, type EventQueue } from "./events.js";
+export {
+  createDispatchManager,
+  type DispatchHooks,
+  type DispatchManager,
+  type DispatchRunner,
+  type DispatchSnapshot,
+  type DispatchStatus,
+  type StartDispatchInput,
+} from "./manager.js";
