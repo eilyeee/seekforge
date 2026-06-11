@@ -5,6 +5,12 @@ import type { AgentDefinition } from "./types.js";
 /** Synthetic tool name the loop intercepts (never reaches a dispatcher). */
 export const DISPATCH_AGENT_TOOL = "dispatch_agent";
 
+/** Synthetic tool: poll a (background) dispatch for status/report. */
+export const AGENT_RESULT_TOOL = "agent_result";
+
+/** Synthetic tool: continue a completed dispatch with a follow-up task. */
+export const AGENT_SEND_TOOL = "agent_send";
+
 /** Builds the synthetic dispatch_agent tool definition for the roster. */
 export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefinitionForModel {
   const lines = defs.map((d) => `${d.id} — ${d.description || d.name} (${d.mode})`);
@@ -26,8 +32,56 @@ export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefini
           type: "string",
           description: "Self-contained sub-task description, including the expected report.",
         },
+        background: {
+          type: "boolean",
+          description: "Start the agent and return immediately; poll with agent_result.",
+        },
       },
       required: ["agentId", "task"],
+    },
+  };
+}
+
+/** Builds the synthetic agent_result tool definition (dispatch polling). */
+export function buildAgentResultToolDefinition(): ToolDefinitionForModel {
+  return {
+    name: AGENT_RESULT_TOOL,
+    description:
+      "Check on a dispatched agent (e.g. one started with background:true). " +
+      "Returns its status and recent steps while running, or its report once done.",
+    parameters: {
+      type: "object",
+      properties: {
+        dispatchId: {
+          type: "string",
+          description: 'Dispatch id returned by dispatch_agent (e.g. "ag-1").',
+        },
+      },
+      required: ["dispatchId"],
+    },
+  };
+}
+
+/** Builds the synthetic agent_send tool definition (dispatch continuation). */
+export function buildAgentSendToolDefinition(): ToolDefinitionForModel {
+  return {
+    name: AGENT_SEND_TOOL,
+    description:
+      "Send a follow-up task to a previously dispatched agent. It resumes with its " +
+      "full prior context and reports back. Only valid once the dispatch completed.",
+    parameters: {
+      type: "object",
+      properties: {
+        dispatchId: {
+          type: "string",
+          description: 'Dispatch id returned by dispatch_agent (e.g. "ag-1").',
+        },
+        task: {
+          type: "string",
+          description: "Follow-up task for the agent, building on its previous run.",
+        },
+      },
+      required: ["dispatchId", "task"],
     },
   };
 }

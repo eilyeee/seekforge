@@ -1,5 +1,5 @@
-/** Where an agent definition was loaded from. */
-export type AgentScope = "global" | "project";
+/** Where an agent definition was loaded from. "builtin" = shipped with SeekForge. */
+export type AgentScope = "global" | "project" | "builtin";
 
 /**
  * A specialist subagent definition, loaded from
@@ -25,6 +25,8 @@ export type AgentDefinition = {
   boundary?: string;
   /** Turn budget for the nested run. Default 15. */
   maxTurns?: number;
+  /** Model override for this agent's runs (AgentCoreDeps.providerForModel). */
+  model?: string;
   scope: AgentScope;
   /** AGENT.md markdown body, appended to the subagent system prompt. */
   body?: string;
