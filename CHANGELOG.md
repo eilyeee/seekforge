@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+Phase 8 batch 1 — harness ergonomics.
+
+### Added
+- Background tasks: `run_command` accepts `background: true` (dev servers,
+  watchers) plus `task_output` / `task_kill` tools; ring-buffered output,
+  same permission flow as foreground, every task killed at session end.
+- Checkpoint & rewind: file contents are snapshotted before a session's
+  first write to each path (incl. the Rust backend path); `seekforge rewind
+  [session] [--dry-run]` restores originals and deletes created files.
+- Direct memory channel: `seekforge memory add` (straight into project.md
+  with an audit candidate, `--pending` to queue instead), `memory remove`
+  by index/id/text, numbered `memory list`, and `/remember <fact>` in the
+  REPL. Injection-filtered like extracted memories.
+
 ## 0.3.0 (unreleased)
 
 Phase 4 — interactive surfaces.

@@ -1,6 +1,6 @@
 {
   "name": "seekforge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A local-first coding agent powered by DeepSeek.",
   "license": "MIT",
   "author": "eilyeee",

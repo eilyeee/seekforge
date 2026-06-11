@@ -1,5 +1,5 @@
 import { createInterface, type Interface } from "node:readline/promises";
-import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import { addMemoryFact, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
@@ -18,6 +18,7 @@ Slash commands:
   /resume <id>       continue an existing session
   /plan <task>       plan read-only first, confirm, then execute
   /model <name>      switch model for subsequent messages
+  /remember <fact>   save a fact to project memory (project.md)
   /usage             cumulative token usage and cost for this REPL
   /quit              exit (Ctrl+D also works)
 Anything else is sent to the agent. @path tokens inline file contents.
@@ -170,6 +171,20 @@ export async function replCommand(opts: { model?: string; yes?: boolean }): Prom
           model = rest[0] ?? model;
           console.log(`model: ${model}`);
           break;
+        case "/remember": {
+          const fact = rest.join(" ").trim();
+          if (!fact) {
+            console.log("usage: /remember <fact>");
+            break;
+          }
+          try {
+            const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+            console.log(`remembered → project.md: ${c.content}`);
+          } catch (err) {
+            console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
+        }
         case "/usage":
           console.log(formatUsage(totalUsage));
           break;

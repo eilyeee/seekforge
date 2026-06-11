@@ -98,7 +98,8 @@ export function appendCandidates(workspace: string, candidates: MemoryCandidate[
   fs.appendFileSync(file, lines, "utf8");
 }
 
-function writeCandidates(workspace: string, candidates: MemoryCandidate[]): void {
+/** Module-internal (used by direct.ts); not part of the public barrel. */
+export function writeCandidates(workspace: string, candidates: MemoryCandidate[]): void {
   const file = candidatesPath(workspace);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");

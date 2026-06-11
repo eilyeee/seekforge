@@ -13,8 +13,15 @@ import {
 } from "./commands/evolve.js";
 import { initCommand } from "./commands/init.js";
 import { mcpListCommand } from "./commands/mcp.js";
-import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
+import {
+  memoryAddCommand,
+  memoryApproveCommand,
+  memoryListCommand,
+  memoryRejectCommand,
+  memoryRemoveCommand,
+} from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
+import { rewindCommand } from "./commands/rewind.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
@@ -97,6 +104,15 @@ program
   .description("continue an existing session with its full history")
   .action(async (sessionId: string, task: string, opts: { yes?: boolean; model?: string }) => {
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
+  });
+
+program
+  .command("rewind")
+  .argument("[session-id]", "session to rewind (default: most recent session with checkpoints)")
+  .option("--dry-run", "show what would be restored/deleted without changing any file")
+  .description("undo all file changes a session made (restore pre-session contents)")
+  .action((sessionId: string | undefined, opts: { dryRun?: boolean }) => {
+    rewindCommand(sessionId, opts);
   });
 
 program
@@ -183,6 +199,22 @@ memory
   .description("show project.md and pending memory candidates")
   .action(() => {
     memoryListCommand();
+  });
+memory
+  .command("add")
+  .argument("<content...>", "fact text (words are joined with spaces)")
+  .option("--type <type>", "command | path | convention | tech | task_pattern", "convention")
+  .option("--pending", "queue as a pending candidate instead of writing to project.md")
+  .description("add a fact directly to project memory (user statement = approval)")
+  .action((content: string[], opts: { type?: string; pending?: boolean }) => {
+    memoryAddCommand(content, opts);
+  });
+memory
+  .command("remove")
+  .argument("<selector>", "fact number, unique substring, or mc- candidate id")
+  .description("remove a fact from project.md, or delete a candidate entirely (mc- id)")
+  .action((selector: string) => {
+    memoryRemoveCommand(selector);
   });
 memory
   .command("approve")

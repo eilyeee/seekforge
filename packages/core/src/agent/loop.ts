@@ -12,7 +12,7 @@ import {
 } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
-import type { ToolContext, ToolDispatcher } from "../tools/index.js";
+import { createBackgroundTasks, type ToolContext, type ToolDispatcher } from "../tools/index.js";
 import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
@@ -26,7 +26,7 @@ import {
 } from "../subagents/index.js";
 import { compactMessages } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
-import { createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
+import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
 export type AgentCoreDeps = {
@@ -179,6 +179,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       };
 
+      // First-wins checkpointing: on resume, pre-seed from the existing file so
+      // the original run's pre-session snapshots stay authoritative.
+      const checkpointed = new Set<string>(
+        resuming ? readCheckpoints(input.projectPath, sessionId).map((c) => c.path) : [],
+      );
       const ctx: ToolContext = {
         sessionId,
         workspace: input.projectPath,
@@ -190,6 +195,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
+        background: createBackgroundTasks(),
+        checkpoint: (path, before) => {
+          if (checkpointed.has(path)) return;
+          checkpointed.add(path);
+          appendCheckpoint(input.projectPath, sessionId, { ts: new Date().toISOString(), path, before });
+        },
       };
 
       const toolDefs =
@@ -469,6 +480,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           type: "session.failed",
           error: { code, message: e.message ?? String(err) },
         });
+      } finally {
+        ctx.background?.disposeAll();
       }
     },
   };
