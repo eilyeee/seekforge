@@ -5,6 +5,7 @@ import {
   type ChatMessage,
   type FinalReport,
   type PermissionRequest,
+  type PermissionRule,
   type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
@@ -44,6 +45,8 @@ export type AgentCoreDeps = {
   runtime?: RuntimeClient;
   /** Extra command prefixes the user allows to auto-run (L2). */
   commandAllowlist?: string[];
+  /** Fine-grained allow/deny rules, project rules first (first match wins). */
+  permissionRules?: PermissionRule[];
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
@@ -182,6 +185,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           approvalMode: input.approvalMode,
           mode: input.mode,
           commandAllowlist: deps.commandAllowlist ?? [],
+          ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
         },
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
