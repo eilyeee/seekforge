@@ -12,7 +12,7 @@ import {
 } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
-import type { ToolContext, ToolDispatcher } from "../tools/index.js";
+import { createBackgroundTasks, type ToolContext, type ToolDispatcher } from "../tools/index.js";
 import { buildMemoryBrief, extractMemoryFromSession } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
@@ -190,6 +190,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         confirm: deps.confirm,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
+        background: createBackgroundTasks(),
       };
 
       const toolDefs =
@@ -469,6 +470,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           type: "session.failed",
           error: { code, message: e.message ?? String(err) },
         });
+      } finally {
+        ctx.background?.disposeAll();
       }
     },
   };
