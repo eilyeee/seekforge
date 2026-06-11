@@ -32,17 +32,22 @@ export type ChatItem =
   | { kind: "report"; id: number; report: FinalReport }
   | { kind: "failed"; id: number; error: AgentError };
 
+/** Latest context-window occupancy (context.usage event). */
+export type ContextUsage = { usedTokens: number; budgetTokens: number; percent: number };
+
 export type ChatState = {
   items: ChatItem[];
   sessionId: string | null;
   running: boolean;
   /** Cumulative across session.completed reports. */
   usage: TokenUsage;
+  /** Latest context.usage event; null until the first turn reports it. */
+  contextUsage: ContextUsage | null;
   nextId: number;
 };
 
 export function initialChatState(): ChatState {
-  return { items: [], sessionId: null, running: false, usage: emptyUsage(), nextId: 1 };
+  return { items: [], sessionId: null, running: false, usage: emptyUsage(), contextUsage: null, nextId: 1 };
 }
 
 /** Distributive Omit so each union member loses `id` individually. */
@@ -173,6 +178,13 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         droppedTurns: ev.droppedTurns,
         summaryTokens: ev.summaryTokens,
       });
+
+    // No chat row: the footer renders the latest occupancy.
+    case "context.usage":
+      return {
+        ...state,
+        contextUsage: { usedTokens: ev.usedTokens, budgetTokens: ev.budgetTokens, percent: ev.percent },
+      };
 
     case "session.completed": {
       const next = push(state, { kind: "report", report: ev.report });

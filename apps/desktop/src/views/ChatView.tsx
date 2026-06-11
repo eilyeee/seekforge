@@ -189,7 +189,7 @@ export function ChatView() {
         />
       </div>
 
-      <UsageFooter usage={tab.chat.usage} conn={tab.conn} />
+      <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} />
 
       {tab.pendingPermission && (
         <PermissionModal request={tab.pendingPermission.request} onRespond={respondPermission} />
