@@ -14,6 +14,7 @@ import {
 import { truncateHeadTail } from "../text.js";
 import { callRuntime } from "../runtime-backend.js";
 import { defineTool, type ToolSpec } from "../registry.js";
+import type { ToolContext } from "../index.js";
 
 const MAX_LIST_ENTRIES = 500;
 const MAX_SEARCH_MATCHES = 200;
@@ -252,6 +253,23 @@ const searchText = defineTool({
 // write_file
 // ---------------------------------------------------------------------------
 
+/**
+ * Fetches a file's current content through the runtime for checkpointing
+ * before a delegated write. A missing/unreadable file maps to null (the
+ * checkpoint semantics for "did not exist before this session").
+ */
+async function runtimeBeforeContent(ctx: ToolContext, relPath: string): Promise<string | null> {
+  try {
+    const res = await callRuntime<{ content: string }>(ctx.runtime!, "read_file", ctx.workspace, {
+      path: relPath,
+    });
+    return res.content;
+  } catch (err) {
+    if (err instanceof ToolError && (err.code === "not_found" || err.code === "io_error")) return null;
+    throw err;
+  }
+}
+
 const writeFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
   content: z.string().describe("Full file content to write (UTF-8)."),
@@ -270,6 +288,9 @@ const writeFile = defineTool({
   }),
   async run(args, ctx) {
     if (ctx.runtime) {
+      if (ctx.checkpoint) {
+        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
+      }
       await callRuntime<{ path: string }>(ctx.runtime, "write_file", ctx.workspace, {
         path: args.path,
         content: args.content,
@@ -278,9 +299,11 @@ const writeFile = defineTool({
       return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
     }
     const resolved = resolveForWrite(ctx.workspace, args.path);
-    if (fs.existsSync(resolved) && !args.overwrite) {
+    const exists = fs.existsSync(resolved);
+    if (exists && !args.overwrite) {
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
     }
+    ctx.checkpoint?.(args.path, exists ? fs.readFileSync(resolved, "utf8") : null);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     fs.writeFileSync(resolved, args.content, "utf8");
     return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
@@ -315,6 +338,9 @@ const applyPatch = defineTool({
   }),
   async run(args, ctx) {
     if (ctx.runtime) {
+      if (ctx.checkpoint) {
+        ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
+      }
       const res = await callRuntime<{ path: string; editsApplied: number }>(
         ctx.runtime,
         "apply_patch",
@@ -332,6 +358,7 @@ const applyPatch = defineTool({
     const content = fs.readFileSync(resolved, "utf8");
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
+    ctx.checkpoint?.(args.path, content);
     fs.writeFileSync(resolved, next, "utf8");
     return { data: { path: args.path, editsApplied: args.edits.length } };
   },
