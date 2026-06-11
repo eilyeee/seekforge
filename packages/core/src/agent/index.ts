@@ -30,6 +30,7 @@ export interface AgentCore {
 
 export { createAgentCore, type AgentCoreDeps } from "./loop.js";
 export { buildSystemPrompt } from "./prompt.js";
+export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
 export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
 export {
   appendCheckpoint,
