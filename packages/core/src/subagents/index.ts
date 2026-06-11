@@ -10,10 +10,12 @@
 
 export type { AgentDefinition, AgentScope } from "./types.js";
 export { DEFAULT_SUBAGENT_MAX_TURNS } from "./types.js";
+export { BUILTIN_AGENTS } from "./builtins.js";
 export {
   loadAgentDefinitions,
   loadAgentDefinitionsFromDirs,
   parseAgentMarkdown,
+  withBuiltinAgents,
   type AgentsDir,
 } from "./load.js";
 export {
