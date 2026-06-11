@@ -1,14 +1,16 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
+import { writeFixtureServer } from "./mcp-fixture.js";
 
 const TOKEN = "test-token-rest";
 
 let workspace: string;
 let server: RunningServer;
 let base: string;
+let mcpFixture: ReturnType<typeof writeFixtureServer>;
 
 const candidate = {
   id: "c1",
@@ -20,7 +22,23 @@ const candidate = {
   status: "pending",
 };
 
-function seedWorkspace(ws: string): void {
+function evolutionProposal(id: string, status: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    sessionId: "s1",
+    type: "agent_rule",
+    title: `proposal ${id}`,
+    problem: "the agent kept forgetting to typecheck",
+    evidence: { commands: ["pnpm typecheck"] },
+    proposal: { content: `rule from ${id}` },
+    risk: "low",
+    status,
+    createdAt: "2026-01-05T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function seedWorkspace(ws: string, mcpServerPath: string): void {
   writeFileIn(
     ws,
     "package.json",
@@ -75,7 +93,80 @@ function seedWorkspace(ws: string): void {
   );
   writeFileIn(ws, ".seekforge/skills/demo-skill/SKILL.md", "# Demo skill\ndo the demo thing\n");
 
-  writeFileIn(ws, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }));
+  // A project subagent definition (builtins explorer/reviewer come for free).
+  writeFileIn(
+    ws,
+    ".seekforge/agents/helper-bot/AGENT.md",
+    [
+      "---",
+      "name: Helper Bot",
+      "description: a project agent fixture",
+      "trigger: helper | fixture",
+      "tools: read_file, search_text",
+      "mode: ask",
+      "---",
+      "",
+      "# Helper procedure",
+      "secret prompt body",
+      "",
+    ].join("\n"),
+  );
+
+  // Evolution proposals, file (chronological) order: ep1, ep2, ep3.
+  writeFileIn(
+    ws,
+    ".seekforge/evolution/proposals.jsonl",
+    [
+      evolutionProposal("ep1", "pending"),
+      evolutionProposal("ep2", "rejected", { reviewedAt: "2026-01-06T00:00:00.000Z" }),
+      evolutionProposal("ep3", "pending"),
+    ]
+      .map((p) => `${JSON.stringify(p)}\n`)
+      .join(""),
+  );
+
+  // Session s3 has checkpoints to rewind; s1 exists but has none.
+  writeFileIn(
+    ws,
+    ".seekforge/sessions/s3/session.json",
+    JSON.stringify({
+      id: "s3",
+      task: "third task",
+      mode: "edit",
+      status: "completed",
+      createdAt: "2026-01-04T00:00:00.000Z",
+      updatedAt: "2026-01-04T00:01:00.000Z",
+    }),
+  );
+  writeFileIn(
+    ws,
+    ".seekforge/sessions/s3/checkpoints.jsonl",
+    [
+      { ts: "2026-01-04T00:00:30.000Z", path: "src/rewind-me.txt", before: "original\n" },
+      { ts: "2026-01-04T00:00:40.000Z", path: "src/created-by-session.txt", before: null },
+    ]
+      .map((e) => `${JSON.stringify(e)}\n`)
+      .join(""),
+  );
+  writeFileIn(ws, "src/rewind-me.txt", "modified by the session\n");
+  writeFileIn(ws, "src/created-by-session.txt", "new file from the session\n");
+
+  writeFileIn(
+    ws,
+    ".seekforge/config.json",
+    JSON.stringify({
+      apiKey: "sk-test123456",
+      model: "deepseek-chat",
+      mcpServers: {
+        fake: {
+          command: process.execPath,
+          args: [mcpServerPath],
+          env: { SECRET_TOKEN: "hush-value" },
+        },
+        broken: { command: "/definitely/not/a/real/binary", trusted: true },
+      },
+    }),
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,13 +190,15 @@ beforeAll(async () => {
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
   workspace = makeWorkspace();
-  seedWorkspace(workspace);
+  mcpFixture = writeFixtureServer();
+  seedWorkspace(workspace, mcpFixture.serverPath);
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
   base = `http://127.0.0.1:${server.port}`;
 });
 
 afterAll(async () => {
   await server.close();
+  mcpFixture.cleanup();
 });
 
 describe("auth", () => {
@@ -151,7 +244,7 @@ describe("REST endpoints", () => {
   it("GET /api/sessions lists newest first", async () => {
     const res = await authed("/api/sessions");
     const body = await jsonOf(res);
-    expect(body.map((m: { id: string }) => m.id)).toEqual(["s2", "s1"]);
+    expect(body.map((m: { id: string }) => m.id)).toEqual(["s3", "s2", "s1"]);
   });
 
   it("GET /api/sessions/:id returns meta and messages", async () => {
@@ -210,6 +303,8 @@ describe("REST endpoints", () => {
     const body = await jsonOf(res);
     expect(body.apiKey).toBe("sk-tes****");
     expect(body.model).toBe("deepseek-chat");
+    // mcpServers entries may carry secret env values — never exposed here.
+    expect(body).not.toHaveProperty("mcpServers");
   });
 
   it("PUT /api/config sets allowed keys and rejects unknown ones", async () => {
@@ -258,6 +353,183 @@ describe("REST endpoints", () => {
 
     const unauth = await fetch(`${base}/api/diff`);
     expect(unauth.status).toBe(401);
+  });
+});
+
+describe("agents endpoints", () => {
+  it("GET /api/agents lists project + builtin agents without prompt bodies", async () => {
+    const res = await authed("/api/agents");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+
+    const ids = body.map((a: { id: string }) => a.id);
+    expect(ids).toContain("helper-bot");
+    expect(ids).toContain("explorer");
+    expect(ids).toContain("reviewer");
+
+    const helper = body.find((a: { id: string }) => a.id === "helper-bot");
+    expect(helper).toMatchObject({
+      id: "helper-bot",
+      name: "Helper Bot",
+      description: "a project agent fixture",
+      scope: "project",
+      mode: "ask",
+      tools: ["read_file", "search_text"],
+      triggers: ["helper", "fixture"],
+    });
+
+    for (const agent of body) expect(agent).not.toHaveProperty("body");
+  });
+
+  it("GET /api/agents/:id returns the full definition incl. body, 404 otherwise", async () => {
+    const res = await authed("/api/agents/helper-bot");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.id).toBe("helper-bot");
+    expect(body.body).toContain("secret prompt body");
+
+    expect((await authed("/api/agents/no-such-agent")).status).toBe(404);
+  });
+});
+
+describe("evolution endpoints", () => {
+  it("GET /api/evolution lists proposals pending-first, newest-first within groups", async () => {
+    const res = await authed("/api/evolution");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.map((p: { id: string }) => p.id)).toEqual(["ep3", "ep1", "ep2"]);
+    expect(body.map((p: { status: string }) => p.status)).toEqual(["pending", "pending", "rejected"]);
+  });
+
+  it("POST apply on a pending proposal is a 409 conflict", async () => {
+    const res = await authed("/api/evolution/ep3/apply", { method: "POST" });
+    expect(res.status).toBe(409);
+    const body = await jsonOf(res);
+    expect(body.error.code).toBe("conflict");
+    expect(body.error.message).toContain("must be accepted before apply");
+  });
+
+  it("POST accept then apply returns the applied proposal and the changed path", async () => {
+    const accepted = await authed("/api/evolution/ep3/accept", { method: "POST" });
+    expect(accepted.status).toBe(200);
+    const acceptedBody = await jsonOf(accepted);
+    expect(acceptedBody.id).toBe("ep3");
+    expect(acceptedBody.status).toBe("accepted");
+    expect(typeof acceptedBody.reviewedAt).toBe("string");
+
+    const applied = await authed("/api/evolution/ep3/apply", { method: "POST" });
+    expect(applied.status).toBe(200);
+    const appliedBody = await jsonOf(applied);
+    expect(appliedBody.proposal.status).toBe("applied");
+    expect(appliedBody.changedPath).toBe(join(workspace, "AGENTS.md"));
+    expect(readFileSync(appliedBody.changedPath, "utf8")).toContain("- rule from ep3");
+  });
+
+  it("POST reject updates the proposal; re-reviewing it is a 409", async () => {
+    const rejected = await authed("/api/evolution/ep1/reject", { method: "POST" });
+    expect(rejected.status).toBe(200);
+    expect((await jsonOf(rejected)).status).toBe("rejected");
+
+    const again = await authed("/api/evolution/ep1/accept", { method: "POST" });
+    expect(again.status).toBe(409);
+    expect((await jsonOf(again)).error.message).toContain("is not pending");
+  });
+
+  it("unknown proposal ids are 404", async () => {
+    expect((await authed("/api/evolution/nope/accept", { method: "POST" })).status).toBe(404);
+    expect((await authed("/api/evolution/nope/apply", { method: "POST" })).status).toBe(404);
+  });
+});
+
+describe("mcp endpoints", () => {
+  it("GET /api/mcp lists configured servers without spawning or leaking env values", async () => {
+    const res = await authed("/api/mcp");
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain("hush-value"); // env VALUES must never leave the server
+    const body = JSON.parse(text);
+
+    const fake = body.find((s: { name: string }) => s.name === "fake");
+    expect(fake).toEqual({
+      name: "fake",
+      command: process.execPath,
+      args: [mcpFixture.serverPath],
+      trusted: false,
+      envKeys: ["SECRET_TOKEN"],
+    });
+
+    const broken = body.find((s: { name: string }) => s.name === "broken");
+    expect(broken).toMatchObject({ name: "broken", trusted: true, envKeys: [] });
+  });
+
+  it("POST /api/mcp/:name/tools spawns, lists tools, and disposes", async () => {
+    const res = await authed("/api/mcp/fake/tools", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.tools).toEqual([
+      { name: "echo", description: "Echoes arguments back." },
+      { name: "boom", description: "Always fails." },
+    ]);
+  });
+
+  it("POST /api/mcp/:name/tools is 404 for unconfigured servers", async () => {
+    const res = await authed("/api/mcp/missing/tools", { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /api/mcp/:name/tools is 502 mcp_error when the server cannot launch", async () => {
+    const res = await authed("/api/mcp/broken/tools", { method: "POST" });
+    expect(res.status).toBe(502);
+    const body = await jsonOf(res);
+    expect(body.error.code).toBe("mcp_error");
+    expect(typeof body.error.message).toBe("string");
+  });
+});
+
+describe("rewind endpoint", () => {
+  function rewind(payload: unknown): Promise<Response> {
+    return authed("/api/rewind", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it("dry-run reports the plan without touching files", async () => {
+    const res = await rewind({ sessionId: "s3", dryRun: true });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body).toEqual({
+      restored: ["src/rewind-me.txt"],
+      deleted: ["src/created-by-session.txt"],
+      skipped: [],
+    });
+    expect(readFileSync(join(workspace, "src/rewind-me.txt"), "utf8")).toBe("modified by the session\n");
+    expect(existsSync(join(workspace, "src/created-by-session.txt"))).toBe(true);
+  });
+
+  it("a real rewind restores pre-session content and deletes created files", async () => {
+    const res = await rewind({ sessionId: "s3" });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.restored).toEqual(["src/rewind-me.txt"]);
+    expect(body.deleted).toEqual(["src/created-by-session.txt"]);
+    expect(readFileSync(join(workspace, "src/rewind-me.txt"), "utf8")).toBe("original\n");
+    expect(existsSync(join(workspace, "src/created-by-session.txt"))).toBe(false);
+  });
+
+  it("is 404 for unknown / traversal session ids and sessions without checkpoints", async () => {
+    expect((await rewind({ sessionId: "nope" })).status).toBe(404);
+    expect((await rewind({ sessionId: "../../etc" })).status).toBe(404);
+    const noCheckpoints = await rewind({ sessionId: "s1" });
+    expect(noCheckpoints.status).toBe(404);
+    expect((await jsonOf(noCheckpoints)).error.message).toContain("no checkpoints");
+  });
+
+  it("is 400 for malformed bodies", async () => {
+    expect((await rewind({})).status).toBe(400);
+    const res = await authed("/api/rewind", { method: "POST", body: "not json" });
+    expect(res.status).toBe(400);
   });
 });
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
+import type { RunAgentTaskInput } from "@seekforge/core";
 import { startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
 import {
   collectFrames,
@@ -7,6 +8,7 @@ import {
   emptyReport,
   fakeAgentFactory,
   makeWorkspace,
+  recordingAgentFactory,
   waitUntil,
   writeFileIn,
   type FrameCollector,
@@ -132,6 +134,94 @@ describe("start -> events -> idle", () => {
     sendFrame(ws, { type: "send", sessionId: "s1", task: "go on" });
     await rx.waitFor((f) => f.type === "idle");
     expect(seenInput).toEqual({ resumeSessionId: "s1", mode: "ask", task: "go on" });
+  });
+});
+
+describe("plan flavor and mode override", () => {
+  function seedAskSession(workspace: string, id = "plan-1"): void {
+    writeFileIn(
+      workspace,
+      `.seekforge/sessions/${id}/session.json`,
+      JSON.stringify({
+        id,
+        task: "make a plan",
+        mode: "ask",
+        status: "completed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+  }
+
+  it("start with plan:true passes plan through to runTask", async () => {
+    const inputs: RunAgentTaskInput[] = [];
+    const { server } = await boot(recordingAgentFactory(inputs));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "plan it", mode: "ask", approvalMode: "confirm", plan: true });
+    await rx.waitFor((f) => f.type === "idle");
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({ task: "plan it", mode: "ask", plan: true });
+  });
+
+  it("start without plan leaves it unset", async () => {
+    const inputs: RunAgentTaskInput[] = [];
+    const { server } = await boot(recordingAgentFactory(inputs));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "no plan", mode: "ask", approvalMode: "confirm" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(inputs[0]?.plan).toBeUndefined();
+  });
+
+  it("rejects a non-boolean plan", async () => {
+    const { server } = await boot(recordingAgentFactory([]));
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "x", mode: "ask", approvalMode: "confirm", plan: "yes" });
+    const err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
+  });
+
+  it('send with mode:"edit" overrides the session\'s ask mode (plan -> execute)', async () => {
+    const inputs: RunAgentTaskInput[] = [];
+    const workspace = makeWorkspace();
+    seedAskSession(workspace);
+    const { server } = await boot(recordingAgentFactory(inputs), workspace);
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "send", sessionId: "plan-1", task: "execute the plan", mode: "edit" });
+    await rx.waitFor((f) => f.type === "idle");
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({
+      resumeSessionId: "plan-1",
+      task: "execute the plan",
+      mode: "edit",
+      approvalMode: "confirm",
+    });
+  });
+
+  it("send without mode keeps the session's own mode", async () => {
+    const inputs: RunAgentTaskInput[] = [];
+    const workspace = makeWorkspace();
+    seedAskSession(workspace);
+    const { server } = await boot(recordingAgentFactory(inputs), workspace);
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "send", sessionId: "plan-1", task: "go on" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(inputs[0]).toMatchObject({ resumeSessionId: "plan-1", mode: "ask" });
+  });
+
+  it("rejects an invalid send mode", async () => {
+    const workspace = makeWorkspace();
+    seedAskSession(workspace);
+    const { server } = await boot(recordingAgentFactory([]), workspace);
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "send", sessionId: "plan-1", task: "x", mode: "plan" });
+    const err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
   });
 });
 

@@ -8,17 +8,24 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import { promisify } from "node:util";
 import {
+  applyProposal,
   approveMemoryCandidate,
   createDefaultDispatcher,
+  createMcpClient,
+  listEvolutionProposals,
   listMemoryCandidates,
   listSessions,
+  loadAgentDefinitions,
   loadSessionMessages,
   loadSkills,
+  readCheckpoints,
   readProjectMemory,
   readSessionMeta,
   rejectMemoryCandidate,
+  rewindSession,
+  setEvolutionProposalStatus,
 } from "@seekforge/core";
-import { ConfigValueError, maskedConfig, setConfigValue } from "./config.js";
+import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
 
 export type RestContext = {
   workspace: string;
@@ -194,6 +201,113 @@ export async function handleApi(
         }
         throw err;
       }
+    }
+
+    if (method === "GET" && path === "/api/agents") {
+      // Prompt bodies are stripped from the list view (GET /api/agents/:id has them).
+      return sendJson(
+        res,
+        200,
+        loadAgentDefinitions(ctx.workspace).map(({ body: _body, ...rest }) => rest),
+      );
+    }
+
+    if (method === "GET" && segs.length === 3 && segs[1] === "agents") {
+      const def = loadAgentDefinitions(ctx.workspace).find((d) => d.id === segs[2]);
+      if (!def) return sendApiError(res, 404, "not_found", `agent not found: ${segs[2]}`);
+      return sendJson(res, 200, def);
+    }
+
+    if (method === "GET" && path === "/api/evolution") {
+      // Newest first within each group, pending proposals before reviewed ones.
+      const proposals = listEvolutionProposals(ctx.workspace);
+      const pendingFirst = [
+        ...proposals.filter((p) => p.status === "pending"),
+        ...proposals.filter((p) => p.status !== "pending"),
+      ];
+      return sendJson(res, 200, pendingFirst);
+    }
+
+    if (
+      method === "POST" &&
+      segs.length === 4 &&
+      segs[1] === "evolution" &&
+      (segs[3] === "accept" || segs[3] === "reject" || segs[3] === "apply")
+    ) {
+      const id = segs[2]!;
+      try {
+        if (segs[3] === "apply") {
+          // applyProposal returns {proposal, changedPath} (the file it wrote).
+          return sendJson(res, 200, applyProposal(ctx.workspace, id));
+        }
+        const proposal = setEvolutionProposalStatus(
+          ctx.workspace,
+          id,
+          segs[3] === "accept" ? "accepted" : "rejected",
+        );
+        return sendJson(res, 200, proposal);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("proposal not found")) {
+          return sendApiError(res, 404, "not_found", message);
+        }
+        // Wrong-state transitions and apply failures (e.g. skill_exists) are conflicts.
+        return sendApiError(res, 409, "conflict", message);
+      }
+    }
+
+    if (method === "GET" && path === "/api/mcp") {
+      // Configured servers only — never spawned here, env VALUES never exposed.
+      const servers = Object.entries(loadConfig(ctx.workspace).mcpServers ?? {});
+      return sendJson(
+        res,
+        200,
+        servers.map(([name, cfg]) => ({
+          name,
+          command: cfg.command,
+          args: cfg.args ?? [],
+          trusted: cfg.trusted === true,
+          envKeys: Object.keys(cfg.env ?? {}),
+        })),
+      );
+    }
+
+    if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
+      const name = segs[2]!;
+      const config = (loadConfig(ctx.workspace).mcpServers ?? {})[name];
+      if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
+      const client = createMcpClient({ name, config });
+      try {
+        const tools = await client.listTools();
+        return sendJson(res, 200, {
+          tools: tools.map((t) => ({ name: t.name, description: t.description ?? "" })),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return sendApiError(res, 502, "mcp_error", message);
+      } finally {
+        client.dispose();
+      }
+    }
+
+    if (method === "POST" && path === "/api/rewind") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { sessionId, dryRun } = (body ?? {}) as { sessionId?: unknown; dryRun?: unknown };
+      if (typeof sessionId !== "string" || sessionId.length === 0) {
+        return sendApiError(res, 400, "bad_request", "body must be {sessionId, dryRun?}");
+      }
+      if (!isSafeId(sessionId) || !readSessionMeta(ctx.workspace, sessionId)) {
+        return sendApiError(res, 404, "not_found", `session not found: ${sessionId}`);
+      }
+      if (readCheckpoints(ctx.workspace, sessionId).length === 0) {
+        return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);
+      }
+      return sendJson(res, 200, rewindSession(ctx.workspace, sessionId, { dryRun: dryRun === true }));
     }
 
     if (method === "GET" && path === "/api/config") {
