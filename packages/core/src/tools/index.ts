@@ -34,6 +34,13 @@ export type ToolContext = {
   background?: BackgroundTasks;
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
+  /**
+   * Records a pre-write snapshot for session rewind. Called by write tools
+   * BEFORE writing with the workspace-relative path and the file's current
+   * content (null when it does not exist). First-write-wins de-duplication
+   * is enforced by the agent loop, not here.
+   */
+  checkpoint?: (path: string, before: string | null) => void;
 };
 
 export interface ToolDispatcher {
