@@ -8,6 +8,8 @@ export type RunAgentTaskInput = {
   projectPath: string;
   task: string;
   mode: "ask" | "edit";
+  /** Plan flavor: read-only investigation producing an implementation plan. */
+  plan?: boolean;
   approvalMode: ApprovalMode;
   /** Continue an existing session: replays its messages, appends `task`. */
   resumeSessionId?: string;

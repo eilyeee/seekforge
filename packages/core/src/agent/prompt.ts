@@ -1,6 +1,8 @@
 export type SystemPromptOptions = {
   workspace: string;
   mode: "ask" | "edit";
+  /** Plan flavor of ask mode: explore read-only, then output an implementation plan. */
+  plan?: boolean;
   /** Contents of the project's AGENTS.md, when present. */
   projectRules?: string;
   /** Task-relevant digest of approved project memory. */
@@ -17,7 +19,19 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "exclusively through the provided tools. You cannot access anything outside the workspace.",
   );
 
-  if (opts.mode === "ask") {
+  if (opts.mode === "ask" && opts.plan) {
+    parts.push(
+      [
+        "Mode: PLAN (read-only). Investigate the codebase, then produce a concrete",
+        "implementation plan — do NOT make any changes (write/command tools are disabled).",
+        "Structure the final reply as markdown:",
+        "## Plan — numbered steps, each naming the exact files to change and how",
+        "## Verification — the commands that will prove the change works",
+        "## Risks — anything that could go wrong or needs the user's decision",
+        "Be specific enough that the plan can be executed step by step without re-investigation.",
+      ].join("\n"),
+    );
+  } else if (opts.mode === "ask") {
     parts.push(
       "Mode: ASK (read-only). Answer the user's question about the codebase. " +
         "Write and command tools are disabled; do not attempt them.",
