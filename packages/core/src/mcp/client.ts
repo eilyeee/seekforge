@@ -40,6 +40,9 @@ type Pending = {
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+// npx-launched servers can take a long time to resolve/install on first start
+// (slow registries/proxies) — give the one-time handshake much more room.
+const HANDSHAKE_TIMEOUT_MS = 120_000;
 const PROTOCOL_VERSION = "2024-11-05";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
 
@@ -126,13 +129,18 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     return proc;
   }
 
-  function rawRequest<T>(proc: ChildProcessWithoutNullStreams, method: string, params: unknown): Promise<T> {
+  function rawRequest<T>(
+    proc: ChildProcessWithoutNullStreams,
+    method: string,
+    params: unknown,
+    timeoutMs = defaultTimeout,
+  ): Promise<T> {
     const id = nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${defaultTimeout}ms`));
-      }, defaultTimeout);
+        reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`));
+      }, timeoutMs);
       pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer });
       proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
         if (err) {
@@ -154,11 +162,16 @@ export function createMcpClient(options: McpClientOptions): McpClient {
   function ensureReady(): { proc: ChildProcessWithoutNullStreams; ready: Promise<void> } {
     const proc = ensureChild();
     if (!handshake) {
-      handshake = rawRequest(proc, "initialize", {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: CLIENT_INFO,
-      }).then(
+      handshake = rawRequest(
+        proc,
+        "initialize",
+        {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: CLIENT_INFO,
+        },
+        HANDSHAKE_TIMEOUT_MS,
+      ).then(
         () => notify(proc, "notifications/initialized"),
         (err: Error) => {
           // Failed handshake: drop this child so the next call starts clean.
