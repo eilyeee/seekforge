@@ -33,14 +33,14 @@ Serves exactly one workspace (the cwd at start).
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
-| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` |
-| GET /api/agents | `AgentDefinition[]` without bodies (id, scope, mode, model?, tools?, description) |
-| GET /api/agents/:id | full definition incl. prompt body |
-| GET /api/evolution | `EvolutionProposal[]` (pending first) |
-| POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`) |
-| GET /api/mcp | configured servers `{name, command, args, trusted}[]` (no spawn) |
-| POST /api/mcp/:name/tools | spawns the server, lists tools `{name, description}[]`, disposes (504-style error JSON on launch failure) |
-| POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result |
+| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}`; `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
+| GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
+| GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
+| GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
+| POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
+| GET /api/mcp | configured servers `{name, command, args, trusted, envKeys}[]` (no spawn; env key names only, values never exposed) |
+| POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
+| POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
 | PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key |
 
 Errors: `{error: {code, message}}` with appropriate HTTP status.

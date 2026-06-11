@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { McpServerConfig } from "@seekforge/core";
 
 export type ServerConfig = {
   apiKey?: string;
@@ -17,6 +18,8 @@ export type ServerConfig = {
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
   commandAllowlist?: string[];
+  /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
+  mcpServers?: Record<string, McpServerConfig>;
 };
 
 export const CONFIG_KEYS = ["apiKey", "model", "baseUrl", "runtimeBin", "commandAllowlist"] as const;
@@ -35,9 +38,12 @@ function readJson(path: string): ServerConfig {
 export function loadConfig(workspace: string): ServerConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(workspace, ".seekforge", "config.json"));
+  // mcpServers merges per server name (project wins) instead of replacing wholesale.
+  const mcpServers = { ...global.mcpServers, ...project.mcpServers };
   return {
     ...global,
     ...project,
+    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
@@ -45,7 +51,9 @@ export function loadConfig(workspace: string): ServerConfig {
 
 /** Merged config with the apiKey masked for transport (GET /api/config). */
 export function maskedConfig(workspace: string): Record<string, unknown> {
-  const merged = loadConfig(workspace);
+  // mcpServers is omitted entirely: entries may carry secret env values
+  // (GET /api/mcp exposes a sanitized view instead).
+  const { mcpServers: _mcpServers, ...merged } = loadConfig(workspace);
   return {
     ...merged,
     apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined,
