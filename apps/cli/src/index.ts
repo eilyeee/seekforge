@@ -6,6 +6,7 @@ import { initCommand } from "./commands/init.js";
 import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
+import { serveCommand } from "./commands/serve.js";
 import { sessionsCommand, statusCommand } from "./commands/sessions.js";
 import { skillCreateCommand, skillListCommand, skillShowCommand } from "./commands/skill.js";
 
@@ -76,6 +77,20 @@ program
   .description("continue an existing session with its full history")
   .action(async (sessionId: string, task: string, opts: { yes?: boolean; model?: string }) => {
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
+  });
+
+program
+  .command("serve")
+  .option("--port <n>", "port to listen on (0 = random)", "7373")
+  .description("serve the web UI and agent API for this workspace (127.0.0.1 only)")
+  .action(async (opts: { port: string }) => {
+    const port = Number.parseInt(opts.port, 10);
+    if (Number.isNaN(port) || port < 0 || port > 65535) {
+      console.error(`invalid --port: ${opts.port}`);
+      process.exitCode = 1;
+      return;
+    }
+    await serveCommand({ port });
   });
 
 const skill = program.command("skill").description("manage skills (procedure libraries)");
