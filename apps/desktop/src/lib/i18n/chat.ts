@@ -88,6 +88,10 @@ export const chat = {
     "chat.usage.balanceTitle": "DeepSeek account balance remaining",
 
     // LoopPanel
+    "chat.cmdArgs.label": "Arguments",
+    "chat.cmdArgs.placeholder": "Replaces $ARGUMENTS in the command",
+    "chat.cmdArgs.preview": "Preview",
+    "chat.cmdArgs.insert": "Insert",
     "chat.loop.title": "Loop mode",
     "chat.loop.explain":
       "Runs your task, then the verify command; if it fails, it keeps fixing and re-running until the command passes — autonomously, within the limits below.",
@@ -203,6 +207,10 @@ export const chat = {
     "chat.usage.balanceTitle": "DeepSeek 账户余额",
 
     // LoopPanel
+    "chat.cmdArgs.label": "参数",
+    "chat.cmdArgs.placeholder": "替换命令里的 $ARGUMENTS",
+    "chat.cmdArgs.preview": "预览",
+    "chat.cmdArgs.insert": "插入",
     "chat.loop.title": "循环模式",
     "chat.loop.explain": "先执行你的任务，再运行校验命令；若失败，则自动持续修复并重试，直到命令通过——在下方限制范围内自主进行。",
     "chat.loop.task": "任务",

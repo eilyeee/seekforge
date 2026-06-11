@@ -67,3 +67,24 @@ export function loadUserCommands(workspace: string): UserCommand[] {
   }
   return out;
 }
+
+/** The placeholder a command body uses to interpolate the invocation arguments. */
+export const COMMAND_ARGUMENTS_PLACEHOLDER = "$ARGUMENTS";
+
+/** True when the command body interpolates arguments (so callers can prompt). */
+export function commandTakesArguments(command: Pick<UserCommand, "body">): boolean {
+  return command.body.includes(COMMAND_ARGUMENTS_PLACEHOLDER);
+}
+
+/**
+ * Expands a custom command into the prompt to send. `$ARGUMENTS` (every
+ * occurrence) is replaced with `args`; if the body has no placeholder, non-empty
+ * args are appended as an "Arguments:" line. Matches the TUI behavior so the
+ * CLI/desktop/TUI all expand identically.
+ */
+export function expandUserCommand(command: Pick<UserCommand, "body">, args: string): string {
+  if (command.body.includes(COMMAND_ARGUMENTS_PLACEHOLDER)) {
+    return command.body.split(COMMAND_ARGUMENTS_PLACEHOLDER).join(args);
+  }
+  return args === "" ? command.body : `${command.body}\n\nArguments: ${args}`;
+}

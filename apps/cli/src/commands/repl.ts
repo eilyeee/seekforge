@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline/promises";
-import { addMemoryFact, compactSessionNow, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import {
+  addMemoryFact,
+  compactSessionNow,
+  expandUserCommand,
+  listSessions,
+  loadAgentDefinitions,
+  loadUserCommands,
+  readSessionMeta,
+} from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { dim, fail, yellow } from "../colors.js";
@@ -47,6 +55,8 @@ function makeAskUser(rl: Interface): (q: { question: string; options: string[] }
 
 export async function replCommand(opts: { model?: string; yes?: boolean; settingsFile?: string }): Promise<void> {
   const projectPath = process.cwd();
+  // Custom slash commands from .seekforge/commands/*.md (project + user).
+  const userCommands = loadUserCommands(projectPath);
   let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(projectPath, opts.settingsFile);
@@ -130,6 +140,20 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
 
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.split(/\s+/);
+      // Custom slash commands (.seekforge/commands/<name>.md) take priority over
+      // built-ins on a name clash: expand the body with the trailing args
+      // ($ARGUMENTS) and run it as a task.
+      const customName = (cmd ?? "").replace(/^\//, "");
+      const custom = customName ? userCommands.find((c) => c.name === customName) : undefined;
+      if (custom) {
+        const task = expandUserCommand(custom, rest.join(" ").trim());
+        try {
+          await runOnce(task);
+        } catch (err) {
+          console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+        }
+        continue;
+      }
       switch (cmd) {
         case "/help":
           console.log(HELP);

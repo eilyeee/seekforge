@@ -41,7 +41,13 @@ export {
 export { classifyAgentError } from "./errors.js";
 export type { AgentErrorKind, ClassifiedAgentError } from "./errors.js";
 export { buildSystemPrompt } from "./prompt.js";
-export { loadUserCommands, type UserCommand } from "./commands.js";
+export {
+  loadUserCommands,
+  expandUserCommand,
+  commandTakesArguments,
+  COMMAND_ARGUMENTS_PLACEHOLDER,
+  type UserCommand,
+} from "./commands.js";
 export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
 export {
   compactMessages,

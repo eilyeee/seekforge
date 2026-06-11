@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadUserCommands } from "../../src/agent/index.js";
+import {
+  commandTakesArguments,
+  expandUserCommand,
+  loadUserCommands,
+} from "../../src/agent/index.js";
 
 function makeDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -71,5 +75,32 @@ describe("loadUserCommands", () => {
     const cmds = loadUserCommands(workspace);
     expect(cmds.map((c) => c.name)).toEqual(["blank"]);
     expect(cmds[0]!.description).toBe("");
+  });
+});
+
+describe("commandTakesArguments", () => {
+  it("is true only when the body interpolates $ARGUMENTS", () => {
+    expect(commandTakesArguments({ body: "Fix $ARGUMENTS now" })).toBe(true);
+    expect(commandTakesArguments({ body: "Fix the build" })).toBe(false);
+  });
+});
+
+describe("expandUserCommand", () => {
+  it("replaces every $ARGUMENTS occurrence with the args", () => {
+    expect(expandUserCommand({ body: "Review $ARGUMENTS and $ARGUMENTS" }, "the diff")).toBe(
+      "Review the diff and the diff",
+    );
+  });
+
+  it("replaces with empty string when args are empty", () => {
+    expect(expandUserCommand({ body: "Run $ARGUMENTS tests" }, "")).toBe("Run  tests");
+  });
+
+  it("appends an Arguments line when there is no placeholder and args are given", () => {
+    expect(expandUserCommand({ body: "Ship it" }, "v2")).toBe("Ship it\n\nArguments: v2");
+  });
+
+  it("returns the body unchanged when there is no placeholder and no args", () => {
+    expect(expandUserCommand({ body: "Ship it" }, "")).toBe("Ship it");
   });
 });

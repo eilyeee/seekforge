@@ -8,6 +8,7 @@ import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { LoopPanel } from "../components/chat/LoopPanel";
 import { ModelBar } from "../components/chat/ModelBar";
+import { CommandArgsDialog } from "../components/chat/CommandArgsDialog";
 import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
@@ -109,6 +110,8 @@ export function ChatView() {
 
   /** Custom slash commands (GET /api/commands), merged into the composer palette. */
   const [customCommands, setCustomCommands] = useState<SlashCommand[]>([]);
+  /** A parameterized custom command awaiting its arguments (the popup). */
+  const [argsCommand, setArgsCommand] = useState<SlashCommand | null>(null);
   useEffect(() => {
     api
       .commands()
@@ -202,8 +205,8 @@ export function ChatView() {
   // the manual /compact action, and any project/user custom commands from the
   // server (choosing a custom command inserts its `body` into the draft).
   const tabMode = tab.mode;
-  const composerCommands = useMemo<ComposerCommand[]>(
-    () => [
+  const composerCommands = useMemo<ComposerCommand[]>(() => {
+    const builtins: ComposerCommand[] = [
       { name: "new", hint: t("chat.cmdNewHint"), run: newSession },
       {
         name: "plan",
@@ -223,16 +226,19 @@ export function ChatView() {
       { name: "evolution", hint: t("chat.cmdEvolutionHint"), run: () => setView("evolution") },
       { name: "settings", hint: t("chat.cmdSettingsHint"), run: () => setView("settings") },
       { name: "compact", hint: t("chat.cmdCompactHint"), run: compactSession },
-      // Custom commands insert their template body into the composer draft.
-      ...customCommands.map((c) => ({
-        name: c.name,
-        hint: c.description,
-        run: () => setDraft(c.body),
-      })),
-    ],
+    ];
+    // Custom commands take priority over built-ins on a name clash: drop the
+    // shadowed built-in. Parameterized ones ($ARGUMENTS) open the args popup;
+    // the rest insert their body straight into the composer draft.
+    const customNames = new Set(customCommands.map((c) => c.name));
+    const custom: ComposerCommand[] = customCommands.map((c) => ({
+      name: c.name,
+      hint: c.description,
+      run: () => (c.body.includes("$ARGUMENTS") ? setArgsCommand(c) : setDraft(c.body)),
+    }));
+    return [...builtins.filter((b) => !customNames.has(b.name)), ...custom];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [newSession, setMode, setView, tabMode, customCommands, compactSession],
-  );
+  }, [newSession, setMode, setView, tabMode, customCommands, compactSession]);
 
   const requestClose = (tabId: string) => {
     const target = tabsState.tabs.find((t) => t.tabId === tabId);
@@ -494,6 +500,17 @@ export function ChatView() {
             {t("chat.conflictHint")}
           </p>
         </ConfirmDialog>
+      )}
+
+      {argsCommand && (
+        <CommandArgsDialog
+          command={argsCommand}
+          onSubmit={(expanded) => {
+            setDraft(expanded);
+            setArgsCommand(null);
+          }}
+          onCancel={() => setArgsCommand(null)}
+        />
       )}
 
       {toast && (
