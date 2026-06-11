@@ -9,7 +9,31 @@ export type FileDiff = {
   text: string;
 };
 
-const HEADER_RE = /^diff --git a\/(.+?) b\/(.+)$/;
+// Paths with spaces/non-ASCII (e.g. Chinese filenames) are quoted by git:
+//   diff --git "a/\346\226\207 件.ts" "b/\346\226\207 件.ts"
+const HEADER_RE = /^diff --git (?:"a\/(.+?)"|a\/(.+?)) (?:"b\/(.+)"|b\/(.+))$/;
+
+/** Unescapes git's C-style quoting (\303\244 octal bytes, \t, \", \\). */
+function unquoteGitPath(quoted: string): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < quoted.length; i++) {
+    const c = quoted[i] as string;
+    if (c !== "\\") {
+      bytes.push(...new TextEncoder().encode(c));
+      continue;
+    }
+    const next = quoted[i + 1];
+    if (next !== undefined && /[0-7]/.test(next)) {
+      bytes.push(Number.parseInt(quoted.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else {
+      const map: Record<string, string> = { t: "\t", n: "\n", '"': '"', "\\": "\\" };
+      bytes.push(...new TextEncoder().encode(map[next ?? ""] ?? (next ?? "")));
+      i += 1;
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
 
 export function splitDiffByFile(diff: string): FileDiff[] {
   const files: FileDiff[] = [];
@@ -19,7 +43,9 @@ export function splitDiffByFile(diff: string): FileDiff[] {
     const header = HEADER_RE.exec(line);
     if (header) {
       if (current) files.push(current);
-      current = { path: header[2] as string, additions: 0, deletions: 0, text: line };
+      const quotedB = header[3];
+      const path = quotedB !== undefined ? unquoteGitPath(quotedB) : ((header[4] ?? header[2]) as string);
+      current = { path, additions: 0, deletions: 0, text: line };
       continue;
     }
     if (!current) continue; // preamble before the first header
