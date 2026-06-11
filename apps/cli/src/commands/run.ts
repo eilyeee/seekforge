@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { readSessionMeta } from "@seekforge/core";
+import { loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
 import { createCliAgent } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
@@ -76,6 +76,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     confirm: json ? async () => false : confirmInTerminal,
     onModelDelta: json ? undefined : (chunk) => process.stdout.write(chunk),
     extractMemory: mode === "edit",
+    subagents: loadAgentDefinitions(projectPath),
   });
 
   const runOnce = async (input: {
