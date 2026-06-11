@@ -68,6 +68,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge diff` | show the current git diff |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge skill list\|show <id>\|create <id>` | procedure skills (project > global > builtin) |
+| `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
 | `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist` (comma-separated prefixes) |
 
