@@ -33,6 +33,12 @@ export type ToolSpec<S extends z.ZodTypeAny = z.ZodTypeAny> = {
   name: string;
   description: string;
   schema: S;
+  /**
+   * Raw JSON Schema advertised to the model instead of zodToJsonSchema(schema).
+   * Used by MCP tools, whose servers own the real schema; `schema` then only
+   * does permissive local validation.
+   */
+  parametersOverride?: Record<string, unknown>;
   classify: (args: z.infer<S>, ctx: ToolContext) => ClassifiedCall;
   run: (args: z.infer<S>, ctx: ToolContext) => Promise<ToolRunOutput>;
 };
@@ -50,7 +56,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
       return tools.map((t) => ({
         name: t.name,
         description: t.description,
-        parameters: zodToJsonSchema(t.schema),
+        parameters: t.parametersOverride ?? zodToJsonSchema(t.schema),
       }));
     },
 
