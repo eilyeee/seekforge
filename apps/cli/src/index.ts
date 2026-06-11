@@ -13,7 +13,13 @@ import {
 } from "./commands/evolve.js";
 import { initCommand } from "./commands/init.js";
 import { mcpListCommand } from "./commands/mcp.js";
-import { memoryApproveCommand, memoryListCommand, memoryRejectCommand } from "./commands/memory.js";
+import {
+  memoryAddCommand,
+  memoryApproveCommand,
+  memoryListCommand,
+  memoryRejectCommand,
+  memoryRemoveCommand,
+} from "./commands/memory.js";
 import { replCommand } from "./commands/repl.js";
 import { runTaskCommand } from "./commands/run.js";
 import { serveCommand } from "./commands/serve.js";
@@ -183,6 +189,22 @@ memory
   .description("show project.md and pending memory candidates")
   .action(() => {
     memoryListCommand();
+  });
+memory
+  .command("add")
+  .argument("<content...>", "fact text (words are joined with spaces)")
+  .option("--type <type>", "command | path | convention | tech | task_pattern", "convention")
+  .option("--pending", "queue as a pending candidate instead of writing to project.md")
+  .description("add a fact directly to project memory (user statement = approval)")
+  .action((content: string[], opts: { type?: string; pending?: boolean }) => {
+    memoryAddCommand(content, opts);
+  });
+memory
+  .command("remove")
+  .argument("<selector>", "fact number, unique substring, or mc- candidate id")
+  .description("remove a fact from project.md, or delete a candidate entirely (mc- id)")
+  .action((selector: string) => {
+    memoryRemoveCommand(selector);
   });
 memory
   .command("approve")
