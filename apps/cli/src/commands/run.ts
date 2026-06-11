@@ -1,13 +1,6 @@
-import { existsSync } from "node:fs";
-import {
-  createAgentCore,
-  createDeepSeekProvider,
-  createDefaultDispatcher,
-  createRuntimeClient,
-  readSessionMeta,
-  type RuntimeClient,
-} from "@seekforge/core";
+import { readSessionMeta } from "@seekforge/core";
 import type { ApprovalMode } from "@seekforge/shared";
+import { createCliAgent } from "../agent-factory.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
@@ -67,15 +60,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   };
   process.on("SIGINT", onSigint);
 
-  let runtime: RuntimeClient | undefined;
-  if (config.runtimeBin) {
-    if (existsSync(config.runtimeBin)) {
-      runtime = createRuntimeClient({ binPath: config.runtimeBin });
-    } else {
-      console.error(`warning: runtimeBin not found (${config.runtimeBin}); using the TypeScript backend`);
-    }
-  }
-
   // JSON mode: machine-readable JSONL events, no streaming/colors, and no
   // interactive prompts — anything that would ask is denied (pair with -y).
   const json = opts.json ?? false;
@@ -83,18 +67,12 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     ? (e: unknown) => console.log(JSON.stringify(e))
     : createRenderer({ streaming: true });
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
-  const agent = createAgentCore({
-    provider: createDeepSeekProvider({
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model,
-    }),
-    dispatcher: createDefaultDispatcher(),
+  const { agent, dispose } = createCliAgent({
+    config,
+    model,
     confirm: json ? async () => false : confirmInTerminal,
     onModelDelta: json ? undefined : (chunk) => process.stdout.write(chunk),
     extractMemory: mode === "edit",
-    runtime,
-    commandAllowlist: config.commandAllowlist,
   });
 
   try {
@@ -113,6 +91,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     if (failed) process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
-    runtime?.dispose();
+    dispose();
   }
 }

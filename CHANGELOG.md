@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+Phase 4 — interactive surfaces.
+
+### Added
+- Interactive REPL as the default command (`seekforge`): multi-turn sessions
+  with slash commands (/new /sessions /resume /model /usage)
+- `seekforge serve`: local agent server (127.0.0.1, token-protected) with a
+  REST API, a WebSocket session protocol (streaming deltas, permission
+  round-trips, cancel), and a bundled React web workbench: chat with live
+  plan/tool rows and a raw-args permission modal, sessions browser, skills,
+  memory review, settings
+
 ## 0.2.0 (unreleased)
 
 Gap-fill iteration after comparing against Claude Code / Codex CLI.
