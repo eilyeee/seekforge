@@ -8,23 +8,33 @@
  * vars; it is never interpolated into the hook command line.
  *
  * Stages (payload fields beyond { sessionId, workspace }):
- * | stage            | fires                                        | blocking | payload extras                  |
- * |------------------|----------------------------------------------|----------|---------------------------------|
- * | preToolUse       | before each tool runs                        | YES      | toolName, args, command?, path? |
- * | postToolUse      | after each tool ran                          | no       | toolName, args, result          |
- * | sessionStart     | top-level run begins                         | no       | task, mode, resuming            |
- * | userPromptSubmit | right after sessionStart, for the task       | YES      | task                            |
- * | preCompact       | before compaction mutates the messages       | no       | reason ("auto")                 |
- * | stop             | after session.completed (not fail/cancel)    | no       | summary                         |
- * | subagentStop     | a dispatched subagent run finished           | no       | agentId, ok                     |
- * | notification     | permission prompt or ask_user question shown | no       | kind, detail                    |
- * | sessionEnd       | top-level session ended (any status)         | no       | status                          |
+ * | stage            | fires                                        | blocking | stdout (exit 0)                  | payload extras                  |
+ * |------------------|----------------------------------------------|----------|----------------------------------|---------------------------------|
+ * | preToolUse       | before each tool runs                        | YES      | JSON {"decision": …} (see below) | toolName, args, command?, path? |
+ * | postToolUse      | after each tool ran                          | no       | ignored                          | toolName, args, result          |
+ * | sessionStart     | top-level run begins                         | no       | ignored                          | task, mode, resuming            |
+ * | userPromptSubmit | right after sessionStart, for the task       | YES      | appended as <hook-context>       | task                            |
+ * | preCompact       | before compaction mutates the messages       | no       | ignored                          | reason ("auto")                 |
+ * | stop             | after session.completed (not fail/cancel)    | no       | ignored                          | summary                         |
+ * | subagentStop     | a dispatched subagent run finished           | no       | ignored                          | agentId, ok                     |
+ * | notification     | permission prompt or ask_user question shown | no       | ignored                          | kind, detail                    |
+ * | sessionEnd       | top-level session ended (any status)         | no       | ignored                          | status                          |
  *
  * Semantics:
  * - Blocking stages (preToolUse, userPromptSubmit): a hook exiting non-zero
  *   BLOCKS the tool/run; later hooks of that stage are skipped. The outcome
  *   carries the output tail as the reason.
- * - All other stages are advisory: failures are logged (stderr), never block.
+ * - preToolUse stdout decisions (exit 0 only): stdout parsing as JSON
+ *   `{"decision": "deny", "reason": "…"}` blocks the call with that reason;
+ *   `{"decision": "allow"}` explicitly allows and SKIPS the remaining
+ *   preToolUse hooks. Any other stdout (including malformed JSON) is ignored
+ *   and the exit-code behavior above applies unchanged.
+ * - userPromptSubmit stdout (trimmed, non-empty, exit 0) is context for the
+ *   model: the loop appends each hook's stdout to the task as
+ *   `\n\n<hook-context>\n…\n</hook-context>` (see buildHookContext), capped
+ *   at HOOK_CONTEXT_MAX_CHARS in total.
+ * - All other stages are advisory: failures are logged (stderr), never block;
+ *   their stdout is captured (HookOutcome.stdout) but has no semantics.
  * - sessionStart, userPromptSubmit and stop fire only for the TOP-LEVEL run
  *   (like sessionEnd); nested subagent runs never fire them.
  * - Hooks run sequentially in config order.
@@ -109,11 +119,19 @@ export type HookPayload = {
 export type HookOutcome = {
   /** The hook's configured shell command (user-authored). */
   command: string;
-  /** True when the hook exited 0. */
+  /**
+   * True when the hook exited 0 — except a preToolUse JSON deny, which is
+   * surfaced as ok: false (with decision: "deny") so existing callers treat
+   * it as a block.
+   */
   ok: boolean;
   exitCode: number | null;
-  /** Tail of interleaved stdout+stderr; the block reason on preToolUse. */
+  /** Tail of interleaved stdout+stderr; the block reason on blocking stages. */
   outputTail: string;
+  /** The hook's stdout alone (head, capped at 8000 chars) — context/decision input. */
+  stdout: string;
+  /** preToolUse only: the parsed JSON stdout decision, when one was given. */
+  decision?: "allow" | "deny";
   timedOut: boolean;
 };
 
@@ -159,6 +177,7 @@ function runOneHook(
 ): Promise<HookOutcome> {
   return new Promise<HookOutcome>((resolve) => {
     let output = "";
+    let stdout = "";
     let timedOut = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -166,6 +185,13 @@ function runOneHook(
     const append = (chunk: Buffer): void => {
       output += chunk.toString("utf8");
       if (output.length > CAPTURE_KEEP_CHARS) output = output.slice(-CAPTURE_KEEP_CHARS);
+    };
+    // stdout is also captured on its own (head-capped: context reads from the
+    // start) — it carries the userPromptSubmit context / preToolUse decisions.
+    const appendStdout = (chunk: Buffer): void => {
+      if (stdout.length < CAPTURE_KEEP_CHARS) {
+        stdout = (stdout + chunk.toString("utf8")).slice(0, CAPTURE_KEEP_CHARS);
+      }
     };
     const finish = (exitCode: number | null): void => {
       if (settled) return;
@@ -179,6 +205,7 @@ function runOneHook(
         ok: !timedOut && exitCode === 0,
         exitCode,
         outputTail: tail,
+        stdout,
         timedOut,
       });
     };
@@ -212,7 +239,10 @@ function runOneHook(
       }
     }, timeoutMs);
 
-    child.stdout?.on("data", append);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      append(chunk);
+      appendStdout(chunk);
+    });
     child.stderr?.on("data", append);
     child.on("error", (err) => {
       append(Buffer.from(String(err)));
@@ -228,12 +258,60 @@ function runOneHook(
 }
 
 /**
+ * Parses a preToolUse hook's stdout as a JSON decision. Returns undefined for
+ * anything that is not a JSON object with decision "allow" | "deny" —
+ * malformed JSON or other stdout never changes behavior.
+ */
+function parseToolDecision(stdout: string): { decision: "allow" | "deny"; reason?: string } | undefined {
+  const text = stdout.trim();
+  if (!text.startsWith("{")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object") return undefined;
+  const decision = (parsed as Record<string, unknown>)["decision"];
+  if (decision !== "allow" && decision !== "deny") return undefined;
+  const reason = (parsed as Record<string, unknown>)["reason"];
+  return { decision, ...(typeof reason === "string" ? { reason } : {}) };
+}
+
+/** Total stdout budget for userPromptSubmit <hook-context> injection. */
+export const HOOK_CONTEXT_MAX_CHARS = 8000;
+
+/**
+ * Builds the task suffix injected from userPromptSubmit hooks: each
+ * successful hook's trimmed, non-empty stdout becomes one
+ * `\n\n<hook-context>\n…\n</hook-context>` block, in hook order. The combined
+ * stdout is capped at HOOK_CONTEXT_MAX_CHARS. Returns "" when no hook
+ * contributed anything.
+ */
+export function buildHookContext(outcomes: HookOutcome[]): string {
+  let budget = HOOK_CONTEXT_MAX_CHARS;
+  let suffix = "";
+  for (const o of outcomes) {
+    if (!o.ok || budget <= 0) continue;
+    const text = o.stdout.trim();
+    if (!text) continue;
+    const clipped = text.slice(0, budget);
+    budget -= clipped.length;
+    const marker = clipped.length < text.length ? "…[truncated]" : "";
+    suffix += `\n\n<hook-context>\n${clipped}${marker}\n</hook-context>`;
+  }
+  return suffix;
+}
+
+/**
  * Runs the hooks of `stage` that match the payload, sequentially in config
  * order. Blocking stages (preToolUse, userPromptSubmit) stop at the first
  * failing hook (its outcome is the block reason — callers must treat any
- * `ok: false` outcome as blocking). For every other stage all matching hooks
- * run; failures go to `opts.onError` (default stderr) and never block.
- * Never throws.
+ * `ok: false` outcome as blocking; a preToolUse JSON deny is surfaced the
+ * same way, with the reason as outputTail). A preToolUse JSON allow stops
+ * the stage early with the remaining hooks skipped. For every other stage
+ * all matching hooks run; failures go to `opts.onError` (default stderr) and
+ * never block. Never throws.
  */
 export async function runHooks(
   stage: HookStage,
@@ -251,6 +329,27 @@ export async function runHooks(
   for (const entry of hooks) {
     if (!hookApplies(entry, payload)) continue;
     const outcome = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
+
+    // preToolUse JSON stdout decisions (exit 0 only): deny blocks with the
+    // given reason; allow short-circuits the remaining preToolUse hooks.
+    // Anything else falls through to plain exit-code semantics.
+    if (stage === "preToolUse" && outcome.ok) {
+      const d = parseToolDecision(outcome.stdout);
+      if (d?.decision === "deny") {
+        outcomes.push({
+          ...outcome,
+          ok: false,
+          decision: "deny",
+          outputTail: (d.reason ?? "denied by preToolUse hook").slice(0, HOOK_OUTPUT_TAIL_CHARS),
+        });
+        break; // blocks the tool; later hooks are moot
+      }
+      if (d?.decision === "allow") {
+        outcomes.push({ ...outcome, decision: "allow" });
+        break; // explicit allow: skip the remaining preToolUse hooks
+      }
+    }
+
     outcomes.push(outcome);
     if (outcome.ok) continue;
     if (BLOCKING_STAGES.has(stage)) break; // blocks the tool/run; later hooks are moot

@@ -134,6 +134,78 @@ describe("agent loop: hooks + context visibility", () => {
     expect(prompt).toMatchObject({ stage: "userPromptSubmit", task: "do it", workspace });
   });
 
+  it("appends userPromptSubmit hook stdout to the task as <hook-context> blocks", async () => {
+    const requests: ChatRequest[] = [];
+    const recording: ChatProvider = {
+      model: "fake",
+      chat: async (req) => {
+        requests.push(req);
+        return response({ content: "done" });
+      },
+      chatStream: async (req) => {
+        requests.push(req);
+        return response({ content: "done" });
+      },
+    };
+    const agent = createAgentCore({
+      provider: recording,
+      dispatcher: spyDispatcher({ ok: true }),
+      confirm: async () => true,
+      hooks: {
+        userPromptSubmit: [
+          { command: "echo current branch: main" },
+          { command: "true" }, // no stdout: contributes no block
+          { command: "echo lint: clean" },
+        ],
+      },
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const created = events.find((e) => e.type === "session.created") as Extract<
+      AgentEvent,
+      { type: "session.created" }
+    >;
+    const expected =
+      "do it" +
+      "\n\n<hook-context>\ncurrent branch: main\n</hook-context>" +
+      "\n\n<hook-context>\nlint: clean\n</hook-context>";
+    // The model sees the augmented task…
+    const sent = requests[0]!.messages as ChatMessage[];
+    expect(sent.find((m) => m.role === "user")!.content).toBe(expected);
+    // …and the trace records it too (session resume replays the same text).
+    const traced = readFileSync(
+      join(workspace, ".seekforge", "sessions", created.sessionId, "messages.jsonl"),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as ChatMessage & { ts: string });
+    expect(traced.find((m) => m.role === "user")!.content).toBe(expected);
+  });
+
+  it("injects nothing when userPromptSubmit hooks stay silent", async () => {
+    const requests: ChatRequest[] = [];
+    const recording: ChatProvider = {
+      model: "fake",
+      chat: async (req) => {
+        requests.push(req);
+        return response({ content: "done" });
+      },
+      chatStream: async (req) => {
+        requests.push(req);
+        return response({ content: "done" });
+      },
+    };
+    const agent = createAgentCore({
+      provider: recording,
+      dispatcher: spyDispatcher({ ok: true }),
+      confirm: async () => true,
+      hooks: { userPromptSubmit: [{ command: "true" }] },
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const sent = requests[0]!.messages as ChatMessage[];
+    expect(sent.find((m) => m.role === "user")!.content).toBe("do it");
+  });
+
   it("a failing userPromptSubmit hook blocks the run with blocked_by_hook", async () => {
     // Empty provider script: any model call would fail with a DIFFERENT error.
     const agent = createAgentCore({
