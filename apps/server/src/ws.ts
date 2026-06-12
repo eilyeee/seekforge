@@ -12,7 +12,7 @@
 import type { RawData, WebSocket } from "ws";
 import { readSessionMeta } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, PermissionRequest } from "@seekforge/shared";
-import type { CreateAgentFn } from "./agent.js";
+import type { CreateAgentFn, RunOverrides } from "./agent.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
@@ -46,7 +46,35 @@ type RunInput = {
   resumeSessionId?: string;
   /** Absolute path of the workspace this run targets (resolved from `ws`). */
   workspace: string;
+  /** Per-run model/thinking overrides from the frame (win over config). */
+  overrides?: RunOverrides;
 };
+
+/**
+ * Validates the optional per-run override fields of a start/send frame.
+ * Returns the overrides object (undefined when none are present) or an
+ * error string describing the first invalid field.
+ */
+export function parseRunOverrides(
+  frame: Record<string, unknown>,
+): { overrides?: RunOverrides } | { error: string } {
+  const { model, thinking, reasoningEffort } = frame;
+  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
+    return { error: "model must be a non-empty string when present" };
+  }
+  if (thinking !== undefined && typeof thinking !== "boolean") {
+    return { error: "thinking must be a boolean when present" };
+  }
+  if (reasoningEffort !== undefined && reasoningEffort !== "high" && reasoningEffort !== "max") {
+    return { error: 'reasoningEffort must be "high" or "max" when present' };
+  }
+  const overrides: RunOverrides = {
+    ...(model !== undefined ? { model } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+  };
+  return Object.keys(overrides).length > 0 ? { overrides } : {};
+}
 
 export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   const timeoutMs = deps.permissionTimeoutMs ?? PERMISSION_TIMEOUT_MS;
@@ -117,6 +145,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
       onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
       extractMemory: input.mode === "edit",
+      ...(input.overrides ? { overrides: input.overrides } : {}),
     });
     try {
       for await (const event of handle.agent.runTask({
@@ -176,11 +205,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (wsId !== undefined && typeof wsId !== "string") {
           return fail("bad_frame", "start.ws must be a string when present");
         }
+        const parsed = parseRunOverrides(frame);
+        if ("error" in parsed) return fail("bad_frame", `start.${parsed.error}`);
         // Omitted ws -> the default (first) workspace, preserving old clients.
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
-        void run({ task, mode, approvalMode, plan, workspace: workspace.path });
+        void run({ task, mode, approvalMode, plan, workspace: workspace.path, ...parsed });
         return;
       }
 
@@ -196,6 +227,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (wsId !== undefined && typeof wsId !== "string") {
           return fail("bad_frame", "send.ws must be a string when present");
         }
+        const parsed = parseRunOverrides(frame);
+        if ("error" in parsed) return fail("bad_frame", `send.${parsed.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const meta =
@@ -211,6 +244,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           approvalMode: "confirm",
           resumeSessionId: sessionId,
           workspace: workspace.path,
+          ...parsed,
         });
         return;
       }
