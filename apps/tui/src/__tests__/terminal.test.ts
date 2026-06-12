@@ -45,3 +45,22 @@ describe("buildTitleSequence", () => {
     expect(buildTitleSequence("evil\x1b]0;pwn\x07\ntitle")).toBe("\x1b]0;evil]0;pwntitle\x07");
   });
 });
+
+describe("mouse sequences without the leading ESC (Ink strips it)", () => {
+  it("parses wheel events with or without ESC", async () => {
+    const { parseMouseWheel } = await import("../terminal.js");
+    expect(parseMouseWheel("[<64;10;5M")).toBe("up");
+    expect(parseMouseWheel("[<65;60;39M")).toBe("down");
+    expect(parseMouseWheel("\x1b[<65;60;39M")).toBe("down");
+  });
+
+  it("isMouseEvent matches any SGR mouse event so clicks are swallowed too", async () => {
+    const { isMouseEvent } = await import("../terminal.js");
+    expect(isMouseEvent("[<65;60;39M")).toBe(true);
+    expect(isMouseEvent("[<0;12;3M")).toBe(true);   // left press
+    expect(isMouseEvent("[<0;12;3m")).toBe(true);   // release
+    expect(isMouseEvent("\x1b[<32;8;2M")).toBe(true); // drag
+    expect(isMouseEvent("hello [<not a mouse")).toBe(false);
+    expect(isMouseEvent("plain text")).toBe(false);
+  });
+});

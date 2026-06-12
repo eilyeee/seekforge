@@ -33,16 +33,28 @@ export function clearTerminalTitle(): void {
   setTerminalTitle(DEFAULT_TITLE);
 }
 
-const SGR_WHEEL = /\x1b\[<(64|65);\d+;\d+M/;
+// Ink consumes the leading ESC before handing the rest to useInput, so the
+// chunk may arrive as "[<65;60;39M" without the escape byte: match both.
+const SGR_WHEEL = /(?:\x1b)?\[<(64|65);\d+;\d+[Mm]/;
+const SGR_ANY = /(?:\x1b)?\[<\d+;\d+;\d+[Mm]/;
 
 /**
  * Scans a raw stdin chunk for an SGR mouse-wheel event:
- * ESC [ < 64 ; x ; y M → "up", ESC [ < 65 ; x ; y M → "down". The chunk may
- * contain multiple or partial sequences; the first wheel match wins.
- * Anything else → null.
+ * [ < 64 ; x ; y M → "up", [ < 65 ; x ; y M → "down" (leading ESC optional —
+ * Ink strips it). The chunk may contain multiple or partial sequences; the
+ * first wheel match wins. Anything else → null.
  */
 export function parseMouseWheel(input: string): "up" | "down" | null {
   const match = SGR_WHEEL.exec(input);
   if (!match) return null;
   return match[1] === "64" ? "up" : "down";
+}
+
+/**
+ * True when the chunk contains ANY SGR mouse event (clicks, releases, drags).
+ * The app swallows these so they never reach the composer as literal text
+ * like "[<65;60;39M".
+ */
+export function isMouseEvent(input: string): boolean {
+  return SGR_ANY.test(input);
 }

@@ -28,7 +28,14 @@ import { KEYMAP, resolveAction, toStroke, type Binding, type InkKey, type KeyStr
 import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "./custom-commands.js";
 import { captureClipboardImage, imagePlaceholder } from "./clipboard-image.js";
 import { createPasteRegistry, expandPastes, registerPaste, shouldPlaceholder } from "./paste.js";
-import { clearTerminalTitle, MOUSE_DISABLE, MOUSE_ENABLE, parseMouseWheel, setTerminalTitle } from "./terminal.js";
+import {
+  clearTerminalTitle,
+  isMouseEvent,
+  MOUSE_DISABLE,
+  MOUSE_ENABLE,
+  parseMouseWheel,
+  setTerminalTitle,
+} from "./terminal.js";
 import { loadKeybindings, mergeKeymap } from "./keybindings.js";
 import { KNOWN_MODELS, modelPickerLines } from "./model-list.js";
 import { runSession } from "./agent/run-session.js";
@@ -907,14 +914,19 @@ export function App({ config, projectPath, initialModel, mcpToolSpecs, initialSe
   useInput((rawInput, key) => {
     const stroke: KeyStroke = toStroke(rawInput, key as unknown as InkKey);
 
-    // 0. Mouse wheel (SGR sequences arrive as raw input chunks).
-    const wheel = parseMouseWheel(rawInput);
-    if (wheel) {
-      dispatch({
-        type: "scroll",
-        delta: wheel === "up" ? 3 : -3,
-        max: Math.max(0, stateRef.current.items.length - 1),
-      });
+    // 0. Mouse events (SGR sequences arrive as raw input chunks, with the
+    // leading ESC already consumed by Ink). Wheel scrolls; everything else
+    // (clicks, releases, drags) is swallowed so it never lands in the
+    // composer as literal "[<65;60;39M" text.
+    if (isMouseEvent(rawInput)) {
+      const wheel = parseMouseWheel(rawInput);
+      if (wheel) {
+        dispatch({
+          type: "scroll",
+          delta: wheel === "up" ? 3 : -3,
+          max: Math.max(0, stateRef.current.items.length - 1),
+        });
+      }
       return;
     }
 
