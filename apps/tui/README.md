@@ -19,16 +19,31 @@ CLI).
 
 ## Interface
 
-- Scrolling transcript: user prompts, streamed assistant markdown, tool rows
-  with a status glyph + dimmed args, an in-place plan checklist (☐ ◐ ☑),
-  file-changed badges, and a final report block.
-- Status line: model · context-window occupancy % · cumulative cost · tokens,
-  with a spinner + "working…" while a turn runs.
-- Inline permission panel showing the RAW command/path verbatim; press `y` to
-  approve, any other key to deny.
-- Composer with slash commands: `/help` `/new` `/model <name>` `/context`
-  `/usage` `/quit`. `@path` tokens inline file contents.
-- Ctrl+C cancels a running task; a second Ctrl+C (or Ctrl+C while idle) exits.
+- **Transcript**: user prompts, streamed assistant markdown with
+  syntax-highlighted code blocks, tool rows, an in-place plan checklist
+  (☐ ◐ ☑), inline colored diffs for every `apply_patch`/`write_file`, nested
+  `↳ [agent] tool` rows for dispatched subagents, and a final report block.
+  PageUp/PageDown scroll the managed viewport; Esc jumps back to latest.
+- **Composer**: multiline (trailing `\` or Ctrl+J inserts a newline), ↑/↓
+  history persisted across sessions, Ctrl+U clears, Ctrl+G (or `/editor`)
+  edits the draft in `$EDITOR`. Typing `/` opens the command palette; typing
+  `@` opens a fuzzy, frecency-ranked file picker (the picked file's contents
+  are inlined on send); `# <fact>` saves to project memory.
+- **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
+  cycles, `/approve <mode>` sets it. In plan mode every message runs a
+  read-only planning turn, then `y` executes it in the same session.
+- **Permissions**: an inline panel shows the RAW command/path verbatim;
+  `y` allows once, `a` allows similar commands for the rest of the session,
+  anything else denies.
+- **Status line**: model · context % · cost · tokens · approval mode ·
+  `⚙ N bg` background tasks · scroll indicator, with a spinner while running.
+
+## Slash commands
+
+`/help` `/new` `/sessions` `/resume <id>` `/plan <task>`
+`/approve [auto|confirm|plan]` `/rewind [yes]` `/model <name>`
+`/remember <fact>` `/tasks` `/agents` `/mcp` `/context` `/compact` `/usage`
+`/copy` `/editor` `/quit`
 
 ## Development
 
@@ -38,8 +53,8 @@ pnpm --filter @seekforge/tui test       # vitest unit tests (pure logic only)
 pnpm --filter @seekforge/tui typecheck  # tsc --noEmit
 ```
 
-## Deferred to a later iteration
-
-- MCP is assembled (`prepareMcp`) but untested end-to-end here.
-- A dedicated diff pane for `file.changed` (currently a one-line badge).
-- Scrollback/viewport management for very long transcripts.
+Architecture: `model.ts` is the single reducer/state hub (overlays, scroll,
+approval, bg tasks all live there); `keymap.ts` is a declarative key table;
+components are presentation-only — all input routing happens in `app.tsx`.
+Theme: set `accent` in config or `SEEKFORGE_TUI_ACCENT` (any Ink color name);
+`NO_COLOR` is respected.

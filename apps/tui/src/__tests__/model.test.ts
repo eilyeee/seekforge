@@ -155,3 +155,78 @@ describe("chatReducer context + report", () => {
     expect(item.text).toContain("nope");
   });
 });
+
+describe("chatReducer v2 state", () => {
+  it("parses nested subagent step titles into agentId + title", () => {
+    let s = base();
+    s = reduce(s, { type: "step.started", title: "[explorer] read_file" });
+    const step = s.items[0] as ChatItem & { kind: "step" };
+    expect(step.agentId).toBe("explorer");
+    expect(step.title).toBe("read_file");
+    s = reduce(s, { type: "step.started", title: "turn 2" });
+    expect((s.items[1] as ChatItem & { kind: "step" }).agentId).toBeUndefined();
+  });
+
+  it("keeps the scroll window anchored while new items arrive", () => {
+    let s = base();
+    for (let i = 0; i < 5; i += 1) s = chatReducer(s, { type: "notice", text: `n${i}` });
+    s = chatReducer(s, { type: "scroll", delta: 3, max: 4 });
+    expect(s.scrollOffset).toBe(3);
+    s = chatReducer(s, { type: "notice", text: "newer" });
+    expect(s.scrollOffset).toBe(4); // grew with the appended item
+    s = chatReducer(s, { type: "scroll-latest" });
+    expect(s.scrollOffset).toBe(0);
+  });
+
+  it("run-start resets the scroll offset", () => {
+    let s = base();
+    s = chatReducer(s, { type: "notice", text: "x" });
+    s = chatReducer(s, { type: "scroll", delta: 1, max: 1 });
+    s = chatReducer(s, { type: "run-start" });
+    expect(s.scrollOffset).toBe(0);
+  });
+
+  it("overlay-move wraps around the candidate count", () => {
+    let s = base();
+    s = chatReducer(s, { type: "overlay", overlay: { kind: "palette", query: "", index: 0 } });
+    s = chatReducer(s, { type: "overlay-move", delta: -1, count: 3 });
+    expect(s.overlay).toMatchObject({ index: 2 });
+    s = chatReducer(s, { type: "overlay-move", delta: 1, count: 3 });
+    expect(s.overlay).toMatchObject({ index: 0 });
+  });
+
+  it("tracks background tasks from run_command/task_kill completions", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "run_command", args: { command: "npm run dev", background: true } },
+      { type: "tool.completed", toolName: "run_command", result: { ok: true, data: { taskId: "bg-1" } } },
+    );
+    expect(s.bgTasks).toEqual([{ id: "bg-1", command: "npm run dev", status: "running" }]);
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "task_kill", args: { taskId: "bg-1" } },
+      { type: "tool.completed", toolName: "task_kill", result: { ok: true, data: { taskId: "bg-1" } } },
+    );
+    expect(s.bgTasks[0]?.status).toBe("exited");
+  });
+
+  it("marks all bg tasks exited on run-end (loop disposes them)", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "tool.started", toolName: "run_command", args: { command: "watch", background: true } },
+      { type: "tool.completed", toolName: "run_command", result: { ok: true, data: { taskId: "bg-9" } } },
+    );
+    s = chatReducer(s, { type: "run-end" });
+    expect(s.bgTasks[0]?.status).toBe("exited");
+  });
+
+  it("appends diff items via the diff action", () => {
+    let s = base();
+    s = chatReducer(s, { type: "diff", path: "a.ts", lines: [{ kind: "add", text: "+x" }] });
+    const item = s.items[0] as ChatItem & { kind: "diff" };
+    expect(item.kind).toBe("diff");
+    expect(item.path).toBe("a.ts");
+  });
+});

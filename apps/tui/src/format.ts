@@ -25,6 +25,10 @@ export type StatusBarModel = {
   context?: ContextUsage;
   usage: TokenUsage;
   running: boolean;
+  /** Persistent approval mode; "confirm" is the default and stays silent. */
+  approval?: "auto" | "confirm" | "plan";
+  /** Running background tasks ("⚙ 2 bg"). */
+  bgRunning?: number;
 };
 
 /**
@@ -40,6 +44,10 @@ export type StatusBarParts = {
   /** "1.2K tok" cumulative total (prompt + completion). */
   tokens: string;
   state: "working" | "idle";
+  /** "auto-approve" / "plan mode" when not the default confirm mode. */
+  approval?: string;
+  /** "⚙ 2 bg" when background tasks are running. */
+  bg?: string;
 };
 
 export function statusBarParts(m: StatusBarModel): StatusBarParts {
@@ -50,6 +58,9 @@ export function statusBarParts(m: StatusBarModel): StatusBarParts {
     cost: `$${m.usage.costUsd.toFixed(4)}`,
     tokens: `${kfmt(totalTokens)} tok`,
     state: m.running ? "working" : "idle",
+    ...(m.approval === "auto" ? { approval: "auto-approve" } : {}),
+    ...(m.approval === "plan" ? { approval: "plan mode" } : {}),
+    ...(m.bgRunning && m.bgRunning > 0 ? { bg: `⚙ ${m.bgRunning} bg` } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
 import { loadAgentDefinitions, type ToolSpec } from "@seekforge/core";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { ApprovalMode, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createTuiAgent } from "./factory.js";
@@ -11,6 +11,12 @@ export type RunSessionDeps = {
   model: string;
   projectPath: string;
   mcpToolSpecs: ToolSpec[];
+  /** ask = read-only investigation; edit = normal. */
+  mode: "ask" | "edit";
+  /** Plan flavor: read-only run that produces an implementation plan. */
+  plan: boolean;
+  /** auto skips confirmations (the TUI's auto approval setting). */
+  approvalMode: ApprovalMode;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
   dispatch: (action: ChatAction) => void;
   /** Awaits the inline PermissionPanel's y/n answer. */
@@ -46,8 +52,9 @@ export async function runSession(
     for await (const event of agent.runTask({
       projectPath: deps.projectPath,
       task: expandFileRefs(task, deps.projectPath),
-      mode: "edit",
-      approvalMode: "confirm",
+      mode: deps.mode,
+      plan: deps.plan,
+      approvalMode: deps.approvalMode,
       resumeSessionId: deps.getSessionId(),
       signal,
     })) {

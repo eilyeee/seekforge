@@ -53,6 +53,16 @@ describe("statusBarParts", () => {
     expect(parts.context).toBeUndefined();
     expect(parts.state).toBe("idle");
   });
+
+  it("surfaces non-default approval modes and running bg tasks", () => {
+    const usage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
+    expect(statusBarParts({ model: "m", usage, running: false }).approval).toBeUndefined();
+    expect(statusBarParts({ model: "m", usage, running: false, approval: "confirm" }).approval).toBeUndefined();
+    expect(statusBarParts({ model: "m", usage, running: false, approval: "auto" }).approval).toBe("auto-approve");
+    expect(statusBarParts({ model: "m", usage, running: false, approval: "plan" }).approval).toBe("plan mode");
+    expect(statusBarParts({ model: "m", usage, running: false, bgRunning: 2 }).bg).toBe("⚙ 2 bg");
+    expect(statusBarParts({ model: "m", usage, running: false, bgRunning: 0 }).bg).toBeUndefined();
+  });
 });
 
 describe("planGlyph", () => {
