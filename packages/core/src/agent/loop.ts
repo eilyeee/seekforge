@@ -98,6 +98,13 @@ export type AgentCoreDeps = {
    */
   providerForModel?: (model: string) => ChatProvider;
   /**
+   * Model used for plan runs (input.plan === true) instead of the default
+   * provider's model, resolved through providerForModel. Lets /plan think on
+   * deepseek-v4-pro while execution runs on flash. Ignored when
+   * providerForModel is unset or input.plan is false.
+   */
+  planModel?: string;
+  /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
    * included). sessionStart/userPromptSubmit/stop/sessionEnd fire only for
@@ -163,6 +170,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       };
 
       yield emit({ type: "session.created", sessionId });
+
+      // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
+      // on v4-pro) while regular runs keep the default provider. Run-local —
+      // resuming the session in execute mode goes back to deps.provider.
+      const provider =
+        input.plan === true && deps.planModel !== undefined
+          ? (deps.providerForModel?.(deps.planModel) ?? deps.provider)
+          : deps.provider;
 
       const startedAt = new Date().toISOString();
       const meta = {
@@ -696,7 +711,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // failure) falls back to the mechanical digest.
             const compacted =
               (deps.compaction === "llm"
-                ? await llmCompactMessages(deps.provider, messages, budgetTokens)
+                ? await llmCompactMessages(provider, messages, budgetTokens)
                 : null) ?? compactMessages(messages, budgetTokens);
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.
@@ -715,8 +730,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
 
           const res = deps.onModelDelta
-            ? await deps.provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta, deps.onReasoningDelta)
-            : await deps.provider.chat({ messages, tools: toolDefs });
+            ? await provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta, deps.onReasoningDelta)
+            : await provider.chat({ messages, tools: toolDefs });
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
 

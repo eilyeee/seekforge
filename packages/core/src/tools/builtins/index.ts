@@ -6,7 +6,10 @@ import { projectTools } from "./project.js";
 import { planTools } from "./plan.js";
 import { webTools } from "./web.js";
 import { askTools } from "./ask.js";
+import { visionTools } from "./vision.js";
+
+export { configureVision, type VisionConfig } from "./vision.js";
 
 export function builtinTools(): ToolSpec[] {
-  return [...fsTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools];
+  return [...fsTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools, ...visionTools];
 }
