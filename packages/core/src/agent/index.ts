@@ -43,6 +43,7 @@ export {
   readCheckpoints,
   readSessionMeta,
   rewindSession,
+  truncateSessionAtUserTurn,
   writeSessionMeta,
   type CheckpointEntry,
   type ListSessionsOptions,
@@ -51,4 +52,5 @@ export {
   type PruneSessionsOptions,
   type RewindResult,
   type SessionMeta,
+  type TruncateResult,
 } from "./trace.js";

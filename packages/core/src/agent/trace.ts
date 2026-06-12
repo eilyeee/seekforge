@@ -179,6 +179,54 @@ export function compactSessionNow(workspace: string, sessionId: string): ManualC
   };
 }
 
+export type TruncateResult = { removedMessages: number; keptMessages: number };
+
+/**
+ * Rewinds a stored session's conversation to just BEFORE one of its user
+ * turns: counts ALL role:"user" messages in messages.jsonl in file order as
+ * turns 0..N-1, keeps every message before the `turnIndex`-th one and drops
+ * that message plus everything after, then rewrites the file. The next
+ * resume replays the truncated history.
+ *
+ * turnIndex 0 is refused (truncating before the original task message would
+ * empty the conversation): returns null. Also returns null when turnIndex is
+ * out of range or the messages file is missing/unreadable. File changes made
+ * by the dropped turns are NOT touched — use rewindSession for that.
+ */
+export function truncateSessionAtUserTurn(
+  workspace: string,
+  sessionId: string,
+  turnIndex: number,
+): TruncateResult | null {
+  if (turnIndex <= 0 || !Number.isInteger(turnIndex)) return null;
+
+  let messages: ChatMessage[];
+  try {
+    messages = loadSessionMessages(workspace, sessionId);
+  } catch {
+    return null;
+  }
+
+  let userTurn = -1;
+  let cutAt = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role !== "user") continue;
+    userTurn += 1;
+    if (userTurn === turnIndex) {
+      cutAt = i;
+      break;
+    }
+  }
+  if (cutAt < 0) return null; // turnIndex out of range
+
+  const kept = messages.slice(0, cutAt);
+  const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
+  const ts = new Date().toISOString();
+  const lines = kept.map((m) => JSON.stringify({ ts, ...m }));
+  writeFileSync(file, `${lines.join("\n")}\n`);
+  return { removedMessages: messages.length - kept.length, keptMessages: kept.length };
+}
+
 export type CheckpointEntry = {
   ts: string;
   /** Workspace-relative path of the file. */
