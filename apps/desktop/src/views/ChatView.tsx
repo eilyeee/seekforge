@@ -69,6 +69,8 @@ export function ChatView() {
         }
       })
       .catch((e: unknown) => showToast(`Merge failed: ${e instanceof Error ? e.message : e}`));
+  };
+
   /** Server config (sandbox badge + thinking default); refreshed per workspace. */
   const [config, setConfig] = useState<ServerConfig | null>(null);
   useEffect(() => {
