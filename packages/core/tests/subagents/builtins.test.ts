@@ -16,12 +16,33 @@ describe("builtin agents", () => {
       expect(def.own).toBeDefined();
       expect(def.boundary).toBeDefined();
       expect(def.body!.length).toBeGreaterThan(200); // real procedure, not a stub
-      expect(def.body).toContain("Report format");
     }
     const explorer = BUILTIN_AGENTS.find((d) => d.id === "explorer")!;
     expect(explorer.tools).toEqual(["list_files", "read_file", "search_text", "detect_project", "list_scripts"]);
     const reviewer = BUILTIN_AGENTS.find((d) => d.id === "reviewer")!;
     expect(reviewer.tools).toEqual(["list_files", "read_file", "search_text", "git_diff", "git_status"]);
+  });
+
+  it("explorer body enforces the context-frugal report contract", () => {
+    const body = BUILTIN_AGENTS.find((d) => d.id === "explorer")!.body!;
+    expect(body).toContain("Report contract");
+    expect(body).toContain("path:line — fact");
+    expect(body).toContain("~30 lines");
+    expect(body).toContain("NO file dumps");
+    expect(body).toContain("never the content itself");
+    expect(body).toContain("Never narrate");
+    expect(body).toContain("Open questions");
+  });
+
+  it("reviewer body follows the code-review skill philosophy", () => {
+    const body = BUILTIN_AGENTS.find((d) => d.id === "reviewer")!.body!;
+    expect(body).toContain("Report format");
+    expect(body).toContain("correctness > safety >");
+    expect(body).toContain("never rewrite the author's style");
+    expect(body).toContain('Re-check each "bug"');
+    expect(body).toContain("smallest");
+    expect(body).toContain("file:line");
+    expect(body).toContain("ship / fix-first / needs-rework");
   });
 
   it("withBuiltinAgents merges builtins at the lowest priority", () => {

@@ -111,6 +111,10 @@ describe("dispatch_agent (loop-level)", () => {
     expect(dispatch).toBeDefined();
     expect(dispatch!.description).toContain("reviewer — reviews code, read-only (ask)");
     expect(dispatch!.description).toContain("fixer — fixes bugs (edit)");
+    // when-to-use guidance: parallel investigations yes, trivial lookups no
+    expect(dispatch!.description).toContain("3+ independent read-only");
+    expect(dispatch!.description).toContain("NOT for anything 1-2 of your own tool calls");
+    expect(dispatch!.description).toContain("poll with agent_result");
     expect((dispatch!.parameters as any).properties.agentId.enum).toEqual(["reviewer", "fixer"]);
     expect(provider.requests[0]!.messages[0]!.content).toContain("dispatch_agent");
     expect(provider.requests[0]!.messages[0]!.content).toContain("- reviewer (ask)");
