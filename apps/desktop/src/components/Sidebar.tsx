@@ -1,15 +1,31 @@
+import type { ComponentType } from "react";
 import { activeTab, useStore, type View } from "../store";
+import {
+  IconAgents,
+  IconChat,
+  IconDiff,
+  IconEvolution,
+  IconMemory,
+  IconSessions,
+  IconSettings,
+  IconSkills,
+  LogoMark,
+} from "./ui/icons";
 
-const NAV: { view: View; label: string; glyph: string }[] = [
-  { view: "chat", label: "Chat", glyph: ">_" },
-  { view: "sessions", label: "Sessions", glyph: "≡" },
-  { view: "diff", label: "Diff", glyph: "±" },
-  { view: "skills", label: "Skills", glyph: "✦" },
-  { view: "agents", label: "Agents", glyph: "⤷" },
-  { view: "memory", label: "Memory", glyph: "◈" },
-  { view: "evolution", label: "Evolve", glyph: "↻" },
-  { view: "settings", label: "Settings", glyph: "⚙" },
+const NAV: { view: View; label: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
+  { view: "chat", label: "Chat", Icon: IconChat },
+  { view: "sessions", label: "Sessions", Icon: IconSessions },
+  { view: "diff", label: "Diff", Icon: IconDiff },
+  { view: "skills", label: "Skills", Icon: IconSkills },
+  { view: "agents", label: "Agents", Icon: IconAgents },
+  { view: "memory", label: "Memory", Icon: IconMemory },
+  { view: "evolution", label: "Evolve", Icon: IconEvolution },
+  { view: "settings", label: "Settings", Icon: IconSettings },
 ];
+
+/** Extra top padding on macOS: the window uses an overlay title bar, so the
+ *  traffic lights float over the sidebar's top-left corner. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
 export function Sidebar() {
   const view = useStore((s) => s.view);
@@ -21,18 +37,26 @@ export function Sidebar() {
   const conn = useStore((s) => activeTab(s.tabs).conn);
 
   return (
-    <aside className="flex w-44 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/40">
-      <div className="px-4 py-3 font-mono text-sm font-bold tracking-tight text-emerald-400">
-        seek<span className="text-zinc-100">forge</span>
+    <aside className="flex w-48 shrink-0 flex-col border-r border-subtle bg-surface-raised/60">
+      <div
+        data-tauri-drag-region
+        className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
+      >
+        <LogoMark size={18} className="text-accent" />
+        <span className="text-sm font-semibold tracking-tight text-primary">
+          Seek<span className="text-accent">Forge</span>
+        </span>
       </div>
       {workspaces.length > 0 && (
-        <div className="px-3 pb-2">
-          <label className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-600">Workspace</label>
+        <div className="px-3 pb-3">
+          <label className="mb-1 block px-1 text-[10px] uppercase tracking-wider text-tertiary">
+            Workspace
+          </label>
           <select
             value={activeWorkspaceId}
             onChange={(e) => setActiveWorkspace(e.target.value)}
             title={workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ""}
-            className="w-full truncate rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-700 focus:outline-none"
+            className="focus-ring w-full truncate rounded-lg border border-strong bg-surface px-2 py-1 text-xs text-primary focus:border-accent/70"
           >
             {workspaces.map((w) => (
               <option key={w.id} value={w.id} title={w.path}>
@@ -43,26 +67,33 @@ export function Sidebar() {
         </div>
       )}
       <nav className="flex-1 space-y-0.5 px-2">
-        {NAV.map((item) => (
-          <button
-            key={item.view}
-            type="button"
-            onClick={() => setView(item.view)}
-            className={`flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
-              view === item.view
-                ? "bg-zinc-800 text-zinc-100"
-                : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-            }`}
-          >
-            <span className="w-5 font-mono text-xs text-zinc-500">{item.glyph}</span>
-            {item.label}
-          </button>
-        ))}
+        {NAV.map(({ view: v, label, Icon }) => {
+          const active = view === v;
+          return (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              aria-current={active ? "page" : undefined}
+              className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                active
+                  ? "bg-accent-muted/70 font-medium text-primary"
+                  : "text-secondary hover:bg-surface-overlay hover:text-primary"
+              }`}
+            >
+              <Icon
+                size={15}
+                className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
+              />
+              {label}
+            </button>
+          );
+        })}
       </nav>
-      <div className="flex items-center gap-1.5 px-4 py-3 font-mono text-[10px] text-zinc-600">
+      <div className="flex items-center gap-1.5 border-t border-subtle px-4 py-3 font-mono text-[10px] text-tertiary">
         <span
           className={`h-1.5 w-1.5 rounded-full ${
-            conn === "connected" ? "bg-emerald-500" : conn === "connecting" ? "bg-amber-500" : "bg-red-500"
+            conn === "connected" ? "bg-ok" : conn === "connecting" ? "bg-warn animate-pulse" : "bg-danger"
           }`}
         />
         {conn}

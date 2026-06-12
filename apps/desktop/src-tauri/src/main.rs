@@ -17,6 +17,7 @@ struct ServerState(Mutex<Option<ServeChild>>);
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ServerState(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -49,12 +50,21 @@ fn start_server_and_open_window(handle: tauri::AppHandle) {
                     return;
                 }
             };
-            let built = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(external))
+            let builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(external))
                 .title("SeekForge")
                 .inner_size(1280.0, 800.0)
-                .build();
-            if let Err(e) = built {
-                fail(&handle, &format!("failed to create window: {e}"));
+                .min_inner_size(800.0, 560.0)
+                // Matches --sf-surface (#0e0f12) to avoid a flash before load.
+                .background_color(tauri::webview::Color(14, 15, 18, 255));
+            // macOS: transparent overlay title bar — traffic lights float over
+            // the sidebar (which pads for them); content runs edge-to-edge.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+            match builder.build() {
+                Ok(_) => spawn_update_check(handle),
+                Err(e) => fail(&handle, &format!("failed to create window: {e}")),
             }
         }
         Err(msg) => fail(&handle, &msg),
@@ -117,6 +127,36 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
             ))
         }
     }
+}
+
+/// Background update check against GitHub releases (see docs/RELEASING.md).
+/// Failures are logged and never block the app: with the placeholder pubkey
+/// in tauri.conf.json the updater simply reports itself unavailable.
+fn spawn_update_check(handle: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    tauri::async_runtime::spawn(async move {
+        let updater = match handle.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("SeekForge: updater unavailable: {e}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                eprintln!(
+                    "SeekForge: update {} available, downloading in background…",
+                    update.version
+                );
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(()) => eprintln!("SeekForge: update installed; restart to apply"),
+                    Err(e) => eprintln!("SeekForge: update install failed: {e}"),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("SeekForge: update check failed: {e}"),
+        }
+    });
 }
 
 /// Locates the monorepo root by walking up from the executable dir and then

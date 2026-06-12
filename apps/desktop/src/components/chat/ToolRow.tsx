@@ -1,14 +1,25 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { ChatItem } from "../../lib/events";
 import { extractDiff } from "../../lib/diff";
 import { DiffBlock } from "../DiffBlock";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
-function StatusIcon({ status }: { status: ToolItem["status"] }) {
-  if (status === "running") return <span className="animate-pulse text-amber-400">●</span>;
-  if (status === "ok") return <span className="text-emerald-400">✓</span>;
-  return <span className="text-red-400">✗</span>;
+/** TUI-style status dot: ⏺ accent while running, green ok, red error. */
+function StatusDot({ status }: { status: ToolItem["status"] }) {
+  const cls =
+    status === "running" ? "animate-pulse text-accent" : status === "ok" ? "text-ok" : "text-danger";
+  return <span className={`${cls} select-none`}>⏺</span>;
+}
+
+/** Indented follow-up line with the ⎿ connector, mirroring the TUI. */
+function ResultLine({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex gap-2 pl-[3px]">
+      <span className="select-none font-mono text-xs leading-5 text-tertiary">⎿</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
 }
 
 function Json({ value }: { value: unknown }) {
@@ -19,58 +30,73 @@ function Json({ value }: { value: unknown }) {
     text = String(value);
   }
   return (
-    <pre className="max-h-60 overflow-auto rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-xs text-zinc-400">
+    <pre className="max-h-60 overflow-auto rounded-lg border border-subtle bg-surface p-2 font-mono text-xs text-secondary">
       {text}
     </pre>
   );
 }
 
-/** Tool call row: name + status, expandable raw args / result JSON. */
+/**
+ * Tool call row in the TUI's ⏺ / ⎿ visual language: status dot + name on the
+ * first line, results indented under a ⎿ connector. Click toggles the raw
+ * args / result JSON.
+ */
 export function ToolRow({ item }: { item: ToolItem }) {
   const [open, setOpen] = useState(false);
   const diff = item.result?.ok ? extractDiff(item.result.data) : null;
 
   return (
-    <div className="rounded border border-zinc-800 bg-zinc-900/60">
+    <div className="py-0.5">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs hover:bg-zinc-800/50"
+        className="focus-ring group flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay/60"
       >
-        <StatusIcon status={item.status} />
-        <span className="text-zinc-200">{item.name}</span>
+        <StatusDot status={item.status} />
+        <span className="text-primary">{item.name}</span>
         {item.status === "error" && item.result?.error && (
-          <span className="truncate text-red-400/80">{item.result.error.message}</span>
+          <span className="truncate text-danger/80">{item.result.error.message}</span>
         )}
-        <span className="ml-auto text-zinc-600">{open ? "▾" : "▸"}</span>
+        <span className="ml-auto text-tertiary opacity-0 transition-opacity group-hover:opacity-100">
+          {open ? "▾" : "▸"}
+        </span>
       </button>
+
       {open && (
-        <div className="space-y-2 border-t border-zinc-800 px-3 py-2">
-          {item.args !== undefined && (
-            <div>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">args</div>
-              <Json value={item.args} />
-            </div>
-          )}
-          {item.result !== undefined && (
-            <div>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">result</div>
-              {diff ? <DiffBlock diff={diff} /> : <Json value={item.result} />}
-            </div>
-          )}
-        </div>
+        <ResultLine>
+          <div className="space-y-2 py-1">
+            {item.args !== undefined && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">args</div>
+                <Json value={item.args} />
+              </div>
+            )}
+            {item.result !== undefined && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">result</div>
+                {diff ? <DiffBlock diff={diff} /> : <Json value={item.result} />}
+              </div>
+            )}
+          </div>
+        </ResultLine>
       )}
+
       {/* Live output tail while the command is still running */}
       {item.status === "running" && item.tail !== undefined && (
-        <pre className="overflow-x-auto border-t border-zinc-800 px-3 py-1.5 font-mono text-[11px] leading-snug text-zinc-500">
-          {item.tail.replace(/\n+$/, "")}
-        </pre>
+        <ResultLine>
+          <pre className="overflow-x-auto py-0.5 font-mono text-[11px] leading-snug text-tertiary">
+            {item.tail.replace(/\n+$/, "")}
+          </pre>
+        </ResultLine>
       )}
+
       {/* Diffs are important enough to show even when collapsed */}
       {!open && diff && (
-        <div className="border-t border-zinc-800 px-3 py-2">
-          <DiffBlock diff={diff} />
-        </div>
+        <ResultLine>
+          <div className="py-1">
+            <DiffBlock diff={diff} />
+          </div>
+        </ResultLine>
       )}
     </div>
   );
