@@ -1,0 +1,16 @@
+{
+  "id": "rename-across-files",
+  "title": "Rename a function across every call site",
+  "fixture": "rename-across-files",
+  "mode": "edit",
+  "task": "Rename the function `fmtPrice` (defined in src/format.js) to `formatPrice`, updating the definition, the export, and every call site across the codebase (it is used from several modules). Behavior must not change and no stray references to the old name may remain. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/format.js", "pattern": "formatPrice" },
+    { "type": "file_not_contains", "path": "src/format.js", "pattern": "fmtPrice" },
+    { "type": "file_not_contains", "path": "src/cart.js", "pattern": "fmtPrice" },
+    { "type": "file_not_contains", "path": "src/receipt.js", "pattern": "fmtPrice" },
+    { "type": "file_not_contains", "path": "src/report.js", "pattern": "fmtPrice" }
+  ],
+  "notes": "Tests exercise the three consumer modules, so a partial rename breaks npm test; the file_not_contains checks catch a missed call site even if requires were left aliased."
+}

@@ -1,0 +1,13 @@
+{
+  "id": "off-by-one-fix",
+  "title": "Fix a boundary (off-by-one) bug with a provided failing test",
+  "fixture": "off-by-one-fix",
+  "mode": "edit",
+  "task": "`npm test` currently fails: pagination math has a boundary bug in src/paginate.js. Fix the implementation so the whole suite passes. You must NOT modify test/paginate.test.js. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "test/paginate.test.js", "pattern": "pageCount\\(10, 3\\), 4" },
+    { "type": "file_contains", "path": "test/paginate.test.js", "pattern": "pageCount\\(1, 5\\), 1" }
+  ],
+  "notes": "pageCount uses Math.floor and drops the partial last page; the file_contains pins keep the boundary assertions from being rewritten."
+}

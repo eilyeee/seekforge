@@ -1,0 +1,11 @@
+{
+  "name": "demo-service",
+  "version": "1.4.2",
+  "server": {
+    "host": "localhost",
+    "port": 3000
+  },
+  "features": {
+    "beta": false
+  }
+}

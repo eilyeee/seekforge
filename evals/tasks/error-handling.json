@@ -1,0 +1,13 @@
+{
+  "id": "error-handling",
+  "title": "Harden a function's error handling per spec",
+  "fixture": "error-handling",
+  "mode": "edit",
+  "task": "`withdraw` in src/account.js silently accepts garbage. Harden it per the spec comment above the function: throw TypeError for non-finite/non-number amounts, RangeError for amounts <= 0, and RangeError for overdrafts (amount > balance). The happy path must keep returning the new balance. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/account.js", "pattern": "TypeError" },
+    { "type": "file_contains", "path": "src/account.js", "pattern": "RangeError" },
+    { "type": "file_contains", "path": "test/account.test.js", "pattern": "withdraw\\(100, 100\\.01\\), RangeError" }
+  ]
+}
