@@ -3,6 +3,7 @@ import type { PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createTuiAgent } from "./factory.js";
+import { createDiffCapture } from "../diff-capture.js";
 import type { ChatAction } from "../model.js";
 
 export type RunSessionDeps = {
@@ -38,6 +39,9 @@ export async function runSession(
     mcpToolSpecs: deps.mcpToolSpecs,
   });
 
+  // One capture per run: snapshots files around write tools to render diffs.
+  const capture = createDiffCapture(deps.projectPath);
+
   try {
     for await (const event of agent.runTask({
       projectPath: deps.projectPath,
@@ -48,6 +52,8 @@ export async function runSession(
       signal,
     })) {
       deps.dispatch({ type: "event", event });
+      const diff = capture.onEvent(event);
+      if (diff) deps.dispatch({ type: "diff", path: diff.path, lines: diff.lines });
     }
   } finally {
     dispose();
