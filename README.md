@@ -31,13 +31,14 @@ Tokens: 38.7K prompt (33.2K cache hit) / 6.1K completion   Cost: $0.0124
 ## Status
 
 ✅ **Step 1 — CLI** (usable today): agent loop with context compaction,
-10 sandboxed tools, 5-level permission policy, session resume, streaming,
+sandboxed tools, 5-level permission policy, session resume, streaming,
 skills, reviewable project memory, optional Rust execution backend.
 
-🚧 **Step 2 — SeekForge App** (in progress): `seekforge serve` ships a local
-web workbench (React) — chat with live plan/tool/permission UI, sessions,
-skills, memory review, settings. The Tauri desktop shell, self-evolution,
-and an evaluation harness come after.
+✅ **Step 2 — surfaces** (0.7.0): `seekforge-tui` is a full
+Claude-Code-parity terminal UI; `seekforge serve` ships a local web
+workbench (React) plus a Tauri desktop shell; subagents, self-evolution
+and an evaluation harness are in. Current focus: real-world polish
+(dogfooding, eval expansion).
 
 ## Install & setup
 
@@ -59,7 +60,7 @@ export DEEPSEEK_API_KEY=sk-...
 | Command | What it does |
 | --- | --- |
 | `seekforge` | **interactive session** (REPL): multi-turn conversation, `/help` for slash commands (`/new` `/sessions` `/resume` `/model` `/usage`) |
-| `seekforge-tui` | **terminal UI** (Ink): full-screen chat with live tool/plan/diff and a status bar |
+| `seekforge-tui` | **terminal UI** (Ink): full Claude-Code-parity daily driver — command palette + argument pickers, vim mode, steering queue, run detach (Ctrl+B), per-turn backtrack with file restore, thinking display, opt-in OS sandbox, MCP over HTTP, custom commands and skills as slash commands; full list in [apps/tui/README.md](apps/tui/README.md) |
 | `seekforge serve [paths...] [--port 7373]` | local web UI + agent API; pass multiple workspace paths to host them together (127.0.0.1 only, token-protected) |
 | `seekforge run "<task>"` | run a development task; `-y` auto-approves safe writes/commands, `-m` overrides the model, `--json` emits JSONL events for CI, `--plan` plans read-only first and executes after your confirmation |
 | `seekforge ask "<question>"` | read-only Q&A (writes and commands disabled) |
@@ -75,7 +76,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
-| `seekforge config show\|set <key> <value> [-g]` | config keys: `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist` (comma-separated prefixes) |
+| `seekforge config show\|set <key> <value> [-g]` | config keys incl. `apiKey`, `model`, `baseUrl`, `runtimeBin`, `commandAllowlist`, `permissionRules`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`, `hooks`, `mcpServers` |
 
 `Ctrl+C` cancels a running session cooperatively (the trace is kept, so
 `seekforge resume` can pick it up); a second `Ctrl+C` force-quits.
@@ -88,9 +89,29 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
 
 - **Edits are search/replace patches** (`oldString` must match uniquely),
   applied atomically — far more reliable than unified diffs for LLMs.
-- **Context manager** keeps long sessions inside the model window via
-  head/tail compaction, and keeps the prompt prefix stable to hit DeepSeek
-  context caching (cache-hit input is ~10x cheaper; the CLI shows your hit rate).
+- **Context manager** keeps long sessions inside the model window:
+  micro-compaction clears old tool outputs first, then the middle is folded
+  into a digest — mechanically, or by the model with `"compaction": "llm"`
+  (falls back to the digest on failure). The prompt prefix stays stable to
+  hit DeepSeek context caching (cache-hit input is ~10x cheaper; the CLI
+  shows your hit rate).
+- **DeepSeek V4 thinking**: `deepseek-v4-flash` / `deepseek-v4-pro` combine
+  reasoning with tool calling — control it via `/think on|off|high|max` or
+  the `thinking` / `reasoningEffort` config keys; streamed reasoning renders
+  as a collapsible thought block and is never echoed back into requests.
+- **OS sandbox (opt-in)**: `"sandbox": "workspace-write" | "restricted"`
+  wraps commands in seatbelt (macOS) / bwrap (Linux); `restricted` also cuts
+  network. Hard-fails if requested but unavailable — never silently
+  unsandboxed. A denial-looking failure asks once before retrying unsandboxed.
+- **Hooks** fire at 9 stages (preToolUse, postToolUse, sessionStart,
+  userPromptSubmit, preCompact, stop, subagentStop, notification,
+  sessionEnd); userPromptSubmit stdout is injected into the task as context,
+  and preToolUse can block a tool with a reason or allow it outright.
+- **MCP client** speaks stdio and streamable HTTP (`url` + optional bearer
+  `headers`); server resources are listable and `@mcp:<server>:<uri>` inlines
+  one into a message.
+- **`ask_user`**: the agent can ask you a multiple-choice question mid-run
+  (never available to subagents or backgrounded runs, so they can't block).
 - **Skills** are procedure briefs (never permissions) selected per task by
   rule matching; ship your own in `.seekforge/skills/<id>/`.
 - **Subagents** (builtin `explorer`/`reviewer`, plus `AGENT.md` in
@@ -123,8 +144,10 @@ work (`git_commit` — push stays impossible), and fetch public docs pages
 - Tool results are treated as data, not instructions (prompt-injection defense),
   and memory candidates are filtered and human-reviewed before persisting.
 
-This is **misuse protection within a project you already trust**, not an OS
-sandbox — any project command (e.g. `npm test`) runs that project's code.
+By default this is **misuse protection within a project you already trust** —
+any project command (e.g. `npm test`) runs that project's code. For OS-level
+isolation, opt into the sandbox (`"sandbox": "workspace-write" | "restricted"`,
+seatbelt/bwrap; see above).
 
 ## Rust execution backend (optional)
 
@@ -141,19 +164,25 @@ Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
 
 ## Known limitations
 
-- `deepseek-reasoner` is not usable as the agent model yet (no function
-  calling; a fallback text protocol exists in the provider but is not wired
-  into the loop).
+- `deepseek-reasoner` is not usable as the agent model (no function calling;
+  a fallback text protocol exists in the provider but is not wired into the
+  loop). Use the DeepSeek V4 models instead — they combine thinking with
+  tool calling.
 - macOS / Linux only.
 
 ## Monorepo layout
 
 ```txt
-apps/cli          the seekforge CLI (published to npm)
-packages/core     agent loop, provider, tools, memory, skills, runtime client
-packages/shared   cross-cutting plain types
-crates/runtime    seekforge-runtime (Rust execution backend)
-examples/         fixture projects for end-to-end verification
+apps/cli              the seekforge CLI (published to npm)
+apps/tui              seekforge-tui — Ink terminal UI (ships in the npm package)
+apps/server           seekforge serve — local agent server + web workbench
+apps/desktop          Tauri desktop shell
+packages/core         agent loop, provider, tools, memory, skills, runtime client
+packages/shared       cross-cutting plain types
+packages/eval-harness evaluation runner (pnpm eval)
+crates/runtime        seekforge-runtime (Rust execution backend)
+evals/                eval tasks, fixtures, baseline
+examples/             fixture projects for end-to-end verification
 ```
 
 Development: `pnpm install`, `pnpm typecheck`, `pnpm test` (TS),
