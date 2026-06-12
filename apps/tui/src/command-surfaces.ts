@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HookEntry } from "@seekforge/core";
-import { kfmt } from "./format.js";
+import { formatDuration, kfmt } from "./format.js";
 import type { TuiConfig } from "./config.js";
 
 /**
@@ -49,6 +49,8 @@ export type StatusInput = {
   extraDirs: number;
   bgRunning: number;
   detachedRuns: number;
+  /** Wall-clock ms since the TUI started; rendered as an "uptime" row. */
+  uptimeMs?: number;
 };
 
 /** Human label for where the API key came from. */
@@ -65,8 +67,8 @@ function keySourceLabel(source: StatusInput["keySource"]): string {
 
 /**
  * Compact aligned "label  value" block for /status. Zero/absent rows
- * (context %, MCP servers, extra dirs, background tasks, version) are
- * omitted; a missing session shows as "(new)".
+ * (context %, uptime, MCP servers, extra dirs, background tasks, version)
+ * are omitted; a missing session shows as "(new)".
  */
 export function formatStatusLines(s: StatusInput): string[] {
   const pairs: Array<readonly [string, string]> = [];
@@ -85,6 +87,7 @@ export function formatStatusLines(s: StatusInput): string[] {
   pairs.push(["sandbox", s.sandbox ?? "off"]);
   pairs.push(["api key", keySourceLabel(s.keySource)]);
   pairs.push(["cost", `$${s.costUsd.toFixed(4)} · ${kfmt(s.totalTokens)} tokens`]);
+  if (s.uptimeMs !== undefined) pairs.push(["uptime", formatDuration(s.uptimeMs)]);
   if (s.contextPercent !== undefined) pairs.push(["context", `${Math.round(s.contextPercent)}% used`]);
   if (s.mcpServers > 0) {
     pairs.push(["mcp", `${s.mcpServers} ${s.mcpServers === 1 ? "server" : "servers"}`]);

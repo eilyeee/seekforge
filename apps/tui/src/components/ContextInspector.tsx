@@ -1,13 +1,15 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { TokenUsage } from "@seekforge/shared";
-import { formatUsage } from "../format.js";
-import type { BgTask, ContextUsage } from "../model.js";
-import { gauge, gaugeCaption } from "../surfaces.js";
+import { formatUsage, kfmt } from "../format.js";
+import type { BgTask, ChatItem, ContextUsage } from "../model.js";
+import { contextBreakdown, gauge, gaugeCaption } from "../surfaces.js";
 import { ACCENT } from "./Header.js";
 
 /**
  * The /context overlay panel: model, session id, context-window gauge,
+ * a per-category breakdown (tool results vs assistant text vs diffs/shell,
+ * chars/4 estimate with mini-gauges), free space until auto-compaction,
  * cumulative usage, transcript size, and running background tasks.
  * Presentation only — the app routes Esc to close via the overlay stack.
  */
@@ -21,7 +23,14 @@ export type ContextInspectorProps = {
   sessionId?: string;
   model: string;
   bgTasks: readonly BgTask[];
+  /**
+   * Transcript items for the per-category breakdown. Optional — without it
+   * the panel renders exactly as before (single window gauge).
+   */
+  items?: readonly ChatItem[];
 };
+
+const MINI_GAUGE_WIDTH = 12;
 
 export function ContextInspector({
   context,
@@ -30,8 +39,12 @@ export function ContextInspector({
   sessionId,
   model,
   bgTasks,
+  items,
 }: ContextInspectorProps): React.ReactElement {
   const runningBg = bgTasks.filter((t) => t.status === "running").length;
+  const breakdown = items ? contextBreakdown(items) : [];
+  const labelWidth = Math.max(0, ...breakdown.map((row) => row.label.length));
+  const freeTokens = context ? Math.max(0, context.budgetTokens - context.usedTokens) : undefined;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} marginY={1}>
       <Text color={ACCENT} bold>
@@ -56,6 +69,27 @@ export function ContextInspector({
           <Text dimColor>window   no turn run yet</Text>
         </Text>
       )}
+      {breakdown.length > 0 ? (
+        <Box flexDirection="column">
+          <Text dimColor>breakdown (chars/4 estimate)</Text>
+          {breakdown.map((row) => (
+            <Text key={row.label}>
+              <Text dimColor>  {row.label.padEnd(labelWidth)}  </Text>
+              {gauge(row.percent, MINI_GAUGE_WIDTH)}
+              <Text dimColor>
+                {"  "}~{kfmt(row.tokens)} tok · {row.count} item{row.count === 1 ? "" : "s"}
+              </Text>
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+      {freeTokens !== undefined && context ? (
+        <Text>
+          <Text dimColor>free     </Text>
+          {kfmt(freeTokens)} tokens
+          <Text dimColor>  until auto-compaction at {kfmt(context.budgetTokens)}</Text>
+        </Text>
+      ) : null}
       <Text>
         <Text dimColor>usage    </Text>
         {formatUsage(usage)}
