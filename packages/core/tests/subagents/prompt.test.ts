@@ -22,6 +22,24 @@ describe("buildSubagentPrompt", () => {
     expect(p).toContain("markdown report");
   });
 
+  it("frames the report for the parent agent: lead with the answer, bounded length", () => {
+    const p = buildSubagentPrompt(base, "/ws");
+    expect(p).toContain("parent SeekForge agent");
+    expect(p).toContain("a machine, not a human");
+    expect(p).toContain("Lead with the answer");
+    expect(p).toContain("~400 words");
+    expect(p).toContain("The parent only sees this final report");
+  });
+
+  it("states the turn budget (default and per-definition) and the no-questions rule", () => {
+    expect(buildSubagentPrompt(base, "/ws")).toContain("at most 15 turns");
+    expect(buildSubagentPrompt({ ...base, maxTurns: 5 }, "/ws")).toContain("at most 5 turns");
+    const p = buildSubagentPrompt(base, "/ws");
+    expect(p).toContain("You cannot ask questions");
+    expect(p).toContain("ask_user is unavailable in nested runs");
+    expect(p).toContain("state your assumption");
+  });
+
   it("renders own/boundary/do-not-touch as binding constraints and appends the body", () => {
     const p = buildSubagentPrompt(
       {

@@ -17,8 +17,11 @@ export function buildDispatchToolDefinition(defs: AgentDefinition[]): ToolDefini
   return {
     name: DISPATCH_AGENT_TOOL,
     description:
-      "Delegate a bounded sub-task to a specialist agent. It runs autonomously and " +
-      "reports back; you stay responsible for the final result. Available agents:\n" +
+      "Delegate a bounded sub-task to a specialist agent; it runs autonomously and returns one report, " +
+      "and you stay responsible for the final result. Worth the overhead for 3+ independent read-only " +
+      "investigations (dispatch them in parallel) or an isolated, well-specified edit task; NOT for anything " +
+      "1-2 of your own tool calls would answer. With background:true it returns a dispatch id immediately " +
+      "while the agent keeps running; poll with agent_result. Available agents:\n" +
       lines.join("\n"),
     parameters: {
       type: "object",
@@ -47,8 +50,9 @@ export function buildAgentResultToolDefinition(): ToolDefinitionForModel {
   return {
     name: AGENT_RESULT_TOOL,
     description:
-      "Check on a dispatched agent (e.g. one started with background:true). " +
-      "Returns its status and recent steps while running, or its report once done.",
+      "Check on a dispatched agent, typically one started with background:true. " +
+      "Returns its status and recent steps while it is still running, or its final report once done. " +
+      "Do useful work between polls instead of calling this in a tight loop.",
     parameters: {
       type: "object",
       properties: {
@@ -67,8 +71,9 @@ export function buildAgentSendToolDefinition(): ToolDefinitionForModel {
   return {
     name: AGENT_SEND_TOOL,
     description:
-      "Send a follow-up task to a previously dispatched agent. It resumes with its " +
-      "full prior context and reports back. Only valid once the dispatch completed.",
+      "Send a follow-up task to a previously dispatched agent; it resumes with its full prior context " +
+      "and returns a new report. Only valid once the dispatch completed. Prefer this over a fresh " +
+      "dispatch_agent when the follow-up builds on what that agent already read.",
     parameters: {
       type: "object",
       properties: {
