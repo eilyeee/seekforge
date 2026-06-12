@@ -28,7 +28,11 @@ CLI).
   history persisted across sessions, Ctrl+U clears, Ctrl+G (or `/editor`)
   edits the draft in `$EDITOR`. Typing `/` opens the command palette; typing
   `@` opens a fuzzy, frecency-ranked file picker (the picked file's contents
-  are inlined on send); `# <fact>` saves to project memory.
+  are inlined on send); `# <fact>` saves to project memory; `!cmd` runs a
+  local shell command directly (no agent, output inline).
+- **Steering**: the composer stays live while the agent works — Enter queues
+  follow-up messages that are sent in order after the turn; Esc interrupts
+  the run (and clears the queue).
 - **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
   cycles, `/approve <mode>` sets it. In plan mode every message runs a
   read-only planning turn, then `y` executes it in the same session.
@@ -40,10 +44,16 @@ CLI).
 
 ## Slash commands
 
-`/help` `/new` `/sessions` `/resume <id>` `/plan <task>`
-`/approve [auto|confirm|plan]` `/rewind [yes]` `/model <name>`
-`/remember <fact>` `/tasks` `/agents` `/mcp` `/context` `/compact` `/usage`
-`/copy` `/editor` `/quit`
+`/help` `/new` `/clear` `/sessions` (interactive picker) `/resume <id>`
+`/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/diff`
+`/model <name>` `/remember <fact>` `/memory [edit]` `/tasks [kill <id>]`
+`/agents` `/mcp` `/context` `/compact` (manual, in-place) `/usage`
+`/export [path]` `/copy` `/editor` `/quit`
+
+Background tasks started with `run_command background:true` survive across
+turns (one shared manager per TUI process; killed on exit). `/compact` folds
+the middle of the stored session into a digest immediately. A terminal bell
+rings on permission prompts and run completion (`"bell": false` disables).
 
 ## Development
 

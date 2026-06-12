@@ -143,3 +143,30 @@ function truncatedDiff(a: string[], b: string[]): DiffLine[] {
   out.push({ kind: "hunk", text: "@@ … truncated @@" });
   return out;
 }
+
+/**
+ * Classifies an existing unified-diff text (e.g. `git diff` output) into
+ * DiffLines for colored rendering. Mirrors apps/desktop/src/lib/diff.ts.
+ */
+export function classifyUnifiedDiff(diff: string): DiffLine[] {
+  const lines = diff.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.map((text): DiffLine => {
+    if (text.startsWith("+++") || text.startsWith("---")) return { kind: "hunk", text };
+    if (text.startsWith("@@")) return { kind: "hunk", text };
+    if (
+      text.startsWith("diff ") ||
+      text.startsWith("index ") ||
+      text.startsWith("new file") ||
+      text.startsWith("deleted file") ||
+      text.startsWith("rename ") ||
+      text.startsWith("similarity ") ||
+      text.startsWith("Binary files")
+    ) {
+      return { kind: "hunk", text };
+    }
+    if (text.startsWith("+")) return { kind: "add", text };
+    if (text.startsWith("-")) return { kind: "del", text };
+    return { kind: "ctx", text };
+  });
+}

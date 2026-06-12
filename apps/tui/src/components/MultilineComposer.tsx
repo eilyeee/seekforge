@@ -40,7 +40,7 @@ export function MultilineComposer({
         <Text color={ACCENT} bold>
           ❯{" "}
         </Text>
-        <Text dimColor>working… Esc to cancel, Ctrl+C to quit</Text>
+        <Text dimColor>answer the permission prompt above (y · a · any other key denies)</Text>
       </Box>
     );
   }

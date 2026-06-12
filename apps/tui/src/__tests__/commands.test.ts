@@ -40,3 +40,24 @@ describe("parseInput", () => {
     expect(p).toEqual({ kind: "slash", command: { name: "unknown", raw: "/frobnicate now" } });
   });
 });
+
+describe("parseInput v2.1 additions", () => {
+  it("parses ! as a local bash passthrough", () => {
+    expect(parseInput("!ls -la")).toEqual({ kind: "bash", command: "ls -la" });
+    expect(parseInput("! git status")).toEqual({ kind: "bash", command: "git status" });
+    expect(parseInput("!")).toEqual({ kind: "empty" });
+  });
+
+  it("parses /tasks with a kill argument", () => {
+    expect(parseInput("/tasks")).toEqual({ kind: "slash", command: { name: "tasks" } });
+    expect(parseInput("/tasks kill bg-1")).toEqual({ kind: "slash", command: { name: "tasks", arg: "kill bg-1" } });
+  });
+
+  it("parses /memory, /export, /clear and /diff", () => {
+    expect(parseInput("/memory")).toEqual({ kind: "slash", command: { name: "memory" } });
+    expect(parseInput("/memory edit")).toEqual({ kind: "slash", command: { name: "memory", arg: "edit" } });
+    expect(parseInput("/export notes.md")).toEqual({ kind: "slash", command: { name: "export", arg: "notes.md" } });
+    expect(parseInput("/clear")).toEqual({ kind: "slash", command: { name: "clear" } });
+    expect(parseInput("/diff")).toEqual({ kind: "slash", command: { name: "diff" } });
+  });
+});

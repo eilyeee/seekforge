@@ -37,7 +37,9 @@ export type ApprovalSetting = "auto" | "confirm" | "plan";
 export type Overlay =
   | { kind: "palette"; query: string; index: number }
   | { kind: "files"; query: string; index: number; anchor: number }
-  | { kind: "context" };
+  | { kind: "context" }
+  /** Interactive session picker (/sessions): Enter resumes ids[index]. */
+  | { kind: "sessions"; ids: string[]; lines: string[]; index: number };
 
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
@@ -54,6 +56,8 @@ export type ChatItem =
   | { kind: "plan"; id: string; items: PlanItem[] }
   | { kind: "file"; id: string; path: string }
   | { kind: "diff"; id: string; path: string; lines: DiffLine[] }
+  /** Output of a "!" passthrough shell command. */
+  | { kind: "shell"; id: string; command: string; output: string; exitCode: number }
   | { kind: "notice"; id: string; text: string; tone: "dim" | "error" }
   | { kind: "report"; id: string; report: FinalReport };
 
@@ -85,6 +89,8 @@ export type ChatState = {
   planPending: boolean;
   /** Background tasks observed via tool events this session. */
   bgTasks: BgTask[];
+  /** Messages typed while a run was active, sent in order afterwards. */
+  queue: string[];
 };
 
 export function emptyUsage(): TokenUsage {
@@ -111,6 +117,7 @@ export function initialState(model: string): ChatState {
     approval: "confirm",
     planPending: false,
     bgTasks: [],
+    queue: [],
   };
 }
 
@@ -122,6 +129,7 @@ export type ChatAction =
   | { type: "run-end" }
   | { type: "set-model"; model: string }
   | { type: "new-session" }
+  | { type: "clear" }
   | { type: "set-session"; sessionId: string }
   | { type: "permission"; request: PermissionRequest }
   | { type: "permission-resolved" }
@@ -132,6 +140,12 @@ export type ChatAction =
   | { type: "set-approval"; approval: ApprovalSetting }
   | { type: "plan-pending"; pending: boolean }
   | { type: "diff"; path: string; lines: DiffLine[] }
+  | { type: "shell"; command: string; output: string; exitCode: number }
+  | { type: "queue"; text: string }
+  | { type: "dequeue" }
+  | { type: "queue-clear" }
+  /** Replaces bg-task state with a live snapshot from the shared manager. */
+  | { type: "bg-sync"; tasks: BgTask[] }
   | { type: "event"; event: AgentEvent };
 
 let counter = 0;
@@ -190,20 +204,31 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, running: true, scrollOffset: 0 };
 
     case "run-end": {
-      // Close any open streaming assistant item; background tasks were
-      // disposed by the loop when the session ended.
+      // Close any open streaming assistant item. Background tasks live in the
+      // shared manager and survive the run; the app bg-syncs a snapshot.
       const items = state.items.map((it) =>
         it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it,
       );
-      const bgTasks = state.bgTasks.map((t): BgTask => ({ ...t, status: "exited" }));
-      return { ...state, running: false, items, bgTasks };
+      return { ...state, running: false, items };
     }
 
     case "set-model":
       return { ...state, model: action.model };
 
     case "new-session":
-      return { ...state, sessionId: undefined, planPending: false, bgTasks: [] };
+      return { ...state, sessionId: undefined, planPending: false, bgTasks: [], queue: [] };
+
+    case "clear":
+      return {
+        ...state,
+        items: [],
+        sessionId: undefined,
+        planPending: false,
+        bgTasks: [],
+        queue: [],
+        scrollOffset: 0,
+        overlay: null,
+      };
 
     case "set-session":
       return { ...state, sessionId: action.sessionId };
@@ -244,6 +269,27 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         items: [...state.items, { kind: "diff", id: nextId("d"), path: action.path, lines: action.lines }],
       };
+
+    case "shell":
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          { kind: "shell", id: nextId("sh"), command: action.command, output: action.output, exitCode: action.exitCode },
+        ],
+      };
+
+    case "queue":
+      return { ...state, queue: [...state.queue, action.text] };
+
+    case "dequeue":
+      return { ...state, queue: state.queue.slice(1) };
+
+    case "queue-clear":
+      return { ...state, queue: [] };
+
+    case "bg-sync":
+      return { ...state, bgTasks: action.tasks };
 
     case "event":
       return applyEvent(state, action.event);
