@@ -1,31 +1,63 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { ACCENT } from "./Header.js";
+import { highlightLines } from "../highlight.js";
 
 /**
  * Minimal terminal markdown: headings, bullet/numbered lists, fenced code
- * blocks, and inline spans (code, bold, italic). Deliberately small — no heavy
- * markdown dep. Good enough for streamed assistant prose.
+ * blocks (syntax highlighted), and inline spans (code, bold, italic).
+ * Deliberately small — no heavy markdown dep. Good enough for streamed
+ * assistant prose.
  */
 export function Markdown({ text }: { text: string }): React.ReactElement {
   const lines = text.replace(/\s+$/, "").split("\n");
   const out: React.ReactElement[] = [];
-  let inFence = false;
+  let fence: { lang?: string; body: string[] } | null = null;
   let key = 0;
 
-  for (const line of lines) {
-    const fence = line.trim().startsWith("```");
-    if (fence) {
-      inFence = !inFence;
-      continue; // drop the fence markers themselves
-    }
-    if (inFence) {
+  const flushFence = (): void => {
+    if (!fence) return;
+    if (fence.lang) {
       out.push(
-        <Text key={key++} color="green">
+        <Text key={key++} dimColor>
           {"  "}
-          {line}
+          {fence.lang}
         </Text>,
       );
+    }
+    const rows = highlightLines(fence.body.join("\n"), fence.lang);
+    for (const row of rows) {
+      out.push(
+        <Text key={key++}>
+          {"  "}
+          {row.map((token, i) =>
+            token.color ? (
+              <Text key={i} color={token.color}>
+                {token.text}
+              </Text>
+            ) : (
+              <Text key={i}>{token.text}</Text>
+            ),
+          )}
+        </Text>,
+      );
+    }
+    fence = null;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (fence) {
+        flushFence(); // closing fence
+      } else {
+        const lang = trimmed.slice(3).trim();
+        fence = lang ? { lang, body: [] } : { body: [] };
+      }
+      continue;
+    }
+    if (fence) {
+      fence.body.push(line);
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -61,6 +93,7 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
     }
     out.push(<Text key={key++}>{renderInline(line)}</Text>);
   }
+  flushFence(); // unterminated fence (still streaming): render the partial body
 
   return <Box flexDirection="column">{out}</Box>;
 }
