@@ -49,6 +49,12 @@ export type ToolContext = {
   /** Optional tool-call audit log sink (JSONL). */
   log?: (entry: Record<string, unknown>) => void;
   /**
+   * Live command-output sink for foreground run_command. The agent loop
+   * wires this per tool call to surface command.output events while the
+   * command is still running. Absent = no streaming (current behavior).
+   */
+  emitOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
+  /**
    * Records a pre-write snapshot for session rewind. Called by write tools
    * BEFORE writing with the workspace-relative path and the file's current
    * content (null when it does not exist). First-write-wins de-duplication
@@ -84,6 +90,7 @@ export { redactSecrets } from "./redact.js";
 export {
   BUILTIN_COMMAND_ALLOWLIST,
   classifyCommand,
+  looksLikeSandboxDenial,
   normalizeCommand,
   runShellCommand,
 } from "./run-command.js";

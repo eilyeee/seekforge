@@ -106,6 +106,14 @@ export type AgentCoreDeps = {
 
 const OUTPUT_RESERVE_TOKENS = 8192;
 
+/**
+ * Max command.output events forwarded per tool call. A chatty command keeps
+ * running and its full (truncated) output still lands in the tool result;
+ * only the LIVE event stream is capped (excess chunks dropped silently) so
+ * one noisy server cannot flood the transcript.
+ */
+const MAX_STREAMED_CHUNKS_PER_CALL = 200;
+
 const ZERO_USAGE: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
 
 function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
@@ -785,9 +793,37 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             } else if (dispatchManager !== undefined && tc.name === AGENT_RESULT_TOOL) {
               result = handleAgentResult(args);
             } else {
+              // Live output: this call gets its own emitOutput that feeds
+              // command.output events into the run's queue (capped per call).
+              let streamedChunks = 0;
+              const callCtx: ToolContext = {
+                ...ctx,
+                emitOutput: (stream, chunk) => {
+                  if (streamedChunks >= MAX_STREAMED_CHUNKS_PER_CALL) return;
+                  streamedChunks++;
+                  pushEvent({ type: "command.output", stream, chunk });
+                },
+              };
               // preToolUse/postToolUse hooks fire inside the dispatcher
               // (after permission enforcement, around tool.run).
-              result = await deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, ctx);
+              const outcome: Promise<{ ok: true; result: ToolResult } | { ok: false; err: unknown }> =
+                deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, callCtx).then(
+                  (r) => ({ ok: true as const, result: r }),
+                  (err: unknown) => ({ ok: false as const, err }),
+                );
+              // Yield queued events WHILE the tool runs (live command output,
+              // background dispatch completions) — the same race
+              // executeNestedRun uses against the queue. The final drain after
+              // the tool settles runs BEFORE its tool.completed is emitted,
+              // so output events always precede their call's completion.
+              for (;;) {
+                const next = await Promise.race([outcome, queue.wait().then(() => undefined)]);
+                for (const ev of queue.drainNow()) yield ev;
+                if (next === undefined) continue;
+                if (!next.ok) throw next.err; // preserve pre-streaming rejection behavior
+                result = next.result;
+                break;
+              }
             }
             yield emit({ type: "tool.completed", toolName: tc.name, result });
 

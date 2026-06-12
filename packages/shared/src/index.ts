@@ -89,6 +89,8 @@ export type ToolResult<T = unknown> = {
     command?: string;
     path?: string;
     truncated?: boolean;
+    /** run_command: the command was rerun without the OS sandbox after a denial. */
+    sandboxEscalated?: boolean;
   };
 };
 

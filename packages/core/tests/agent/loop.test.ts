@@ -144,6 +144,64 @@ describe("agent loop", () => {
     expect(execProvider.requests[0]!.messages.some((m) => m.content.includes("## Plan"))).toBe(true);
   });
 
+  it("yields command.output events emitted via ctx.emitOutput BEFORE the tool.completed", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "run_command", argumentsJson: '{"command":"echo hi"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "final" }),
+    ]);
+    // Tool that streams two chunks while "running", then resolves.
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "run_command", description: "d", parameters: {} }],
+      execute: async (_call: ToolCall, ctx: ToolContext) => {
+        ctx.emitOutput?.("stdout", "line one\n");
+        await new Promise((r) => setTimeout(r, 10));
+        ctx.emitOutput?.("stderr", "line two\n");
+        return { ok: true, data: { exitCode: 0 } };
+      },
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+
+    const outputIdx = events
+      .map((e, i) => (e.type === "command.output" ? i : -1))
+      .filter((i) => i >= 0);
+    const completedIdx = events.findIndex((e) => e.type === "tool.completed");
+    expect(outputIdx).toHaveLength(2);
+    expect(completedIdx).toBeGreaterThanOrEqual(0);
+    // Both output events precede the tool.completed of their call, in emit order.
+    expect(outputIdx[0]!).toBeLessThan(completedIdx);
+    expect(outputIdx[1]!).toBeLessThan(completedIdx);
+    const first = events[outputIdx[0]!]!;
+    const second = events[outputIdx[1]!]!;
+    expect(first).toEqual({ type: "command.output", stream: "stdout", chunk: "line one\n" });
+    expect(second).toEqual({ type: "command.output", stream: "stderr", chunk: "line two\n" });
+  });
+
+  it("caps streamed command.output at 200 chunks per tool call", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "run_command", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "final" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "run_command", description: "d", parameters: {} }],
+      execute: async (_call: ToolCall, ctx: ToolContext) => {
+        for (let i = 0; i < 250; i++) ctx.emitOutput?.("stdout", `chunk ${i}\n`);
+        return { ok: true, data: {} };
+      },
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const outputs = events.filter((e) => e.type === "command.output");
+    expect(outputs).toHaveLength(200);
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+  });
+
   it("resumes a session with its prior messages", async () => {
     const first = createAgentCore({
       provider: fakeProvider([response({ content: "first answer" })]),
