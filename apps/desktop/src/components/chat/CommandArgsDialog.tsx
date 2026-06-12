@@ -9,6 +9,11 @@ export function commandTakesArgs(body: string): boolean {
   return body.includes("$ARGUMENTS") || /\$[1-9]/.test(body);
 }
 
+/** True when the body embeds a !`shell` injection (expanded server-side). */
+export function commandHasShell(body: string): boolean {
+  return /!`[^`]+`/.test(body);
+}
+
 /**
  * Expands a command body: positional `$1`..`$9` from the whitespace-split args,
  * then every `$ARGUMENTS` with the full string. Mirrors core's expandUserCommand.
@@ -32,12 +37,14 @@ export function CommandArgsDialog({
   onCancel,
 }: {
   command: SlashCommand;
-  onSubmit: (expanded: string) => void;
+  /** Receives the raw args string; the caller expands (client- or server-side). */
+  onSubmit: (args: string) => void;
   onCancel: () => void;
 }) {
   const t = useT();
   const [args, setArgs] = useState("");
   const preview = expandCommand(command, args || "…");
+  const hasShell = commandHasShell(command.body);
 
   // ConfirmDialog's confirm button is autoFocus and mounts after this field, so
   // it would otherwise steal focus. Focus the args field after that initial
@@ -51,7 +58,7 @@ export function CommandArgsDialog({
     <ConfirmDialog
       title={`/${command.name}`}
       confirmLabel={t("chat.cmdArgs.insert")}
-      onConfirm={() => onSubmit(expandCommand(command, args))}
+      onConfirm={() => onSubmit(args)}
       onCancel={onCancel}
     >
       <div className="space-y-3">
@@ -73,7 +80,7 @@ export function CommandArgsDialog({
             onChange={(e) => setArgs(e.target.value)}
             onKeyDown={(e) => {
               // ⌘/Ctrl+Enter confirms, like the composer.
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit(expandCommand(command, args));
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit(args);
             }}
             rows={2}
             placeholder={command.argumentHint || t("chat.cmdArgs.placeholder")}
@@ -87,6 +94,7 @@ export function CommandArgsDialog({
           <pre className="max-h-40 overflow-auto rounded-lg border border-subtle bg-surface-overlay/50 px-3 py-2 text-xs text-secondary whitespace-pre-wrap break-words">
             {preview}
           </pre>
+          {hasShell && <p className="mt-1 text-2xs text-tertiary">{t("chat.cmdArgs.shellHint")}</p>}
         </div>
       </div>
     </ConfirmDialog>

@@ -310,6 +310,9 @@ export const api = {
 
   // Custom slash commands surfaced in the composer (workspace-scoped).
   commands: () => request<CommandsResponse>("GET", withWorkspace("/api/commands")),
+  /** Server-side expand: interpolates args and runs !`shell` injections in the workspace. */
+  expandCommand: (name: string, args: string) =>
+    request<{ text: string }>("POST", withWorkspace("/api/commands/expand"), { name, args }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string) =>

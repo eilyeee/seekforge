@@ -8,7 +8,12 @@ import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { LoopPanel } from "../components/chat/LoopPanel";
 import { ModelBar } from "../components/chat/ModelBar";
-import { CommandArgsDialog, commandTakesArgs } from "../components/chat/CommandArgsDialog";
+import {
+  CommandArgsDialog,
+  commandHasShell,
+  commandTakesArgs,
+  expandCommand,
+} from "../components/chat/CommandArgsDialog";
 import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
@@ -197,8 +202,33 @@ export function ChatView() {
 
   const submit = (task: string) => {
     if (!task || tab.chat.running) return;
+    // "# fact" saves to project memory instead of sending a task (like Claude Code).
+    if (task.startsWith("#")) {
+      const fact = task.slice(1).trim();
+      if (!fact) return;
+      setDraft("");
+      api
+        .memoryAddFact(fact, "convention")
+        .then(() => showToast(t("chat.memorySaved")))
+        .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
+      return;
+    }
     sendTask(task);
     setDraft("");
+  };
+
+  // Resolve a chosen custom command into composer text. Bodies with a !`shell`
+  // injection are expanded server-side (the shell runs in the workspace);
+  // everything else interpolates args locally.
+  const insertCommand = (c: SlashCommand, args: string): void => {
+    if (commandHasShell(c.body)) {
+      api
+        .expandCommand(c.name, args)
+        .then((r) => setDraft(r.text))
+        .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
+    } else {
+      setDraft(expandCommand(c, args));
+    }
   };
 
   // Slash-command registry for the composer palette: built-in UI/store actions,
@@ -234,7 +264,7 @@ export function ChatView() {
     const custom: ComposerCommand[] = customCommands.map((c) => ({
       name: c.name,
       hint: c.description,
-      run: () => (commandTakesArgs(c.body) ? setArgsCommand(c) : setDraft(c.body)),
+      run: () => (commandTakesArgs(c.body) ? setArgsCommand(c) : insertCommand(c, "")),
     }));
     return [...builtins.filter((b) => !customNames.has(b.name)), ...custom];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -505,8 +535,8 @@ export function ChatView() {
       {argsCommand && (
         <CommandArgsDialog
           command={argsCommand}
-          onSubmit={(expanded) => {
-            setDraft(expanded);
+          onSubmit={(args) => {
+            insertCommand(argsCommand, args);
             setArgsCommand(null);
           }}
           onCancel={() => setArgsCommand(null)}

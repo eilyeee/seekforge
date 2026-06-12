@@ -19,6 +19,8 @@ import {
   createMcpClient,
   createSkillScaffold,
   deleteSession,
+  expandShellInjections,
+  expandUserCommand,
   fetchBalance,
   importExternalAgent,
   importExternalSkill,
@@ -1124,6 +1126,34 @@ export async function handleApi(
     // Custom user-defined slash commands (project + user layers; project wins).
     if (method === "GET" && path === "/api/commands") {
       return sendJson(res, 200, { commands: loadUserCommands(workspace) });
+    }
+
+    // Expand a custom command server-side: interpolate args ($ARGUMENTS / $1..$9)
+    // and run any !`shell` injections in the workspace, returning the final text.
+    if (method === "POST" && path === "/api/commands/expand") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { name, args } = (body ?? {}) as { name?: unknown; args?: unknown };
+      if (typeof name !== "string" || name === "") {
+        return sendApiError(res, 400, "bad_request", "name must be a non-empty string");
+      }
+      const command = loadUserCommands(workspace).find((c) => c.name === name);
+      if (!command) {
+        return sendApiError(res, 404, "not_found", `unknown command: ${name}`);
+      }
+      const expanded = expandUserCommand(command, typeof args === "string" ? args : "");
+      const text = await expandShellInjections(expanded, (cmd) =>
+        execFileAsync("/bin/sh", ["-c", cmd], { cwd: workspace, timeout: 10_000, maxBuffer: 1024 * 1024 })
+          .then(({ stdout }) => stdout)
+          .catch((err: NodeJS.ErrnoException & { stdout?: string }) =>
+            typeof err.stdout === "string" ? err.stdout : Promise.reject(err),
+          ),
+      );
+      return sendJson(res, 200, { text });
     }
 
     // Cross-session todo list (.seekforge/todos.md, TUI-compatible format).

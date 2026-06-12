@@ -289,6 +289,29 @@ describe("GET /api/commands", () => {
   });
 });
 
+describe("POST /api/commands/expand", () => {
+  it("interpolates args and runs !`shell` injections in the workspace", async () => {
+    writeFileIn(workspace, ".seekforge/commands/exp.md", "task: $ARGUMENTS; out: !`echo hi`");
+    const res = await authed("/api/commands/expand", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "exp", args: "do it" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.text).toBe("task: do it; out: hi");
+  });
+
+  it("404 for an unknown command", async () => {
+    const res = await authed("/api/commands/expand", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "nope", args: "" }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("POST /api/sessions/:id/compact", () => {
   it("404 for a missing session", async () => {
     const res = await authed("/api/sessions/nope/compact", { method: "POST" });
