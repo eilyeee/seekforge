@@ -39,7 +39,7 @@ import {
   type DispatchManager,
 } from "../subagents/index.js";
 import { clearOldToolResults, compactMessages, estimateMessagesTokens } from "./context.js";
-import { runHooks, type HookConfig } from "../hooks/index.js";
+import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
@@ -94,7 +94,8 @@ export type AgentCoreDeps = {
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
    * included). sessionStart/userPromptSubmit/stop/sessionEnd fire only for
-   * the top-level session; userPromptSubmit can block the run. preCompact,
+   * the top-level session; userPromptSubmit can block the run, and its hook
+   * stdout is appended to the task as <hook-context>. preCompact,
    * subagentStop and notification are advisory (see hooks/index.ts).
    */
   hooks?: HookConfig;
@@ -166,6 +167,32 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       };
       writeSessionMeta(input.projectPath, { ...meta, status: "running", updatedAt: startedAt });
 
+      // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
+      // (like sessionEnd); nested subagent runs (depth > 0) skip them. They
+      // fire BEFORE the task message is built so that userPromptSubmit hook
+      // stdout (exit 0) can be appended to the task as <hook-context> — the
+      // conversation AND the trace record the augmented task. A failing hook
+      // still blocks, but only inside the try below so the normal failure
+      // path (session.failed, meta, sessionEnd hooks) applies.
+      let task = input.task;
+      let promptBlocked: HookOutcome | undefined;
+      if (depth === 0) {
+        await runHooks("sessionStart", deps.hooks?.sessionStart, {
+          sessionId,
+          workspace: input.projectPath,
+          task: input.task,
+          mode: input.mode,
+          resuming,
+        });
+        const promptOutcomes = await runHooks("userPromptSubmit", deps.hooks?.userPromptSubmit, {
+          sessionId,
+          workspace: input.projectPath,
+          task: input.task,
+        });
+        promptBlocked = promptOutcomes.find((o) => !o.ok);
+        if (!promptBlocked) task = input.task + buildHookContext(promptOutcomes);
+      }
+
       // This run's 0-based user-turn index: how many role:"user" messages the
       // conversation holds BEFORE this run appends its task. 0 for a fresh
       // session; on resume, the count over the replayed history. Aligns with
@@ -193,7 +220,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               }),
           };
         }
-        const continuation: ChatMessage = { role: "user", content: input.task };
+        const continuation: ChatMessage = { role: "user", content: task };
         messages.push(continuation);
         trace.message(continuation);
       } else if (input.systemPromptOverride !== undefined) {
@@ -201,7 +228,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // prompt (and skip skill selection — the definition is the procedure).
         messages = [
           { role: "system", content: input.systemPromptOverride },
-          { role: "user", content: input.task },
+          { role: "user", content: task },
         ];
         for (const m of messages) trace.message(m);
       } else {
@@ -227,7 +254,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         });
         messages = [
           { role: "system", content: systemPrompt },
-          { role: "user", content: input.task },
+          { role: "user", content: task },
         ];
         for (const m of messages) trace.message(m);
       }
@@ -637,29 +664,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       }
 
       try {
-        // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
-        // (like sessionEnd); nested subagent runs (depth > 0) skip them.
-        if (depth === 0) {
-          await runHooks("sessionStart", deps.hooks?.sessionStart, {
-            sessionId,
-            workspace: input.projectPath,
-            task: input.task,
-            mode: input.mode,
-            resuming,
-          });
-          // Blocking, mirroring preToolUse: a non-zero exit fails the run.
-          const promptOutcomes = await runHooks("userPromptSubmit", deps.hooks?.userPromptSubmit, {
-            sessionId,
-            workspace: input.projectPath,
-            task: input.task,
-          });
-          const blocked = promptOutcomes.find((o) => !o.ok);
-          if (blocked) {
-            throw new AgentLimitError(
-              "blocked_by_hook",
-              blocked.outputTail || `blocked by userPromptSubmit hook (${blocked.command})`,
-            );
-          }
+        // Blocking, mirroring preToolUse: a failing userPromptSubmit hook
+        // (run above, before the task message was built) fails the run.
+        if (promptBlocked) {
+          throw new AgentLimitError(
+            "blocked_by_hook",
+            promptBlocked.outputTail || `blocked by userPromptSubmit hook (${promptBlocked.command})`,
+          );
         }
 
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {

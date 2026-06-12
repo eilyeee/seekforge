@@ -1,17 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { McpError } from "./errors.js";
+import { createMcpHttpTransport } from "./http.js";
 import type { McpResource, McpServerConfig, McpTool } from "./types.js";
 
-/** Error thrown for MCP transport/protocol failures. */
-export class McpError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "McpError";
-  }
-}
+export { McpError };
 
 export type McpClientOptions = {
   /** Server name (config key) — used in log prefixes and error messages. */
@@ -74,14 +67,21 @@ function flattenResourceContents(contents: ResourceContent[]): string {
     .join("\n");
 }
 
+/** Minimal transport contract shared by the stdio and Streamable HTTP backends. */
+type McpTransport = {
+  /** Sends one JSON-RPC request (handshaking first when needed) and returns its result. */
+  request<T>(method: string, params: unknown): Promise<T>;
+  dispose(): void;
+};
+
 /**
- * Newline-delimited JSON-RPC 2.0 client for an MCP server over stdio
+ * Newline-delimited JSON-RPC 2.0 transport for an MCP server over stdio
  * (mirrors runtime/client.ts). The child is spawned lazily; the MCP
  * initialize handshake runs once per (re)spawn before any other request.
  * A crash rejects pending requests with "mcp_crashed" and the next call
  * transparently respawns + re-handshakes.
  */
-export function createMcpClient(options: McpClientOptions): McpClient {
+function createStdioTransport(options: McpClientOptions): McpTransport {
   const defaultTimeout = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   let child: ChildProcessWithoutNullStreams | undefined;
   let handshake: Promise<void> | undefined;
@@ -92,8 +92,12 @@ export function createMcpClient(options: McpClientOptions): McpClient {
   function ensureChild(): ChildProcessWithoutNullStreams {
     if (child) return child;
     if (disposed) throw new McpError("disposed", `MCP client "${options.name}" is disposed`);
+    const command = options.config.command;
+    if (!command) {
+      throw new McpError("mcp_config", `MCP server "${options.name}" has neither "command" nor "url"`);
+    }
 
-    const proc = spawn(options.config.command, options.config.args ?? [], {
+    const proc = spawn(command, options.config.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...options.config.env },
     });
@@ -206,40 +210,11 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     return { proc, ready: handshake };
   }
 
-  async function call<T>(method: string, params: unknown): Promise<T> {
-    const { proc, ready } = ensureReady();
-    await ready;
-    return rawRequest<T>(proc, method, params);
-  }
-
   return {
-    async listTools(): Promise<McpTool[]> {
-      // v1: no pagination (nextCursor ignored).
-      const res = await call<{ tools?: McpTool[] }>("tools/list", {});
-      return res?.tools ?? [];
-    },
-
-    async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-      const res = await call<CallToolResult>("tools/call", { name, arguments: args });
-      const text = flattenContent(res?.content ?? []);
-      if (res?.isError) {
-        throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
-      }
-      return text;
-    },
-
-    async listResources(): Promise<McpResource[]> {
-      // v1: no pagination (nextCursor ignored), like listTools.
-      const res = await call<{ resources?: McpResource[] }>("resources/list", {});
-      return res?.resources ?? [];
-    },
-
-    async readResource(uri: string): Promise<string> {
-      const res = await call<ReadResourceResult>("resources/read", { uri });
-      const text = flattenResourceContents(res?.contents ?? []);
-      return text.length > RESOURCE_READ_MAX_CHARS
-        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
-        : text;
+    async request<T>(method: string, params: unknown): Promise<T> {
+      const { proc, ready } = ensureReady();
+      await ready;
+      return rawRequest<T>(proc, method, params);
     },
 
     dispose(): void {
@@ -254,6 +229,53 @@ export function createMcpClient(options: McpClientOptions): McpClient {
         p.reject(new McpError("disposed", `MCP client "${options.name}" disposed`));
       }
       pending.clear();
+    },
+  };
+}
+
+/**
+ * MCP client for one configured server. The transport is selected from the
+ * config: `url` present → Streamable HTTP (see http.ts), otherwise `command`
+ * → stdio child process. Both transports share the request surface below
+ * (initialize handshake, tools list/call, resources list/read, dispose).
+ */
+export function createMcpClient(options: McpClientOptions): McpClient {
+  const transport: McpTransport = options.config.url
+    ? createMcpHttpTransport(options)
+    : createStdioTransport(options);
+
+  return {
+    async listTools(): Promise<McpTool[]> {
+      // v1: no pagination (nextCursor ignored).
+      const res = await transport.request<{ tools?: McpTool[] }>("tools/list", {});
+      return res?.tools ?? [];
+    },
+
+    async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+      const res = await transport.request<CallToolResult>("tools/call", { name, arguments: args });
+      const text = flattenContent(res?.content ?? []);
+      if (res?.isError) {
+        throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
+      }
+      return text;
+    },
+
+    async listResources(): Promise<McpResource[]> {
+      // v1: no pagination (nextCursor ignored), like listTools.
+      const res = await transport.request<{ resources?: McpResource[] }>("resources/list", {});
+      return res?.resources ?? [];
+    },
+
+    async readResource(uri: string): Promise<string> {
+      const res = await transport.request<ReadResourceResult>("resources/read", { uri });
+      const text = flattenResourceContents(res?.contents ?? []);
+      return text.length > RESOURCE_READ_MAX_CHARS
+        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
+        : text;
+    },
+
+    dispose(): void {
+      transport.dispose();
     },
   };
 }
