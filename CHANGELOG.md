@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 (unreleased) — round 8: release readiness
+
+- `seekforge-tui` now ships inside the published `seekforge` npm package as
+  a second bin (bundled like core; ink/react become real dependencies).
+- DeepSeek V4 verified against the real API: /models lists only
+  deepseek-v4-flash/pro for current keys; thinking + tool calling confirmed
+  to coexist in one response. Default model is now `deepseek-v4-flash`
+  everywhere; V4 pricing table updated with real numbers (flash 0.14/0.0028
+  in, 0.28 out; pro 0.435/0.003625 in, 0.87 out per 1M).
+- CLI/REPL sync: streamed thinking (dim ✻ blocks), live command output,
+  micro-compaction notices, ask_user over readline, /think, and
+  sandbox/compaction/thinking config — all CLI-side now (suppressed in
+  --json mode).
+- Server/Web sync: `reasoning.delta` WS streaming, `question.request`/
+  `question.answer` round-trip (declines on timeout/disconnect), live
+  command tails and thinking blocks in the workbench, config passthrough;
+  SERVER-API.md updated.
+- Evals expanded 4 → 14 tasks (multi-file rename, cross-module bug, missing
+  tests, API migration, off-by-one, spec-to-feature, error handling, perf,
+  JSON edit, TS typing), all deterministic checks, fixtures verified
+  fail-pristine/pass-solved.
+- Docs refreshed to 0.7.0 reality (README forms/features/limitations, TUI
+  design record of rounds 3-8, roadmap Phase 9 note).
+
 ## 0.7.0 (unreleased) — round 7: final gaps + command depth
 
 - Command-detail alignment round: /compact <focus> runs an LLM-summarized

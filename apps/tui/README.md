@@ -40,9 +40,9 @@ CLI).
   incrementally (Ctrl+R again steps older, Enter accepts); Tab completes
   plain path tokens against the workspace file index (repeated Tab cycles).
 - **Backtrack**: Esc Esc on an empty idle composer (or `/backtrack`) opens a
-  picker of this session's earlier messages — Enter rewinds the stored
-  conversation to that turn and refills the composer (file changes are not
-  reverted; `/rewind` covers files).
+  picker of this session's earlier messages — Enter rewinds the conversation
+  AND restores files to that turn (per-turn checkpoints); `c` rewinds the
+  conversation only; `/rewind` still covers whole-session file rollback.
 - **Vim mode**: `/vim` toggles modal editing (h j k l w b e 0 $ gg G, i a I A
   o O, x dd dw cw cc D C s S, yy p, u undo); the status bar shows
   INSERT/NORMAL. `"vim": true` in config starts with it on.
