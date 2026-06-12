@@ -1,0 +1,12 @@
+{
+  "id": "spec-to-feature",
+  "title": "Implement a small feature from a spec comment",
+  "fixture": "spec-to-feature",
+  "mode": "edit",
+  "task": "Implement `parseDuration` in src/duration.js exactly as described by the spec comment above the function (compact duration strings like \"1h30m\" parsed into total seconds, null for anything invalid). The tests encode the spec — do not modify them. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/duration.js", "pattern": "TODO: implement" },
+    { "type": "file_contains", "path": "test/duration.test.js", "pattern": "parseDuration\\(\"1h2m3s\"\\), 3723" }
+  ]
+}

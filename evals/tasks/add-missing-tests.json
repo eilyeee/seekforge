@@ -1,0 +1,15 @@
+{
+  "id": "add-missing-tests",
+  "title": "Add tests for an untested module",
+  "fixture": "add-missing-tests",
+  "mode": "edit",
+  "task": "src/validators.js has no test coverage. Create a new test file test/validators.test.js (using node:test and node:assert, matching the style of the existing tests) that covers `isValidEmail` with at least one valid address and at least two invalid inputs. Do not modify src/validators.js or the existing tests. Run the whole suite to verify everything is green.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node --test test/validators.test.js" },
+    { "type": "file_contains", "path": "test/validators.test.js", "pattern": "isValidEmail" },
+    { "type": "file_contains", "path": "test/validators.test.js", "pattern": "assert" },
+    { "type": "file_contains", "path": "src/validators.js", "pattern": "module\\.exports = \\{ isValidEmail, isValidPort \\};" }
+  ],
+  "notes": "The second command proves the new test file exists and runs green on its own; the last check pins src/validators.js so coverage can't be faked by simplifying the implementation."
+}
