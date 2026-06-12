@@ -13,12 +13,16 @@ import {
   mockSkillContent,
   mockSkills,
 } from "./fixtures";
-import type { EvolutionProposal, MemoryCandidate, ServerConfig } from "../types";
+import type { EvolutionProposal, MemoryCandidate, ServerConfig, Todo } from "../types";
 
 // Mutable copies so approve/reject and config saves stick for the page lifetime.
 const candidates: MemoryCandidate[] = mockCandidates.map((c) => ({ ...c }));
 const config: ServerConfig = { ...mockConfig, commandAllowlist: [...(mockConfig.commandAllowlist ?? [])] };
 const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p }));
+const todos: Todo[] = [
+  { index: 1, text: "ship the v11 capability UI", done: false },
+  { index: 2, text: "rerun the eval baseline", done: true },
+];
 
 function delay(ms = 150): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -201,6 +205,72 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     proposal.status = action === "accept" ? "accepted" : "rejected";
     proposal.reviewedAt = new Date().toISOString();
     return { ...proposal };
+  }
+
+  // User-turn index: all role:"user" messages of the stored transcript.
+  m = /^\/api\/sessions\/([^/]+)\/turns$/.exec(path);
+  if (method === "GET" && m) {
+    const messages = mockSessionMessages[decodeURIComponent(m[1]!)];
+    if (!messages) throw mockError(404, "not_found", "session not found");
+    return messages
+      .filter((msg) => msg.role === "user")
+      .map((msg, turn) => ({ turn, text: msg.content, backtrackable: turn > 0 }));
+  }
+
+  m = /^\/api\/sessions\/([^/]+)\/backtrack$/.exec(path);
+  if (method === "POST" && m) {
+    const messages = mockSessionMessages[decodeURIComponent(m[1]!)];
+    if (!messages) throw mockError(404, "not_found", "session not found");
+    const { turn, files } = (body ?? {}) as { turn?: number; files?: boolean };
+    let userTurn = -1;
+    let cutAt = -1;
+    for (let i = 0; i < messages.length; i += 1) {
+      if (messages[i]!.role !== "user") continue;
+      userTurn += 1;
+      if (userTurn === turn) {
+        cutAt = i;
+        break;
+      }
+    }
+    if (typeof turn !== "number" || turn <= 0 || cutAt < 0) {
+      throw mockError(400, "bad_request", `turn ${String(turn)} is not backtrackable`);
+    }
+    messages.splice(cutAt); // mock truncation sticks for the page lifetime
+    return {
+      removedMessages: 0,
+      keptMessages: messages.length,
+      files: files ? { restored: 1, deleted: 0, skipped: 0 } : null,
+    };
+  }
+
+  if (method === "GET" && path === "/api/todos") return todos.map((t) => ({ ...t }));
+  if (method === "POST" && path === "/api/todos") {
+    const { op, text, index } = (body ?? {}) as { op?: string; text?: string; index?: number };
+    if (op === "add" && text?.trim()) {
+      todos.push({ index: todos.length + 1, text: text.trim(), done: false });
+    } else if (op === "toggle" || op === "remove") {
+      const at = todos.findIndex((t) => t.index === index);
+      if (at < 0) throw mockError(404, "not_found", `no todo at index ${String(index)}`);
+      if (op === "toggle") todos[at]!.done = !todos[at]!.done;
+      else todos.splice(at, 1);
+      todos.forEach((t, i) => (t.index = i + 1));
+    } else {
+      throw mockError(400, "bad_request", 'op must be "add", "toggle" or "remove"');
+    }
+    return todos.map((t) => ({ ...t }));
+  }
+
+  if (method === "GET" && path === "/api/balance")
+    return { balance: { currency: "USD", totalBalance: "23.45" } };
+
+  if (method === "GET" && path === "/api/mcp/resources") {
+    await delay(400); // spawning takes a moment
+    return {
+      resources: [
+        { server: "context7", uri: "docs://react/hooks", name: "React hooks docs" },
+        { server: "context7", uri: "docs://zustand/getting-started" },
+      ],
+    };
   }
 
   if (method === "GET" && path === "/api/mcp") return mockMcpServers.map((s) => ({ ...s }));

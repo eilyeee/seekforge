@@ -17,7 +17,7 @@ import { createWorkspaceRegistry } from "./workspaces.js";
 import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
 
-export type { AgentHandle, CreateAgentFn, CreateAgentOptions } from "./agent.js";
+export type { AgentHandle, CreateAgentFn, CreateAgentOptions, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 export type { MergeResult, WorktreeStatus } from "./worktrees.js";

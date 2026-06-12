@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ChatMessage, SessionStatus } from "@seekforge/shared";
 import { ApiError, api } from "../lib/api";
 import { messagesToItems } from "../lib/messages";
+import { filterSessions } from "../lib/sessions-filter";
 import { formatUsd } from "../lib/usage";
 import { useStore } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
@@ -25,6 +26,8 @@ export function SessionsView() {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Client-side search over id and task text. */
+  const [query, setQuery] = useState("");
   /** Dry-run result awaiting confirmation. */
   const [rewindPreview, setRewindPreview] = useState<{ sessionId: string; result: RewindResult } | null>(null);
   /** Per-session inline note ("no checkpoints" / result summary). */
@@ -104,10 +107,18 @@ export function SessionsView() {
     );
   }
 
+  const visible = filterSessions(sessions ?? [], query);
+
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-zinc-800 px-4 py-2">
+      <header className="flex items-center gap-3 border-b border-zinc-800 px-4 py-2">
         <h1 className="text-sm font-semibold text-zinc-100">Sessions</h1>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by id, title or task…"
+          className="ml-auto w-64 rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none"
+        />
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && <div className="mb-3 rounded border border-red-900 bg-red-950/40 p-2 text-xs text-red-300">{error}</div>}
@@ -115,9 +126,11 @@ export function SessionsView() {
           <p className="text-zinc-600">Loading…</p>
         ) : sessions.length === 0 ? (
           <p className="text-zinc-600">No sessions yet.</p>
+        ) : visible.length === 0 ? (
+          <p className="text-zinc-600">No sessions match “{query.trim()}”.</p>
         ) : (
           <ul className="space-y-2">
-            {sessions.map((s) => (
+            {visible.map((s) => (
               <li key={s.id}>
                 <div
                   onClick={() => openSession(s.id)}

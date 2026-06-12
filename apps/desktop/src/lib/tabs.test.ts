@@ -240,3 +240,24 @@ describe("routeFrame", () => {
     expect(s3.tabs.find((t) => t.tabId === "t3")!.planReady).toBe(false);
   });
 });
+
+describe("header-control state (model/thinking/effort)", () => {
+  it("fresh tabs default to config-driven controls", () => {
+    const tab = activeTab(initialTabsState());
+    expect(tab.model).toBe("");
+    expect(tab.thinking).toBeNull();
+    expect(tab.reasoningEffort).toBe("high");
+  });
+
+  it("controls are per tab and survive tab switches", () => {
+    let s = threeTabs(); // t3 active
+    s = updateTab(s, "t3", { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" });
+    s = switchTab(s, "t1");
+    expect(activeTab(s).model).toBe(""); // t1 untouched
+    expect(s.tabs.find((t) => t.tabId === "t3")).toMatchObject({
+      model: "deepseek-v4-pro",
+      thinking: true,
+      reasoningEffort: "max",
+    });
+  });
+});

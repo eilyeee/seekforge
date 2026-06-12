@@ -18,6 +18,13 @@ import {
 import type { PermissionRequest } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
 
+/** Per-run model overrides from a start/send frame (win over config). */
+export type RunOverrides = {
+  model?: string;
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max";
+};
+
 export type CreateAgentOptions = {
   workspace: string;
   /** Permission bridge: resolves with the user's decision over the WS. */
@@ -28,6 +35,8 @@ export type CreateAgentOptions = {
   /** ask_user bridge: resolves with the user's answer over the WS. */
   askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   extractMemory: boolean;
+  /** Per-run model/thinking overrides (frame fields win over config). */
+  overrides?: RunOverrides;
 };
 
 export type AgentHandle = {
@@ -45,14 +54,19 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
     runtime = createRuntimeClient({ binPath: config.runtimeBin });
   }
 
+  // Per-run frame overrides win over config (a fresh agent is assembled per run).
+  const model = opts.overrides?.model ?? config.model;
+  const thinking = opts.overrides?.thinking ?? config.thinking;
+  const reasoningEffort = opts.overrides?.reasoningEffort ?? config.reasoningEffort;
+
   const agent = createAgentCore({
     provider: createDeepSeekProvider({
       apiKey: config.apiKey ?? "",
       baseUrl: config.baseUrl,
-      model: config.model,
+      model,
       // Thinking mode + effort passthrough (mirrors apps/tui agent factory).
-      ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
-      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+      ...(thinking !== undefined ? { thinking } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     }),
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,

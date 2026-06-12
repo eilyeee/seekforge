@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { activeTab, useStore, type StartMode } from "../store";
+import { api } from "../lib/api";
+import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
+import { buildHandoff, handoffFilename } from "../lib/handoff";
 import { ChatItems } from "../components/chat/ChatItems";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { PermissionModal } from "../components/chat/PermissionModal";
@@ -7,6 +10,7 @@ import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import type { AccountBalance, ServerConfig } from "../types";
 
 const MODES: { mode: StartMode; label: string; hint: string }[] = [
   { mode: "edit", label: "Edit", hint: "make changes" },
@@ -20,13 +24,18 @@ type WorktreeDialog =
   | { kind: "merged"; tabId: string }
   | { kind: "conflict"; files: string[] };
 
+/** Known DeepSeek V4 models (the input also accepts any free-text model id). */
+const MODEL_SUGGESTIONS = ["deepseek-v4-flash", "deepseek-v4-pro"];
+
 export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
+  const { setModel, setThinking, setReasoningEffort, truncateAtItem } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -60,6 +69,74 @@ export function ChatView() {
         }
       })
       .catch((e: unknown) => showToast(`Merge failed: ${e instanceof Error ? e.message : e}`));
+  /** Server config (sandbox badge + thinking default); refreshed per workspace. */
+  const [config, setConfig] = useState<ServerConfig | null>(null);
+  useEffect(() => {
+    api
+      .config()
+      .then(setConfig)
+      .catch(() => setConfig(null));
+  }, [activeWorkspaceId]);
+
+  /** Account balance chip: fetched on mount and again after each run ends. */
+  const [balance, setBalance] = useState<AccountBalance | null>(null);
+  const running = tab.chat.running;
+  useEffect(() => {
+    if (running) return;
+    let alive = true;
+    api
+      .balance()
+      .then((r) => {
+        // null = unknown; keep showing the previous value (fetchBalance contract).
+        if (alive && r.balance) setBalance(r.balance);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [running, activeWorkspaceId]);
+
+  /** Backtrack dialog state (user item pending the rewind confirmation). */
+  const [backtrackItem, setBacktrackItem] = useState<number | null>(null);
+  const [restoreFiles, setRestoreFiles] = useState(false);
+  const [backtrackError, setBacktrackError] = useState<string | null>(null);
+
+  const confirmBacktrack = async () => {
+    const itemId = backtrackItem;
+    const sessionId = tab.chat.sessionId;
+    setBacktrackItem(null);
+    if (itemId === null || !sessionId) return;
+    const local = userTurnOf(tab.chat.items, itemId);
+    if (!local) return;
+    try {
+      // Server turns index ALL user messages of messages.jsonl; align the
+      // local bubble ordinal to them from the end (see lib/backtrack.ts).
+      const turns = await api.sessionTurns(sessionId, tab.ws);
+      const turn = mapToServerTurn(local.turn, local.count, turns.length);
+      if (turn <= 0 || turn >= turns.length || !turns[turn]?.backtrackable) {
+        throw new Error(`turn ${turn} is not backtrackable`);
+      }
+      await api.backtrack(sessionId, turn, restoreFiles, tab.ws);
+      truncateAtItem(itemId);
+      setBacktrackError(null);
+    } catch (e) {
+      setBacktrackError(String(e));
+    }
+  };
+
+  const downloadHandoff = () => {
+    const markdown = buildHandoff({
+      items: tab.chat.items,
+      sessionId: tab.chat.sessionId ?? undefined,
+      model: tab.model.trim() || config?.model || "(config default)",
+      costUsd: tab.chat.usage.costUsd,
+    });
+    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = handoffFilename();
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -183,6 +260,64 @@ export function ChatView() {
           auto-approve{tab.autoApprove ? " ⚠" : ""}
         </label>
 
+        <input
+          list="model-suggestions"
+          value={tab.model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={tab.chat.running}
+          placeholder={config?.model ?? "model (config default)"}
+          title="model for the next message; empty = server config default"
+          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none disabled:opacity-50"
+        />
+        <datalist id="model-suggestions">
+          {MODEL_SUGGESTIONS.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+
+        <label
+          className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${
+            (tab.thinking ?? config?.thinking ?? false)
+              ? "border-violet-800 bg-violet-950/40 text-violet-300"
+              : "border-zinc-700 text-zinc-400"
+          }`}
+          title="DeepSeek V4 thinking mode for the next message (✻ reasoning stream)"
+        >
+          <input
+            type="checkbox"
+            checked={tab.thinking ?? config?.thinking ?? false}
+            onChange={(e) => setThinking(e.target.checked)}
+            disabled={tab.chat.running}
+            className="accent-violet-500"
+          />
+          think
+        </label>
+        {(tab.thinking ?? config?.thinking ?? false) && (
+          <select
+            value={tab.reasoningEffort}
+            onChange={(e) => setReasoningEffort(e.target.value as "high" | "max")}
+            disabled={tab.chat.running}
+            title="reasoning effort (thinking mode)"
+            className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-xs text-zinc-300 focus:border-emerald-700 focus:outline-none disabled:opacity-50"
+          >
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+        )}
+
+        {config && (
+          <span
+            title="OS command sandbox (config: sandbox)"
+            className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
+              config.sandbox && config.sandbox !== "off"
+                ? "bg-emerald-950/60 text-emerald-300"
+                : "bg-zinc-800 text-zinc-500"
+            }`}
+          >
+            sandbox: {config.sandbox ?? "off"}
+          </span>
+        )}
+
         <div className="ml-auto flex gap-2">
           {tab.planReady && !tab.chat.running && tab.chat.sessionId && (
             <button
@@ -202,6 +337,15 @@ export function ChatView() {
               Cancel
             </button>
           )}
+          <button
+            type="button"
+            onClick={downloadHandoff}
+            disabled={tab.chat.items.length === 0}
+            title="Download a markdown handoff brief of this conversation"
+            className="rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+          >
+            Handoff
+          </button>
           <button
             type="button"
             onClick={newSession}
@@ -226,9 +370,26 @@ export function ChatView() {
             </div>
           </div>
         ) : (
-          <ChatItems items={tab.chat.items} />
+          <ChatItems
+            items={tab.chat.items}
+            onBacktrack={
+              tab.chat.sessionId && !tab.chat.running
+                ? (itemId) => {
+                    setRestoreFiles(false);
+                    setBacktrackError(null);
+                    setBacktrackItem(itemId);
+                  }
+                : undefined
+            }
+          />
         )}
       </div>
+
+      {backtrackError && (
+        <div className="border-t border-red-900 bg-red-950/40 px-4 py-1.5 font-mono text-xs text-red-300">
+          backtrack failed: {backtrackError}
+        </div>
+      )}
 
       {tab.wsError && (
         <div className="border-t border-amber-900 bg-amber-950/40 px-4 py-1.5 font-mono text-xs text-amber-300">
@@ -246,7 +407,7 @@ export function ChatView() {
         workspaceId={tab.ws ?? ""}
       />
 
-      <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} />
+      <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />
 
       {tab.pendingPermission && (
         <PermissionModal request={tab.pendingPermission.request} onRespond={respondPermission} />
@@ -258,6 +419,30 @@ export function ChatView() {
           options={tab.pendingQuestion.options}
           onAnswer={respondQuestion}
         />
+      )}
+
+      {backtrackItem !== null && (
+        <ConfirmDialog
+          title="Rewind conversation to here?"
+          confirmLabel="Rewind"
+          danger
+          onConfirm={() => void confirmBacktrack()}
+          onCancel={() => setBacktrackItem(null)}
+        >
+          <p>
+            This message and everything after it are removed from the session transcript. The next
+            message continues from the earlier state.
+          </p>
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={restoreFiles}
+              onChange={(e) => setRestoreFiles(e.target.checked)}
+              className="accent-red-500"
+            />
+            also restore files changed by the removed turns (checkpoint restore)
+          </label>
+        </ConfirmDialog>
       )}
 
       {confirmClose && (
