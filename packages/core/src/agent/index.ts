@@ -31,7 +31,14 @@ export interface AgentCore {
 export { createAgentCore, type AgentCoreDeps } from "./loop.js";
 export { buildSystemPrompt } from "./prompt.js";
 export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
-export { compactMessages, estimateMessagesTokens, estimateTokens } from "./context.js";
+export {
+  compactMessages,
+  estimateMessagesTokens,
+  estimateTokens,
+  llmCompactMessages,
+  type CompactionResult,
+  type SummaryProvider,
+} from "./context.js";
 export {
   appendCheckpoint,
   compactSessionNow,

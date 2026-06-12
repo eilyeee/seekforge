@@ -70,12 +70,15 @@ const SUMMARY_LINE_CHARS = 160;
 const SUMMARY_MAX_CHARS = 4000;
 
 /**
- * Phase 0 compaction: keep head (system + task) and the most recent tail,
- * replace the middle with a plain-text digest. Keeps assistant/tool pairing
- * intact by never starting the tail on a dangling role:"tool" message.
- * Returns null when the conversation already fits the budget.
+ * Shared head/tail boundary math for both compaction flavors: decides which
+ * middle segment gets dropped. Keeps assistant/tool pairing intact by never
+ * starting the kept tail on a dangling role:"tool" message. Returns null
+ * when the conversation already fits the budget or is too short to compact.
  */
-export function compactMessages(messages: ChatMessage[], budgetTokens: number): CompactionResult | null {
+function splitForCompaction(
+  messages: ChatMessage[],
+  budgetTokens: number,
+): { dropped: ChatMessage[]; tailStart: number } | null {
   if (estimateMessagesTokens(messages) <= budgetTokens) return null;
   if (messages.length <= KEEP_HEAD + KEEP_TAIL + 1) return null; // nothing meaningful to drop
 
@@ -83,8 +86,48 @@ export function compactMessages(messages: ChatMessage[], budgetTokens: number): 
   // A tool message must stay with the assistant message that requested it.
   while (tailStart > KEEP_HEAD && messages[tailStart]?.role === "tool") tailStart--;
   if (tailStart <= KEEP_HEAD) return null;
+  return { dropped: messages.slice(KEEP_HEAD, tailStart), tailStart };
+}
 
-  const dropped = messages.slice(KEEP_HEAD, tailStart);
+/**
+ * Wraps a compaction body (mechanical digest or LLM summary) in the SAME
+ * framing message, so downstream consumers cannot tell the flavors apart.
+ */
+function compactionSummaryMessage(label: "Digest" | "Summary", body: string): ChatMessage {
+  return {
+    role: "user",
+    content:
+      `[Context compacted to fit the window. ${label} of the dropped earlier turns — ` +
+      "treat as background, re-read files if you need their exact content:]\n" +
+      body,
+  };
+}
+
+/** Assembles head + summary + tail into a CompactionResult. */
+function assembleCompaction(
+  messages: ChatMessage[],
+  tailStart: number,
+  summaryMessage: ChatMessage,
+  droppedTurns: number,
+): CompactionResult {
+  return {
+    messages: [...messages.slice(0, KEEP_HEAD), summaryMessage, ...messages.slice(tailStart)],
+    droppedTurns,
+    summaryTokens: estimateTokens(summaryMessage.content),
+  };
+}
+
+/**
+ * Phase 0 compaction: keep head (system + task) and the most recent tail,
+ * replace the middle with a plain-text digest. Keeps assistant/tool pairing
+ * intact by never starting the tail on a dangling role:"tool" message.
+ * Returns null when the conversation already fits the budget.
+ */
+export function compactMessages(messages: ChatMessage[], budgetTokens: number): CompactionResult | null {
+  const split = splitForCompaction(messages, budgetTokens);
+  if (!split) return null;
+
+  const { dropped, tailStart } = split;
   const lines: string[] = [];
   for (const m of dropped) {
     const text = m.content.replace(/\s+/g, " ").trim();
@@ -96,17 +139,79 @@ export function compactMessages(messages: ChatMessage[], budgetTokens: number): 
     digest = `${digest.slice(0, SUMMARY_MAX_CHARS)}\n- …(further entries omitted)`;
   }
 
-  const summaryMessage: ChatMessage = {
-    role: "user",
-    content:
-      "[Context compacted to fit the window. Digest of the dropped earlier turns — " +
-      "treat as background, re-read files if you need their exact content:]\n" +
-      digest,
-  };
+  return assembleCompaction(messages, tailStart, compactionSummaryMessage("Digest", digest), dropped.length);
+}
 
-  return {
-    messages: [...messages.slice(0, KEEP_HEAD), summaryMessage, ...messages.slice(tailStart)],
-    droppedTurns: dropped.length,
-    summaryTokens: estimateTokens(summaryMessage.content),
-  };
+/** Per-message cap for tool outputs in the segment sent to the summarizer. */
+const LLM_TOOL_RESULT_PREVIEW_CHARS = 200;
+/** Total cap for the serialized segment (≈6K tokens of summarizer input). */
+const LLM_SEGMENT_CAP_CHARS = 24_000;
+const LLM_SUMMARY_INSTRUCTION =
+  "Summarize this conversation segment for an AI coding agent resuming work: " +
+  "decisions made, files touched, commands run + outcomes, open problems. Be dense, ≤500 words.";
+
+/** Minimal provider surface needed for summarization (ChatProvider satisfies it). */
+export type SummaryProvider = {
+  chat(req: { messages: ChatMessage[] }): Promise<{ content: string }>;
+};
+
+/** Role-prefixed, size-capped plain-text rendering of the dropped segment. */
+function serializeSegment(dropped: ChatMessage[]): string {
+  const lines: string[] = [];
+  for (const m of dropped) {
+    const text =
+      m.role === "tool" && m.content.length > LLM_TOOL_RESULT_PREVIEW_CHARS
+        ? `${m.content.slice(0, LLM_TOOL_RESULT_PREVIEW_CHARS)}…`
+        : m.content;
+    const calls = m.toolCalls?.map((c) => c.name).join(",");
+    lines.push(`${m.role}${calls ? ` [tools: ${calls}]` : ""}: ${text}`);
+  }
+  let out = lines.join("\n");
+  if (out.length > LLM_SEGMENT_CAP_CHARS) {
+    out = `${out.slice(0, LLM_SEGMENT_CAP_CHARS)}\n…(segment truncated)`;
+  }
+  return out;
+}
+
+/**
+ * LLM-flavored compaction: same head/tail framing as compactMessages (shared
+ * splitForCompaction boundary math), but the dropped middle is replaced by
+ * ONE dense summary produced by a model call instead of a mechanical digest.
+ * The summary message mirrors the mechanical digest's wrapper, so downstream
+ * handling (trace replay, /context, resume) is identical.
+ *
+ * Returns null exactly when compactMessages would (under budget / too short),
+ * and ADDITIONALLY on any provider failure or an empty summary — the caller
+ * is expected to fall back to the mechanical compactMessages in that case.
+ *
+ * Note: trace.ts compactSessionNow (the TUI's manual /compact) deliberately
+ * stays mechanical — no provider is available at that layer, and a manual
+ * command should be deterministic and instant.
+ */
+export async function llmCompactMessages(
+  provider: SummaryProvider,
+  messages: ChatMessage[],
+  budgetTokens: number,
+): Promise<CompactionResult | null> {
+  const split = splitForCompaction(messages, budgetTokens);
+  if (!split) return null;
+
+  const segment = serializeSegment(split.dropped);
+  let summary: string;
+  try {
+    const res = await provider.chat({
+      messages: [{ role: "user", content: `${LLM_SUMMARY_INSTRUCTION}\n\n${segment}` }],
+    });
+    summary = res.content.trim();
+  } catch {
+    return null; // provider error → caller falls back to mechanical compaction
+  }
+  if (summary === "") return null;
+
+  return assembleCompaction(
+    messages,
+    split.tailStart,
+    compactionSummaryMessage("Summary", summary),
+    split.dropped.length,
+  );
 }
