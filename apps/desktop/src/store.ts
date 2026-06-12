@@ -23,7 +23,7 @@ import {
 } from "./lib/tabs";
 import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
-import type { SessionMeta, Workspace } from "./types";
+import type { SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
 export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
 
@@ -56,6 +56,22 @@ type AppStore = {
   /** Ensures the active tab has a (re)connecting WS client. */
   connect: () => void;
   openTab: () => void;
+  /**
+   * "New worktree session": creates an isolated git worktree in the active
+   * workspace and opens a tab bound to its workspace (`wt-<slug>`). Rejects
+   * (ApiError) e.g. when the workspace is not a git repo.
+   */
+  openWorktreeTab: () => Promise<void>;
+  /**
+   * "Merge back": merges the tab's worktree branch into its base workspace
+   * (the server auto-commits dirty work first). Resolves with the server's
+   * verdict; on {conflict} everything is left intact (merge aborted).
+   */
+  mergeWorktree: (tabId: string) => Promise<WorktreeMergeResult>;
+  /** "Discard"/post-merge cleanup: deletes the worktree+branch, closes the tab. */
+  discardWorktree: (tabId: string) => Promise<void>;
+  /** Refreshes the dirty flag of all worktree tabs (after runs finish). */
+  refreshWorktrees: () => void;
   /** Closing also closes the tab's socket — a running session is cancelled server-side. */
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
@@ -89,6 +105,8 @@ export const useStore = create<AppStore>()((set, get) => {
       notify({ kind: "completed", tabTitle: tab.title });
     else if (frame.type === "event" && frame.event.type === "session.failed")
       notify({ kind: "failed", tabTitle: tab.title });
+    // A finished run may have left uncommitted work — refresh the dirty dot.
+    if (frame.type === "idle" && tab.worktree) get().refreshWorktrees();
   };
 
   const ensureWs = (tabId: string): WsClient => {
@@ -143,6 +161,57 @@ export const useStore = create<AppStore>()((set, get) => {
     openTab: () => {
       set((s) => ({ tabs: openTabPure(s.tabs, s.activeWorkspaceId) }));
       ensureWs(get().tabs.activeTabId);
+    },
+
+    openWorktreeTab: async () => {
+      const base = get().activeWorkspaceId;
+      const created = await api.worktreeCreate(base);
+      set((s) => ({
+        tabs: openTabPure(s.tabs, created.id, {
+          // ws = the worktree's workspace id -> the chat WS and scoped REST
+          // calls target the isolated checkout via the existing ?ws= path.
+          worktree: { id: created.id, branch: created.branch, base, dirty: false },
+        }),
+      }));
+      ensureWs(get().tabs.activeTabId);
+    },
+
+    mergeWorktree: async (tabId) => {
+      const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
+      if (!tab?.worktree) throw new Error("tab has no worktree");
+      const result = await api.worktreeMerge(tab.worktree.id);
+      get().refreshWorktrees();
+      return result;
+    },
+
+    discardWorktree: async (tabId) => {
+      const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
+      if (!tab?.worktree) throw new Error("tab has no worktree");
+      await api.worktreeDelete(tab.worktree.id);
+      get().closeTab(tabId);
+    },
+
+    refreshWorktrees: () => {
+      const worktreeTabs = get().tabs.tabs.filter((t) => t.worktree);
+      for (const base of new Set(worktreeTabs.map((t) => t.worktree!.base))) {
+        api
+          .worktrees(base)
+          .then((list) => {
+            set((s) => {
+              let tabs = s.tabs;
+              for (const t of s.tabs.tabs) {
+                const status = t.worktree && list.find((w) => w.id === t.worktree!.id);
+                if (status && status.dirty !== t.worktree!.dirty) {
+                  tabs = updateTab(tabs, t.tabId, { worktree: { ...t.worktree!, dirty: status.dirty } });
+                }
+              }
+              return { tabs };
+            });
+          })
+          .catch(() => {
+            // Status refresh is best-effort (old server, deleted worktree, ...).
+          });
+      }
     },
 
     closeTab: (tabId) => {
