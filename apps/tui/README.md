@@ -11,6 +11,9 @@ pnpm --filter @seekforge/tui build
 node apps/tui/bin/seekforge-tui.js     # or: seekforge-tui (when linked)
 ```
 
+Flags: `-c/--continue` resumes the most recent session; `--model <name>`,
+`--vim/--no-vim`, `-h`. First run without an API key opens a setup wizard.
+
 `seekforge-tui` launches a full-screen chat in the current working directory.
 A DeepSeek API key is required: set `DEEPSEEK_API_KEY` or write
 `~/.seekforge/config.json` with `{ "apiKey": "…" }`. Config precedence is
@@ -43,6 +46,21 @@ CLI).
 - **Vim mode**: `/vim` toggles modal editing (h j k l w b e 0 $ gg G, i a I A
   o O, x dd dw cw cc D C s S, yy p, u undo); the status bar shows
   INSERT/NORMAL. `"vim": true` in config starts with it on.
+- **Run control**: Ctrl+B detaches the current run to the background (chat
+  continues in a fresh session; its outcome arrives as a notice); Ctrl+O
+  toggles verbose mode (full diffs, shell output, tool results); Ctrl+Z
+  suspends to the shell; the mouse wheel scrolls the transcript.
+- **Agent questions**: the `ask_user` tool pops a multiple-choice panel
+  (↑↓ or 1-N, Enter answers, Esc declines).
+- **Attachments**: Ctrl+V captures a clipboard image into
+  `.seekforge/uploads/` and inserts an `[image #N: path]` marker (carried in
+  the task for vision-capable models); pastes over 6 lines collapse into a
+  `[Pasted text #N]` placeholder expanded on send.
+- **Custom commands**: `.seekforge/commands/<name>.md` (project or
+  `~/.seekforge/commands/`) become `/name` palette entries; `$ARGUMENTS` in
+  the body is replaced with what you type after the command.
+- **Keybindings**: override any binding in `.seekforge/keybindings.json`
+  (`{"composer": {"newline": "ctrl+j"}}` style; project overrides global).
 - **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
   cycles, `/approve <mode>` sets it. In plan mode every message runs a
   read-only planning turn, then `y` executes it in the same session.

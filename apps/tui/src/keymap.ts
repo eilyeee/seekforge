@@ -44,6 +44,7 @@ export type ActionId =
   | "external-editor"
   | "history-search"
   | "path-complete"
+  | "paste-image"
   // overlay
   | "overlay-up"
   | "overlay-down"
@@ -54,7 +55,10 @@ export type ActionId =
   | "cycle-approval"
   | "scroll-up"
   | "scroll-down"
-  | "scroll-latest";
+  | "scroll-latest"
+  | "toggle-verbose"
+  | "detach-run"
+  | "suspend";
 
 export type Binding = { scope: Scope; key: KeyStroke; action: ActionId };
 
@@ -79,12 +83,16 @@ export const KEYMAP: ReadonlyArray<Binding> = [
   { scope: "composer", key: { input: "g", ctrl: true }, action: "external-editor" },
   { scope: "composer", key: { input: "r", ctrl: true }, action: "history-search" },
   { scope: "composer", key: { input: "", name: "tab" }, action: "path-complete" },
+  { scope: "composer", key: { input: "v", ctrl: true }, action: "paste-image" },
 
   // Global (any scope, checked after the scope's own bindings).
   { scope: "global", key: { input: "c", ctrl: true }, action: "cancel-or-quit" },
   { scope: "global", key: { input: "", name: "tab", shift: true }, action: "cycle-approval" },
   { scope: "global", key: { input: "", name: "pageup" }, action: "scroll-up" },
   { scope: "global", key: { input: "", name: "pagedown" }, action: "scroll-down" },
+  { scope: "global", key: { input: "o", ctrl: true }, action: "toggle-verbose" },
+  { scope: "global", key: { input: "b", ctrl: true }, action: "detach-run" },
+  { scope: "global", key: { input: "z", ctrl: true }, action: "suspend" },
 ];
 
 /** Ink useInput key object, structurally (so we don't import ink here). */
@@ -154,13 +162,18 @@ function matches(binding: KeyStroke, stroke: KeyStroke): boolean {
 /**
  * Resolves a keystroke in a scope: the scope's own bindings first, then
  * global ones. Returns undefined when nothing matches (the composer then
- * treats printable input as text insertion).
+ * treats printable input as text insertion). Pass a merged table (user
+ * keybindings applied) to override the built-in KEYMAP.
  */
-export function resolveAction(scope: Scope, stroke: KeyStroke): ActionId | undefined {
-  for (const b of KEYMAP) {
+export function resolveAction(
+  scope: Scope,
+  stroke: KeyStroke,
+  table: ReadonlyArray<Binding> = KEYMAP,
+): ActionId | undefined {
+  for (const b of table) {
     if (b.scope === scope && matches(b.key, stroke)) return b.action;
   }
-  for (const b of KEYMAP) {
+  for (const b of table) {
     if (b.scope === "global" && matches(b.key, stroke)) return b.action;
   }
   return undefined;

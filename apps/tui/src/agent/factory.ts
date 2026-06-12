@@ -26,6 +26,8 @@ export type TuiAgentOptions = {
   mcpToolSpecs?: ToolSpec[];
   /** Shared background-task manager: tasks survive across turns (app owns it). */
   background?: BackgroundTasks;
+  /** ask_user channel (TUI question overlay). */
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
 };
 
 export type TuiAgent = {
@@ -74,6 +76,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     subagents: opts.subagents,
     hooks: config.hooks,
     ...(opts.background ? { background: opts.background } : {}),
+    ...(opts.askUser ? { askUser: opts.askUser } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

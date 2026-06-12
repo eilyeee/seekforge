@@ -19,6 +19,8 @@ export type RunSessionDeps = {
   approvalMode: ApprovalMode;
   /** Shared background-task manager (tasks outlive single runs). */
   background: BackgroundTasks;
+  /** Routes the ask_user tool to the TUI question overlay. */
+  askUser: (q: { question: string; options: string[] }) => Promise<string>;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
   dispatch: (action: ChatAction) => void;
   /** Awaits the inline PermissionPanel's y/n answer. */
@@ -46,6 +48,7 @@ export async function runSession(
     subagents: loadAgentDefinitions(deps.projectPath),
     mcpToolSpecs: deps.mcpToolSpecs,
     background: deps.background,
+    askUser: deps.askUser,
   });
 
   // One capture per run: snapshots files around write tools to render diffs.
