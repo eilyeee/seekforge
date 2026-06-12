@@ -16,7 +16,9 @@ import {
   moveRight,
   moveUp,
   replaceAtToken,
+  replaceSlashArg,
   setText,
+  slashArgAt,
   slashPrefix,
   type EditorState,
 } from "../editor.js";
@@ -164,6 +166,63 @@ describe("slashPrefix", () => {
     expect(slashPrefix(at("plan", 2))).toBeNull();
     expect(slashPrefix(at("/a\nb", 2))).toBeNull();
     expect(slashPrefix(at("/abc", 0))).toBeNull();
+  });
+});
+
+describe("slashArgAt", () => {
+  it("returns the command name, anchor, and full argument at the end", () => {
+    expect(slashArgAt(at("/resume 2026", 12))).toEqual({ name: "resume", anchor: 8, arg: "2026" });
+  });
+
+  it("the arg spans the whole region, not just the last word", () => {
+    expect(slashArgAt(at("/todo done 2", 12))).toEqual({ name: "todo", anchor: 6, arg: "done 2" });
+  });
+
+  it("empty argument right after the separating space", () => {
+    expect(slashArgAt(at("/resume ", 8))).toEqual({ name: "resume", anchor: 8, arg: "" });
+  });
+
+  it("null without a space — the command-name palette owns that state", () => {
+    expect(slashArgAt(at("/resume", 7))).toBeNull();
+  });
+
+  it("cuts the argument at the cursor when mid-argument", () => {
+    expect(slashArgAt(at("/resume 2026", 10))).toEqual({ name: "resume", anchor: 8, arg: "20" });
+  });
+
+  it("anchors after the whole whitespace run following the command word", () => {
+    expect(slashArgAt(at("/todo   x", 9))).toEqual({ name: "todo", anchor: 8, arg: "x" });
+  });
+
+  it("works for a single-letter command", () => {
+    expect(slashArgAt(at("/q ", 3))).toEqual({ name: "q", anchor: 3, arg: "" });
+  });
+
+  it("lowercases the command name", () => {
+    expect(slashArgAt(at("/Resume 1", 9))).toEqual({ name: "resume", anchor: 8, arg: "1" });
+  });
+
+  it("null while the cursor is inside the command word or before the space", () => {
+    expect(slashArgAt(at("/resume 2026", 3))).toBeNull();
+    expect(slashArgAt(at("/plan x", 5))).toBeNull(); // on the separating space
+  });
+
+  it("null for multiline or non-slash input", () => {
+    expect(slashArgAt(at("/a b\nc", 4))).toBeNull();
+    expect(slashArgAt(at("todo x", 6))).toBeNull();
+  });
+});
+
+describe("replaceSlashArg", () => {
+  it("replaces the argument region through the end of the line", () => {
+    const s = replaceSlashArg(at("/resume 20xx", 10), 8, "2026-06");
+    expect(s.text).toBe("/resume 2026-06");
+    expect(s.cursor).toBe(15);
+  });
+
+  it("an empty replacement truncates at the anchor", () => {
+    const s = replaceSlashArg(at("/resume 2026", 12), 8, "");
+    expect(s).toEqual({ text: "/resume ", cursor: 8 });
   });
 });
 
