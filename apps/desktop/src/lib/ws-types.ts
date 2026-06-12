@@ -14,11 +14,13 @@ export type ClientFrame =
     }
   | { type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string }
   | { type: "permission.response"; requestId: string; approved: boolean }
+  | { type: "question.answer"; id: string; answer: string }
   | { type: "cancel" };
 
 export type ServerFrame =
   | { type: "event"; sessionId: string; event: StreamEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
+  | { type: "question.request"; id: string; question: string; options: string[] }
   | { type: "error"; code: string; message: string }
   | { type: "idle" };
 
