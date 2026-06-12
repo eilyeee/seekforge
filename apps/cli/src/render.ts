@@ -5,6 +5,7 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const YELLOW = "\x1b[33m";
 const DIM = "\x1b[2m";
+const ITALIC = "\x1b[3m";
 const RESET = "\x1b[0m";
 
 function summarizeArgs(args: unknown): string {
@@ -37,21 +38,49 @@ export function formatContextSuffix(
   return ` ${DIM}· ctx ${ctx.percent}%${RESET}`;
 }
 
-/** Creates a terminal renderer for agent events. */
-export function createRenderer(opts: RendererOptions = {}): (e: AgentEvent) => void {
+export type Renderer = {
+  render: (e: AgentEvent) => void;
+  /** onModelDelta sink: closes a pending thinking block, then writes raw. */
+  modelDelta: (chunk: string) => void;
+  /** onReasoningDelta sink: dim italic, "✻ thinking" header once per block. */
+  reasoningDelta: (chunk: string) => void;
+};
+
+/** Creates a terminal renderer for agent events (plus the delta sinks). */
+export function createRenderer(opts: RendererOptions = {}): Renderer {
   // context.usage prints no line of its own; the latest value decorates the
   // final usage line (session.completed) once occupancy is worth mentioning.
   let lastContext: { percent: number } | undefined;
-  return (e) => {
-    if (e.type === "context.usage") {
-      lastContext = { percent: e.percent };
-      return;
-    }
-    if (e.type === "session.completed") {
-      console.log(`\n${formatUsage(e.report.usage)}${formatContextSuffix(lastContext)}`);
-      return;
-    }
-    renderEvent(e, opts);
+  // True while a streamed chain-of-thought block is open (header printed).
+  let inThinking = false;
+  return {
+    render: (e) => {
+      if (e.type === "context.usage") {
+        lastContext = { percent: e.percent };
+        return;
+      }
+      if (e.type === "model.message") inThinking = false; // next block reprints the header
+      if (e.type === "session.completed") {
+        console.log(`\n${formatUsage(e.report.usage)}${formatContextSuffix(lastContext)}`);
+        return;
+      }
+      renderEvent(e, opts);
+    },
+    modelDelta: (chunk) => {
+      if (inThinking) {
+        process.stdout.write("\n"); // visual break between thinking and answer
+        inThinking = false;
+      }
+      process.stdout.write(chunk);
+    },
+    reasoningDelta: (chunk) => {
+      if (!inThinking) {
+        process.stdout.write(`${DIM}${ITALIC}✻ thinking${RESET}\n`);
+        inThinking = true;
+      }
+      // Wrap every chunk so interleaved writes can never leak the style.
+      process.stdout.write(`${DIM}${ITALIC}${chunk}${RESET}`);
+    },
   };
 }
 
@@ -90,6 +119,14 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
     }
     case "file.changed":
       console.log(`${YELLOW}● changed${RESET} ${e.path}`);
+      break;
+    case "command.output":
+      // Live run_command output, streamed as it arrives. Dimmed so it reads
+      // as background detail; chunks keep their own newlines.
+      process.stdout.write(`${DIM}${e.chunk}${RESET}`);
+      break;
+    case "context.microcompacted":
+      console.log(`${DIM}context: cleared ${e.clearedResults} old tool outputs${RESET}`);
       break;
     case "context.compacted":
       console.log(`${DIM}(context compacted: dropped ${e.droppedTurns} earlier messages)${RESET}`);
