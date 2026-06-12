@@ -87,6 +87,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
+    ...(config.compaction ? { compaction: config.compaction } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

@@ -84,6 +84,7 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
           status={item.status}
           error={item.error}
           {...(item.resultPreview ? { resultPreview: item.resultPreview } : {})}
+          {...(item.outputTail ? { outputTail: item.outputTail } : {})}
           verbose={verbose}
         />
       );

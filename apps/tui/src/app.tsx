@@ -28,7 +28,7 @@ import {
 import type { PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
 import { chatReducer, initialState, type ApprovalSetting, type ChatAction, type Overlay } from "./model.js";
-import { formatUsage, kfmt } from "./format.js";
+import { formatUsageDetail, kfmt } from "./format.js";
 import { COMMANDS, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
@@ -104,6 +104,7 @@ import { INIT_PROMPT } from "./init-prompt.js";
 import { notify } from "./notify.js";
 import { applyCompletion, cycleCompletion, startCompletion, type PathCompletion } from "./path-complete.js";
 import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
+import { attachSkillContent, expandSkillCommand, findSkillByCommand, skillCommandSpecs } from "./skill-commands.js";
 import { applyVimKey, initialVim, type VimState } from "./vim.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
 import { openInExternalEditor } from "./external-editor.js";
@@ -223,6 +224,11 @@ export function App({
   // Custom slash commands (.seekforge/commands/*.md), loaded once.
   const customCommandsRef = useRef<CustomCommand[] | null>(null);
   if (customCommandsRef.current === null) customCommandsRef.current = loadCustomCommands(projectPath);
+
+  // Installed skills double as "/skill:<id>" palette commands.
+  const skillRowsRef = useRef<ReturnType<typeof loadSkillsWithStatus> | null>(null);
+  if (skillRowsRef.current === null) skillRowsRef.current = loadSkillsWithStatus(projectPath);
+  const appStartRef = useRef(Date.now());
 
   // Extra read-only roots for @ references (/add-dir).
   const extraDirsRef = useRef<string[]>([]);
@@ -399,6 +405,7 @@ export function App({
     const all: CommandSpec[] = [
       ...COMMANDS,
       ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
+      ...skillCommandSpecs(skillRowsRef.current ?? []),
     ];
     return rankCommands(state.overlay.query, all, usageRef.current, 24);
   }, [state.overlay]);
@@ -623,6 +630,7 @@ export function App({
           const specs: CommandSpec[] = [
             ...COMMANDS,
             ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
+            ...skillCommandSpecs(skillRowsRef.current ?? []),
           ];
           const rows = helpRows(specs);
           const selectable = selectableIndices(rows);
@@ -981,9 +989,15 @@ export function App({
           );
           break;
         }
-        case "usage":
-          notice(formatUsage(stateRef.current.totalUsage));
+        case "usage": {
+          const turns = stateRef.current.items.filter((i) => i.kind === "user").length;
+          for (const line of formatUsageDetail(stateRef.current.totalUsage, {
+            durationMs: Date.now() - appStartRef.current,
+            turns,
+          }))
+            notice(line);
           break;
+        }
         case "copy": {
           const lastAssistant = [...stateRef.current.items].reverse().find((i) => i.kind === "assistant");
           if (!lastAssistant || lastAssistant.kind !== "assistant") {
@@ -1013,6 +1027,7 @@ export function App({
             ...(cfg.reasoningEffort ? { reasoningEffort: cfg.reasoningEffort } : {}),
             ...(cfg.sandbox ? { sandbox: cfg.sandbox } : {}),
             keySource: process.env["DEEPSEEK_API_KEY"] ? "env" : cfg.apiKey ? "config" : "none",
+            uptimeMs: Date.now() - appStartRef.current,
             costUsd: s.totalUsage.costUsd,
             totalTokens: s.totalUsage.promptTokens + s.totalUsage.completionTokens,
             ...(s.context ? { contextPercent: s.context.percent } : {}),
@@ -1089,9 +1104,24 @@ export function App({
             void runTask(expandCustomCommand(custom, rest.join(" ").trim()), { echoUser: false });
             break;
           }
+          // Skills are invocable as /skill:<id> [task].
+          const skill = findSkillByCommand(
+            attachSkillContent(projectPath, skillRowsRef.current ?? []),
+            (head ?? "").toLowerCase(),
+          );
+          if (skill) {
+            if (controllerRef.current) {
+              notice("a task is already running — wait for it to finish", "error");
+              break;
+            }
+            dispatch({ type: "user", text: command.raw });
+            void runTask(expandSkillCommand(skill, rest.join(" ").trim()), { echoUser: false });
+            break;
+          }
           const suggestion = didYouMean(head ?? "", [
             ...COMMANDS,
             ...customCommandSpecs(customCommandsRef.current ?? []),
+            ...skillCommandSpecs(skillRowsRef.current ?? []),
           ]);
           notice(
             `unknown command ${command.raw}${suggestion ? ` — did you mean /${suggestion}?` : ""} (/help lists all)`,
@@ -1650,6 +1680,7 @@ export function App({
           {...(state.context ? { context: state.context } : {})}
           usage={state.totalUsage}
           itemCount={state.items.length}
+          items={state.items}
           {...(state.sessionId ? { sessionId: state.sessionId } : {})}
           model={state.model}
           bgTasks={state.bgTasks}

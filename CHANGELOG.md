@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 (unreleased) — round 7: final gaps + command depth
+
+- Live command output: run_command streams stdout/stderr while it runs —
+  the TUI shows a rolling tail under the running ⏺ row (core emits
+  command.output during execution; ≤200 chunks/call).
+- Sandbox escalation: a sandboxed command failing with a denial-looking
+  error asks once "retry WITHOUT sandbox?"; results carry sandboxEscalated.
+- MCP streamable-HTTP transport: servers with `url` (+ optional `headers`
+  for bearer tokens) work alongside stdio — JSON and SSE responses,
+  session-id echo, timeouts. OAuth flows out of scope.
+- Hook stdout semantics: userPromptSubmit stdout is injected into the task
+  as <hook-context> (8K cap); preToolUse stdout JSON {"decision":
+  "deny"|"allow", reason} blocks with a reason or short-circuits.
+- LLM compaction (`"compaction": "llm"`): the dropped middle is summarized
+  by the model (decisions/files/commands/open problems); any failure falls
+  back to the mechanical digest. Manual /compact stays deterministic.
+- Skills are invocable: every enabled skill appears as /skill:<id> [task]
+  in the palette and help; expansion wraps the skill procedure + your task.
+- Command-depth audit vs Claude Code docs: /context now shows a
+  per-category breakdown (tool results / text / thinking / diffs / shell)
+  with mini-gauges, free space and the compaction threshold; /usage shows
+  labeled lines incl. cache-hit rate, duration, turns; /sessions adds
+  relative ages; /status shows uptime. Audited the rest to parity.
+
 ## 0.7.0 (unreleased) — round 5: engine gaps + UI polish + DeepSeek V4
 
 ### Added (engine)
