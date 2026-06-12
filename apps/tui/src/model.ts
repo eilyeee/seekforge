@@ -39,7 +39,13 @@ export type Overlay =
   | { kind: "files"; query: string; index: number; anchor: number }
   | { kind: "context" }
   /** Interactive session picker (/sessions): Enter resumes ids[index]. */
-  | { kind: "sessions"; ids: string[]; lines: string[]; index: number };
+  | { kind: "sessions"; ids: string[]; lines: string[]; index: number }
+  /** Backtrack picker (Esc Esc / /backtrack): Enter rewinds to the turn. */
+  | {
+      kind: "backtrack";
+      targets: Array<{ turn: number; text: string; itemIndex: number }>;
+      index: number;
+    };
 
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
@@ -146,6 +152,8 @@ export type ChatAction =
   | { type: "queue-clear" }
   /** Replaces bg-task state with a live snapshot from the shared manager. */
   | { type: "bg-sync"; tasks: BgTask[] }
+  /** Conversation backtrack: drop the target user item and everything after. */
+  | { type: "backtrack-apply"; itemIndex: number }
   | { type: "event"; event: AgentEvent };
 
 let counter = 0;
@@ -290,6 +298,15 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "bg-sync":
       return { ...state, bgTasks: action.tasks };
+
+    case "backtrack-apply":
+      return {
+        ...state,
+        items: state.items.slice(0, Math.max(0, action.itemIndex)),
+        overlay: null,
+        scrollOffset: 0,
+        planPending: false,
+      };
 
     case "event":
       return applyEvent(state, action.event);

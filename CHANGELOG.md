@@ -46,11 +46,25 @@ TUI v2 — full-parity terminal UI (apps/tui/DESIGN.md batches A–D).
   killed on exit); `/tasks` shows live status and `/tasks kill <id>` stops
   one.
 
+- Vim mode (`/vim`, or `"vim": true`): modal composer editing — motions
+  h j k l w b e 0 $ gg G, insert entries i a I A o O, edits x dd dw cw cc
+  D C s S yy p, u undo; INSERT/NORMAL shown in the status bar.
+- Ctrl+R reverse history search (incremental, Ctrl+R steps older) and Tab
+  path completion for plain tokens (cycles candidates; `@` picker unchanged).
+- Conversation backtrack: Esc Esc or `/backtrack` picks an earlier user turn,
+  truncates the stored session there (core `truncateSessionAtUserTurn`) and
+  refills the composer; file changes stay (use /rewind).
+- `/init` (agent writes/refreshes AGENTS.md), `/doctor` (11 environment
+  checks), `/skills` (installed skills incl. disabled builtins); OS
+  notifications via osascript/notify-send on permission prompts and
+  completion (`"notify": false` disables; bell kept as fallback).
+
 ### Changed
 - TUI keybindings are a declarative testable table (`keymap.ts`); all input
   routing (permission → overlay → composer) is centralized in one handler.
-- TUI tests: 26 → 172 (editor model, history, fuzzy, file index, viewport,
-  diff, capture, allowlist, surfaces, highlight, theme, keymap, export).
+- TUI tests: 26 → 273 (editor model, history, fuzzy, file index, viewport,
+  diff, capture, allowlist, surfaces, highlight, theme, keymap, export, vim,
+  history-search, path-complete, backtrack, doctor, skills, notify).
 
 ## 0.6.0 (unreleased)
 

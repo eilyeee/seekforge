@@ -14,6 +14,8 @@ type StatusBarProps = {
   approval: ApprovalSetting;
   bgRunning: number;
   scrolled: boolean;
+  /** Vim composer mode; undefined when vim mode is off. */
+  vim?: "insert" | "normal";
 };
 
 export function StatusBar(props: StatusBarProps): React.ReactElement {
@@ -48,6 +50,12 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
         </Text>
       ) : null}
       {props.scrolled ? <Text color="yellow">{"  ·  ↑ scrolled"}</Text> : null}
+      {props.vim ? (
+        <Text color={props.vim === "normal" ? "magenta" : ACCENT} bold>
+          {"  ·  "}
+          {props.vim === "normal" ? "NORMAL" : "INSERT"}
+        </Text>
+      ) : null}
     </Box>
   );
 }

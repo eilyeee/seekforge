@@ -26,6 +26,10 @@ export type TuiConfig = {
   accent?: string;
   /** Terminal bell on permission prompts / run completion (default true). */
   bell?: boolean;
+  /** OS notifications (macOS osascript / linux notify-send; default true). */
+  notify?: boolean;
+  /** Start the composer in vim mode (/vim toggles at runtime). */
+  vim?: boolean;
 };
 
 function readJson(path: string): TuiConfig {

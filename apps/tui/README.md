@@ -33,6 +33,16 @@ CLI).
 - **Steering**: the composer stays live while the agent works — Enter queues
   follow-up messages that are sent in order after the turn; Esc interrupts
   the run (and clears the queue).
+- **Recall & completion**: Ctrl+R reverse-searches the persisted history
+  incrementally (Ctrl+R again steps older, Enter accepts); Tab completes
+  plain path tokens against the workspace file index (repeated Tab cycles).
+- **Backtrack**: Esc Esc on an empty idle composer (or `/backtrack`) opens a
+  picker of this session's earlier messages — Enter rewinds the stored
+  conversation to that turn and refills the composer (file changes are not
+  reverted; `/rewind` covers files).
+- **Vim mode**: `/vim` toggles modal editing (h j k l w b e 0 $ gg G, i a I A
+  o O, x dd dw cw cc D C s S, yy p, u undo); the status bar shows
+  INSERT/NORMAL. `"vim": true` in config starts with it on.
 - **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
   cycles, `/approve <mode>` sets it. In plan mode every message runs a
   read-only planning turn, then `y` executes it in the same session.
@@ -45,15 +55,19 @@ CLI).
 ## Slash commands
 
 `/help` `/new` `/clear` `/sessions` (interactive picker) `/resume <id>`
-`/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/diff`
-`/model <name>` `/remember <fact>` `/memory [edit]` `/tasks [kill <id>]`
-`/agents` `/mcp` `/context` `/compact` (manual, in-place) `/usage`
-`/export [path]` `/copy` `/editor` `/quit`
+`/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/backtrack`
+`/diff` `/model <name>` `/remember <fact>` `/memory [edit]`
+`/tasks [kill <id>]` `/agents` `/skills` `/mcp` `/init` `/doctor` `/vim`
+`/context` `/compact` (manual, in-place) `/usage` `/export [path]` `/copy`
+`/editor` `/quit`
 
 Background tasks started with `run_command background:true` survive across
 turns (one shared manager per TUI process; killed on exit). `/compact` folds
-the middle of the stored session into a digest immediately. A terminal bell
-rings on permission prompts and run completion (`"bell": false` disables).
+the middle of the stored session into a digest immediately. `/init` runs an
+agent task that writes or refreshes AGENTS.md; `/doctor` checks the
+environment (key, node, git, runtime, MCP, editor, clipboard). Permission
+prompts and run completion trigger an OS notification (macOS/Linux) plus a
+terminal bell — `"notify": false` / `"bell": false` disable each.
 
 ## Development
 
