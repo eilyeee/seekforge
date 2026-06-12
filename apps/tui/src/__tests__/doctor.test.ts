@@ -43,7 +43,7 @@ describe("runDoctor", () => {
     const checks = runDoctor("/proj", { ...healthyConfig, apiKey: undefined }, healthyProbes());
     const check = byName(checks, "api key");
     expect(check.ok).toBe(false);
-    expect(check.detail).toContain("DEEPSEEK_API_KEY");
+    expect(check.fixHint).toContain("DEEPSEEK_API_KEY");
   });
 
   it("fails the node check below version 20", () => {

@@ -2,6 +2,20 @@
 
 ## 0.7.0 (unreleased) — round 7: final gaps + command depth
 
+- Command-detail alignment round: /compact <focus> runs an LLM-summarized
+  compaction steered by the focus text (no-arg stays the instant digest);
+  /memory edit <file> picks any file under .seekforge/memory/ (with an
+  argument picker); /clear <name> labels the old session for /sessions;
+  /model notes session-only switching; /rewind and /backtrack
+  cross-reference each other; /mcp explains reconnection; /doctor failing
+  checks print "→ fix:" hints.
+- Layout: the approval mode (⏵⏵ auto-approve / ⏸ plan mode, shift+tab hint)
+  and the running shell command + background/detached counts now sit UNDER
+  the input box, Claude Code-style; the top status bar stays lean.
+- Text selection: mouse capture is now OFF by default so dragging selects
+  text natively; /mouse (or "mouse": true) enables wheel-scrolling, with
+  Shift/Option-drag still selecting while it's on.
+
 - Live command output: run_command streams stdout/stderr while it runs —
   the TUI shows a rolling tail under the running ⏺ row (core emits
   command.output during execution; ≤200 chunks/call).

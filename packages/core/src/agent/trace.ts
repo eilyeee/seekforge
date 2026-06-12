@@ -169,15 +169,23 @@ export function compactSessionNow(workspace: string, sessionId: string): ManualC
   const compacted = compactMessages(messages, 0);
   if (!compacted) return null;
 
-  const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
-  const ts = new Date().toISOString();
-  const lines = compacted.messages.map((m) => JSON.stringify({ ts, ...m }));
-  writeFileSync(file, `${lines.join("\n")}\n`);
+  rewriteSessionMessages(workspace, sessionId, compacted.messages);
   return {
     droppedTurns: compacted.droppedTurns,
     beforeTokens,
     afterTokens: estimateMessagesTokens(compacted.messages),
   };
+}
+
+/**
+ * Replaces a session's messages.jsonl wholesale (manual compaction flows
+ * that build the new history elsewhere, e.g. LLM-summarized /compact).
+ */
+export function rewriteSessionMessages(workspace: string, sessionId: string, messages: ChatMessage[]): void {
+  const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
+  const ts = new Date().toISOString();
+  const lines = messages.map((m) => JSON.stringify({ ts, ...m }));
+  writeFileSync(file, `${lines.join("\n")}\n`);
 }
 
 export type TruncateResult = { removedMessages: number; keptMessages: number };

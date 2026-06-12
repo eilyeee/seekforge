@@ -52,6 +52,7 @@ export {
   readSessionMeta,
   rewindSession,
   rewindSessionToTurn,
+  rewriteSessionMessages,
   sessionTitle,
   truncateSessionAtUserTurn,
   writeSessionMeta,

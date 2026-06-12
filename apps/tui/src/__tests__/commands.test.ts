@@ -71,3 +71,21 @@ describe("parseInput v3 additions", () => {
     expect(parseInput("/vim")).toEqual({ kind: "slash", command: { name: "vim" } });
   });
 });
+
+describe("parseInput round-8 alignment additions", () => {
+  it("parses /clear with a label, /compact with focus, /memory edit <file>", () => {
+    expect(parseInput("/clear refactor attempt")).toEqual({
+      kind: "slash",
+      command: { name: "clear", arg: "refactor attempt" },
+    });
+    expect(parseInput("/compact focus on the auth bug")).toEqual({
+      kind: "slash",
+      command: { name: "compact", arg: "focus on the auth bug" },
+    });
+    expect(parseInput("/memory edit candidates.jsonl")).toEqual({
+      kind: "slash",
+      command: { name: "memory", arg: "edit candidates.jsonl" },
+    });
+    expect(parseInput("/mouse")).toEqual({ kind: "slash", command: { name: "mouse" } });
+  });
+});

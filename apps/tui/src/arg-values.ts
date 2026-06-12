@@ -15,6 +15,8 @@ export type ArgContext = {
   bgTasks: Array<{ id: string; command: string; status: string }>;
   models: Array<{ id: string; note: string }>;
   memoryFactCount: number;
+  /** Files under .seekforge/memory/ offered by "/memory edit ". */
+  memoryFiles?: string[];
 };
 
 /** Caps `text` to `max` characters, ellipsizing when it overflows. */
@@ -89,6 +91,9 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
         { value: "yes", hint: "apply" },
       ];
     case "memory":
+      if (argSoFar.startsWith("edit ")) {
+        return (ctx.memoryFiles ?? []).map((f) => ({ value: `edit ${f}`, hint: "open in $EDITOR" }));
+      }
       return [
         { value: "", hint: `list ${ctx.memoryFactCount} facts` },
         { value: "edit", hint: "open in $EDITOR" },
