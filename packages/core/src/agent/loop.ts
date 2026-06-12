@@ -37,7 +37,7 @@ import {
   type DispatchHooks,
   type DispatchManager,
 } from "../subagents/index.js";
-import { compactMessages, estimateMessagesTokens } from "./context.js";
+import { clearOldToolResults, compactMessages, estimateMessagesTokens } from "./context.js";
 import { runHooks, type HookConfig } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
@@ -85,7 +85,9 @@ export type AgentCoreDeps = {
   /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
-   * included); sessionEnd fires once when the top-level session ends.
+   * included). sessionStart/userPromptSubmit/stop/sessionEnd fire only for
+   * the top-level session; userPromptSubmit can block the run. preCompact,
+   * subagentStop and notification are advisory (see hooks/index.ts).
    */
   hooks?: HookConfig;
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
@@ -220,6 +222,32 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       };
 
+      // notification hooks fire just before the user is interrupted (a
+      // permission prompt or an ask_user question), so external notifiers
+      // (sound, desktop alert) can ping. Advisory; never affects the answer.
+      const confirmWithNotify = async (req: PermissionRequest): Promise<boolean> => {
+        await runHooks("notification", deps.hooks?.notification, {
+          sessionId,
+          workspace: input.projectPath,
+          kind: "permission",
+          detail: req,
+        });
+        return deps.confirm(req);
+      };
+      const askUser = deps.askUser;
+      const askUserWithNotify =
+        askUser === undefined
+          ? undefined
+          : async (q: { question: string; options: string[] }): Promise<string> => {
+              await runHooks("notification", deps.hooks?.notification, {
+                sessionId,
+                workspace: input.projectPath,
+                kind: "question",
+                detail: q,
+              });
+              return askUser(q);
+            };
+
       // First-write-per-RUN checkpointing: each run snapshots a file's
       // pre-content the first time IT writes the file, tagged with this run's
       // user-turn index. rewindSession keeps using the oldest entry per path;
@@ -234,7 +262,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           commandAllowlist: deps.commandAllowlist ?? [],
           ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
         },
-        confirm: deps.confirm,
+        confirm: confirmWithNotify,
         log: (entry) => trace.toolCall(entry),
         runtime: deps.runtime,
         hooks: deps.hooks,
@@ -251,7 +279,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         },
         // Only the top-level run may block on the user; nested subagent runs
         // never get the channel (see executeNestedRun).
-        ...(depth === 0 && deps.askUser ? { askUser: deps.askUser } : {}),
+        ...(depth === 0 && askUserWithNotify ? { askUser: askUserWithNotify } : {}),
       };
 
       const toolDefs =
@@ -380,6 +408,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // the parent linkage by logging the dispatch itself.
         ctx.log?.({ tool: DISPATCH_AGENT_TOOL, agentId: def.id, task, subSessionId });
 
+        // subagentStop: a dispatched run finished (sessionId = the parent's).
+        await runHooks("subagentStop", deps.hooks?.subagentStop, {
+          sessionId,
+          workspace: input.projectPath,
+          agentId: def.id,
+          ok: failure === undefined && report !== undefined,
+        });
+
         if (nestedUsage) {
           usage = addUsage(usage, nestedUsage);
           pushEvent({ type: "usage.updated", usage });
@@ -448,7 +484,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // ask-mode agents are read-only and auto-allowed; edit-mode agents
         // go through the normal approval flow (unless approvalMode is auto).
         if (def.mode === "edit" && input.approvalMode !== "auto") {
-          const approved = await deps.confirm({
+          const approved = await confirmWithNotify({
             toolName: DISPATCH_AGENT_TOOL,
             permission: "write",
             description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
@@ -562,7 +598,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           };
         }
         if (def.mode === "edit" && input.approvalMode !== "auto") {
-          const approved = await deps.confirm({
+          const approved = await confirmWithNotify({
             toolName: AGENT_SEND_TOOL,
             permission: "write",
             description: `Dispatch agent ${def.id}: ${task.slice(0, 100)}`,
@@ -584,18 +620,58 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       }
 
       try {
+        // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
+        // (like sessionEnd); nested subagent runs (depth > 0) skip them.
+        if (depth === 0) {
+          await runHooks("sessionStart", deps.hooks?.sessionStart, {
+            sessionId,
+            workspace: input.projectPath,
+            task: input.task,
+            mode: input.mode,
+            resuming,
+          });
+          // Blocking, mirroring preToolUse: a non-zero exit fails the run.
+          const promptOutcomes = await runHooks("userPromptSubmit", deps.hooks?.userPromptSubmit, {
+            sessionId,
+            workspace: input.projectPath,
+            task: input.task,
+          });
+          const blocked = promptOutcomes.find((o) => !o.ok);
+          if (blocked) {
+            throw new AgentLimitError(
+              "blocked_by_hook",
+              blocked.outputTail || `blocked by userPromptSubmit hook (${blocked.command})`,
+            );
+          }
+        }
+
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
           throwIfCancelled();
           // Surface events from background dispatches between turns.
           for (const ev of queue.drainNow()) yield ev;
-          const compacted = compactMessages(messages, budgetTokens);
-          if (compacted) {
-            messages = compacted.messages;
-            yield emit({
-              type: "context.compacted",
-              droppedTurns: compacted.droppedTurns,
-              summaryTokens: compacted.summaryTokens,
-            });
+          if (estimateMessagesTokens(messages) > budgetTokens) {
+            // Micro-compaction first: blank stale tool outputs (cheap, keeps
+            // structure). Full compaction only when that is not enough.
+            const micro = clearOldToolResults(messages);
+            if (micro.cleared > 0) {
+              messages = micro.messages;
+              yield emit({ type: "context.microcompacted", clearedResults: micro.cleared });
+            }
+            const compacted = compactMessages(messages, budgetTokens);
+            if (compacted) {
+              // Advisory heads-up before compaction mutates the conversation.
+              await runHooks("preCompact", deps.hooks?.preCompact, {
+                sessionId,
+                workspace: input.projectPath,
+                reason: "auto",
+              });
+              messages = compacted.messages;
+              yield emit({
+                type: "context.compacted",
+                droppedTurns: compacted.droppedTurns,
+                summaryTokens: compacted.summaryTokens,
+              });
+            }
           }
 
           const res = deps.onModelDelta
@@ -778,6 +854,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
         sessionEndStatus = "completed";
         yield emit({ type: "session.completed", report });
+        // stop fires after a SUCCESSFUL top-level completion only (never on
+        // failure/cancel — sessionEnd covers those). Advisory.
+        if (depth === 0) {
+          await runHooks("stop", deps.hooks?.stop, {
+            sessionId,
+            workspace: input.projectPath,
+            summary: finalContent,
+          });
+        }
       } catch (err) {
         const e = err as Partial<AgentLimitError> & Error;
         const code = e.code ?? "agent_error";

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { McpServerConfig, McpTool } from "./types.js";
+import type { McpResource, McpServerConfig, McpTool } from "./types.js";
 
 /** Error thrown for MCP transport/protocol failures. */
 export class McpError extends Error {
@@ -30,6 +30,14 @@ export type McpClient = {
    * A result with isError:true rejects with code "mcp_tool_error".
    */
   callTool(name: string, args: Record<string, unknown>): Promise<string>;
+  /** resources/list — missing result.resources is treated as an empty list. */
+  listResources(): Promise<McpResource[]>;
+  /**
+   * resources/read — returns the contents flattened to text (text parts
+   * joined with "\n"; blob parts become "[binary content]"), capped at
+   * RESOURCE_READ_MAX_CHARS.
+   */
+  readResource(uri: string): Promise<string>;
   dispose(): void;
 };
 
@@ -46,12 +54,23 @@ const HANDSHAKE_TIMEOUT_MS = 120_000;
 const PROTOCOL_VERSION = "2024-11-05";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
 
+/** A read resource is capped at this many characters (text after flattening). */
+export const RESOURCE_READ_MAX_CHARS = 50_000;
+
 type ContentPart = { type: string; text?: string };
 type CallToolResult = { content?: ContentPart[]; isError?: boolean };
+type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
+type ReadResourceResult = { contents?: ResourceContent[] };
 
 function flattenContent(parts: ContentPart[]): string {
   return parts
     .map((p) => (p.type === "text" ? (p.text ?? "") : `[${p.type} content]`))
+    .join("\n");
+}
+
+function flattenResourceContents(contents: ResourceContent[]): string {
+  return contents
+    .map((c) => (typeof c.text === "string" ? c.text : `[binary content${c.mimeType ? `: ${c.mimeType}` : ""}]`))
     .join("\n");
 }
 
@@ -207,6 +226,20 @@ export function createMcpClient(options: McpClientOptions): McpClient {
         throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
       }
       return text;
+    },
+
+    async listResources(): Promise<McpResource[]> {
+      // v1: no pagination (nextCursor ignored), like listTools.
+      const res = await call<{ resources?: McpResource[] }>("resources/list", {});
+      return res?.resources ?? [];
+    },
+
+    async readResource(uri: string): Promise<string> {
+      const res = await call<ReadResourceResult>("resources/read", { uri });
+      const text = flattenResourceContents(res?.contents ?? []);
+      return text.length > RESOURCE_READ_MAX_CHARS
+        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
+        : text;
     },
 
     dispose(): void {

@@ -13,6 +13,9 @@ import { join } from "node:path";
  * - tools/call echo → echoes args as text + one non-text part.
  * - tools/call boom → isError:true result.
  * - tools/call die  → process.exit(7) without answering.
+ * - resources/list → two resources: mem://notes (named) and mem://logo.
+ * - resources/read mem://notes → one text part; mem://logo → one blob part;
+ *   mem://big → 60_000 chars of text (cap testing); others → error.
  */
 const FAKE_MCP_SERVER = `#!/usr/bin/env node
 const rl = require("node:readline").createInterface({ input: process.stdin });
@@ -44,6 +47,36 @@ rl.on("line", (line) => {
         inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
       { name: "boom", description: "Always fails." },
     ] } });
+    return;
+  }
+  if (msg.method === "resources/list") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { resources: [
+      { uri: "mem://notes", name: "Notes", mimeType: "text/plain" },
+      { uri: "mem://logo" },
+    ] } });
+    return;
+  }
+  if (msg.method === "resources/read") {
+    const uri = msg.params.uri;
+    if (uri === "mem://notes") {
+      send({ jsonrpc: "2.0", id: msg.id, result: { contents: [
+        { uri, mimeType: "text/plain", text: "note one\\nnote two" },
+      ] } });
+      return;
+    }
+    if (uri === "mem://logo") {
+      send({ jsonrpc: "2.0", id: msg.id, result: { contents: [
+        { uri, mimeType: "image/png", blob: "deadbeef" },
+      ] } });
+      return;
+    }
+    if (uri === "mem://big") {
+      send({ jsonrpc: "2.0", id: msg.id, result: { contents: [
+        { uri, mimeType: "text/plain", text: "x".repeat(60000) },
+      ] } });
+      return;
+    }
+    send({ jsonrpc: "2.0", id: msg.id, error: { code: -32002, message: "unknown resource: " + uri } });
     return;
   }
   if (msg.method === "tools/call") {

@@ -11,11 +11,23 @@ const REQUIRED_SECTIONS = [
 ];
 
 describe("BUILTIN_SKILLS", () => {
-  it("contains exactly the three builtin skills with unique ids", () => {
-    expect(BUILTIN_SKILLS).toHaveLength(3);
+  it("contains exactly the four builtin skills with unique ids", () => {
+    expect(BUILTIN_SKILLS).toHaveLength(4);
     const ids = BUILTIN_SKILLS.map((s) => s.id);
-    expect(new Set(ids).size).toBe(3);
-    expect(ids.sort()).toEqual(["bugfix", "small-code-change", "test-failure-fix"]);
+    expect(new Set(ids).size).toBe(4);
+    expect(ids.sort()).toEqual(["bugfix", "github-issue-pr", "small-code-change", "test-failure-fix"]);
+  });
+
+  it("github-issue-pr describes the gh issue → branch → PR procedure", () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === "github-issue-pr")!;
+    expect(skill).toBeDefined();
+    expect(skill.triggers).toContain("github");
+    expect(skill.triggers).toContain("issue");
+    expect(skill.content).toContain("gh issue view");
+    expect(skill.content).toContain("git checkout -b fix/");
+    expect(skill.content).toContain("gh pr create");
+    // gh / git push must never auto-run — the content has to say so.
+    expect(skill.content).toMatch(/NEVER auto-run/);
   });
 
   it("every builtin is enabled, builtin-scoped, and low risk", () => {

@@ -22,3 +22,11 @@ export type McpTool = {
   /** Raw JSON Schema for the tool's arguments, passed through to the model. */
   inputSchema?: Record<string, unknown>;
 };
+
+/** A resource as advertised by an MCP server via resources/list. */
+export type McpResource = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+};

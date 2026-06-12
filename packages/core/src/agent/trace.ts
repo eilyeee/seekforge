@@ -1,5 +1,6 @@
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -384,6 +385,39 @@ export function rewindSessionToTurn(
     if (!earliestPerPath.has(entry.path)) earliestPerPath.set(entry.path, entry);
   }
   return applyCheckpoints(workspace, earliestPerPath.values(), opts);
+}
+
+/**
+ * Forks a stored session into a fresh one: copies messages.jsonl (and
+ * checkpoints.jsonl when present) into a new session directory under a new
+ * id, and writes meta derived from the original ("(fork) " task prefix,
+ * status "completed", fresh timestamps) so the fork is immediately resumable
+ * without touching the original. Returns the new session id, or null when
+ * the source session (meta or messages) is missing.
+ */
+export function forkSession(workspace: string, sessionId: string): string | null {
+  const srcDir = join(sessionsRoot(workspace), sessionId);
+  const srcMessages = join(srcDir, "messages.jsonl");
+  const meta = readSessionMeta(workspace, sessionId);
+  if (!meta || !existsSync(srcMessages)) return null;
+
+  const id = newSessionId();
+  const dstDir = join(sessionsRoot(workspace), id);
+  mkdirSync(dstDir, { recursive: true });
+  copyFileSync(srcMessages, join(dstDir, "messages.jsonl"));
+  const srcCheckpoints = join(srcDir, "checkpoints.jsonl");
+  if (existsSync(srcCheckpoints)) copyFileSync(srcCheckpoints, join(dstDir, "checkpoints.jsonl"));
+
+  const now = new Date().toISOString();
+  writeSessionMeta(workspace, {
+    ...meta,
+    id,
+    task: `(fork) ${meta.task}`,
+    status: "completed",
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
 }
 
 /**
