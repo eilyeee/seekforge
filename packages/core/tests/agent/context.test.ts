@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@seekforge/shared";
-import { clearOldToolResults, compactMessages, estimateMessagesTokens } from "../../src/agent/context.js";
+import {
+  clearOldToolResults,
+  compactMessages,
+  estimateMessagesTokens,
+  llmCompactMessages,
+  type SummaryProvider,
+} from "../../src/agent/context.js";
 
 function msg(role: ChatMessage["role"], content: string, extra?: Partial<ChatMessage>): ChatMessage {
   return { role, content, ...extra };
@@ -45,6 +51,83 @@ describe("compactMessages", () => {
     // The first message after the digest must not be a tool result whose
     // assistant tool_calls message was dropped.
     expect(result.messages[3]!.role).not.toBe("tool");
+  });
+});
+
+describe("llmCompactMessages", () => {
+  /** Provider stub recording the summarization requests it receives. */
+  function summaryProvider(content: string): SummaryProvider & { requests: ChatMessage[][] } {
+    const requests: ChatMessage[][] = [];
+    return {
+      requests,
+      chat: async (req) => {
+        requests.push(req.messages);
+        return { content };
+      },
+    };
+  }
+
+  it("returns null when under budget without calling the provider", async () => {
+    const provider = summaryProvider("never used");
+    expect(await llmCompactMessages(provider, conversation(2), 1_000_000)).toBeNull();
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("returns null when the conversation is too short to compact", async () => {
+    const provider = summaryProvider("never used");
+    // Over budget but <= KEEP_HEAD + KEEP_TAIL + 1 messages: mechanical
+    // compactMessages would refuse too.
+    const short = conversation(4); // 2 head + 8 turn messages = 10 total
+    expect(compactMessages(short, 10)).toBeNull();
+    expect(await llmCompactMessages(provider, short, 10)).toBeNull();
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("replaces the dropped middle with the model summary in the digest wrapper", async () => {
+    const provider = summaryProvider("Refactored auth.ts; tests green; TODO: docs.");
+    const messages = conversation(30);
+    const result = await llmCompactMessages(provider, messages, 2000);
+    expect(result).not.toBeNull();
+    // Same boundary math as the mechanical path.
+    const mechanical = compactMessages(messages, 2000)!;
+    expect(result!.droppedTurns).toBe(mechanical.droppedTurns);
+    expect(result!.messages).toHaveLength(mechanical.messages.length);
+    // Head intact, summary wrapped like the mechanical digest, tail aligned.
+    expect(result!.messages[0]!.content).toBe("system prompt");
+    expect(result!.messages[1]!.content).toBe("the task");
+    expect(result!.messages[2]!.role).toBe("user");
+    expect(result!.messages[2]!.content).toContain("[Context compacted to fit the window.");
+    expect(result!.messages[2]!.content).toContain("Refactored auth.ts; tests green; TODO: docs.");
+    expect(result!.messages[3]!.role).not.toBe("tool");
+    expect(result!.summaryTokens).toBeGreaterThan(0);
+  });
+
+  it("sends a role-prefixed segment with tool results truncated to 200 chars", async () => {
+    const provider = summaryProvider("summary");
+    await llmCompactMessages(provider, conversation(30, 5000), 2000);
+    expect(provider.requests).toHaveLength(1);
+    const sent = provider.requests[0]!;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.role).toBe("user");
+    expect(sent[0]!.content).toContain("Summarize this conversation segment for an AI coding agent");
+    expect(sent[0]!.content).toContain("assistant [tools: read_file]:");
+    // 5000-char tool outputs must arrive truncated, total input capped.
+    expect(sent[0]!.content).not.toContain("x".repeat(201));
+    expect(sent[0]!.content).toContain("x".repeat(200));
+    expect(sent[0]!.content.length).toBeLessThanOrEqual(25_000);
+  });
+
+  it("returns null when the provider throws (caller falls back to mechanical)", async () => {
+    const provider: SummaryProvider = {
+      chat: async () => {
+        throw new Error("rate limited");
+      },
+    };
+    expect(await llmCompactMessages(provider, conversation(30), 2000)).toBeNull();
+  });
+
+  it("returns null on an empty summary", async () => {
+    expect(await llmCompactMessages(summaryProvider("   "), conversation(30), 2000)).toBeNull();
   });
 });
 
