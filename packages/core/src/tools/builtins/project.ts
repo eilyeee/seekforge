@@ -24,7 +24,7 @@ function readPackageJson(workspace: string): PackageJson | undefined {
 const detectProject = defineTool({
   name: "detect_project",
   description:
-    "Detect project languages, package manager, frameworks (vue/react/next), and npm scripts by inspecting the workspace root.",
+    "Inspect the workspace root and report languages, package manager, frameworks (vue/react/next), and npm scripts. Make this your FIRST call when you need to know how to build, run, or test the project — cheaper than guessing commands.",
   schema: z.object({}),
   classify: () => ({ permission: "readonly", description: "Detect project type", path: "." }),
   async run(_args, ctx) {
@@ -65,7 +65,8 @@ const detectProject = defineTool({
 
 const listScripts = defineTool({
   name: "list_scripts",
-  description: "List the package.json scripts of the workspace as {name, command} pairs.",
+  description:
+    "List the workspace package.json scripts as {name, command} pairs — the quickest way to learn how to run, build, or test a Node project before reaching for run_command.",
   schema: z.object({}),
   classify: () => ({ permission: "readonly", description: "List package.json scripts", path: "package.json" }),
   async run(_args, ctx) {

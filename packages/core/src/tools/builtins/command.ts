@@ -25,8 +25,8 @@ export function setShellRunnerForTests(fn: typeof runShellCommand | null): void 
 }
 
 const runCommandSchema = z.object({
-  command: z.string().describe("Shell command line to run via /bin/sh -c."),
-  cwd: z.string().optional().describe("Working directory, relative to the workspace root."),
+  command: z.string().describe("Non-interactive shell command line to run via /bin/sh -c."),
+  cwd: z.string().optional().describe("Working directory, relative to the workspace root (default '.')."),
   timeoutMs: z
     .number()
     .optional()
@@ -42,7 +42,7 @@ const runCommandSchema = z.object({
 const runCommand = defineTool({
   name: "run_command",
   description:
-    "Run a shell command inside the workspace. Output is truncated and secrets are redacted. Destructive commands are refused; dependency installs require confirmation.",
+    "Run a non-interactive shell command via /bin/sh -c in the workspace root (or cwd). Default timeout 30s (120s tests, 180s builds); stdout/stderr are head/tail-truncated at 20,000 chars and secrets redacted. For dev servers/watchers pass background:true and follow up with task_output/task_kill; never start editors, REPLs, or anything that waits for input. Destructive commands are refused; dependency installs require confirmation.",
   schema: runCommandSchema,
   classify: (args, ctx) => {
     const cls = classifyCommand(args.command, ctx.policy.commandAllowlist);
@@ -191,7 +191,7 @@ const taskOutputSchema = z.object({
 const taskOutput = defineTool({
   name: "task_output",
   description:
-    "Read the latest stdout/stderr and status of a background task started via run_command with background:true.",
+    "Read the latest stdout/stderr and status of the background task taskId started via run_command with background:true (tail defaults to the last 2000 chars per stream). Do not poll in a tight loop — do other useful work between checks, then poll again.",
   schema: taskOutputSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -226,7 +226,8 @@ const taskKillSchema = z.object({
 
 const taskKill = defineTool({
   name: "task_kill",
-  description: "Kill a background task started in this session (SIGKILL to its process group).",
+  description:
+    "Kill the background task taskId started in this session (SIGKILL to its process group). Use when a server/watcher is no longer needed or must be restarted.",
   schema: taskKillSchema,
   classify: (args, ctx) => {
     const task = ctx.background?.get(args.taskId);

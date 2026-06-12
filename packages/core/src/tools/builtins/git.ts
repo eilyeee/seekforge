@@ -31,7 +31,8 @@ async function runGit(workspace: string, args: string[]): Promise<{ text: string
 
 const gitStatus = defineTool({
   name: "git_status",
-  description: "Show the working tree status (git status --porcelain=v1 -b).",
+  description:
+    "Show the working tree status (git status --porcelain=v1 -b). Run it after editing to verify exactly which files you touched before committing or reporting results.",
   schema: z.object({}),
   classify: () => ({
     permission: "readonly",
@@ -54,7 +55,8 @@ const gitDiffSchema = z.object({
 
 const gitDiff = defineTool({
   name: "git_diff",
-  description: "Show uncommitted changes (git diff, or git diff --cached when staged is true).",
+  description:
+    "Show uncommitted changes (git diff, or git diff --cached when staged is true). Use it to review your own edits before committing or reporting — the diff is the ground truth of what actually changed.",
   schema: gitDiffSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -85,7 +87,7 @@ const gitCommitSchema = z.object({
 const gitCommit = defineTool({
   name: "git_commit",
   description:
-    "Create a git commit in the workspace (stages all changes by default). Pushing is not possible — git push is always denied.",
+    "Create a git commit with message (stages ALL changes first by default; set addAll:false to commit only what is already staged). Check git_status/git_diff first so you know what goes in. Pushing is not possible — git push is always denied.",
   schema: gitCommitSchema,
   classify: (args) => ({
     permission: "write",
