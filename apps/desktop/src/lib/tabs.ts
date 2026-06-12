@@ -13,6 +13,9 @@ export type StartMode = "edit" | "plan" | "ask";
 
 export type PendingPermission = { requestId: string; request: PermissionRequest };
 
+/** ask_user question awaiting an answer (question.request frame). */
+export type PendingQuestion = { id: string; question: string; options: string[] };
+
 export type ChatTab = {
   tabId: string;
   /** First words of the first task; placeholder until a task is sent. */
@@ -27,6 +30,7 @@ export type ChatTab = {
   chat: ChatState;
   conn: ConnState;
   pendingPermission: PendingPermission | null;
+  pendingQuestion: PendingQuestion | null;
   /** Last protocol-level WS error ({"type":"error"} frame) on this tab. */
   wsError: string | null;
   mode: StartMode;
@@ -63,6 +67,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     chat: initialChatState(),
     conn: "disconnected",
     pendingPermission: null,
+    pendingQuestion: null,
     wsError: null,
     mode: "edit",
     autoApprove: false,
@@ -153,6 +158,11 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         pendingPermission: { requestId: frame.requestId, request: frame.request },
       });
 
+    case "question.request":
+      return updateTab(state, tabId, {
+        pendingQuestion: { id: frame.id, question: frame.question, options: frame.options },
+      });
+
     case "error":
       return updateTab(state, tabId, (tab) => ({
         wsError: `${frame.code}: ${frame.message}`,
@@ -165,6 +175,7 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
       return updateTab(state, tabId, (tab) => ({
         chat: { ...tab.chat, running: false },
         pendingPermission: null,
+        pendingQuestion: null,
       }));
 
     default:

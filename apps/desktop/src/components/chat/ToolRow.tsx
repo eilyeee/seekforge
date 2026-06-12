@@ -60,6 +60,12 @@ export function ToolRow({ item }: { item: ToolItem }) {
           )}
         </div>
       )}
+      {/* Live output tail while the command is still running */}
+      {item.status === "running" && item.tail !== undefined && (
+        <pre className="overflow-x-auto border-t border-zinc-800 px-3 py-1.5 font-mono text-[11px] leading-snug text-zinc-500">
+          {item.tail.replace(/\n+$/, "")}
+        </pre>
+      )}
       {/* Diffs are important enough to show even when collapsed */}
       {!open && diff && (
         <div className="border-t border-zinc-800 px-3 py-2">

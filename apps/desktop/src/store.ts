@@ -17,6 +17,7 @@ import {
   DEFAULT_TAB_TITLE,
   type ChatTab,
   type PendingPermission,
+  type PendingQuestion,
   type StartMode,
   type TabsState,
 } from "./lib/tabs";
@@ -26,7 +27,7 @@ import type { SessionMeta, Workspace } from "./types";
 
 export type View = "chat" | "sessions" | "diff" | "skills" | "agents" | "memory" | "evolution" | "settings";
 
-export type { ChatTab, PendingPermission, StartMode };
+export type { ChatTab, PendingPermission, PendingQuestion, StartMode };
 export { activeTab };
 
 function readTokenFromLocation(): string {
@@ -65,6 +66,8 @@ type AppStore = {
   cancel: () => void;
   newSession: () => void;
   respondPermission: (approved: boolean) => void;
+  /** Answers the pending ask_user question on the active tab. */
+  respondQuestion: (answer: string) => void;
   continueSession: (meta: SessionMeta, messages: ChatMessage[]) => void;
 };
 
@@ -81,6 +84,7 @@ export const useStore = create<AppStore>()((set, get) => {
     set((s) => ({ tabs: routeFrame(s.tabs, tabId, frame) }));
     if (!tab) return;
     if (frame.type === "permission.request") notify({ kind: "permission" });
+    else if (frame.type === "question.request") notify({ kind: "question" });
     else if (frame.type === "event" && frame.event.type === "session.completed")
       notify({ kind: "completed", tabTitle: tab.title });
     else if (frame.type === "event" && frame.event.type === "session.failed")
@@ -201,6 +205,7 @@ export const useStore = create<AppStore>()((set, get) => {
           title: DEFAULT_TAB_TITLE,
           chat: initialChatState(),
           pendingPermission: null,
+          pendingQuestion: null,
           wsError: null,
           planPending: false,
           planReady: false,
@@ -214,6 +219,14 @@ export const useStore = create<AppStore>()((set, get) => {
       if (!pending) return;
       wsByTab.get(tab.tabId)?.send({ type: "permission.response", requestId: pending.requestId, approved });
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingPermission: null }) }));
+    },
+
+    respondQuestion: (answer) => {
+      const tab = activeTab(get().tabs);
+      const pending = tab.pendingQuestion;
+      if (!pending) return;
+      wsByTab.get(tab.tabId)?.send({ type: "question.answer", id: pending.id, answer });
+      set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingQuestion: null }) }));
     },
 
     continueSession: (meta, messages) => {

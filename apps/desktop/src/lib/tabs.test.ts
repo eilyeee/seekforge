@@ -135,6 +135,30 @@ describe("routeFrame", () => {
     expect(t2.pendingPermission).toBeNull();
   });
 
+  it("question.request lands on the addressed tab", () => {
+    const frame: ServerFrame = {
+      type: "question.request",
+      id: "q1",
+      question: "Which approach?",
+      options: ["A", "B"],
+    };
+    const next = routeFrame(threeTabs(), "t2", frame);
+    expect(next.tabs.find((t) => t.tabId === "t2")!.pendingQuestion).toEqual({
+      id: "q1",
+      question: "Which approach?",
+      options: ["A", "B"],
+    });
+    expect(next.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).toBeNull();
+  });
+
+  it("idle clears the pending question", () => {
+    let s = updateTab(threeTabs(), "t2", {
+      pendingQuestion: { id: "q2", question: "?", options: ["x"] },
+    });
+    s = routeFrame(s, "t2", { type: "idle" });
+    expect(s.tabs.find((t) => t.tabId === "t2")!.pendingQuestion).toBeNull();
+  });
+
   it("non-busy errors stop the spinner; busy keeps it", () => {
     const base = updateTab(threeTabs(), "t1", (tab) => ({ chat: { ...tab.chat, running: true } }));
     const bad = routeFrame(base, "t1", { type: "error", code: "unknown_session", message: "?" });
