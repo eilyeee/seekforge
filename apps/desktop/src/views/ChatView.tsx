@@ -13,12 +13,19 @@ const MODES: { mode: StartMode; label: string; hint: string }[] = [
   { mode: "ask", label: "Ask", hint: "read-only Q&A" },
 ];
 
+/** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
+type WorktreeDialog =
+  | { kind: "discard"; tabId: string }
+  | { kind: "merged"; tabId: string }
+  | { kind: "conflict"; files: string[] };
+
 export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan } = useStore.getState();
+  const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -27,6 +34,32 @@ export function ChatView() {
 
   /** Tab id pending close confirmation (running tab — closing cancels the run). */
   const [confirmClose, setConfirmClose] = useState<string | null>(null);
+
+  const [worktreeDialog, setWorktreeDialog] = useState<WorktreeDialog | null>(null);
+  /** Transient bottom-right toast. */
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (text: string) => {
+    setToast(text);
+    window.setTimeout(() => setToast((t) => (t === text ? null : t)), 4000);
+  };
+
+  const newWorktreeSession = () => {
+    openWorktreeTab().catch((e: unknown) => showToast(`Worktree failed: ${e instanceof Error ? e.message : e}`));
+  };
+
+  const requestMergeBack = (tabId: string) => {
+    mergeWorktree(tabId)
+      .then((result) => {
+        if ("conflict" in result) {
+          // Merge was aborted server-side; worktree and base are untouched.
+          setWorktreeDialog({ kind: "conflict", files: result.files });
+        } else {
+          showToast("Worktree merged back");
+          setWorktreeDialog({ kind: "merged", tabId });
+        }
+      })
+      .catch((e: unknown) => showToast(`Merge failed: ${e instanceof Error ? e.message : e}`));
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollPos = useRef(new Map<string, number>());
@@ -71,6 +104,9 @@ export function ChatView() {
         onSelect={setActiveTab}
         onClose={requestClose}
         onNew={openTab}
+        onNewWorktree={newWorktreeSession}
+        onMergeWorktree={requestMergeBack}
+        onDiscardWorktree={(tabId) => setWorktreeDialog({ kind: "discard", tabId })}
         workspaceName={workspaceName}
       />
 
@@ -220,6 +256,70 @@ export function ChatView() {
         >
           This tab has a running session. Closing it disconnects the socket and cancels the run on the server.
         </ConfirmDialog>
+      )}
+
+      {worktreeDialog?.kind === "discard" && (
+        <ConfirmDialog
+          title="Discard worktree?"
+          confirmLabel="Discard"
+          danger
+          onConfirm={() => {
+            const { tabId } = worktreeDialog;
+            setWorktreeDialog(null);
+            discardWorktree(tabId)
+              .then(() => showToast("Worktree discarded"))
+              .catch((e: unknown) => showToast(`Discard failed: ${e instanceof Error ? e.message : e}`));
+          }}
+          onCancel={() => setWorktreeDialog(null)}
+        >
+          The worktree checkout and its branch are deleted permanently — any unmerged work in this session
+          is lost. The tab closes too.
+        </ConfirmDialog>
+      )}
+
+      {worktreeDialog?.kind === "merged" && (
+        <ConfirmDialog
+          title="Merged back"
+          confirmLabel="Delete worktree & close tab"
+          onConfirm={() => {
+            const { tabId } = worktreeDialog;
+            setWorktreeDialog(null);
+            discardWorktree(tabId).catch((e: unknown) =>
+              showToast(`Cleanup failed: ${e instanceof Error ? e.message : e}`),
+            );
+          }}
+          onCancel={() => setWorktreeDialog(null)}
+        >
+          The worktree branch was merged into the base workspace. Delete the worktree and close this tab?
+          (Cancel keeps both — you can continue working and merge again later.)
+        </ConfirmDialog>
+      )}
+
+      {worktreeDialog?.kind === "conflict" && (
+        <ConfirmDialog
+          title="Merge conflict — nothing was changed"
+          confirmLabel="OK"
+          onConfirm={() => setWorktreeDialog(null)}
+          onCancel={() => setWorktreeDialog(null)}
+        >
+          <p className="mb-2">
+            The merge was aborted; the base workspace and the worktree are untouched. Conflicting files:
+          </p>
+          <ul className="max-h-48 list-inside list-disc overflow-y-auto font-mono text-xs text-amber-300">
+            {worktreeDialog.files.map((f) => (
+              <li key={f}>{f}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-zinc-400">
+            Resolve the divergence (e.g. update the worktree from the base branch) and merge again.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-50 rounded border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 shadow-xl">
+          {toast}
+        </div>
       )}
     </div>
   );

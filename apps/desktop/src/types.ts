@@ -12,6 +12,29 @@ export type Workspace = {
   path: string;
 };
 
+/** POST /api/worktrees result (the worktree is also a registered Workspace). */
+export type WorktreeCreated = {
+  /** Workspace id of the worktree (`wt-<slug>`). */
+  id: string;
+  path: string;
+  /** Branch the worktree session runs on (`seekforge/<slug>`). */
+  branch: string;
+};
+
+/** GET /api/worktrees entry. */
+export type WorktreeStatus = {
+  id: string;
+  branch: string;
+  path: string;
+  /** Uncommitted changes in the worktree. */
+  dirty: boolean;
+  /** Commits on the branch not yet on the base HEAD. */
+  ahead: number;
+};
+
+/** POST /api/worktrees/:id/merge result; conflicts abort and report files. */
+export type WorktreeMergeResult = { merged: true } | { conflict: true; files: string[] };
+
 export type SessionMeta = {
   id: string;
   task: string;

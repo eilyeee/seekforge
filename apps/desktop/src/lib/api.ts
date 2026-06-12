@@ -15,6 +15,9 @@ import type {
   SessionMeta,
   Skill,
   Workspace,
+  WorktreeCreated,
+  WorktreeMergeResult,
+  WorktreeStatus,
 } from "../types";
 
 let tokenProvider: () => string = () => "";
@@ -55,7 +58,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
   if (isMock()) {
     try {
       return (await mockRequest(method, path, body)) as T;
@@ -127,6 +130,19 @@ export const api = {
   mcp: () => request<McpServer[]>("GET", withWorkspace("/api/mcp")),
   mcpTools: (name: string) =>
     request<McpTool[]>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`)),
+  // Worktree sessions. Create/list are scoped to the base workspace via `ws`;
+  // merge/delete identify the worktree by id (any valid `ws` works, so we pass
+  // the worktree's own workspace id — the server resolves the base itself).
+  worktreeCreate: (ws: string, name?: string) =>
+    request<WorktreeCreated>("POST", withWorkspace("/api/worktrees", ws), name ? { name } : {}),
+  worktrees: (ws: string) => request<WorktreeStatus[]>("GET", withWorkspace("/api/worktrees", ws)),
+  worktreeMerge: (id: string) =>
+    request<WorktreeMergeResult>(
+      "POST",
+      withWorkspace(`/api/worktrees/${encodeURIComponent(id)}/merge`, id),
+    ),
+  worktreeDelete: (id: string) =>
+    request<{ deleted: true }>("DELETE", withWorkspace(`/api/worktrees/${encodeURIComponent(id)}`, id)),
   rewind: (sessionId: string, dryRun?: boolean) =>
     request<RewindResult>("POST", withWorkspace("/api/rewind"), {
       sessionId,
