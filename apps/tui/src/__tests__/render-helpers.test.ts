@@ -7,7 +7,9 @@ import {
   keyHints,
   layoutTable,
   numberDiffLines,
+  osc8Link,
   pickTip,
+  supportsHyperlinks,
   toolResultSummary,
   toolTitle,
   turnSummaryLine,
@@ -285,5 +287,31 @@ describe("numberDiffLines", () => {
     const out = numberDiffLines([d("ctx", " pre"), d("add", "+a")]);
     expect(out[0]).toEqual({ line: d("ctx", " pre") });
     expect(out[1]).toEqual({ line: d("add", "+a") });
+  });
+});
+
+describe("supportsHyperlinks / osc8Link", () => {
+  it("recognizes OSC 8-capable TERM_PROGRAM values", () => {
+    for (const term of ["iTerm.app", "WezTerm", "kitty", "vscode"]) {
+      expect(supportsHyperlinks({ TERM_PROGRAM: term })).toBe(true);
+    }
+    expect(supportsHyperlinks({ TERM_PROGRAM: "Apple_Terminal" })).toBe(false);
+    expect(supportsHyperlinks({})).toBe(false);
+  });
+
+  it("honors FORCE_HYPERLINK as an explicit override in both directions", () => {
+    expect(supportsHyperlinks({ FORCE_HYPERLINK: "1" })).toBe(true);
+    expect(supportsHyperlinks({ FORCE_HYPERLINK: "0", TERM_PROGRAM: "iTerm.app" })).toBe(false);
+    expect(supportsHyperlinks({ FORCE_HYPERLINK: "" , TERM_PROGRAM: "kitty" })).toBe(true);
+  });
+
+  it("wraps text in BEL-terminated OSC 8 escapes when supported", () => {
+    const out = osc8Link("docs", "https://example.com", { TERM_PROGRAM: "kitty" });
+    expect(out).toBe("\u001B]8;;https://example.com\u0007docs\u001B]8;;\u0007");
+  });
+
+  it("returns the bare text when the terminal lacks support", () => {
+    expect(osc8Link("docs", "https://example.com", {})).toBe("docs");
+    expect(osc8Link("docs", "https://example.com", { TERM_PROGRAM: "Apple_Terminal" })).toBe("docs");
   });
 });

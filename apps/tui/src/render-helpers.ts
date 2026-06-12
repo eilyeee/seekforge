@@ -7,6 +7,7 @@
  */
 import type { DiffLine } from "./model.js";
 import { kfmt } from "./format.js";
+import { STRINGS, TIP_COUNT, t } from "./strings.js";
 
 /** Max characters for a tool title's detail part. */
 const DETAIL_CAP = 80;
@@ -232,21 +233,16 @@ export function turnSummaryLine(p: { durationMs: number; costUsd: number; totalT
   return `✓ ${formatDuration(p.durationMs)} · $${p.costUsd.toFixed(4)} · ${kfmt(p.totalTokens)} tok`;
 }
 
-/** One-line tips rotated under the welcome banner. */
-export const TIPS: readonly string[] = [
-  "Type @ to attach files to your message",
-  "Press / to open the command palette",
-  "Start a line with # to save a note to project memory",
-  "Start a line with ! to run a shell command directly",
-  "Ctrl+B detaches the current run to the background",
-  "Ctrl+O toggles verbose output (full diffs and tool results)",
-  "Press Esc twice to backtrack to an earlier turn",
-  "Shift+Tab cycles approval modes (confirm / auto / plan)",
-  "Ctrl+R searches your prompt history",
-  "/vim enables vim keybindings in the composer",
-  "Drop markdown files in .seekforge/commands/ to add custom commands",
-  "Ctrl+V pastes an image from the clipboard",
-];
+/**
+ * One-line tips rotated under the welcome banner. The canonical (English)
+ * values live in strings.ts under "tips.N"; this array exposes the en list
+ * for callers/tests that need the full set. pickTip resolves through t() so
+ * the active locale applies.
+ */
+export const TIPS: readonly string[] = Array.from(
+  { length: TIP_COUNT },
+  (_, i) => STRINGS.en[`tips.${i}`] as string,
+);
 
 /** Pick a tip; a seed makes the choice deterministic (tests, per-session). */
 export function pickTip(seed?: number): string {
@@ -254,19 +250,43 @@ export function pickTip(seed?: number): string {
     seed === undefined
       ? Math.floor(Math.random() * TIPS.length)
       : Math.abs(Math.trunc(seed)) % TIPS.length;
-  return TIPS[i] as string;
+  return t(`tips.${i}`);
 }
 
 /** Context-sensitive footer hints below the composer. */
 export function keyHints(mode: "idle" | "running" | "permission"): string {
-  switch (mode) {
-    case "running":
-      return "Esc interrupt · Ctrl+B background · ⏎ queue";
-    case "permission":
-      return "y allow · a allow session · n deny";
-    default:
-      return "⏎ send · / commands · @ files · Ctrl+R history";
-  }
+  return t(`hints.${mode}`);
+}
+
+/** TERM_PROGRAM values known to render OSC 8 hyperlinks. */
+const OSC8_TERMS: readonly string[] = ["iTerm.app", "WezTerm", "kitty", "vscode"];
+
+/**
+ * Whether the current terminal is known to support OSC 8 hyperlinks.
+ * Gated on TERM_PROGRAM (iTerm.app / WezTerm / kitty / vscode) or an
+ * explicit FORCE_HYPERLINK opt-in (any non-empty, non-"0" value).
+ */
+export function supportsHyperlinks(env: Record<string, string | undefined> = process.env): boolean {
+  const force = env.FORCE_HYPERLINK;
+  if (force !== undefined && force !== "") return force !== "0";
+  const term = env.TERM_PROGRAM;
+  return term !== undefined && OSC8_TERMS.includes(term);
+}
+
+/**
+ * Wrap `text` in an OSC 8 hyperlink to `url` when the terminal supports it;
+ * otherwise return `text` unchanged (callers then fall back to plain
+ * underline+url rendering). Uses the BEL terminator () like the JS
+ * terminal-link ecosystem, so Ink's string-width sees zero-width escapes and
+ * layout stays correct. Unsupporting terminals ignore the escapes entirely.
+ */
+export function osc8Link(
+  text: string,
+  url: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (!supportsHyperlinks(env)) return text;
+  return `\u001B]8;;${url}\u0007${text}\u001B]8;;\u0007`;
 }
 
 /** Count add/del lines of a diff for the "+N −M" header badge. */

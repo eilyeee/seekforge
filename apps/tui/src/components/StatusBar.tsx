@@ -5,6 +5,7 @@ import type { TokenUsage } from "@seekforge/shared";
 import { kfmt, statusBarParts } from "../format.js";
 import type { ApprovalSetting, ContextUsage } from "../model.js";
 import { ACCENT } from "./Header.js";
+import { t } from "../strings.js";
 
 type StatusBarProps = {
   model: string;
@@ -35,6 +36,17 @@ function useElapsedSeconds(startedAt: number | undefined, running: boolean): num
   return startedAt !== undefined && running ? Math.floor((Date.now() - startedAt) / 1000) : 0;
 }
 
+/** Dim "│" divider between footer segments (CodeWhale footer_ui-style). */
+function Divider(): React.ReactElement {
+  return <Text dimColor>{" │ "}</Text>;
+}
+
+/**
+ * Segmented footer bar, CodeWhale footer_ui-style: fixed-order groups
+ * (state | model | ctx | cost/tokens | vim | scroll) separated by dim "│"
+ * dividers. The state segment carries the live spinner, elapsed seconds, and
+ * turn token counter while running.
+ */
 export function StatusBar(props: StatusBarProps): React.ReactElement {
   const parts = statusBarParts(props);
   const elapsed = useElapsedSeconds(props.turnStartedAt, props.running);
@@ -42,29 +54,40 @@ export function StatusBar(props: StatusBarProps): React.ReactElement {
     <Box>
       {parts.state === "working" ? (
         <Text color={ACCENT}>
-          <Spinner type="dots" /> working… {elapsed > 0 ? `${elapsed}s ` : ""}
+          <Spinner type="dots" /> {t("status.working")} {elapsed > 0 ? `${elapsed}s ` : ""}
           {props.turnTokens && props.turnTokens > 0 ? `· ↓${kfmt(props.turnTokens)} tok ` : ""}
-          <Text dimColor>· esc to interrupt </Text>
+          <Text dimColor>· {t("status.interrupt")}</Text>
         </Text>
       ) : (
-        <Text dimColor>ready </Text>
+        <Text dimColor>{t("status.ready")}</Text>
       )}
+      <Divider />
+      <Text dimColor>{parts.model}</Text>
+      {parts.context ? (
+        <>
+          <Divider />
+          <Text dimColor>{parts.context}</Text>
+        </>
+      ) : null}
+      <Divider />
       <Text dimColor>
-        {parts.model}
-        {parts.context ? `  ·  ${parts.context}` : ""}
-        {"  ·  "}
-        {parts.cost}
-        {"  ·  "}
-        {parts.tokens}
+        {parts.cost} · {parts.tokens}
       </Text>
       {/* approval / background / detached moved to the mode line under the
           composer (Claude Code-style); the top bar stays lean. */}
-      {props.scrolled ? <Text color="yellow">{"  ·  ↑ scrolled"}</Text> : null}
       {props.vim ? (
-        <Text color={props.vim === "normal" ? "magenta" : ACCENT} bold>
-          {"  ·  "}
-          {props.vim === "normal" ? "NORMAL" : "INSERT"}
-        </Text>
+        <>
+          <Divider />
+          <Text color={props.vim === "normal" ? "magenta" : ACCENT} bold>
+            {props.vim === "normal" ? "NORMAL" : "INSERT"}
+          </Text>
+        </>
+      ) : null}
+      {props.scrolled ? (
+        <>
+          <Divider />
+          <Text color="yellow">{t("status.scrolled")}</Text>
+        </>
       ) : null}
     </Box>
   );

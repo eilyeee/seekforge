@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { ACCENT } from "./Header.js";
 import { highlightLines } from "../highlight.js";
-import { layoutTable } from "../render-helpers.js";
+import { layoutTable, osc8Link, supportsHyperlinks } from "../render-helpers.js";
 
 /**
  * Minimal terminal markdown: headings, nested bullet/numbered lists, fenced
@@ -163,13 +163,21 @@ function renderInline(text: string): React.ReactNode {
       if (link) {
         const label = link[1] as string;
         const url = link[2] as string;
+        // OSC 8-capable terminals get a real clickable hyperlink (the URL
+        // travels in zero-width escapes); others keep the "(url)" suffix.
         parts.push(
-          <Text key={key++}>
-            <Text color={ACCENT} underline>
-              {label}
+          supportsHyperlinks() ? (
+            <Text key={key++} color={ACCENT} underline>
+              {osc8Link(label, url)}
             </Text>
-            {url !== label ? <Text dimColor> ({url})</Text> : null}
-          </Text>,
+          ) : (
+            <Text key={key++}>
+              <Text color={ACCENT} underline>
+                {label}
+              </Text>
+              {url !== label ? <Text dimColor> ({url})</Text> : null}
+            </Text>
+          ),
         );
       } else {
         parts.push(token);
@@ -187,9 +195,10 @@ function renderInline(text: string): React.ReactNode {
         </Text>,
       );
     } else {
+      // Bare URL: also OSC 8-wrapped when supported (label stays the URL).
       parts.push(
         <Text key={key++} underline>
-          {token}
+          {osc8Link(token, token)}
         </Text>,
       );
     }
