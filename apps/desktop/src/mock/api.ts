@@ -35,6 +35,21 @@ const mockWorkspaces = [
   { id: "mockws2", name: "other-project", path: "/mock/other-project" },
 ];
 
+/** Fixture file index for the composer's @ picker. */
+const mockWorkspaceFiles = [
+  "package.json",
+  "README.md",
+  "src/app.ts",
+  "src/index.css",
+  "src/components/Button.tsx",
+  "src/components/Modal.tsx",
+  "src/lib/api.ts",
+  "src/lib/utils.ts",
+  "tests/app.test.ts",
+];
+
+let uploadCounter = 0;
+
 export async function mockRequest(method: string, fullPath: string, body?: unknown): Promise<unknown> {
   await delay();
 
@@ -157,6 +172,23 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (!tools) throw mockError(504, "mcp_launch_failed", "failed to launch MCP server");
     await delay(400); // spawning takes a moment
     return tools;
+  }
+
+  if (method === "GET" && path === "/api/files") {
+    const q = (new URLSearchParams(fullPath.split("?")[1] ?? "").get("q") ?? "").toLowerCase();
+    const files = mockWorkspaceFiles.filter((f) => q === "" || f.toLowerCase().includes(q));
+    return { files, truncated: false };
+  }
+
+  if (method === "POST" && path === "/api/upload") {
+    const { name, dataBase64 } = (body ?? {}) as { name?: string; dataBase64?: string };
+    if (!name || !dataBase64) throw mockError(400, "bad_request", "body must be {name, dataBase64}");
+    const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? "").toLowerCase();
+    if (!["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) {
+      throw mockError(400, "bad_request", `unsupported image extension ".${ext}"`);
+    }
+    uploadCounter += 1;
+    return { path: `.seekforge/uploads/img-mock${uploadCounter}.${ext}` };
   }
 
   if (method === "POST" && path === "/api/rewind") {

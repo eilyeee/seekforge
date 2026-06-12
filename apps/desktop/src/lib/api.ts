@@ -132,4 +132,15 @@ export const api = {
       sessionId,
       ...(dryRun ? { dryRun: true } : {}),
     }),
+  // Composer: @ file picker index and image paste/drop uploads. Both take an
+  // explicit ws so a tab bound to a non-active workspace still hits the right
+  // one (an empty/omitted id resolves to the server's default workspace,
+  // matching the tab's WS frame semantics).
+  files: (q: string, ws?: string) =>
+    request<{ files: string[]; truncated: boolean }>(
+      "GET",
+      withWorkspace(`/api/files${q ? `?q=${encodeURIComponent(q)}` : ""}`, ws),
+    ),
+  upload: (name: string, dataBase64: string, ws?: string) =>
+    request<{ path: string }>("POST", withWorkspace("/api/upload", ws), { name, dataBase64 }),
 };

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { activeTab, useStore, type StartMode } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
+import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
@@ -18,7 +19,7 @@ export function ChatView() {
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
-  const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan } = useStore.getState();
+  const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan, setView } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -48,12 +49,36 @@ export function ChatView() {
     }
   }, [tab.tabId, tab.chat.items]);
 
-  const submit = () => {
-    const task = draft.trim();
+  const submit = (task: string) => {
     if (!task || tab.chat.running) return;
     sendTask(task);
     setDraft("");
   };
+
+  // Slash-command registry for the composer palette. Pure UI/store actions —
+  // anything needing server support stays out (e.g. /compact has no endpoint).
+  const tabMode = tab.mode;
+  const composerCommands = useMemo<ComposerCommand[]>(
+    () => [
+      { name: "new", hint: "start a fresh session in this tab", run: newSession },
+      {
+        name: "plan",
+        hint: "toggle Plan mode for the next start (read-only plan first)",
+        run: () => setMode(tabMode === "plan" ? "edit" : "plan"),
+      },
+      { name: "edit", hint: "Edit mode for the next start (make changes)", run: () => setMode("edit") },
+      { name: "ask", hint: "Ask mode for the next start (read-only Q&A)", run: () => setMode("ask") },
+      { name: "model", hint: "switch the model (opens Settings)", run: () => setView("settings") },
+      { name: "sessions", hint: "browse and resume past sessions", run: () => setView("sessions") },
+      { name: "diff", hint: "view the working-tree diff", run: () => setView("diff") },
+      { name: "skills", hint: "installed skills", run: () => setView("skills") },
+      { name: "agents", hint: "dispatchable subagents", run: () => setView("agents") },
+      { name: "memory", hint: "project memory and candidates", run: () => setView("memory") },
+      { name: "evolution", hint: "self-evolution proposals", run: () => setView("evolution") },
+      { name: "settings", hint: "server configuration", run: () => setView("settings") },
+    ],
+    [newSession, setMode, setView, tabMode],
+  );
 
   const requestClose = (tabId: string) => {
     const target = tabsState.tabs.find((t) => t.tabId === tabId);
@@ -175,23 +200,15 @@ export function ChatView() {
         </div>
       )}
 
-      <div className="border-t border-zinc-800 p-3">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Don't submit while an IME composition (CJK input) is active.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          disabled={tab.chat.running}
-          placeholder={tab.chat.running ? "agent is running…" : "What should the agent do?"}
-          rows={3}
-          className="w-full resize-none rounded border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none disabled:opacity-50"
-        />
-      </div>
+      <Composer
+        value={draft}
+        onChange={setDraft}
+        onSend={submit}
+        disabled={tab.chat.running}
+        placeholder={tab.chat.running ? "agent is running…" : "What should the agent do? (/ commands · @ files)"}
+        commands={composerCommands}
+        workspaceId={tab.ws ?? ""}
+      />
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} />
 
