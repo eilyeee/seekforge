@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -162,5 +162,116 @@ describe("truncateSessionAtUserTurn", () => {
   it("returns null for a missing session", async () => {
     const { truncateSessionAtUserTurn } = await import("../../src/agent/trace.js");
     expect(truncateSessionAtUserTurn(ws, "nope", 1)).toBeNull();
+  });
+});
+
+describe("rewindSessionToTurn", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-rewindturn-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  const sid = "s1";
+
+  /**
+   * a.txt touched in turns 0 and 2, b.txt created in turn 2, c.txt touched
+   * only in turn 0. Current on-disk state reflects all three turns applied.
+   */
+  async function seed() {
+    const { appendCheckpoint } = await import("../../src/agent/trace.js");
+    writeFileSync(join(ws, "a.txt"), "a-final");
+    writeFileSync(join(ws, "b.txt"), "b-created-turn2");
+    writeFileSync(join(ws, "c.txt"), "c-modified-turn0");
+    appendCheckpoint(ws, sid, { ts: "t0", path: "a.txt", before: "a-pre-turn0", turn: 0 });
+    appendCheckpoint(ws, sid, { ts: "t0", path: "c.txt", before: "c-original", turn: 0 });
+    appendCheckpoint(ws, sid, { ts: "t2", path: "a.txt", before: "a-pre-turn2", turn: 2 });
+    appendCheckpoint(ws, sid, { ts: "t2", path: "b.txt", before: null, turn: 2 });
+  }
+
+  it("restores each path to its earliest entry with turn >= turnIndex, leaving earlier-only paths alone", async () => {
+    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    await seed();
+    const res = rewindSessionToTurn(ws, sid, 2);
+    expect(res.restored).toEqual(["a.txt"]);
+    expect(res.deleted).toEqual(["b.txt"]);
+    expect(res.skipped).toEqual([]);
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a-pre-turn2");
+    expect(existsSync(join(ws, "b.txt"))).toBe(false);
+    expect(readFileSync(join(ws, "c.txt"), "utf8")).toBe("c-modified-turn0"); // untouched
+  });
+
+  it("turnIndex 0 rewinds everything to the oldest pre-content", async () => {
+    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    await seed();
+    const res = rewindSessionToTurn(ws, sid, 0);
+    expect(res.restored.sort()).toEqual(["a.txt", "c.txt"]);
+    expect(res.deleted).toEqual(["b.txt"]);
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a-pre-turn0");
+    expect(readFileSync(join(ws, "c.txt"), "utf8")).toBe("c-original");
+  });
+
+  it("dryRun reports without touching files", async () => {
+    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    await seed();
+    const res = rewindSessionToTurn(ws, sid, 2, { dryRun: true });
+    expect(res.restored).toEqual(["a.txt"]);
+    expect(res.deleted).toEqual(["b.txt"]);
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a-final");
+    expect(existsSync(join(ws, "b.txt"))).toBe(true);
+  });
+
+  it("legacy entries without turn behave as turn 0", async () => {
+    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    writeFileSync(join(ws, "legacy.txt"), "modified");
+    appendCheckpoint(ws, sid, { ts: "t", path: "legacy.txt", before: "legacy-original" });
+    expect(rewindSessionToTurn(ws, sid, 1).restored).toEqual([]); // turn 0 < 1: untouched
+    expect(readFileSync(join(ws, "legacy.txt"), "utf8")).toBe("modified");
+    expect(rewindSessionToTurn(ws, sid, 0).restored).toEqual(["legacy.txt"]);
+    expect(readFileSync(join(ws, "legacy.txt"), "utf8")).toBe("legacy-original");
+  });
+
+  it("full rewindSession still restores the oldest state per path", async () => {
+    const { rewindSession } = await import("../../src/agent/trace.js");
+    await seed();
+    const res = rewindSession(ws, sid);
+    expect(res.restored.sort()).toEqual(["a.txt", "c.txt"]);
+    expect(res.deleted).toEqual(["b.txt"]);
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a-pre-turn0");
+    expect(readFileSync(join(ws, "c.txt"), "utf8")).toBe("c-original");
+  });
+});
+
+describe("sessionTitle", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-title-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("uses the first non-empty summary.md line, stripping heading markers and capping at 80 chars", async () => {
+    const { createSessionTrace, sessionTitle } = await import("../../src/agent/trace.js");
+    const trace = createSessionTrace(ws, "s1");
+    trace.summary(`\n\n## Fixed the login bug\n\nDetails follow.`);
+    expect(sessionTitle(ws, "s1")).toBe("Fixed the login bug");
+
+    const long = createSessionTrace(ws, "s2");
+    long.summary(`# ${"x".repeat(120)}`);
+    expect(sessionTitle(ws, "s2")).toHaveLength(80);
+  });
+
+  it("falls back to the meta task's first line, whitespace-collapsed", async () => {
+    const { sessionTitle } = await import("../../src/agent/trace.js");
+    writeSessionMeta(ws, meta("s3", 0, { task: "  fix   the\tthing \nsecond line ignored" }));
+    expect(sessionTitle(ws, "s3")).toBe("fix the thing");
+  });
+
+  it("falls back to the session id when neither summary nor meta exists", async () => {
+    const { sessionTitle } = await import("../../src/agent/trace.js");
+    expect(sessionTitle(ws, "unknown-session")).toBe("unknown-session");
   });
 });

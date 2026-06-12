@@ -231,8 +231,14 @@ export type CheckpointEntry = {
   ts: string;
   /** Workspace-relative path of the file. */
   path: string;
-  /** Full content BEFORE the session's first write, or null if the file did not exist. */
+  /** Full content BEFORE the run's first write, or null if the file did not exist. */
   before: string | null;
+  /**
+   * 0-based user-turn index of the run that recorded the entry (aligned with
+   * truncateSessionAtUserTurn's all-user-messages indexing). Absent in files
+   * written before per-turn checkpointing; readers treat missing as 0.
+   */
+  turn?: number;
 };
 
 function checkpointsFile(workspace: string, sessionId: string): string {
@@ -257,7 +263,15 @@ export function readCheckpoints(workspace: string, sessionId: string): Checkpoin
       const parsed = JSON.parse(line) as Partial<CheckpointEntry>;
       if (typeof parsed.path !== "string" || parsed.path === "") continue;
       if (parsed.before !== null && typeof parsed.before !== "string") continue;
-      entries.push({ ts: typeof parsed.ts === "string" ? parsed.ts : "", path: parsed.path, before: parsed.before });
+      entries.push({
+        ts: typeof parsed.ts === "string" ? parsed.ts : "",
+        path: parsed.path,
+        before: parsed.before,
+        // Legacy entries predate per-turn checkpointing: treat them as turn 0.
+        ...(typeof parsed.turn === "number" && Number.isInteger(parsed.turn) && parsed.turn >= 0
+          ? { turn: parsed.turn }
+          : {}),
+      });
     } catch {
       // corrupt line: skip, keep the rest usable
     }
@@ -286,25 +300,21 @@ function pruneEmptyDirs(dir: string, root: string): void {
 }
 
 /**
- * Undoes all file changes a session made by applying the FIRST recorded
- * checkpoint per path: before === null deletes the file (the session created
- * it), otherwise the pre-session content is written back. Entries whose path
- * resolves outside the workspace root are refused (the checkpoint file may
- * have been tampered with).
+ * Applies one checkpoint entry per path: before === null deletes the file
+ * (the run created it), otherwise the snapshotted content is written back.
+ * Entries whose path resolves outside the workspace root are refused (the
+ * checkpoint file may have been tampered with). Shared by rewindSession and
+ * rewindSessionToTurn, which differ only in WHICH entry per path they pick.
  */
-export function rewindSession(
+function applyCheckpoints(
   workspace: string,
-  sessionId: string,
-  opts: { dryRun?: boolean } = {},
+  entries: Iterable<CheckpointEntry>,
+  opts: { dryRun?: boolean },
 ): RewindResult {
   const result: RewindResult = { restored: [], deleted: [], skipped: [] };
   const wsRoot = resolve(workspace);
-  const seen = new Set<string>();
 
-  for (const entry of readCheckpoints(workspace, sessionId)) {
-    if (seen.has(entry.path)) continue; // first-recorded entry per path wins
-    seen.add(entry.path);
-
+  for (const entry of entries) {
     const target = resolve(wsRoot, entry.path);
     if (target === wsRoot || !target.startsWith(wsRoot + sep)) {
       result.skipped.push({ path: entry.path, reason: "path escapes the workspace" });
@@ -334,6 +344,69 @@ export function rewindSession(
     }
   }
   return result;
+}
+
+/**
+ * Undoes all file changes a session made by applying the FIRST recorded
+ * checkpoint per path. With per-turn entries that is still the oldest
+ * pre-content of each file, i.e. its state before the session touched it.
+ */
+export function rewindSession(
+  workspace: string,
+  sessionId: string,
+  opts: { dryRun?: boolean } = {},
+): RewindResult {
+  const firstPerPath = new Map<string, CheckpointEntry>();
+  for (const entry of readCheckpoints(workspace, sessionId)) {
+    if (!firstPerPath.has(entry.path)) firstPerPath.set(entry.path, entry);
+  }
+  return applyCheckpoints(workspace, firstPerPath.values(), opts);
+}
+
+/**
+ * Undoes the file changes made by user turns >= `turnIndex` of a session:
+ * for each path, restores the EARLIEST checkpoint entry recorded with
+ * `turn >= turnIndex` (the file's state just before that turn first wrote
+ * it). Paths only touched in earlier turns are left alone. Entries without
+ * a `turn` (written before per-turn checkpointing) count as turn 0.
+ * Companion to truncateSessionAtUserTurn, which shares the same 0-based
+ * all-user-messages turn indexing.
+ */
+export function rewindSessionToTurn(
+  workspace: string,
+  sessionId: string,
+  turnIndex: number,
+  opts: { dryRun?: boolean } = {},
+): RewindResult {
+  const earliestPerPath = new Map<string, CheckpointEntry>();
+  for (const entry of readCheckpoints(workspace, sessionId)) {
+    if ((entry.turn ?? 0) < turnIndex) continue;
+    if (!earliestPerPath.has(entry.path)) earliestPerPath.set(entry.path, entry);
+  }
+  return applyCheckpoints(workspace, earliestPerPath.values(), opts);
+}
+
+/**
+ * Short display title for a session: the first non-empty line of the
+ * session's summary.md (leading "#" markers stripped), else the meta task's
+ * first line (whitespace collapsed), else the session id. Capped at 80 chars.
+ */
+export function sessionTitle(workspace: string, sessionId: string): string {
+  try {
+    const summary = readFileSync(join(sessionsRoot(workspace), sessionId, "summary.md"), "utf8");
+    for (const raw of summary.split("\n")) {
+      const line = raw.replace(/^#+\s*/, "").trim();
+      if (line) return line.slice(0, 80);
+    }
+  } catch {
+    // no summary yet (running/failed session): fall through to the task
+  }
+  const task = readSessionMeta(workspace, sessionId)?.task ?? "";
+  const firstLine = task
+    .split("\n")
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .find((l) => l !== "");
+  return firstLine ? firstLine.slice(0, 80) : sessionId;
 }
 
 export function newSessionId(now = new Date()): string {

@@ -25,6 +25,8 @@ export type ToolContext = {
   policy: PermissionPolicy;
   /** Ask the user. Resolves true if approved. Must be given raw args to display. */
   confirm: (req: PermissionRequest) => Promise<boolean>;
+  /** Interactive question channel (TUI). Absent in non-interactive runs. */
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   /**
    * Optional Rust execution backend (seekforge-runtime). When present,
    * fs/command/git tools delegate raw IO to it; permission checks and

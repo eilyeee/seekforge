@@ -41,7 +41,7 @@ import { compactMessages, estimateMessagesTokens } from "./context.js";
 import { runHooks, type HookConfig } from "../hooks/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
-import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readCheckpoints, writeSessionMeta } from "./trace.js";
+import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
 export type AgentCoreDeps = {
@@ -49,6 +49,12 @@ export type AgentCoreDeps = {
   dispatcher: ToolDispatcher;
   /** Asks the user for permission; must surface the raw command/path. */
   confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Interactive question channel (TUI), backing the ask_user tool. Absent in
+   * non-interactive runs; never forwarded to nested subagent runs (they must
+   * not block on user input).
+   */
+  askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   limits?: Partial<AgentLimits>;
   /** Model context window in tokens. DeepSeek: 128K. */
   contextWindowTokens?: number;
@@ -142,9 +148,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       };
       writeSessionMeta(input.projectPath, { ...meta, status: "running", updatedAt: startedAt });
 
+      // This run's 0-based user-turn index: how many role:"user" messages the
+      // conversation holds BEFORE this run appends its task. 0 for a fresh
+      // session; on resume, the count over the replayed history. Aligns with
+      // truncateSessionAtUserTurn / rewindSessionToTurn indexing.
+      let runTurnIndex = 0;
       let messages: ChatMessage[];
       if (resuming) {
         messages = loadSessionMessages(input.projectPath, sessionId);
+        runTurnIndex = messages.filter((m) => m.role === "user").length;
         // Rebuild the system prompt for the resumed run: the mode may have
         // changed (plan -> execute) and memory approved since the original
         // run should apply. Costs one prefix-cache miss; correctness first.
@@ -208,11 +220,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       };
 
-      // First-wins checkpointing: on resume, pre-seed from the existing file so
-      // the original run's pre-session snapshots stay authoritative.
-      const checkpointed = new Set<string>(
-        resuming ? readCheckpoints(input.projectPath, sessionId).map((c) => c.path) : [],
-      );
+      // First-write-per-RUN checkpointing: each run snapshots a file's
+      // pre-content the first time IT writes the file, tagged with this run's
+      // user-turn index. rewindSession keeps using the oldest entry per path;
+      // rewindSessionToTurn picks the earliest entry with turn >= N.
+      const checkpointed = new Set<string>();
       const ctx: ToolContext = {
         sessionId,
         workspace: input.projectPath,
@@ -230,8 +242,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         checkpoint: (path, before) => {
           if (checkpointed.has(path)) return;
           checkpointed.add(path);
-          appendCheckpoint(input.projectPath, sessionId, { ts: new Date().toISOString(), path, before });
+          appendCheckpoint(input.projectPath, sessionId, {
+            ts: new Date().toISOString(),
+            path,
+            before,
+            turn: runTurnIndex,
+          });
         },
+        // Only the top-level run may block on the user; nested subagent runs
+        // never get the channel (see executeNestedRun).
+        ...(depth === 0 && deps.askUser ? { askUser: deps.askUser } : {}),
       };
 
       const toolDefs =
@@ -283,6 +303,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           dispatcher: def.tools ? whitelistDispatcher(deps.dispatcher, def.tools) : deps.dispatcher,
           onModelDelta: undefined,
           extractMemory: false,
+          askUser: undefined, // subagents must not block on user input
           limits: { ...deps.limits, maxAgentTurns: def.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS },
         });
 

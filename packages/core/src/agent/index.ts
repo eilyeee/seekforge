@@ -43,6 +43,8 @@ export {
   readCheckpoints,
   readSessionMeta,
   rewindSession,
+  rewindSessionToTurn,
+  sessionTitle,
   truncateSessionAtUserTurn,
   writeSessionMeta,
   type CheckpointEntry,
