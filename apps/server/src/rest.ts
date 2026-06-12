@@ -26,6 +26,7 @@ import {
   setEvolutionProposalStatus,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
+import { listWorkspaceFiles, saveUpload, UploadError } from "./files.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export type RestContext = {
@@ -159,6 +160,37 @@ export async function handleApi(
 
     if (method === "GET" && path === "/api/sessions") {
       return sendJson(res, 200, listSessions(workspace));
+    }
+
+    if (method === "GET" && path === "/api/files") {
+      // @ file picker index: ignore-aware scan, capped at 2000 paths.
+      return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
+    }
+
+    if (method === "POST" && path === "/api/upload") {
+      // 4MB decoded cap → base64 plus JSON wrapper stays under ~6MB raw body.
+      let raw: string;
+      try {
+        raw = await readBody(req, 6_000_000);
+      } catch {
+        return sendApiError(res, 413, "too_large", "request body too large (4MB image cap)");
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const { name, dataBase64 } = (body ?? {}) as { name?: unknown; dataBase64?: unknown };
+      if (typeof name !== "string" || name === "" || typeof dataBase64 !== "string" || dataBase64 === "") {
+        return sendApiError(res, 400, "bad_request", "body must be {name, dataBase64}");
+      }
+      try {
+        return sendJson(res, 200, saveUpload(workspace, name, dataBase64));
+      } catch (err) {
+        if (err instanceof UploadError) return sendApiError(res, err.status, err.code, err.message);
+        throw err;
+      }
     }
 
     if (method === "GET" && path === "/api/diff") {
