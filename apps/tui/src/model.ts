@@ -7,17 +7,42 @@ import type {
 
 /**
  * The chat model. A flat list of renderable items plus session-level state
- * (status bar inputs). The reducer below is a pure port of the CLI renderer's
+ * (status bar inputs, overlay stack, scrollback offset, approval mode,
+ * background tasks). The reducer below is a pure port of the CLI renderer's
  * event→display switch, producing items instead of writing to stdout.
+ *
+ * This file is the type hub for the TUI: every new surface is a reducer
+ * field + a component, never ad-hoc state in components (DESIGN.md).
  */
 
 export type PlanStatus = "pending" | "in_progress" | "done";
 export type PlanItem = { step: string; status: PlanStatus };
 
+/** Colored diff line kinds (mirrors apps/desktop/src/lib/diff.ts). */
+export type DiffLineKind = "add" | "del" | "ctx" | "hunk";
+export type DiffLine = { kind: DiffLineKind; text: string };
+
+/** Background task surfaced from run_command background:true tool events. */
+export type BgTaskStatus = "running" | "exited";
+export type BgTask = { id: string; command: string; status: BgTaskStatus };
+
+/** Persistent approval setting (Shift+Tab / /approve cycles these). */
+export type ApprovalSetting = "auto" | "confirm" | "plan";
+
+/**
+ * Overlay stack (top one receives keystrokes before the composer).
+ * palette/files track their own selection index; query is derived from the
+ * composer text by the app and pushed in via the "overlay" action.
+ */
+export type Overlay =
+  | { kind: "palette"; query: string; index: number }
+  | { kind: "files"; query: string; index: number; anchor: number }
+  | { kind: "context" };
+
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
-  | { kind: "step"; id: string; title: string }
+  | { kind: "step"; id: string; title: string; agentId?: string }
   | {
       kind: "tool";
       id: string;
@@ -28,6 +53,7 @@ export type ChatItem =
     }
   | { kind: "plan"; id: string; items: PlanItem[] }
   | { kind: "file"; id: string; path: string }
+  | { kind: "diff"; id: string; path: string; lines: DiffLine[] }
   | { kind: "notice"; id: string; text: string; tone: "dim" | "error" }
   | { kind: "report"; id: string; report: FinalReport };
 
@@ -44,8 +70,21 @@ export type ChatState = {
   totalUsage: TokenUsage;
   /** Active session id (resume chaining like the REPL). */
   sessionId?: string;
-  /** Pending permission request awaiting a y/n keypress, if any. */
+  /** Pending permission request awaiting a y/a/n keypress, if any. */
   permission?: PermissionRequest;
+  /** Top overlay, or null when keystrokes go to the composer. */
+  overlay: Overlay | null;
+  /**
+   * Scrollback: number of items hidden BELOW the viewport (0 = pinned to
+   * latest). Kept stable while new items arrive (the reducer bumps it).
+   */
+  scrollOffset: number;
+  /** Persistent approval mode for subsequent runs. */
+  approval: ApprovalSetting;
+  /** A finished /plan run awaits the execute-or-keep decision. */
+  planPending: boolean;
+  /** Background tasks observed via tool events this session. */
+  bgTasks: BgTask[];
 };
 
 export function emptyUsage(): TokenUsage {
@@ -67,6 +106,11 @@ export function initialState(model: string): ChatState {
     running: false,
     model,
     totalUsage: emptyUsage(),
+    overlay: null,
+    scrollOffset: 0,
+    approval: "confirm",
+    planPending: false,
+    bgTasks: [],
   };
 }
 
@@ -81,6 +125,13 @@ export type ChatAction =
   | { type: "set-session"; sessionId: string }
   | { type: "permission"; request: PermissionRequest }
   | { type: "permission-resolved" }
+  | { type: "overlay"; overlay: Overlay | null }
+  | { type: "overlay-move"; delta: number; count: number }
+  | { type: "scroll"; delta: number; max: number }
+  | { type: "scroll-latest" }
+  | { type: "set-approval"; approval: ApprovalSetting }
+  | { type: "plan-pending"; pending: boolean }
+  | { type: "diff"; path: string; lines: DiffLine[] }
   | { type: "event"; event: AgentEvent };
 
 let counter = 0;
@@ -94,8 +145,23 @@ function lastItem(items: ChatItem[]): ChatItem | undefined {
   return items[items.length - 1];
 }
 
-/** Pure reducer: a port of apps/cli/src/render.ts's switch into item state. */
+/** Matches nested-subagent step titles emitted by the loop: "[agentId] tool". */
+const NESTED_STEP = /^\[([A-Za-z0-9_-]+)\] (.+)$/;
+
+/**
+ * Pure reducer. Wraps the inner switch to keep the scrollback anchored: when
+ * the user has scrolled up (offset > 0), newly appended items grow the offset
+ * so the visible window does not shift underneath them.
+ */
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  const next = innerReducer(state, action);
+  if (state.scrollOffset > 0 && next.items.length > state.items.length) {
+    return { ...next, scrollOffset: state.scrollOffset + (next.items.length - state.items.length) };
+  }
+  return next;
+}
+
+function innerReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "user":
       return { ...state, items: [...state.items, { kind: "user", id: nextId("u"), text: action.text }] };
@@ -121,21 +187,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case "run-start":
-      return { ...state, running: true };
+      return { ...state, running: true, scrollOffset: 0 };
 
     case "run-end": {
-      // Close any open streaming assistant item.
+      // Close any open streaming assistant item; background tasks were
+      // disposed by the loop when the session ended.
       const items = state.items.map((it) =>
         it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it,
       );
-      return { ...state, running: false, items };
+      const bgTasks = state.bgTasks.map((t): BgTask => ({ ...t, status: "exited" }));
+      return { ...state, running: false, items, bgTasks };
     }
 
     case "set-model":
       return { ...state, model: action.model };
 
     case "new-session":
-      return { ...state, sessionId: undefined };
+      return { ...state, sessionId: undefined, planPending: false, bgTasks: [] };
 
     case "set-session":
       return { ...state, sessionId: action.sessionId };
@@ -145,6 +213,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "permission-resolved":
       return { ...state, permission: undefined };
+
+    case "overlay":
+      return { ...state, overlay: action.overlay };
+
+    case "overlay-move": {
+      if (!state.overlay || state.overlay.kind === "context" || action.count <= 0) return state;
+      const raw = state.overlay.index + action.delta;
+      const index = ((raw % action.count) + action.count) % action.count; // wrap
+      return { ...state, overlay: { ...state.overlay, index } };
+    }
+
+    case "scroll": {
+      const max = Math.max(0, action.max);
+      const offset = Math.min(max, Math.max(0, state.scrollOffset + action.delta));
+      return { ...state, scrollOffset: offset };
+    }
+
+    case "scroll-latest":
+      return { ...state, scrollOffset: 0 };
+
+    case "set-approval":
+      return { ...state, approval: action.approval };
+
+    case "plan-pending":
+      return { ...state, planPending: action.pending };
+
+    case "diff":
+      return {
+        ...state,
+        items: [...state.items, { kind: "diff", id: nextId("d"), path: action.path, lines: action.lines }],
+      };
 
     case "event":
       return applyEvent(state, action.event);
@@ -160,8 +259,14 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "session.created":
       return { ...state, sessionId: e.sessionId };
 
-    case "step.started":
-      return { ...state, items: [...state.items, { kind: "step", id: nextId("s"), title: e.title }] };
+    case "step.started": {
+      // Nested subagent activity is forwarded as "[agentId] tool" titles.
+      const nested = NESTED_STEP.exec(e.title);
+      const step: ChatItem = nested
+        ? { kind: "step", id: nextId("s"), title: nested[2] ?? e.title, agentId: nested[1] }
+        : { kind: "step", id: nextId("s"), title: e.title };
+      return { ...state, items: [...state.items, step] };
+    }
 
     case "model.message": {
       // Content already streamed via onModelDelta; close the live item. If we
@@ -205,7 +310,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       }
       // Pair the completion with the most recent running tool row of this name.
       const idx = lastRunningToolIndex(state.items, e.toolName);
-      if (idx < 0) return state;
+      if (idx < 0) return applyBgEvent(state, e.toolName, e.result.ok, e.result.data, undefined);
       const next = state.items.slice();
       const row = next[idx] as ChatItem & { kind: "tool" };
       next[idx] = {
@@ -213,7 +318,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         status: e.result.ok ? "ok" : "error",
         error: e.result.ok ? undefined : { code: e.result.error?.code ?? "error", message: e.result.error?.message ?? "" },
       };
-      return { ...state, items: next };
+      return applyBgEvent({ ...state, items: next }, e.toolName, e.result.ok, e.result.data, row.args);
     }
 
     case "file.changed":
@@ -255,6 +360,49 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     default:
       return state; // command.output / step.completed: silent for now
   }
+}
+
+/**
+ * Tracks background tasks from tool completions: run_command background:true
+ * returns { taskId }, task_kill/task_output report { taskId, status }.
+ */
+function applyBgEvent(
+  state: ChatState,
+  toolName: string,
+  ok: boolean,
+  data: unknown,
+  args: unknown,
+): ChatState {
+  if (!ok || typeof data !== "object" || data === null) return state;
+  const taskId = (data as { taskId?: unknown }).taskId;
+  if (typeof taskId !== "string") return state;
+
+  if (toolName === "run_command") {
+    const command =
+      typeof (args as { command?: unknown })?.command === "string"
+        ? ((args as { command: string }).command)
+        : "(unknown command)";
+    if (state.bgTasks.some((t) => t.id === taskId)) return state;
+    return { ...state, bgTasks: [...state.bgTasks, { id: taskId, command, status: "running" }] };
+  }
+
+  if (toolName === "task_kill") {
+    return {
+      ...state,
+      bgTasks: state.bgTasks.map((t): BgTask => (t.id === taskId ? { ...t, status: "exited" } : t)),
+    };
+  }
+
+  if (toolName === "task_output") {
+    const status = (data as { status?: unknown }).status;
+    if (status !== "running" && status !== "exited") return state;
+    return {
+      ...state,
+      bgTasks: state.bgTasks.map((t): BgTask => (t.id === taskId ? { ...t, status } : t)),
+    };
+  }
+
+  return state;
 }
 
 function lastRunningToolIndex(items: ChatItem[], toolName: string): number {
