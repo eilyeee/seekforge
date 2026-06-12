@@ -24,6 +24,21 @@
   fix → tests → PR, with explicit user-approval notes for gh/git push.
 - `/review`: read-only review of the uncommitted changes.
 
+### Added (TUI UX, command experience)
+- Slash-argument pickers: after the command word, the picker lists real
+  candidates — `/resume` sessions (with titles), `/todo done` open items,
+  `/tasks kill` running tasks, `/approve` `/think` `/model` `/memory`
+  `/config` `/rewind` values; Tab fills, Enter runs immediately.
+- `/help` is a grouped interactive overlay (Session / Running / Review /
+  Context / Tools / Settings / Info); Enter inserts the command.
+- Palette ranks by session usage (recently used commands float up) and
+  matches summaries too; mistyped commands get "did you mean /x?".
+- New commands vs Claude Code: `/status` (env+session snapshot), `/config
+  [edit]` (effective config, key redacted), `/permissions` (rules +
+  allowlists + sandbox), `/hooks`, `/release-notes`, `/bug` (report to
+  clipboard). Aliases: `/q` `/h` `/cost` `/todos`.
+- Fixed: TUI hooks config only merged 3 of 9 stages.
+
 ### Added (TUI UX)
 - Claude Code-style tool rows: `⏺ Read(src/app.ts)` with friendly per-tool
   titles and `  ⎿  120 lines`-style result summaries; verbose keeps full

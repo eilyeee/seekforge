@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   addMemoryFact,
@@ -19,6 +20,7 @@ import {
   rewindSessionToTurn,
   sessionTitle,
   truncateSessionAtUserTurn,
+  BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
   type McpClientEntry,
   type ToolSpec,
@@ -27,7 +29,19 @@ import type { PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
 import { chatReducer, initialState, type ApprovalSetting, type ChatAction, type Overlay } from "./model.js";
 import { formatUsage, kfmt } from "./format.js";
-import { COMMANDS, HELP_LINES, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
+import { COMMANDS, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
+import { argCandidates, type ArgContext } from "./arg-values.js";
+import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
+import { helpRows, selectableIndices } from "./command-meta.js";
+import {
+  buildBugReport,
+  findChangelogSection,
+  formatConfigLines,
+  formatHookLines,
+  formatPermissionLines,
+  formatReleaseNotes,
+  formatStatusLines,
+} from "./command-surfaces.js";
 import { KEYMAP, resolveAction, toStroke, type Binding, type InkKey, type KeyStroke, type Scope } from "./keymap.js";
 import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "./custom-commands.js";
 import { captureClipboardImage, imagePlaceholder } from "./clipboard-image.js";
@@ -64,7 +78,9 @@ import {
   moveRight,
   moveUp,
   replaceAtToken,
+  replaceSlashArg,
   setText,
+  slashArgAt,
   slashPrefix,
   type EditorState,
 } from "./editor.js";
@@ -210,6 +226,10 @@ export function App({
 
   // Extra read-only roots for @ references (/add-dir).
   const extraDirsRef = useRef<string[]>([]);
+  // Palette ranking: commands used this session float to the top.
+  const usageRef = useRef<CommandUsage>({});
+  const versionRef = useRef(version);
+  const lastErrorRef = useRef<string | null>(null);
   // Cost-budget warning state (80% / 100%, warned once each).
   const budgetRef = useRef<BudgetState>({ warned80: false, warnedOver: false });
   // Custom statusline output (config.statusLine command), refreshed per run.
@@ -307,14 +327,49 @@ export function App({
   // Overlay derivation: composer text drives the palette / file picker.
   // ---------------------------------------------------------------------
 
+  /** Data for the slash-argument picker, gathered when it opens. */
+  const buildArgContext = useCallback((): ArgContext => {
+    const metas = listSessions(projectPath).slice(0, 20);
+    return {
+      sessions: metas.map((m) => ({ id: m.id, title: sessionTitle(projectPath, m.id), status: m.status })),
+      todos: loadTodos(projectPath),
+      bgTasks: (bgRef.current?.list() ?? []).map((t) => ({ id: t.id, command: t.command, status: t.status })),
+      models: [...KNOWN_MODELS],
+      memoryFactCount: listProjectFacts(projectPath).length,
+    };
+  }, [projectPath]);
+
   const syncOverlay = useCallback(
     (next: EditorState) => {
       const current = stateRef.current.overlay;
-      if (current?.kind === "context") return; // modal; closes via Esc only
+      if (current?.kind === "context" || current?.kind === "help") return; // modal; close via Esc only
       const slash = slashPrefix(next);
       if (slash !== null) {
         const index = current?.kind === "palette" && current.query === slash ? current.index : 0;
         dispatch({ type: "overlay", overlay: { kind: "palette", query: slash, index } });
+        return;
+      }
+      // Argument picker: "/resume <cursor>" lists sessions, "/think " modes…
+      const slashArg = slashArgAt(next);
+      if (slashArg) {
+        const all = argCandidates(slashArg.name, slashArg.arg, buildArgContext());
+        if (all && all.length > 0) {
+          const candidates = slashArg.arg
+            ? fuzzyRank(slashArg.arg, all.filter((c) => c.value !== ""), (c) => c.value, 10)
+            : all.slice(0, 10);
+          if (candidates.length > 0) {
+            const keep =
+              current?.kind === "args" && current.command === slashArg.name && current.index < candidates.length
+                ? current.index
+                : 0;
+            dispatch({
+              type: "overlay",
+              overlay: { kind: "args", command: slashArg.name, anchor: slashArg.anchor, candidates, index: keep },
+            });
+            return;
+          }
+        }
+        if (current) dispatch({ type: "overlay", overlay: null });
         return;
       }
       const at = atTokenAt(next);
@@ -326,7 +381,7 @@ export function App({
       }
       if (current) dispatch({ type: "overlay", overlay: null });
     },
-    [ensureFiles],
+    [ensureFiles, buildArgContext],
   );
 
   const applyEditor = useCallback(
@@ -345,7 +400,7 @@ export function App({
       ...COMMANDS,
       ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
     ];
-    return fuzzyRank(state.overlay.query, all, (c) => c.name, 24);
+    return rankCommands(state.overlay.query, all, usageRef.current, 24);
   }, [state.overlay]);
 
   const pickerFiles = useMemo(() => {
@@ -452,6 +507,7 @@ export function App({
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        lastErrorRef.current = message;
         if (!controller.signal.aborted && !detached()) {
           dispatch({ type: "notice", tone: "error", text: `error: ${message}` });
         }
@@ -561,12 +617,27 @@ export function App({
 
   const handleSlash = useCallback(
     (command: SlashCommand) => {
+      if (command.name !== "unknown") usageRef.current = bumpUsage(usageRef.current, command.name);
       switch (command.name) {
-        case "help":
-          notice("Slash commands:");
-          for (const [cmd, desc] of HELP_LINES) notice(`  ${cmd.padEnd(22)} ${desc}`);
-          notice("  @path opens the file picker · # <fact> remembers · Shift+Tab cycles approval");
+        case "help": {
+          const specs: CommandSpec[] = [
+            ...COMMANDS,
+            ...customCommandSpecs(customCommandsRef.current ?? []).map((c) => ({ ...c, group: "tools" as const })),
+          ];
+          const rows = helpRows(specs);
+          const selectable = selectableIndices(rows);
+          dispatch({
+            type: "overlay",
+            overlay: {
+              kind: "help",
+              lines: rows.map((r) => (r.kind === "header" ? r.text : `  ${r.label.padEnd(26)} ${r.summary}`)),
+              selectable,
+              names: rows.filter((r) => r.kind === "command").map((r) => (r.kind === "command" ? r.name : "")),
+              index: 0,
+            },
+          });
           break;
+        }
         case "new":
           dispatch({ type: "new-session" });
           syncBg();
@@ -927,6 +998,81 @@ export function App({
         case "editor":
           openExternalEditor();
           break;
+        case "status": {
+          const live = (bgRef.current?.list() ?? []).filter((t) => t.status === "running").length;
+          const cfg = runConfigRef.current;
+          const s = stateRef.current;
+          for (const line of formatStatusLines({
+            ...(versionRef.current ? { version: versionRef.current } : {}),
+            model: modelRef.current,
+            projectPath,
+            ...(s.sessionId ? { sessionId: s.sessionId } : {}),
+            approval: s.approval,
+            vim: vimOn,
+            ...(cfg.thinking !== undefined ? { thinking: cfg.thinking } : {}),
+            ...(cfg.reasoningEffort ? { reasoningEffort: cfg.reasoningEffort } : {}),
+            ...(cfg.sandbox ? { sandbox: cfg.sandbox } : {}),
+            keySource: process.env["DEEPSEEK_API_KEY"] ? "env" : cfg.apiKey ? "config" : "none",
+            costUsd: s.totalUsage.costUsd,
+            totalTokens: s.totalUsage.promptTokens + s.totalUsage.completionTokens,
+            ...(s.context ? { contextPercent: s.context.percent } : {}),
+            mcpServers: Object.keys(config.mcpServers ?? {}).length,
+            extraDirs: extraDirsRef.current.length,
+            bgRunning: live,
+            detachedRuns: s.detached.length,
+          }))
+            notice(line);
+          break;
+        }
+        case "config": {
+          if (command.arg === "edit") {
+            setRawMode(false);
+            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [join(homedir(), ".seekforge", "config.json")], {
+              stdio: "inherit",
+            });
+            setRawMode(true);
+            notice(r.error ? `editor failed: ${r.error.message}` : "config saved — restart the TUI to apply", r.error ? "error" : "dim");
+            break;
+          }
+          for (const line of formatConfigLines(config, {
+            global: join(homedir(), ".seekforge", "config.json"),
+            project: join(projectPath, ".seekforge", "config.json"),
+          }))
+            notice(line);
+          break;
+        }
+        case "permissions":
+          for (const line of formatPermissionLines({
+            rules: config.permissionRules ?? [],
+            builtinAllowlist: BUILTIN_COMMAND_ALLOWLIST,
+            configAllowlist: config.commandAllowlist ?? [],
+            sessionAllowlist: allowlistRef.current.filter((p) => !(config.commandAllowlist ?? []).includes(p)),
+            ...(runConfigRef.current.sandbox ? { sandbox: runConfigRef.current.sandbox } : {}),
+            approval: stateRef.current.approval,
+          }))
+            notice(line);
+          break;
+        case "hooks":
+          for (const line of formatHookLines(config.hooks)) notice(line);
+          break;
+        case "release-notes":
+          for (const line of formatReleaseNotes(findChangelogSection([projectPath]), versionRef.current)) notice(line);
+          break;
+        case "bug": {
+          const report = buildBugReport({
+            ...(versionRef.current ? { version: versionRef.current } : {}),
+            platform: process.platform,
+            nodeVersion: process.version,
+            model: modelRef.current,
+            doctorLines: formatDoctorLines(runDoctor(projectPath, config, createDefaultProbes())),
+            ...(lastErrorRef.current ? { lastError: lastErrorRef.current } : {}),
+          });
+          const copied = copyToClipboard(report);
+          notice(copied ? "bug report copied to the clipboard — paste it into a GitHub issue:" : "clipboard unavailable — report follows:", "dim");
+          notice("  https://github.com/eilyeee/seekforge/issues/new");
+          if (!copied) for (const l of report.split("\n").slice(0, 30)) notice(`  ${l}`);
+          break;
+        }
         case "quit":
           quit();
           break;
@@ -943,7 +1089,14 @@ export function App({
             void runTask(expandCustomCommand(custom, rest.join(" ").trim()), { echoUser: false });
             break;
           }
-          notice(`unknown command ${command.raw} — /help for the list`, "error");
+          const suggestion = didYouMean(head ?? "", [
+            ...COMMANDS,
+            ...customCommandSpecs(customCommandsRef.current ?? []),
+          ]);
+          notice(
+            `unknown command ${command.raw}${suggestion ? ` — did you mean /${suggestion}?` : ""} (/help lists all)`,
+            "error",
+          );
           break;
         }
       }
@@ -1178,6 +1331,19 @@ export function App({
         }
         return;
       }
+      // Help overlay: navigate command rows, Enter inserts the command.
+      if (overlay.kind === "help") {
+        if (stroke.name === "escape" || rawInput === "q") {
+          dispatch({ type: "overlay", overlay: null });
+        } else if (stroke.name === "up" || stroke.name === "down") {
+          dispatch({ type: "overlay-move", delta: stroke.name === "up" ? -1 : 1, count: overlay.selectable.length });
+        } else if (stroke.name === "return" || stroke.name === "tab") {
+          const name = overlay.names[overlay.index];
+          dispatch({ type: "overlay", overlay: null });
+          if (name) applyEditor(setText(`/${name} `));
+        }
+        return;
+      }
       // ask_user question: modal; digits jump, Enter answers, Esc declines.
       if (overlay.kind === "question") {
         const resolveAnswer = (answer: string): void => {
@@ -1235,7 +1401,9 @@ export function App({
                 ? overlay.targets.length
                 : overlay.kind === "model"
                   ? overlay.ids.length
-                  : 0;
+                  : overlay.kind === "args"
+                    ? overlay.candidates.length
+                    : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -1273,6 +1441,22 @@ export function App({
           } else if (id === "deepseek-reasoner") {
             notice("deepseek-reasoner has no tool calling and cannot drive the agent", "error");
           }
+        } else if (overlay.kind === "args") {
+          const candidate = overlay.candidates[overlay.index];
+          if (!candidate) {
+            dispatch({ type: "overlay", overlay: null });
+            return;
+          }
+          if (stroke.name === "tab") {
+            // Tab fills the argument and keeps editing (syncOverlay re-derives).
+            applyEditor(replaceSlashArg(editor, overlay.anchor, candidate.value));
+            return;
+          }
+          // Enter runs the command with the chosen argument immediately.
+          const line = `/${overlay.command} ${candidate.value}`.trimEnd();
+          applyEditor(emptyEditor());
+          const parsed = parseInput(line);
+          if (parsed.kind === "slash") handleSlash(parsed.command);
         }
         return;
       }
@@ -1519,6 +1703,24 @@ export function App({
             lines={state.overlay.lines}
             index={state.overlay.index}
             footer="↑↓ select · Enter switch · Esc dismiss"
+          />
+        ) : null}
+        {state.overlay?.kind === "args" ? (
+          <ListOverlay
+            title={`/${state.overlay.command}`}
+            lines={state.overlay.candidates.map(
+              (c) => `${(c.value || "(no argument)").padEnd(26)} ${c.hint ?? ""}`.trimEnd(),
+            )}
+            index={state.overlay.index}
+            footer="↑↓ select · Tab fill · Enter run · Esc dismiss"
+          />
+        ) : null}
+        {state.overlay?.kind === "help" ? (
+          <ListOverlay
+            title="Commands"
+            lines={state.overlay.lines}
+            index={state.overlay.selectable[state.overlay.index] ?? 0}
+            footer="↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval"
           />
         ) : null}
         {search ? (

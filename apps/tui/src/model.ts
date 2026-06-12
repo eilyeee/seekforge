@@ -49,7 +49,17 @@ export type Overlay =
   /** Model picker (/model with no argument). */
   | { kind: "model"; ids: string[]; lines: string[]; index: number }
   /** ask_user tool question awaiting an answer. */
-  | { kind: "question"; question: string; options: string[]; index: number };
+  | { kind: "question"; question: string; options: string[]; index: number }
+  /** Slash-argument picker ("/resume <cursor>"): Tab fills, Enter runs. */
+  | {
+      kind: "args";
+      command: string;
+      anchor: number;
+      candidates: Array<{ value: string; hint?: string }>;
+      index: number;
+    }
+  /** Grouped help overlay: Enter inserts the selected command. */
+  | { kind: "help"; lines: string[]; selectable: number[]; names: string[]; index: number };
 
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
