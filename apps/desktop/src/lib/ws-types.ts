@@ -8,6 +8,8 @@ export type RunOverrides = {
   model?: string;
   thinking?: boolean;
   reasoningEffort?: "high" | "max";
+  /** Output style name (built-in or custom); resolved server-side. */
+  outputStyle?: string;
 };
 
 export type ClientFrame =

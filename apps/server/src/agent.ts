@@ -28,6 +28,8 @@ export type RunOverrides = {
   model?: string;
   thinking?: boolean;
   reasoningEffort?: "high" | "max";
+  /** Output style name (built-in or custom), resolved to appendSystemPrompt. */
+  outputStyle?: string;
 };
 
 export type CreateAgentOptions = {

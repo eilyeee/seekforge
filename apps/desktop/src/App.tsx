@@ -12,6 +12,7 @@ import { DiffView } from "./views/DiffView";
 import { EvolutionView } from "./views/EvolutionView";
 import { FilesView } from "./views/FilesView";
 import { GitView } from "./views/GitView";
+import { HooksView } from "./views/HooksView";
 import { MemoryView } from "./views/MemoryView";
 import { SessionsView } from "./views/SessionsView";
 import { SettingsView } from "./views/SettingsView";
@@ -60,6 +61,7 @@ export function App() {
           {view === "agents" && <AgentsView />}
           {view === "memory" && <MemoryView />}
           {view === "evolution" && <EvolutionView />}
+          {view === "hooks" && <HooksView />}
           {view === "settings" && <SettingsView />}
           {view === "diagnostics" && <DiagnosticsView />}
         </div>

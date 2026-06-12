@@ -39,7 +39,8 @@ export function ChatView() {
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
-  const { setModel, setThinking, setReasoningEffort, truncateAtItem, startLoop } = useStore.getState();
+  const { setModel, setThinking, setReasoningEffort, setOutputStyle, truncateAtItem, startLoop } =
+    useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -122,6 +123,15 @@ export function ChatView() {
       .commands()
       .then((r) => setCustomCommands(r.commands))
       .catch(() => setCustomCommands([]));
+  }, [activeWorkspaceId]);
+
+  /** Available output styles (GET /api/output-styles) for the ModelBar picker. */
+  const [outputStyles, setOutputStyles] = useState<{ name: string; kind: "builtin" | "custom" }[]>([]);
+  useEffect(() => {
+    api
+      .outputStyles()
+      .then((r) => setOutputStyles(r.styles))
+      .catch(() => setOutputStyles([]));
   }, [activeWorkspaceId]);
 
   /** Manual /compact: POST the active tab's session, then refresh on success. */
@@ -397,9 +407,11 @@ export function ChatView() {
         <ModelBar
           tab={tab}
           config={config}
+          outputStyles={outputStyles}
           onSetModel={setModel}
           onSetThinking={setThinking}
           onSetReasoningEffort={setReasoningEffort}
+          onSetOutputStyle={setOutputStyle}
         />
 
         <Composer

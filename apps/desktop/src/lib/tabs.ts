@@ -73,6 +73,8 @@ export type ChatTab = {
   thinking: boolean | null;
   /** Reasoning effort; only sent while thinking is explicitly on. */
   reasoningEffort: "high" | "max";
+  /** Output style name; "" or "default" = server default (nothing sent). */
+  outputStyle: string;
   /**
    * Loop-mode progress for this tab: the streamed loop.event feed + the final
    * result. Reset when a new loop starts or the session is reset.
@@ -114,6 +116,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     model: "",
     thinking: null,
     reasoningEffort: "high",
+    outputStyle: "",
     loop: emptyLoopProgress(),
   };
 }

@@ -289,6 +289,51 @@ describe("GET /api/commands", () => {
   });
 });
 
+describe("hooks editor (GET/PUT /api/hooks)", () => {
+  it("writes hooks to the project config and reads them back; rejects bad input", async () => {
+    const put = await authed("/api/hooks", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        hooks: { preToolUse: [{ command: "echo hi", match: "run_command" }] },
+      }),
+    });
+    expect(put.status).toBe(200);
+    const get = await authed("/api/hooks");
+    const body = await jsonOf(get);
+    expect(body.hooks.preToolUse).toEqual([{ command: "echo hi", match: "run_command" }]);
+
+    const bad = await authed("/api/hooks", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hooks: { bogusStage: [{ command: "x" }] } }),
+    });
+    expect(bad.status).toBe(400);
+
+    // A JSON `null` body must be a clean 400, not a 500.
+    const nullBody = await authed("/api/hooks", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: "null",
+    });
+    expect(nullBody.status).toBe(400);
+  });
+});
+
+describe("GET /api/output-styles", () => {
+  it("lists the built-ins plus custom .seekforge/output-styles files", async () => {
+    writeFileIn(workspace, ".seekforge/output-styles/pirate.md", "Arr");
+    const res = await authed("/api/output-styles");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    const names = body.styles.map((s: { name: string }) => s.name);
+    expect(names.slice(0, 4)).toEqual(["default", "concise", "explanatory", "learning"]);
+    expect(body.styles.find((s: { name: string }) => s.name === "pirate")).toMatchObject({
+      kind: "custom",
+    });
+  });
+});
+
 describe("POST /api/commands/expand", () => {
   it("interpolates args and runs !`shell` injections in the workspace", async () => {
     writeFileIn(workspace, ".seekforge/commands/exp.md", "task: $ARGUMENTS; out: !`echo hi`");

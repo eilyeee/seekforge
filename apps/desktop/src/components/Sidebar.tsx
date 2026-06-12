@@ -12,6 +12,7 @@ import {
   IconMemory,
   IconSessions,
   IconSettings,
+  IconShield,
   IconSkills,
   LogoMark,
 } from "./ui/icons";
@@ -65,6 +66,7 @@ const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
   {
     titleKey: "nav.group.system",
     items: [
+      { view: "hooks", key: "nav.hooks", Icon: IconShield },
       { view: "settings", key: "nav.settings", Icon: IconSettings },
       { view: "diagnostics", key: "nav.diagnostics", Icon: IconSettings },
     ],

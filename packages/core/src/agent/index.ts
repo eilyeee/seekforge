@@ -51,6 +51,16 @@ export {
   type UserCommand,
 } from "./commands.js";
 export { detectThinkingKeyword } from "./thinking.js";
+export {
+  OUTPUT_STYLES,
+  isOutputStyle,
+  outputStylePrompt,
+  loadCustomOutputStyle,
+  resolveOutputStyle,
+  listOutputStyles,
+  type OutputStyle,
+  type OutputStyleInfo,
+} from "./output-style.js";
 export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
 export {
   compactMessages,

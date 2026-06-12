@@ -39,6 +39,7 @@ export type View =
   | "agents"
   | "memory"
   | "evolution"
+  | "hooks"
   | "settings"
   | "diagnostics";
 
@@ -165,6 +166,7 @@ type AppStore = {
   setModel: (model: string) => void;
   setThinking: (on: boolean) => void;
   setReasoningEffort: (effort: "high" | "max") => void;
+  setOutputStyle: (style: string) => void;
   /**
    * Drops the given user item and everything after it from the active tab's
    * transcript (after a successful POST backtrack on the server).
@@ -429,6 +431,9 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setReasoningEffort: (effort) =>
       set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { reasoningEffort: effort }) })),
+
+    setOutputStyle: (outputStyle) =>
+      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { outputStyle }) })),
 
     todosOpen: false,
     toggleTodos: () => set((s) => ({ todosOpen: !s.todosOpen })),

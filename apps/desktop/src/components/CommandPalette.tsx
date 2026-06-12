@@ -16,6 +16,7 @@ const VIEW_ITEMS: { view: View; navKey: string }[] = [
   { view: "agents", navKey: "nav.agents" },
   { view: "memory", navKey: "nav.memory" },
   { view: "evolution", navKey: "nav.evolution" },
+  { view: "hooks", navKey: "nav.hooks" },
   { view: "diagnostics", navKey: "nav.diagnostics" },
   { view: "settings", navKey: "nav.settings" },
 ];

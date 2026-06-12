@@ -304,6 +304,26 @@ export type SlashCommand = {
 /** GET /api/commands response. */
 export type CommandsResponse = { commands: SlashCommand[] };
 
+/** The nine hook stages, mirroring core's HookStage. */
+export const HOOK_STAGES = [
+  "preToolUse",
+  "postToolUse",
+  "sessionStart",
+  "userPromptSubmit",
+  "preCompact",
+  "stop",
+  "subagentStop",
+  "notification",
+  "sessionEnd",
+] as const;
+export type HookStage = (typeof HOOK_STAGES)[number];
+
+/** One shell hook entry (matches core's HookEntry). */
+export type HookEntry = { command: string; match?: string; pattern?: string };
+
+/** Project hooks config: stage → entries. */
+export type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
+
 /**
  * Loop-mode result status (server LoopResult.status). Mirrors the server
  * contract; not exported by @seekforge/shared.

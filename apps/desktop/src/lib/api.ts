@@ -13,6 +13,7 @@ import type {
   EvolutionProposal,
   FileContent,
   GitStatus,
+  HooksConfig,
   McpResource,
   McpServer,
   McpTool,
@@ -313,6 +314,16 @@ export const api = {
   /** Server-side expand: interpolates args and runs !`shell` injections in the workspace. */
   expandCommand: (name: string, args: string) =>
     request<{ text: string }>("POST", withWorkspace("/api/commands/expand"), { name, args }),
+  /** Available output styles (built-ins + custom .seekforge/output-styles/*.md). */
+  outputStyles: () =>
+    request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>(
+      "GET",
+      withWorkspace("/api/output-styles"),
+    ),
+  /** Project hooks config (the editable .seekforge/config.json layer). */
+  hooks: () => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks")),
+  saveHooks: (hooks: HooksConfig) =>
+    request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks"), { hooks }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string) =>

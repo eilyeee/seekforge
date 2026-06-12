@@ -24,6 +24,7 @@ import {
   fetchBalance,
   importExternalAgent,
   importExternalSkill,
+  listOutputStyles,
   loadUserCommands,
   compactSessionNow,
   listEvolutionProposals,
@@ -50,6 +51,8 @@ import {
   setEvolutionProposalStatus,
   truncateSessionAtUserTurn,
   MEMORY_CANDIDATE_TYPES,
+  type HookConfig,
+  type HookEntry,
   type McpClientEntry,
   type McpServerConfig,
   type MemoryCandidateType,
@@ -332,6 +335,68 @@ function mutateMcpServers(
   mutate(servers);
   if (Object.keys(servers).length === 0) delete doc.mcpServers;
   else doc.mcpServers = servers;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Reads the project config.json (raw); returns {} on missing/invalid. */
+function readConfigDoc(workspace: string): ConfigDoc {
+  const path = join(workspace, ".seekforge", "config.json");
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as ConfigDoc;
+  } catch {
+    return {};
+  }
+}
+
+const HOOK_STAGES = [
+  "preToolUse",
+  "postToolUse",
+  "sessionStart",
+  "userPromptSubmit",
+  "preCompact",
+  "stop",
+  "subagentStop",
+  "notification",
+  "sessionEnd",
+] as const;
+
+/** Validates a hooks object from PUT /api/hooks into a clean HookConfig. */
+function validateHooks(input: unknown): { hooks: HookConfig } | { error: string } {
+  if (input === null || typeof input !== "object") return { error: "hooks must be an object" };
+  const out: HookConfig = {};
+  for (const [stage, entries] of Object.entries(input as Record<string, unknown>)) {
+    if (!(HOOK_STAGES as readonly string[]).includes(stage)) {
+      return { error: `unknown hook stage: ${stage}` };
+    }
+    if (!Array.isArray(entries)) return { error: `${stage} must be an array` };
+    const list: HookEntry[] = [];
+    for (const e of entries) {
+      if (e === null || typeof e !== "object") return { error: `${stage} entries must be objects` };
+      const { command, match, pattern } = e as Record<string, unknown>;
+      if (typeof command !== "string" || command.trim() === "") {
+        return { error: `${stage} entry needs a non-empty command` };
+      }
+      if (match !== undefined && typeof match !== "string") return { error: `${stage} match must be a string` };
+      if (pattern !== undefined && typeof pattern !== "string") return { error: `${stage} pattern must be a string` };
+      list.push({
+        command,
+        ...(match !== undefined && match !== "" ? { match } : {}),
+        ...(pattern !== undefined && pattern !== "" ? { pattern } : {}),
+      });
+    }
+    if (list.length > 0) out[stage as keyof HookConfig] = list;
+  }
+  return { hooks: out };
+}
+
+/** Writes the hooks block into the project config.json, preserving other keys. */
+function writeHooks(workspace: string, hooks: HookConfig): void {
+  const path = join(workspace, ".seekforge", "config.json");
+  const doc = readConfigDoc(workspace);
+  if (Object.keys(hooks).length === 0) delete doc.hooks;
+  else doc.hooks = hooks;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
 }
@@ -1128,6 +1193,11 @@ export async function handleApi(
       return sendJson(res, 200, { commands: loadUserCommands(workspace) });
     }
 
+    // Output styles: built-ins + custom .seekforge/output-styles/*.md files.
+    if (method === "GET" && path === "/api/output-styles") {
+      return sendJson(res, 200, { styles: listOutputStyles(workspace) });
+    }
+
     // Expand a custom command server-side: interpolate args ($ARGUMENTS / $1..$9)
     // and run any !`shell` injections in the workspace, returning the final text.
     if (method === "POST" && path === "/api/commands/expand") {
@@ -1380,6 +1450,27 @@ export async function handleApi(
 
     if (method === "GET" && path === "/api/config") {
       return sendJson(res, 200, maskedConfig(workspace));
+    }
+
+    // Project hooks (the editable layer): read/write .seekforge/config.json hooks.
+    if (method === "GET" && path === "/api/hooks") {
+      return sendJson(res, 200, { hooks: readConfigDoc(workspace).hooks ?? {} });
+    }
+    if (method === "PUT" && path === "/api/hooks") {
+      let body: unknown;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return sendApiError(res, 400, "bad_request", "body must be valid JSON");
+      }
+      const hooksInput =
+        body !== null && typeof body === "object" ? (body as { hooks?: unknown }).hooks : undefined;
+      const result = validateHooks(hooksInput);
+      if ("error" in result) {
+        return sendApiError(res, 400, "bad_request", result.error);
+      }
+      writeHooks(workspace, result.hooks);
+      return sendJson(res, 200, { hooks: result.hooks });
     }
 
     if (method === "PUT" && path === "/api/config") {

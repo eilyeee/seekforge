@@ -10,7 +10,7 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { detectThinkingKeyword, readSessionMeta, type LoopEvent } from "@seekforge/core";
+import { detectThinkingKeyword, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
@@ -60,7 +60,7 @@ type RunInput = {
 export function parseRunOverrides(
   frame: Record<string, unknown>,
 ): { overrides?: RunOverrides } | { error: string } {
-  const { model, thinking, reasoningEffort } = frame;
+  const { model, thinking, reasoningEffort, outputStyle } = frame;
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
     return { error: "model must be a non-empty string when present" };
   }
@@ -70,10 +70,14 @@ export function parseRunOverrides(
   if (reasoningEffort !== undefined && reasoningEffort !== "high" && reasoningEffort !== "max") {
     return { error: 'reasoningEffort must be "high" or "max" when present' };
   }
+  if (outputStyle !== undefined && (typeof outputStyle !== "string" || outputStyle.length === 0)) {
+    return { error: "outputStyle must be a non-empty string when present" };
+  }
   const overrides: RunOverrides = {
     ...(model !== undefined ? { model } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(outputStyle !== undefined ? { outputStyle } : {}),
   };
   return Object.keys(overrides).length > 0 ? { overrides } : {};
 }
@@ -157,6 +161,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       extractMemory: input.mode === "edit",
       ...(overrides ? { overrides } : {}),
     });
+    // An output-style override resolves to a system-prompt addendum; an unknown
+    // style name is ignored (run with the base prompt) rather than failing.
+    let appendSystemPrompt: string | undefined;
+    if (overrides?.outputStyle) {
+      try {
+        appendSystemPrompt = resolveOutputStyle(overrides.outputStyle, input.workspace);
+      } catch {
+        appendSystemPrompt = undefined;
+      }
+    }
     try {
       for await (const event of handle.agent.runTask({
         projectPath: input.workspace,
@@ -165,6 +179,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         plan: input.plan,
         approvalMode: input.approvalMode,
         resumeSessionId: input.resumeSessionId,
+        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         signal: controller.signal,
       })) {
         if (event.type === "session.created") sessionId = event.sessionId;

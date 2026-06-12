@@ -67,24 +67,37 @@ describe("buildExecutePlanFrame", () => {
 
 describe("overridesOf (header controls -> frame fields)", () => {
   it("untouched controls produce no fields (server config decides)", () => {
-    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high" })).toEqual({});
-    expect(overridesOf({ model: "   ", thinking: null, reasoningEffort: "max" })).toEqual({});
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "" })).toEqual({});
+    expect(overridesOf({ model: "   ", thinking: null, reasoningEffort: "max", outputStyle: "default" })).toEqual(
+      {},
+    );
   });
 
   it("a non-empty model is trimmed and sent", () => {
-    expect(overridesOf({ model: " deepseek-v4-pro ", thinking: null, reasoningEffort: "high" })).toEqual({
+    expect(
+      overridesOf({ model: " deepseek-v4-pro ", thinking: null, reasoningEffort: "high", outputStyle: "" }),
+    ).toEqual({
       model: "deepseek-v4-pro",
     });
   });
 
   it("thinking on sends thinking AND the effort; thinking off sends only thinking:false", () => {
-    expect(overridesOf({ model: "", thinking: true, reasoningEffort: "max" })).toEqual({
+    expect(overridesOf({ model: "", thinking: true, reasoningEffort: "max", outputStyle: "" })).toEqual({
       thinking: true,
       reasoningEffort: "max",
     });
-    expect(overridesOf({ model: "", thinking: false, reasoningEffort: "max" })).toEqual({
+    expect(overridesOf({ model: "", thinking: false, reasoningEffort: "max", outputStyle: "" })).toEqual({
       thinking: false,
     });
+  });
+
+  it("a non-default output style is sent; default/empty is omitted", () => {
+    expect(
+      overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "concise" }),
+    ).toEqual({ outputStyle: "concise" });
+    expect(
+      overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "default" }),
+    ).toEqual({});
   });
 });
 

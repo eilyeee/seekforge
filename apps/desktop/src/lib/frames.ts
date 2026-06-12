@@ -21,6 +21,8 @@ export type HeaderControls = {
   thinking: boolean | null;
   /** Only sent while thinking is explicitly on. */
   reasoningEffort: "high" | "max";
+  /** Output style name; "" or "default" = server default (field omitted). */
+  outputStyle: string;
 };
 
 /**
@@ -30,10 +32,12 @@ export type HeaderControls = {
  */
 export function overridesOf(controls: HeaderControls): RunOverrides {
   const model = controls.model.trim();
+  const style = controls.outputStyle.trim();
   return {
     ...(model !== "" ? { model } : {}),
     ...(controls.thinking !== null ? { thinking: controls.thinking } : {}),
     ...(controls.thinking === true ? { reasoningEffort: controls.reasoningEffort } : {}),
+    ...(style !== "" && style !== "default" ? { outputStyle: style } : {}),
   };
 }
 

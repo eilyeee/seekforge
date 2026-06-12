@@ -94,6 +94,7 @@ export const chat = {
     "chat.cmdArgs.insert": "Insert",
     "chat.cmdArgs.shellHint": "!`shell` commands run in the workspace when inserted.",
     "chat.memorySaved": "Saved to project memory",
+    "chat.outputStyleTitle": "Output style (how the agent communicates)",
     "chat.loop.title": "Loop mode",
     "chat.loop.explain":
       "Runs your task, then the verify command; if it fails, it keeps fixing and re-running until the command passes — autonomously, within the limits below.",
@@ -215,6 +216,7 @@ export const chat = {
     "chat.cmdArgs.insert": "插入",
     "chat.cmdArgs.shellHint": "插入时 !`shell` 命令会在工作区执行。",
     "chat.memorySaved": "已存入项目记忆",
+    "chat.outputStyleTitle": "输出风格（代理的表达方式）",
     "chat.loop.title": "循环模式",
     "chat.loop.explain": "先执行你的任务，再运行校验命令；若失败，则自动持续修复并重试，直到命令通过——在下方限制范围内自主进行。",
     "chat.loop.task": "任务",
