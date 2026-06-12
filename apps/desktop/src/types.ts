@@ -293,6 +293,12 @@ export type SlashCommand = {
   scope: "project" | "user";
   /** Template text inserted into the composer draft when chosen. */
   body: string;
+  /** Frontmatter `model`: preferred model for this command (informational here). */
+  model?: string;
+  /** Frontmatter `allowed-tools`: tool whitelist (informational here). */
+  allowedTools?: string[];
+  /** Frontmatter `argument-hint`: placeholder shown in the args popup. */
+  argumentHint?: string;
 };
 
 /** GET /api/commands response. */

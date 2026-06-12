@@ -80,10 +80,17 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
  * - Requests time out after `requestTimeoutMs` (default 30s) via AbortController.
  *
  * Out of scope: full OAuth flows (authorization-code, token refresh). Static
- * `headers` cover bearer-token servers; servers needing interactive auth are
- * not supported. Server-initiated requests and standalone GET streams are
- * also not supported (matching the stdio client's v1 surface).
+ * `headers` cover bearer-token servers — and each header value may interpolate
+ * `${ENV_VAR}` so secrets live in the environment, not in committed config
+ * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Servers needing
+ * interactive auth are not supported. Server-initiated requests and standalone
+ * GET streams are also not supported (matching the stdio client's v1 surface).
  */
+
+/** Expands `${VAR}` in a header value from process.env (missing → empty). */
+function expandEnvRefs(value: string): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? "");
+}
 export function createMcpHttpTransport(options: McpClientOptions): {
   request<T>(method: string, params: unknown): Promise<T>;
   dispose(): void;
@@ -99,10 +106,14 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   const inflight = new Set<AbortController>();
 
   function headers(): Record<string, string> {
+    const configured: Record<string, string> = {};
+    for (const [k, v] of Object.entries(options.config.headers ?? {})) {
+      configured[k] = expandEnvRefs(v);
+    }
     return {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      ...options.config.headers,
+      ...configured,
       ...(sessionId !== undefined ? { "mcp-session-id": sessionId } : {}),
     };
   }

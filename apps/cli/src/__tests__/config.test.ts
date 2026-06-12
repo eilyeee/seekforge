@@ -208,4 +208,38 @@ test("invalid JSON in settings file throws a descriptive error", () => {
   cleanup();
 });
 
+// ── config.local.json personal layer ─────────────────────────────────────────
+
+/** Write .seekforge/config.local.json in the project dir. */
+function writeLocal(projectPath: string, content: Record<string, unknown>): void {
+  const seekDir = join(projectPath, ".seekforge");
+  mkdirSync(seekDir, { recursive: true });
+  writeFileSync(join(seekDir, "config.local.json"), JSON.stringify(content));
+}
+
+test("config.local.json overrides project scalars but loses to --settings", () => {
+  const { projectPath, cleanup } = setupProject({ model: "deepseek-chat", baseUrl: "http://proj" });
+  writeLocal(projectPath, { model: "deepseek-v4-flash", baseUrl: "http://local" });
+  // No settings file: local wins over project.
+  let config = loadConfig(projectPath);
+  assert.equal(config.model, "deepseek-v4-flash");
+  assert.equal(config.baseUrl, "http://local");
+  // With a settings file: settings wins over local for the keys it sets.
+  const settingsPath = writeSettings(projectPath, "settings.json", { model: "deepseek-v4-pro" });
+  config = loadConfig(projectPath, settingsPath);
+  assert.equal(config.model, "deepseek-v4-pro");
+  assert.equal(config.baseUrl, "http://local"); // untouched by settings
+  cleanup();
+});
+
+test("config.local.json mcpServers merge above project", () => {
+  const { projectPath, cleanup } = setupProject({
+    mcpServers: { fs: { command: "npx", args: ["old"] } },
+  });
+  writeLocal(projectPath, { mcpServers: { fs: { command: "npx", args: ["local"] } } });
+  const config = loadConfig(projectPath);
+  assert.deepEqual(config.mcpServers?.["fs"], { command: "npx", args: ["local"] });
+  cleanup();
+});
+
 console.log(`${passed} config tests passed`);

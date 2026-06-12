@@ -45,9 +45,12 @@ export {
   loadUserCommands,
   expandUserCommand,
   commandTakesArguments,
+  commandHasShellInjection,
+  expandShellInjections,
   COMMAND_ARGUMENTS_PLACEHOLDER,
   type UserCommand,
 } from "./commands.js";
+export { detectThinkingKeyword } from "./thinking.js";
 export { collectProjectRules, collectRuleFiles, type RuleFile } from "./rules.js";
 export {
   compactMessages,

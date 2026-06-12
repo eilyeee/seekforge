@@ -10,7 +10,7 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { readSessionMeta, type LoopEvent } from "@seekforge/core";
+import { detectThinkingKeyword, readSessionMeta, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
@@ -142,6 +142,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     running = true;
     controller = new AbortController();
     let sessionId = input.resumeSessionId ?? "";
+    // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
+    // for this turn, on top of (winning over) any frame overrides.
+    const effort = detectThinkingKeyword(input.task);
+    const overrides = effort
+      ? { ...input.overrides, thinking: true, reasoningEffort: effort }
+      : input.overrides;
     const handle = deps.createAgent({
       workspace: input.workspace,
       confirm,
@@ -149,7 +155,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
       onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
       extractMemory: input.mode === "edit",
-      ...(input.overrides ? { overrides: input.overrides } : {}),
+      ...(overrides ? { overrides } : {}),
     });
     try {
       for await (const event of handle.agent.runTask({

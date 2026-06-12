@@ -4,10 +4,14 @@
 // node:assert and a non-zero exit on the first failure signals `pnpm test`.
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   OUTPUT_STYLES,
   isOutputStyle,
   outputStylePrompt,
+  resolveOutputStyle,
   type OutputStyle,
 } from "../output-style.js";
 
@@ -72,6 +76,29 @@ test("outputStylePrompt: presets carry their defining directive", () => {
   assert.match(concise, /terse|one[- ]line|shortest|concise/i);
   assert.match(explanatory, /why|reasoning|trade-?off|explain/i);
   assert.match(learning, /TODO\(human\)/);
+});
+
+// --- resolveOutputStyle: built-ins + custom files ---------------------------
+test("resolveOutputStyle: built-in styles resolve to their preset", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "sf-style-"));
+  assert.equal(resolveOutputStyle("default", tmp), undefined);
+  assert.equal(resolveOutputStyle("concise", tmp), outputStylePrompt("concise"));
+  rmSync(tmp, { recursive: true });
+});
+
+test("resolveOutputStyle: a custom .seekforge/output-styles/<name>.md is used (frontmatter stripped)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "sf-style-"));
+  const dir = join(tmp, ".seekforge", "output-styles");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "pirate.md"), "---\ndescription: Arr\n---\nSpeak like a pirate.");
+  assert.equal(resolveOutputStyle("pirate", tmp), "Speak like a pirate.");
+  rmSync(tmp, { recursive: true });
+});
+
+test("resolveOutputStyle: unknown style with no file throws", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "sf-style-"));
+  assert.throws(() => resolveOutputStyle("nope", tmp));
+  rmSync(tmp, { recursive: true });
 });
 
 // Type-level sanity: OUTPUT_STYLES is exactly OutputStyle[] (compile-time only).

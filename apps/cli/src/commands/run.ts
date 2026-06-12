@@ -16,7 +16,7 @@ import {
 } from "../output-format.js";
 import { t } from "../i18n.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
-import { outputStylePrompt } from "../output-style.js";
+import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "../workspace-dirs.js";
@@ -217,7 +217,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   let styleAddendum: string | undefined;
   if (opts.outputStyle) {
     try {
-      styleAddendum = outputStylePrompt(opts.outputStyle);
+      styleAddendum = resolveOutputStyle(opts.outputStyle, projectPath);
     } catch {
       fail(t("err.unknownOutputStyle", { style: opts.outputStyle }), {
         hint: t("err.unknownOutputStyleHint"),

@@ -4,9 +4,21 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Badge, TextArea } from "../ui";
 import type { SlashCommand } from "../../types";
 
-/** Expands a command body, replacing every $ARGUMENTS with the given args. */
+/** True when the body interpolates args ($ARGUMENTS or positional $1..$9). */
+export function commandTakesArgs(body: string): boolean {
+  return body.includes("$ARGUMENTS") || /\$[1-9]/.test(body);
+}
+
+/**
+ * Expands a command body: positional `$1`..`$9` from the whitespace-split args,
+ * then every `$ARGUMENTS` with the full string. Mirrors core's expandUserCommand.
+ */
 export function expandCommand(command: SlashCommand, args: string): string {
-  return command.body.split("$ARGUMENTS").join(args);
+  const positional = args.trim() === "" ? [] : args.trim().split(/\s+/);
+  return command.body
+    .replace(/\$([1-9])/g, (_, d: string) => positional[Number(d) - 1] ?? "")
+    .split("$ARGUMENTS")
+    .join(args);
 }
 
 /**
@@ -43,8 +55,12 @@ export function CommandArgsDialog({
       onCancel={onCancel}
     >
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge tone={command.scope === "user" ? "accent" : "ok"}>{command.scope}</Badge>
+          {command.model && <Badge tone="neutral">{command.model}</Badge>}
+          {command.allowedTools && command.allowedTools.length > 0 && (
+            <Badge tone="neutral">{command.allowedTools.length} tools</Badge>
+          )}
           {command.description && <span className="text-xs text-tertiary">{command.description}</span>}
         </div>
         <label className="block">
@@ -60,7 +76,7 @@ export function CommandArgsDialog({
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit(expandCommand(command, args));
             }}
             rows={2}
-            placeholder={t("chat.cmdArgs.placeholder")}
+            placeholder={command.argumentHint || t("chat.cmdArgs.placeholder")}
             className="w-full"
           />
         </label>

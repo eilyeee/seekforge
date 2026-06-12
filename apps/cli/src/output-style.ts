@@ -4,6 +4,14 @@
 // Each non-default style contributes an addendum that the integrator appends to
 // the system prompt via the existing `appendSystemPrompt` seam. "default" makes
 // no change (returns undefined) so the base prompt is used verbatim.
+//
+// Beyond the built-ins, a user can define their own style as a Markdown file at
+// .seekforge/output-styles/<name>.md (project, then ~/.seekforge); its body
+// (frontmatter stripped) is used as the addendum verbatim.
+
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /** The set of supported output styles. */
 export type OutputStyle = "default" | "concise" | "explanatory" | "learning";
@@ -72,4 +80,46 @@ export function outputStylePrompt(style: string): string | undefined {
   }
   if (style === "default") return undefined;
   return ADDENDA[style];
+}
+
+/** Strips an optional leading YAML frontmatter block, returning the trimmed body. */
+function stripFrontmatter(md: string): string {
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/.exec(md);
+  return (m ? (m[1] as string) : md).trim();
+}
+
+/**
+ * Loads a custom output style from `.seekforge/output-styles/<name>.md`
+ * (project first, then `~/.seekforge`). The file body (frontmatter stripped)
+ * is the addendum. Returns undefined when no such file exists in any layer.
+ */
+export function loadCustomOutputStyle(name: string, projectPath: string): string | undefined {
+  const dirs = [
+    join(projectPath, ".seekforge", "output-styles"),
+    join(homedir(), ".seekforge", "output-styles"),
+  ];
+  for (const dir of dirs) {
+    try {
+      const body = stripFrontmatter(readFileSync(join(dir, `${name}.md`), "utf8"));
+      if (body) return body;
+    } catch {
+      // not present in this layer — try the next
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves an output style to its system-prompt addendum: a built-in style uses
+ * its preset; otherwise a custom `.seekforge/output-styles/<name>.md` file.
+ * Returns undefined for "default" (no change). Throws if neither resolves.
+ */
+export function resolveOutputStyle(style: string, projectPath: string): string | undefined {
+  if (isOutputStyle(style)) return outputStylePrompt(style);
+  const custom = loadCustomOutputStyle(style, projectPath);
+  if (custom !== undefined) return custom;
+  throw new Error(
+    `Unknown output style: ${JSON.stringify(style)}. Expected a built-in (${OUTPUT_STYLES.join(", ")}) ` +
+      `or a .seekforge/output-styles/${style}.md file.`,
+  );
 }

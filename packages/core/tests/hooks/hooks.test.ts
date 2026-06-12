@@ -301,6 +301,39 @@ describe("runHooks", () => {
     expect(outcomes[0]!.decision).toBeUndefined();
   });
 
+  it('preToolUse honors the Claude shape hookSpecificOutput.permissionDecision "deny"', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        {
+          command: `echo '{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"blocked here"}}'`,
+        },
+        { command: "touch perm-deny-skip" },
+      ],
+      payload({ toolName: "apply_patch", path: "src/a.ts" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.decision).toBe("deny");
+    expect(outcomes[0]!.outputTail).toBe("blocked here");
+    expect(existsSync(join(workspace, "perm-deny-skip"))).toBe(false);
+  });
+
+  it('permissionDecision "ask" defers to the normal flow without blocking', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: `echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'` },
+        { command: "touch ask-fell-through" },
+      ],
+      payload({ toolName: "read_file", path: "a.ts" }),
+    );
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]!.ok).toBe(true);
+    expect(outcomes[0]!.decision).toBe("ask");
+    expect(existsSync(join(workspace, "ask-fell-through"))).toBe(true);
+  });
+
   it("sessionEnd entries run without a toolName and receive the status", async () => {
     const outcomes = await runHooks(
       "sessionEnd",
@@ -332,6 +365,23 @@ describe("buildHookContext", () => {
     expect(suffix).toBe(
       "\n\n<hook-context>\nfirst context\n</hook-context>" +
         "\n\n<hook-context>\nsecond context\n</hook-context>",
+    );
+  });
+
+  it("prefers JSON additionalContext (top-level or hookSpecificOutput) over raw stdout", () => {
+    expect(buildHookContext([outcome({ stdout: `{"additionalContext":"from json"}` })])).toBe(
+      "\n\n<hook-context>\nfrom json\n</hook-context>",
+    );
+    expect(
+      buildHookContext([
+        outcome({ stdout: `{"hookSpecificOutput":{"additionalContext":"nested ctx"}}` }),
+      ]),
+    ).toBe("\n\n<hook-context>\nnested ctx\n</hook-context>");
+  });
+
+  it("falls back to raw stdout when JSON has no additionalContext", () => {
+    expect(buildHookContext([outcome({ stdout: "plain text ctx" })])).toBe(
+      "\n\n<hook-context>\nplain text ctx\n</hook-context>",
     );
   });
 

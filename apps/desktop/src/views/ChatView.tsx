@@ -8,7 +8,7 @@ import { HomeWelcome } from "../components/chat/HomeWelcome";
 import { Composer, type ComposerCommand } from "../components/chat/Composer";
 import { LoopPanel } from "../components/chat/LoopPanel";
 import { ModelBar } from "../components/chat/ModelBar";
-import { CommandArgsDialog } from "../components/chat/CommandArgsDialog";
+import { CommandArgsDialog, commandTakesArgs } from "../components/chat/CommandArgsDialog";
 import { RunControls } from "../components/chat/RunControls";
 import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
@@ -234,7 +234,7 @@ export function ChatView() {
     const custom: ComposerCommand[] = customCommands.map((c) => ({
       name: c.name,
       hint: c.description,
-      run: () => (c.body.includes("$ARGUMENTS") ? setArgsCommand(c) : setDraft(c.body)),
+      run: () => (commandTakesArgs(c.body) ? setArgsCommand(c) : setDraft(c.body)),
     }));
     return [...builtins.filter((b) => !customNames.has(b.name)), ...custom];
     // eslint-disable-next-line react-hooks/exhaustive-deps

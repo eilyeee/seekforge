@@ -2,15 +2,19 @@ import { spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline/promises";
 import {
   addMemoryFact,
+  commandHasShellInjection,
   compactSessionNow,
+  detectThinkingKeyword,
+  expandShellInjections,
   expandUserCommand,
   listSessions,
   loadAgentDefinitions,
   loadUserCommands,
   readSessionMeta,
 } from "@seekforge/core";
-import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
+import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
+import { buildToolGatingRules } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
@@ -27,6 +31,25 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
     costUsd: a.costUsd + b.costUsd,
   };
+}
+
+/** Runs a `!`cmd`` injection from a custom command: capture stdout, 10s cap. */
+function runShellCapture(command: string, cwd: string): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn("/bin/sh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    child.stdout?.on("data", (c: Buffer) => (out += c.toString("utf8")));
+    child.stderr?.on("data", (c: Buffer) => (out += c.toString("utf8")));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve(`[command failed: ${err.message}]`);
+    });
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve(out);
+    });
+  });
 }
 
 /** Permission prompt sharing the REPL's readline (no competing stdin readers). */
@@ -84,10 +107,18 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
   console.log(`${t("repl.welcome", { model, path: projectPath })}`);
   console.log(`${dim(t("repl.welcomeHint"))}\n`);
 
-  const runOnce = async (task: string, runOpts?: { mode?: "ask" | "edit"; plan?: boolean }): Promise<void> => {
+  const runOnce = async (
+    task: string,
+    runOpts?: { mode?: "ask" | "edit"; plan?: boolean; model?: string; permissionRules?: PermissionRule[] },
+  ): Promise<void> => {
+    // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
+    // for this turn only, without mutating the persistent /think setting.
+    const effort = detectThinkingKeyword(task);
+    const runConfig = effort ? { ...config, thinking: true, reasoningEffort: effort } : config;
     const { agent, dispose } = createCliAgent({
-      config,
-      model,
+      config: runConfig,
+      model: runOpts?.model ?? model,
+      ...(runOpts?.permissionRules ? { permissionRules: runOpts.permissionRules } : {}),
       confirm: makeConfirm(rl),
       onModelDelta: renderer.modelDelta,
       onReasoningDelta: renderer.reasoningDelta,
@@ -138,6 +169,22 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
     }
     if (line === "") continue;
 
+    // "# fact" is a shortcut to save a fact to project memory (like Claude Code).
+    if (line.startsWith("#")) {
+      const fact = line.slice(1).trim();
+      if (!fact) {
+        console.log(t("repl.rememberUsage"));
+        continue;
+      }
+      try {
+        const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+        console.log(t("repl.remembered", { content: c.content }));
+      } catch (err) {
+        console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+      }
+      continue;
+    }
+
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.split(/\s+/);
       // Custom slash commands (.seekforge/commands/<name>.md) take priority over
@@ -146,9 +193,20 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
       const customName = (cmd ?? "").replace(/^\//, "");
       const custom = customName ? userCommands.find((c) => c.name === customName) : undefined;
       if (custom) {
-        const task = expandUserCommand(custom, rest.join(" ").trim());
+        let task = expandUserCommand(custom, rest.join(" ").trim());
+        // !`cmd` injections run in the workspace and their output is inlined.
+        if (commandHasShellInjection(task)) {
+          task = await expandShellInjections(task, (c) => runShellCapture(c, projectPath));
+        }
+        // Frontmatter model / allowed-tools apply just to this invocation.
+        const permissionRules = custom.allowedTools
+          ? buildToolGatingRules({ allowedTools: custom.allowedTools, base: config.permissionRules })
+          : undefined;
         try {
-          await runOnce(task);
+          await runOnce(task, {
+            ...(custom.model ? { model: custom.model } : {}),
+            ...(permissionRules ? { permissionRules } : {}),
+          });
         } catch (err) {
           console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
         }

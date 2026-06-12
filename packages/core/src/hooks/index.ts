@@ -130,8 +130,11 @@ export type HookOutcome = {
   outputTail: string;
   /** The hook's stdout alone (head, capped at 8000 chars) — context/decision input. */
   stdout: string;
-  /** preToolUse only: the parsed JSON stdout decision, when one was given. */
-  decision?: "allow" | "deny";
+  /**
+   * preToolUse only: the parsed JSON stdout decision, when one was given.
+   * "ask" means the hook explicitly defers to the normal permission flow.
+   */
+  decision?: "allow" | "deny" | "ask";
   timedOut: boolean;
 };
 
@@ -257,25 +260,61 @@ function runOneHook(
   });
 }
 
-/**
- * Parses a preToolUse hook's stdout as a JSON decision. Returns undefined for
- * anything that is not a JSON object with decision "allow" | "deny" —
- * malformed JSON or other stdout never changes behavior.
- */
-function parseToolDecision(stdout: string): { decision: "allow" | "deny"; reason?: string } | undefined {
-  const text = stdout.trim();
+/** Parses `s` as a JSON object, returning undefined for non-objects/garbage. */
+function parseJsonObject(s: string): Record<string, unknown> | undefined {
+  const text = s.trim();
   if (!text.startsWith("{")) return undefined;
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    const parsed = JSON.parse(text) as unknown;
+    return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }
-  if (parsed === null || typeof parsed !== "object") return undefined;
-  const decision = (parsed as Record<string, unknown>)["decision"];
+}
+
+/**
+ * Parses a preToolUse hook's stdout as a JSON decision. Accepts both the legacy
+ * `{ "decision": "allow" | "deny", "reason"? }` and the Claude-Code shape
+ * `{ "hookSpecificOutput": { "permissionDecision": "allow"|"deny"|"ask",
+ * "permissionDecisionReason"? } }` (also honored at the top level). Returns
+ * undefined for anything else — malformed JSON never changes behavior.
+ */
+function parseToolDecision(stdout: string): { decision: "allow" | "deny" | "ask"; reason?: string } | undefined {
+  const obj = parseJsonObject(stdout);
+  if (!obj) return undefined;
+  const specific =
+    obj["hookSpecificOutput"] && typeof obj["hookSpecificOutput"] === "object"
+      ? (obj["hookSpecificOutput"] as Record<string, unknown>)
+      : undefined;
+
+  const permission = specific?.["permissionDecision"] ?? obj["permissionDecision"];
+  if (permission === "allow" || permission === "deny" || permission === "ask") {
+    const reason = specific?.["permissionDecisionReason"] ?? obj["permissionDecisionReason"];
+    return { decision: permission, ...(typeof reason === "string" ? { reason } : {}) };
+  }
+
+  const decision = obj["decision"];
   if (decision !== "allow" && decision !== "deny") return undefined;
-  const reason = (parsed as Record<string, unknown>)["reason"];
+  const reason = obj["reason"];
   return { decision, ...(typeof reason === "string" ? { reason } : {}) };
+}
+
+/**
+ * The context text a userPromptSubmit / sessionStart hook contributes. Prefers
+ * an explicit JSON `additionalContext` (top-level or under hookSpecificOutput),
+ * matching Claude Code; otherwise the hook's raw stdout is used verbatim.
+ */
+function hookContextText(stdout: string): string {
+  const obj = parseJsonObject(stdout);
+  if (obj) {
+    const specific =
+      obj["hookSpecificOutput"] && typeof obj["hookSpecificOutput"] === "object"
+        ? (obj["hookSpecificOutput"] as Record<string, unknown>)
+        : undefined;
+    const ctx = specific?.["additionalContext"] ?? obj["additionalContext"];
+    if (typeof ctx === "string") return ctx;
+  }
+  return stdout;
 }
 
 /** Total stdout budget for userPromptSubmit <hook-context> injection. */
@@ -293,7 +332,7 @@ export function buildHookContext(outcomes: HookOutcome[]): string {
   let suffix = "";
   for (const o of outcomes) {
     if (!o.ok || budget <= 0) continue;
-    const text = o.stdout.trim();
+    const text = hookContextText(o.stdout).trim();
     if (!text) continue;
     const clipped = text.slice(0, budget);
     budget -= clipped.length;
@@ -347,6 +386,11 @@ export async function runHooks(
       if (d?.decision === "allow") {
         outcomes.push({ ...outcome, decision: "allow" });
         break; // explicit allow: skip the remaining preToolUse hooks
+      }
+      if (d?.decision === "ask") {
+        // Explicit deferral to the normal permission flow: record it, keep going.
+        outcomes.push({ ...outcome, decision: "ask" });
+        continue;
       }
     }
 

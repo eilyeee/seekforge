@@ -91,27 +91,36 @@ function readSettingsFile(settingsPath: string): CliConfig {
 }
 
 /**
- * Precedence: env > CLI flags > --settings file > project .seekforge/config.json > ~/.seekforge/config.json
+ * Precedence: env > CLI flags > --settings file > .seekforge/config.local.json
+ *   > project .seekforge/config.json > ~/.seekforge/config.json
  *
- * The --settings layer slots between project config (below) and env vars (above).
- * For deep-merge fields (mcpServers, permissionRules, hooks), the settings
+ * config.local.json is the gitignored personal layer (per-developer overrides);
+ * it slots just above the shared project config. The --settings layer sits
+ * above it. For deep-merge fields (mcpServers, permissionRules, hooks), each
  * layer is merged into the existing logic rather than replacing wholesale.
  */
 export function loadConfig(projectPath: string, settingsPath?: string): CliConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
+  const local = readJson(join(projectPath, ".seekforge", "config.local.json"));
   const settings = settingsPath ? readSettingsFile(settingsPath) : {};
 
-  // mcpServers merges per server name (later wins): settings > project > global.
-  const mcpServers = { ...global.mcpServers, ...project.mcpServers, ...settings.mcpServers };
-  // permissionRules concatenates settings-then-project-then-global: first match
-  // wins, so settings rules take highest precedence among file layers.
+  // mcpServers merges per server name (later wins): settings > local > project > global.
+  const mcpServers = {
+    ...global.mcpServers,
+    ...project.mcpServers,
+    ...local.mcpServers,
+    ...settings.mcpServers,
+  };
+  // permissionRules concatenates settings-then-local-then-project-then-global:
+  // first match wins, so settings rules take highest precedence among file layers.
   const permissionRules = [
     ...(settings.permissionRules ?? []),
+    ...(local.permissionRules ?? []),
     ...(project.permissionRules ?? []),
     ...(global.permissionRules ?? []),
   ];
-  // hooks concatenate per stage: global first, then project, then settings.
+  // hooks concatenate per stage: global, then project, then local, then settings.
   const hooks: HookConfig = {};
   for (const stage of [
     "preToolUse",
@@ -127,6 +136,7 @@ export function loadConfig(projectPath: string, settingsPath?: string): CliConfi
     const merged = [
       ...(global.hooks?.[stage] ?? []),
       ...(project.hooks?.[stage] ?? []),
+      ...(local.hooks?.[stage] ?? []),
       ...(settings.hooks?.[stage] ?? []),
     ];
     if (merged.length > 0) hooks[stage] = merged;
@@ -134,6 +144,7 @@ export function loadConfig(projectPath: string, settingsPath?: string): CliConfi
   return {
     ...global,
     ...project,
+    ...local,
     ...settings,
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
