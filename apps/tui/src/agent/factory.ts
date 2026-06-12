@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import {
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  wrapProviderWithCache,
   type AgentCore,
   type AgentDefinition,
   type BackgroundTasks,
@@ -59,12 +62,16 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
-  const provider = createDeepSeekProvider({
+  const baseProvider = createDeepSeekProvider({
     apiKey: config.apiKey ?? "",
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
     ...thinkingOpts,
   });
+  // Opt-in disk cache for identical non-streaming calls (evals, subagents).
+  const provider = config.llmCache
+    ? wrapProviderWithCache(baseProvider, join(homedir(), ".seekforge", "llm-cache"))
+    : baseProvider;
 
   const agent = createAgentCore({
     provider,
@@ -88,6 +95,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
     ...(config.compaction ? { compaction: config.compaction } : {}),
+    ...(config.routing?.planModel ? { planModel: config.routing.planModel } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };

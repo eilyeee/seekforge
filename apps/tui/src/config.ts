@@ -44,6 +44,14 @@ export type TuiConfig = {
   compaction?: "mechanical" | "llm";
   /** Capture the mouse for wheel scrolling (default false: text stays selectable). */
   mouse?: boolean;
+  /** UI language ("en" | "zh-CN"); SEEKFORGE_LANG/LANG also detected. */
+  locale?: "en" | "zh-CN";
+  /** Vision model for the image_analyze tool (OpenAI-compatible endpoint). */
+  visionModel?: { model: string; baseUrl?: string; apiKey?: string };
+  /** Cache identical non-streaming LLM calls on disk (evals/subagents). */
+  llmCache?: boolean;
+  /** Model routing: /plan runs think on this model (e.g. deepseek-v4-pro). */
+  routing?: { planModel?: string };
 };
 
 function readJson(path: string): TuiConfig {

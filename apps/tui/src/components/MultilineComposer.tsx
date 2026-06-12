@@ -13,17 +13,21 @@ type MultilineComposerProps = {
   editor: EditorState;
   disabled: boolean;
   placeholder?: string;
+  /** History-based ghost completion shown dim after the cursor (→ accepts). */
+  ghost?: string;
 };
 
 /** A buffer line with the cursor rendered as an inverse character. */
-function LineWithCursor({ line, column }: { line: string; column: number }): React.ReactElement {
+function LineWithCursor({ line, column, ghost }: { line: string; column: number; ghost?: string }): React.ReactElement {
   const before = line.slice(0, column);
-  const at = column < line.length ? line[column] : " ";
-  const after = column < line.length ? line.slice(column + 1) : "";
+  const atEnd = column >= line.length;
+  const at = atEnd ? " " : line[column];
+  const after = atEnd ? "" : line.slice(column + 1);
   return (
     <Text>
       {before}
       <Text inverse>{at}</Text>
+      {atEnd && ghost ? <Text dimColor>{ghost}</Text> : null}
       {after}
     </Text>
   );
@@ -33,6 +37,7 @@ export function MultilineComposer({
   editor,
   disabled,
   placeholder,
+  ghost,
 }: MultilineComposerProps): React.ReactElement {
   if (disabled) {
     return (
@@ -75,7 +80,7 @@ export function MultilineComposer({
           ) : (
             <Text dimColor>… </Text>
           )}
-          {i === cursorLine ? <LineWithCursor line={line} column={cursorColumn} /> : <Text>{line}</Text>}
+          {i === cursorLine ? <LineWithCursor line={line} column={cursorColumn} {...(ghost ? { ghost } : {})} /> : <Text>{line}</Text>}
         </Box>
       ))}
     </Box>

@@ -107,6 +107,25 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
       return todoCandidates(argSoFar, ctx);
     case "tasks":
       return tasksCandidates(argSoFar, ctx);
+    case "theme":
+      return ["default", "deepseek", "mono", "solarized", "matrix"].map((v) => ({ value: v }));
+    case "tab":
+      return [
+        { value: "new", hint: "open a parallel session tab (Ctrl+N)" },
+        { value: "next", hint: "switch tabs (Ctrl+T)" },
+        { value: "close", hint: "close the current tab" },
+      ];
+    case "stash":
+      return [
+        { value: "", hint: "stash the current draft" },
+        { value: "pop", hint: "restore the last stashed draft" },
+        { value: "list", hint: "show stashed drafts" },
+      ];
+    case "handoff":
+      return [
+        { value: "", hint: "write a handoff document" },
+        { value: "list", hint: "recent handoffs" },
+      ];
     case "export":
       return [{ value: "", hint: "default path" }];
     default:

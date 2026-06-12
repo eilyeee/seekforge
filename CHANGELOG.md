@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0 (unreleased) — round 9: CodeWhale absorption + style
+
+- Multi-tab sessions: Ctrl+N opens a parallel tab, Ctrl+T cycles, /tab
+  manages; every tab owns its own transcript/session/run (actions route by
+  tab ID, so a run keeps streaming into its tab after you switch away);
+  per-tab permission/question prompts; the tab strip shows auto-names.
+- Sidebar file tree (Ctrl+E): fold/expand dirs, Enter inserts @path.
+- Transcript pager (Ctrl+L): full untruncated history, g/G/PgUp/PgDn.
+- Composer extras: history ghost suggestions (→ accepts), /stash [pop|list]
+  draft stash.
+- CodeWhale-referenced style: tighter ◆ header, segmented │ status bar,
+  theme presets (deepseek/mono/solarized/matrix) with /theme picker, OSC8
+  hyperlinks in supported terminals; en/zh-CN i18n layer (config locale or
+  SEEKFORGE_LANG).
+- Engine: image_analyze vision tool (config visionModel, OpenAI-compatible
+  endpoint — closes the Ctrl+V image loop); /balance; opt-in LLM response
+  cache (llmCache); plan-model routing (routing.planModel — /plan thinks on
+  v4-pro, execution on flash); seekforge mcp-serve exposes SeekForge AS an
+  MCP server (read-only by default, --allow-write opt-in); /handoff session
+  handoff documents; error taxonomy — failures now carry actionable hints.
+- Deliberately not adopted from CodeWhale: in-TUI text selection (our
+  default-off mouse capture keeps native selection), hotbar/context menus
+  (mouse-first UI), full LSP integration and execpolicy DSL (our
+  diagnostics-via-tools and permission rules cover the need at lower
+  complexity), full i18n of every string (chrome strings only for now).
+
 ## 0.7.0 (unreleased) — round 8: release readiness
 
 - `seekforge-tui` now ships inside the published `seekforge` npm package as

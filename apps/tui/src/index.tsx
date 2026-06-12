@@ -1,11 +1,12 @@
 import React from "react";
 import { createRequire } from "node:module";
 import { render } from "ink";
-import { listSessions } from "@seekforge/core";
+import { configureVision, listSessions } from "@seekforge/core";
 import { App } from "./app.js";
 import { loadConfig, type TuiConfig } from "./config.js";
 import { prepareMcp } from "./agent/factory.js";
 import { loadTheme } from "./theme.js";
+import { detectLocale, setLocale } from "./strings.js";
 import { setAccent } from "./components/Header.js";
 import { parseTuiArgs, TUI_HELP } from "./cli-args.js";
 import { needsOnboarding, saveGlobalApiKey } from "./onboarding.js";
@@ -42,6 +43,12 @@ async function main(): Promise<void> {
   if (args.model) config = { ...config, model: args.model };
   if (args.vim !== undefined) config = { ...config, vim: args.vim };
   setAccent(loadTheme(config.accent).accent);
+  setLocale(config.locale ?? detectLocale());
+  configureVision(
+    config.visionModel?.baseUrl
+      ? { model: config.visionModel.model, baseUrl: config.visionModel.baseUrl, ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}) }
+      : null,
+  );
 
   // The TUI is interactive only. Without a TTY (CI, piped stdout, smoke import)
   // there is nothing to render — print a short notice and exit cleanly instead
