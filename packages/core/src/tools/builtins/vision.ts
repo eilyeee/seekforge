@@ -56,7 +56,7 @@ const imageAnalyzeSchema = z.object({
   question: z
     .string()
     .optional()
-    .describe("What to ask about the image (default: a detailed description)."),
+    .describe("Specific question about the image, e.g. \"What error is shown?\" (default: a detailed description)."),
 });
 
 const DEFAULT_QUESTION = "Describe this image in detail for a coding agent.";
@@ -64,8 +64,9 @@ const DEFAULT_QUESTION = "Describe this image in detail for a coding agent.";
 const imageAnalyze = defineTool({
   name: "image_analyze",
   description:
-    "Analyze an image file (png/jpg/jpeg/gif/webp, max 4MB) with the configured vision model and return a text description. " +
-    "Use it to read screenshots, diagrams, or UI mockups. Requires user confirmation (network call).",
+    "Send the image at path (png/jpg/jpeg/gif/webp, max 4MB) to the configured vision model and return a text answer; fails with vision_unconfigured when no vision model is set up. " +
+    'Ask a specific question ("What error text is shown in this screenshot?", "List the form fields and their labels") rather than a generic one. ' +
+    "Network call — always requires user confirmation.",
   schema: imageAnalyzeSchema,
   // "env" level: always confirmed, even in auto-approval mode — same pattern
   // as web_fetch/web_search; the image leaves the machine via a network call.

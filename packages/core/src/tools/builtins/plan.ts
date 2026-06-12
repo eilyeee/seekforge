@@ -19,7 +19,7 @@ export type PlanItem = z.infer<typeof planItemSchema>;
 const updatePlan = defineTool({
   name: "update_plan",
   description:
-    "Publish or update your step-by-step plan for the current task (full replacement). Use for tasks with 3+ steps; keep statuses current as you work.",
+    "Publish your step-by-step plan as items — a FULL replacement of the previous plan, so always resend every step, not just the changed ones. Use for tasks with 3+ steps and keep statuses (pending/in_progress/done) current as you work; skip it for trivial tasks.",
   schema: updatePlanSchema,
   classify: (args) => ({
     permission: "readonly",

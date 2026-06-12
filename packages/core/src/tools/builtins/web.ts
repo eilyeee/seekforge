@@ -71,7 +71,7 @@ const webFetchSchema = z.object({
 const webFetch = defineTool({
   name: "web_fetch",
   description:
-    "Fetch a public http(s) URL and return its readable text (HTML is stripped). Every fetch requires user confirmation; private/loopback addresses are refused.",
+    "Fetch a public http(s) url and return its readable text (HTML is stripped, output capped at 20k chars). Every fetch requires user confirmation and private/loopback addresses are refused — fetch only when the page genuinely adds information (docs, issues, changelogs), not for things the codebase already answers.",
   schema: webFetchSchema,
   // "env" level: always confirmed, even in auto-approval mode — the network
   // is off by default (docs/14 §3.5) and every URL is shown raw to the user.
@@ -211,7 +211,7 @@ const SEARCH_DEFAULT_COUNT = 5;
 const SEARCH_MAX_COUNT = 10;
 
 const webSearchSchema = z.object({
-  query: z.string().min(1).describe("Search query text."),
+  query: z.string().min(1).describe("Search query: a few concrete keywords, not a full sentence."),
   count: z
     .number()
     .int()
@@ -224,9 +224,9 @@ const webSearchSchema = z.object({
 const webSearch = defineTool({
   name: "web_search",
   description:
-    "Search the web via DuckDuckGo and return the top results (title, url, snippet). " +
-    "Results are web snippets to verify by fetching the page — not authoritative. " +
-    "Every search requires user confirmation (the network is off by default).",
+    "Search the web (DuckDuckGo) with query and return top results as {title, url, snippet}. " +
+    "Every search requires user confirmation (network is off by default), so search only for facts you cannot get locally: current library versions, unfamiliar error messages, recent API changes. " +
+    'Use a few concrete keywords ("vitest mock timers flush"), not full sentences; snippets are leads, not authoritative — verify with web_fetch.',
   schema: webSearchSchema,
   // "env" level: always confirmed even in auto mode, like web_fetch — the
   // network is default-deny and the raw query is shown to the user.
