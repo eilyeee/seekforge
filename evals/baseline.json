@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-11T05:11:08.677Z",
+  "generatedAt": "2026-06-12T09:58:53.145Z",
   "results": [
     {
       "taskId": "add-function",
@@ -23,10 +23,62 @@
       ],
       "metrics": {
         "turns": 6,
-        "toolCalls": 7,
+        "toolCalls": 8,
         "failedToolCalls": 0,
-        "costUsd": 0.0023313080000000003,
-        "durationMs": 14535,
+        "costUsd": 0.0025038720000000003,
+        "durationMs": 13205,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "add-missing-tests",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node --test test/validators.test.js"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/validators.test.js",
+            "pattern": "isValidEmail"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/validators.test.js",
+            "pattern": "assert"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/validators.js",
+            "pattern": "module\\.exports = \\{ isValidEmail, isValidPort \\};"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 6,
+        "failedToolCalls": 0,
+        "costUsd": 0.001989064,
+        "durationMs": 9258,
         "score": 100
       }
     },
@@ -44,10 +96,145 @@
       ],
       "metrics": {
         "turns": 2,
-        "toolCalls": 1,
+        "toolCalls": 2,
         "failedToolCalls": 0,
-        "costUsd": 0.000645456,
-        "durationMs": 1899,
+        "costUsd": 0.0008633800000000001,
+        "durationMs": 2279,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "cross-module-bug",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/discount.js",
+            "pattern": "return subtotal \\* percent;"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/checkout.test.js",
+            "pattern": "checkoutTotal\\(\\[120, 80\\], 10\\), 180"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 10,
+        "failedToolCalls": 0,
+        "costUsd": 0.0028616839999999998,
+        "durationMs": 15205,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "deprecated-api-migration",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/config.js",
+            "pattern": "getConfig"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/server.js",
+            "pattern": "getConfig"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/logger.js",
+            "pattern": "getConfig"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/server.js",
+            "pattern": "loadConfig"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 11,
+        "toolCalls": 15,
+        "failedToolCalls": 0,
+        "costUsd": 0.0038768519999999996,
+        "durationMs": 20053,
+        "score": 99
+      }
+    },
+    {
+      "taskId": "error-handling",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/account.js",
+            "pattern": "TypeError"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/account.js",
+            "pattern": "RangeError"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/account.test.js",
+            "pattern": "withdraw\\(100, 100\\.01\\), RangeError"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 9,
+        "failedToolCalls": 0,
+        "costUsd": 0.002408672,
+        "durationMs": 11218,
         "score": 100
       }
     },
@@ -80,11 +267,211 @@
         }
       ],
       "metrics": {
+        "turns": 6,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0022868999999999997,
+        "durationMs": 11811,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "json-config-edit",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node -e \"const c = require('./config/app.json'); const ok = c.name === 'demo-service' && c.version === '2.0.0' && c.server.host === 'localhost' && c.server.port === 8080 && c.features.beta === false && c.features.darkMode === true; process.exit(ok ? 0 : 1)\""
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 9,
+        "failedToolCalls": 0,
+        "costUsd": 0.003155124,
+        "durationMs": 11683,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "off-by-one-fix",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/paginate.test.js",
+            "pattern": "pageCount\\(10, 3\\), 4"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/paginate.test.js",
+            "pattern": "pageCount\\(1, 5\\), 1"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
         "turns": 5,
         "toolCalls": 7,
         "failedToolCalls": 0,
-        "costUsd": 0.001696688,
-        "durationMs": 9149,
+        "costUsd": 0.0022587320000000003,
+        "durationMs": 11891,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "perf-nested-loop",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/tally.js",
+            "pattern": "for \\(let j"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/tally.js",
+            "pattern": "new Map\\("
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.00282814,
+        "durationMs": 12290,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "rename-across-files",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/format.js",
+            "pattern": "formatPrice"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/format.js",
+            "pattern": "fmtPrice"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/cart.js",
+            "pattern": "fmtPrice"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/receipt.js",
+            "pattern": "fmtPrice"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/report.js",
+            "pattern": "fmtPrice"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 12,
+        "toolCalls": 18,
+        "failedToolCalls": 0,
+        "costUsd": 0.007797775999999999,
+        "durationMs": 25621,
+        "score": 98
+      }
+    },
+    {
+      "taskId": "spec-to-feature",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/duration.js",
+            "pattern": "TODO: implement"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/duration.test.js",
+            "pattern": "parseDuration\\(\"1h2m3s\"\\), 3723"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.002644264,
+        "durationMs": 15156,
         "score": 100
       }
     },
@@ -117,11 +504,48 @@
         }
       ],
       "metrics": {
-        "turns": 6,
+        "turns": 5,
+        "toolCalls": 6,
+        "failedToolCalls": 0,
+        "costUsd": 0.0019130160000000002,
+        "durationMs": 7981,
+        "score": 100
+      }
+    },
+    {
+      "taskId": "ts-typing-fix",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/stats.ts",
+            "pattern": "const avg: string"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/stats.ts",
+            "pattern": "toFixed\\(2\\)"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
         "toolCalls": 7,
         "failedToolCalls": 0,
-        "costUsd": 0.00205772,
-        "durationMs": 11708,
+        "costUsd": 0.001970612,
+        "durationMs": 13718,
         "score": 100
       }
     }
