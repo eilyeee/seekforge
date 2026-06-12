@@ -72,12 +72,14 @@ CLI).
 
 ## Slash commands
 
-`/help` `/new` `/clear` `/sessions` (interactive picker) `/resume <id>`
+`/help` `/new` `/clear` `/sessions` (picker; `f` forks) `/resume <id>` `/fork`
 `/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/backtrack`
-`/diff` `/model <name>` `/remember <fact>` `/memory [edit]`
-`/tasks [kill <id>]` `/agents` `/skills` `/mcp` `/init` `/doctor` `/vim`
-`/context` `/compact` (manual, in-place) `/usage` `/export [path]` `/copy`
-`/editor` `/quit`
+`/diff` `/review` `/model` (picker) `/think [on|off|high|max]`
+`/remember <fact>` `/memory [edit]` `/todo [add|done|rm]` `/add-dir [path]`
+`/tasks [kill <id>]` `/agents` `/skills` `/mcp` (incl. resources) `/init`
+`/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
+`/export [path]` `/copy` `/editor` `/quit` — plus custom commands from
+`.seekforge/commands/`.
 
 Background tasks started with `run_command background:true` survive across
 turns (one shared manager per TUI process; killed on exit). `/compact` folds

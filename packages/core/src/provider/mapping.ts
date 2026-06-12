@@ -42,11 +42,22 @@ export type WireUsage = {
 
 export type WireChatCompletion = {
   choices?: Array<{
-    message?: { content?: string | null; tool_calls?: WireToolCall[] };
+    message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: WireToolCall[] };
     finish_reason?: string | null;
   }>;
   usage?: WireUsage | null;
 };
+
+/** Request-side thinking controls (DeepSeek V4 only). */
+export type ThinkingOptions = {
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max";
+};
+
+/** thinking.{type,reasoning_effort} is only valid on deepseek-v4-* models. */
+export function supportsThinking(model: string): boolean {
+  return model.startsWith("deepseek-v4");
+}
 
 // --- request mapping --------------------------------------------------------
 
@@ -80,6 +91,7 @@ export function buildRequestBody(
   model: string,
   req: ChatRequest,
   stream: boolean,
+  thinking?: ThinkingOptions,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model,
@@ -90,6 +102,15 @@ export function buildRequestBody(
   if (req.temperature !== undefined) body.temperature = req.temperature;
   if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
   if (stream) body.stream_options = { include_usage: true };
+  // V4 thinking mode. Note: reasoning_content from responses is never echoed
+  // back (toWireMessages builds from our ChatMessage, which has no such
+  // field) — the API 400s on requests containing it.
+  if (supportsThinking(model) && (thinking?.thinking !== undefined || thinking?.reasoningEffort)) {
+    body.thinking = {
+      type: thinking.thinking === false ? "disabled" : "enabled",
+      ...(thinking.reasoningEffort ? { reasoning_effort: thinking.reasoningEffort } : {}),
+    };
+  }
   return body;
 }
 
@@ -127,10 +148,12 @@ export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolC
 
 export function mapChatResponse(json: WireChatCompletion, model: string): ChatResponse {
   const choice = json.choices?.[0];
+  const reasoning = choice?.message?.reasoning_content;
   return {
     content: choice?.message?.content ?? "",
     toolCalls: mapWireToolCalls(choice?.message?.tool_calls),
     finishReason: mapFinishReason(choice?.finish_reason),
     usage: mapUsage(json.usage, model),
+    ...(typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
   };
 }

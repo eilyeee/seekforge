@@ -61,6 +61,8 @@ export type AgentCoreDeps = {
   contextWindowTokens?: number;
   /** When set, model output is streamed through this callback (chatStream). */
   onModelDelta?: (chunk: string) => void;
+  /** Streamed chain-of-thought deltas (DeepSeek V4 thinking mode). */
+  onReasoningDelta?: (chunk: string) => void;
   /** Post-task memory extraction (one extra model call) for edit sessions. */
   extractMemory?: boolean;
   /** Rust execution backend; passed through to tools via ToolContext. */
@@ -682,7 +684,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
 
           const res = deps.onModelDelta
-            ? await deps.provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta)
+            ? await deps.provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta, deps.onReasoningDelta)
             : await deps.provider.chat({ messages, tools: toolDefs });
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });

@@ -266,3 +266,36 @@ describe("chatReducer v2.1 (steering queue, shell, bg-sync, clear)", () => {
     expect(s.queue).toEqual([]);
   });
 });
+
+describe("chatReducer thinking blocks (V4)", () => {
+  it("coalesces thinking deltas and closes the block when content starts", () => {
+    let s = base();
+    s = chatReducer(s, { type: "thinking-delta", chunk: "let me " });
+    s = chatReducer(s, { type: "thinking-delta", chunk: "think" });
+    expect(s.items).toHaveLength(1);
+    const th = s.items[0] as ChatItem & { kind: "thinking" };
+    expect(th.kind).toBe("thinking");
+    expect(th.text).toBe("let me think");
+    expect(th.streaming).toBe(true);
+    s = chatReducer(s, { type: "model-delta", chunk: "answer" });
+    expect((s.items[0] as ChatItem & { kind: "thinking" }).streaming).toBe(false);
+    expect((s.items[0] as ChatItem & { kind: "thinking" }).endedAt).toBeDefined();
+    expect((s.items[1] as ChatItem & { kind: "assistant" }).text).toBe("answer");
+  });
+
+  it("run-end closes a dangling thinking block", () => {
+    let s = base();
+    s = chatReducer(s, { type: "thinking-delta", chunk: "hmm" });
+    s = chatReducer(s, { type: "run-end" });
+    expect((s.items[0] as ChatItem & { kind: "thinking" }).streaming).toBe(false);
+  });
+
+  it("tracks live turn tokens from usage.updated and resets on run-start", () => {
+    let s = base();
+    s = chatReducer(s, { type: "run-start" });
+    s = reduce(s, { type: "usage.updated", usage: { promptTokens: 100, completionTokens: 50, cacheHitTokens: 0, costUsd: 0 } });
+    expect(s.turnTokens).toBe(150);
+    s = chatReducer(s, { type: "run-start" });
+    expect(s.turnTokens).toBe(0);
+  });
+});

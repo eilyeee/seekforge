@@ -1,4 +1,5 @@
 import React from "react";
+import { createRequire } from "node:module";
 import { render } from "ink";
 import { listSessions } from "@seekforge/core";
 import { App } from "./app.js";
@@ -69,13 +70,23 @@ async function main(): Promise<void> {
   const mcp = await prepareMcp(config); // MCP servers live for the whole session
   const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : undefined;
 
+  let version: string | undefined;
+  try {
+    const require = createRequire(import.meta.url);
+    version = (require("../package.json") as { version?: string }).version;
+  } catch {
+    // header simply omits the version
+  }
+
   const { waitUntilExit } = render(
     <App
       config={config}
       projectPath={projectPath}
       initialModel={model}
       mcpToolSpecs={mcp.specs}
+      mcpEntries={mcp.entries}
       {...(continueSessionId ? { initialSessionId: continueSessionId } : {})}
+      {...(version ? { version } : {})}
     />,
   );
   try {

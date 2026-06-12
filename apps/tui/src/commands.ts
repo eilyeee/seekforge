@@ -25,8 +25,13 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" },
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" },
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" },
+  { name: "fork", summary: "fork the current session (continue without touching the original)" },
   { name: "diff", summary: "git diff of the working tree" },
+  { name: "review", summary: "review the uncommitted changes (read-only)" },
+  { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" },
+  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references" },
   { name: "model", args: "<name>", summary: "switch model for subsequent messages" },
+  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" },
   { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" },
   { name: "memory", args: "[edit]", summary: "list project memory facts (edit opens $EDITOR)" },
   { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" },
@@ -36,6 +41,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" },
   { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" },
   { name: "vim", summary: "toggle vim mode for the composer" },
+  { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" },
   { name: "context", summary: "open the context inspector" },
   { name: "compact", summary: "how context compaction works" },
   { name: "usage", summary: "cumulative token usage and cost" },
@@ -55,8 +61,14 @@ export type SlashCommand =
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
+  | { name: "fork" }
   | { name: "diff" }
+  | { name: "review" }
+  | { name: "todo"; arg?: string }
+  | { name: "add-dir"; arg?: string }
+  | { name: "terminal-setup" }
   | { name: "model"; arg?: string }
+  | { name: "think"; arg?: string }
   | { name: "remember"; arg?: string }
   | { name: "memory"; arg?: string }
   | { name: "tasks"; arg?: string }
@@ -88,7 +100,10 @@ const NO_ARG = new Set([
   "clear",
   "sessions",
   "backtrack",
+  "fork",
   "diff",
+  "review",
+  "terminal-setup",
   "agents",
   "skills",
   "mcp",
@@ -103,9 +118,9 @@ const NO_ARG = new Set([
   "quit",
 ]);
 /** Commands whose argument is the whole rest of the line (free text). */
-const REST_ARG = new Set(["plan", "remember", "tasks"]);
+const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir"]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "memory", "export"]);
+const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "memory", "export"]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();
@@ -130,7 +145,7 @@ export function parseInput(line: string): ParsedInput {
 
   const [head, ...rest] = trimmed.slice(1).split(/\s+/);
   const name = (head ?? "").toLowerCase();
-  const alias = name === "exit" ? "quit" : name;
+  const alias = name === "exit" ? "quit" : name === "todos" ? "todo" : name;
 
   if (NO_ARG.has(alias)) return { kind: "slash", command: { name: alias } as SlashCommand };
   if (REST_ARG.has(alias)) {

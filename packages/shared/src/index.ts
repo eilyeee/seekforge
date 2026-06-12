@@ -137,6 +137,8 @@ export type ChatResponse = {
   toolCalls: ProviderToolCall[];
   usage: TokenUsage;
   finishReason: ChatFinishReason;
+  /** Chain-of-thought text (DeepSeek V4 thinking mode). NEVER sent back. */
+  reasoningContent?: string;
 };
 
 // ---------------------------------------------------------------------------

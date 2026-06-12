@@ -181,3 +181,30 @@ describe("mapChatResponse", () => {
     expect(response.usage.costUsd).toBe(0);
   });
 });
+
+describe("V4 thinking mode", () => {
+  it("attaches thinking only for deepseek-v4 models", async () => {
+    const { buildRequestBody } = await import("../../src/provider/mapping.js");
+    const req = { messages: [{ role: "user" as const, content: "hi" }] };
+    const v4 = buildRequestBody("deepseek-v4-pro", req, false, { thinking: true, reasoningEffort: "max" });
+    expect(v4.thinking).toEqual({ type: "enabled", reasoning_effort: "max" });
+    const off = buildRequestBody("deepseek-v4-flash", req, false, { thinking: false });
+    expect(off.thinking).toEqual({ type: "disabled" });
+    const legacy = buildRequestBody("deepseek-chat", req, false, { thinking: true });
+    expect(legacy.thinking).toBeUndefined();
+    const unset = buildRequestBody("deepseek-v4-pro", req, false, {});
+    expect(unset.thinking).toBeUndefined();
+  });
+
+  it("maps reasoning_content from responses", async () => {
+    const { mapChatResponse } = await import("../../src/provider/mapping.js");
+    const res = mapChatResponse(
+      { choices: [{ message: { content: "answer", reasoning_content: "let me think" }, finish_reason: "stop" }] },
+      "deepseek-v4-pro",
+    );
+    expect(res.reasoningContent).toBe("let me think");
+    expect(res.content).toBe("answer");
+    const none = mapChatResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }, "deepseek-v4-pro");
+    expect(none.reasoningContent).toBeUndefined();
+  });
+});

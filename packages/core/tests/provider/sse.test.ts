@@ -106,3 +106,25 @@ describe("SSE accumulation", () => {
     expect(finalizeSse(acc).content).toBe("tail");
   });
 });
+
+describe("streaming reasoning_content", () => {
+  it("accumulates reasoning deltas separately and fires the callback", async () => {
+    const { createSseAccumulator, feedSseChunk, finalizeSse } = await import("../../src/provider/sse.js");
+    const acc = createSseAccumulator();
+    const content: string[] = [];
+    const reasoning: string[] = [];
+    const lines = [
+      'data: {"choices":[{"delta":{"reasoning_content":"think "}}]}',
+      'data: {"choices":[{"delta":{"reasoning_content":"hard"}}]}',
+      'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    feedSseChunk(acc, lines, (d) => content.push(d), (d) => reasoning.push(d));
+    const result = finalizeSse(acc);
+    expect(reasoning.join("")).toBe("think hard");
+    expect(content.join("")).toBe("answer");
+    expect(result.reasoningContent).toBe("think hard");
+    expect(result.content).toBe("answer");
+  });
+});

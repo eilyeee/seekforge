@@ -35,12 +35,16 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     "content-type": "application/json",
     authorization: `Bearer ${config.apiKey}`,
   };
+  const thinking = {
+    ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+  };
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
     const res = await fetchWithRetry(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(buildRequestBody(model, req, false)),
+      body: JSON.stringify(buildRequestBody(model, req, false, thinking)),
     });
     const json = (await res.json()) as WireChatCompletion;
     return mapChatResponse(json, model);
@@ -49,11 +53,12 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   async function chatStream(
     req: ChatRequest,
     onDelta: (chunk: string) => void,
+    onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
     const res = await fetchWithRetry(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(buildRequestBody(model, req, true)),
+      body: JSON.stringify(buildRequestBody(model, req, true, thinking)),
     });
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
@@ -65,9 +70,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta);
+        feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
       }
-      feedSseChunk(acc, decoder.decode(), onDelta);
+      feedSseChunk(acc, decoder.decode(), onDelta, onReasoningDelta);
     } finally {
       reader.releaseLock();
     }
@@ -77,6 +82,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       toolCalls: result.toolCalls,
       finishReason: result.finishReason,
       usage: mapUsage(result.usage, model),
+      ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
     };
   }
 

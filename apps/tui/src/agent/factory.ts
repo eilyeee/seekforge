@@ -8,6 +8,7 @@ import {
   type AgentCore,
   type AgentDefinition,
   type BackgroundTasks,
+  type McpClientEntry,
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
@@ -19,6 +20,8 @@ export type TuiAgentOptions = {
   model?: string;
   confirm: (req: PermissionRequest) => Promise<boolean>;
   onModelDelta?: (chunk: string) => void;
+  /** Streamed chain-of-thought deltas (V4 thinking mode). */
+  onReasoningDelta?: (chunk: string) => void;
   extractMemory: boolean;
   /** Specialist agents the loop may dispatch via dispatch_agent. */
   subagents?: AgentDefinition[];
@@ -52,10 +55,15 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     }
   }
 
+  const thinkingOpts = {
+    ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+  };
   const provider = createDeepSeekProvider({
     apiKey: config.apiKey ?? "",
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
+    ...thinkingOpts,
   });
 
   const agent = createAgentCore({
@@ -64,11 +72,12 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     // deepseek-reasoner cannot drive the tool-call loop, so fall back.
     providerForModel: (model) => {
       if (model === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model });
+      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model, ...thinkingOpts });
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
+    ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     extractMemory: opts.extractMemory,
     runtime,
     commandAllowlist: config.commandAllowlist,
@@ -77,6 +86,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     hooks: config.hooks,
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
+    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
   });
 
   return { agent, dispose: () => runtime?.dispose() };
@@ -86,9 +96,11 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
  * Spawns the configured MCP servers and builds their ToolSpecs. Callers must
  * invoke dispose() when the session ends. No servers configured -> no-op.
  */
-export async function prepareMcp(config: TuiConfig): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
+export async function prepareMcp(
+  config: TuiConfig,
+): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
   if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
-    return { specs: [], dispose: () => {} };
+    return { specs: [], entries: [], dispose: () => {} };
   }
   return loadMcpToolSpecs(config.mcpServers);
 }
