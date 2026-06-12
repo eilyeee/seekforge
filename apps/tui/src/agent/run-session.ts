@@ -4,6 +4,7 @@ import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createTuiAgent } from "./factory.js";
 import { createDiffCapture } from "../diff-capture.js";
+import { createBufferedDispatch } from "../delta-buffer.js";
 import type { ChatAction } from "../model.js";
 
 export type RunSessionDeps = {
@@ -39,12 +40,16 @@ export async function runSession(
   signal: AbortSignal,
   deps: RunSessionDeps,
 ): Promise<void> {
+  // Coalesce per-token deltas and live output into ~20fps dispatches so the
+  // transcript doesn't repaint on every chunk (anti-flicker).
+  const buffered = createBufferedDispatch(deps.dispatch);
+
   const { agent, dispose } = createTuiAgent({
     config: deps.config,
     model: deps.model,
     confirm: deps.confirm,
-    onModelDelta: (chunk) => deps.dispatch({ type: "model-delta", chunk }),
-    onReasoningDelta: (chunk) => deps.dispatch({ type: "thinking-delta", chunk }),
+    onModelDelta: (chunk) => buffered.dispatch({ type: "model-delta", chunk }),
+    onReasoningDelta: (chunk) => buffered.dispatch({ type: "thinking-delta", chunk }),
     extractMemory: true,
     subagents: loadAgentDefinitions(deps.projectPath),
     mcpToolSpecs: deps.mcpToolSpecs,
@@ -65,11 +70,12 @@ export async function runSession(
       resumeSessionId: deps.getSessionId(),
       signal,
     })) {
-      deps.dispatch({ type: "event", event });
+      buffered.dispatch({ type: "event", event });
       const diff = capture.onEvent(event);
-      if (diff) deps.dispatch({ type: "diff", path: diff.path, lines: diff.lines });
+      if (diff) buffered.dispatch({ type: "diff", path: diff.path, lines: diff.lines });
     }
   } finally {
+    buffered.flush();
     dispose();
   }
 }

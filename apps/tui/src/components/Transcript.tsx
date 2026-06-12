@@ -130,6 +130,14 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
   }
 }
 
+/**
+ * Memoized item renderer: ChatItems are immutable (the reducer replaces only
+ * the items it changes), so settled transcript entries skip re-rendering —
+ * and re-parsing markdown / re-highlighting code — on every streamed delta.
+ * This is the main defense against flicker during long runs.
+ */
+const MemoItem = React.memo(Item);
+
 type TranscriptProps = {
   items: ChatItem[];
   /** Items hidden below the viewport (0 = pinned to latest). */
@@ -146,7 +154,7 @@ export function Transcript({ items, offset, size, verbose }: TranscriptProps): R
     <Box flexDirection="column">
       {hiddenAbove > 0 ? <Text dimColor>… {hiddenAbove} earlier items (PageUp to scroll)</Text> : null}
       {items.slice(start, end).map((item) => (
-        <Item key={item.id} item={item} verbose={verbose} />
+        <MemoItem key={item.id} item={item} verbose={verbose} />
       ))}
       {hiddenBelow > 0 ? (
         <Text dimColor>
