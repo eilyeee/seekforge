@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### round 27: desktop UI design polish
+A UI-design pass on the desktop app (the token system, themes, modals, and
+button philosophy were already solid — these are refinements):
+- **Unified iconography.** ~27 inline unicode glyphs used as icons in the chat
+  stream (✻ thinking, ▸/▾ expand carets, ⤷ subagent, → arrows) are replaced with
+  SVG icons (`IconSparkle`/`IconChevron`/`IconCornerDownRight`/`IconArrowRight`),
+  so weight/baseline/color are consistent across platforms and CJK fonts.
+  Genuinely-textual characters (streaming cursor ▌, `·` separators) are kept.
+- **Tighter accent hierarchy.** The whale-blue accent was tinting too many
+  secondary things; it's now reserved for the user's own messages and
+  interactive elements. The "session completed" card uses the success color
+  (`ok`); subagent/agent rows are neutral.
+- **One micro type size.** Scattered `text-[9px]/[10px]/[11px]` (incl. an
+  illegible 9px) collapse into a single `text-2xs` (11px) token in the Tailwind
+  config.
+
 ### round 26: model-selection polish + REPL commands (Claude detail parity)
 An audit vs Claude found stale deprecated-model defaults users would hit:
 - **Desktop Settings could only pick `deepseek-chat`** — the dropdown omitted the

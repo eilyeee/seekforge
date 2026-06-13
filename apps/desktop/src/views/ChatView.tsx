@@ -224,7 +224,7 @@ export function ChatView() {
       <header className="flex flex-wrap items-center gap-3 border-b border-subtle px-4 py-2">
         <h1 className="text-sm font-semibold text-primary">Chat</h1>
         {tab.chat.sessionId && (
-          <span className="rounded bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-secondary">
+          <span className="rounded bg-surface-overlay px-2 py-0.5 font-mono text-2xs text-secondary">
             {tab.chat.sessionId}
           </span>
         )}
@@ -327,7 +327,7 @@ export function ChatView() {
         {config && (
           <span
             title="OS command sandbox (config: sandbox)"
-            className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
+            className={`rounded px-1.5 py-0.5 font-mono text-2xs uppercase ${
               config.sandbox && config.sandbox !== "off"
                 ? "bg-ok/15 text-ok"
                 : "bg-surface-overlay text-tertiary"

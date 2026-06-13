@@ -54,6 +54,11 @@ export default {
         // Slightly more generous default radius (Claude-desktop-ish calm).
         DEFAULT: "0.375rem",
       },
+      fontSize: {
+        // One canonical micro size for captions/labels (replaces the scattered
+        // text-[9px]/[10px]/[11px]); 11px keeps small chrome legible.
+        "2xs": ["0.6875rem", { lineHeight: "1rem" }],
+      },
       fontFamily: {
         // CJK-friendly system stacks (terminal-inspired UI, no webfonts).
         sans: [

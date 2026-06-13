@@ -116,7 +116,7 @@ export function PermissionModal({ request, onRespond }: Props) {
           <>
             <Button onClick={() => onRespond(false)}>
               Skip all
-              <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
+              <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
             </Button>
             <Button
               onClick={handleApplySelected}
@@ -126,7 +126,7 @@ export function PermissionModal({ request, onRespond }: Props) {
             >
               Apply selected ({selectedCount}/{hunks!.length})
               {selectedCount > 0 && (
-                <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
+                <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
               )}
             </Button>
             <Button
@@ -134,7 +134,7 @@ export function PermissionModal({ request, onRespond }: Props) {
               onClick={() => onRespond(true, undefined, hunks!.map((h) => h.index))}
             >
               Apply all
-              <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">a</kbd>
+              <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">a</kbd>
             </Button>
           </>
         }
@@ -147,10 +147,10 @@ export function PermissionModal({ request, onRespond }: Props) {
           </div>
         )}
 
-        <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-tertiary">
+        <div className="mb-1 flex items-center gap-2 text-2xs uppercase tracking-wider text-tertiary">
           <span>Individual edits</span>
           <button
-            className="ml-auto text-[10px] text-accent hover:text-accent-hover disabled:text-tertiary disabled:no-underline"
+            className="ml-auto text-2xs text-accent hover:text-accent-hover disabled:text-tertiary disabled:no-underline"
             disabled={selectedHunks !== null && selectedHunks.size === hunks!.length}
             onClick={() => setSelectedHunks(new Set(hunks!.map((h) => h.index)))}
           >
@@ -170,7 +170,7 @@ export function PermissionModal({ request, onRespond }: Props) {
                     className="mt-0.5 accent-accent"
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono text-[11px] text-tertiary">
+                    <div className="font-mono text-2xs text-tertiary">
                       Edit #{hunk.index + 1}
                     </div>
                     <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-primary">
@@ -203,11 +203,11 @@ export function PermissionModal({ request, onRespond }: Props) {
           <>
             <Button onClick={() => onRespond(false)}>
               Reject
-              <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
+              <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
             </Button>
             <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
               Accept
-              <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
+              <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
             </Button>
           </>
         }
@@ -234,15 +234,15 @@ export function PermissionModal({ request, onRespond }: Props) {
         <>
           <Button onClick={() => onRespond(false)}>
             Deny
-            <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">n</kbd>
+            <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
           </Button>
           <Button onClick={() => onRespond(true, "session")}>
             Allow for session
-            <kbd className="rounded bg-surface-overlay px-1 font-mono text-[10px] text-tertiary">a</kbd>
+            <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">a</kbd>
           </Button>
           <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
             Allow once
-            <kbd className="rounded bg-white/20 px-1 font-mono text-[10px]">y</kbd>
+            <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
           </Button>
         </>
       }
@@ -251,7 +251,7 @@ export function PermissionModal({ request, onRespond }: Props) {
 
       {request.command !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">raw command</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">raw command</div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-warn">
             {request.command}
           </pre>
@@ -259,7 +259,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       )}
       {request.path !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">raw path</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">raw path</div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-accent-hover">
             {request.path}
           </pre>

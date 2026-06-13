@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { ChatItem } from "../../lib/events";
 import { extractDiff } from "../../lib/diff";
 import { DiffBlock } from "../DiffBlock";
+import { IconChevron } from "../ui";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -58,7 +59,7 @@ export function ToolRow({ item }: { item: ToolItem }) {
           <span className="truncate text-danger/80">{item.result.error.message}</span>
         )}
         <span className="ml-auto text-tertiary opacity-0 transition-opacity group-hover:opacity-100">
-          {open ? "▾" : "▸"}
+          <IconChevron size={14} className={open ? "rotate-90" : ""} />
         </span>
       </button>
 
@@ -67,13 +68,13 @@ export function ToolRow({ item }: { item: ToolItem }) {
           <div className="space-y-2 py-1">
             {item.args !== undefined && (
               <div>
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">args</div>
+                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">args</div>
                 <Json value={item.args} />
               </div>
             )}
             {item.result !== undefined && (
               <div>
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-tertiary">result</div>
+                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">result</div>
                 {diff ? <DiffBlock diff={diff} /> : <Json value={item.result} />}
               </div>
             )}
@@ -84,7 +85,7 @@ export function ToolRow({ item }: { item: ToolItem }) {
       {/* Live output tail while the command is still running */}
       {item.status === "running" && item.tail !== undefined && (
         <ResultLine>
-          <pre className="overflow-x-auto py-0.5 font-mono text-[11px] leading-snug text-tertiary">
+          <pre className="overflow-x-auto py-0.5 font-mono text-2xs leading-snug text-tertiary">
             {item.tail.replace(/\n+$/, "")}
           </pre>
         </ResultLine>

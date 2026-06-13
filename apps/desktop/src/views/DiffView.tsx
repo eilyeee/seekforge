@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { useStore } from "../store";
 import { diffTotals, splitDiffByFile, type FileDiff } from "../lib/diff-files";
 import { DiffBlock } from "../components/DiffBlock";
-import { Button, EmptyState, IconDiff } from "../components/ui";
+import { Button, EmptyState, IconChevron, IconDiff } from "../components/ui";
 
 function FileSection({ file }: { file: FileDiff }) {
   const [open, setOpen] = useState(true);
@@ -14,7 +14,7 @@ function FileSection({ file }: { file: FileDiff }) {
         onClick={() => setOpen((v) => !v)}
         className="focus-ring flex w-full items-center gap-2 bg-surface-raised/60 px-3 py-1.5 text-left font-mono text-xs hover:bg-surface-overlay"
       >
-        <span className="text-tertiary">{open ? "▾" : "▸"}</span>
+        <span className="text-tertiary"><IconChevron size={10} className={open ? 'rotate-90' : ''} /></span>
         <span className="flex-1 truncate text-primary">{file.path}</span>
         <span className="text-ok">+{file.additions}</span>
         <span className="text-danger">-{file.deletions}</span>

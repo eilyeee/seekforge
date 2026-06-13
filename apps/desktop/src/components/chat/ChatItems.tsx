@@ -6,6 +6,7 @@ import { formatTokens, formatUsd } from "../../lib/usage";
 import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
+import { IconSparkle, IconChevron, IconCornerDownRight } from "../ui";
 
 /** The styled fallback chip shown for non-image markers or when an <img> fails. */
 function ImageChipFallback({ label, path }: { label: string; path: string }) {
@@ -60,7 +61,7 @@ function ImageFileChip({ path }: { path: string }) {
   const src = api.rawUrl(path);
   if (failed) {
     return (
-      <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-muted px-2.5 py-0.5 font-mono text-xs text-accent">
+      <div className="inline-flex items-center gap-1.5 rounded-full border border-subtle bg-surface-overlay px-2.5 py-0.5 font-mono text-xs text-secondary">
         <span aria-hidden>🖼</span>
         <span>{path}</span>
       </div>
@@ -114,9 +115,11 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
         onClick={() => setManualOpen(!open)}
         className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-tertiary hover:text-secondary"
       >
-        <span className={item.streaming ? "animate-pulse" : ""}>✻</span>
+        <IconSparkle size={14} className={item.streaming ? "animate-pulse" : ""} />
         <span className="italic">thinking{item.streaming ? "…" : ""}</span>
-        <span className="ml-auto text-tertiary">{open ? "▾" : "▸"}</span>
+        <span className="ml-auto text-tertiary">
+          <IconChevron size={14} className={open ? "rotate-90" : ""} />
+        </span>
       </button>
       {open && (
         <div className="whitespace-pre-wrap border-t border-subtle px-3 py-2 text-xs italic text-tertiary">
@@ -162,8 +165,10 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       return <PlanCard items={item.items} />;
     case "substep":
       return (
-        <div className="rounded border border-accent/40 bg-accent-muted/40 px-3 py-1.5 text-xs">
-          <span className="font-mono font-semibold text-accent">⤷ {item.agentId}</span>
+        <div className="rounded border border-subtle bg-surface/40 px-3 py-1.5 text-xs">
+          <span className="font-mono font-semibold text-secondary">
+            <IconCornerDownRight size={14} className="inline-block align-middle" /> {item.agentId}
+          </span>
           <span className="ml-2 font-mono text-tertiary">{item.steps.join(" · ")}</span>
         </div>
       );
@@ -171,7 +176,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
       if (isImage) return <ImageFileChip path={item.path} />;
       return (
-        <div className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent-muted px-2.5 py-0.5 font-mono text-xs text-accent">
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-subtle bg-surface-overlay px-2.5 py-0.5 font-mono text-xs text-secondary">
           <span aria-hidden>±</span>
           <span>{item.path}</span>
         </div>
@@ -191,8 +196,8 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
       );
     case "report":
       return (
-        <div className="rounded border border-accent/40 bg-accent-muted/60 px-3 py-2 text-xs text-secondary">
-          <span className="font-semibold text-accent">session completed</span>
+        <div className="rounded border border-ok/40 bg-ok/10 px-3 py-2 text-xs text-secondary">
+          <span className="font-semibold text-ok">session completed</span>
           {item.report.changedFiles.length > 0 && (
             <span> · {item.report.changedFiles.length} file(s) changed</span>
           )}

@@ -51,7 +51,7 @@ export function Sidebar() {
       </div>
       {workspaces.length > 0 && (
         <div className="px-3 pb-3">
-          <label className="mb-1 block px-1 text-[10px] uppercase tracking-wider text-tertiary">
+          <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
             Workspace
           </label>
           <select
@@ -105,7 +105,7 @@ export function Sidebar() {
           Todos
         </button>
       </div>
-      <div className="flex items-center gap-1.5 border-t border-subtle px-4 py-3 font-mono text-[10px] text-tertiary">
+      <div className="flex items-center gap-1.5 border-t border-subtle px-4 py-3 font-mono text-2xs text-tertiary">
         <span
           className={`h-1.5 w-1.5 rounded-full ${
             conn === "connected" ? "bg-ok" : conn === "connecting" ? "bg-warn animate-pulse" : "bg-danger"

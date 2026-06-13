@@ -31,7 +31,7 @@ export function UsageFooter({
   balance?: AccountBalance | null;
 }) {
   return (
-    <div className="flex items-center gap-4 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-[11px] text-tertiary">
+    <div className="flex items-center gap-4 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-2xs text-tertiary">
       <span title="prompt tokens">prompt {formatTokens(usage.promptTokens)}</span>
       <span title="DeepSeek context-cache hits">cache-hit {formatTokens(usage.cacheHitTokens)}</span>
       <span title="completion tokens">completion {formatTokens(usage.completionTokens)}</span>
