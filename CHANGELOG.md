@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 (unreleased) — round 14: CLI + desktop detail parity vs Claude Code
+
+- Edit review before apply: write tools (write_file/apply_patch) attach a diff
+  preview to their permission request; the TUI panel and desktop modal become
+  "Review change → Accept / Reject" showing the colored diff before anything
+  is written (per-hunk partial-apply deferred — needs a confirm-contract change).
+- CLI completeness: `-p/--print` headless mode + stdin piping
+  (`cat err.log | seekforge -p "explain"`); `--output-format text|json|stream-json`
+  (`--json` = stream-json alias); `-c/--continue` + `--resume <id>`, `--add-dir`,
+  `--max-turns`, `--verbose` on run/ask/-p; new `doctor`, `mcp add/remove`,
+  `update` commands.
+- Desktop polish: native OS notifications (tauri-plugin-notification) on
+  permission/completion when unfocused; light/dark/system theme switcher with a
+  full light token set; first-run API-key onboarding screen.
+
 ## 0.7.0 (unreleased) — round 9: CodeWhale absorption + style
 
 - Multi-tab sessions: Ctrl+N opens a parallel tab, Ctrl+T cycles, /tab
