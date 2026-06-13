@@ -3,6 +3,13 @@ export const DEFAULT_BASE_URL = "https://api.deepseek.com";
 // listed on /models for new keys — V4 flash is the working default.
 export const DEFAULT_MODEL = "deepseek-v4-flash";
 
+/**
+ * Models that are deprecated upstream (no longer returned by /models for new
+ * API keys). Keep pricing and display support for users with existing keys,
+ * but flag them when listing.
+ */
+export const DEPRECATED_MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
+
 /** USD per 1M tokens, split by cache hit/miss on the input side. */
 export type ModelPricing = {
   inputCacheMissPer1M: number;
