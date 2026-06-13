@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useT } from "../../lib/i18n";
 import type { ChatItem } from "../../lib/events";
 import { extractDiff } from "../../lib/diff";
 import { DiffBlock } from "../DiffBlock";
@@ -43,6 +44,7 @@ function Json({ value }: { value: unknown }) {
  * args / result JSON.
  */
 export function ToolRow({ item }: { item: ToolItem }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const diff = item.result?.ok ? extractDiff(item.result.data) : null;
 
@@ -68,13 +70,13 @@ export function ToolRow({ item }: { item: ToolItem }) {
           <div className="space-y-2 py-1">
             {item.args !== undefined && (
               <div>
-                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">args</div>
+                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{t("chat.tool.args")}</div>
                 <Json value={item.args} />
               </div>
             )}
             {item.result !== undefined && (
               <div>
-                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">result</div>
+                <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{t("chat.tool.result")}</div>
                 {diff ? <DiffBlock diff={diff} /> : <Json value={item.result} />}
               </div>
             )}

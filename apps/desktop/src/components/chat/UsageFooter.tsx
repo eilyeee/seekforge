@@ -1,4 +1,5 @@
 import type { TokenUsage } from "@seekforge/shared";
+import { useT } from "../../lib/i18n";
 import type { ConnState } from "../../lib/ws";
 import type { ContextUsage } from "../../lib/events";
 import { formatTokens, formatUsd } from "../../lib/usage";
@@ -30,35 +31,36 @@ export function UsageFooter({
   /** DeepSeek account balance; null/undefined = unknown (chip hidden). */
   balance?: AccountBalance | null;
 }) {
+  const t = useT();
   return (
     <div className="flex items-center gap-4 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-2xs text-tertiary">
-      <span title="prompt tokens">prompt {formatTokens(usage.promptTokens)}</span>
-      <span title="DeepSeek context-cache hits">cache-hit {formatTokens(usage.cacheHitTokens)}</span>
-      <span title="completion tokens">completion {formatTokens(usage.completionTokens)}</span>
-      <span className="text-secondary" title="cumulative cost">
+      <span title={t("chat.usage.promptTitle")}>{t("chat.usage.prompt", { tokens: formatTokens(usage.promptTokens) })}</span>
+      <span title={t("chat.usage.cacheHitTitle")}>{t("chat.usage.cacheHit", { tokens: formatTokens(usage.cacheHitTokens) })}</span>
+      <span title={t("chat.usage.completionTitle")}>{t("chat.usage.completion", { tokens: formatTokens(usage.completionTokens) })}</span>
+      <span className="text-secondary" title={t("chat.usage.costTitle")}>
         {formatUsd(usage.costUsd)}
       </span>
       {context && (
         <span
           className={ctxColor(context.percent)}
-          title={`context window: ${formatTokens(context.usedTokens)} of ${formatTokens(context.budgetTokens)} budget tokens used`}
+          title={t("chat.usage.ctxTitle", { used: formatTokens(context.usedTokens), budget: formatTokens(context.budgetTokens) })}
         >
-          ctx {context.percent}%
+          {t("chat.usage.ctx", { percent: context.percent })}
         </span>
       )}
       {balance && (
         <span
           className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-zinc-400"
-          title="DeepSeek account balance remaining"
+          title={t("chat.usage.balanceTitle")}
         >
           {balance.currency === "USD" ? "$" : ""}
           {balance.totalBalance}
-          {balance.currency === "USD" ? "" : ` ${balance.currency}`} left
+          {balance.currency === "USD" ? "" : ` ${balance.currency}`} {t("chat.usage.balanceLeft")}
         </span>
       )}
       <span className="ml-auto flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${CONN_DOT[conn]}`} />
-        {conn}
+        {t(`status.${conn}`)}
       </span>
     </div>
   );

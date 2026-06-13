@@ -9,20 +9,21 @@ import { PermissionModal } from "../components/chat/PermissionModal";
 import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
+import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button, EmptyState } from "../components/ui";
 import type { AccountBalance, ServerConfig } from "../types";
 
-const MODES: { mode: StartMode; label: string; hint: string }[] = [
-  { mode: "edit", label: "Edit", hint: "make changes" },
-  { mode: "plan", label: "Plan", hint: "produce a plan first (read-only)" },
-  { mode: "ask", label: "Ask", hint: "read-only Q&A" },
+const MODES: { mode: StartMode; key: string; hintKey: string }[] = [
+  { mode: "edit", key: "chat.mode.edit", hintKey: "chat.mode.editHint" },
+  { mode: "plan", key: "chat.mode.plan", hintKey: "chat.mode.planHint" },
+  { mode: "ask", key: "chat.mode.ask", hintKey: "chat.mode.askHint" },
 ];
 
-const APPROVALS: { value: ApprovalChoice; label: string; hint: string }[] = [
-  { value: "confirm", label: "Confirm", hint: "approvalMode: confirm — prompt before each tool" },
-  { value: "acceptEdits", label: "Accept edits", hint: "approvalMode: acceptEdits — auto-approve file edits, prompt for the rest" },
-  { value: "auto", label: "Auto", hint: "approvalMode: auto — run every tool without prompting ⚠" },
+const APPROVALS: { value: ApprovalChoice; key: string; hintKey: string }[] = [
+  { value: "confirm", key: "chat.approval.confirm", hintKey: "chat.approval.confirmHint" },
+  { value: "acceptEdits", key: "chat.approval.acceptEdits", hintKey: "chat.approval.acceptEditsHint" },
+  { value: "auto", key: "chat.approval.auto", hintKey: "chat.approval.autoHint" },
 ];
 
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
@@ -35,6 +36,7 @@ type WorktreeDialog =
 const MODEL_SUGGESTIONS = ["deepseek-v4-flash", "deepseek-v4-pro"];
 
 export function ChatView() {
+  const t = useT();
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
@@ -71,7 +73,7 @@ export function ChatView() {
           // Merge was aborted server-side; worktree and base are untouched.
           setWorktreeDialog({ kind: "conflict", files: result.files });
         } else {
-          showToast("Worktree merged back");
+          showToast(t("chat.mergedToast"));
           setWorktreeDialog({ kind: "merged", tabId });
         }
       })
@@ -179,22 +181,22 @@ export function ChatView() {
   const tabMode = tab.mode;
   const composerCommands = useMemo<ComposerCommand[]>(
     () => [
-      { name: "new", hint: "start a fresh session in this tab", run: newSession },
+      { name: "new", hint: t("chat.cmdNewHint"), run: newSession },
       {
         name: "plan",
-        hint: "toggle Plan mode for the next start (read-only plan first)",
+        hint: t("chat.cmdPlanHint"),
         run: () => setMode(tabMode === "plan" ? "edit" : "plan"),
       },
-      { name: "edit", hint: "Edit mode for the next start (make changes)", run: () => setMode("edit") },
-      { name: "ask", hint: "Ask mode for the next start (read-only Q&A)", run: () => setMode("ask") },
-      { name: "model", hint: "switch the model (opens Settings)", run: () => setView("settings") },
-      { name: "sessions", hint: "browse and resume past sessions", run: () => setView("sessions") },
-      { name: "diff", hint: "view the working-tree diff", run: () => setView("diff") },
-      { name: "skills", hint: "installed skills", run: () => setView("skills") },
-      { name: "agents", hint: "dispatchable subagents", run: () => setView("agents") },
-      { name: "memory", hint: "project memory and candidates", run: () => setView("memory") },
-      { name: "evolution", hint: "self-evolution proposals", run: () => setView("evolution") },
-      { name: "settings", hint: "server configuration", run: () => setView("settings") },
+      { name: "edit", hint: t("chat.cmdEditHint"), run: () => setMode("edit") },
+      { name: "ask", hint: t("chat.cmdAskHint"), run: () => setMode("ask") },
+      { name: "model", hint: t("chat.cmdModelHint"), run: () => setView("settings") },
+      { name: "sessions", hint: t("chat.cmdSessionsHint"), run: () => setView("sessions") },
+      { name: "diff", hint: t("chat.cmdDiffHint"), run: () => setView("diff") },
+      { name: "skills", hint: t("chat.cmdSkillsHint"), run: () => setView("skills") },
+      { name: "agents", hint: t("chat.cmdAgentsHint"), run: () => setView("agents") },
+      { name: "memory", hint: t("chat.cmdMemoryHint"), run: () => setView("memory") },
+      { name: "evolution", hint: t("chat.cmdEvolutionHint"), run: () => setView("evolution") },
+      { name: "settings", hint: t("chat.cmdSettingsHint"), run: () => setView("settings") },
     ],
     [newSession, setMode, setView, tabMode],
   );
@@ -222,7 +224,7 @@ export function ChatView() {
       />
 
       <header className="flex flex-wrap items-center gap-3 border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Chat</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("chat.title")}</h1>
         {tab.chat.sessionId && (
           <span className="rounded bg-surface-overlay px-2 py-0.5 font-mono text-2xs text-secondary">
             {tab.chat.sessionId}
@@ -231,29 +233,29 @@ export function ChatView() {
         {tab.chat.running && (
           <span className="flex items-center gap-1.5 text-xs text-warn">
             <span className="h-2 w-2 animate-pulse rounded-full bg-warn" />
-            running
+            {t("chat.running")}
           </span>
         )}
 
-        <div className="flex items-center rounded border border-strong" title="mode for the next start">
-          {MODES.map(({ mode, label, hint }) => (
+        <div className="flex items-center rounded border border-strong" title={t("chat.modeTitle")}>
+          {MODES.map(({ mode, key, hintKey }) => (
             <button
               key={mode}
               type="button"
               disabled={!modeSelectable}
-              title={hint}
+              title={t(hintKey)}
               onClick={() => setMode(mode)}
               className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
                 tab.mode === mode ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay"
               }`}
             >
-              {label}
+              {t(key)}
             </button>
           ))}
         </div>
 
-        <div className="flex items-center rounded border border-strong" title="approval mode for the next start">
-          {APPROVALS.map(({ value, label, hint }) => {
+        <div className="flex items-center rounded border border-strong" title={t("chat.approvalTitle")}>
+          {APPROVALS.map(({ value, key, hintKey }) => {
             const active = tab.approvalMode === value;
             const activeClass =
               value === "auto"
@@ -266,13 +268,13 @@ export function ChatView() {
                 key={value}
                 type="button"
                 disabled={!modeSelectable}
-                title={hint}
+                title={t(hintKey)}
                 onClick={() => setApprovalMode(value)}
                 className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
                   active ? activeClass : "text-secondary hover:bg-surface-overlay"
                 }`}
               >
-                {label}
+                {t(key)}
                 {value === "auto" && active ? " ⚠" : ""}
               </button>
             );
@@ -284,8 +286,8 @@ export function ChatView() {
           value={tab.model}
           onChange={(e) => setModel(e.target.value)}
           disabled={tab.chat.running}
-          placeholder={config?.model ?? "model (config default)"}
-          title="model for the next message; empty = server config default"
+          placeholder={config?.model ?? t("chat.modelDefaultFallback")}
+          title={t("chat.modelTitle")}
           className="w-44 rounded border border-strong bg-surface px-2 py-1 font-mono text-xs text-primary placeholder:text-tertiary focus:border-accent/70 focus:outline-none disabled:opacity-50"
         />
         <datalist id="model-suggestions">
@@ -300,7 +302,7 @@ export function ChatView() {
               ? "border-accent/60 bg-accent-muted text-accent-hover"
               : "border-strong text-secondary"
           }`}
-          title="DeepSeek V4 thinking mode for the next message (✻ reasoning stream)"
+          title={t("chat.think")}
         >
           <input
             type="checkbox"
@@ -309,55 +311,55 @@ export function ChatView() {
             disabled={tab.chat.running}
             className="accent-accent"
           />
-          think
+          {t("chat.think")}
         </label>
         {(tab.thinking ?? config?.thinking ?? false) && (
           <select
             value={tab.reasoningEffort}
             onChange={(e) => setReasoningEffort(e.target.value as "high" | "max")}
             disabled={tab.chat.running}
-            title="reasoning effort (thinking mode)"
+            title={t("chat.reasoningTitle")}
             className="rounded border border-strong bg-surface px-1.5 py-1 text-xs text-secondary focus:border-accent/70 focus:outline-none disabled:opacity-50"
           >
-            <option value="high">high</option>
-            <option value="max">max</option>
+            <option value="high">{t("chat.reasoning.high")}</option>
+            <option value="max">{t("chat.reasoning.max")}</option>
           </select>
         )}
 
         {config && (
           <span
-            title="OS command sandbox (config: sandbox)"
+            title={t("chat.sandboxTitle")}
             className={`rounded px-1.5 py-0.5 font-mono text-2xs ${
               config.sandbox && config.sandbox !== "off"
                 ? "bg-ok/10 text-ok/80"
                 : "bg-surface-overlay text-tertiary"
             }`}
           >
-            sandbox: {config.sandbox ?? "off"}
+            {t("chat.sandboxLabel", { mode: config.sandbox ?? "off" })}
           </span>
         )}
 
         <div className="ml-auto flex gap-2">
           {tab.planReady && !tab.chat.running && tab.chat.sessionId && (
             <Button size="sm" variant="primary" onClick={executePlan}>
-              Execute plan
+              {t("chat.executePlan")}
             </Button>
           )}
           {tab.chat.running && (
             <Button size="sm" variant="danger" onClick={cancel}>
-              Cancel
+              {t("action.cancel")}
             </Button>
           )}
           <Button
             size="sm"
             onClick={downloadHandoff}
             disabled={tab.chat.items.length === 0}
-            title="Download a markdown handoff brief of this conversation"
+            title={t("chat.handoffTitle")}
           >
-            Handoff
+            {t("chat.handoff")}
           </Button>
           <Button size="sm" onClick={newSession}>
-            New session
+            {t("chat.newSession")}
           </Button>
         </div>
       </header>
@@ -370,12 +372,12 @@ export function ChatView() {
         {tab.chat.items.length === 0 ? (
           <EmptyState
             icon={<div className="font-mono text-2xl text-tertiary">&gt;_</div>}
-            title="Ask SeekForge to do something"
+            title={t("chat.emptyTitle")}
             description={
               <>
-                Describe a coding task to start a session.
+                {t("chat.emptyLine1")}
                 <br />
-                Enter sends · Shift+Enter inserts a newline
+                {t("chat.emptyLine2")}
               </>
             }
           />
@@ -397,7 +399,7 @@ export function ChatView() {
 
       {backtrackError && (
         <div className="border-t border-danger/40 bg-danger/10 px-4 py-1.5 font-mono text-xs text-danger">
-          backtrack failed: {backtrackError}
+          {t("chat.backtrackError", { error: backtrackError })}
         </div>
       )}
 
@@ -419,7 +421,7 @@ export function ChatView() {
         onChange={setDraft}
         onSend={submit}
         disabled={tab.chat.running}
-        placeholder={tab.chat.running ? "agent is running…" : "What should the agent do? (/ commands · @ files)"}
+        placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
         commands={composerCommands}
         workspaceId={tab.ws ?? ""}
       />
@@ -440,15 +442,14 @@ export function ChatView() {
 
       {backtrackItem !== null && (
         <ConfirmDialog
-          title="Rewind conversation to here?"
-          confirmLabel="Rewind"
+          title={t("chat.backtrackTitle")}
+          confirmLabel={t("chat.backtrackConfirm")}
           danger
           onConfirm={() => void confirmBacktrack()}
           onCancel={() => setBacktrackItem(null)}
         >
           <p>
-            This message and everything after it are removed from the session transcript. The next
-            message continues from the earlier state.
+            {t("chat.backtrackBody")}
           </p>
           <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-secondary">
             <input
@@ -457,15 +458,15 @@ export function ChatView() {
               onChange={(e) => setRestoreFiles(e.target.checked)}
               className="accent-danger"
             />
-            also restore files changed by the removed turns (checkpoint restore)
+            {t("chat.backtrackRestore")}
           </label>
         </ConfirmDialog>
       )}
 
       {confirmClose && (
         <ConfirmDialog
-          title="Close running tab?"
-          confirmLabel="Close tab"
+          title={t("chat.closeRunningTitle")}
+          confirmLabel={t("action.close")}
           danger
           onConfirm={() => {
             closeTab(confirmClose);
@@ -473,33 +474,32 @@ export function ChatView() {
           }}
           onCancel={() => setConfirmClose(null)}
         >
-          This tab has a running session. Closing it disconnects the socket and cancels the run on the server.
+          {t("chat.closeRunningBody")}
         </ConfirmDialog>
       )}
 
       {worktreeDialog?.kind === "discard" && (
         <ConfirmDialog
-          title="Discard worktree?"
-          confirmLabel="Discard"
+          title={t("chat.discardTitle")}
+          confirmLabel={t("chat.discardConfirm")}
           danger
           onConfirm={() => {
             const { tabId } = worktreeDialog;
             setWorktreeDialog(null);
             discardWorktree(tabId)
-              .then(() => showToast("Worktree discarded"))
+              .then(() => showToast(t("chat.discardToast")))
               .catch((e: unknown) => showToast(`Discard failed: ${e instanceof Error ? e.message : e}`));
           }}
           onCancel={() => setWorktreeDialog(null)}
         >
-          The worktree checkout and its branch are deleted permanently — any unmerged work in this session
-          is lost. The tab closes too.
+          {t("chat.discardBody")}
         </ConfirmDialog>
       )}
 
       {worktreeDialog?.kind === "merged" && (
         <ConfirmDialog
-          title="Merged back"
-          confirmLabel="Delete worktree & close tab"
+          title={t("chat.mergedTitle")}
+          confirmLabel={t("chat.mergedConfirm")}
           onConfirm={() => {
             const { tabId } = worktreeDialog;
             setWorktreeDialog(null);
@@ -509,20 +509,19 @@ export function ChatView() {
           }}
           onCancel={() => setWorktreeDialog(null)}
         >
-          The worktree branch was merged into the base workspace. Delete the worktree and close this tab?
-          (Cancel keeps both — you can continue working and merge again later.)
+          {t("chat.mergedBody")}
         </ConfirmDialog>
       )}
 
       {worktreeDialog?.kind === "conflict" && (
         <ConfirmDialog
-          title="Merge conflict — nothing was changed"
-          confirmLabel="OK"
+          title={t("chat.conflictTitle")}
+          confirmLabel={t("action.confirm")}
           onConfirm={() => setWorktreeDialog(null)}
           onCancel={() => setWorktreeDialog(null)}
         >
           <p className="mb-2">
-            The merge was aborted; the base workspace and the worktree are untouched. Conflicting files:
+            {t("chat.conflictBody")}
           </p>
           <ul className="max-h-48 list-inside list-disc overflow-y-auto font-mono text-xs text-warn">
             {worktreeDialog.files.map((f) => (
@@ -530,7 +529,7 @@ export function ChatView() {
             ))}
           </ul>
           <p className="mt-2 text-xs text-secondary">
-            Resolve the divergence (e.g. update the worktree from the base branch) and merge again.
+            {t("chat.conflictHint")}
           </p>
         </ConfirmDialog>
       )}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "./ui";
+import { useT } from "../lib/i18n";
 import {
   dataThemeAttr,
   nextThemeChoice,
@@ -31,12 +32,6 @@ export function initTheme(): void {
   applyTheme(readThemeChoice(localStorage.getItem(THEME_STORAGE_KEY)));
 }
 
-const LABEL: Record<ThemeChoice, string> = {
-  dark: "Dark",
-  light: "Light",
-  system: "System",
-};
-
 const GLYPH: Record<ThemeChoice, string> = {
   dark: "🌙",
   light: "☀",
@@ -48,6 +43,7 @@ const GLYPH: Record<ThemeChoice, string> = {
  * <html>; while on "system" it tracks the OS preference live.
  */
 export function ThemeSwitcher({ className = "" }: { className?: string }) {
+  const t = useT();
   const [choice, setChoice] = useState<ThemeChoice>(() =>
     typeof localStorage === "undefined" ? "system" : readThemeChoice(localStorage.getItem(THEME_STORAGE_KEY)),
   );
@@ -72,12 +68,12 @@ export function ThemeSwitcher({ className = "" }: { className?: string }) {
       size="sm"
       variant="ghost"
       onClick={() => setChoice((c) => nextThemeChoice(c))}
-      title={`Theme: ${LABEL[choice]} (click to change)`}
-      aria-label={`Theme: ${LABEL[choice]}`}
+      title={t("theme.title", { label: t(`theme.${choice}`) })}
+      aria-label={t("theme.ariaLabel", { label: t(`theme.${choice}`) })}
       className={className}
     >
       <span aria-hidden="true">{GLYPH[choice]}</span>
-      {LABEL[choice]}
+      {t(`theme.${choice}`)}
     </Button>
   );
 }

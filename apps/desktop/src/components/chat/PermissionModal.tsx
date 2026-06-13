@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useT } from "../../lib/i18n";
 import type { PermissionRequest } from "@seekforge/shared";
 import { Badge, type BadgeTone } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -34,6 +35,7 @@ type Props = {
  * Single-hunk or no hunks preserves the original boolean allow/deny flow.
  */
 export function PermissionModal({ request, onRespond }: Props) {
+  const tModal = useT();
   const [selectedHunks, setSelectedHunks] = useState<Set<number> | null>(null);
 
   const hunks = request.hunks;
@@ -107,7 +109,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         onDismiss={() => onRespond(false)}
         title={
           <>
-            <span>Review {hunks!.length} edits in {preview?.path ?? request.path ?? "unknown"}</span>
+            <span>{tModal("chat.permission.reviewEdits", { count: hunks!.length, path: preview?.path ?? request.path ?? tModal("chat.permission.reviewEditsFallback") })}</span>
             <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
             <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
           </>
@@ -115,7 +117,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         footer={
           <>
             <Button onClick={() => onRespond(false)}>
-              Skip all
+              {tModal("chat.permission.skipAll")}
               <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
             </Button>
             <Button
@@ -124,7 +126,7 @@ export function PermissionModal({ request, onRespond }: Props) {
               variant="primary"
               autoFocus
             >
-              Apply selected ({selectedCount}/{hunks!.length})
+              {tModal("chat.permission.applySelected", { selected: selectedCount, total: hunks!.length })}
               {selectedCount > 0 && (
                 <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
               )}
@@ -133,7 +135,7 @@ export function PermissionModal({ request, onRespond }: Props) {
               variant="primary"
               onClick={() => onRespond(true, undefined, hunks!.map((h) => h.index))}
             >
-              Apply all
+              {tModal("chat.permission.applyAll")}
               <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">a</kbd>
             </Button>
           </>
@@ -148,13 +150,13 @@ export function PermissionModal({ request, onRespond }: Props) {
         )}
 
         <div className="mb-1 flex items-center gap-2 text-2xs uppercase tracking-wider text-tertiary">
-          <span>Individual edits</span>
+          <span>{tModal("chat.permission.individualEdits")}</span>
           <button
             className="ml-auto text-2xs text-accent hover:text-accent-hover disabled:text-tertiary disabled:no-underline"
             disabled={selectedHunks !== null && selectedHunks.size === hunks!.length}
             onClick={() => setSelectedHunks(new Set(hunks!.map((h) => h.index)))}
           >
-            Select all
+            {tModal("chat.permission.selectAll")}
           </button>
         </div>
         <ul className="flex flex-col gap-1.5">
@@ -171,7 +173,7 @@ export function PermissionModal({ request, onRespond }: Props) {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="font-mono text-2xs text-tertiary">
-                      Edit #{hunk.index + 1}
+                      {tModal("chat.permission.editNumber", { n: hunk.index + 1 })}
                     </div>
                     <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-primary">
                       {hunk.preview}
@@ -194,7 +196,7 @@ export function PermissionModal({ request, onRespond }: Props) {
         onDismiss={() => onRespond(false)}
         title={
           <>
-            <span>Review change: {preview.path}</span>
+            <span>{tModal("chat.permission.reviewChange", { path: preview.path })}</span>
             <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
             <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
           </>
@@ -202,11 +204,11 @@ export function PermissionModal({ request, onRespond }: Props) {
         footer={
           <>
             <Button onClick={() => onRespond(false)}>
-              Reject
+              {tModal("chat.permission.reject")}
               <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
             </Button>
             <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
-              Accept
+              {tModal("chat.permission.accept")}
               <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
             </Button>
           </>
@@ -225,7 +227,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       onDismiss={() => onRespond(false)}
       title={
         <>
-          <span>Permission required</span>
+          <span>{tModal("chat.permission.permissionRequired")}</span>
           <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
           <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
         </>
@@ -233,15 +235,15 @@ export function PermissionModal({ request, onRespond }: Props) {
       footer={
         <>
           <Button onClick={() => onRespond(false)}>
-            Deny
+            {tModal("chat.permission.deny")}
             <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
           </Button>
           <Button onClick={() => onRespond(true, "session")}>
-            Allow for session
+            {tModal("chat.permission.allowSession")}
             <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">a</kbd>
           </Button>
           <Button variant="primary" onClick={() => onRespond(true)} autoFocus>
-            Allow once
+            {tModal("chat.permission.allowOnce")}
             <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
           </Button>
         </>
@@ -251,7 +253,7 @@ export function PermissionModal({ request, onRespond }: Props) {
 
       {request.command !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">raw command</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{tModal("chat.permission.rawCommand")}</div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-warn">
             {request.command}
           </pre>
@@ -259,7 +261,7 @@ export function PermissionModal({ request, onRespond }: Props) {
       )}
       {request.path !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">raw path</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{tModal("chat.permission.rawPath")}</div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-accent-hover">
             {request.path}
           </pre>

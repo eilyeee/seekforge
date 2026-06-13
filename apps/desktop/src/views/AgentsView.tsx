@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconAgents, type BadgeTone } from "../components/ui";
 import type { AgentInfo, AgentScope } from "../types";
 
@@ -12,7 +13,8 @@ const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
 };
 
 function ModeChip({ mode }: { mode: AgentInfo["mode"] }) {
-  return <Badge tone={mode === "ask" ? "accent" : "warn"}>{mode === "ask" ? "read-only" : "edit"}</Badge>;
+  const t = useT();
+  return <Badge tone={mode === "ask" ? "accent" : "warn"}>{mode === "ask" ? t("chat.mode.ask") : t("chat.mode.edit")}</Badge>;
 }
 
 function ScopeChip({ scope }: { scope: AgentScope }) {
@@ -29,6 +31,7 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 export function AgentsView() {
+  const t = useT();
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [detail, setDetail] = useState<AgentInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +61,7 @@ export function AgentsView() {
       <div className="flex h-full flex-col">
         <header className="flex items-center gap-3 border-b border-subtle px-4 py-2">
           <Button size="sm" onClick={() => setDetail(null)}>
-            ← Back
+            {t("agents.backBtn")}
           </Button>
           <span className="text-sm font-semibold text-primary">{detail.name}</span>
           <span className="font-mono text-xs text-tertiary">{detail.id}</span>
@@ -69,13 +72,13 @@ export function AgentsView() {
           <div className="max-w-2xl space-y-4">
             <p className="text-sm text-secondary">{detail.description}</p>
             <Card className="grid grid-cols-2 gap-3">
-              <Field label="model" value={detail.model ?? "(default)"} />
-              <Field label="max turns" value={String(detail.maxTurns ?? 15)} />
-              <Field label="triggers" value={detail.triggers.join(", ") || "—"} />
-              <Field label="tools" value={detail.tools?.join(", ") ?? "all tools"} />
-              {detail.own && <Field label="owns" value={detail.own} />}
-              {detail.doNotTouch && <Field label="do not touch" value={detail.doNotTouch} />}
-              {detail.boundary && <Field label="boundary" value={detail.boundary} />}
+              <Field label={t("agents.fieldModel")} value={detail.model ?? t("agents.defaultModel")} />
+              <Field label={t("agents.fieldMaxTurns")} value={String(detail.maxTurns ?? 15)} />
+              <Field label={t("agents.fieldTriggers")} value={detail.triggers.join(", ") || "—"} />
+              <Field label={t("agents.fieldTools")} value={detail.tools?.join(", ") ?? t("agents.allTools")} />
+              {detail.own && <Field label={t("agents.fieldOwns")} value={detail.own} />}
+              {detail.doNotTouch && <Field label={t("agents.fieldDoNotTouch")} value={detail.doNotTouch} />}
+              {detail.boundary && <Field label={t("agents.fieldBoundary")} value={detail.boundary} />}
             </Card>
             {detail.body && (
               <Card className="text-sm text-secondary">
@@ -91,19 +94,19 @@ export function AgentsView() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Agents</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("agents.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
         )}
         {agents === null ? (
-          <p className="text-tertiary">Loading…</p>
+          <p className="text-tertiary">{t("agents.loading")}</p>
         ) : agents.length === 0 ? (
           <EmptyState
             icon={<IconAgents size={28} />}
-            title="No agents configured"
-            description="Define agents in .seekforge/agents to dispatch specialized subagents."
+            title={t("agents.emptyTitle")}
+            description={t("agents.emptyDescription")}
           />
         ) : (
           <div className="max-w-3xl space-y-2">

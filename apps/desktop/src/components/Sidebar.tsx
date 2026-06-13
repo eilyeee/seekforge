@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { activeTab, useStore, type View } from "../store";
+import { useT } from "../lib/i18n";
 import {
   IconAgents,
   IconChat,
@@ -12,15 +13,15 @@ import {
   LogoMark,
 } from "./ui/icons";
 
-const NAV: { view: View; label: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
-  { view: "chat", label: "Chat", Icon: IconChat },
-  { view: "sessions", label: "Sessions", Icon: IconSessions },
-  { view: "diff", label: "Diff", Icon: IconDiff },
-  { view: "skills", label: "Skills", Icon: IconSkills },
-  { view: "agents", label: "Agents", Icon: IconAgents },
-  { view: "memory", label: "Memory", Icon: IconMemory },
-  { view: "evolution", label: "Evolve", Icon: IconEvolution },
-  { view: "settings", label: "Settings", Icon: IconSettings },
+const NAV: { view: View; key: string; Icon: ComponentType<{ size?: number; className?: string }> }[] = [
+  { view: "chat", key: "nav.chat", Icon: IconChat },
+  { view: "sessions", key: "nav.sessions", Icon: IconSessions },
+  { view: "diff", key: "nav.diff", Icon: IconDiff },
+  { view: "skills", key: "nav.skills", Icon: IconSkills },
+  { view: "agents", key: "nav.agents", Icon: IconAgents },
+  { view: "memory", key: "nav.memory", Icon: IconMemory },
+  { view: "evolution", key: "nav.evolution", Icon: IconEvolution },
+  { view: "settings", key: "nav.settings", Icon: IconSettings },
 ];
 
 /** Extra top padding on macOS: the window uses an overlay title bar, so the
@@ -28,6 +29,7 @@ const NAV: { view: View; label: string; Icon: ComponentType<{ size?: number; cla
 const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
 export function Sidebar() {
+  const t = useT();
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const workspaces = useStore((s) => s.workspaces);
@@ -52,7 +54,7 @@ export function Sidebar() {
       {workspaces.length > 0 && (
         <div className="px-3 pb-3">
           <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
-            Workspace
+            {t("nav.workspace")}
           </label>
           <select
             value={activeWorkspaceId}
@@ -69,7 +71,7 @@ export function Sidebar() {
         </div>
       )}
       <nav className="flex-1 space-y-0.5 px-2">
-        {NAV.map(({ view: v, label, Icon }) => {
+        {NAV.map(({ view: v, key, Icon }) => {
           const active = view === v;
           return (
             <button
@@ -87,7 +89,7 @@ export function Sidebar() {
                 size={15}
                 className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
               />
-              {label}
+              {t(key)}
             </button>
           );
         })}
@@ -96,13 +98,13 @@ export function Sidebar() {
         <button
           type="button"
           onClick={toggleTodos}
-          title="cross-session todo list (.seekforge/todos.md)"
+          title={t("todos.title")}
           className={`flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
             todosOpen ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay/50 hover:text-primary"
           }`}
         >
           <span className="w-5 font-mono text-xs text-tertiary">☑</span>
-          Todos
+          {t("nav.todos")}
         </button>
       </div>
       <div className="flex items-center gap-1.5 border-t border-subtle px-4 py-3 font-mono text-2xs text-tertiary">
@@ -111,7 +113,7 @@ export function Sidebar() {
             conn === "connected" ? "bg-ok" : conn === "connecting" ? "bg-warn animate-pulse" : "bg-danger"
           }`}
         />
-        {conn}
+        {t(`status.${conn}`)}
       </div>
     </aside>
   );

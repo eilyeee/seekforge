@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useT } from "../../lib/i18n";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
 
@@ -18,6 +19,7 @@ type Props = {
  * is never left blocked. Keyboard: 1-9 pick an option (TUI parity).
  */
 export function QuestionModal({ question, options, onAnswer }: Props) {
+  const t = useT();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -37,13 +39,13 @@ export function QuestionModal({ question, options, onAnswer }: Props) {
       onDismiss={() => onAnswer(DECLINED_ANSWER)}
       title={
         <>
-          <span>The agent has a question</span>
+          <span>{t("chat.question.title")}</span>
           <span className="ml-auto font-mono text-xs font-normal text-tertiary">ask_user</span>
         </>
       }
       footer={
         <Button size="sm" onClick={() => onAnswer(DECLINED_ANSWER)}>
-          Decline to answer
+          {t("chat.question.decline")}
         </Button>
       }
     >

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useT } from "../../lib/i18n";
 import { api } from "../../lib/api";
 import type { ChatItem } from "../../lib/events";
 import { isImagePath, splitImageMarkers } from "../../lib/composer";
@@ -106,6 +107,7 @@ function TextWithImages({ text }: { text: string }) {
  * collapsed to one line once the answer starts (click toggles).
  */
 function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
+  const t = useT();
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const open = manualOpen ?? item.streaming;
   return (
@@ -116,7 +118,7 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
         className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs text-tertiary hover:text-secondary"
       >
         <IconSparkle size={14} className={item.streaming ? "animate-pulse" : ""} />
-        <span className="italic">thinking{item.streaming ? "…" : ""}</span>
+        <span className="italic">{item.streaming ? t("chat.thinking.streaming") : t("chat.thinking")}</span>
         <span className="ml-auto text-tertiary">
           <IconChevron size={14} className={open ? "rotate-90" : ""} />
         </span>
@@ -131,6 +133,7 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
 }
 
 function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId: number) => void }) {
+  const t = useT();
   switch (item.kind) {
     case "user":
       return (
@@ -139,7 +142,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
             <button
               type="button"
               onClick={() => onBacktrack(item.id)}
-              title="Rewind the conversation to just before this message"
+              title={t("chat.rewindTitle")}
               className="mt-1 rounded border border-strong px-1.5 py-0.5 text-xs text-tertiary opacity-0 hover:bg-surface-overlay hover:text-primary group-hover:opacity-100"
             >
               ↺
@@ -185,25 +188,25 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
     case "compacted":
       return (
         <div className="rounded border border-dashed border-strong px-3 py-1.5 text-center text-xs text-tertiary">
-          context compacted — {item.droppedTurns} turns summarized into ~{item.summaryTokens} tokens
+          {t("chat.contextCompacted", { droppedTurns: item.droppedTurns, summaryTokens: item.summaryTokens })}
         </div>
       );
     case "microcompacted":
       return (
         <div className="rounded border border-dashed border-subtle px-3 py-1 text-center text-xs text-tertiary">
-          context micro-compacted — {item.clearedResults} old tool result(s) cleared
+          {t("chat.microCompacted", { clearedResults: item.clearedResults })}
         </div>
       );
     case "report":
       return (
         <div className="rounded border border-ok/40 bg-ok/10 px-3 py-2 text-xs text-secondary">
-          <span className="font-semibold text-ok">session completed</span>
+          <span className="font-semibold text-ok">{t("chat.sessionCompleted")}</span>
           {item.report.changedFiles.length > 0 && (
-            <span> · {item.report.changedFiles.length} file(s) changed</span>
+            <span> · {t("chat.filesChanged", { n: item.report.changedFiles.length })}</span>
           )}
           <span>
             {" "}
-            · {formatTokens(item.report.usage.promptTokens + item.report.usage.completionTokens)} tokens ·{" "}
+            · {formatTokens(item.report.usage.promptTokens + item.report.usage.completionTokens)} {t("chat.tokens")} ·{" "}
             {formatUsd(item.report.usage.costUsd)}
           </span>
           <div className="mt-1 font-mono text-tertiary">{item.report.verification}</div>
@@ -220,8 +223,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
           {item.error.hint && <div className="mt-1 text-xs text-danger/80">→ {item.error.hint}</div>}
           {resumeId && (
             <div className="mt-1 text-xs text-danger/80">
-              → resume with <span className="font-mono text-danger">/resume {resumeId}</span> (your file
-              changes and completed steps are preserved; checkpoints intact)
+              {t("chat.resumeInfo.prefix")} <span className="font-mono text-danger">/resume {resumeId}</span> {t("chat.resumeInfo.suffix")}
             </div>
           )}
         </div>

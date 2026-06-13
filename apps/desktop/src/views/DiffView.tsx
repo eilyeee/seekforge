@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useStore } from "../store";
 import { diffTotals, splitDiffByFile, type FileDiff } from "../lib/diff-files";
 import { DiffBlock } from "../components/DiffBlock";
+import { useT } from "../lib/i18n";
 import { Button, EmptyState, IconChevron, IconDiff } from "../components/ui";
 
 function FileSection({ file }: { file: FileDiff }) {
@@ -25,6 +26,7 @@ function FileSection({ file }: { file: FileDiff }) {
 }
 
 export function DiffView() {
+  const t = useT();
   const [files, setFiles] = useState<FileDiff[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [staged, setStaged] = useState(false);
@@ -59,29 +61,29 @@ export function DiffView() {
   return (
     <div className="flex h-full flex-col gap-3 p-4">
       <div className="flex items-center gap-3">
-        <h1 className="text-sm font-semibold text-primary">Workspace diff</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("diff.title")}</h1>
         <label className="flex items-center gap-1.5 text-xs text-secondary">
           <input type="checkbox" checked={staged} onChange={(e) => setStaged(e.target.checked)} className="accent-accent" />
-          staged
+          {t("diff.staged")}
         </label>
         <Button variant="ghost" size="sm" onClick={() => void refresh()}>
-          refresh
+          {t("diff.refresh")}
         </Button>
         {totals && totals.files > 0 && (
           <span className="font-mono text-xs text-tertiary">
-            {totals.files} file(s) <span className="text-ok">+{totals.additions}</span>{" "}
+            {t("diff.fileCount", { count: totals.files })} <span className="text-ok">+{totals.additions}</span>{" "}
             <span className="text-danger">-{totals.deletions}</span>
           </span>
         )}
-        {truncated && <span className="text-xs text-warn">diff truncated (2 MB cap)</span>}
+        {truncated && <span className="text-xs text-warn">{t("diff.truncated")}</span>}
       </div>
 
       {error && (
         <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>
       )}
-      {!error && loading && files === null && <p className="text-sm text-tertiary">Loading…</p>}
+      {!error && loading && files === null && <p className="text-sm text-tertiary">{t("diff.loading")}</p>}
       {!error && !loading && files && files.length === 0 && (
-        <EmptyState icon={<IconDiff size={28} />} title="Working tree clean" description="No uncommitted changes." />
+        <EmptyState icon={<IconDiff size={28} />} title={t("diff.emptyTitle")} description={t("diff.emptyDescription")} />
       )}
       <div className="flex-1 space-y-3 overflow-auto">
         {files?.map((f) => <FileSection key={f.path} file={f} />)}

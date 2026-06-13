@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
+import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconSkills, type BadgeTone } from "../components/ui";
 import type { Skill, SkillScope } from "../types";
 
@@ -16,6 +17,7 @@ function ScopeChip({ scope }: { scope: SkillScope }) {
 }
 
 export function SkillsView() {
+  const t = useT();
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [detail, setDetail] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,14 +46,14 @@ export function SkillsView() {
       <div className="flex h-full flex-col">
         <header className="flex items-center gap-3 border-b border-subtle px-4 py-2">
           <Button size="sm" onClick={() => setDetail(null)}>
-            ← Back
+            {t("skills.backBtn")}
           </Button>
           <span className="font-mono text-xs text-secondary">{detail.id}</span>
           <ScopeChip scope={detail.scope} />
-          {!detail.enabled && <Badge tone="danger">disabled</Badge>}
+          {!detail.enabled && <Badge tone="danger">{t("skills.disabled")}</Badge>}
         </header>
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          <Markdown source={detail.content ?? "*no SKILL.md content*"} />
+          <Markdown source={detail.content ?? t("skills.noContent")} />
         </div>
       </div>
     );
@@ -60,19 +62,19 @@ export function SkillsView() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-subtle px-4 py-2">
-        <h1 className="text-sm font-semibold text-primary">Skills</h1>
+        <h1 className="text-sm font-semibold text-primary">{t("skills.title")}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
         {error && (
           <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
         )}
         {skills === null ? (
-          <p className="text-tertiary">Loading…</p>
+          <p className="text-tertiary">{t("skills.loading")}</p>
         ) : skills.length === 0 ? (
           <EmptyState
             icon={<IconSkills size={28} />}
-            title="No skills found"
-            description="Add SKILL.md files under .seekforge/skills to teach the agent reusable workflows."
+            title={t("skills.emptyTitle")}
+            description={t("skills.emptyDescription")}
           />
         ) : (
           <div className="max-w-3xl space-y-2">

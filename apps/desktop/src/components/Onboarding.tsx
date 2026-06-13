@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { validateApiKeyFormat } from "../lib/onboarding";
+import { useT } from "../lib/i18n";
 import { Button, Input, LogoMark } from "./ui";
 
 const DEEPSEEK_URL = "https://platform.deepseek.com/api_keys";
@@ -15,6 +16,7 @@ const DEEPSEEK_URL = "https://platform.deepseek.com/api_keys";
  * re-checks config and unmounts this screen.
  */
 export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () => void }) {
+  const t = useT();
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -43,17 +45,16 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
         <div className="mb-5 flex items-center gap-2.5">
           <LogoMark size={28} className="text-accent" />
           <h1 className="text-lg font-semibold tracking-tight text-primary">
-            Welcome to Seek<span className="text-accent">Forge</span>
+            {t("onboarding.welcome")} Seek<span className="text-accent">Forge</span>
           </h1>
         </div>
 
         <p className="mb-5 text-sm leading-relaxed text-secondary">
-          SeekForge is a local-first coding agent powered by DeepSeek — chat, sessions, diffs, skills,
-          sub-agents and memory in one desktop workbench. Add your DeepSeek API key to get started.
+          {t("onboarding.description")}
         </p>
 
         <label className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">
-          DeepSeek API key
+          {t("onboarding.apiKeyLabel")}
         </label>
         <Input
           type="password"
@@ -73,7 +74,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
         {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
 
         <p className="mt-2 text-2xs text-tertiary">
-          Stored in your global config (~/.seekforge). Get a key at{" "}
+          {t("onboarding.storageHint")}
           <a
             href={DEEPSEEK_URL}
             target="_blank"
@@ -87,10 +88,10 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
 
         <div className="mt-6 flex items-center justify-between gap-2">
           <Button variant="ghost" size="sm" onClick={onSkip} disabled={saving}>
-            Skip for now
+            {t("onboarding.skip")}
           </Button>
           <Button variant="primary" onClick={() => void save()} disabled={saving || apiKey.trim() === ""}>
-            {saving ? "Saving…" : "Save & continue"}
+            {saving ? t("onboarding.saving") : t("onboarding.saveContinue")}
           </Button>
         </div>
       </div>

@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "../../lib/i18n";
 import { api } from "../../lib/api";
 import {
   atBottomEdge,
@@ -77,13 +78,14 @@ function PendingImageChip({
   workspaceId: string;
   onRemove: () => void;
 }) {
+  const t = useT();
   const [failed, setFailed] = useState(false);
   const name = marker.path.split("/").pop() || marker.path;
   const src = api.rawUrl(marker.path, workspaceId);
   const removeButton = (
     <button
       type="button"
-      aria-label={`Remove image #${marker.n}`}
+      aria-label={t("chat.composer.removeImage", { n: marker.n })}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onRemove}
       className="absolute -right-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-subtle bg-surface-raised text-xs text-tertiary hover:text-danger"
@@ -124,6 +126,7 @@ function PendingImageChip({
 }
 
 export function Composer({ value, onChange, onSend, disabled, placeholder, commands, workspaceId }: ComposerProps) {
+  const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   /** Esc dismissed the dropdown; cleared on the next text change. */
@@ -424,8 +427,8 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
 
       {(uploading > 0 || uploadError) && (
         <div className="mt-1 text-xs">
-          {uploading > 0 && <span className="text-tertiary">uploading image…</span>}
-          {uploadError && <span className="text-danger">upload failed: {uploadError}</span>}
+          {uploading > 0 && <span className="text-tertiary">{t("chat.composer.uploading")}</span>}
+          {uploadError && <span className="text-danger">{t("chat.composer.uploadFailed", { error: uploadError })}</span>}
         </div>
       )}
     </div>
