@@ -1,0 +1,18 @@
+{
+  "id": "multi-file-extract-helper",
+  "title": "Extract a duplicated slugify block into a shared helper",
+  "fixture": "multi-file-extract-helper",
+  "mode": "edit",
+  "task": "The same slugify routine is copy-pasted into four modules: src/posts.js, src/tags.js, src/users.js and src/categories.js (each marked with a `DUP-SLUGIFY` comment). Extract it into a single shared helper (e.g. a `slugify` function in src/slug.js) and have all four modules import and use it. Behavior must not change. Every `DUP-SLUGIFY` marker must be gone and no module may keep its own copy of the slug logic. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/posts.js", "pattern": "DUP-SLUGIFY" },
+    { "type": "file_not_contains", "path": "src/tags.js", "pattern": "DUP-SLUGIFY" },
+    { "type": "file_not_contains", "path": "src/users.js", "pattern": "DUP-SLUGIFY" },
+    { "type": "file_not_contains", "path": "src/categories.js", "pattern": "DUP-SLUGIFY" },
+    { "type": "file_not_contains", "path": "src/posts.js", "pattern": "replace\\(/\\[\\^a-z0-9\\]" },
+    { "type": "file_contains", "path": "src/slug.js", "pattern": "replace\\(/\\[\\^a-z0-9\\]" },
+    { "type": "command_succeeds", "command": "test $(grep -rl \"require.*slug\" src | wc -l) -ge 4" }
+  ],
+  "notes": "Behavior pinned by the suite. The DUP-SLUGIFY markers and the inlined regex must be gone from the call sites and live only in src/slug.js; the final command asserts at least four modules import the shared helper, so a partial extraction fails."
+}

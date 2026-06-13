@@ -1,0 +1,13 @@
+{
+  "id": "feature-edge-cases",
+  "title": "Implement median with all the boundary cases",
+  "fixture": "feature-edge-cases",
+  "mode": "edit",
+  "task": "Implement `median` in src/median.js exactly as described by the spec comment above it. The tests enforce every boundary: empty list returns null, a single element returns itself, odd-length returns the middle of sorted order, even-length returns the mean of the two middle values, the input must not be mutated, and averaging two very large middle values must not overflow to Infinity (use lo + (hi - lo) / 2 rather than (lo + hi) / 2). Do not assume the input is sorted and do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/median.js", "pattern": "TODO: implement" },
+    { "type": "file_contains", "path": "test/median.test.js", "pattern": "do not become Infinity" }
+  ],
+  "notes": "Boundary tests (empty/single/overflow/no-mutation) make a naive sum-and-divide implementation fail the overflow case; a full implementation passes."
+}

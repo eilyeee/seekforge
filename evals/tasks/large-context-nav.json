@@ -1,0 +1,14 @@
+{
+  "id": "large-context-nav",
+  "title": "Find and fix the one buggy module among many",
+  "fixture": "large-context-nav",
+  "mode": "edit",
+  "task": "`npm test` fails in test/clamp.test.js: a utility is not capping values at its upper bound. The src/ directory holds about fifteen small utility modules re-exported through src/index.js; only one of them is wrong, and there is a similarly named decoy (src/clampList.js) that is fine. Locate the actual buggy module, fix it at its source, and leave the other modules untouched. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/clamp.js", "pattern": "n > hi" },
+    { "type": "file_not_contains", "path": "src/clamp.js", "pattern": "if \\(n < hi\\) return hi;" },
+    { "type": "file_contains", "path": "test/clamp.test.js", "pattern": "caps values above the upper bound" }
+  ],
+  "notes": "Tests how well the agent navigates a larger fixture to the right file. The fix lives in src/clamp.js (wrong comparison on the upper bound); the decoy src/clampList.js must not be the one touched. file_not_contains removes the buggy comparison."
+}

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "service": "billing",
+  "timeoutSeconds": 30,
+  "endpoints": [
+    { "name": "create", "path": "/v1/create", "retries": 3 },
+    { "name": "cancel", "path": "/v1/cancel", "retries": 1 },
+    { "name": "status", "path": "/v1/status", "retries": 0 }
+  ]
+}

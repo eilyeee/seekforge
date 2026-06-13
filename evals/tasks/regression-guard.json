@@ -1,0 +1,15 @@
+{
+  "id": "regression-guard",
+  "title": "Fix a bug and add a regression test that guards it",
+  "fixture": "regression-guard",
+  "mode": "edit",
+  "task": "`titleCase` in src/titlecase.js mishandles runs of multiple spaces (it splits on a single space, producing empty words and wrong output). The existing tests in test/titlecase.test.js only use single spaces, so they pass even though the bug is real. Two things are required: (1) fix titleCase so multiple whitespace characters between words are handled and the result uses single spaces between words; (2) ADD a new regression test to test/titlecase.test.js that exercises the multiple-space case and would FAIL on the old buggy implementation. Keep the existing tests passing. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/titlecase.js", "pattern": "split\\(\" \"\\)" },
+    { "type": "command_succeeds", "command": "sh verify-regression.sh" },
+    { "type": "file_contains", "path": "verify-regression.sh", "pattern": "Anti-cheat for the regression-guard task" },
+    { "type": "file_contains", "path": "test/titlecase.test.js", "pattern": "title-cases a normal sentence" }
+  ],
+  "notes": "verify-regression.sh runs the agent's CURRENT test/ against the original buggy titlecase.js in a throwaway copy and asserts the suite FAILS there — proving an effective regression test was actually added (not a tautological one). The last pin keeps the original tests; file_not_contains removes the single-space split."
+}
