@@ -10,6 +10,7 @@ import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button, EmptyState } from "../components/ui";
 import type { AccountBalance, ServerConfig } from "../types";
 
 const MODES: { mode: StartMode; label: string; hint: string }[] = [
@@ -214,21 +215,21 @@ export function ChatView() {
         workspaceName={workspaceName}
       />
 
-      <header className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-2">
-        <h1 className="text-sm font-semibold text-zinc-100">Chat</h1>
+      <header className="flex flex-wrap items-center gap-3 border-b border-subtle px-4 py-2">
+        <h1 className="text-sm font-semibold text-primary">Chat</h1>
         {tab.chat.sessionId && (
-          <span className="rounded bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-zinc-400">
+          <span className="rounded bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-secondary">
             {tab.chat.sessionId}
           </span>
         )}
         {tab.chat.running && (
-          <span className="flex items-center gap-1.5 text-xs text-amber-400">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+          <span className="flex items-center gap-1.5 text-xs text-warn">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-warn" />
             running
           </span>
         )}
 
-        <div className="flex items-center rounded border border-zinc-700" title="mode for the next start">
+        <div className="flex items-center rounded border border-strong" title="mode for the next start">
           {MODES.map(({ mode, label, hint }) => (
             <button
               key={mode}
@@ -237,7 +238,7 @@ export function ChatView() {
               title={hint}
               onClick={() => setMode(mode)}
               className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
-                tab.mode === mode ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800"
+                tab.mode === mode ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay"
               }`}
             >
               {label}
@@ -248,8 +249,8 @@ export function ChatView() {
         <label
           className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${
             tab.autoApprove
-              ? "border-amber-700 bg-amber-950/40 text-amber-300"
-              : "border-zinc-700 text-zinc-400"
+              ? "border-warn/60 bg-warn/15 text-warn"
+              : "border-strong text-secondary"
           }`}
           title="approvalMode: auto — tools run without confirmation prompts"
         >
@@ -257,7 +258,7 @@ export function ChatView() {
             type="checkbox"
             checked={tab.autoApprove}
             onChange={(e) => setAutoApprove(e.target.checked)}
-            className="accent-amber-500"
+            className="accent-warn"
           />
           auto-approve{tab.autoApprove ? " ⚠" : ""}
         </label>
@@ -269,7 +270,7 @@ export function ChatView() {
           disabled={tab.chat.running}
           placeholder={config?.model ?? "model (config default)"}
           title="model for the next message; empty = server config default"
-          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none disabled:opacity-50"
+          className="w-44 rounded border border-strong bg-surface px-2 py-1 font-mono text-xs text-primary placeholder:text-tertiary focus:border-accent/70 focus:outline-none disabled:opacity-50"
         />
         <datalist id="model-suggestions">
           {MODEL_SUGGESTIONS.map((m) => (
@@ -280,8 +281,8 @@ export function ChatView() {
         <label
           className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${
             (tab.thinking ?? config?.thinking ?? false)
-              ? "border-violet-800 bg-violet-950/40 text-violet-300"
-              : "border-zinc-700 text-zinc-400"
+              ? "border-accent/60 bg-accent-muted text-accent-hover"
+              : "border-strong text-secondary"
           }`}
           title="DeepSeek V4 thinking mode for the next message (✻ reasoning stream)"
         >
@@ -290,7 +291,7 @@ export function ChatView() {
             checked={tab.thinking ?? config?.thinking ?? false}
             onChange={(e) => setThinking(e.target.checked)}
             disabled={tab.chat.running}
-            className="accent-violet-500"
+            className="accent-accent"
           />
           think
         </label>
@@ -300,7 +301,7 @@ export function ChatView() {
             onChange={(e) => setReasoningEffort(e.target.value as "high" | "max")}
             disabled={tab.chat.running}
             title="reasoning effort (thinking mode)"
-            className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-xs text-zinc-300 focus:border-emerald-700 focus:outline-none disabled:opacity-50"
+            className="rounded border border-strong bg-surface px-1.5 py-1 text-xs text-secondary focus:border-accent/70 focus:outline-none disabled:opacity-50"
           >
             <option value="high">high</option>
             <option value="max">max</option>
@@ -312,8 +313,8 @@ export function ChatView() {
             title="OS command sandbox (config: sandbox)"
             className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
               config.sandbox && config.sandbox !== "off"
-                ? "bg-emerald-950/60 text-emerald-300"
-                : "bg-zinc-800 text-zinc-500"
+                ? "bg-ok/15 text-ok"
+                : "bg-surface-overlay text-tertiary"
             }`}
           >
             sandbox: {config.sandbox ?? "off"}
@@ -322,39 +323,26 @@ export function ChatView() {
 
         <div className="ml-auto flex gap-2">
           {tab.planReady && !tab.chat.running && tab.chat.sessionId && (
-            <button
-              type="button"
-              onClick={executePlan}
-              className="rounded bg-emerald-700 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
-            >
+            <Button size="sm" variant="primary" onClick={executePlan}>
               Execute plan
-            </button>
+            </Button>
           )}
           {tab.chat.running && (
-            <button
-              type="button"
-              onClick={cancel}
-              className="rounded border border-red-900 px-3 py-1 text-xs text-red-300 hover:bg-red-950"
-            >
+            <Button size="sm" variant="danger" onClick={cancel}>
               Cancel
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
+          <Button
+            size="sm"
             onClick={downloadHandoff}
             disabled={tab.chat.items.length === 0}
             title="Download a markdown handoff brief of this conversation"
-            className="rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
           >
             Handoff
-          </button>
-          <button
-            type="button"
-            onClick={newSession}
-            className="rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-          >
+          </Button>
+          <Button size="sm" onClick={newSession}>
             New session
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -364,13 +352,17 @@ export function ChatView() {
         className="flex-1 overflow-y-auto px-4 py-4"
       >
         {tab.chat.items.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center text-zinc-600">
-            <div>
-              <div className="mb-2 font-mono text-2xl text-zinc-700">&gt;_</div>
-              <p>Describe a coding task to start a session.</p>
-              <p className="mt-1 text-xs">Enter sends · Shift+Enter inserts a newline</p>
-            </div>
-          </div>
+          <EmptyState
+            icon={<div className="font-mono text-2xl text-tertiary">&gt;_</div>}
+            title="Ask SeekForge to do something"
+            description={
+              <>
+                Describe a coding task to start a session.
+                <br />
+                Enter sends · Shift+Enter inserts a newline
+              </>
+            }
+          />
         ) : (
           <ChatItems
             items={tab.chat.items}
@@ -388,20 +380,20 @@ export function ChatView() {
       </div>
 
       {backtrackError && (
-        <div className="border-t border-red-900 bg-red-950/40 px-4 py-1.5 font-mono text-xs text-red-300">
+        <div className="border-t border-danger/40 bg-danger/10 px-4 py-1.5 font-mono text-xs text-danger">
           backtrack failed: {backtrackError}
         </div>
       )}
 
       {tab.chat.retry && (
-        <div className="border-t border-amber-900/60 bg-amber-950/30 px-4 py-1.5 font-mono text-xs text-amber-300/90">
+        <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 font-mono text-xs text-warn">
           ⟳ retrying ({tab.chat.retry.attempt}/{tab.chat.retry.maxAttempts}) in{" "}
           {(tab.chat.retry.delayMs / 1000).toFixed(1)}s — {tab.chat.retry.reason}
         </div>
       )}
 
       {tab.wsError && (
-        <div className="border-t border-amber-900 bg-amber-950/40 px-4 py-1.5 font-mono text-xs text-amber-300">
+        <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 font-mono text-xs text-warn">
           {tab.wsError}
         </div>
       )}
@@ -442,12 +434,12 @@ export function ChatView() {
             This message and everything after it are removed from the session transcript. The next
             message continues from the earlier state.
           </p>
-          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-secondary">
             <input
               type="checkbox"
               checked={restoreFiles}
               onChange={(e) => setRestoreFiles(e.target.checked)}
-              className="accent-red-500"
+              className="accent-danger"
             />
             also restore files changed by the removed turns (checkpoint restore)
           </label>
@@ -516,19 +508,19 @@ export function ChatView() {
           <p className="mb-2">
             The merge was aborted; the base workspace and the worktree are untouched. Conflicting files:
           </p>
-          <ul className="max-h-48 list-inside list-disc overflow-y-auto font-mono text-xs text-amber-300">
+          <ul className="max-h-48 list-inside list-disc overflow-y-auto font-mono text-xs text-warn">
             {worktreeDialog.files.map((f) => (
               <li key={f}>{f}</li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-zinc-400">
+          <p className="mt-2 text-xs text-secondary">
             Resolve the divergence (e.g. update the worktree from the base branch) and merge again.
           </p>
         </ConfirmDialog>
       )}
 
       {toast && (
-        <div className="fixed bottom-4 right-4 z-50 rounded border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 shadow-xl">
+        <div className="fixed bottom-4 right-4 z-50 rounded border border-strong bg-surface-raised px-4 py-2 text-sm text-primary shadow-xl">
           {toast}
         </div>
       )}
