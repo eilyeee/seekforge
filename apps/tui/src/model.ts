@@ -27,7 +27,7 @@ export type BgTaskStatus = "running" | "exited";
 export type BgTask = { id: string; command: string; status: BgTaskStatus };
 
 /** Persistent approval setting (Shift+Tab / /approve cycles these). */
-export type ApprovalSetting = "auto" | "confirm" | "plan";
+export type ApprovalSetting = "auto" | "acceptEdits" | "confirm" | "plan";
 
 /**
  * Overlay stack (top one receives keystrokes before the composer).
@@ -135,6 +135,41 @@ export type ChatState = {
    */
   retryStatus?: { attempt: number; maxAttempts: number; delayMs: number; reason: string };
 };
+
+/**
+ * Approval-mode cycle for Shift+Tab / `/approve` (no arg): confirm →
+ * acceptEdits → auto → plan → confirm. Pure so the order is unit-testable.
+ */
+export const APPROVAL_CYCLE: ApprovalSetting[] = ["confirm", "acceptEdits", "auto", "plan"];
+
+/** The next mode after `current` in APPROVAL_CYCLE (wraps around). */
+export function nextApproval(current: ApprovalSetting): ApprovalSetting {
+  const idx = APPROVAL_CYCLE.indexOf(current);
+  return APPROVAL_CYCLE[(idx + 1) % APPROVAL_CYCLE.length] ?? "confirm";
+}
+
+/** Maps a persistent approval setting to the run's core ApprovalMode. */
+export function approvalModeFor(setting: ApprovalSetting): "auto" | "acceptEdits" | "confirm" {
+  if (setting === "auto") return "auto";
+  if (setting === "acceptEdits") return "acceptEdits";
+  // "plan" runs read-only via the ask/plan path; its tools still confirm.
+  return "confirm";
+}
+
+/**
+ * Permission-panel keypress → core ConfirmResult. "y" allows once, "a" allows
+ * this (and similar) for the rest of the session (the richer remember result
+ * that grows CORE's session allowlist), anything else denies. Pure so the
+ * return shape is unit-testable without rendering Ink.
+ */
+export function permissionResultForKey(
+  key: string,
+): boolean | { allow: true; remember: "session" } {
+  const choice = key.toLowerCase();
+  if (choice === "y") return true;
+  if (choice === "a") return { allow: true, remember: "session" };
+  return false;
+}
 
 export function emptyUsage(): TokenUsage {
   return { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };

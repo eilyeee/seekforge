@@ -11,7 +11,7 @@
 
 import type { RawData, WebSocket } from "ws";
 import { readSessionMeta } from "@seekforge/core";
-import type { AgentEvent, ApprovalMode, PermissionRequest } from "@seekforge/shared";
+import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, RunOverrides } from "./agent.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
@@ -82,8 +82,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let running = false;
   let controller: AbortController | undefined;
   let requestCounter = 0;
-  // requestId -> settle(approved); settling clears its timeout and unregisters.
-  const pending = new Map<string, (approved: boolean) => void>();
+  // requestId -> settle(result); settling clears its timeout and unregisters.
+  // The result is the core ConfirmResult so "allow for session" can grow the
+  // run's session allowlist ({ allow: true, remember: "session" }).
+  const pending = new Map<string, (result: ConfirmResult) => void>();
   // question id -> settle(answer); same lifecycle as `pending`.
   const pendingQuestions = new Map<string, (answer: string) => void>();
 
@@ -97,18 +99,18 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     for (const settle of [...pendingQuestions.values()]) settle(DECLINED_ANSWER);
   };
 
-  const confirm = (request: PermissionRequest): Promise<boolean> =>
-    new Promise<boolean>((resolve) => {
+  const confirm = (request: PermissionRequest): Promise<ConfirmResult> =>
+    new Promise<ConfirmResult>((resolve) => {
       if (closed) {
         resolve(false);
         return;
       }
       const requestId = `p${++requestCounter}`;
       let timer: NodeJS.Timeout | undefined;
-      const settle = (approved: boolean) => {
+      const settle = (result: ConfirmResult) => {
         if (timer !== undefined) clearTimeout(timer);
         pending.delete(requestId);
-        resolve(approved);
+        resolve(result);
       };
       timer = setTimeout(() => settle(false), timeoutMs);
       pending.set(requestId, settle);
@@ -196,8 +198,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (mode !== "edit" && mode !== "ask") {
           return fail("bad_frame", 'start.mode must be "edit" or "ask"');
         }
-        if (approvalMode !== "auto" && approvalMode !== "confirm") {
-          return fail("bad_frame", 'start.approvalMode must be "auto" or "confirm"');
+        if (approvalMode !== "auto" && approvalMode !== "acceptEdits" && approvalMode !== "confirm") {
+          return fail("bad_frame", 'start.approvalMode must be "auto", "acceptEdits", or "confirm"');
         }
         if (plan !== undefined && typeof plan !== "boolean") {
           return fail("bad_frame", "start.plan must be a boolean when present");
@@ -250,10 +252,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       }
 
       case "permission.response": {
-        const { requestId, approved } = frame;
+        const { requestId, approved, remember } = frame;
         const settle = typeof requestId === "string" ? pending.get(requestId) : undefined;
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
-        settle(approved === true);
+        const allow = approved === true;
+        // remember:"session" forwards the richer ConfirmResult so core grows
+        // its session allowlist; a plain allow/deny stays a bare boolean.
+        settle(allow && remember === "session" ? { allow: true, remember: "session" } : allow);
         return;
       }
 

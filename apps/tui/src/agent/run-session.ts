@@ -1,5 +1,5 @@
 import { loadAgentDefinitions, type BackgroundTasks, type ToolSpec } from "@seekforge/core";
-import type { ApprovalMode, PermissionRequest } from "@seekforge/shared";
+import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { createTuiAgent } from "./factory.js";
@@ -24,8 +24,11 @@ export type RunSessionDeps = {
   askUser: (q: { question: string; options: string[] }) => Promise<string>;
   /** Pushes a reducer action (events, deltas, lifecycle) into the UI state. */
   dispatch: (action: ChatAction) => void;
-  /** Awaits the inline PermissionPanel's y/n answer. */
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Awaits the inline PermissionPanel's y/a/n answer. "a" returns the richer
+   * { allow: true, remember: "session" } so CORE grows its session allowlist.
+   */
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /** Resolves the current session id for resume chaining. */
   getSessionId: () => string | undefined;
 };

@@ -14,13 +14,19 @@ export type ClientFrame =
       type: "start";
       task: string;
       mode: "edit" | "ask";
-      approvalMode: "auto" | "confirm";
+      approvalMode: "auto" | "acceptEdits" | "confirm";
       plan?: boolean;
       /** Workspace id (default: first workspace when omitted). */
       ws?: string;
     } & RunOverrides)
   | ({ type: "send"; sessionId: string; task: string; mode?: "edit"; ws?: string } & RunOverrides)
-  | { type: "permission.response"; requestId: string; approved: boolean }
+  | {
+      type: "permission.response";
+      requestId: string;
+      approved: boolean;
+      /** "session" = allow this (and similar) for the rest of the session. */
+      remember?: "session";
+    }
   | { type: "question.answer"; id: string; answer: string }
   | { type: "cancel" };
 

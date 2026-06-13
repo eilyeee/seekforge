@@ -1,6 +1,6 @@
 /** Pure builders for the start/send client frames (plan & approval controls). */
 import type { ClientFrame, RunOverrides } from "./ws-types";
-import type { StartMode } from "./tabs";
+import type { ApprovalChoice, StartMode } from "./tabs";
 
 export type { RunOverrides };
 
@@ -45,11 +45,10 @@ export function overridesOf(controls: HeaderControls): RunOverrides {
 export function buildStartFrame(
   task: string,
   mode: StartMode,
-  autoApprove: boolean,
+  approvalMode: ApprovalChoice,
   ws?: string,
   overrides: RunOverrides = {},
 ): ClientFrame {
-  const approvalMode = autoApprove ? "auto" : "confirm";
   if (mode === "plan") {
     return withWs({ type: "start", task, mode: "ask", approvalMode, plan: true, ...overrides }, ws);
   }

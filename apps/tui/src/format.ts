@@ -1,5 +1,5 @@
 import type { TokenUsage } from "@seekforge/shared";
-import type { ContextUsage } from "./model.js";
+import type { ApprovalSetting, ContextUsage } from "./model.js";
 
 /** Compact thousands formatting: 1234 -> "1.2K". */
 export function kfmt(n: number): string {
@@ -79,7 +79,7 @@ export type StatusBarModel = {
   usage: TokenUsage;
   running: boolean;
   /** Persistent approval mode; "confirm" is the default and stays silent. */
-  approval?: "auto" | "confirm" | "plan";
+  approval?: ApprovalSetting;
   /** Running background tasks ("⚙ 2 bg"). */
   bgRunning?: number;
 };
@@ -112,6 +112,7 @@ export function statusBarParts(m: StatusBarModel): StatusBarParts {
     tokens: `${kfmt(totalTokens)} tok`,
     state: m.running ? "working" : "idle",
     ...(m.approval === "auto" ? { approval: "auto-approve" } : {}),
+    ...(m.approval === "acceptEdits" ? { approval: "accept-edits" } : {}),
     ...(m.approval === "plan" ? { approval: "plan mode" } : {}),
     ...(m.bgRunning && m.bgRunning > 0 ? { bg: `⚙ ${m.bgRunning} bg` } : {}),
   };

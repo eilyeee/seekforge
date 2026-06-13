@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { activeTab, useStore, type StartMode } from "../store";
+import { activeTab, useStore, type ApprovalChoice, type StartMode } from "../store";
 import { api } from "../lib/api";
 import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
 import { buildHandoff, handoffFilename } from "../lib/handoff";
@@ -19,6 +19,12 @@ const MODES: { mode: StartMode; label: string; hint: string }[] = [
   { mode: "ask", label: "Ask", hint: "read-only Q&A" },
 ];
 
+const APPROVALS: { value: ApprovalChoice; label: string; hint: string }[] = [
+  { value: "confirm", label: "Confirm", hint: "approvalMode: confirm — prompt before each tool" },
+  { value: "acceptEdits", label: "Accept edits", hint: "approvalMode: acceptEdits — auto-approve file edits, prompt for the rest" },
+  { value: "auto", label: "Auto", hint: "approvalMode: auto — run every tool without prompting ⚠" },
+];
+
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
 type WorktreeDialog =
   | { kind: "discard"; tabId: string }
@@ -34,7 +40,7 @@ export function ChatView() {
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
-  const { openTab, closeTab, setActiveTab, setMode, setAutoApprove, executePlan, setView } = useStore.getState();
+  const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
   const { setModel, setThinking, setReasoningEffort, truncateAtItem } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
@@ -246,22 +252,32 @@ export function ChatView() {
           ))}
         </div>
 
-        <label
-          className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-xs ${
-            tab.autoApprove
-              ? "border-warn/60 bg-warn/15 text-warn"
-              : "border-strong text-secondary"
-          }`}
-          title="approvalMode: auto — tools run without confirmation prompts"
-        >
-          <input
-            type="checkbox"
-            checked={tab.autoApprove}
-            onChange={(e) => setAutoApprove(e.target.checked)}
-            className="accent-warn"
-          />
-          auto-approve{tab.autoApprove ? " ⚠" : ""}
-        </label>
+        <div className="flex items-center rounded border border-strong" title="approval mode for the next start">
+          {APPROVALS.map(({ value, label, hint }) => {
+            const active = tab.approvalMode === value;
+            const activeClass =
+              value === "auto"
+                ? "bg-warn/15 text-warn"
+                : value === "acceptEdits"
+                  ? "bg-accent-muted text-accent-hover"
+                  : "bg-surface-overlay text-primary";
+            return (
+              <button
+                key={value}
+                type="button"
+                disabled={!modeSelectable}
+                title={hint}
+                onClick={() => setApprovalMode(value)}
+                className={`px-2.5 py-1 text-xs first:rounded-l last:rounded-r disabled:opacity-50 ${
+                  active ? activeClass : "text-secondary hover:bg-surface-overlay"
+                }`}
+              >
+                {label}
+                {value === "auto" && active ? " ⚠" : ""}
+              </button>
+            );
+          })}
+        </div>
 
         <input
           list="model-suggestions"
