@@ -201,6 +201,20 @@ export function App({
     [],
   );
   const [editor, setEditor] = useState<EditorState>(emptyEditor());
+  /** Hunk indices selected by the user for multi-hunk permission requests. */
+  const [hunkSelection, setHunkSelection] = useState<number[]>([]);
+
+  /**
+   * When a new multi-hunk permission request arrives, reset selection to all
+   * hunks (apply-all default). Single/no-hunk requests leave state unchanged
+   * (the key-routing below ignores it).
+   */
+  useEffect(() => {
+    const hunks = state.permission?.hunks;
+    if (hunks && hunks.length > 1) {
+      setHunkSelection(hunks.map((h) => h.index));
+    }
+  }, [state.permission]);
 
   // -c / --continue: chain onto the most recent session.
   useEffect(() => {
@@ -1649,8 +1663,59 @@ export function App({
     //    "a" returns the richer { allow, remember: "session" } so CORE grows
     //    its canonical sessionAllowlist (the local allowlistRef is also kept in
     //    sync for /permissions display and command-prefix matching).
+    //    Multi-hunk mode (hunks.length > 1): digit keys toggle individual
+    //    hunks, "a" selects all, "y" confirms the current selection, "n" denies.
     if (pendingPermissionRef.current) {
       const pending = pendingPermissionRef.current;
+      const hunks = pending.request.hunks;
+
+      // Multi-hunk mode: interactive hunk selection.
+      if (hunks && hunks.length > 1) {
+        const numHunks = hunks.length;
+        // Digit key (1-9) toggles the corresponding hunk.
+        if (/^[1-9]$/.test(rawInput)) {
+          const idx = Number(rawInput) - 1;
+          if (idx < numHunks) {
+            setHunkSelection((prev) =>
+              prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx].sort(),
+            );
+          }
+          return;
+        }
+        // "a" selects all hunks.
+        if (rawInput.toLowerCase() === "a") {
+          setHunkSelection(hunks.map((h) => h.index));
+          return;
+        }
+        // "y" confirms with current selection.
+        if (rawInput.toLowerCase() === "y") {
+          const selected = hunkSelection;
+          if (selected.length === numHunks) {
+            // All hunks selected: resolve as simple allow.
+            pendingPermissionByTabRef.current.delete(activeIdRef.current);
+            dispatch({ type: "permission-resolved" });
+            pending.resolve(true);
+          } else if (selected.length > 0) {
+            // Subset selected: resolve with selectedHunks.
+            pendingPermissionByTabRef.current.delete(activeIdRef.current);
+            dispatch({ type: "permission-resolved" });
+            pending.resolve({ allow: true, selectedHunks: selected });
+          } else {
+            // No hunks selected: treat as deny.
+            pendingPermissionByTabRef.current.delete(activeIdRef.current);
+            dispatch({ type: "permission-resolved" });
+            pending.resolve(false);
+          }
+          return;
+        }
+        // Any other key denies.
+        pendingPermissionByTabRef.current.delete(activeIdRef.current);
+        dispatch({ type: "permission-resolved" });
+        pending.resolve(false);
+        return;
+      }
+
+      // Single-hunk / no-hunk: original behavior unchanged.
       const result: ConfirmResult = permissionResultForKey(rawInput);
       // "a" (allow for session) also mirrors the command prefix into the local
       // allowlist for /permissions display and command-prefix matching; CORE's
@@ -2106,7 +2171,14 @@ export function App({
           </Box>
         </Box>
       )}
-      {state.permission ? <PermissionPanel request={state.permission} /> : null}
+      {state.permission ? (
+        <PermissionPanel
+          request={state.permission}
+          hunkSelection={
+            state.permission.hunks && state.permission.hunks.length > 1 ? hunkSelection : undefined
+          }
+        />
+      ) : null}
       {state.overlay?.kind === "question" ? (
         <QuestionPanel question={state.overlay.question} options={state.overlay.options} index={state.overlay.index} />
       ) : null}
