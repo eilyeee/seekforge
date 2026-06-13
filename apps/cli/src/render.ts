@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import type { AgentEvent, PermissionRequest, TokenUsage } from "@seekforge/shared";
+import type { AgentEvent, ConfirmResult, PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
 
 function summarizeArgs(args: unknown, verbose = false): string {
@@ -180,16 +180,43 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
  * Permission prompt. Always shows the RAW command/path — never only a
  * model paraphrase (prompt-injection defense, see docs 14 §3).
  */
-export async function confirmInTerminal(req: PermissionRequest): Promise<boolean> {
+export async function confirmInTerminal(req: PermissionRequest): Promise<ConfirmResult> {
   const c = makeColorizer(colorIsEnabled());
   console.log(`\n${c.yellow("Permission required")} [${req.permission}] ${req.toolName}`);
   if (req.command) console.log(`  command: ${req.command}`);
   if (req.path) console.log(`  path:    ${req.path}`);
   if (!req.command && !req.path) console.log(`  ${req.description}`);
+  // Multi-hunk selection: offer per-hunk choice when the request carries
+  // individual hunk previews (apply_patch with >1 edit).
+  if (req.hunks && req.hunks.length > 1) {
+    console.log(c.dim("  Edits:"));
+    for (const hunk of req.hunks) {
+      console.log(`    [${hunk.index}] ${hunk.preview}`);
+    }
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await new Promise<string>((resolve) => {
+        rl.question("  Apply all [y], skip all [N], or pick hunks (e.g. 0,2): ").then(resolve, () => resolve("n"));
+        rl.once("SIGINT", () => {
+          resolve("n");
+          process.emit("SIGINT" as never);
+        });
+      });
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "y" || trimmed === "yes" || trimmed === "") return true;
+      // Try to parse as comma-separated hunk indices.
+      const parts = trimmed.split(/\s*,\s*/).map((s) => Number.parseInt(s, 10));
+      if (parts.length > 0 && parts.every((n) => Number.isInteger(n) && n >= 0)) {
+        return { allow: true, selectedHunks: parts };
+      }
+      return false;
+    } finally {
+      rl.close();
+    }
+  }
+  // Single-hunk or no-hunk request: original y/N prompt.
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    // readline swallows Ctrl+C while a question is pending: treat it as a
-    // denial and re-raise so the session's cancel flow still runs.
     const answer = await new Promise<string>((resolve) => {
       rl.question("Allow? [y/N] ").then(resolve, () => resolve("n"));
       rl.once("SIGINT", () => {

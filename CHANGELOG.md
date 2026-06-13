@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### round 21: per-hunk partial-apply (hardest dogfood — cross-layer contract)
+- **`apply_patch` per-hunk partial-apply (core + CLI).** When a patch has more
+  than one edit, you can now approve/reject individual hunks instead of
+  all-or-nothing. SeekForge implemented this itself via plan→execute on a
+  genuinely hard, cross-layer change; reviewed and independently verified.
+  - Additive contract: `ConfirmResult` gains a `{ allow: true; selectedHunks:
+    number[] }` variant and `PermissionRequest` a `hunks?` field — existing
+    `boolean` / `{allow,remember}` returns are byte-for-byte unchanged, so the
+    TUI, desktop, and server WS frontends keep returning `boolean` and were not
+    touched (they stay all-or-nothing until a future round adds the UI).
+  - Core threads the selection from `confirmWithUser` → `ctx.selectedHunks` →
+    `apply_patch.run` (filters edits to the chosen indices), and clears it after
+    each call so it never leaks across tool invocations.
+  - CLI `confirmInTerminal`: multi-hunk prompt offers apply-all / skip-all /
+    pick indices (`0,2`); machine/non-interactive mode is unchanged.
+  - 6 new core tests; all 7 packages typecheck and core/cli/tui/desktop/server
+    suites pass.
+
 ### round 20: features built by dogfooding (SeekForge implementing SeekForge)
 - **`seekforge models`** — lists each DeepSeek model with cache-miss/cache-hit
   input and output pricing (sourced from MODEL_PRICING), marking the default.

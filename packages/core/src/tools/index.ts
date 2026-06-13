@@ -67,6 +67,13 @@ export type ToolContext = {
    * is enforced by the agent loop, not here.
    */
   checkpoint?: (path: string, before: string | null) => void;
+  /**
+   * When set, apply_patch should only apply the edits at these indices
+   * (per-hunk selection). Set by the dispatcher after the user selected
+   * specific hunks via the ConfirmResult.selectedHunks channel. Absent =
+   * apply all edits (backward-compatible behavior).
+   */
+  selectedHunks?: number[];
 };
 
 export interface ToolDispatcher {
