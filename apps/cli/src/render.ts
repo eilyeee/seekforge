@@ -131,9 +131,24 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
     case "context.compacted":
       console.log(`${DIM}(context compacted: dropped ${e.droppedTurns} earlier messages)${RESET}`);
       break;
-    case "session.failed":
-      console.error(`${RED}failed: ${e.error.code} — ${e.error.message}${RESET}`);
+    case "provider.retry":
+      // Transient retry progress: dim stderr so it never pollutes piped stdout.
+      console.error(
+        `${DIM}⟳ retrying (${e.attempt}/${e.maxAttempts}) in ${(e.delayMs / 1000).toFixed(1)}s — ${e.reason}${RESET}`,
+      );
       break;
+    case "session.failed": {
+      console.error(`${RED}failed: ${e.error.code} — ${e.error.message}${RESET}`);
+      if (e.error.hint) console.error(`${DIM}  → ${e.error.hint}${RESET}`);
+      // Genuine, recoverable failures: point at the exact resume command.
+      if (e.error.recoverable && e.error.sessionId) {
+        console.error(
+          `${DIM}  → resume with \`seekforge resume ${e.error.sessionId}\` ` +
+            `(your file changes and completed steps are preserved; checkpoints intact)${RESET}`,
+        );
+      }
+      break;
+    }
     case "session.completed":
       // Reached only when called outside createRenderer (which intercepts
       // session.completed to append the context suffix).

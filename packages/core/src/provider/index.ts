@@ -14,7 +14,7 @@ import { createSseAccumulator, feedSseChunk, finalizeSse } from "./sse.js";
 import { DeepSeekApiError, fetchWithRetry } from "./http.js";
 import type { ChatProvider, ChatRequest, ProviderConfig } from "./types.js";
 
-export type { ProviderConfig, ChatRequest, ChatProvider } from "./types.js";
+export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo } from "./types.js";
 export { estimateCostUsd, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, type ModelPricing } from "./constants.js";
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
@@ -41,13 +41,18 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
+  const retryOpts = config.onRetry ? { onRetry: config.onRetry } : {};
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
-    const res = await fetchWithRetry(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(buildRequestBody(model, req, false, thinking)),
-    });
+    const res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(buildRequestBody(model, req, false, thinking)),
+      },
+      retryOpts,
+    );
     const json = (await res.json()) as WireChatCompletion;
     return mapChatResponse(json, model);
   }
@@ -57,11 +62,15 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     onDelta: (chunk: string) => void,
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    const res = await fetchWithRetry(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(buildRequestBody(model, req, true, thinking)),
-    });
+    const res = await fetchWithRetry(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(buildRequestBody(model, req, true, thinking)),
+      },
+      retryOpts,
+    );
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
     }

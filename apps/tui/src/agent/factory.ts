@@ -5,6 +5,7 @@ import {
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
+  createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
   wrapProviderWithCache,
@@ -62,10 +63,14 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
+  // One retry bus shared by every provider; the active run routes provider
+  // retries into its event stream (provider.retry).
+  const retryBus = createRetryBus();
   const baseProvider = createDeepSeekProvider({
     apiKey: config.apiKey ?? "",
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
+    onRetry: retryBus.onRetry,
     ...thinkingOpts,
   });
   // Opt-in disk cache for identical non-streaming calls (evals, subagents).
@@ -75,11 +80,18 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
 
   const agent = createAgentCore({
     provider,
+    retryBus,
     // Per-agent model override: same key/endpoint, different model.
     // deepseek-reasoner cannot drive the tool-call loop, so fall back.
     providerForModel: (model) => {
       if (model === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model, ...thinkingOpts });
+      return createDeepSeekProvider({
+        apiKey: config.apiKey ?? "",
+        baseUrl: config.baseUrl,
+        model,
+        onRetry: retryBus.onRetry,
+        ...thinkingOpts,
+      });
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,

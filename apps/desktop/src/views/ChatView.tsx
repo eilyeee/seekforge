@@ -393,6 +393,13 @@ export function ChatView() {
         </div>
       )}
 
+      {tab.chat.retry && (
+        <div className="border-t border-amber-900/60 bg-amber-950/30 px-4 py-1.5 font-mono text-xs text-amber-300/90">
+          ⟳ retrying ({tab.chat.retry.attempt}/{tab.chat.retry.maxAttempts}) in{" "}
+          {(tab.chat.retry.delayMs / 1000).toFixed(1)}s — {tab.chat.retry.reason}
+        </div>
+      )}
+
       {tab.wsError && (
         <div className="border-t border-amber-900 bg-amber-950/40 px-4 py-1.5 font-mono text-xs text-amber-300">
           {tab.wsError}

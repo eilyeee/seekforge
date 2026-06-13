@@ -328,3 +328,72 @@ describe("chatReducer live command output", () => {
     expect(s.items).toHaveLength(0);
   });
 });
+
+describe("chatReducer provider.retry status", () => {
+  it("sets a transient retryStatus and adds no transcript item", () => {
+    let s = base();
+    s = reduce(s, {
+      type: "provider.retry",
+      attempt: 2,
+      maxAttempts: 3,
+      delayMs: 1000,
+      reason: "rate limited",
+    });
+    expect(s.items).toHaveLength(0);
+    expect(s.retryStatus).toEqual({ attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "rate limited" });
+  });
+
+  it("clears retryStatus on the next successful turn (usage.updated)", () => {
+    let s = base();
+    s = reduce(s, { type: "provider.retry", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "rate limited" });
+    expect(s.retryStatus).toBeDefined();
+    s = reduce(s, {
+      type: "usage.updated",
+      usage: { promptTokens: 5, completionTokens: 3, cacheHitTokens: 0, costUsd: 0 },
+    });
+    expect(s.retryStatus).toBeUndefined();
+  });
+
+  it("clears retryStatus when the run ends", () => {
+    let s = base();
+    s = reduce(s, { type: "provider.retry", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "network error" });
+    s = chatReducer(s, { type: "run-end" });
+    expect(s.retryStatus).toBeUndefined();
+  });
+});
+
+describe("chatReducer session.failed recovery hint", () => {
+  it("includes the /resume hint when the failure is recoverable with a sessionId", () => {
+    let s = base();
+    s = reduce(s, {
+      type: "session.failed",
+      error: { code: "rate_limit", message: "boom", hint: "wait a moment", recoverable: true, sessionId: "sess-1" },
+    });
+    const notice = s.items.at(-1) as ChatItem & { kind: "notice" };
+    expect(notice.tone).toBe("error");
+    expect(notice.text).toContain("/resume sess-1");
+    expect(notice.text).toContain("wait a moment");
+  });
+
+  it("falls back to the tracked sessionId when the error omits it", () => {
+    let s = base();
+    s = reduce(s, { type: "session.created", sessionId: "tracked-9" });
+    s = reduce(s, {
+      type: "session.failed",
+      error: { code: "network", message: "down", recoverable: true },
+    });
+    const notice = s.items.at(-1) as ChatItem & { kind: "notice" };
+    expect(notice.text).toContain("/resume tracked-9");
+  });
+
+  it("omits the resume hint for a non-recoverable (cancelled) failure", () => {
+    let s = base();
+    s = reduce(s, { type: "session.created", sessionId: "sess-x" });
+    s = reduce(s, {
+      type: "session.failed",
+      error: { code: "cancelled", message: "cancelled by user" },
+    });
+    const notice = s.items.at(-1) as ChatItem & { kind: "notice" };
+    expect(notice.text).not.toContain("/resume");
+  });
+});

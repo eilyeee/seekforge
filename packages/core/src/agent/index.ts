@@ -28,7 +28,7 @@ export interface AgentCore {
   runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent>;
 }
 
-export { createAgentCore, type AgentCoreDeps } from "./loop.js";
+export { createAgentCore, createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 export { classifyAgentError } from "./errors.js";
 export type { AgentErrorKind, ClassifiedAgentError } from "./errors.js";
 export { buildSystemPrompt } from "./prompt.js";

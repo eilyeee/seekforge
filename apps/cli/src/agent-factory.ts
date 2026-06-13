@@ -3,6 +3,7 @@ import {
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
+  createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
   type AgentCore,
@@ -52,15 +53,20 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
+  // One retry bus shared by every provider this factory builds; the active
+  // run routes its retries into the agent event stream (provider.retry).
+  const retryBus = createRetryBus();
   const provider = createDeepSeekProvider({
     apiKey: config.apiKey ?? "",
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
+    onRetry: retryBus.onRetry,
     ...thinkingOpts,
   });
 
   const agent = createAgentCore({
     provider,
+    retryBus,
     // Per-agent model override (AgentDefinition.model): same key/endpoint,
     // different model. deepseek-reasoner cannot drive the tool-call loop.
     providerForModel: (model) => {
@@ -70,7 +76,13 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
         );
         return provider;
       }
-      return createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model, ...thinkingOpts });
+      return createDeepSeekProvider({
+        apiKey: config.apiKey ?? "",
+        baseUrl: config.baseUrl,
+        model,
+        onRetry: retryBus.onRetry,
+        ...thinkingOpts,
+      });
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
