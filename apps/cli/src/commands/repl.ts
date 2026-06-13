@@ -56,9 +56,17 @@ function makeAskUser(rl: Interface): (q: { question: string; options: string[] }
   };
 }
 
-export async function replCommand(opts: { model?: string; yes?: boolean }): Promise<void> {
+export async function replCommand(opts: { model?: string; yes?: boolean; settingsFile?: string }): Promise<void> {
   const projectPath = process.cwd();
-  const config = loadConfig(projectPath);
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(projectPath, opts.settingsFile);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const hint = (err as { hint?: string }).hint;
+    fail(msg, hint ? { hint } : undefined);
+    return;
+  }
   if (!config.apiKey) {
     fail("no DeepSeek API key found", {
       hint: "set DEEPSEEK_API_KEY or run: seekforge config set apiKey <key> --global",
