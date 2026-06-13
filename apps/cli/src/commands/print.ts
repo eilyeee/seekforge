@@ -18,6 +18,10 @@ export type PrintCliOptions = {
   addDir?: string[];
   maxTurns?: string;
   verbose?: boolean;
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+  allowedTools?: string;
+  disallowedTools?: string;
 };
 
 export async function printCommand(inlinePrompt: string | undefined, opts: PrintCliOptions): Promise<void> {
@@ -56,5 +60,9 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     addDirs: opts.addDir,
     maxTurns,
     verbose: opts.verbose,
+    systemPrompt: opts.systemPrompt,
+    appendSystemPrompt: opts.appendSystemPrompt,
+    allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
   });
 }

@@ -1,12 +1,20 @@
 import { createInterface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
-import type { ApprovalMode, FinalReport } from "@seekforge/shared";
+import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
-import { buildJsonResult, isMachineFormat, type OutputFormat } from "../output-format.js";
+import {
+  buildResultEnvelope,
+  createStreamJsonMapper,
+  isMachineFormat,
+  outcomeFromErrorCode,
+  type OutputFormat,
+  type ResultOutcome,
+} from "../output-format.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
+import { buildToolGatingRules } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "../workspace-dirs.js";
 
 export type RunOptions = {
@@ -26,6 +34,14 @@ export type RunOptions = {
   maxTurns?: number;
   /** Verbose tool args/results in text mode. */
   verbose?: boolean;
+  /** Full system-prompt override (CLI --system-prompt → core systemPromptOverride). */
+  systemPrompt?: string;
+  /** Append text to the system prompt (CLI --append-system-prompt). */
+  appendSystemPrompt?: string;
+  /** Comma-separated allow-list of tools (CLI --allowedTools). */
+  allowedTools?: string;
+  /** Comma-separated deny-list of tools (CLI --disallowedTools). */
+  disallowedTools?: string;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -33,6 +49,17 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const config = loadConfig(projectPath);
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
+
+  // --append-system-prompt needs a core seam (the base prompt is composed inside
+  // core from project rules / memory / skills and is not reconstructable here).
+  // core only exposes systemPromptOverride (a FULL replacement), so appending is
+  // not yet supported CLI-side. Fail clearly rather than silently dropping it.
+  if (opts.appendSystemPrompt !== undefined) {
+    fail("--append-system-prompt is not supported yet", {
+      hint: "use --system-prompt for a full override; appending needs a small core hook (planned)",
+    });
+    return;
+  }
 
   const model = opts.model ?? config.model;
   if (model === "deepseek-reasoner") {
@@ -98,15 +125,32 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const renderer = machine
     ? undefined
     : createRenderer({ streaming: true, verbose: opts.verbose, color: !machine });
-  // stream-json emits one AgentEvent per line; json buffers the final report.
+  // stream-json: Claude-style SDK envelopes (system/assistant/user) per line via
+  // the mapper, with the final result envelope appended after the stream.
+  // stream-json-raw: the OLD behavior — one raw AgentEvent per line.
+  // json: buffer everything, emit one result envelope at the end.
+  const streamMapper = format === "stream-json" ? createStreamJsonMapper() : undefined;
   const render =
     format === "stream-json"
-      ? (e: unknown) => console.log(JSON.stringify(e))
-      : renderer
-        ? renderer.render
-        : () => {}; // json: swallow events, emit one final object at the end
+      ? (e: AgentEvent) => {
+          for (const env of streamMapper!.map(e)) console.log(JSON.stringify(env));
+        }
+      : format === "stream-json-raw"
+        ? (e: AgentEvent) => console.log(JSON.stringify(e))
+        : renderer
+          ? renderer.render
+          : () => {}; // json: swallow events, emit one final object at the end
   const approvalMode: ApprovalMode = opts.yes ? "auto" : "confirm";
   const mcp = await prepareMcp(config);
+
+  // --allowedTools/--disallowedTools synthesize per-run permission rules,
+  // prepended to any config rules. undefined when neither flag is used.
+  const permissionRules = buildToolGatingRules({
+    allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
+    base: config.permissionRules,
+  });
+
   const { agent, dispose } = createCliAgent({
     config,
     model,
@@ -117,12 +161,17 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     extractMemory: mode === "edit",
     subagents: loadAgentDefinitions(projectPath),
     ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
+    ...(permissionRules ? { permissionRules } : {}),
   });
 
   // @-references resolve against the workspace first, then any extra dirs.
   const expand = (t: string): string => expandExtraFileRefs(expandFileRefs(t, projectPath), extraDirs);
 
   let finalReport: FinalReport | undefined;
+  // Run accounting for the result envelope (json + stream-json final line).
+  const startedAt = Date.now();
+  let numTurns = 0; // assistant text turns observed across runOnce calls
+  let outcome: ResultOutcome = { kind: "success" };
 
   const runOnce = async (input: {
     task: string;
@@ -140,20 +189,37 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       approvalMode,
       resumeSessionId: input.resumeSessionId,
       signal: controller.signal,
+      ...(opts.systemPrompt !== undefined ? { systemPromptOverride: opts.systemPrompt } : {}),
     })) {
       render(event);
+      if (event.type === "model.message") numTurns++;
       if (event.type === "session.created") sessionId = event.sessionId;
       if (event.type === "session.completed") {
         completed = true;
         finalReport = event.report;
       }
+      if (event.type === "session.failed") {
+        outcome = outcomeFromErrorCode(event.error.code, event.error.message);
+      }
     }
     return { sessionId, completed };
   };
 
-  const emitJsonResult = (sessionId: string | undefined): void => {
-    if (format === "json" && finalReport) {
-      console.log(JSON.stringify(buildJsonResult(finalReport, sessionId), null, 2));
+  // Emits the final Claude-compatible result envelope: pretty-printed for `json`,
+  // one JSONL line (via the stream mapper) for `stream-json`. No-op otherwise.
+  const emitResult = (sessionId: string | undefined): void => {
+    if (format !== "json" && format !== "stream-json") return;
+    const input = {
+      ...(finalReport ? { report: finalReport } : {}),
+      sessionId,
+      numTurns,
+      durationMs: Date.now() - startedAt,
+      outcome: finalReport ? outcome : outcome.kind === "success" ? { kind: "error" as const } : outcome,
+    };
+    if (format === "stream-json") {
+      console.log(JSON.stringify(streamMapper!.result(input)));
+    } else {
+      console.log(JSON.stringify(buildResultEnvelope(input), null, 2));
     }
   };
 
@@ -187,7 +253,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     }
 
     const run = await runOnce({ task: expand(task), mode, resumeSessionId });
-    emitJsonResult(run.sessionId);
+    emitResult(run.sessionId);
     if (!run.completed) process.exitCode = 1;
   } finally {
     process.removeListener("SIGINT", onSigint);
