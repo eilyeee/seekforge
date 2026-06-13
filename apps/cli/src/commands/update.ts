@@ -8,11 +8,8 @@
 // to run. This reuses checkForUpdate() from version-check.ts.
 
 import { createRequire } from "node:module";
+import { dim, green } from "../colors.js";
 import { checkForUpdate } from "../version-check.js";
-
-const DIM = "\x1b[2m";
-const GREEN = "\x1b[32m";
-const RESET = "\x1b[0m";
 
 export async function updateCommand(): Promise<void> {
   const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
@@ -21,11 +18,11 @@ export async function updateCommand(): Promise<void> {
     console.log(`seekforge ${version} is up to date.`);
     return;
   }
-  console.log(`${GREEN}↑ seekforge ${latest} is available${RESET} (you have ${version}).`);
+  console.log(`${green(`↑ seekforge ${latest} is available`)} (you have ${version}).`);
   console.log("");
   console.log("Update with:");
   console.log("  npm i -g seekforge");
   console.log("");
-  console.log(`${DIM}(Run the install with the package manager you used to install seekforge —${RESET}`);
-  console.log(`${DIM} e.g. pnpm add -g seekforge. SeekForge never self-updates the global binary.)${RESET}`);
+  console.log(dim("(Run the install with the package manager you used to install seekforge —"));
+  console.log(dim(" e.g. pnpm add -g seekforge. SeekForge never self-updates the global binary.)"));
 }

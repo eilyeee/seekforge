@@ -2,6 +2,7 @@
 // any), compose the effective prompt, stream to stdout, and exit. Wraps
 // runTaskCommand (the same engine as `run`) but adds stdin composition.
 
+import { fail } from "../colors.js";
 import { resolveOutputFormat, type OutputFormat } from "../output-format.js";
 import { composePrompt, readStdin } from "../stdin-prompt.js";
 import { runTaskCommand } from "./run.js";
@@ -24,23 +25,24 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
   try {
     format = resolveOutputFormat(opts);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
+    fail(err instanceof Error ? err.message : String(err));
     return;
   }
 
+  // readStdin() returns "" immediately when stdin is a TTY (nothing piped), so
+  // `-p` with no inline prompt and no pipe fails fast here rather than hanging.
   const stdin = await readStdin();
   const prompt = composePrompt(inlinePrompt, stdin);
   if (!prompt) {
-    console.error('No prompt. Pass one inline (seekforge -p "…") or pipe it (cat task.md | seekforge -p).');
-    process.exitCode = 1;
+    fail("no prompt provided", {
+      hint: 'pass one inline (seekforge -p "…") or pipe it (cat task.md | seekforge -p)',
+    });
     return;
   }
 
   const maxTurns = opts.maxTurns !== undefined ? Number.parseInt(opts.maxTurns, 10) : undefined;
   if (maxTurns !== undefined && (Number.isNaN(maxTurns) || maxTurns <= 0)) {
-    console.error("--max-turns must be a positive integer.");
-    process.exitCode = 1;
+    fail("--max-turns must be a positive integer");
     return;
   }
 

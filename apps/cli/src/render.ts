@@ -1,12 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import type { AgentEvent, PermissionRequest, TokenUsage } from "@seekforge/shared";
-
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
-const YELLOW = "\x1b[33m";
-const DIM = "\x1b[2m";
-const ITALIC = "\x1b[3m";
-const RESET = "\x1b[0m";
+import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
 
 function summarizeArgs(args: unknown, verbose = false): string {
   const text = JSON.stringify(args, null, verbose ? 2 : undefined) ?? "";
@@ -33,6 +27,12 @@ export type RendererOptions = {
   streaming?: boolean;
   /** Print full tool args and tool result data instead of a quiet summary. */
   verbose?: boolean;
+  /**
+   * Whether to emit ANSI color. Defaults to the process-wide gate (NO_COLOR /
+   * non-TTY aware). Pass `false` for machine output modes so the renderer is
+   * guaranteed byte-clean even on a TTY.
+   */
+  color?: boolean;
 };
 
 /**
@@ -44,7 +44,8 @@ export function formatContextSuffix(
   opts: { always?: boolean } = {},
 ): string {
   if (!ctx || (!opts.always && ctx.percent < 50)) return "";
-  return ` ${DIM}· ctx ${ctx.percent}%${RESET}`;
+  const c = makeColorizer(colorIsEnabled());
+  return ` ${c.dim(`· ctx ${ctx.percent}%`)}`;
 }
 
 export type Renderer = {
@@ -57,6 +58,7 @@ export type Renderer = {
 
 /** Creates a terminal renderer for agent events (plus the delta sinks). */
 export function createRenderer(opts: RendererOptions = {}): Renderer {
+  const c = makeColorizer(opts.color ?? colorIsEnabled());
   // context.usage prints no line of its own; the latest value decorates the
   // final usage line (session.completed) once occupancy is worth mentioning.
   let lastContext: { percent: number } | undefined;
@@ -73,7 +75,7 @@ export function createRenderer(opts: RendererOptions = {}): Renderer {
         console.log(`\n${formatUsage(e.report.usage)}${formatContextSuffix(lastContext)}`);
         return;
       }
-      renderEvent(e, opts);
+      renderEvent(e, opts, c);
     },
     modelDelta: (chunk) => {
       if (inThinking) {
@@ -84,22 +86,22 @@ export function createRenderer(opts: RendererOptions = {}): Renderer {
     },
     reasoningDelta: (chunk) => {
       if (!inThinking) {
-        process.stdout.write(`${DIM}${ITALIC}✻ thinking${RESET}\n`);
+        process.stdout.write(`${c.dimItalic("✻ thinking")}\n`);
         inThinking = true;
       }
       // Wrap every chunk so interleaved writes can never leak the style.
-      process.stdout.write(`${DIM}${ITALIC}${chunk}${RESET}`);
+      process.stdout.write(c.dimItalic(chunk));
     },
   };
 }
 
-function renderEvent(e: AgentEvent, opts: RendererOptions): void {
+function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
   switch (e.type) {
     case "session.created":
-      console.log(`${DIM}session ${e.sessionId}${RESET}`);
+      console.log(c.dim(`session ${e.sessionId}`));
       break;
     case "step.started":
-      console.log(`${DIM}· ${e.title}${RESET}`);
+      console.log(c.dim(`· ${e.title}`));
       break;
     case "model.message":
       if (opts.streaming) {
@@ -109,55 +111,57 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       }
       break;
     case "tool.started":
-      process.stdout.write(`${DIM}→ ${e.toolName} ${summarizeArgs(e.args, opts.verbose)}${RESET}\n`);
+      process.stdout.write(`${c.dim(`→ ${e.toolName} ${summarizeArgs(e.args, opts.verbose)}`)}\n`);
       break;
     case "tool.completed": {
       if (e.toolName === "update_plan" && e.result.ok) {
         const items = (e.result.data as { items?: Array<{ step: string; status: string }> })?.items ?? [];
-        console.log(`${YELLOW}Plan${RESET}`);
+        console.log(c.yellow("Plan"));
         for (const item of items) {
           const box = item.status === "done" ? "☑" : item.status === "in_progress" ? "◐" : "☐";
           console.log(`  ${box} ${item.step}`);
         }
         break;
       }
-      const mark = e.result.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
-      const err = e.result.ok ? "" : ` ${RED}${e.result.error?.code}: ${e.result.error?.message}${RESET}`;
+      const mark = e.result.ok ? c.green("✓") : c.red("✗");
+      const err = e.result.ok ? "" : ` ${c.red(`${e.result.error?.code}: ${e.result.error?.message}`)}`;
       console.log(`${mark} ${e.toolName}${err}`);
       if (opts.verbose && e.result.ok && e.result.data !== undefined) {
         const dump = summarizeResult(e.result.data);
-        if (dump.trim()) console.log(`${DIM}${dump}${RESET}`);
+        if (dump.trim()) console.log(c.dim(dump));
       }
       break;
     }
     case "file.changed":
-      console.log(`${YELLOW}● changed${RESET} ${e.path}`);
+      console.log(`${c.yellow("● changed")} ${e.path}`);
       break;
     case "command.output":
       // Live run_command output, streamed as it arrives. Dimmed so it reads
       // as background detail; chunks keep their own newlines.
-      process.stdout.write(`${DIM}${e.chunk}${RESET}`);
+      process.stdout.write(c.dim(e.chunk));
       break;
     case "context.microcompacted":
-      console.log(`${DIM}context: cleared ${e.clearedResults} old tool outputs${RESET}`);
+      console.log(c.dim(`context: cleared ${e.clearedResults} old tool outputs`));
       break;
     case "context.compacted":
-      console.log(`${DIM}(context compacted: dropped ${e.droppedTurns} earlier messages)${RESET}`);
+      console.log(c.dim(`(context compacted: dropped ${e.droppedTurns} earlier messages)`));
       break;
     case "provider.retry":
       // Transient retry progress: dim stderr so it never pollutes piped stdout.
       console.error(
-        `${DIM}⟳ retrying (${e.attempt}/${e.maxAttempts}) in ${(e.delayMs / 1000).toFixed(1)}s — ${e.reason}${RESET}`,
+        c.dim(`⟳ retrying (${e.attempt}/${e.maxAttempts}) in ${(e.delayMs / 1000).toFixed(1)}s — ${e.reason}`),
       );
       break;
     case "session.failed": {
-      console.error(`${RED}failed: ${e.error.code} — ${e.error.message}${RESET}`);
-      if (e.error.hint) console.error(`${DIM}  → ${e.error.hint}${RESET}`);
+      console.error(c.red(`failed: ${e.error.code} — ${e.error.message}`));
+      if (e.error.hint) console.error(c.dim(`  → ${e.error.hint}`));
       // Genuine, recoverable failures: point at the exact resume command.
       if (e.error.recoverable && e.error.sessionId) {
         console.error(
-          `${DIM}  → resume with \`seekforge resume ${e.error.sessionId}\` ` +
-            `(your file changes and completed steps are preserved; checkpoints intact)${RESET}`,
+          c.dim(
+            `  → resume with \`seekforge resume ${e.error.sessionId}\` ` +
+              `(your file changes and completed steps are preserved; checkpoints intact)`,
+          ),
         );
       }
       break;
@@ -177,7 +181,8 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
  * model paraphrase (prompt-injection defense, see docs 14 §3).
  */
 export async function confirmInTerminal(req: PermissionRequest): Promise<boolean> {
-  console.log(`\n${YELLOW}Permission required${RESET} [${req.permission}] ${req.toolName}`);
+  const c = makeColorizer(colorIsEnabled());
+  console.log(`\n${c.yellow("Permission required")} [${req.permission}] ${req.toolName}`);
   if (req.command) console.log(`  command: ${req.command}`);
   if (req.path) console.log(`  path:    ${req.path}`);
   if (!req.command && !req.path) console.log(`  ${req.description}`);
