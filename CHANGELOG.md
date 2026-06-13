@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### round 30: CLI i18n (English + 简体中文)
+Completes the i18n work (TUI + desktop already done): the CLI's user-facing
+chrome is now translatable.
+- `apps/cli/src/i18n.ts`: TUI-style flat key→string tables with an English
+  fallback; locale resolved once at startup (`config.locale` > `SEEKFORGE_LANG`
+  > `LC_ALL`/`LANG` > en). Tables split into i18n/{common,repl,commands}.
+- Translated: `fail()` messages + hints, the text-mode renderer labels, the REPL
+  chrome (/help, prompts, status), and command output (status, sessions, models,
+  doctor, memory, …). A `locale` config key is added.
+- Deliberately NOT translated: `--help`/option text (kept English), and all
+  machine output (`--output-format json`/`stream-json`, output-format.ts) stays
+  byte-stable English so scripts keep parsing it.
+
 ### round 29: desktop i18n (English + 简体中文)
 The desktop app had no i18n (all hardcoded English) while the TUI did. Added a
 matching lightweight layer — no deps, a flat key→string table per locale with an

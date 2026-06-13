@@ -13,6 +13,7 @@ import {
   type OutputFormat,
   type ResultOutcome,
 } from "../output-format.js";
+import { t } from "../i18n.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
 import { outputStylePrompt } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
@@ -80,15 +81,15 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (model === "deepseek-reasoner") {
     // reasoner has no function calling; the fallback text protocol is not
     // wired into the loop yet (planned). Refuse instead of failing midway.
-    fail("deepseek-reasoner does not support tool calling and cannot drive the agent yet", {
-      hint: "use deepseek-v4-flash (default)",
+    fail(t("err.reasonerNoToolCall"), {
+      hint: t("err.reasonerHint"),
     });
     return;
   }
 
   if (!config.apiKey) {
-    fail("no DeepSeek API key found", {
-      hint: 'set DEEPSEEK_API_KEY, or put {"apiKey": "..."} in .seekforge/config.json (project) or ~/.seekforge/config.json (global)',
+    fail(t("err.noApiKey"), {
+      hint: t("err.noApiKeyHint2"),
     });
     return;
   }
@@ -98,7 +99,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (!resumeSessionId && opts.continueLast) {
     const recent = listSessions(projectPath)[0];
     if (!recent) {
-      fail("no previous session to continue", { hint: "run a task first" });
+      fail(t("err.noPreviousSession"), { hint: t("err.noPreviousSessionHint") });
       return;
     }
     resumeSessionId = recent.id;
@@ -108,7 +109,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (resumeSessionId) {
     const meta = readSessionMeta(projectPath, resumeSessionId);
     if (!meta) {
-      fail(`session "${resumeSessionId}" not found`, { hint: "see `seekforge sessions`" });
+      fail(t("err.sessionNotFound", { id: resumeSessionId }), { hint: t("err.sessionNotFoundHint") });
       return;
     }
     mode = meta.mode; // a resumed session keeps its original ask/edit mode
@@ -119,7 +120,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   for (const raw of opts.addDirs ?? []) {
     const abs = normalizeExtraDir(raw, projectPath);
     if (abs) extraDirs.push(abs);
-    else console.error(`warning: --add-dir "${raw}" skipped (not an existing dir outside the project)`);
+    else console.error(t("err.excludedDirSkipped", { dir: raw }));
   }
 
   // Ctrl+C: first press cancels cooperatively (session marked cancelled,
@@ -127,7 +128,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const controller = new AbortController();
   const onSigint = () => {
     if (controller.signal.aborted) process.exit(130);
-    console.error("\ncancelling… (press Ctrl+C again to force quit)");
+    console.error(t("render.cancelling"));
     controller.abort();
   };
   process.on("SIGINT", onSigint);
@@ -177,8 +178,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
         planFromMode = true;
         break;
       default:
-        fail(`unknown --permission-mode "${opts.permissionMode}"`, {
-          hint: "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
+        fail(t("err.unknownPermissionMode", { mode: opts.permissionMode }), {
+          hint: t("err.unknownPermissionModeHint"),
         });
         return;
     }
@@ -192,8 +193,8 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     try {
       styleAddendum = outputStylePrompt(opts.outputStyle);
     } catch {
-      fail(`unknown --output-style "${opts.outputStyle}"`, {
-        hint: "default | concise | explanatory | learning",
+      fail(t("err.unknownOutputStyle", { style: opts.outputStyle }), {
+        hint: t("err.unknownOutputStyleHint"),
       });
       return;
     }
@@ -300,7 +301,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
         if (!r.completed) break;
       }
       if (turns === 0) {
-        fail("stream-json input: no user turns received on stdin");
+        fail(t("err.streamJsonNoTurns"));
         return;
       }
       emitResult(sid);
@@ -319,12 +320,12 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       let answer: string;
       try {
-        answer = (await rl.question("\nExecute this plan? [y/N] ")).trim().toLowerCase();
+        answer = (await rl.question(t("render.executeQuestion"))).trim().toLowerCase();
       } finally {
         rl.close();
       }
       if (answer !== "y") {
-        console.log(`plan kept, nothing executed (resume later: seekforge resume ${planRun.sessionId})`);
+        console.log(t("render.planKept", { sessionId: planRun.sessionId ?? "" }));
         return;
       }
       const execRun = await runOnce({

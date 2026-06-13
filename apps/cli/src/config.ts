@@ -34,6 +34,8 @@ export type CliConfig = {
   thinking?: boolean;
   /** V4 reasoning effort: "high" or "max". */
   reasoningEffort?: "high" | "max";
+  /** UI language for CLI chrome (errors, prompts, command output). */
+  locale?: "en" | "zh-CN";
 };
 
 function readJson(path: string): CliConfig {

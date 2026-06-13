@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { startServer } from "@seekforge/server";
+import { t } from "../i18n.js";
 
 export type ServeOptions = {
   port: number;
@@ -34,17 +35,17 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
   const workspaces = resolveWorkspaces(opts.workspaces);
   const { port, token, close } = await startServer({ workspaces, port: opts.port });
 
-  console.log(`SeekForge server: http://127.0.0.1:${port}/?token=${token}`);
-  console.log(`Serving ${workspaces.length} workspace(s) on 127.0.0.1 only:`);
+  console.log(t("cmd.serve.url", { port: String(port), token }));
+  console.log(t("cmd.serve.workspaces", { count: workspaces.length }));
   for (const ws of workspaces) console.log(`  - ${ws}`);
-  console.log("Press Ctrl+C to stop.");
+  console.log(t("cmd.serve.pressCtrlC"));
 
   await new Promise<void>((resolve) => {
     let closing = false;
     const shutdown = () => {
       if (closing) process.exit(130);
       closing = true;
-      console.error("\nshutting down…");
+      console.error(t("render.shuttingDown"));
       void close().then(resolve);
     };
     process.on("SIGINT", shutdown);

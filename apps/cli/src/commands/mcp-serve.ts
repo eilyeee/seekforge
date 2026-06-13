@@ -1,4 +1,5 @@
 import { serveMcp } from "@seekforge/core";
+import { t } from "../i18n.js";
 
 export type McpServeOptions = {
   /** Expose the FULL tool set (write/run). Trusted callers only. */
@@ -18,7 +19,7 @@ export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
   const readOnly = opts.allowWrite !== true;
   const workspace = process.cwd();
   process.stderr.write(
-    `seekforge mcp-serve: ${readOnly ? "read-only" : "FULL ACCESS (trusted callers only)"} on ${workspace}\n`,
+    `${t("cmd.mcpServe.header", { mode: readOnly ? t("cmd.mcpServe.readOnly") : t("cmd.mcpServe.fullAccess"), workspace })}\n`,
   );
 
   const server = serveMcp({ workspace, readOnly, input: process.stdin, output: process.stdout });

@@ -9,20 +9,21 @@
 
 import { createRequire } from "node:module";
 import { dim, green } from "../colors.js";
+import { t } from "../i18n.js";
 import { checkForUpdate } from "../version-check.js";
 
 export async function updateCommand(): Promise<void> {
   const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
   const latest = await checkForUpdate(version);
   if (!latest) {
-    console.log(`seekforge ${version} is up to date.`);
+    console.log(t("status.upToDate", { version }));
     return;
   }
-  console.log(`${green(`↑ seekforge ${latest} is available`)} (you have ${version}).`);
+  console.log(`${green(t("status.updateAvailable", { latest }))} ${t("status.currentVersion", { version })}`);
   console.log("");
-  console.log("Update with:");
-  console.log("  npm i -g seekforge");
+  console.log(t("status.updateWith"));
+  console.log(`  ${t("status.npmInstallCmd")}`);
   console.log("");
-  console.log(dim("(Run the install with the package manager you used to install seekforge —"));
-  console.log(dim(" e.g. pnpm add -g seekforge. SeekForge never self-updates the global binary.)"));
+  console.log(dim(t("status.updateNote")));
+  console.log(dim(t("status.updateNote2")));
 }

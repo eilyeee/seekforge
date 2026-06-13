@@ -1,5 +1,6 @@
 import { MODEL_PRICING, DEFAULT_MODEL, DEPRECATED_MODELS } from "@seekforge/core";
 import { green, dim } from "../colors.js";
+import { t } from "../i18n.js";
 
 export function modelsCommand(): void {
   const deprecatedSet = new Set<string>(DEPRECATED_MODELS);
@@ -13,14 +14,14 @@ export function modelsCommand(): void {
     return aDep - bDep;
   });
 
-  console.log("Models available from DeepSeek:\n");
+  console.log(t("cmd.models.header"));
 
   for (const [id, pricing] of entries) {
     const isDefault = id === DEFAULT_MODEL;
     const isDeprecated = deprecatedSet.has(id);
     const padded = id.padEnd(maxIdLen);
-    const depTag = isDeprecated ? `  ${dim("(deprecated)")}` : "";
-    const defaultTag = isDefault ? `  ${green("(default)")}` : "";
+    const depTag = isDeprecated ? `  ${dim(t("cmd.models.deprecated"))}` : "";
+    const defaultTag = isDefault ? `  ${green(t("cmd.models.default"))}` : "";
     console.log(
       `  ${padded}  input: $${pricing.inputCacheMissPer1M}/1M  ` +
         `${dim(`($${pricing.inputCacheHitPer1M} cache-hit/1M)`)}  ` +
@@ -29,6 +30,6 @@ export function modelsCommand(): void {
   }
 
   console.log(
-    `\n${dim("Prices shown are in USD per 1 million tokens. Cache-hit pricing applies when the input prompt prefix is cached.")}`,
+    `\n${dim(t("cmd.models.footer"))}`,
   );
 }

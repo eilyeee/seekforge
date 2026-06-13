@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command, InvalidArgumentError } from "commander";
 import { fail, setColorEnabled, useColor } from "./colors.js";
+import { loadConfig } from "./config.js";
+import { detectLocale, setLocale } from "./i18n.js";
 import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
 import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { completionCommand } from "./commands/completion.js";
@@ -76,6 +78,9 @@ const machineMode = argvWantsMachineFormat(process.argv);
 
 // Resolve the process-wide color default once: TTY + !NO_COLOR + !machine mode.
 setColorEnabled(useColor({ machine: machineMode }));
+
+// Resolve the CLI chrome locale once at startup: config.locale > env > en.
+setLocale(loadConfig(process.cwd()).locale ?? detectLocale());
 
 /** commander collector for repeatable options (e.g. --add-dir). */
 const collect = (val: string, prev: string[]): string[] => [...prev, val];

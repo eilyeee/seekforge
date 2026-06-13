@@ -88,13 +88,15 @@ _seekforge() {
 compdef _seekforge seekforge
 `;
 
+import { t } from "../i18n.js";
+
 export function completionCommand(shell: string): void {
   if (shell === "bash") {
     process.stdout.write(BASH_SCRIPT);
   } else if (shell === "zsh") {
     process.stdout.write(ZSH_SCRIPT);
   } else {
-    console.error(`unsupported shell: ${shell} (expected bash or zsh)`);
+    console.error(t("cmd.completion.unsupportedShell", { shell }));
     process.exitCode = 1;
   }
 }

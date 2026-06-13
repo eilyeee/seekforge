@@ -1,22 +1,23 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { importExternalAgent, loadAgentDefinitions } from "@seekforge/core";
+import { t } from "../i18n.js";
 
 export function agentListCommand(): void {
   const agents = loadAgentDefinitions(process.cwd());
   if (agents.length === 0) {
-    console.log("No agents available. Import one with `seekforge agent import <path>`.");
+    console.log(t("cmd.agent.none"));
     return;
   }
   for (const a of agents) {
-    console.log(`${a.id}  [${a.scope}] [${a.mode}]  ${a.description}`);
+    console.log(t("cmd.agent.listLine", { id: a.id, scope: a.scope, mode: a.mode, description: a.description }));
   }
 }
 
 export function agentShowCommand(id: string): void {
   const def = loadAgentDefinitions(process.cwd()).find((a) => a.id === id);
   if (!def) {
-    console.error(`Agent "${id}" not found. See \`seekforge agent list\`.`);
+    console.error(t("err.agentNotFound", { id }));
     process.exitCode = 1;
     return;
   }
@@ -47,13 +48,13 @@ export function agentImportCommand(
       targetRoot,
       force: opts.force,
     });
-    console.log(`imported "${agent.id}" [${agent.mode}] → ${dir}`);
-    if (agent.tools) console.log(`tools: ${agent.tools.join(", ")}`);
+    console.log(t("cmd.agent.imported", { id: agent.id, mode: agent.mode, dir }));
+    if (agent.tools) console.log(t("cmd.agent.tools", { tools: agent.tools.join(", ") }));
     if (droppedTools.length > 0) {
-      console.log(`dropped tools (no SeekForge equivalent): ${droppedTools.join(", ")}`);
+      console.log(t("cmd.agent.droppedTools", { tools: droppedTools.join(", ") }));
     }
-    console.log(`Check it with \`seekforge agent show ${agent.id}\`. The main agent can now`);
-    console.log("delegate to it via dispatch_agent; edit-mode dispatch still asks for approval.");
+    console.log(t("cmd.agent.importedMore", { id: agent.id }));
+    console.log(t("cmd.agent.importedMore2"));
   } catch (err) {
     console.error((err as Error).message);
     process.exitCode = 1;

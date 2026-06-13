@@ -1,5 +1,6 @@
 import { createMcpClient } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
+import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
 import {
   addMcpServer,
@@ -17,17 +18,17 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
   const config = loadConfig(process.cwd());
   const servers = Object.entries(config.mcpServers ?? {});
   if (servers.length === 0) {
-    console.log('no MCP servers configured — add "mcpServers" to .seekforge/config.json');
+    console.log(t("cmd.mcp.none"));
     return;
   }
 
   for (const [name, serverConfig] of servers) {
     const commandLine = [serverConfig.command, ...(serverConfig.args ?? [])].join(" ");
-    const trust = serverConfig.trusted ? "trusted" : "untrusted";
+    const trustLabel = serverConfig.trusted ? t("cmd.mcp.trusted") : t("cmd.mcp.untrusted");
     const client = createMcpClient({ name, config: serverConfig });
     try {
       const tools = await client.listTools();
-      console.log(`${name}  ${dim(`(${commandLine}, ${trust})`)}  ${tools.length} tool(s)`);
+      console.log(t("cmd.mcp.serverLine", { name, cmd: commandLine, trust: trustLabel, count: tools.length }));
       for (const tool of tools) {
         if (opts.tools) {
           const firstLine = (tool.description ?? "").split("\n")[0] ?? "";
@@ -38,7 +39,7 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
       }
     } catch (err) {
       console.error(
-        `${name}  ${dim(`(${commandLine}, ${trust})`)}  error: ${err instanceof Error ? err.message : String(err)}`,
+        t("cmd.mcp.serverError", { name, cmd: commandLine, trust: trustLabel, error: err instanceof Error ? err.message : String(err) }),
       );
     } finally {
       client.dispose();
@@ -57,8 +58,8 @@ export function mcpAddCommand(
   opts: { global?: boolean },
 ): void {
   if (commandTokens.length === 0) {
-    fail("missing command for `mcp add`", {
-      hint: "seekforge mcp add <name> <command> [args...]  e.g. seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .",
+    fail(t("err.missingCommandMcp"), {
+      hint: t("err.missingCommandMcpHint"),
     });
     return;
   }
@@ -72,8 +73,8 @@ export function mcpAddCommand(
     return;
   }
   const commandLine = [command, ...args].join(" ");
-  console.log(`added MCP server "${name}" (${commandLine}) to ${path}`);
-  console.log(dim('note: new servers are untrusted by default — set "trusted": true in config to auto-approve their tools'));
+  console.log(t("status.addedMcp", { name, cmd: commandLine, path }));
+  console.log(dim(t("status.mcpUntrustedNote")));
 }
 
 /**
@@ -89,5 +90,5 @@ export function mcpRemoveCommand(name: string, opts: { global?: boolean }): void
     fail(err instanceof Error ? err.message : String(err));
     return;
   }
-  console.log(`removed MCP server "${name}" from ${path}`);
+  console.log(t("status.removedMcp", { name, path }));
 }
