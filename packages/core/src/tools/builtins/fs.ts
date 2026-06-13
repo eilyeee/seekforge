@@ -338,6 +338,11 @@ const searchText = defineTool({
     const matchesGlob = (rel: string): boolean =>
       globRe ? globRe.test(globOnBasename ? path.basename(rel) : rel) : true;
 
+    // The agent's own session transcripts live under .seekforge/sessions; if
+    // search descended into them it would ingest escaped copies of its own
+    // prior tool output (a self-pollution feedback loop that also burns tokens).
+    const sessionsDir = path.join(ctx.workspace, ".seekforge", "sessions");
+
     const matches: SearchMatch[] = [];
     const filesWithMatches: string[] = [];
     let truncated = false;
@@ -433,6 +438,7 @@ const searchText = defineTool({
         const childPath = path.join(dir, d.name);
         if (d.isDirectory()) {
           if (DEFAULT_IGNORE_DIRS.has(d.name)) continue;
+          if (childPath === sessionsDir) continue;
           walk(childPath, childRel);
         } else if (d.isFile()) {
           searchFile(childPath, childRel);

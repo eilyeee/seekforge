@@ -62,6 +62,17 @@ test("outputStylePrompt: unknown style throws", () => {
   assert.throws(() => outputStylePrompt("bogus"));
   assert.throws(() => outputStylePrompt(""));
 });
+// Guard the *intent* of each preset so it can't be silently weakened into a
+// no-op (the round-19 dogfood found the original wording too soft to change
+// model output). Each style must carry its defining directive.
+test("outputStylePrompt: presets carry their defining directive", () => {
+  const concise = outputStylePrompt("concise") as string;
+  const explanatory = outputStylePrompt("explanatory") as string;
+  const learning = outputStylePrompt("learning") as string;
+  assert.match(concise, /terse|one[- ]line|shortest|concise/i);
+  assert.match(explanatory, /why|reasoning|trade-?off|explain/i);
+  assert.match(learning, /TODO\(human\)/);
+});
 
 // Type-level sanity: OUTPUT_STYLES is exactly OutputStyle[] (compile-time only).
 const _styleCheck: readonly OutputStyle[] = OUTPUT_STYLES;

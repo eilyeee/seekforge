@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### round 19: dogfood fixes (bugs found by running SeekForge on SeekForge)
+Four parallel dogfood sessions (3 read-only investigations + 1 live edit run)
+surfaced real bugs only running the agent could expose:
+- **`auto`/`-y` now actually auto-approves command execution.** The `execute`
+  permission case had no `auto` branch, so `-y` / `--permission-mode
+  bypassPermissions` still prompted for commands — and in headless mode that
+  meant every non-allowlisted command was auto-DENIED. Matches the documented
+  "auto-approve write/execute" contract now. (acceptEdits still confirms
+  commands, by design.)
+- **`search_text` no longer descends into `.seekforge/sessions/`** — it was
+  ingesting escaped copies of the agent's own prior tool output (a
+  self-pollution feedback loop that burned tokens).
+- **Reasoning/thinking stream is clean in non-TTY output.** The CLI renderer
+  forced color on for every interactive run, so piped/captured `ask` output was
+  flooded with per-token ANSI escapes; it now honors the TTY-aware color gate.
+- **Skills are no longer selected/announced in read-only ask mode** — they are
+  task-execution procedures, irrelevant to Q&A (plan/edit still get them).
+- **Stronger `--output-style` presets.** The original wording was too soft to
+  visibly change responses; concise/explanatory/learning now state hard,
+  shape-changing rules.
+- **Citation guidance**: ask mode now instructs the model to take line numbers
+  from actual tool output, never reconstruct them from memory (the dogfood found
+  citations drifting 10–45 lines).
+- Plus a feature SeekForge wrote itself during the edit dogfood: `seekforge
+  completion bash|zsh` now offers `run` subcommand flags (function-based
+  completion), not just top-level command names.
+
 ### round 18: CLI headless parity (Claude Code flag closeout)
 - `--permission-mode <mode>`: Claude-compatible names (`default`/`acceptEdits`/
   `plan`/`bypassPermissions`) plus native (`confirm`/`auto`) map onto the core

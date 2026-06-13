@@ -41,6 +41,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "Mode: ASK (read-only). Answer the user's question about the codebase.",
         "Write and command tools are disabled; do not attempt them.",
         "Ground every claim in code you read this session and cite it as path:line.",
+        "Line numbers must come from the tool output you actually saw (read_file is numbered; search_text returns the line of each match). Never estimate or reconstruct a line number from memory — if you are unsure of the exact line, cite just the path or re-read to confirm.",
       ].join("\n"),
     );
   } else {
