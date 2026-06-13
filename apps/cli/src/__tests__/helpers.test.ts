@@ -6,8 +6,17 @@
 import assert from "node:assert/strict";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
 import { addMcpServer, removeMcpServer } from "../mcp-config.js";
-import { buildJsonResult, isMachineFormat, resolveOutputFormat } from "../output-format.js";
+import type { AgentEvent } from "@seekforge/shared";
+import {
+  buildResultEnvelope,
+  buildUsage,
+  createStreamJsonMapper,
+  isMachineFormat,
+  outcomeFromErrorCode,
+  resolveOutputFormat,
+} from "../output-format.js";
 import { composePrompt } from "../stdin-prompt.js";
+import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
 // whole point of the color-gating tests, so the control char is intentional.
@@ -61,6 +70,9 @@ test("resolveOutputFormat: explicit values", () => {
 test("resolveOutputFormat: --output-format wins over --json", () => {
   assert.equal(resolveOutputFormat({ outputFormat: "text", json: true }), "text");
 });
+test("resolveOutputFormat: stream-json-raw is valid", () => {
+  assert.equal(resolveOutputFormat({ outputFormat: "stream-json-raw" }), "stream-json-raw");
+});
 test("resolveOutputFormat: invalid throws", () => {
   assert.throws(() => resolveOutputFormat({ outputFormat: "yaml" }));
 });
@@ -68,15 +80,156 @@ test("isMachineFormat", () => {
   assert.equal(isMachineFormat("text"), false);
   assert.equal(isMachineFormat("json"), true);
   assert.equal(isMachineFormat("stream-json"), true);
+  assert.equal(isMachineFormat("stream-json-raw"), true);
 });
-test("buildJsonResult shape", () => {
-  const r = buildJsonResult(
-    { summary: "s", changedFiles: ["a"], commandsRun: [], verification: "ok", usage: { promptTokens: 1, completionTokens: 2, cacheHitTokens: 0, costUsd: 0.1 } },
-    "sess-1",
-  );
-  assert.equal(r.sessionId, "sess-1");
-  assert.equal(r.summary, "s");
-  assert.deepEqual(r.changedFiles, ["a"]);
+
+// --- buildResultEnvelope (Claude `--output-format json` shape) ---------------
+const sampleReport = {
+  summary: "did the thing",
+  changedFiles: ["a.ts"],
+  commandsRun: ["pnpm test"],
+  verification: "ok",
+  usage: { promptTokens: 10, completionTokens: 5, cacheHitTokens: 3, costUsd: 0.042 },
+};
+test("buildResultEnvelope: Claude field names on success", () => {
+  const r = buildResultEnvelope({ report: sampleReport, sessionId: "sess-1", numTurns: 3, durationMs: 1234 });
+  assert.equal(r.type, "result");
+  assert.equal(r.subtype, "success");
+  assert.equal(r.is_error, false);
+  assert.equal(r.result, "did the thing");
+  assert.equal(r.session_id, "sess-1");
+  assert.equal(r.num_turns, 3);
+  assert.equal(r.duration_ms, 1234);
+  assert.equal(r.total_cost_usd, 0.042);
+  const usage = r.usage as Record<string, number>;
+  assert.equal(usage.input_tokens, 10);
+  assert.equal(usage.output_tokens, 5);
+  assert.equal(usage.cache_read_input_tokens, 3);
+});
+test("buildResultEnvelope: SeekForge extras ride along", () => {
+  const r = buildResultEnvelope({ report: sampleReport, sessionId: "s", numTurns: 1, durationMs: 1 });
+  assert.deepEqual(r.changedFiles, ["a.ts"]);
+  assert.deepEqual(r.commandsRun, ["pnpm test"]);
+  assert.equal(r.verification, "ok");
+});
+test("buildResultEnvelope: null session id when absent", () => {
+  const r = buildResultEnvelope({ report: sampleReport, sessionId: undefined, numTurns: 0, durationMs: 0 });
+  assert.equal(r.session_id, null);
+});
+test("buildResultEnvelope: max_turns subtype", () => {
+  const r = buildResultEnvelope({ sessionId: "s", numTurns: 50, durationMs: 9, outcome: { kind: "max_turns" } });
+  assert.equal(r.subtype, "error_max_turns");
+  assert.equal(r.is_error, true);
+  assert.equal(r.total_cost_usd, 0); // no report → zeroed cost
+  assert.deepEqual(r.usage, {});
+});
+test("buildResultEnvelope: error subtype puts message in result", () => {
+  const r = buildResultEnvelope({ sessionId: "s", numTurns: 1, durationMs: 9, outcome: { kind: "error", message: "boom" } });
+  assert.equal(r.subtype, "error");
+  assert.equal(r.is_error, true);
+  assert.equal(r.result, "boom");
+});
+test("buildUsage maps DeepSeek tokens to Anthropic names", () => {
+  const u = buildUsage({ promptTokens: 7, completionTokens: 2, cacheHitTokens: 1, costUsd: 0 });
+  assert.equal(u.input_tokens, 7);
+  assert.equal(u.output_tokens, 2);
+  assert.equal(u.cache_read_input_tokens, 1);
+});
+test("outcomeFromErrorCode: max_turns_exceeded → max_turns", () => {
+  assert.deepEqual(outcomeFromErrorCode("max_turns_exceeded"), { kind: "max_turns" });
+});
+test("outcomeFromErrorCode: other → error with message", () => {
+  assert.deepEqual(outcomeFromErrorCode("agent_error", "nope"), { kind: "error", message: "nope" });
+});
+
+// --- createStreamJsonMapper (AgentEvent → Claude stream envelopes) -----------
+test("stream mapper: type taxonomy from a synthetic AgentEvent sequence", () => {
+  const m = createStreamJsonMapper();
+  const events: AgentEvent[] = [
+    { type: "session.created", sessionId: "sess-9" },
+    { type: "step.started", title: "thinking" }, // dropped (no Claude equivalent)
+    { type: "model.message", content: "hello" },
+    { type: "tool.started", toolName: "read_file", args: { path: "a.ts" } },
+    { type: "tool.completed", toolName: "read_file", result: { ok: true, data: "x" } },
+  ];
+  const out = events.flatMap((e) => m.map(e));
+  const types = out.map((o) => o.type);
+  // leading system init (lazy on first id), then assistant text, assistant
+  // tool_use, user tool_result. step.started produced nothing.
+  assert.deepEqual(types, ["system", "assistant", "assistant", "user"]);
+  assert.equal(out[0]!.subtype, "init");
+  assert.equal(out[0]!.session_id, "sess-9");
+  // every envelope carries the session id
+  for (const o of out) assert.equal(o.session_id, "sess-9");
+  // turn counting tracks text-producing model messages
+  assert.equal(m.turns(), 1);
+});
+test("stream mapper: tool_result is_error reflects failed tool", () => {
+  const m = createStreamJsonMapper();
+  m.map({ type: "session.created", sessionId: "s" });
+  const out = m.map({
+    type: "tool.completed",
+    toolName: "run_command",
+    result: { ok: false, error: { code: "x", message: "fail" } },
+  });
+  const content = (out[0]!.message as { content: Array<{ is_error: boolean }> }).content;
+  assert.equal(content[0]!.is_error, true);
+});
+test("stream mapper: result() reuses tracked turn count", () => {
+  const m = createStreamJsonMapper();
+  m.map({ type: "session.created", sessionId: "s" });
+  m.map({ type: "model.message", content: "a" });
+  m.map({ type: "model.message", content: "b" });
+  const r = m.result({ report: sampleReport, sessionId: "s", numTurns: 0, durationMs: 5 });
+  assert.equal(r.type, "result");
+  assert.equal(r.num_turns, 2); // falls back to the mapper's count when 0 passed
+});
+
+// --- tool gating (--allowedTools / --disallowedTools) -----------------------
+test("parseToolList: splits commas and trims", () => {
+  assert.deepEqual(parseToolList("read_file, search_text ,, run_command"), [
+    "read_file",
+    "search_text",
+    "run_command",
+  ]);
+  assert.deepEqual(parseToolList(undefined), []);
+});
+test("buildToolGatingRules: neither flag → undefined (config passes through)", () => {
+  assert.equal(buildToolGatingRules({}), undefined);
+});
+test("buildToolGatingRules: --disallowedTools → one deny per tool", () => {
+  const rules = buildToolGatingRules({ disallowedTools: "run_command,write_file" });
+  assert.deepEqual(rules, [
+    { action: "deny", tool: "run_command" },
+    { action: "deny", tool: "write_file" },
+  ]);
+});
+test("buildToolGatingRules: --allowedTools denies every other known tool", () => {
+  const rules = buildToolGatingRules({ allowedTools: "read_file,search_text", knownTools: ["read_file", "search_text", "run_command", "write_file"] });
+  assert.ok(rules);
+  // listed tools get NO rule; the rest are denied
+  assert.deepEqual(rules, [
+    { action: "deny", tool: "run_command" },
+    { action: "deny", tool: "write_file" },
+  ]);
+});
+test("buildToolGatingRules: allow + disallow do not duplicate a denied tool", () => {
+  const rules = buildToolGatingRules({
+    allowedTools: "read_file",
+    disallowedTools: "run_command",
+    knownTools: ["read_file", "run_command", "write_file"],
+  });
+  // run_command denied once (explicit), write_file denied (not in allow-list),
+  // read_file allowed (no rule).
+  assert.deepEqual(rules, [
+    { action: "deny", tool: "run_command" },
+    { action: "deny", tool: "write_file" },
+  ]);
+});
+test("buildToolGatingRules: base rules are appended after synthesized", () => {
+  const base = [{ action: "allow" as const, tool: "web_fetch", match: "https://docs" }];
+  const rules = buildToolGatingRules({ disallowedTools: "run_command", base });
+  assert.deepEqual(rules, [{ action: "deny", tool: "run_command" }, ...base]);
 });
 
 // --- mcp-config mutation ----------------------------------------------------

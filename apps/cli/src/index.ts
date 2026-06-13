@@ -59,12 +59,16 @@ function argvWantsMachineFormat(argv: string[]): boolean {
   const i = argv.indexOf("--output-format");
   if (i !== -1) {
     const v = argv[i + 1]?.toLowerCase();
-    return v === "json" || v === "stream-json";
+    return v === "json" || v === "stream-json" || v === "stream-json-raw";
   }
   // `--output-format=json` form.
   return argv.some((a) => {
     const v = a.toLowerCase();
-    return v === "--output-format=json" || v === "--output-format=stream-json";
+    return (
+      v === "--output-format=json" ||
+      v === "--output-format=stream-json" ||
+      v === "--output-format=stream-json-raw"
+    );
   });
 }
 const machineMode = argvWantsMachineFormat(process.argv);
@@ -107,13 +111,20 @@ program
   .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
   .option("-y, --yes", "with -p: auto-approve write/execute permissions")
   .option("-m, --model <model>", "with -p: override model")
-  .option("--output-format <fmt>", "with -p: text | json (final object) | stream-json (one event/line)")
+  .option(
+    "--output-format <fmt>",
+    "with -p: text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
+  )
   .option("--json", "with -p: alias for --output-format stream-json (machine mode; no color/chrome)")
   .option("-c, --continue", "with -p: resume the most recent session")
   .option("--resume <id>", "with -p: resume a specific session")
   .option("--add-dir <path>", "with -p: extra read-only root for @-references (repeatable)", collect, [] as string[])
   .option("--max-turns <n>", "with -p: cap agent turns", parsePositiveInt)
-  .option("--verbose", "with -p: print full tool args and results");
+  .option("--verbose", "with -p: print full tool args and results")
+  .option("--system-prompt <text>", "with -p: replace the system prompt entirely")
+  .option("--append-system-prompt <text>", "with -p: append to the system prompt (not yet supported)")
+  .option("--allowedTools <list>", "with -p: only allow these tools (comma-separated)")
+  .option("--disallowedTools <list>", "with -p: deny these tools (comma-separated)");
 
 type SharedRunOpts = {
   yes?: boolean;
@@ -125,6 +136,10 @@ type SharedRunOpts = {
   addDir?: string[];
   maxTurns?: number;
   verbose?: boolean;
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+  allowedTools?: string;
+  disallowedTools?: string;
 };
 
 program
@@ -132,13 +147,20 @@ program
   .argument("<task>", "development task to perform (@path tokens inline file contents)")
   .option("-y, --yes", "auto-approve write/execute permissions (env-level still asks)")
   .option("-m, --model <model>", "override model (deepseek-chat | deepseek-reasoner)")
-  .option("--output-format <fmt>", "text | json (final object) | stream-json (one event/line)")
+  .option(
+    "--output-format <fmt>",
+    "text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
+  )
   .option("--json", "alias for --output-format stream-json (CI mode; prompts denied, pair with -y)")
   .option("-c, --continue", "resume the most recent session")
   .option("--resume <id>", "resume a specific session (see `seekforge sessions`)")
   .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
+  .option("--system-prompt <text>", "replace the system prompt entirely")
+  .option("--append-system-prompt <text>", "append to the system prompt (not yet supported)")
+  .option("--allowedTools <list>", "only allow these tools (comma-separated)")
+  .option("--disallowedTools <list>", "deny these tools (comma-separated)")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
   .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
@@ -152,6 +174,10 @@ program
       addDirs: opts.addDir,
       maxTurns: opts.maxTurns,
       verbose: opts.verbose,
+      systemPrompt: opts.systemPrompt,
+      appendSystemPrompt: opts.appendSystemPrompt,
+      allowedTools: opts.allowedTools,
+      disallowedTools: opts.disallowedTools,
       plan: opts.plan,
     });
   });
@@ -160,13 +186,20 @@ program
   .command("ask")
   .argument("<question>", "question about the current project (@path tokens inline file contents)")
   .option("-m, --model <model>", "override model")
-  .option("--output-format <fmt>", "text | json (final object) | stream-json (one event/line)")
+  .option(
+    "--output-format <fmt>",
+    "text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
+  )
   .option("--json", "alias for --output-format stream-json (CI mode)")
   .option("-c, --continue", "resume the most recent session")
   .option("--resume <id>", "resume a specific session")
   .option("--add-dir <path>", "extra read-only root for @-references (repeatable)", collect, [] as string[])
   .option("--max-turns <n>", "cap agent turns", parsePositiveInt)
   .option("--verbose", "print full tool args and results")
+  .option("--system-prompt <text>", "replace the system prompt entirely")
+  .option("--append-system-prompt <text>", "append to the system prompt (not yet supported)")
+  .option("--allowedTools <list>", "only allow these tools (comma-separated)")
+  .option("--disallowedTools <list>", "deny these tools (comma-separated)")
   .description("read-only Q&A about the codebase (no writes, no commands)")
   .action(async (question: string, opts: SharedRunOpts) => {
     await runTaskCommand(question, {
@@ -178,6 +211,10 @@ program
       addDirs: opts.addDir,
       maxTurns: opts.maxTurns,
       verbose: opts.verbose,
+      systemPrompt: opts.systemPrompt,
+      appendSystemPrompt: opts.appendSystemPrompt,
+      allowedTools: opts.allowedTools,
+      disallowedTools: opts.disallowedTools,
     });
   });
 
@@ -532,6 +569,10 @@ program
       addDir?: string[];
       maxTurns?: number;
       verbose?: boolean;
+      systemPrompt?: string;
+      appendSystemPrompt?: string;
+      allowedTools?: string;
+      disallowedTools?: string;
     }>();
     if (root.print !== undefined) {
       const inline = typeof root.print === "string" ? root.print : undefined;
@@ -546,6 +587,10 @@ program
         addDir: root.addDir,
         maxTurns: root.maxTurns !== undefined ? String(root.maxTurns) : undefined,
         verbose: root.verbose,
+        systemPrompt: root.systemPrompt,
+        appendSystemPrompt: root.appendSystemPrompt,
+        allowedTools: root.allowedTools,
+        disallowedTools: root.disallowedTools,
       });
       return;
     }
