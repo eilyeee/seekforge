@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyDiffLine, extractDiff, splitDiff } from "./diff";
+import { classifyDiffLine, diffFilePath, extractDiff, splitDiff } from "./diff";
 
 describe("classifyDiffLine", () => {
   it("classifies additions and deletions", () => {
@@ -27,6 +27,23 @@ describe("splitDiff", () => {
     const lines = splitDiff("--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n");
     expect(lines.map((l) => l.kind)).toEqual(["meta", "meta", "hunk", "del", "add"]);
     expect(lines[4]).toEqual({ kind: "add", text: "+new" });
+  });
+});
+
+describe("diffFilePath", () => {
+  it("prefers the +++ b/<path> line and strips the a/b prefix", () => {
+    const diff = "diff --git a/src/x.ts b/src/x.ts\n--- a/src/x.ts\n+++ b/src/x.ts\n@@\n+x";
+    expect(diffFilePath(diff)).toBe("src/x.ts");
+  });
+
+  it("falls back to --- or diff --git when no +++ path is present", () => {
+    expect(diffFilePath("--- a/lib/foo.py\n@@")).toBe("lib/foo.py");
+    expect(diffFilePath("diff --git a/cmd/main.go b/cmd/main.go")).toBe("cmd/main.go");
+  });
+
+  it("ignores /dev/null (new/deleted files) and returns '' when no path", () => {
+    expect(diffFilePath("+++ /dev/null\n--- a/gone.rs")).toBe("gone.rs");
+    expect(diffFilePath("@@ -1 +1 @@\n-a\n+b")).toBe("");
   });
 });
 
