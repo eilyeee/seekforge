@@ -4,7 +4,7 @@ import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import { Badge, Button, Card, Input, TextArea } from "../components/ui";
-import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
+import type { ConfigKey, McpResource, McpServer, McpTool, ModelInfo, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -228,21 +228,28 @@ export function SettingsView() {
   const [global, setGlobal] = useState(false);
   const { states, save } = useFieldSave();
 
-  const [model, setModel] = useState("deepseek-chat");
+  const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [runtimeBin, setRuntimeBin] = useState("");
   const [allowlist, setAllowlist] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyMask, setApiKeyMask] = useState("");
+  const [models, setModels] = useState<ModelInfo[] | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
     setError(null);
     setLoading(true);
-    api
-      .config()
-      .then((config) => {
-        setModel(config.model ?? "deepseek-chat");
+    setModels(null);
+    Promise.all([
+      api.models().catch(() => null as ModelInfo[] | null),
+      api.config(),
+    ])
+      .then(([modelList, config]) => {
+        if (modelList) setModels(modelList);
+        const defaultModel =
+          modelList?.find((m) => m.isDefault)?.id ?? config.model ?? "deepseek-chat";
+        setModel(config.model ?? defaultModel);
         setBaseUrl(config.baseUrl ?? "");
         setRuntimeBin(config.runtimeBin ?? "");
         setAllowlist((config.commandAllowlist ?? []).join(", "));
@@ -285,16 +292,28 @@ export function SettingsView() {
                   onChange={(e) => setModel(e.target.value)}
                   className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
                 >
-                  <option value="deepseek-chat">deepseek-chat</option>
-                  <option value="deepseek-reasoner" disabled>
-                    deepseek-reasoner (no tool calling yet)
-                  </option>
+                  {models === null ? (
+                    <option value="deepseek-chat">deepseek-chat</option>
+                  ) : (
+                    [
+                      ...models
+                        .filter((m) => !m.deprecated)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.id}
+                            {m.isDefault ? " (default)" : ""}
+                          </option>
+                        )),
+                      ...models.filter((m) => m.deprecated).map((m) => (
+                        <option key={m.id} value={m.id} disabled>
+                          {m.id} (deprecated)
+                        </option>
+                      )),
+                    ]
+                  )}
                 </select>
                 <SaveButton state={states.model ?? "idle"} onClick={() => void save("model", model, global)} />
               </div>
-              <p className="mt-1 text-[11px] text-tertiary">
-                deepseek-reasoner is disabled: it does not support tool calling yet.
-              </p>
             </div>
 
             <div>

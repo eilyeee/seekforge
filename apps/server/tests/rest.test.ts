@@ -230,6 +230,41 @@ describe("REST endpoints", () => {
     expect(typeof body.version).toBe("string");
   });
 
+  it("GET /api/models returns the model list with metadata", async () => {
+    const res = await authed("/api/models");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeGreaterThanOrEqual(4);
+
+    // deepseek-v4-flash is the default, not deprecated
+    const flash = body.find((m: { id: string }) => m.id === "deepseek-v4-flash");
+    expect(flash).toBeDefined();
+    expect(flash.isDefault).toBe(true);
+    expect(flash.deprecated).toBe(false);
+    expect(flash.pricing).toHaveProperty("inputCacheMissPer1M");
+    expect(flash.pricing).toHaveProperty("inputCacheHitPer1M");
+    expect(flash.pricing).toHaveProperty("outputPer1M");
+
+    // deepseek-chat is deprecated, not default
+    const chat = body.find((m: { id: string }) => m.id === "deepseek-chat");
+    expect(chat).toBeDefined();
+    expect(chat.isDefault).toBe(false);
+    expect(chat.deprecated).toBe(true);
+
+    // deepseek-reasoner is deprecated, not default
+    const reasoner = body.find((m: { id: string }) => m.id === "deepseek-reasoner");
+    expect(reasoner).toBeDefined();
+    expect(reasoner.isDefault).toBe(false);
+    expect(reasoner.deprecated).toBe(true);
+
+    // deepseek-v4-pro is not deprecated, not default
+    const pro = body.find((m: { id: string }) => m.id === "deepseek-v4-pro");
+    expect(pro).toBeDefined();
+    expect(pro.isDefault).toBe(false);
+    expect(pro.deprecated).toBe(false);
+  });
+
   it("GET /api/project detects the fixture project", async () => {
     const res = await authed("/api/project");
     expect(res.status).toBe(200);

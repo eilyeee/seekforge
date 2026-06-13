@@ -6,6 +6,7 @@ import {
   mockEvolutionProposals,
   mockMcpServers,
   mockMcpTools,
+  mockModels,
   mockProjectMd,
   mockRewindResults,
   mockSessionMessages,
@@ -65,6 +66,8 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   // The real server scopes routes by ?ws=; the mock serves the same fixtures
   // for every workspace, so strip the query and match on the bare path.
   const path = fullPath.split("?")[0]!;
+
+  if (method === "GET" && path === "/api/models") return mockModels.map((m) => ({ ...m }));
 
   if (method === "GET" && path === "/api/workspaces")
     return [...mockWorkspaces, ...mockWorktrees.map((w) => ({ id: w.id, name: w.branch.split("/")[1]!, path: w.path }))];

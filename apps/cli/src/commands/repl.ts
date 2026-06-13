@@ -1,10 +1,12 @@
+import { spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline/promises";
-import { addMemoryFact, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
+import { addMemoryFact, compactSessionNow, listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
+import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
 
 const HELP = `
@@ -14,10 +16,14 @@ Slash commands:
   /sessions          list sessions of this project
   /resume <id>       continue an existing session
   /plan <task>       plan read-only first, confirm, then execute
-  /model <name>      switch model (e.g. deepseek-chat, deepseek-v4-flash, deepseek-v4-pro)
+  /model <name>      switch model (e.g. deepseek-v4-flash, deepseek-v4-pro)
   /think [on|off|high|max]  V4 thinking mode and reasoning effort
   /remember <fact>   save a fact to project memory (project.md)
   /usage             cumulative token usage and cost for this REPL
+  /clear             clear the terminal screen
+  /diff              show current git diff
+  /status            project/config/session overview
+  /compact [focus]   compact the current session (mechanical digest)
   /context           context-window occupancy of the last turn
   /quit              exit (Ctrl+D also works)
 Anything else is sent to the agent. @path tokens inline file contents.
@@ -154,6 +160,33 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
           sessionId = undefined;
           console.log("next message starts a fresh session");
           break;
+        case "/clear":
+          // clear terminal and reset on-screen history
+          process.stdout.write("\x1b[2J\x1b[H");
+          console.log(`SeekForge — ${dim("screen cleared")}`);
+          break;
+        case "/diff":
+          spawn("git", ["diff"], { stdio: "inherit" });
+          break;
+        case "/status":
+          statusCommand();
+          break;
+        case "/compact": {
+          if (!sessionId) {
+            console.log("no active session to compact — run a task first");
+            break;
+          }
+          const result = compactSessionNow(projectPath, sessionId);
+          if (!result) {
+            console.log("session is too short to compact or has no messages file");
+          } else {
+            console.log(
+              `compacted: dropped ${result.droppedTurns} turn(s), ` +
+                `${result.beforeTokens} → ${result.afterTokens} tokens`,
+            );
+          }
+          break;
+        }
         case "/sessions":
           for (const s of listSessions(projectPath).slice(0, 15)) {
             console.log(`${s.id}  [${s.status}]  ${s.task.replace(/\s+/g, " ").slice(0, 60)}`);
@@ -197,7 +230,7 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
             break;
           }
           if (!rest[0]) {
-            console.log(`model: ${model} (try deepseek-chat, deepseek-v4-flash, deepseek-v4-pro)`);
+            console.log(`model: ${model} (try deepseek-v4-flash, deepseek-v4-pro)`);
             break;
           }
           model = rest[0];

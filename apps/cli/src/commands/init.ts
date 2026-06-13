@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_MODEL } from "@seekforge/core";
 
 const AGENTS_TEMPLATE = `# AGENTS.md
 
@@ -38,7 +39,7 @@ export function initCommand(): void {
   const configPath = join(dir, "config.json");
   if (!existsSync(configPath)) {
     // 0600: users often put apiKey in here later.
-    writeFileSync(configPath, `${JSON.stringify({ model: "deepseek-chat" }, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(configPath, `${JSON.stringify({ model: DEFAULT_MODEL }, null, 2)}\n`, { mode: 0o600 });
     console.log("created .seekforge/config.json");
   }
 

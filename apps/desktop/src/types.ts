@@ -173,3 +173,15 @@ export type AccountBalance = { currency: string; totalBalance: string };
 
 /** GET /api/mcp/resources entry. Inline reference syntax: @mcp:<server>:<uri>. */
 export type McpResource = { server: string; uri: string; name?: string };
+
+/** GET /api/models entry (mirror of core MODEL_PRICING with metadata). */
+export type ModelInfo = {
+  id: string;
+  isDefault: boolean;
+  deprecated: boolean;
+  pricing: {
+    inputCacheMissPer1M: number;
+    inputCacheHitPer1M: number;
+    outputPer1M: number;
+  };
+};

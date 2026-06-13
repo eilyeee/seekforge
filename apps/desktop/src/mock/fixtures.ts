@@ -6,6 +6,7 @@ import type {
   McpServer,
   McpTool,
   MemoryCandidate,
+  ModelInfo,
   RewindResult,
   ServerConfig,
   SessionMeta,
@@ -347,6 +348,34 @@ export const mockRewindResults: Record<string, RewindResult> = {
     skipped: [],
   },
 };
+
+/** Mock models list mirroring core MODEL_PRICING with metadata. */
+export const mockModels: ModelInfo[] = [
+  {
+    id: "deepseek-v4-flash",
+    isDefault: true,
+    deprecated: false,
+    pricing: { inputCacheMissPer1M: 0.14, inputCacheHitPer1M: 0.0028, outputPer1M: 0.28 },
+  },
+  {
+    id: "deepseek-v4-pro",
+    isDefault: false,
+    deprecated: false,
+    pricing: { inputCacheMissPer1M: 0.435, inputCacheHitPer1M: 0.003625, outputPer1M: 0.87 },
+  },
+  {
+    id: "deepseek-chat",
+    isDefault: false,
+    deprecated: true,
+    pricing: { inputCacheMissPer1M: 0.28, inputCacheHitPer1M: 0.028, outputPer1M: 0.42 },
+  },
+  {
+    id: "deepseek-reasoner",
+    isDefault: false,
+    deprecated: true,
+    pricing: { inputCacheMissPer1M: 0.28, inputCacheHitPer1M: 0.028, outputPer1M: 0.42 },
+  },
+];
 
 export const mockConfig: ServerConfig = {
   model: "deepseek-v4-flash",
