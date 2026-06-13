@@ -22,6 +22,12 @@ export type ClassifiedCall = {
   path?: string;
   /** For "execute": the command matched an allowlist and may run without prompting. */
   allowlisted?: boolean;
+  /**
+   * Edit-review preview (write tools): unified diff of current → proposed
+   * content. Forwarded verbatim onto the PermissionRequest so frontends can
+   * render an Accept/Reject diff review. Best-effort; omitted on any failure.
+   */
+  preview?: { path: string; diff: string };
 };
 
 export type ToolRunOutput = {

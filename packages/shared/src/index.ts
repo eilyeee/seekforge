@@ -35,6 +35,14 @@ export type PermissionRequest = {
   command?: string;
   /** Raw path, when the request is about touching a file. */
   path?: string;
+  /**
+   * Edit-review preview: a unified-diff (current → proposed) for write tools.
+   * When present, frontends SHOULD render the diff and turn the prompt into an
+   * Accept/Reject review (Reject = deny = no write). Additive — every existing
+   * consumer ignores it safely; attached on a best-effort basis (omitted on any
+   * failure so the write path is never blocked).
+   */
+  preview?: { path: string; diff: string };
 };
 
 /**

@@ -29,6 +29,7 @@ async function confirmWithUser(
     // Raw values, never paraphrased — prompt-injection defense.
     ...(cls.command !== undefined ? { command: cls.command } : {}),
     ...(cls.path !== undefined ? { path: cls.path } : {}),
+    ...(cls.preview !== undefined ? { preview: cls.preview } : {}),
   });
   if (approved) return { allowed: true, decision: "user_approved" };
   return {
