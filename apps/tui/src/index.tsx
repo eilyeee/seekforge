@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   }
 
   const model = config.model ?? "deepseek-v4-flash";
-  const mcp = await prepareMcp(config); // MCP servers live for the whole session
+  const mcp = await prepareMcp(config, projectPath); // MCP servers live for the whole session
   const continueSessionId = args.continueLast ? listSessions(projectPath)[0]?.id : undefined;
 
   let version: string | undefined;

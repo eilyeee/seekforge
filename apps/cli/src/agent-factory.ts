@@ -115,10 +115,15 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
  * Spawns the configured MCP servers and builds their ToolSpecs for
  * createCliAgent. Callers must invoke dispose() when the session ends
  * (kills the server child processes). No servers configured -> no-op.
+ * `workspacePath` (absolute) is advertised to each server via the roots
+ * capability, so servers answer roots/list with the real workspace.
  */
-export async function prepareMcp(config: CliConfig): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
+export async function prepareMcp(
+  config: CliConfig,
+  workspacePath?: string,
+): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
   if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
     return { specs: [], dispose: () => {} };
   }
-  return loadMcpToolSpecs(config.mcpServers);
+  return loadMcpToolSpecs(config.mcpServers, workspacePath ? [workspacePath] : undefined);
 }

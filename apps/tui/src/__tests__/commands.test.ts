@@ -89,3 +89,22 @@ describe("parseInput round-8 alignment additions", () => {
     expect(parseInput("/mouse")).toEqual({ kind: "slash", command: { name: "mouse" } });
   });
 });
+
+describe("parseInput MCP-prompt additions", () => {
+  it("parses /prompts as a no-arg command", () => {
+    expect(parseInput("/prompts")).toEqual({ kind: "slash", command: { name: "prompts" } });
+  });
+
+  it("routes /mcp:<server>:<prompt> through the unknown resolver (dynamic command)", () => {
+    // The colon-namespaced name is not a built-in keyword, so it parses as an
+    // unknown command whose raw the app re-resolves against live MCP prompts.
+    expect(parseInput("/mcp:fake:greet world")).toEqual({
+      kind: "slash",
+      command: { name: "unknown", raw: "/mcp:fake:greet world" },
+    });
+  });
+
+  it("keeps /mcp itself a distinct no-arg command", () => {
+    expect(parseInput("/mcp")).toEqual({ kind: "slash", command: { name: "mcp" } });
+  });
+});
