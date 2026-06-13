@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Permissions for the main SeekForge window. The frontend is served from a local `seekforge serve` process on http://127.0.0.1:<port>, so the webview runs on a remote (non-tauri://) origin and plugin commands must be granted to it explicitly via `remote.urls`.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": ["core:default", "core:window:allow-start-dragging", "notification:default"]
+}

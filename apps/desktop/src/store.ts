@@ -6,6 +6,7 @@ import { appendUser, initialChatState } from "./lib/events";
 import { buildExecutePlanFrame, buildSendFrame, buildStartFrame, overridesOf, EXECUTE_PLAN_TASK } from "./lib/frames";
 import { messagesToItems } from "./lib/messages";
 import { notify, requestNotifyPermission } from "./lib/notify";
+import { needsOnboarding } from "./lib/onboarding";
 import {
   activeTab,
   closeTab as closeTabPure,
@@ -52,6 +53,18 @@ type AppStore = {
   loadWorkspaces: () => void;
   /** Switches the active workspace (new tabs + views follow it). */
   setActiveWorkspace: (id: string) => void;
+
+  /**
+   * First-run onboarding gate. "unknown" until config is fetched; "needed"
+   * when no API key is configured; "done" once a key is saved or the user
+   * skipped (drops into the app read-only). The app entry renders Onboarding
+   * while this is "needed".
+   */
+  onboarding: "unknown" | "needed" | "done";
+  /** Fetches /api/config and sets `onboarding` (needed when no key). */
+  checkOnboarding: () => void;
+  /** Marks onboarding complete (after a successful key save or a skip). */
+  finishOnboarding: () => void;
 
   /** Whether the todos drawer is open (global, not per-tab). */
   todosOpen: boolean;
@@ -113,7 +126,7 @@ export const useStore = create<AppStore>()((set, get) => {
     const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
     set((s) => ({ tabs: routeFrame(s.tabs, tabId, frame) }));
     if (!tab) return;
-    if (frame.type === "permission.request") notify({ kind: "permission" });
+    if (frame.type === "permission.request") notify({ kind: "permission", tool: frame.request.toolName });
     else if (frame.type === "question.request") notify({ kind: "question" });
     else if (frame.type === "event" && frame.event.type === "session.completed")
       notify({ kind: "completed", tabTitle: tab.title });
@@ -165,6 +178,18 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
+
+    onboarding: "unknown",
+    checkOnboarding: () => {
+      api
+        .config()
+        .then((config) => set({ onboarding: needsOnboarding(config) ? "needed" : "done" }))
+        .catch(() => {
+          // Can't reach config (offline/old server) — don't block the app.
+          set({ onboarding: "done" });
+        });
+    },
+    finishOnboarding: () => set({ onboarding: "done" }),
 
     setView: (view) => set({ view }),
 
@@ -365,3 +390,6 @@ setWorkspaceProvider(() => useStore.getState().activeWorkspaceId);
 // Load the hosted workspaces once at boot (no-op on old single-workspace
 // servers without /api/workspaces — the default workspace stays selected).
 useStore.getState().loadWorkspaces();
+
+// Decide whether to show first-run onboarding (no API key configured).
+useStore.getState().checkOnboarding();

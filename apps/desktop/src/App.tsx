@@ -1,4 +1,5 @@
 import { useStore } from "./store";
+import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
 import { AgentsView } from "./views/AgentsView";
@@ -13,6 +14,14 @@ import { SkillsView } from "./views/SkillsView";
 export function App() {
   const view = useStore((s) => s.view);
   const todosOpen = useStore((s) => s.todosOpen);
+  const onboarding = useStore((s) => s.onboarding);
+  const finishOnboarding = useStore((s) => s.finishOnboarding);
+
+  // First-run welcome ahead of the workbench when no API key is configured.
+  if (onboarding === "needed") {
+    return <Onboarding onDone={finishOnboarding} onSkip={finishOnboarding} />;
+  }
+
   return (
     <div className="flex h-full">
       <Sidebar />
