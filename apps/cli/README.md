@@ -7,12 +7,18 @@ search/replace patches, runs your tests, keeps fixing on failure, and reports
 a diff with token/cost usage at the end.
 
 ```bash
-npm install -g seekforge
+npm i -g seekforge            # published to the official npm registry
+
+seekforge                     # the CLI
+seekforge-tui                 # the terminal UI
 
 cd your-project
 seekforge config set apiKey sk-... --global   # DeepSeek API key
 seekforge run "修复登录按钮点击无响应的问题"
 ```
+
+> Released from the `v*` git tags via a provenance-signed automated publish — see
+> `.github/workflows/release-npm.yml`.
 
 ## Commands
 
