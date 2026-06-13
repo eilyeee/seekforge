@@ -56,7 +56,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     // reasoner has no function calling; the fallback text protocol is not
     // wired into the loop yet (planned). Refuse instead of failing midway.
     fail("deepseek-reasoner does not support tool calling and cannot drive the agent yet", {
-      hint: "use deepseek-chat (default)",
+      hint: "use deepseek-v4-flash (default)",
     });
     return;
   }
