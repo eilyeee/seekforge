@@ -8,9 +8,16 @@ const DIM = "\x1b[2m";
 const ITALIC = "\x1b[3m";
 const RESET = "\x1b[0m";
 
-function summarizeArgs(args: unknown): string {
-  const text = JSON.stringify(args) ?? "";
+function summarizeArgs(args: unknown, verbose = false): string {
+  const text = JSON.stringify(args, null, verbose ? 2 : undefined) ?? "";
+  if (verbose) return text;
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
+
+/** Verbose dump of a tool result's data (truncated to keep output sane). */
+function summarizeResult(data: unknown): string {
+  const text = typeof data === "string" ? data : (JSON.stringify(data, null, 2) ?? "");
+  return text.length > 2000 ? `${text.slice(0, 2000)}\n…[truncated]` : text;
 }
 
 export function formatUsage(usage: TokenUsage): string {
@@ -24,6 +31,8 @@ export function formatUsage(usage: TokenUsage): string {
 export type RendererOptions = {
   /** When model output is streamed via onModelDelta, don't reprint it. */
   streaming?: boolean;
+  /** Print full tool args and tool result data instead of a quiet summary. */
+  verbose?: boolean;
 };
 
 /**
@@ -100,7 +109,7 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       }
       break;
     case "tool.started":
-      process.stdout.write(`${DIM}→ ${e.toolName} ${summarizeArgs(e.args)}${RESET}\n`);
+      process.stdout.write(`${DIM}→ ${e.toolName} ${summarizeArgs(e.args, opts.verbose)}${RESET}\n`);
       break;
     case "tool.completed": {
       if (e.toolName === "update_plan" && e.result.ok) {
@@ -115,6 +124,10 @@ function renderEvent(e: AgentEvent, opts: RendererOptions): void {
       const mark = e.result.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
       const err = e.result.ok ? "" : ` ${RED}${e.result.error?.code}: ${e.result.error?.message}${RESET}`;
       console.log(`${mark} ${e.toolName}${err}`);
+      if (opts.verbose && e.result.ok && e.result.data !== undefined) {
+        const dump = summarizeResult(e.result.data);
+        if (dump.trim()) console.log(`${DIM}${dump}${RESET}`);
+      }
       break;
     }
     case "file.changed":

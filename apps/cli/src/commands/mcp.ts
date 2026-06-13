@@ -1,5 +1,12 @@
 import { createMcpClient } from "@seekforge/core";
 import { loadConfig } from "../config.js";
+import {
+  addMcpServer,
+  mcpConfigPath,
+  readConfigDoc,
+  removeMcpServer,
+  writeConfigDoc,
+} from "../mcp-config.js";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -39,4 +46,51 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
       client.dispose();
     }
   }
+}
+
+/**
+ * `seekforge mcp add <name> <command...>` — append a stdio server to
+ * mcpServers in .seekforge/config.json (or ~/.seekforge with --global).
+ * The first token after <name> is the command, the rest are its args.
+ */
+export function mcpAddCommand(
+  name: string,
+  commandTokens: string[],
+  opts: { global?: boolean },
+): void {
+  if (commandTokens.length === 0) {
+    console.error('usage: seekforge mcp add <name> <command> [args...]\n  e.g. seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .');
+    process.exitCode = 1;
+    return;
+  }
+  const [command, ...args] = commandTokens;
+  const path = mcpConfigPath(process.cwd(), opts.global ?? false);
+  try {
+    const next = addMcpServer(readConfigDoc(path), name, command ?? "", args);
+    writeConfigDoc(path, next);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
+  const commandLine = [command, ...args].join(" ");
+  console.log(`added MCP server "${name}" (${commandLine}) to ${path}`);
+  console.log(`${DIM}note: new servers are untrusted by default — set "trusted": true in config to auto-approve their tools${RESET}`);
+}
+
+/**
+ * `seekforge mcp remove <name>` — delete a server from mcpServers in
+ * .seekforge/config.json (or ~/.seekforge with --global).
+ */
+export function mcpRemoveCommand(name: string, opts: { global?: boolean }): void {
+  const path = mcpConfigPath(process.cwd(), opts.global ?? false);
+  try {
+    const next = removeMcpServer(readConfigDoc(path), name);
+    writeConfigDoc(path, next);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`removed MCP server "${name}" from ${path}`);
 }

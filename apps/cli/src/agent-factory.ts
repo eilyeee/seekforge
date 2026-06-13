@@ -28,6 +28,8 @@ export type CliAgentOptions = {
   subagents?: AgentDefinition[];
   /** Extra tools from MCP servers (see prepareMcp). */
   mcpToolSpecs?: ToolSpec[];
+  /** Cap on agent turns (maps to limits.maxAgentTurns); CLI --max-turns. */
+  maxTurns?: number;
 };
 
 export type CliAgent = {
@@ -85,6 +87,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
       });
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
+    ...(opts.maxTurns !== undefined && opts.maxTurns > 0 ? { limits: { maxAgentTurns: opts.maxTurns } } : {}),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),

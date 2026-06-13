@@ -26,13 +26,67 @@ seekforge run "修复登录按钮点击无响应的问题"
 | --- | --- |
 | `seekforge run "<task>"` | run a development task (add `-y` to auto-approve safe writes/commands) |
 | `seekforge ask "<question>"` | read-only Q&A about the codebase |
+| `seekforge -p "<prompt>"` | headless print mode: one run, stream to stdout, exit (reads piped stdin) |
 | `seekforge resume <id> [task]` | continue a previous session with its full history |
 | `seekforge sessions` / `status` | list sessions / project overview |
 | `seekforge diff` | show the current git diff |
+| `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge update` (alias `upgrade`) | check npm for a newer release and print the install command |
 | `seekforge init` | scaffold `.seekforge/` and `AGENTS.md` |
 | `seekforge skill list\|show\|create` | manage procedure skills |
+| `seekforge mcp list\|add\|remove` | list/add/remove MCP servers in config |
 | `seekforge memory list\|approve\|reject` | curate long-term project memory |
 | `seekforge config show\|set` | configuration (`apiKey`, `model`, `baseUrl`, `runtimeBin`) |
+
+### Flags for `run` / `ask` / `-p`
+
+| Flag | Effect |
+| --- | --- |
+| `-y, --yes` | auto-approve write/execute permissions (env-level still asks) |
+| `-m, --model <model>` | override the model |
+| `--output-format <fmt>` | `text` (default, human), `json` (one final object), `stream-json` (one event/line) |
+| `--json` | back-compat alias for `--output-format stream-json` |
+| `-c, --continue` | resume the most recent session |
+| `--resume <id>` | resume a specific session |
+| `--add-dir <path>` | extra read-only root whose `@path` references resolve (repeatable) |
+| `--max-turns <n>` | cap the number of agent turns |
+| `--verbose` | print full tool args and results instead of a quiet summary |
+
+### Headless / piped usage
+
+```bash
+seekforge -p "summarize the changes in this repo"      # print mode, then exit
+cat err.log | seekforge -p "explain this error"        # stdin appended to the prompt
+cat task.md  | seekforge -p                             # stdin IS the whole prompt
+seekforge -p "fix the failing test" --output-format json -y
+```
+
+Prompt precedence: an inline prompt and piped stdin are **both** used — the
+inline prompt comes first, then the piped input under a `--- piped input ---`
+fence. With only stdin, stdin is the entire prompt. Machine output formats
+(`json` / `stream-json`) disable colored streaming and interactive prompts, so
+pair them with `-y`.
+
+### MCP servers
+
+```bash
+seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .   # add (project)
+seekforge mcp add -g github npx @modelcontextprotocol/server-github      # add (global ~/.seekforge)
+seekforge mcp list --tools                                               # list + tool descriptions
+seekforge mcp remove fs                                                  # remove
+```
+
+Everything after the server name is the command + its args verbatim (so its own
+flags like `-y` are kept). New servers are **untrusted** by default — set
+`"trusted": true` on the entry in `.seekforge/config.json` to auto-approve their
+tools with `-y`.
+
+### Updating
+
+`seekforge update` only **checks** the npm registry and prints the install
+command (`npm i -g seekforge`); it never self-mutates the global install,
+because that binary may be owned by root or a version manager (npm/pnpm/volta/
+asdf/brew) and replacing the running binary mid-process is unsafe.
 
 ## Safety model
 
