@@ -103,7 +103,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
 | POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — mutates `.seekforge/todos.md`, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range |
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
-| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every configured MCP server (spawned on demand, then disposed). A server that fails or lacks resource support contributes zero entries |
+| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks resource support contributes zero entries |
+| GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks prompt support contributes zero entries. Mirrors GET /api/mcp/resources |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |
