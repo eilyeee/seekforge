@@ -16,7 +16,7 @@ import type { ChatProvider, ChatRequest, ProviderConfig, RetryInfo } from "./typ
 
 export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo } from "./types.js";
 export { estimateCostUsd, type UsageTokens } from "./cost.js";
-export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, type ModelPricing } from "./constants.js";
+export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
 export { DeepSeekApiError } from "./http.js";
 export { fetchBalance, type AccountBalance } from "./balance.js";
