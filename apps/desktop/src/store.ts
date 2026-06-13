@@ -347,6 +347,7 @@ export const useStore = create<AppStore>()((set, get) => {
             running: false,
             usage: meta.usage ?? emptyUsage(),
             contextUsage: null,
+            retry: null,
             // messagesToItems assigns sequential ids starting at 1.
             nextId: items.length + 1,
           },

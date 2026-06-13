@@ -106,13 +106,24 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
           <div className="mt-1 font-mono text-zinc-500">{item.report.verification}</div>
         </div>
       );
-    case "failed":
+    case "failed": {
+      // Genuine, recoverable failures (not user cancels) get the exact resume
+      // command; the loop sets recoverable + sessionId on the error.
+      const resumeId = item.error.recoverable ? item.error.sessionId : undefined;
       return (
         <div className="rounded border border-red-900 bg-red-950/40 px-3 py-2 text-sm">
           <span className="font-mono text-xs text-red-400">[{item.error.code}]</span>{" "}
           <span className="text-red-200">{item.error.message}</span>
+          {item.error.hint && <div className="mt-1 text-xs text-red-300/80">→ {item.error.hint}</div>}
+          {resumeId && (
+            <div className="mt-1 text-xs text-red-300/80">
+              → resume with <span className="font-mono text-red-200">/resume {resumeId}</span> (your file
+              changes and completed steps are preserved; checkpoints intact)
+            </div>
+          )}
         </div>
       );
+    }
   }
 }
 

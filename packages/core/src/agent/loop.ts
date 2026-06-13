@@ -10,7 +10,7 @@ import {
   type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
-import type { ChatProvider } from "../provider/index.js";
+import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
   createBackgroundTasks,
@@ -45,6 +45,20 @@ import { buildSystemPrompt } from "./prompt.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
+
+/**
+ * Mutable handoff between a provider (built in the app factory) and a run's
+ * event stream. One bus is created per factory and shared by every provider
+ * it builds (main + per-model); the active run owns `emit` for its lifetime.
+ * Calls outside a run (or after one ends) are no-ops.
+ */
+export type RetryBus = { emit?: (info: RetryInfo) => void };
+
+/** Convenience: a fresh bus plus the onRetry callback to hand the provider. */
+export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => void } {
+  const bus: RetryBus = {};
+  return Object.assign(bus, { onRetry: (info: RetryInfo) => bus.emit?.(info) });
+}
 
 export type AgentCoreDeps = {
   provider: ChatProvider;
@@ -114,6 +128,15 @@ export type AgentCoreDeps = {
    * subagentStop and notification are advisory (see hooks/index.ts).
    */
   hooks?: HookConfig;
+  /**
+   * Retry-progress bridge. The provider is built outside the loop (in the app
+   * factory), so its onRetry callback cannot reach this run's event stream
+   * directly. The factory wires the provider's onRetry to `retryBus.emit` and
+   * passes the SAME bus here; the loop installs `emit` for the duration of the
+   * run, turning each retry into a `provider.retry` event, and clears it after.
+   * Unset = retry progress is not surfaced (the provider still retries).
+   */
+  retryBus?: RetryBus;
   /** Internal: nesting depth. Depth > 0 never advertises dispatch_agent. */
   _depth?: number;
   /** Internal: dispatch-manager override (test seam). */
@@ -388,6 +411,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // generator: producers push (traced immediately), the loop drains.
       const queue = createEventQueue<AgentEvent>();
       const pushEvent = (ev: AgentEvent): void => queue.push(emit(ev));
+
+      // Surface provider retries as provider.retry events for the duration of
+      // this run. The provider (built in the app factory) calls retryBus.emit;
+      // we route it onto this run's queue, and clear the hook in finally so a
+      // retry from a later run never leaks into a stale queue.
+      if (deps.retryBus) {
+        deps.retryBus.emit = (info: RetryInfo) =>
+          pushEvent({
+            type: "provider.retry",
+            attempt: info.attempt,
+            maxAttempts: info.maxAttempts,
+            delayMs: info.delayMs,
+            reason: info.reason,
+          });
+      }
       const dispatchManager: DispatchManager | undefined =
         roster.length > 0 ? (deps._dispatchManager ?? createDispatchManager()) : undefined;
 
@@ -990,6 +1028,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           usage,
         });
         for (const ev of queue.drainNow()) yield ev;
+        const cancelled = code === "cancelled";
         yield emit({
           type: "session.failed",
           error: {
@@ -997,10 +1036,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             message: e.message ?? String(err),
             // Actionable recovery hint for every frontend; a user cancel
             // needs none (it is not a failure to recover from).
-            ...(code === "cancelled" ? {} : { hint: classifyAgentError(err).hint }),
+            ...(cancelled ? {} : { hint: classifyAgentError(err).hint }),
+            // Genuine failures are recoverable: the session's file changes,
+            // completed steps and checkpoints are preserved on disk, so the
+            // user can `/resume <sessionId>`. A cancel is not a failure to
+            // recover from. sessionId lets frontends print the exact command.
+            ...(cancelled ? {} : { recoverable: true, sessionId }),
           },
         });
       } finally {
+        // Stop routing provider retries onto this (now-ending) run's queue.
+        if (deps.retryBus) deps.retryBus.emit = undefined;
         queue.end();
         dispatchManager?.disposeAll();
         // A caller-provided manager outlives the run (multi-turn sessions).

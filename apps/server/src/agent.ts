@@ -11,6 +11,7 @@ import {
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
+  createRetryBus,
   createRuntimeClient,
   type AgentCore,
   type RuntimeClient,
@@ -59,15 +60,20 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
   const thinking = opts.overrides?.thinking ?? config.thinking;
   const reasoningEffort = opts.overrides?.reasoningEffort ?? config.reasoningEffort;
 
+  // Retry bus: routes provider retries into this run's provider.retry events,
+  // forwarded to the client over the WS by the generic event forwarder.
+  const retryBus = createRetryBus();
   const agent = createAgentCore({
     provider: createDeepSeekProvider({
       apiKey: config.apiKey ?? "",
       baseUrl: config.baseUrl,
       model,
+      onRetry: retryBus.onRetry,
       // Thinking mode + effort passthrough (mirrors apps/tui agent factory).
       ...(thinking !== undefined ? { thinking } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     }),
+    retryBus,
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,

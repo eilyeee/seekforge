@@ -151,6 +151,33 @@ describe("reduceEvent", () => {
     expect(s.items[0]).toMatchObject({ kind: "failed", error: { code: "max_turns_exceeded" } });
   });
 
+  it("carries recoverable + sessionId on a recoverable session.failed", () => {
+    const s = play([
+      {
+        type: "session.failed",
+        error: { code: "rate_limit", message: "boom", hint: "wait", recoverable: true, sessionId: "s-9" },
+      },
+    ]);
+    expect(s.items[0]).toMatchObject({
+      kind: "failed",
+      error: { recoverable: true, sessionId: "s-9", hint: "wait" },
+    });
+  });
+
+  it("sets a transient retry status (no row) and clears it on the next success", () => {
+    let s = play([{ type: "provider.retry", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "rate limited" }]);
+    expect(s.items).toHaveLength(0);
+    expect(s.retry).toEqual({ attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "rate limited" });
+    s = play([{ type: "usage.updated", usage }], s);
+    expect(s.retry).toBeNull();
+  });
+
+  it("clears the retry status when the session completes or fails", () => {
+    let s = play([{ type: "provider.retry", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "network error" }]);
+    s = play([{ type: "session.failed", error: { code: "network", message: "down" } }], s);
+    expect(s.retry).toBeNull();
+  });
+
   it("ignores events without a dedicated row", () => {
     const s = play([
       { type: "step.started", title: "selecting skills" }, // not a subagent step
