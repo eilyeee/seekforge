@@ -5,7 +5,7 @@ import { createMcpClient, McpError } from "../../src/mcp/client.js";
 
 const SESSION_ID = "sess-42";
 
-type RecordedRequest = { method: string; id?: number; headers: IncomingHttpHeaders };
+type RecordedRequest = { method: string; id?: number; headers: IncomingHttpHeaders; params?: unknown };
 
 /**
  * Tiny Streamable HTTP MCP server speaking BOTH response styles:
@@ -35,7 +35,12 @@ function startFakeServer(): Promise<{
         id?: number;
         params?: { name?: string; arguments?: unknown };
       };
-      requests.push({ method: msg.method, ...(msg.id !== undefined ? { id: msg.id } : {}), headers: req.headers });
+      requests.push({
+        method: msg.method,
+        ...(msg.id !== undefined ? { id: msg.id } : {}),
+        headers: req.headers,
+        params: msg.params,
+      });
 
       const json = (payload: unknown, headers: Record<string, string> = {}): void => {
         res.writeHead(200, { "content-type": "application/json", ...headers });
@@ -177,6 +182,21 @@ describe("mcp client over streamable HTTP", () => {
       expect(requests[0]!.headers["mcp-session-id"]).toBeUndefined();
       expect(requests[1]!.headers["mcp-session-id"]).toBe(SESSION_ID);
       expect(requests[2]!.headers["mcp-session-id"]).toBe(SESSION_ID);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("sends protocol 2025-06-18 and the roots capability in initialize", async () => {
+    requests.length = 0;
+    const client = makeClient();
+    try {
+      await client.listTools();
+      const init = requests.find((r) => r.method === "initialize");
+      expect(init?.params).toMatchObject({
+        protocolVersion: "2025-06-18",
+        capabilities: { roots: { listChanged: true } },
+      });
     } finally {
       client.dispose();
     }

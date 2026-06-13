@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMcpClient, McpError } from "../../src/mcp/client.js";
-import { writeFixtureServer } from "./fixture.js";
+import { writeFallbackServer, writeFixtureServer } from "./fixture.js";
 
 let serverPath: string;
 let cleanup: () => void;
@@ -135,6 +135,94 @@ describe("mcp client", () => {
     }
   });
 
+  it("lists prompts via prompts/list", async () => {
+    const client = makeClient();
+    try {
+      const prompts = await client.listPrompts();
+      expect(prompts).toEqual([
+        {
+          name: "greet",
+          description: "Greets someone.",
+          arguments: [{ name: "name", description: "Who to greet", required: true }],
+        },
+        { name: "review", description: "Reviews code." },
+      ]);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("gets a prompt and renders messages to a single string", async () => {
+    const client = makeClient();
+    try {
+      expect(await client.getPrompt("greet", { name: "Ada" })).toBe(
+        "system: Be friendly.\n\nuser: Hello Ada",
+      );
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("caps a rendered prompt at 50_000 chars", async () => {
+    const client = makeClient();
+    try {
+      const text = await client.getPrompt("big");
+      expect(text.length).toBeLessThanOrEqual(50_000 + "…[truncated]".length);
+      expect(text.endsWith("…[truncated]")).toBe(true);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("propagates server errors for unknown prompts", async () => {
+    const client = makeClient();
+    try {
+      await expect(client.getPrompt("nope")).rejects.toMatchObject({
+        name: "McpError",
+        code: "mcp_error",
+      });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("advertises protocol 2025-06-18 + roots capability and answers roots/list with the workspace file:// URI", async () => {
+    const root = "/tmp/seekforge-workspace";
+    const client = createMcpClient({
+      name: "fake",
+      config: { command: process.execPath, args: [serverPath] },
+      workspaceRoots: [root],
+    });
+    try {
+      // The fixture captures the client's initialize payload and its answer to
+      // the server-initiated roots/list, surfaced via the __getRoots tool.
+      const raw = await client.callTool("__getRoots", {});
+      const seen = JSON.parse(raw) as {
+        protocolVersion: string;
+        capabilities: { roots?: { listChanged?: boolean } };
+        rootsAnswer: { roots?: Array<{ uri: string; name?: string }> };
+      };
+      expect(seen.protocolVersion).toBe("2025-06-18");
+      expect(seen.capabilities.roots).toEqual({ listChanged: true });
+      expect(seen.rootsAnswer.roots).toEqual([
+        { uri: `file://${root}`, name: "workspace" },
+      ]);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("reports an empty roots list when no workspace is configured", async () => {
+    const client = makeClient();
+    try {
+      const raw = await client.callTool("__getRoots", {});
+      const seen = JSON.parse(raw) as { rootsAnswer: { roots?: unknown[] } };
+      expect(seen.rootsAnswer.roots).toEqual([]);
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("surfaces launch failures as errors", async () => {
     const client = createMcpClient({
       name: "missing",
@@ -151,5 +239,21 @@ describe("mcp client", () => {
     const client = makeClient();
     client.dispose();
     await expect(client.listTools()).rejects.toMatchObject({ code: "disposed" });
+  });
+
+  it("still connects when the server only speaks an older protocol revision", async () => {
+    const old = writeFallbackServer();
+    const client = createMcpClient({
+      name: "old",
+      config: { command: process.execPath, args: [old.serverPath] },
+    });
+    try {
+      // The server replies with 2024-11-05; the client accepts it and proceeds.
+      const tools = await client.listTools();
+      expect(tools.map((t) => t.name)).toEqual(["ping"]);
+    } finally {
+      client.dispose();
+      old.cleanup();
+    }
   });
 });
