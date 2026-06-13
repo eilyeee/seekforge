@@ -13,12 +13,15 @@ import {
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
 import { callRuntime } from "../runtime-backend.js";
+import { compileGlob } from "./glob.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import type { ToolContext } from "../index.js";
 
 const MAX_LIST_ENTRIES = 500;
-const MAX_SEARCH_MATCHES = 200;
+const DEFAULT_SEARCH_MATCHES = 1000;
+const MAX_SEARCH_MATCHES = 5000;
 const MAX_SEARCHABLE_FILE_BYTES = 1_000_000;
+const MAX_CONTEXT_LINES = 10;
 
 // Edit-review preview: cap the rendered diff so a huge rewrite cannot bloat the
 // permission prompt. Beyond this the diff is truncated with a marker line.
@@ -268,16 +271,44 @@ const searchTextSchema = z.object({
     .describe("JavaScript regular expression, e.g. \"function\\\\s+createUser\" (an invalid regex is retried as literal text)."),
   path: z.string().optional().describe("File or directory to search, relative to the workspace root (default '.')."),
   caseSensitive: z.boolean().optional().describe("Case-sensitive matching (default false)."),
+  glob: z
+    .string()
+    .optional()
+    .describe('Only search files whose path matches this glob, e.g. "*.ts" or "src/**/*.tsx".'),
+  contextLines: z
+    .number()
+    .optional()
+    .describe("Include up to N lines of context before and after each match (like grep -C, max 10)."),
+  filesWithMatches: z
+    .boolean()
+    .optional()
+    .describe("Return only the list of matching file paths, with no line content (like grep -l)."),
+  multiline: z
+    .boolean()
+    .optional()
+    .describe("Treat each file as one string so the pattern can span newlines (regex 's' flag)."),
+  maxMatches: z
+    .number()
+    .optional()
+    .describe("Cap on the number of results (default 1000, max 5000)."),
 });
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type SearchMatch = {
+  file: string;
+  line: number;
+  text: string;
+  /** Context lines before/after the match (only when contextLines > 0). */
+  context?: { before: string[]; after: string[] };
+};
+
 const searchText = defineTool({
   name: "search_text",
   description:
-    "Your FIRST tool for locating code: recursively search file contents for a regex pattern (e.g. \"function\\s+createUser\"); an invalid regex falls back to a literal-text search. Matching is per-line, case-insensitive by default, returns {file, line, text} up to 200 matches; binary files, files over 1MB, and ignored directories are skipped. Pass path to narrow the search.",
+    "Your FIRST tool for locating code by CONTENT: search file contents for a regex pattern (e.g. \"function\\s+createUser\"); an invalid regex falls back to literal text. Per-line, case-insensitive by default, returns {file, line, text} up to 1000 matches (raise with maxMatches, max 5000). Options: glob restricts to matching file paths (e.g. \"*.ts\"); contextLines adds N surrounding lines (grep -C); filesWithMatches returns only file paths (grep -l); multiline lets the pattern span newlines. Skips binaries, files over 1MB, ignored dirs. To find files by NAME, use the glob tool.",
   schema: searchTextSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -289,7 +320,8 @@ const searchText = defineTool({
     if (!fs.existsSync(root)) {
       throw new ToolError("not_found", `Path not found: ${args.path ?? "."}`);
     }
-    const flags = args.caseSensitive ? "" : "i";
+    let flags = args.caseSensitive ? "" : "i";
+    if (args.multiline) flags += "s";
     let re: RegExp;
     try {
       re = new RegExp(args.pattern, flags);
@@ -297,10 +329,25 @@ const searchText = defineTool({
       re = new RegExp(escapeRegExp(args.pattern), flags);
     }
 
-    const matches: Array<{ file: string; line: number; text: string }> = [];
+    const cap = Math.max(1, Math.min(args.maxMatches ?? DEFAULT_SEARCH_MATCHES, MAX_SEARCH_MATCHES));
+    const ctxLines = Math.max(0, Math.min(args.contextLines ?? 0, MAX_CONTEXT_LINES));
+    const globRe = args.glob ? compileGlob(args.glob) : undefined;
+    // ripgrep-style: a glob without "/" matches the basename anywhere in the
+    // tree (e.g. "*.ts" hits "src/a.ts"); a glob with "/" matches the full path.
+    const globOnBasename = args.glob !== undefined && !args.glob.includes("/");
+    const matchesGlob = (rel: string): boolean =>
+      globRe ? globRe.test(globOnBasename ? path.basename(rel) : rel) : true;
+
+    const matches: SearchMatch[] = [];
+    const filesWithMatches: string[] = [];
     let truncated = false;
 
+    /** Count the limiting unit (files in -l mode, otherwise individual matches). */
+    const atCap = (): boolean =>
+      args.filesWithMatches ? filesWithMatches.length >= cap : matches.length >= cap;
+
     const searchFile = (filePath: string, rel: string): void => {
+      if (!matchesGlob(rel)) return;
       let stat: fs.Stats;
       try {
         stat = fs.statSync(filePath);
@@ -311,17 +358,64 @@ const searchText = defineTool({
       if (isSensitiveBasename(path.basename(filePath))) return;
       const buf = fs.readFileSync(filePath);
       if (buf.subarray(0, 8192).includes(0)) return; // binary sniff: NUL byte
-      const lines = buf.toString("utf8").split("\n");
+      const content = buf.toString("utf8");
+
+      if (args.multiline) {
+        // Whole-file search: report the 1-based start line of each match.
+        const lines = content.split("\n");
+        // Precompute byte→line via cumulative line lengths.
+        const lineStarts: number[] = [0];
+        for (let i = 0; i < lines.length; i++) {
+          lineStarts.push(lineStarts[i]! + (lines[i] as string).length + 1);
+        }
+        const lineOf = (idx: number): number => {
+          let lo = 0;
+          let hi = lineStarts.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (lineStarts[mid]! <= idx) lo = mid;
+            else hi = mid - 1;
+          }
+          return lo; // 0-based
+        };
+        const gre = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+        let m: RegExpExecArray | null;
+        let matchedFile = false;
+        while ((m = gre.exec(content)) !== null) {
+          if (atCap()) {
+            truncated = true;
+            break;
+          }
+          matchedFile = true;
+          if (!args.filesWithMatches) {
+            const lineNo = lineOf(m.index);
+            pushMatch(matches, lines, rel, lineNo, ctxLines);
+          }
+          if (m.index === gre.lastIndex) gre.lastIndex++; // avoid zero-width loop
+          if (args.filesWithMatches) break;
+        }
+        if (matchedFile && args.filesWithMatches) filesWithMatches.push(rel);
+        return;
+      }
+
+      const lines = content.split("\n");
+      let matchedFile = false;
       for (let i = 0; i < lines.length; i++) {
-        if (matches.length >= MAX_SEARCH_MATCHES) {
+        if (atCap()) {
           truncated = true;
           return;
         }
         const line = lines[i] as string;
         if (re.test(line)) {
-          matches.push({ file: rel, line: i + 1, text: line.slice(0, 500) });
+          matchedFile = true;
+          if (args.filesWithMatches) {
+            filesWithMatches.push(rel);
+            return;
+          }
+          pushMatch(matches, lines, rel, i, ctxLines);
         }
       }
+      void matchedFile;
     };
 
     const walk = (dir: string, rel: string): void => {
@@ -351,12 +445,36 @@ const searchText = defineTool({
     } else {
       walk(root, "");
     }
+
+    if (args.filesWithMatches) {
+      return {
+        data: { files: filesWithMatches, count: filesWithMatches.length, truncated },
+        meta: { truncated },
+      };
+    }
     return {
       data: { matches, count: matches.length, truncated },
       meta: { truncated },
     };
   },
 });
+
+/** Append a single match (line index `i`, 0-based) with optional context. */
+function pushMatch(
+  matches: SearchMatch[],
+  lines: string[],
+  rel: string,
+  i: number,
+  ctxLines: number,
+): void {
+  const entry: SearchMatch = { file: rel, line: i + 1, text: (lines[i] as string).slice(0, 500) };
+  if (ctxLines > 0) {
+    const before = lines.slice(Math.max(0, i - ctxLines), i).map((l) => l.slice(0, 500));
+    const after = lines.slice(i + 1, i + 1 + ctxLines).map((l) => l.slice(0, 500));
+    entry.context = { before, after };
+  }
+  matches.push(entry);
+}
 
 // ---------------------------------------------------------------------------
 // write_file
