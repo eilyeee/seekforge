@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { listSessions, loadAgentDefinitions, readSessionMeta } from "@seekforge/core";
 import type { ApprovalMode, FinalReport } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
+import { fail } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { expandFileRefs } from "../file-refs.js";
 import { buildJsonResult, isMachineFormat, type OutputFormat } from "../output-format.js";
@@ -37,20 +38,16 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (model === "deepseek-reasoner") {
     // reasoner has no function calling; the fallback text protocol is not
     // wired into the loop yet (planned). Refuse instead of failing midway.
-    console.error(
-      "deepseek-reasoner does not support tool calling and is not usable as the agent model yet. " +
-        "Use deepseek-chat (default).",
-    );
-    process.exitCode = 1;
+    fail("deepseek-reasoner does not support tool calling and cannot drive the agent yet", {
+      hint: "use deepseek-chat (default)",
+    });
     return;
   }
 
   if (!config.apiKey) {
-    console.error(
-      "No DeepSeek API key found. Set DEEPSEEK_API_KEY, or put {\"apiKey\": \"...\"} in " +
-        ".seekforge/config.json (project) or ~/.seekforge/config.json (global).",
-    );
-    process.exitCode = 1;
+    fail("no DeepSeek API key found", {
+      hint: 'set DEEPSEEK_API_KEY, or put {"apiKey": "..."} in .seekforge/config.json (project) or ~/.seekforge/config.json (global)',
+    });
     return;
   }
 
@@ -59,8 +56,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (!resumeSessionId && opts.continueLast) {
     const recent = listSessions(projectPath)[0];
     if (!recent) {
-      console.error("No previous session to continue. Run a task first.");
-      process.exitCode = 1;
+      fail("no previous session to continue", { hint: "run a task first" });
       return;
     }
     resumeSessionId = recent.id;
@@ -70,8 +66,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   if (resumeSessionId) {
     const meta = readSessionMeta(projectPath, resumeSessionId);
     if (!meta) {
-      console.error(`Session "${resumeSessionId}" not found. See \`seekforge sessions\`.`);
-      process.exitCode = 1;
+      fail(`session "${resumeSessionId}" not found`, { hint: "see `seekforge sessions`" });
       return;
     }
     mode = meta.mode; // a resumed session keeps its original ask/edit mode
@@ -98,7 +93,11 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   // Machine formats (json/stream-json): no streaming/colors, and no interactive
   // prompts — anything that would ask is denied (pair with -y). Reasoning
   // deltas are also suppressed (they are a stdout stream, not events).
-  const renderer = machine ? undefined : createRenderer({ streaming: true, verbose: opts.verbose });
+  // color: false in machine mode is belt-and-suspenders — the renderer is also
+  // skipped entirely below — but it documents intent and guards the delta sinks.
+  const renderer = machine
+    ? undefined
+    : createRenderer({ streaming: true, verbose: opts.verbose, color: !machine });
   // stream-json emits one AgentEvent per line; json buffers the final report.
   const render =
     format === "stream-json"

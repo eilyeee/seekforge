@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command, InvalidArgumentError } from "commander";
+import { fail, setColorEnabled, useColor } from "./colors.js";
 import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
 import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { completionCommand } from "./commands/completion.js";
@@ -47,6 +48,30 @@ const program = new Command();
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
+// A machine output mode is requested when argv asks for json/stream-json (via
+// --json or --output-format json|stream-json). Used to gate BOTH color (must
+// be byte-clean) and the update-notifier (must not write chrome). The per-run
+// renderer in run.ts threads a precise `color` flag too; this argv scan
+// resolves the process-wide default before commander parses. `--output-format
+// text` is NOT a machine mode — text output keeps its colors on a TTY.
+function argvWantsMachineFormat(argv: string[]): boolean {
+  if (argv.includes("--json")) return true;
+  const i = argv.indexOf("--output-format");
+  if (i !== -1) {
+    const v = argv[i + 1]?.toLowerCase();
+    return v === "json" || v === "stream-json";
+  }
+  // `--output-format=json` form.
+  return argv.some((a) => {
+    const v = a.toLowerCase();
+    return v === "--output-format=json" || v === "--output-format=stream-json";
+  });
+}
+const machineMode = argvWantsMachineFormat(process.argv);
+
+// Resolve the process-wide color default once: TTY + !NO_COLOR + !machine mode.
+setColorEnabled(useColor({ machine: machineMode }));
+
 /** commander collector for repeatable options (e.g. --add-dir). */
 const collect = (val: string, prev: string[]): string[] => [...prev, val];
 
@@ -62,8 +87,8 @@ function resolveOutputFormatOrExit(opts: { outputFormat?: string; json?: boolean
   try {
     return resolveOutputFormat(opts);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    fail(err instanceof Error ? err.message : String(err));
+    process.exit(process.exitCode ?? 1);
   }
 }
 
@@ -82,8 +107,8 @@ program
   .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
   .option("-y, --yes", "with -p: auto-approve write/execute permissions")
   .option("-m, --model <model>", "with -p: override model")
-  .option("--output-format <fmt>", "with -p: text | json | stream-json")
-  .option("--json", "with -p: alias for --output-format stream-json")
+  .option("--output-format <fmt>", "with -p: text | json (final object) | stream-json (one event/line)")
+  .option("--json", "with -p: alias for --output-format stream-json (machine mode; no color/chrome)")
   .option("-c, --continue", "with -p: resume the most recent session")
   .option("--resume <id>", "with -p: resume a specific session")
   .option("--add-dir <path>", "with -p: extra read-only root for @-references (repeatable)", collect, [] as string[])
@@ -242,8 +267,7 @@ program
   .action(async (paths: string[], opts: { port: string; workspace: string[] }) => {
     const port = Number.parseInt(opts.port, 10);
     if (Number.isNaN(port) || port < 0 || port > 65535) {
-      console.error(`invalid --port: ${opts.port}`);
-      process.exitCode = 1;
+      fail(`invalid --port "${opts.port}" (expected 0-65535)`);
       return;
     }
     await serveCommand({ port, workspaces: [...paths, ...opts.workspace] });
@@ -530,16 +554,30 @@ program
 
 // Non-blocking update check: fire-and-forget at start, print the notice (to
 // stderr, so it never pollutes stdout) after the command finishes. Skipped for
-// --json / non-TTY output so machine consumers are unaffected.
+// machine output (json/stream-json), headless print mode, and non-TTY stderr
+// so machine consumers see nothing but their data.
 const quietUpdate =
-  process.argv.includes("--json") ||
-  process.argv.includes("--output-format") ||
+  machineMode ||
   process.argv.includes("-p") ||
   process.argv.includes("--print") ||
   !process.stderr.isTTY;
 const updatePromise = quietUpdate ? Promise.resolve(null) : checkForUpdate(version);
 
-program.parseAsync().finally(async () => {
-  const latest = await updatePromise;
-  if (latest) process.stderr.write(`${formatUpdateNotice(latest, version)}\n`);
-});
+/** True for the shape carried by core's AgentError (code + message + optional hint). */
+function isAgentErrorLike(err: unknown): err is { message: string; hint?: string } {
+  return typeof err === "object" && err !== null && typeof (err as { message?: unknown }).message === "string";
+}
+
+program
+  .parseAsync()
+  .catch((err: unknown) => {
+    // Top-level safety net: any uncaught error becomes one consistent
+    // `error: <message>` (+ hint when present) on stderr with a non-zero exit.
+    const message = isAgentErrorLike(err) ? err.message : String(err);
+    const hint = isAgentErrorLike(err) ? err.hint : undefined;
+    fail(message, { hint });
+  })
+  .finally(async () => {
+    const latest = await updatePromise;
+    if (latest) process.stderr.write(`${formatUpdateNotice(latest, version)}\n`);
+  });
