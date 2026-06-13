@@ -15,6 +15,7 @@ const COMMANDS = [
   "diff",
   "sessions",
   "status",
+  "models",
   "resume",
   "rewind",
   "serve",
