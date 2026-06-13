@@ -52,7 +52,7 @@ export function TabBar({
 
   return (
     <div
-      className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 bg-zinc-900/40 px-2 pt-1.5"
+      className="flex items-center gap-1 overflow-x-auto border-b border-subtle bg-surface/40 px-2 pt-1.5"
       title={`${tabs.length} tab(s) · total ${formatUsd(totalCost)}`}
     >
       {tabs.map((tab) => {
@@ -63,34 +63,34 @@ export function TabBar({
             onClick={() => onSelect(tab.tabId)}
             className={`group relative flex max-w-56 cursor-pointer items-center gap-1.5 rounded-t border-x border-t px-2.5 py-1 text-xs ${
               active
-                ? "border-zinc-700 bg-zinc-950 text-zinc-100"
-                : "border-transparent text-zinc-500 hover:bg-zinc-800/60 hover:text-zinc-300"
+                ? "border-strong bg-surface text-primary"
+                : "border-transparent text-tertiary hover:bg-surface-overlay/60 hover:text-secondary"
             }`}
           >
             {tab.pendingPermission ? (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" title="waiting for approval" />
             ) : tab.chat.running ? (
-              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400" title="running" />
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn" title="running" />
             ) : (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-zinc-700" />
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-surface-overlay" />
             )}
             <span className="truncate" title={tab.title}>
               {tab.title}
             </span>
             {tab.worktree && (
               <span
-                className="flex shrink-0 items-center gap-1 rounded bg-emerald-950/70 px-1 text-[10px] text-emerald-300"
+                className="flex shrink-0 items-center gap-1 rounded bg-accent-muted px-1 text-[10px] text-accent"
                 title={`worktree branch: ${tab.worktree.branch}${tab.worktree.dirty ? " (uncommitted changes)" : ""}`}
               >
                 ⎇ {worktreeLabel(tab.worktree)}
                 {tab.worktree.dirty && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" title="uncommitted changes" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-warn" title="uncommitted changes" />
                 )}
               </span>
             )}
             {showWs && tab.ws && !tab.worktree && (
               <span
-                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-zinc-400"
+                className="shrink-0 rounded bg-surface-overlay px-1 text-[9px] uppercase tracking-wide text-secondary"
                 title={`workspace: ${workspaceName?.(tab.ws) ?? tab.ws}`}
               >
                 {workspaceName?.(tab.ws) ?? tab.ws}
@@ -105,7 +105,7 @@ export function TabBar({
                   setMenu(menu === tab.tabId ? null : tab.tabId);
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="rounded px-0.5 text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
+                className="rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
               >
                 ▾
               </button>
@@ -117,13 +117,13 @@ export function TabBar({
                 e.stopPropagation();
                 onClose(tab.tabId);
               }}
-              className="ml-0.5 rounded px-0.5 text-zinc-600 hover:bg-zinc-700 hover:text-zinc-200"
+              className="ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
             >
               ×
             </button>
             {menu === tab.tabId && tab.worktree && (
               <div
-                className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-zinc-700 bg-zinc-900 py-1 shadow-lg"
+                className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-strong bg-surface-raised py-1 shadow-lg"
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
               >
@@ -133,7 +133,7 @@ export function TabBar({
                     setMenu(null);
                     onMergeWorktree(tab.tabId);
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800"
+                  className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
                 >
                   Merge back
                 </button>
@@ -143,7 +143,7 @@ export function TabBar({
                     setMenu(null);
                     onDiscardWorktree(tab.tabId);
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-xs text-red-300 hover:bg-zinc-800"
+                  className="block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
                 >
                   Discard…
                 </button>
@@ -158,13 +158,13 @@ export function TabBar({
           aria-label="new tab menu"
           onClick={() => setMenu(menu === "new" ? null : "new")}
           onMouseDown={(e) => e.stopPropagation()}
-          className="ml-0.5 mb-1 rounded px-2 py-0.5 text-sm text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          className="ml-0.5 mb-1 rounded px-2 py-0.5 text-sm text-tertiary hover:bg-surface-overlay hover:text-primary"
         >
           +
         </button>
         {menu === "new" && (
           <div
-            className="absolute left-0 top-full z-40 w-52 rounded border border-zinc-700 bg-zinc-900 py-1 shadow-lg"
+            className="absolute left-0 top-full z-40 w-52 rounded border border-strong bg-surface-raised py-1 shadow-lg"
             onMouseDown={(e) => e.stopPropagation()}
           >
             <button
@@ -173,7 +173,7 @@ export function TabBar({
                 setMenu(null);
                 onNew();
               }}
-              className="block w-full px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800"
+              className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
             >
               New tab
             </button>
@@ -183,7 +183,7 @@ export function TabBar({
                 setMenu(null);
                 onNewWorktree();
               }}
-              className="block w-full px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800"
+              className="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
               title="Run this session on an isolated git worktree branch; merge back when done"
             >
               New worktree session
