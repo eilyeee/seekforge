@@ -59,14 +59,19 @@ pub struct ServeCommand {
 
 /// Resolves the serve command. Order:
 /// 1. `SEEKFORGE_SERVE_CMD` env var (full command line, split on whitespace)
-/// 2. `seekforge` found on PATH, with args `serve --port 0`
-/// 3. dev fallback: `<repo-root>/node_modules/.bin/tsx <repo-root>/apps/cli/src/index.ts serve --port 0`
+/// 2. when `prefer_repo` (dev builds): the repo dev fallback, BEFORE PATH — a
+///    source checkout should use its own server (it serves the freshly-built
+///    web UI) rather than an older `seekforge` installed on PATH.
+/// 3. `seekforge` found on PATH, with args `serve --port 0`
+/// 4. dev fallback: `<repo-root>/node_modules/.bin/tsx <repo-root>/apps/cli/src/index.ts serve --port 0`
 ///
-/// `env_cmd` / `path_var` / `repo_root` are injected so tests can control them.
+/// `env_cmd` / `path_var` / `repo_root` / `prefer_repo` are injected so tests
+/// can control them; the caller passes `prefer_repo = cfg!(debug_assertions)`.
 pub fn resolve_serve_command(
     env_cmd: Option<&str>,
     path_var: Option<&str>,
     repo_root: Option<&Path>,
+    prefer_repo: bool,
 ) -> Option<ServeCommand> {
     if let Some(cmd) = env_cmd {
         let mut parts = cmd.split_whitespace().map(str::to_string);
@@ -77,6 +82,13 @@ pub fn resolve_serve_command(
         });
     }
 
+    // Dev builds run from the repo prefer the source server over a PATH install.
+    if prefer_repo {
+        if let Some(cmd) = repo_dev_command(repo_root) {
+            return Some(cmd);
+        }
+    }
+
     if let Some(path) = find_on_path("seekforge", path_var) {
         return Some(ServeCommand {
             program: path.to_string_lossy().into_owned(),
@@ -84,6 +96,12 @@ pub fn resolve_serve_command(
         });
     }
 
+    repo_dev_command(repo_root)
+}
+
+/// The dev fallback command: `<repo>/node_modules/.bin/tsx
+/// <repo>/apps/cli/src/index.ts serve --port 0`. `None` unless both exist.
+fn repo_dev_command(repo_root: Option<&Path>) -> Option<ServeCommand> {
     let root = repo_root?;
     let tsx = root.join("node_modules/.bin/tsx");
     let entry = root.join("apps/cli/src/index.ts");
@@ -335,6 +353,7 @@ mod tests {
             Some("node /tmp/server.js serve --port 0"),
             Some("/usr/bin"),
             Some(Path::new("/nonexistent")),
+            false,
         )
         .unwrap();
         assert_eq!(cmd.program, "node");
@@ -344,7 +363,7 @@ mod tests {
     #[test]
     fn empty_env_cmd_yields_none_not_fallthrough_crash() {
         // Whitespace-only env value has no program token.
-        assert_eq!(resolve_serve_command(Some("   "), None, None), None);
+        assert_eq!(resolve_serve_command(Some("   "), None, None, false), None);
     }
 
     #[cfg(unix)]
@@ -353,7 +372,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         make_executable(&dir.path().join("seekforge"));
         let path_var = dir.path().to_string_lossy().into_owned();
-        let cmd = resolve_serve_command(None, Some(&path_var), None).unwrap();
+        let cmd = resolve_serve_command(None, Some(&path_var), None, false).unwrap();
         assert_eq!(cmd.program, dir.path().join("seekforge").to_string_lossy());
         assert_eq!(cmd.args, vec!["serve", "--port", "0"]);
     }
@@ -368,7 +387,7 @@ mod tests {
         fs::create_dir_all(root.path().join("apps/cli/src")).unwrap();
         fs::write(root.path().join("apps/cli/src/index.ts"), "// cli\n").unwrap();
 
-        let cmd = resolve_serve_command(None, Some("/definitely/not/a/dir"), Some(root.path()))
+        let cmd = resolve_serve_command(None, Some("/definitely/not/a/dir"), Some(root.path()), false)
             .unwrap();
         assert_eq!(
             cmd.program,
@@ -390,10 +409,33 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn prefer_repo_uses_dev_fallback_over_path() {
+        // A dev build (prefer_repo = true) from the repo uses the source server
+        // even when a `seekforge` is on PATH (which may be an older UI-less install).
+        let dir = tempfile::tempdir().unwrap();
+        make_executable(&dir.path().join("seekforge"));
+        let path_var = dir.path().to_string_lossy().into_owned();
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
+        fs::create_dir_all(root.path().join("node_modules/.bin")).unwrap();
+        make_executable(&root.path().join("node_modules/.bin/tsx"));
+        fs::create_dir_all(root.path().join("apps/cli/src")).unwrap();
+        fs::write(root.path().join("apps/cli/src/index.ts"), "// cli\n").unwrap();
+
+        let cmd = resolve_serve_command(None, Some(&path_var), Some(root.path()), true).unwrap();
+        assert_eq!(
+            cmd.program,
+            root.path().join("node_modules/.bin/tsx").to_string_lossy()
+        );
+    }
+
     #[test]
     fn no_resolution_yields_none() {
         assert_eq!(
-            resolve_serve_command(None, Some("/definitely/not/a/dir"), None),
+            resolve_serve_command(None, Some("/definitely/not/a/dir"), None, false),
             None
         );
     }

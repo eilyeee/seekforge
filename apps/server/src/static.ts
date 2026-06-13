@@ -34,8 +34,20 @@ const CONTENT_TYPES: Record<string, string> = {
  * relative location holds for the CLI bundle (apps/cli/dist/index.js).
  */
 export function resolveStaticRoot(override?: string): string | undefined {
-  const root = override ?? fileURLToPath(new URL("../../desktop/dist", import.meta.url));
-  return existsSync(join(root, "index.html")) ? resolve(root) : undefined;
+  const candidates = override
+    ? [override]
+    : [
+        // Monorepo / source: from apps/server (or the in-tree cli bundle at
+        // apps/cli/dist), ../../desktop/dist is the vite build output.
+        fileURLToPath(new URL("../../desktop/dist", import.meta.url)),
+        // Published npm package: the web UI is copied next to the cli bundle
+        // (apps/cli/dist/web) at publish time, so `seekforge serve` ships a UI.
+        fileURLToPath(new URL("./web", import.meta.url)),
+      ];
+  for (const root of candidates) {
+    if (existsSync(join(root, "index.html"))) return resolve(root);
+  }
+  return undefined;
 }
 
 /** Resolves a URL path inside root; undefined when it would escape root. */

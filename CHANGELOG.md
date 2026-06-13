@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### round 28: ship the web UI in the npm package + dev server resolution
+Found by actually running the native desktop app (`pnpm tauri dev`): it printed
+"web UI is not built" because the Tauri shell spawned the globally-installed
+`seekforge`, which ships no UI.
+- **`seekforge serve` now ships a web UI.** The published `seekforge` package
+  excluded the desktop build, so `seekforge serve` (documented as "local web UI
+  + agent API") only ever served the API. The cli build now copies the desktop
+  `dist` into `dist/web`, `resolveStaticRoot` falls back to it, and
+  `prepublishOnly` builds the desktop first — so npm installs get a real
+  workbench.
+- **Dev builds prefer the repo's server.** `resolve_serve_command` gains a
+  `prefer_repo` flag (passed `cfg!(debug_assertions)`): a `tauri dev` from a
+  source checkout now uses the repo's server (which serves the freshly-built UI)
+  instead of an older `seekforge` on PATH. Release builds are unchanged.
+
 ### round 27: desktop UI design polish
 A UI-design pass on the desktop app (the token system, themes, modals, and
 button philosophy were already solid — these are refinements):

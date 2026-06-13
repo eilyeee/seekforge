@@ -16,4 +16,7 @@ export default defineConfig({
   // Their runtime deps (zod, ink, react) are declared as real dependencies.
   noExternal: [/^@seekforge\//],
   external: ["ink", "ink-spinner", "react"],
+  // Copy the built desktop web UI into dist/web so the published package's
+  // `seekforge serve` ships a usable web workbench (not just the API).
+  onSuccess: "node scripts/bundle-web.mjs",
 });

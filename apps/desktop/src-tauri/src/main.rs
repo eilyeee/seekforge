@@ -82,6 +82,9 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
         env_cmd.as_deref(),
         path_var.as_deref(),
         repo_root.as_deref(),
+        // Dev builds (run from a source checkout via `tauri dev`) prefer the
+        // repo's own server over an older `seekforge` on PATH.
+        cfg!(debug_assertions),
     )
     .ok_or_else(|| {
         "could not resolve the serve command.\n\
