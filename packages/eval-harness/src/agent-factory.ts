@@ -1,13 +1,20 @@
 /**
  * Default agent factory: assembles the real DeepSeek-backed AgentCore.
  * Injectable in tests via the CreateAgentFn contract (see task-runner.ts).
+ *
+ * Accepts an optional AgentBuildOptions so A/B variants can flip dep knobs
+ * (e.g. compaction strategy) per run — see variants.ts.
  */
 
 import { createAgentCore, createDeepSeekProvider, createDefaultDispatcher } from "@seekforge/core";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
+import type { AgentBuildOptions } from "./variants.js";
 
-export function createDefaultAgentFactory(config: EvalConfig): CreateAgentFn {
+export function createDefaultAgentFactory(
+  config: EvalConfig,
+  options: AgentBuildOptions = {},
+): CreateAgentFn {
   return () => {
     if (!config.apiKey) {
       throw new Error("no DeepSeek API key configured (env DEEPSEEK_API_KEY or .seekforge/config.json)");
@@ -25,6 +32,10 @@ export function createDefaultAgentFactory(config: EvalConfig): CreateAgentFn {
       confirm: async () => false,
       // Never pollute fixtures (or anything else) with extracted memory.
       extractMemory: false,
+      ...(options.compaction !== undefined ? { compaction: options.compaction } : {}),
+      ...(options.contextWindowTokens !== undefined
+        ? { contextWindowTokens: options.contextWindowTokens }
+        : {}),
     });
     return { agent };
   };
