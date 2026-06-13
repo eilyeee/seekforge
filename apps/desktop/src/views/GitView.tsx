@@ -209,9 +209,14 @@ function Section({
               <Badge tone={STATUS_TONE[f.status]} title={f.status}>
                 {t(`git.status.${f.status}`)}
               </Badge>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-secondary" title={f.path}>
+              <button
+                type="button"
+                onClick={() => useStore.getState().openFileAt(f.path)}
+                title={t("git.openFileTitle")}
+                className="min-w-0 flex-1 truncate text-left font-mono text-xs text-secondary hover:text-primary"
+              >
                 {f.path}
-              </span>
+              </button>
               {onDiscard && (
                 <Button
                   variant="ghost"

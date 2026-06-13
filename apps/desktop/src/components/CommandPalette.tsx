@@ -38,12 +38,15 @@ export function CommandPalette() {
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Global shortcut: ⌘K / Ctrl+K toggles the palette.
+  // Global shortcuts: ⌘K toggles the palette; ⌘P opens the "go to file" finder.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
         setOpen(!useStore.getState().paletteOpen);
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        useStore.getState().openFilesFinder();
       }
     };
     window.addEventListener("keydown", onKey);

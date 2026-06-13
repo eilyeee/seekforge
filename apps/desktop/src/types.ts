@@ -324,9 +324,9 @@ export type HookEntry = { command: string; match?: string; pattern?: string };
 /** Project hooks config: stage → entries. */
 export type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
 
-/** One content-search hit (GET /api/search). */
-export type SearchHit = { path: string; line: number; text: string };
-export type SearchResult = { hits: SearchHit[]; truncated: boolean };
+/** One content-search hit (GET /api/search); col/len locate the match in text. */
+export type SearchHit = { path: string; line: number; text: string; col: number; len: number };
+export type SearchResult = { hits: SearchHit[]; truncated: boolean; error?: string };
 
 /**
  * Loop-mode result status (server LoopResult.status). Mirrors the server

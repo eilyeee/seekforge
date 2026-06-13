@@ -225,8 +225,12 @@ export const api = {
   // explicit ws so a tab bound to a non-active workspace still hits the right
   // one (an empty/omitted id resolves to the server's default workspace,
   // matching the tab's WS frame semantics).
-  searchContent: (q: string, ws?: string) =>
-    request<SearchResult>("GET", withWorkspace(`/api/search?q=${encodeURIComponent(q)}`, ws)),
+  searchContent: (q: string, opts?: { caseSensitive?: boolean; regex?: boolean }, ws?: string) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.caseSensitive) params.set("case", "1");
+    if (opts?.regex) params.set("regex", "1");
+    return request<SearchResult>("GET", withWorkspace(`/api/search?${params.toString()}`, ws));
+  },
   files: (q: string, ws?: string) =>
     request<{ files: string[]; truncated: boolean }>(
       "GET",

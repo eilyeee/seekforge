@@ -129,6 +129,17 @@ type AppStore = {
   /** Whether the ⌘K command palette overlay is open. */
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
+  /** "Go to file" finder (⌘/Ctrl+P); openable from any view. */
+  filesFinderOpen: boolean;
+  setFilesFinderOpen: (open: boolean) => void;
+  openFilesFinder: () => void;
+  /**
+   * A pending "open this file (optionally at a line/match)" request, consumed by
+   * the Files view. `nonce` makes repeat opens of the same target re-fire.
+   */
+  filesTarget: { path: string; line?: number; col?: number; len?: number; nonce: number } | null;
+  openFileAt: (path: string, loc?: { line?: number; col?: number; len?: number }) => void;
+  clearFilesTarget: () => void;
 
   setView: (view: View) => void;
   /**
@@ -440,6 +451,15 @@ export const useStore = create<AppStore>()((set, get) => {
 
     paletteOpen: false,
     setPaletteOpen: (open) => set({ paletteOpen: open }),
+
+    filesFinderOpen: false,
+    setFilesFinderOpen: (open) => set({ filesFinderOpen: open }),
+    openFilesFinder: () => set({ view: "files", filesFinderOpen: true }),
+
+    filesTarget: null,
+    openFileAt: (path, loc) =>
+      set({ view: "files", filesTarget: { path, ...(loc ?? {}), nonce: Date.now() } }),
+    clearFilesTarget: () => set({ filesTarget: null }),
 
     truncateAtItem: (itemId) =>
       set((s) => ({

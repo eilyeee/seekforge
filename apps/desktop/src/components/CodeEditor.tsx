@@ -107,8 +107,8 @@ function documentWords(context: CompletionContext): CompletionResult | null {
   return { from: before.from, options, validFor: /^[\w$]*$/ };
 }
 
-/** Imperative handle: lets the toolbar open the find/replace panel. */
-export type CodeEditorHandle = { openSearch: () => void };
+/** Imperative handle: lets the toolbar open the find/replace + go-to-line panels. */
+export type CodeEditorHandle = { openSearch: () => void; goToLine: () => void };
 
 /**
  * CodeMirror 6 editor for the Files view: in-editor syntax highlighting,
@@ -126,10 +126,14 @@ export const CodeEditor = forwardRef<
     readOnly?: boolean;
     /** Soft-wrap long lines. */
     wrap?: boolean;
-    /** 1-based line to select and center on open / when it changes. */
-    scrollToLine?: number;
+    /**
+     * Reveal a location on open / when `nonce` changes: 1-based `line`, optional
+     * 0-based `col` + `len` to select the match. `nonce` forces a re-reveal even
+     * when the location is unchanged (e.g. clicking the same search hit again).
+     */
+    reveal?: { line: number; col?: number; len?: number; nonce: number };
   }
->(function CodeEditor({ path, value, onChange, readOnly = false, wrap = false, scrollToLine }, ref) {
+>(function CodeEditor({ path, value, onChange, readOnly = false, wrap = false, reveal }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeComp = useRef(new Compartment());
@@ -143,6 +147,10 @@ export const CodeEditor = forwardRef<
     openSearch: () => {
       const view = viewRef.current;
       if (view) openSearchPanel(view);
+    },
+    goToLine: () => {
+      const view = viewRef.current;
+      if (view) gotoLine(view);
     },
   }));
 
@@ -213,17 +221,20 @@ export const CodeEditor = forwardRef<
     });
   }, [wrap]);
 
-  // Jump to a 1-based line (project-search result → open at that line).
+  // Reveal a line (and select the match span) — e.g. a project-search hit.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !scrollToLine) return;
-    const lineNo = Math.max(1, Math.min(scrollToLine, view.state.doc.lines));
+    if (!view || !reveal) return;
+    const lineNo = Math.max(1, Math.min(reveal.line, view.state.doc.lines));
     const line = view.state.doc.line(lineNo);
+    const from = Math.min(line.from + (reveal.col ?? 0), line.to);
+    const to = Math.min(from + (reveal.len ?? 0), line.to);
     view.dispatch({
-      selection: { anchor: line.from },
-      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
     });
-  }, [scrollToLine, value]);
+    // Re-run on nonce change (same hit re-clicked) and once content has loaded.
+  }, [reveal?.nonce, value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Follow the app's light/dark switch at runtime.
   useEffect(() => {

@@ -57,6 +57,7 @@ export function MemoryView() {
   // Where new/approved memory is written: this project or the user-level file
   // (~/.seekforge, shared across all projects). Governs add + approve.
   const [scope, setScope] = useState<"project" | "user">("project");
+  const [filter, setFilter] = useState("");
   const ws = useStore((s) => s.activeWorkspaceId);
 
   const loadStats = () =>
@@ -117,11 +118,17 @@ export function MemoryView() {
   const addFact = (content: string, type: MemoryCandidateType): Promise<void> =>
     api.memoryAddFact(content, type, undefined, scope).then(refresh);
 
-  const pending = memory?.candidates.filter((c) => c.status === "pending") ?? [];
-  const resolved = memory?.candidates.filter((c) => c.status !== "pending") ?? [];
-  const facts = memory?.facts ?? [];
+  const fq = filter.trim().toLowerCase();
+  const hit = (s: string) => fq === "" || s.toLowerCase().includes(fq);
+  const pending = (memory?.candidates.filter((c) => c.status === "pending") ?? []).filter((c) => hit(c.content));
+  const resolved = (memory?.candidates.filter((c) => c.status !== "pending") ?? []).filter((c) => hit(c.content));
+  const facts = (memory?.facts ?? []).filter((f) => hit(f.content));
+  // Empty state reflects the workspace, not the current filter.
   const isEmpty =
-    memory !== null && memory.candidates.length === 0 && facts.length === 0 && !memory.projectMd;
+    memory !== null &&
+    memory.candidates.length === 0 &&
+    memory.facts.length === 0 &&
+    !memory.projectMd;
 
   return (
     <div className="flex h-full flex-col">
@@ -129,6 +136,9 @@ export function MemoryView() {
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-primary">{t("memory.title")}</h1>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-tertiary">{t("memory.description")}</p>
+          <div className="mt-2 max-w-xs">
+            <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("memory.filterPlaceholder")} />
+          </div>
         </div>
         <div className="shrink-0">
           <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{t("memory.scopeLabel")}</div>

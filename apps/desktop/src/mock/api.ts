@@ -147,6 +147,9 @@ const mockCommands = [
   },
 ];
 
+/** Editable project hooks (mock of /api/hooks). */
+let mockHooks: Record<string, unknown> = {};
+
 /** In-memory worktree sessions (mock of the git-backed real server). */
 type MockWorktree = { id: string; branch: string; path: string; dirty: boolean; ahead: number };
 const mockWorktrees: MockWorktree[] = [];
@@ -638,6 +641,53 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     const q = (new URLSearchParams(fullPath.split("?")[1] ?? "").get("q") ?? "").toLowerCase();
     const files = mockWorkspaceFiles.filter((f) => q === "" || f.toLowerCase().includes(q));
     return { files, truncated: false };
+  }
+
+  // Project-wide content search over the mock file map.
+  if (method === "GET" && path === "/api/search") {
+    const params = new URLSearchParams(fullPath.split("?")[1] ?? "");
+    const q = params.get("q") ?? "";
+    if (q === "") return { hits: [], truncated: false };
+    let re: RegExp;
+    try {
+      re = new RegExp(params.get("regex") === "1" ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), params.get("case") === "1" ? "" : "i");
+    } catch {
+      return { hits: [], truncated: false, error: "invalid regex" };
+    }
+    const hits: { path: string; line: number; text: string; col: number; len: number }[] = [];
+    for (const [p, content] of Object.entries(mockFiles)) {
+      content.split("\n").forEach((line, i) => {
+        const m = re.exec(line);
+        if (m) hits.push({ path: p, line: i + 1, text: line.slice(0, 240), col: m.index, len: m[0].length });
+      });
+    }
+    return { hits, truncated: false };
+  }
+
+  if (method === "GET" && path === "/api/output-styles") {
+    return {
+      styles: [
+        { name: "default", kind: "builtin" },
+        { name: "concise", kind: "builtin" },
+        { name: "explanatory", kind: "builtin" },
+        { name: "learning", kind: "builtin" },
+      ],
+    };
+  }
+
+  if (path === "/api/hooks") {
+    if (method === "GET") return { hooks: mockHooks };
+    if (method === "PUT") {
+      mockHooks = ((body ?? {}) as { hooks?: Record<string, unknown> }).hooks ?? {};
+      return { hooks: mockHooks };
+    }
+  }
+
+  if (method === "POST" && path === "/api/commands/expand") {
+    const { name, args } = (body ?? {}) as { name?: string; args?: string };
+    const cmd = mockCommands.find((c) => c.name === name);
+    if (!cmd) throw mockError(404, "not_found", `unknown command: ${name}`);
+    return { text: cmd.body.split("$ARGUMENTS").join(args ?? "") };
   }
 
   if (method === "POST" && path === "/api/upload") {

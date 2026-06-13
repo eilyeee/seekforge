@@ -609,9 +609,16 @@ export async function handleApi(
       return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
     }
 
-    // Project-wide content search (case-insensitive literal), bounded.
+    // Project-wide content search (literal or regex), bounded.
     if (method === "GET" && path === "/api/search") {
-      return sendJson(res, 200, searchWorkspaceContent(workspace, url.searchParams.get("q") ?? ""));
+      return sendJson(
+        res,
+        200,
+        await searchWorkspaceContent(workspace, url.searchParams.get("q") ?? "", {
+          caseSensitive: url.searchParams.get("case") === "1",
+          regex: url.searchParams.get("regex") === "1",
+        }),
+      );
     }
 
     // File browser: one directory listing (dirs first then files, alphabetical;

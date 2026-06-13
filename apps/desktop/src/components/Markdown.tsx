@@ -1,6 +1,32 @@
 import { useMemo } from "react";
 import { parseMarkdown, type MdBlock, type MdInline } from "../lib/markdown";
 import { highlightLines, isKnownLang, type TokenClass } from "../lib/highlight";
+import { useStore } from "../store";
+
+/** Extensions that make a bare (slash-less) `code` span look like a file ref. */
+const FILE_EXTS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java", "kt", "c", "cc", "cpp",
+  "cxx", "h", "hpp", "cs", "rb", "php", "swift", "md", "markdown", "json", "jsonc", "yaml",
+  "yml", "toml", "ini", "css", "scss", "less", "html", "htm", "xml", "svg", "sh", "bash",
+  "sql", "txt", "lock", "vue", "svelte",
+]);
+
+/**
+ * Recognizes a workspace file reference inside a `code` span: `path.ext`,
+ * `path.ext:line`, optional leading `@` or `./`. Conservative — a slash-less
+ * token must carry a known file extension so `a.length` / `obj.method` don't
+ * become links. Returns null for non-paths.
+ */
+export function parseFileRef(text: string): { path: string; line?: number } | null {
+  const s = text.trim();
+  if (s === "" || /\s/.test(s) || s.includes("://")) return null;
+  const m = /^@?([A-Za-z0-9._/@~+-]+\.[A-Za-z0-9]+)(?::(\d+))?(?::\d+)?$/.exec(s);
+  if (!m) return null;
+  const path = (m[1] as string).replace(/^\.\//, "");
+  const ext = (path.split(".").pop() ?? "").toLowerCase();
+  if (!path.includes("/") && !FILE_EXTS.has(ext)) return null;
+  return { path, ...(m[2] ? { line: Number(m[2]) } : {}) };
+}
 
 /** Maps a highlighter token class to a semantic-token text color. */
 const TOKEN_CLASS: Record<TokenClass, string> = {
@@ -18,7 +44,23 @@ function Inlines({ inlines }: { inlines: MdInline[] }) {
         switch (seg.kind) {
           case "text":
             return <span key={i}>{seg.text}</span>;
-          case "code":
+          case "code": {
+            const ref = parseFileRef(seg.text);
+            if (ref) {
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() =>
+                    useStore.getState().openFileAt(ref.path, ref.line !== undefined ? { line: ref.line } : undefined)
+                  }
+                  title={seg.text}
+                  className="rounded bg-surface-overlay px-1 py-0.5 font-mono text-[0.85em] text-accent-hover underline-offset-2 hover:underline"
+                >
+                  {seg.text}
+                </button>
+              );
+            }
             return (
               <code
                 key={i}
@@ -27,6 +69,7 @@ function Inlines({ inlines }: { inlines: MdInline[] }) {
                 {seg.text}
               </code>
             );
+          }
           case "strong":
             return (
               <strong key={i} className="font-semibold text-primary">

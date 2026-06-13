@@ -7,21 +7,32 @@ import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChevron, IconDiff, IconSparkle } from "../components/ui";
 
 function FileSection({ file }: { file: FileDiff }) {
+  const t = useT();
   const [open, setOpen] = useState(true);
   return (
     <Card flush className="overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="focus-ring flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-overlay/60"
-      >
-        <span className="text-tertiary">
-          <IconChevron size={12} className={open ? "rotate-90" : ""} />
-        </span>
-        <span className="flex-1 truncate font-mono text-xs text-primary">{file.path}</span>
+      <div className="flex w-full items-center gap-2.5 px-4 py-2.5 hover:bg-surface-overlay/60">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2.5 text-left"
+        >
+          <span className="text-tertiary">
+            <IconChevron size={12} className={open ? "rotate-90" : ""} />
+          </span>
+          <span className="flex-1 truncate font-mono text-xs text-primary">{file.path}</span>
+        </button>
         <Badge tone="ok">+{file.additions}</Badge>
         <Badge tone="danger">-{file.deletions}</Badge>
-      </button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => useStore.getState().openFileAt(file.path)}
+          title={t("diff.openFileTitle")}
+        >
+          {t("diff.openFile")}
+        </Button>
+      </div>
       {open && (
         <div className="px-3 pb-3">
           <DiffBlock diff={file.text} />

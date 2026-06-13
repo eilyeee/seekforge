@@ -4,9 +4,13 @@ import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { CodeEditor, type CodeEditorHandle } from "../components/CodeEditor";
 import { Modal } from "../components/ui/Modal";
+import { fuzzyRank } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
 import { Badge, Button, EmptyState, IconChevron, IconFiles, IconSearch, Input } from "../components/ui";
-import type { FileContent, SearchResult, TreeEntry } from "../types";
+import type { FileContent, SearchHit, SearchResult, TreeEntry } from "../types";
+
+/** A reveal target passed to the editor (1-based line + match span + nonce). */
+type Reveal = { line: number; col: number; len: number; nonce: number };
 
 /** A directory node in the lazy-loaded tree: its children + load/expand state. */
 type DirState = {
@@ -25,13 +29,20 @@ export function FilesView() {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
-  const [selectedLine, setSelectedLine] = useState<number | undefined>(undefined);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [recent, setRecent] = useState<string[]>([]);
   const [leftMode, setLeftMode] = useState<"tree" | "search">("tree");
-  const [finderOpen, setFinderOpen] = useState(false);
+  // The finder is openable globally (⌘P), so its open state lives in the store.
+  const finderOpen = useStore((s) => s.filesFinderOpen);
+  const setFinderOpen = useStore((s) => s.setFilesFinderOpen);
+  // A cross-view "open this file at a line" request (chat / diff / git links).
+  const filesTarget = useStore((s) => s.filesTarget);
+  const clearFilesTarget = useStore((s) => s.clearFilesTarget);
 
-  const openFile = (path: string, line?: number) => {
+  const openFile = (path: string, hit?: { line: number; col: number; len: number }) => {
     setSelected(path);
-    setSelectedLine(line);
+    setReveal(hit ? { ...hit, nonce: Date.now() } : null);
+    setRecent((r) => [path, ...r.filter((p) => p !== path)].slice(0, 20));
   };
 
   const loadDir = (path: string) => {
@@ -54,24 +65,30 @@ export function FilesView() {
     setDirs({});
     setExpanded(new Set());
     setSelected(null);
-    setSelectedLine(undefined);
+    setReveal(null);
+    setRecent([]);
     setLeftMode("tree");
-    setFinderOpen(false);
+    // NB: don't reset finderOpen here — a global ⌘P sets it just before this
+    // view mounts, and clearing it on mount would immediately close the finder.
     loadDir("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
-  // ⌘/Ctrl+P opens the fuzzy "go to file" finder.
+  // Honor a cross-view "open file at line" request (chat / diff / git links).
+  // It's a one-shot intent: consume then clear, so it doesn't re-fire when this
+  // view later remounts.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "p" || e.key === "P")) {
-        e.preventDefault();
-        setFinderOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    if (!filesTarget) return;
+    openFile(
+      filesTarget.path,
+      filesTarget.line !== undefined
+        ? { line: filesTarget.line, col: filesTarget.col ?? 0, len: filesTarget.len ?? 0 }
+        : undefined,
+    );
+    clearFilesTarget();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesTarget?.nonce]);
+
 
   const toggleDir = (path: string) => {
     setExpanded((prev) => {
@@ -156,13 +173,14 @@ export function FilesView() {
               description={t("files.noSelectionHint")}
             />
           ) : (
-            <FilePane key={selected} path={selected} initialLine={selectedLine} wsPath={wsPath} />
+            <FilePane key={selected} path={selected} reveal={reveal} wsPath={wsPath} />
           )}
         </section>
       </div>
 
       {finderOpen && (
         <FileFinder
+          recent={recent}
           onClose={() => setFinderOpen(false)}
           onPick={(p) => {
             openFile(p);
@@ -174,12 +192,30 @@ export function FilesView() {
   );
 }
 
-/** Project-wide content search results (GET /api/search), debounced. */
-function SearchPanel({ onOpen }: { onOpen: (path: string, line: number) => void }) {
+/** Renders `text` with the [col, col+len) span emphasized. */
+function HitLine({ text, col, len }: { text: string; col: number; len: number }) {
+  if (len <= 0 || col < 0) return <>{text.trim() || text}</>;
+  const a = text.slice(0, col);
+  const b = text.slice(col, col + len);
+  const c = text.slice(col + len);
+  return (
+    <>
+      {a}
+      <mark className="rounded bg-accent-muted px-0.5 text-accent-hover">{b}</mark>
+      {c}
+    </>
+  );
+}
+
+/** Project-wide content search (GET /api/search): debounced, grouped by file. */
+function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => void }) {
   const t = useT();
   const [q, setQ] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [regex, setRegex] = useState(false);
   const [res, setRes] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const seq = useRef(0);
 
   useEffect(() => {
     const term = q.trim();
@@ -189,42 +225,87 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, line: number) => void 
       return;
     }
     setLoading(true);
+    const mine = ++seq.current;
     const h = window.setTimeout(() => {
       api
-        .searchContent(term)
-        .then(setRes)
-        .catch(() => setRes({ hits: [], truncated: false }))
-        .finally(() => setLoading(false));
+        .searchContent(term, { caseSensitive, regex })
+        .then((r) => {
+          if (mine === seq.current) setRes(r); // ignore out-of-order responses
+        })
+        .catch(() => {
+          if (mine === seq.current) setRes({ hits: [], truncated: false });
+        })
+        .finally(() => {
+          if (mine === seq.current) setLoading(false);
+        });
     }, 250);
     return () => window.clearTimeout(h);
-  }, [q]);
+  }, [q, caseSensitive, regex]);
+
+  // Group hits by file, preserving first-seen order.
+  const groups: { path: string; hits: SearchHit[] }[] = [];
+  if (res) {
+    const byPath = new Map<string, SearchHit[]>();
+    for (const h of res.hits) {
+      const list = byPath.get(h.path);
+      if (list) list.push(h);
+      else {
+        const fresh = [h];
+        byPath.set(h.path, fresh);
+        groups.push({ path: h.path, hits: fresh });
+      }
+    }
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="p-2">
+      <div className="space-y-1.5 p-2">
         <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("files.searchPlaceholder")} />
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant={caseSensitive ? "primary" : "ghost"} onClick={() => setCaseSensitive((v) => !v)} title={t("files.searchCaseTitle")}>
+            Aa
+          </Button>
+          <Button size="sm" variant={regex ? "primary" : "ghost"} onClick={() => setRegex((v) => !v)} title={t("files.searchRegexTitle")}>
+            .*
+          </Button>
+          {res && res.hits.length > 0 && (
+            <span className="ml-auto text-2xs text-tertiary">
+              {t("files.searchCount", { hits: res.hits.length, files: groups.length })}
+            </span>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <p className="px-4 py-2 text-xs text-tertiary">{t("files.searching")}</p>
         ) : res === null ? (
           <p className="px-4 py-2 text-xs text-tertiary">{t("files.searchHint")}</p>
+        ) : res.error ? (
+          <p className="px-4 py-2 text-xs text-danger">{t("files.searchInvalidRegex")}</p>
         ) : res.hits.length === 0 ? (
           <p className="px-4 py-2 text-xs text-tertiary">{t("files.searchNoResults")}</p>
         ) : (
-          <ul>
-            {res.hits.map((h, i) => (
-              <li key={`${h.path}:${h.line}:${i}`}>
-                <button
-                  type="button"
-                  onClick={() => onOpen(h.path, h.line)}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-surface-overlay"
-                >
-                  <span className="block truncate font-mono text-2xs text-tertiary">
-                    {h.path}:{h.line}
-                  </span>
-                  <span className="block truncate font-mono text-xs text-secondary">{h.text.trim()}</span>
-                </button>
+          <ul className="pb-2">
+            {groups.map((g) => (
+              <li key={g.path}>
+                <div className="sticky top-0 truncate bg-surface px-3 py-1 font-mono text-2xs text-tertiary">
+                  {g.path} <span className="text-tertiary/70">({g.hits.length})</span>
+                </div>
+                {g.hits.map((h, i) => (
+                  <button
+                    key={`${h.line}:${h.col}:${i}`}
+                    type="button"
+                    onClick={() => onOpen(h.path, h)}
+                    className="block w-full px-3 py-1 text-left hover:bg-surface-overlay"
+                  >
+                    <span className="flex gap-2 font-mono text-xs">
+                      <span className="shrink-0 text-tertiary">{h.line}</span>
+                      <span className="truncate text-secondary">
+                        <HitLine text={h.text} col={h.col} len={h.len} />
+                      </span>
+                    </span>
+                  </button>
+                ))}
               </li>
             ))}
             {res.truncated && <li className="px-3 py-1.5 text-2xs text-tertiary">{t("files.searchTruncated")}</li>}
@@ -235,23 +316,49 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, line: number) => void 
   );
 }
 
-/** ⌘P fuzzy "go to file" finder over the ignore-aware file index. */
-function FileFinder({ onClose, onPick }: { onClose: () => void; onPick: (path: string) => void }) {
+/** ⌘P fuzzy "go to file" finder: loads the file index once, ranks client-side. */
+function FileFinder({
+  recent,
+  onClose,
+  onPick,
+}: {
+  recent: string[];
+  onClose: () => void;
+  onPick: (path: string) => void;
+}) {
   const t = useT();
   const [q, setQ] = useState("");
   const [files, setFiles] = useState<string[]>([]);
+  const [active, setActive] = useState(0);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
-    const h = window.setTimeout(() => {
-      api
-        .files(q.trim())
-        .then((r) => setFiles(r.files))
-        .catch(() => setFiles([]));
-    }, 120);
-    return () => window.clearTimeout(h);
-  }, [q]);
+    api
+      .files("")
+      .then((r) => setFiles(r.files))
+      .catch(() => setFiles([]));
+  }, []);
 
-  const shown = files.slice(0, 50);
+  const term = q.trim();
+  // Empty query → recent first (then the index); otherwise fuzzy-rank the index.
+  const shown: { path: string; positions: number[] }[] =
+    term === ""
+      ? [...recent.filter((p) => files.includes(p)), ...files.filter((f) => !recent.includes(f))]
+          .slice(0, 50)
+          .map((path) => ({ path, positions: [] }))
+      : fuzzyRank(term, files, (f) => f)
+          .slice(0, 50)
+          .map((r) => ({ path: r.item, positions: r.match.positions }));
+
+  useEffect(() => setActive(0), [q]);
+  // Keep the highlighted row in view while arrowing through a long list.
+  useEffect(() => {
+    itemRefs.current[active]?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const pick = (i: number) => {
+    if (shown[i]) onPick(shown[i].path);
+  };
 
   return (
     <Modal title={t("files.goToFile")} onDismiss={onClose}>
@@ -260,7 +367,16 @@ function FileFinder({ onClose, onPick }: { onClose: () => void; onPick: (path: s
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && shown[0]) onPick(shown[0]);
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive((a) => Math.min(a + 1, shown.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((a) => Math.max(a - 1, 0));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            pick(active);
+          }
         }}
         placeholder={t("files.goToFilePlaceholder")}
         className="font-mono"
@@ -269,20 +385,61 @@ function FileFinder({ onClose, onPick }: { onClose: () => void; onPick: (path: s
         {shown.length === 0 ? (
           <li className="px-1 py-2 text-xs text-tertiary">{t("files.searchNoResults")}</li>
         ) : (
-          shown.map((f) => (
-            <li key={f}>
-              <button
-                type="button"
-                onClick={() => onPick(f)}
-                className="block w-full truncate rounded px-2 py-1 text-left font-mono text-xs text-secondary hover:bg-surface-overlay hover:text-primary"
-              >
-                {f}
-              </button>
-            </li>
-          ))
+          shown.map((item, i) => {
+            const slash = item.path.lastIndexOf("/");
+            const dir = slash >= 0 ? item.path.slice(0, slash + 1) : "";
+            const base = slash >= 0 ? item.path.slice(slash + 1) : item.path;
+            const pos = new Set(item.positions);
+            return (
+              <li key={item.path}>
+                <button
+                  type="button"
+                  ref={(el) => {
+                    itemRefs.current[i] = el;
+                  }}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => onPick(item.path)}
+                  className={`block w-full truncate rounded px-2 py-1 text-left font-mono text-xs ${
+                    i === active ? "bg-accent-muted" : "hover:bg-surface-overlay"
+                  }`}
+                >
+                  {dir && <FuzzyText text={dir} positions={pos} offset={0} className="text-tertiary" />}
+                  <FuzzyText text={base} positions={pos} offset={dir.length} className="text-primary" />
+                </button>
+              </li>
+            );
+          })
         )}
       </ul>
+      <p className="mt-2 border-t border-subtle pt-2 text-2xs text-tertiary">{t("files.finderHint")}</p>
     </Modal>
+  );
+}
+
+/** Renders `text` with fuzzy-matched character positions (offset-adjusted) emphasized. */
+function FuzzyText({
+  text,
+  positions,
+  offset,
+  className,
+}: {
+  text: string;
+  positions: Set<number>;
+  offset: number;
+  className?: string;
+}) {
+  return (
+    <span className={className}>
+      {[...text].map((ch, i) =>
+        positions.has(i + offset) ? (
+          <span key={i} className="font-semibold text-accent">
+            {ch}
+          </span>
+        ) : (
+          ch
+        ),
+      )}
+    </span>
   );
 }
 
@@ -376,7 +533,7 @@ function TreeNode({
 const MARKDOWN_RE = /\.(md|markdown)$/i;
 
 /** Views one file with an Edit/Save toggle (PUT /api/file). */
-function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: number; wsPath: string }) {
+function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | null; wsPath: string }) {
   const t = useT();
   const [file, setFile] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -386,9 +543,27 @@ function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: n
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState<"rel" | "abs" | null>(null);
-  const [viewSource, setViewSource] = useState(false);
-  const [wrap, setWrap] = useState(false);
+  // wrap / view-source are sticky preferences across files (localStorage).
+  const [viewSource, setViewSource] = useState(() => localStorage.getItem("sf.files.viewSource") === "1");
+  const [wrap, setWrap] = useState(() => localStorage.getItem("sf.files.wrap") === "1");
   const editorRef = useRef<CodeEditorHandle>(null);
+
+  useEffect(() => localStorage.setItem("sf.files.wrap", wrap ? "1" : "0"), [wrap]);
+  // Persist the *preference* only on an explicit user toggle (below), not when a
+  // reveal auto-switches to source — so a search hit doesn't change the default.
+  const toggleViewSource = () =>
+    setViewSource((v) => {
+      const next = !v;
+      localStorage.setItem("sf.files.viewSource", next ? "1" : "0");
+      return next;
+    });
+
+  // Opening a markdown file at a specific line (search hit) shows source so the
+  // line is reachable; this does not persist the preference.
+  useEffect(() => {
+    if (reveal?.line !== undefined && MARKDOWN_RE.test(path)) setViewSource(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.nonce]);
 
   useEffect(() => {
     setFile(null);
@@ -463,7 +638,7 @@ function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: n
           {t("files.copyAbs")}
         </Button>
         {file && !editing && isMarkdown && (
-          <Button size="sm" variant="ghost" onClick={() => setViewSource((v) => !v)}>
+          <Button size="sm" variant="ghost" onClick={toggleViewSource}>
             {viewSource ? t("files.viewRendered") : t("files.viewSource")}
           </Button>
         )}
@@ -475,6 +650,11 @@ function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: n
             title={t("files.wrapTitle")}
           >
             {t("files.wrap")}
+          </Button>
+        )}
+        {editorShown && (
+          <Button size="sm" variant="ghost" onClick={() => editorRef.current?.goToLine()} title={t("files.gotoLineTitle")}>
+            {t("files.gotoLine")}
           </Button>
         )}
         {editorShown && (
@@ -525,7 +705,7 @@ function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: n
             onChange={() => {}}
             readOnly
             wrap={wrap}
-            scrollToLine={initialLine}
+            reveal={reveal ?? undefined}
           />
         )}
       </div>

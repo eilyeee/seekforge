@@ -13,6 +13,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { DEFAULT_IGNORE_DIRS, isSensitiveBasename, resolveInsideWorkspace } from "@seekforge/core";
 
@@ -79,38 +80,77 @@ export function listWorkspaceFiles(root: string, q = "", limit = FILE_LIST_LIMIT
   return { files, truncated: false };
 }
 
-export type SearchHit = { path: string; line: number; text: string };
-export type SearchResult = { hits: SearchHit[]; truncated: boolean };
+/** `col`/`len` are the 0-based match offset and length within `text`. */
+export type SearchHit = { path: string; line: number; text: string; col: number; len: number };
+export type SearchResult = { hits: SearchHit[]; truncated: boolean; error?: string };
+export type SearchOptions = { caseSensitive?: boolean; regex?: boolean; limit?: number };
 
 const SEARCH_MAX_HITS = 200;
 const SEARCH_MAX_FILES = 1500;
 const SEARCH_MAX_FILE_BYTES = 500_000;
 const SEARCH_MAX_LINE_LEN = 240;
+/** Overall wall-clock budget; a slow/pathological query stops and reports truncated. */
+const SEARCH_BUDGET_MS = 3000;
+/** In regex mode, skip lines longer than this (minified/data lines drive ReDoS). */
+const SEARCH_MAX_REGEX_LINE = 2000;
+/** Yield to the event loop every this many files so concurrent requests aren't starved. */
+const SEARCH_YIELD_EVERY = 50;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
- * Case-insensitive literal content search across the workspace (the @-picker's
- * ignore-aware file set). Bounded on every axis — files scanned, file size, and
- * total hits — so a query can't run away on a big repo. Skips binary/oversized
- * files. Returns at most `limit` hits with `truncated` set when the cap was hit.
+ * Content search across the workspace (the @-picker's ignore-aware file set):
+ * literal or regex, case-insensitive by default. Records the first non-empty
+ * match per line (with its column + length). Bounded on every axis — files,
+ * file size (checked via stat before reading), total hits, and a wall-clock
+ * budget — and reads asynchronously, yielding to the event loop so a big search
+ * never blocks other requests. Regex mode skips very long lines and is
+ * time-boxed as a pragmatic ReDoS guard. An invalid regex returns `error`.
  */
-export function searchWorkspaceContent(root: string, q: string, limit = SEARCH_MAX_HITS): SearchResult {
-  const needle = q.toLowerCase();
-  if (needle === "") return { hits: [], truncated: false };
+export async function searchWorkspaceContent(
+  root: string,
+  q: string,
+  opts: SearchOptions = {},
+): Promise<SearchResult> {
+  if (q === "") return { hits: [], truncated: false };
+  const limit = opts.limit ?? SEARCH_MAX_HITS;
+  const flags = opts.caseSensitive ? "" : "i";
+  let re: RegExp;
+  try {
+    re = new RegExp(opts.regex ? q : escapeRegExp(q), flags);
+  } catch {
+    return { hits: [], truncated: false, error: "invalid regex" };
+  }
   const { files, truncated: listTruncated } = listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
   const hits: SearchHit[] = [];
+  const deadline = Date.now() + SEARCH_BUDGET_MS;
+  let scanned = 0;
   for (const rel of files) {
-    let buf: Buffer;
+    if (Date.now() > deadline) return { hits, truncated: true };
+    if (++scanned % SEARCH_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
+    let st: Awaited<ReturnType<typeof stat>>;
     try {
-      buf = readFileSync(join(root, rel));
+      st = await stat(join(root, rel));
     } catch {
       continue;
     }
-    if (buf.length > SEARCH_MAX_FILE_BYTES || looksBinary(buf)) continue;
+    if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES) continue; // size-gate BEFORE reading
+    let buf: Buffer;
+    try {
+      buf = await readFile(join(root, rel));
+    } catch {
+      continue;
+    }
+    if (looksBinary(buf)) continue;
     const lines = buf.toString("utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] as string;
-      if (line.toLowerCase().includes(needle)) {
-        hits.push({ path: rel, line: i + 1, text: line.slice(0, SEARCH_MAX_LINE_LEN) });
+      if (opts.regex && line.length > SEARCH_MAX_REGEX_LINE) continue;
+      const m = re.exec(line);
+      if (m && m[0].length > 0) {
+        hits.push({ path: rel, line: i + 1, text: line.slice(0, SEARCH_MAX_LINE_LEN), col: m.index, len: m[0].length });
         if (hits.length >= limit) return { hits, truncated: true };
       }
     }

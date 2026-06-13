@@ -321,16 +321,30 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
 });
 
 describe("GET /api/search", () => {
-  it("returns case-insensitive content hits with file + line; empty q → no hits", async () => {
-    writeFileIn(workspace, "src/needle.txt", "alpha\nFindMe here\nbeta");
+  it("returns case-insensitive hits with file/line/col/len; empty q → no hits", async () => {
+    writeFileIn(workspace, "src/needle.txt", "alpha\nfoo FindMe here\nbeta");
     const res = await authed(`/api/search?q=${encodeURIComponent("findme")}`);
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
     const hit = body.hits.find((h: { path: string }) => h.path === "src/needle.txt");
-    expect(hit).toMatchObject({ line: 2, text: "FindMe here" });
+    expect(hit).toMatchObject({ line: 2, text: "foo FindMe here", col: 4, len: 6 });
 
     const empty = await authed("/api/search?q=");
     expect((await jsonOf(empty)).hits).toEqual([]);
+  });
+
+  it("supports case-sensitive and regex, and reports an invalid regex", async () => {
+    writeFileIn(workspace, "cs.txt", "Foo\nfoo");
+    const cs = await jsonOf(await authed(`/api/search?q=Foo&case=1`));
+    const hits = cs.hits.filter((h: { path: string }) => h.path === "cs.txt");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ line: 1 });
+
+    const rx = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("f.o")}&regex=1`));
+    expect(rx.hits.some((h: { path: string }) => h.path === "cs.txt")).toBe(true);
+
+    const bad = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("(")}&regex=1`));
+    expect(bad.error).toBe("invalid regex");
   });
 });
 
