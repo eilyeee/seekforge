@@ -1,0 +1,15 @@
+{
+  "id": "error-path-typed",
+  "title": "Replace silent error-swallowing with typed throws",
+  "fixture": "error-path-typed",
+  "mode": "edit",
+  "task": "`extract` in src/extract.js currently swallows every bad path by returning undefined, hiding real failures. Harden it per the spec comment above the function: throw TypeError when raw is not a string, let invalid JSON surface as a SyntaxError, throw TypeError when the parsed value is not a plain object (arrays and null do not count), and throw RangeError when the requested key is absent. A present key whose value is falsy/null/undefined must still be returned, not treated as missing. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/extract.js", "pattern": "TypeError" },
+    { "type": "file_contains", "path": "src/extract.js", "pattern": "RangeError" },
+    { "type": "file_not_contains", "path": "src/extract.js", "pattern": "catch \\{\\s*return undefined;" },
+    { "type": "file_contains", "path": "test/extract.test.js", "pattern": "missing key throws RangeError" }
+  ],
+  "notes": "Each error path has its own test (TypeError/SyntaxError/RangeError) plus the falsy-value happy path, so a partial fix fails. file_not_contains removes the swallow; the test pin blocks a rewrite."
+}

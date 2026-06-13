@@ -1,0 +1,14 @@
+{
+  "id": "pipeline-transform-bug",
+  "title": "Fix a data-pipeline bug in the transform, not the output",
+  "fixture": "pipeline-transform-bug",
+  "mode": "edit",
+  "task": "`npm test` fails: the parse -> normalize -> render pipeline produces the wrong discounted price. The symptom shows up in the rendered string, but src/parse.js (input) and src/render.js (output) are correct — the bug is in the discount math in src/normalize.js (the transform). Fix the transform so a price discounted by `rate` (e.g. 0.1 = 10% off) is computed correctly. Do not change src/render.js or src/parse.js, and do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/normalize.js", "pattern": "record\\.price \\* rate" },
+    { "type": "file_contains", "path": "src/render.js", "pattern": "toFixed\\(2\\)" },
+    { "type": "file_contains", "path": "test/pipeline.test.js", "pattern": "Widget \\$90\\.00" }
+  ],
+  "notes": "The cause is in the transform (multiplying by rate instead of 1 - rate); file_not_contains proves the transform was fixed rather than the renderer compensating. The render pin confirms the output stage was left intact."
+}

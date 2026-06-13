@@ -1,0 +1,13 @@
+{
+  "id": "ambiguous-dedup",
+  "title": "Implement dedupe under an under-specified requirement",
+  "fixture": "ambiguous-dedup",
+  "mode": "edit",
+  "task": "Implement `dedupe` in src/dedupe.js per the spec comment above it: remove duplicate values, returning a NEW array with every distinct value appearing exactly once and surviving elements in their original relative order. The spec deliberately does not say which duplicate to keep when a value repeats — keeping the first occurrence and keeping the last occurrence are BOTH acceptable. You will not be able to ask for clarification, so pick ONE interpretation and implement it fully and consistently. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/dedupe.js", "pattern": "TODO: implement" },
+    { "type": "file_contains", "path": "test/dedupe.test.js", "pattern": "either keep-first or keep-last is valid" }
+  ],
+  "notes": "Tests accept either keep-first or keep-last as long as it dedupes fully and preserves order, so a confident agent that commits to one interpretation passes while a half-done or order-mangling attempt fails. There is no ask_user in eval, which is the point: the agent must choose and proceed."
+}

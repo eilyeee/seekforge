@@ -1,0 +1,14 @@
+{
+  "id": "api-version-migration",
+  "title": "Migrate call sites across a breaking money-lib upgrade",
+  "fixture": "api-version-migration",
+  "mode": "edit",
+  "task": "The local money library in src/money.js was upgraded from v1 to v2 with a breaking change documented at the top of that file: v1 was `format(cents)` returning a \"$12.34\"-style string, while v2 is `format(amount, currency)` where amount is in MAJOR units (dollars) and the output is \"12.34 USD\". The call sites in src/invoice.js and src/receipt.js still use the v1 convention (passing integer cents, expecting a \"$\" prefix) and are now wrong. Migrate both call sites to v2: convert their stored cents to major units and pass the \"USD\" currency code. Do not change src/money.js and do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/invoice.js", "pattern": "USD" },
+    { "type": "file_contains", "path": "src/receipt.js", "pattern": "USD" },
+    { "type": "file_contains", "path": "test/money.test.js", "pattern": "12\\.34 USD" }
+  ],
+  "notes": "Pristine call sites pass cents to v2 format and omit the currency arg, so the suite fails. The test pin stops a rewrite of the expected output."
+}
