@@ -14,6 +14,12 @@ const BODY_SNIPPET_CHARS = 500;
 export type FetchWithRetryOptions = {
   /** Reported just before each backoff sleep (attempt is 1-based). */
   onRetry?: (info: RetryInfo) => void;
+  /**
+   * Override the retry budget (default MAX_RETRIES). Pass 0 to disable retries
+   * entirely — used by the provider's fallback-model path, which wants exactly
+   * one attempt with the alternate model.
+   */
+  maxRetries?: number;
 };
 
 /** Short human-readable cause for a retry, used in the onRetry report. */
@@ -31,6 +37,19 @@ export class DeepSeekApiError extends Error {
     super(message);
     this.name = "DeepSeekApiError";
   }
+}
+
+/**
+ * True if a DeepSeekApiError represents the same retryable condition that
+ * fetchWithRetry retries on (429 / 5xx / network). A DeepSeekApiError with no
+ * status is a network error (also retryable); other 4xx (400/401/403/etc.) are
+ * not. Used by the provider's fallback-model path to decide whether the
+ * exhausted-retries failure warrants a final fallback attempt.
+ */
+export function isRetryableError(err: unknown): boolean {
+  if (!(err instanceof DeepSeekApiError)) return false;
+  const { status } = err;
+  return status === undefined || status === 429 || status >= 500;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -51,13 +70,14 @@ export async function fetchWithRetry(
   // Cause of the failure that scheduled the upcoming retry (status undefined =
   // network error). Carried across iterations so onRetry reports it precisely.
   let pendingStatus: number | undefined;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const delayMs = backoffMs(attempt);
       try {
         options.onRetry?.({
           attempt,
-          maxAttempts: MAX_RETRIES,
+          maxAttempts: maxRetries,
           delayMs: Math.round(delayMs),
           reason: retryReason(pendingStatus),
         });

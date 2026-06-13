@@ -17,6 +17,8 @@ import type { CliConfig } from "./config.js";
 export type CliAgentOptions = {
   config: CliConfig;
   model?: string;
+  /** Model to retry the request with if the primary is overloaded (CLI --fallback-model). */
+  fallbackModel?: string;
   confirm: (req: PermissionRequest) => Promise<boolean>;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (V4 thinking mode). */
@@ -69,6 +71,7 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
     baseUrl: config.baseUrl,
     model: opts.model ?? config.model,
     onRetry: retryBus.onRetry,
+    ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
     ...thinkingOpts,
   });
 
