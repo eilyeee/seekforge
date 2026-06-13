@@ -14,6 +14,7 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
       { check: { type: "command_succeeds", command: "npm test" }, passed: true },
     ],
     metrics: { turns: 3, toolCalls: 5, failedToolCalls: 0, costUsd: 0.01, durationMs: 1234, score: 100 },
+    skills: [],
     ...overrides,
   };
 }

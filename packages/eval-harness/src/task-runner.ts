@@ -25,6 +25,15 @@ export type RunTaskOptions = {
   keepDir?: boolean;
   /** Override the fixture root (tests use throwaway fixtures). */
   fixturesDir?: string;
+  /** Appended to the task text (A/B prompt-style variants); see variants.ts. */
+  taskSuffix?: string;
+};
+
+/** One skill the core selected for this task's session (from skills-usage.jsonl). */
+export type SkillUsage = {
+  skillId: string;
+  scope: string;
+  score: number;
 };
 
 export type CheckResult = {
@@ -50,11 +59,40 @@ export type TaskResult = {
   success: boolean;
   checks: CheckResult[];
   metrics: TaskMetrics;
+  /** Skills the core selected for this session (empty when none fired). */
+  skills: SkillUsage[];
   /** Set when keepDir was requested. */
   workspaceDir?: string;
   /** Set when the session emitted session.failed. */
   error?: string;
 };
+
+/** Reads .seekforge/skills-usage.jsonl from the (throwaway) workspace. */
+async function readSkillUsage(dir: string): Promise<SkillUsage[]> {
+  let raw: string;
+  try {
+    raw = await readFile(join(dir, ".seekforge", "skills-usage.jsonl"), "utf8");
+  } catch {
+    return []; // no skills fired (file absent)
+  }
+  const usage: SkillUsage[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const entry = JSON.parse(line) as { skillId?: unknown; scope?: unknown; score?: unknown };
+      if (typeof entry.skillId === "string") {
+        usage.push({
+          skillId: entry.skillId,
+          scope: typeof entry.scope === "string" ? entry.scope : "unknown",
+          score: typeof entry.score === "number" ? entry.score : 0,
+        });
+      }
+    } catch {
+      // Skip malformed lines; one bad entry must not sink the run.
+    }
+  }
+  return usage;
+}
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
@@ -139,7 +177,7 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     try {
       const events = created.agent.runTask({
         projectPath: dir,
-        task: task.task,
+        task: opts.taskSuffix ? `${task.task}${opts.taskSuffix}` : task.task,
         mode: task.mode,
         approvalMode: "auto",
       });
@@ -188,11 +226,15 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
       checks.push(await evaluateCheck(check, { dir, answer: summary }));
     }
 
+    // Capture skill usage from the workspace BEFORE the finally block wipes it.
+    const skills = await readSkillUsage(dir);
+
     const result: TaskResult = {
       taskId: task.id,
       success: completed && checks.every((c) => c.passed),
       checks,
       metrics: { turns, toolCalls, failedToolCalls, costUsd, durationMs, score },
+      skills,
     };
     if (opts.keepDir) result.workspaceDir = dir;
     if (error !== undefined) result.error = error;

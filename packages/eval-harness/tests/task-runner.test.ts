@@ -187,6 +187,37 @@ describe("runTask", () => {
     expect(result.metrics.turns).toBeUndefined();
   });
 
+  it("captures skill usage written by the agent into the workspace before cleanup", async () => {
+    const fx = fixture({ "file.txt": "x" });
+    const result = await runTask(
+      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent((input) => {
+          const dir = join(input.projectPath, ".seekforge");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(
+            join(dir, "skills-usage.jsonl"),
+            `${JSON.stringify({ sessionId: "s1", skillId: "bugfix", scope: "builtin", score: 4 })}\n` +
+              `${JSON.stringify({ sessionId: "s1", skillId: "verify-change", scope: "builtin", score: 2 })}\n`,
+          );
+          return completedEvents();
+        }),
+      },
+    );
+    expect(result.skills.map((s) => s.skillId)).toEqual(["bugfix", "verify-change"]);
+    expect(result.skills[0]).toEqual({ skillId: "bugfix", scope: "builtin", score: 4 });
+  });
+
+  it("reports an empty skills array when no usage file was written", async () => {
+    const fx = fixture({ "file.txt": "x" });
+    const result = await runTask(makeTask(), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent(() => completedEvents()),
+    });
+    expect(result.skills).toEqual([]);
+  });
+
   it("scores the session via core scoreSession when trace files exist", async () => {
     const fx = fixture({ "file.txt": "x" });
     const result = await runTask(
