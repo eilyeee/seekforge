@@ -51,7 +51,9 @@ const runCommand = defineTool({
       description:
         cls.permission === "dangerous"
           ? `Refused command (${cls.reason}): ${normalizeCommand(args.command)}`
-          : `Run command: ${normalizeCommand(args.command)}`,
+          : cls.permission === "readonly"
+            ? `Read command (${cls.reason}): ${normalizeCommand(args.command)}`
+            : `Run command: ${normalizeCommand(args.command)}`,
       command: args.command,
       allowlisted: cls.allowlisted,
     };

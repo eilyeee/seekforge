@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { ToolError } from "./errors.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
-export type CommandPermission = "execute" | "env" | "dangerous";
+export type CommandPermission = "readonly" | "execute" | "env" | "dangerous";
 
 export type CommandClassification = {
   permission: CommandPermission;
@@ -84,6 +84,148 @@ function matchesPrefix(normalized: string, prefix: string): boolean {
   return normalized === prefix || normalized.startsWith(prefix + " ");
 }
 
+/**
+ * GitHub CLI (`gh`) and git classification.
+ *
+ * Read-only operations talk to the remote but only *fetch* data, so they are
+ * safe to auto-run (classified "readonly"/L0) the same way `git status` and
+ * `git diff` are auto-allowed. Mutating operations (create/merge/clone, writing
+ * the worktree, or any non-GET `gh api`) fall through to "execute"/L2 and must
+ * be confirmed — and the raw command is surfaced in the prompt (run_command
+ * already passes `command` to confirm). Unknown subcommands default to the SAFE
+ * side ("execute", confirm) rather than auto-allow.
+ *
+ * gh subcommand → permission
+ *   issue   view | list                                  → readonly
+ *   issue   create | close | reopen | comment | edit | delete | transfer
+ *   issue   develop | lock | unlock | pin | unpin        → execute (confirm)
+ *   pr      view | list | diff | checks | status         → readonly
+ *   pr      create | merge | close | reopen | comment | edit | ready
+ *   pr      checkout (writes worktree) | review          → execute (confirm)
+ *   repo    view | list                                  → readonly
+ *   repo    clone | fork | create | delete | rename ...  → execute (confirm)
+ *   release view | list                                  → readonly
+ *   release create | upload | delete | edit              → execute (confirm)
+ *   auth    status                                       → readonly
+ *   api     (GET: default, or --method/-X GET, no -f/-F/--input write) → readonly
+ *   api     (-X/--method POST|PUT|PATCH|DELETE, or -f/-F/--input)      → execute
+ *   <anything else / unknown>                            → execute (confirm)
+ *
+ * git subcommand → permission
+ *   status | diff | log | show | branch (read, no mutate flag)
+ *   fetch | remote -v | rev-parse | describe | tag (list) | stash list → readonly
+ *   push | reset --hard | clean                          → dangerous (denylist)
+ *   commit | merge | rebase | checkout -b | add ...      → execute (confirm)
+ */
+
+/** Read-only `gh <noun> <verb>` pairs (auto-allowed). */
+const GH_READONLY: ReadonlySet<string> = new Set([
+  "issue view",
+  "issue list",
+  "issue status",
+  "pr view",
+  "pr list",
+  "pr diff",
+  "pr checks",
+  "pr status",
+  "repo view",
+  "repo list",
+  "release view",
+  "release list",
+  "auth status",
+  "search issues",
+  "search prs",
+  "search repos",
+  "search code",
+  "workflow view",
+  "workflow list",
+  "run view",
+  "run list",
+  "label list",
+  "gist view",
+  "gist list",
+]);
+
+/** Mutating-API method flags on `gh api`. */
+const GH_API_WRITE_METHOD = /\b(post|put|patch|delete)\b/;
+
+/**
+ * Classify a `gh` command line (already normalized, tokens[0] === "gh").
+ * Returns "readonly" for safe reads, "execute" for everything else
+ * (mutations and unknown subcommands — the safe default).
+ */
+function classifyGh(tokens: string[]): CommandPermission {
+  const noun = tokens[1];
+  if (noun === undefined) return "execute"; // bare `gh` — confirm
+
+  if (noun === "api") {
+    // GET is the default and is read-only; any write method or a field/body
+    // flag (-f/-F/--field/--raw-field/--input) means a mutation.
+    const hasWriteField = tokens.some(
+      (t) => t === "-f" || t === "-F" || t === "--field" || t === "--raw-field" || t === "--input",
+    );
+    if (hasWriteField) return "execute";
+    const mIdx = tokens.findIndex((t) => t === "-X" || t === "--method");
+    if (mIdx !== -1) {
+      const method = (tokens[mIdx + 1] ?? "").toLowerCase();
+      return GH_API_WRITE_METHOD.test(method) ? "execute" : "readonly";
+    }
+    return "readonly"; // no method flag → GET
+  }
+
+  const verb = tokens[2];
+  if (verb !== undefined && GH_READONLY.has(`${noun} ${verb}`)) {
+    return "readonly";
+  }
+  return "execute"; // unknown / mutating subcommand → confirm (safe default)
+}
+
+/** Read-only git subcommands (auto-allowed when no mutating flag is present). */
+const GIT_READONLY_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "fetch",
+  "rev-parse",
+  "describe",
+  "shortlog",
+  "blame",
+  "ls-files",
+  "ls-remote",
+  "cat-file",
+  "reflog",
+  "whatchanged",
+]);
+
+/**
+ * Classify a `git` command line (normalized, tokens[0] === "git"). Returns
+ * "readonly" for inspection commands, "execute" for mutations (commit, merge,
+ * checkout, add, …). Destructive git (push, reset --hard, clean) is handled by
+ * the denylist before this is reached. Returns null when git is not read-only
+ * AND not a recognized mutation case worth special handling — caller falls
+ * through to the generic "execute" path.
+ */
+function classifyGit(tokens: string[]): CommandPermission {
+  const sub = tokens[1];
+  if (sub === undefined) return "execute";
+
+  if (GIT_READONLY_SUBCOMMANDS.has(sub)) return "readonly";
+
+  // `git branch`/`git tag`/`git stash`/`git remote`: read-only only in their
+  // listing form; a write argument (e.g. `git branch -D x`, `git tag v1`)
+  // makes them mutations.
+  if (sub === "branch" || sub === "tag" || sub === "stash" || sub === "remote") {
+    const args = tokens.slice(2);
+    const listOnly =
+      args.length === 0 ||
+      args.every((a) => a === "-v" || a === "-vv" || a === "-a" || a === "-r" || a === "-l" || a === "--list" || a === "list");
+    return listOnly ? "readonly" : "execute";
+  }
+
+  return "execute"; // commit, merge, rebase, checkout, add, … → confirm
+}
+
 export function classifyCommand(
   command: string,
   extraAllowlist: readonly string[] = [],
@@ -102,6 +244,30 @@ export function classifyCommand(
         allowlisted: false,
         defaultTimeoutMs: BUILD_COMMAND_TIMEOUT_MS,
         reason,
+      };
+    }
+  }
+
+  // gh / git: read-only forms auto-run (L0); mutating/unknown forms fall
+  // through to the generic "execute" path below so they confirm and surface the
+  // raw command. Only inspect single, unpiped commands — a compound line keeps
+  // the conservative generic treatment.
+  const tokens = normalized.split(" ");
+  if (!/[|&;]/.test(normalized)) {
+    if (tokens[0] === "gh" && classifyGh(tokens) === "readonly") {
+      return {
+        permission: "readonly",
+        allowlisted: true,
+        defaultTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+        reason: "gh read-only",
+      };
+    }
+    if (tokens[0] === "git" && classifyGit(tokens) === "readonly") {
+      return {
+        permission: "readonly",
+        allowlisted: true,
+        defaultTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+        reason: "git read-only",
       };
     }
   }

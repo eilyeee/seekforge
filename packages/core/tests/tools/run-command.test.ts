@@ -42,7 +42,9 @@ describe("classifyCommand", () => {
   });
 
   it("allowlists known-safe prefixes", () => {
-    for (const cmd of ["pwd", "ls -la", "git status", "git  diff   --stat", "pnpm test", "cargo test"]) {
+    // git status/diff are now classified readonly (see the git read/write
+    // suite); the remaining allowlist entries stay execute + allowlisted.
+    for (const cmd of ["pwd", "ls -la", "pnpm test", "cargo test"]) {
       const cls = classifyCommand(cmd);
       expect(cls.permission, cmd).toBe("execute");
       expect(cls.allowlisted, cmd).toBe(true);
@@ -57,6 +59,162 @@ describe("classifyCommand", () => {
 
   it("honors the user allowlist from the policy", () => {
     expect(classifyCommand("echo hi", ["echo"]).allowlisted).toBe(true);
+  });
+});
+
+describe("classifyCommand: gh", () => {
+  it("classifies read-only gh subcommands as readonly", () => {
+    for (const cmd of [
+      "gh issue view 12",
+      "gh issue list",
+      "gh issue status",
+      "gh pr view 7",
+      "gh pr list --state open",
+      "gh pr diff 7",
+      "gh pr checks 7",
+      "gh pr status",
+      "gh repo view owner/repo",
+      "gh release view v1.2.3",
+      "gh release list",
+      "gh auth status",
+    ]) {
+      const cls = classifyCommand(cmd);
+      expect(cls.permission, cmd).toBe("readonly");
+      // readonly commands carry allowlisted:true so they never prompt.
+      expect(cls.allowlisted, cmd).toBe(true);
+    }
+  });
+
+  it("classifies mutating gh subcommands as execute (confirm)", () => {
+    for (const cmd of [
+      "gh pr create --fill",
+      "gh pr merge 7 --squash",
+      "gh pr close 7",
+      "gh pr checkout 7",
+      "gh issue create --title x",
+      "gh issue close 12",
+      "gh issue comment 12 --body hi",
+      "gh release create v1.2.3",
+      "gh repo clone owner/repo",
+      "gh repo fork owner/repo",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("execute");
+    }
+  });
+
+  it("classifies gh api GET as readonly and writes as execute", () => {
+    for (const cmd of [
+      "gh api repos/owner/repo/issues",
+      "gh api -X GET repos/owner/repo",
+      "gh api --method GET repos/owner/repo/pulls",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("readonly");
+    }
+    for (const cmd of [
+      "gh api -X POST repos/owner/repo/issues",
+      "gh api --method PUT repos/owner/repo",
+      "gh api -X DELETE repos/owner/repo/issues/1",
+      "gh api repos/owner/repo/issues -f title=bug",
+      "gh api repos/owner/repo/issues -F body=@note.md",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("execute");
+    }
+  });
+
+  it("defaults unknown gh subcommands to execute (safe side)", () => {
+    for (const cmd of [
+      "gh",
+      "gh frobnicate",
+      "gh issue frobnicate 1",
+      "gh secret set TOKEN",
+      "gh workflow run deploy",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("execute");
+    }
+  });
+
+  it("does not auto-allow read-only gh inside a compound/piped line", () => {
+    expect(classifyCommand("gh issue view 1 | cat").permission).toBe("execute");
+    expect(classifyCommand("gh issue view 1 && rm x").permission).toBe("execute");
+  });
+});
+
+describe("classifyCommand: git read vs write", () => {
+  it("classifies read-only git as readonly", () => {
+    for (const cmd of [
+      "git status",
+      "git diff --stat",
+      "git log --oneline",
+      "git show HEAD",
+      "git fetch origin",
+      "git rev-parse HEAD",
+      "git branch",
+      "git branch -a",
+      "git tag",
+      "git tag --list",
+      "git stash list",
+      "git remote -v",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("readonly");
+    }
+  });
+
+  it("classifies mutating git as execute (confirm)", () => {
+    for (const cmd of [
+      "git commit -m x",
+      "git merge feature",
+      "git rebase main",
+      "git checkout -b fix/1",
+      "git add -A",
+      "git branch -D old",
+      "git tag v1.0.0",
+      "git stash pop",
+      "git remote add up url",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("execute");
+    }
+  });
+
+  it("keeps destructive git on the denylist", () => {
+    for (const cmd of ["git push origin main", "git reset --hard HEAD~1", "git clean -fd"]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
+    }
+  });
+});
+
+describe("permission flow: gh read vs write", () => {
+  it("auto-allows a read-only gh command in confirm mode without prompting", async () => {
+    const ws = makeWorkspace();
+    let confirms = 0;
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm" },
+      confirm: async () => {
+        confirms++;
+        return true;
+      },
+    });
+    // gh is unlikely to be authenticated in CI; the command may fail, but the
+    // point is that permission enforcement never prompts (readonly → L0).
+    const res = await dispatcher.execute(call("run_command", { command: "gh pr view 1" }), ctx);
+    expect(confirms).toBe(0);
+    expect(res.meta?.permission).toBe("readonly");
+  });
+
+  it("requires confirmation for a mutating gh command in confirm mode", async () => {
+    const ws = makeWorkspace();
+    let confirms = 0;
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm" },
+      confirm: async () => {
+        confirms++;
+        return false; // deny so the command never actually runs
+      },
+    });
+    const res = await dispatcher.execute(call("run_command", { command: "gh pr create --fill" }), ctx);
+    expect(confirms).toBe(1);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_user");
+    expect(res.meta?.permission).toBe("execute");
   });
 });
 

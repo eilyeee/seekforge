@@ -183,10 +183,13 @@ reproduce it, fix it on a dedicated branch, and open a PR that links back.
    \`gh pr create\` with a body that links the issue (e.g. "Fixes #<number>")
    and summarizes the change and how it was verified.
 
-NOTE on permissions: \`gh\` and \`git push\` talk to remote services — they
-require user-approved command permissions and must NEVER auto-run. If approval
-is not granted, stop after the local commit and tell the user the exact
-commands to run themselves.
+NOTE on permissions: read-only \`gh\` runs without a prompt — \`gh issue view\`,
+\`gh issue list\`, \`gh pr view/list/diff/checks\`, \`gh repo view\`, and \`gh api\`
+GET requests are classified read-only and auto-allow. Mutating commands that
+write to GitHub or the remote — \`gh pr create\`, \`gh pr merge/close\`,
+\`gh issue create/comment\`, \`gh pr checkout\`, and \`git push\` — will ask for
+approval and must NEVER auto-run. If approval is not granted, stop after the
+local commit and tell the user the exact commands to run themselves.
 
 ## Verification
 
@@ -200,7 +203,8 @@ commands to run themselves.
 - Fixing without reading the issue thread — comments often narrow the cause.
 - Working on the default branch instead of a fix/<issue> branch.
 - Opening the PR before the tests pass locally.
-- Pushing or creating the PR without explicit user approval of gh/git push.
+- Pushing or creating the PR without explicit user approval (gh pr create and
+  git push always prompt; if denied, hand the commands to the user).
 - A PR body that never mentions the issue, breaking the auto-close link.
 `;
 
