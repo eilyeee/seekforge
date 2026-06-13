@@ -11,6 +11,12 @@ import { SessionsView } from "./views/SessionsView";
 import { SettingsView } from "./views/SettingsView";
 import { SkillsView } from "./views/SkillsView";
 
+/** macOS uses an overlay title bar over the whole window top. The sidebar
+ *  reserves its corner with pt-9; the content column reserves a matching
+ *  draggable strip so its top chrome (tabs, toolbar) isn't covered by the
+ *  click-eating title-bar zone. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
 export function App() {
   const view = useStore((s) => s.view);
   const todosOpen = useStore((s) => s.todosOpen);
@@ -25,15 +31,18 @@ export function App() {
   return (
     <div className="flex h-full">
       <Sidebar />
-      <main className="min-w-0 flex-1">
-        {view === "chat" && <ChatView />}
-        {view === "sessions" && <SessionsView />}
-        {view === "diff" && <DiffView />}
-        {view === "skills" && <SkillsView />}
-        {view === "agents" && <AgentsView />}
-        {view === "memory" && <MemoryView />}
-        {view === "evolution" && <EvolutionView />}
-        {view === "settings" && <SettingsView />}
+      <main className="flex min-w-0 flex-1 flex-col">
+        {IS_MAC && <div data-tauri-drag-region className="h-9 shrink-0" />}
+        <div className="min-h-0 flex-1">
+          {view === "chat" && <ChatView />}
+          {view === "sessions" && <SessionsView />}
+          {view === "diff" && <DiffView />}
+          {view === "skills" && <SkillsView />}
+          {view === "agents" && <AgentsView />}
+          {view === "memory" && <MemoryView />}
+          {view === "evolution" && <EvolutionView />}
+          {view === "settings" && <SettingsView />}
+        </div>
       </main>
       {todosOpen && <TodosPanel />}
     </div>
