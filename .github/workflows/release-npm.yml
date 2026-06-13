@@ -1,0 +1,170 @@
+# Publish `seekforge` (apps/cli) to the official npm registry on a v* tag.
+#
+# OTP-FREE PUBLISHING
+# -------------------
+# This workflow publishes without an interactive one-time password. To do that
+# it uses an npm **Automation** access token, which is exempt from the 2FA/OTP
+# prompt that normally gates `npm publish`. Create one at:
+#
+#   npmjs.com  ->  Account  ->  Access Tokens  ->  Generate New Token
+#                ->  type "Automation"  (Granular tokens also work if scoped
+#                    to read+write on the `seekforge` package)
+#
+# Then add it to this repo as the secret  NPM_TOKEN  (Settings -> Secrets and
+# variables -> Actions -> New repository secret). The token owner must be a
+# maintainer/owner of the `seekforge` package (npm user `kylexyj`).
+#
+# PROVENANCE
+# ----------
+# `--provenance` attaches a signed build-provenance attestation to the package.
+# It requires `id-token: write` permission AND that publishing happens from a
+# public GitHub-hosted runner over OIDC. Outside CI it will warn/fail — that is
+# expected; provenance only works in this workflow.
+#
+# FLOW
+# ----
+# Tag a release commit (e.g. `git tag v0.7.0 && git push origin v0.7.0`). The
+# tag must match `apps/cli/package.json` "version" — the workflow fails loudly
+# otherwise so you can't tag v0.8.0 while the package still says 0.7.0.
+
+name: release-npm
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.7.0). Must match apps/cli/package.json version."
+        required: true
+        type: string
+
+permissions:
+  contents: read # checkout
+  id-token: write # npm provenance (OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # GitHub Release creation needs write access to releases; grant it here so
+    # the default GITHUB_TOKEN can create/edit the release for this tag.
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # registry-url wires npm to the official registry so NODE_AUTH_TOKEN
+          # is injected into ~/.npmrc for the publish step.
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          # Strip leading "v" for the bare semver.
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
+      - name: Verify tag matches apps/cli/package.json version
+        run: |
+          PKG_VER="$(node -p "require('./apps/cli/package.json').version")"
+          TAG_VER="${{ steps.tag.outputs.version }}"
+          echo "package.json version: ${PKG_VER}"
+          echo "tag version:          ${TAG_VER}"
+          if [ "v${PKG_VER}" != "${{ steps.tag.outputs.tag }}" ]; then
+            echo "::error::Tag '${{ steps.tag.outputs.tag }}' does not match apps/cli/package.json version 'v${PKG_VER}'. Refusing to publish."
+            exit 1
+          fi
+
+      - name: Build all workspace packages
+        run: pnpm -r build
+
+      - name: Run tests (publish gate)
+        run: pnpm -r test
+
+      - name: Guard against republishing an existing version
+        id: guard
+        run: |
+          VER="${{ steps.tag.outputs.version }}"
+          # `npm view` exits non-zero if the version doesn't exist yet; that is
+          # the happy path. If it prints the version, it's already published.
+          PUBLISHED="$(npm view "seekforge@${VER}" version --registry=https://registry.npmjs.org/ 2>/dev/null || true)"
+          if [ "${PUBLISHED}" = "${VER}" ]; then
+            echo "::error::seekforge@${VER} is already published. Bump the version before tagging."
+            exit 1
+          fi
+          echo "seekforge@${VER} is not yet published — proceeding."
+
+      - name: Publish to npm (provenance, no OTP)
+        working-directory: apps/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --provenance --access public --registry=https://registry.npmjs.org/
+
+      - name: Create or update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VER="${{ steps.tag.outputs.version }}"
+          NOTES_FILE="$(mktemp)"
+
+          # Prefer a matching CHANGELOG section if one exists and is easily
+          # sliced; otherwise fall back to GitHub's autogenerated notes.
+          USE_AUTO=1
+          for CL in CHANGELOG.md apps/cli/CHANGELOG.md; do
+            if [ -f "$CL" ]; then
+              # Slice from the heading for this version to the next "## " heading.
+              awk -v ver="$VER" '
+                $0 ~ "^## +\\[?" ver "\\]?" {grab=1; print; next}
+                grab && /^## / {exit}
+                grab {print}
+              ' "$CL" > "$NOTES_FILE"
+              if [ -s "$NOTES_FILE" ]; then USE_AUTO=0; fi
+              break
+            fi
+          done
+
+          # Idempotent: the desktop release workflow may target the SAME tag, so
+          # create the release if absent, otherwise edit it. See coordination
+          # note below.
+          if [ "$USE_AUTO" = "1" ]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes \
+              || gh release edit "$TAG" --title "$TAG"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" \
+              || gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES_FILE"
+          fi
+
+# COORDINATION WITH THE DESKTOP RELEASE
+# -------------------------------------
+# If a separate desktop-release workflow also fires on `v*` tags and creates a
+# GitHub Release for the same tag, the two runs race. This step is idempotent:
+# `gh release create ... || gh release edit ...` succeeds whether or not the
+# release already exists, so whichever workflow lands first creates it and the
+# other one edits it. Neither overwrites the other's uploaded assets (desktop
+# binaries are added with `gh release upload`, not `create`).
