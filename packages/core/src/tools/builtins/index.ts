@@ -1,5 +1,6 @@
 import type { ToolSpec } from "../registry.js";
 import { fsTools } from "./fs.js";
+import { globTools } from "./glob.js";
 import { commandTools } from "./command.js";
 import { gitTools } from "./git.js";
 import { projectTools } from "./project.js";
@@ -11,5 +12,5 @@ import { visionTools } from "./vision.js";
 export { configureVision, type VisionConfig } from "./vision.js";
 
 export function builtinTools(): ToolSpec[] {
-  return [...fsTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools, ...visionTools];
+  return [...fsTools, ...globTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools, ...visionTools];
 }
