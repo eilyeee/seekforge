@@ -249,6 +249,11 @@ export function SettingsView() {
   const [apiKey, setApiKey] = useState("");
   const [apiKeyMask, setApiKeyMask] = useState("");
   const [models, setModels] = useState<ModelInfo[] | null>(null);
+  // Engine knobs (effective values are always present on GET /api/config).
+  const [sandbox, setSandbox] = useState("off");
+  const [compaction, setCompaction] = useState("mechanical");
+  const [thinking, setThinking] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const ws = useStore((s) => s.activeWorkspaceId);
 
   useEffect(() => {
@@ -268,6 +273,10 @@ export function SettingsView() {
         setRuntimeBin(config.runtimeBin ?? "");
         setAllowlist((config.commandAllowlist ?? []).join(", "));
         setApiKeyMask(config.apiKey ?? "");
+        setSandbox(config.sandbox ?? "off");
+        setCompaction(config.compaction ?? "mechanical");
+        setThinking(config.thinking ?? false);
+        setReasoningEffort(config.reasoningEffort ?? "");
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -374,6 +383,77 @@ export function SettingsView() {
                   onClick={() => void save("commandAllowlist", allowlist, global)}
                 />
               </div>
+            </div>
+
+            <div>
+              <label className={FIELD_LABEL}>sandbox (OS command sandbox)</label>
+              <div className="flex gap-2">
+                <select
+                  value={sandbox}
+                  onChange={(e) => setSandbox(e.target.value)}
+                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                >
+                  <option value="off">off (no sandbox)</option>
+                  <option value="workspace-write">workspace-write (writes confined to the workspace)</option>
+                  <option value="restricted">restricted (workspace-write + no network)</option>
+                </select>
+                <SaveButton state={states.sandbox ?? "idle"} onClick={() => void save("sandbox", sandbox, global)} />
+              </div>
+              <p className="mt-1 text-2xs text-tertiary">
+                Wraps commands in seatbelt (macOS) / bwrap (Linux). Hard-fails if requested but unavailable.
+              </p>
+            </div>
+
+            <div>
+              <label className={FIELD_LABEL}>compaction (long-context strategy)</label>
+              <div className="flex gap-2">
+                <select
+                  value={compaction}
+                  onChange={(e) => setCompaction(e.target.value)}
+                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                >
+                  <option value="mechanical">mechanical (drop old tool output)</option>
+                  <option value="llm">llm (summarize via the model)</option>
+                </select>
+                <SaveButton
+                  state={states.compaction ?? "idle"}
+                  onClick={() => void save("compaction", compaction, global)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={FIELD_LABEL}>reasoningEffort (V4 thinking depth)</label>
+              <div className="flex gap-2">
+                <select
+                  value={reasoningEffort}
+                  onChange={(e) => setReasoningEffort(e.target.value)}
+                  className="w-full rounded-lg border border-strong bg-surface px-3 py-1.5 font-mono text-sm text-primary focus:border-accent/70 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                >
+                  <option value="">(API default)</option>
+                  <option value="high">high</option>
+                  <option value="max">max</option>
+                </select>
+                <SaveButton
+                  state={states.reasoningEffort ?? "idle"}
+                  onClick={() => void save("reasoningEffort", reasoningEffort, global)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-xs text-secondary">
+                <input
+                  type="checkbox"
+                  checked={thinking}
+                  onChange={(e) => {
+                    setThinking(e.target.checked);
+                    void save("thinking", String(e.target.checked), global);
+                  }}
+                  className="accent-accent"
+                />
+                thinking — enable DeepSeek V4 reasoning by default
+              </label>
             </div>
 
             <div>

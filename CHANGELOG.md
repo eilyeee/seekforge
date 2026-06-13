@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### round 31: native top-bar clicks + sandbox/engine settings in the UI
+Two issues found running the native desktop app:
+- **macOS overlay title bar ate clicks on the top toolbar** (tab bar, mode
+  toggles, New session, "+" menu) — they sit at y=0, under the draggable
+  title-bar zone, so clicks dragged the window instead. The content column now
+  reserves a draggable strip at the top (matching the sidebar's `pt-9`), pushing
+  the top chrome below the title bar so it's clickable. (Composer/sidebar were
+  unaffected and always worked.)
+- **The OS sandbox (and other engine knobs) couldn't be set from the UI** — only
+  apiKey/model/baseUrl/runtimeBin/commandAllowlist were settable. Added
+  `sandbox`, `compaction`, `thinking`, `reasoningEffort` to the writable config
+  keys (server `setConfigValue` + CLI `config set`, with enum/boolean
+  validation) and to the desktop Settings (dropdowns + a thinking checkbox). The
+  sandbox badge in the toolbar remains a status display; you set it here.
+
 ### round 30: CLI i18n (English + 简体中文)
 Completes the i18n work (TUI + desktop already done): the CLI's user-facing
 chrome is now translatable.
