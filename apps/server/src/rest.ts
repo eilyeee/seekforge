@@ -31,7 +31,7 @@ import {
   type McpClientEntry,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
-import { listWorkspaceFiles, saveUpload, UploadError } from "./files.js";
+import { listWorkspaceFiles, readRawUpload, RawFileError, saveUpload, UploadError } from "./files.js";
 import { WorktreeError, type WorktreeManager } from "./worktrees.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
@@ -207,6 +207,26 @@ export async function handleApi(
     if (method === "GET" && path === "/api/files") {
       // @ file picker index: ignore-aware scan, capped at 2000 paths.
       return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
+    }
+
+    // Raw bytes of an agent-uploaded image (so the UI renders real <img>
+    // thumbnails). Hard-confined to .seekforge/uploads/ — NOT a general
+    // file-serving endpoint. See readRawUpload for the confinement rules.
+    if (method === "GET" && path === "/api/raw") {
+      try {
+        const { data, contentType } = readRawUpload(workspace, url.searchParams.get("path") ?? "");
+        res.writeHead(200, {
+          "content-type": contentType,
+          "content-length": String(data.length),
+          // Uploads are immutable (unique stamped names) — safe to cache.
+          "cache-control": "private, max-age=31536000, immutable",
+        });
+        res.end(data);
+        return;
+      } catch (err) {
+        if (err instanceof RawFileError) return sendApiError(res, err.status, err.code, err.message);
+        throw err;
+      }
     }
 
     if (method === "POST" && path === "/api/upload") {

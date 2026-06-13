@@ -62,6 +62,67 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/**
+ * A pending image attachment: a real thumbnail (GET /api/raw) capped at
+ * ~200px with a filename caption, click-to-open, and a removable ✕ (stripping
+ * the marker from the text — the send-marker contract is preserved). On an
+ * <img> load error it degrades to the styled chip.
+ */
+function PendingImageChip({
+  marker,
+  workspaceId,
+  onRemove,
+}: {
+  marker: { n: number; path: string };
+  workspaceId: string;
+  onRemove: () => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  const name = marker.path.split("/").pop() || marker.path;
+  const src = api.rawUrl(marker.path, workspaceId);
+  const removeButton = (
+    <button
+      type="button"
+      aria-label={`Remove image #${marker.n}`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onRemove}
+      className="absolute -right-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-subtle bg-surface-raised text-xs text-tertiary hover:text-danger"
+    >
+      ✕
+    </button>
+  );
+  if (failed) {
+    return (
+      <span
+        title={marker.path}
+        className="relative inline-flex max-w-[14rem] items-center gap-1 rounded-md border border-subtle bg-surface-raised px-1.5 py-0.5 font-mono text-xs text-secondary"
+      >
+        <span aria-hidden className="text-tertiary">
+          🖼
+        </span>
+        <span className="truncate">
+          #{marker.n} {name}
+        </span>
+        {removeButton}
+      </span>
+    );
+  }
+  return (
+    <span className="relative inline-block">
+      <a href={src} target="_blank" rel="noopener noreferrer" title={marker.path} className="block">
+        <img
+          src={src}
+          alt={name}
+          onError={() => setFailed(true)}
+          className="max-h-[200px] max-w-[200px] rounded-md border border-subtle object-cover"
+        />
+        <span className="mt-0.5 block max-w-[200px] truncate font-mono text-xs text-tertiary">{name}</span>
+      </a>
+      {removeButton}
+    </span>
+  );
+}
+
 export function Composer({ value, onChange, onSend, disabled, placeholder, commands, workspaceId }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
@@ -334,33 +395,15 @@ export function Composer({ value, onChange, onSend, disabled, placeholder, comma
       )}
 
       {pendingImages.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {pendingImages.map((marker) => {
-            const name = marker.path.split("/").pop() || marker.path;
-            return (
-              <span
-                key={`${marker.n}:${marker.path}`}
-                title={marker.path}
-                className="inline-flex max-w-[14rem] items-center gap-1 rounded-md border border-subtle bg-surface-raised px-1.5 py-0.5 font-mono text-xs text-secondary"
-              >
-                <span aria-hidden className="text-tertiary">
-                  🖼
-                </span>
-                <span className="truncate">
-                  #{marker.n} {name}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove image #${marker.n}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => removeImage(marker)}
-                  className="ml-0.5 rounded text-tertiary hover:text-danger"
-                >
-                  ✕
-                </button>
-              </span>
-            );
-          })}
+        <div className="mb-1.5 flex flex-wrap gap-2">
+          {pendingImages.map((marker) => (
+            <PendingImageChip
+              key={`${marker.n}:${marker.path}`}
+              marker={marker}
+              workspaceId={workspaceId}
+              onRemove={() => removeImage(marker)}
+            />
+          ))}
         </div>
       )}
 
