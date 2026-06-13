@@ -1,0 +1,158 @@
+name: release-desktop
+
+# Builds, signs, and publishes the SeekForge desktop app (DMG + auto-update
+# artifacts) to a GitHub Release whenever a `v*` tag is pushed.
+#
+# What this does, end to end:
+#   1. On a `v*` tag (or manual dispatch) it runs a macOS matrix
+#      (Apple Silicon + Intel).
+#   2. Each job verifies the tag matches the version in
+#      `apps/desktop/src-tauri/tauri.conf.json`, builds the Tauri bundle, signs
+#      the updater payload with the Tauri signing key, optionally code-signs +
+#      notarizes with an Apple Developer ID, and uploads the DMG / .app.tar.gz /
+#      .sig to the release for the tag.
+#   3. tauri-action also generates `latest.json` (the updater manifest). Because
+#      both matrix jobs target the same `tagName`, tauri-action APPENDS each
+#      arch's entry to the SAME `latest.json` on the release — so the published
+#      manifest ends up with both `darwin-aarch64` and `darwin-x86_64` keys.
+#
+# Coordination with the npm release workflow:
+#   The npm release workflow (.github/workflows/release-npm.yml, owned by a
+#   different change) also creates a GitHub Release for the same `v*` tag.
+#   tauri-action is idempotent against an existing release: if the release for
+#   the tag already exists it reuses it and just appends the desktop assets, and
+#   if it does not exist yet it creates it. Either ordering works — both
+#   workflows target one shared release per tag.
+#
+# Required repo secrets (see apps/desktop/docs/RELEASING.md for generation):
+#   TAURI_SIGNING_PRIVATE_KEY           (required for working auto-update)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (required; "" if you set no password)
+# Optional Apple code-signing / notarization secrets (all must be present
+# together to enable signing; absent => an UNSIGNED build is produced instead of
+# failing, so forks without secrets still build):
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14   # Apple Silicon
+            target: aarch64-apple-darwin
+          - platform: macos-13   # Intel
+            target: x86_64-apple-darwin
+          # --- Deferred platforms (uncomment + add per-OS deps to enable) ---
+          # - platform: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          # - platform: windows-latest
+          #   target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          # Keep arch-specific caches separate so the two matrix jobs don't clash.
+          key: ${{ matrix.target }}
+          workspaces: . -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fail fast if someone tags a version that doesn't match tauri.conf.json.
+      # Skipped on workflow_dispatch (no tag ref to compare against).
+      - name: Verify tag matches tauri.conf.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          conf="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          echo "Tag version:        $tag"
+          echo "tauri.conf version: $conf"
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::Tag v$tag does not match tauri.conf.json version $conf. Bump apps/desktop/src-tauri/tauri.conf.json (and src-tauri/Cargo.toml) before tagging."
+            exit 1
+          fi
+
+      # Import the Apple Developer ID cert into a temporary keychain — only when
+      # the signing secrets are present. Skipped on forks/PRs without secrets so
+      # the build still produces an (unsigned) DMG instead of failing.
+      - name: Import Apple Developer certificate
+        if: env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$APPLE_CERTIFICATE_PASSWORD}"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          rm -f certificate.p12
+
+      - name: Build, sign, and publish desktop release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater payload signing (always set; required for auto-update).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple code-signing / notarization. When these are empty (no secrets)
+          # tauri-action produces an unsigned build instead of failing.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          # Build from repo root: the src-tauri crate is a member of the root
+          # Cargo workspace and the Tauri CLI is a root devDependency.
+          projectPath: .
+          tauriScript: pnpm tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SeekForge v__VERSION__'
+          releaseDraft: false
+          prerelease: false
+          # Per-arch target so each matrix job emits one platform entry that
+          # tauri-action merges into the shared latest.json.
+          args: --target ${{ matrix.target }}
