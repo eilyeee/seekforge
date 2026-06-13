@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.7.0 (unreleased) — round 15: polish pass (CLI output + desktop design system)
+## 0.7.0 (2026-06-13)
+
+### round 15: polish pass (CLI output + desktop design system)
 
 - Desktop: all 8 views adopt the whale-blue semantic tokens + ui/ primitives
   (Button/Card/Badge/Input/EmptyState) — previously they still used the old
@@ -14,7 +16,7 @@
   --output-format json/stream-json guaranteed byte-clean (no color, no
   notices, errors to stderr).
 
-## 0.7.0 (unreleased) — round 14: CLI + desktop detail parity vs Claude Code
+### round 14: CLI + desktop detail parity vs Claude Code
 
 - Edit review before apply: write tools (write_file/apply_patch) attach a diff
   preview to their permission request; the TUI panel and desktop modal become
@@ -29,7 +31,7 @@
   permission/completion when unfocused; light/dark/system theme switcher with a
   full light token set; first-run API-key onboarding screen.
 
-## 0.7.0 (unreleased) — round 9: CodeWhale absorption + style
+### round 9: CodeWhale absorption + style
 
 - Multi-tab sessions: Ctrl+N opens a parallel tab, Ctrl+T cycles, /tab
   manages; every tab owns its own transcript/session/run (actions route by
@@ -55,7 +57,7 @@
   diagnostics-via-tools and permission rules cover the need at lower
   complexity), full i18n of every string (chrome strings only for now).
 
-## 0.7.0 (unreleased) — round 11: desktop parity + design system
+### round 11: desktop parity + design system
 
 - Rich composer: / command palette, @ file picker (new GET /api/files),
   image paste & drag-drop upload (POST /api/upload → [image #N] markers for
@@ -76,7 +78,7 @@
   tauri-plugin-updater wired to GitHub releases; signing keys are the
   documented user step (apps/desktop/docs/RELEASING.md).
 
-## 0.7.0 (unreleased) — round 8: release readiness
+### round 8: release readiness
 
 - `seekforge-tui` now ships inside the published `seekforge` npm package as
   a second bin (bundled like core; ink/react become real dependencies).
@@ -100,7 +102,7 @@
 - Docs refreshed to 0.7.0 reality (README forms/features/limitations, TUI
   design record of rounds 3-8, roadmap Phase 9 note).
 
-## 0.7.0 (unreleased) — round 7: final gaps + command depth
+### round 7: final gaps + command depth
 
 - Command-detail alignment round: /compact <focus> runs an LLM-summarized
   compaction steered by the focus text (no-arg stays the instant digest);
@@ -138,7 +140,7 @@
   labeled lines incl. cache-hit rate, duration, turns; /sessions adds
   relative ages; /status shows uptime. Audited the rest to parity.
 
-## 0.7.0 (unreleased) — round 5: engine gaps + UI polish + DeepSeek V4
+### round 5: engine gaps + UI polish + DeepSeek V4
 
 ### Added (engine)
 - OS-level command sandbox (opt-in `"sandbox": "workspace-write" | "restricted"`):
