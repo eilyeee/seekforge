@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState, Compartment, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
+import { openSearchPanel, search } from "@codemirror/search";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
@@ -106,25 +107,34 @@ function documentWords(context: CompletionContext): CompletionResult | null {
   return { from: before.from, options, validFor: /^[\w$]*$/ };
 }
 
+/** Imperative handle: lets the toolbar open the find/replace panel. */
+export type CodeEditorHandle = { openSearch: () => void };
+
 /**
  * CodeMirror 6 editor for the Files view: in-editor syntax highlighting,
- * language-aware autocompletion (basicSetup), tab-indent, and light/dark theme
- * synced to the app's data-theme. Mounts per edit session (keyed by file path).
+ * language-aware autocompletion (basicSetup), find/replace (Ctrl/Cmd+F, or the
+ * exposed openSearch()), tab-indent, and a light/dark theme synced to the app's
+ * data-theme. `readOnly` renders the same editor for viewing (search/select/copy
+ * without editing). Mounts per file (keyed by path).
  */
-export function CodeEditor({
-  path,
-  value,
-  onChange,
-}: {
-  path: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
+export const CodeEditor = forwardRef<
+  CodeEditorHandle,
+  { path: string; value: string; onChange: (v: string) => void; readOnly?: boolean }
+>(function CodeEditor({ path, value, onChange, readOnly = false }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeComp = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  useImperativeHandle(ref, () => ({
+    // openSearchPanel focuses the search field itself — don't call view.focus()
+    // after, or focus snaps back to the editor and away from the query input.
+    openSearch: () => {
+      const view = viewRef.current;
+      if (view) openSearchPanel(view);
+    },
+  }));
 
   useEffect(() => {
     if (!host.current) return;
@@ -134,7 +144,11 @@ export function CodeEditor({
         doc: value,
         extensions: [
           basicSetup,
+          // Explicit search state so the find panel (and openSearch) work in
+          // read-only views too; it renders at the top, VS Code-style.
+          search({ top: true }),
           keymap.of([indentWithTab]),
+          ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           ...languageFor(path),
           // Document-word suggestions for every file type (augments language ones).
           EditorState.languageData.of(() => [{ autocomplete: documentWords }]),
@@ -148,9 +162,9 @@ export function CodeEditor({
     });
     viewRef.current = view;
     return () => view.destroy();
-    // Recreate when the file changes (new language + initial doc).
+    // Recreate when the file changes (new language + initial doc) or mode flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path]);
+  }, [path, readOnly]);
 
   // Sync external value changes (e.g. cancel/reset) without clobbering typing.
   useEffect(() => {
@@ -170,4 +184,4 @@ export function CodeEditor({
   }, []);
 
   return <div ref={host} className="h-full overflow-hidden" />;
-}
+});

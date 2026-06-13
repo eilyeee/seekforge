@@ -425,6 +425,11 @@ export const views = {
     "files.cancel": "Cancel",
     "files.saved": "Saved",
     "files.saveError": "Save failed: {error}",
+    "files.copyPath": "Copy path",
+    "files.copyPathTitle": "Copy this file's path",
+    "files.copied": "Copied",
+    "files.find": "Find",
+    "files.findTitle": "Find in file (⌘/Ctrl+F)",
     // ── GitView (Source Control) ──────────────────────────────────
     "git.title": "Source Control",
     "git.description": "Stage, commit and discard working-tree changes.",
@@ -886,6 +891,11 @@ export const views = {
     "files.cancel": "取消",
     "files.saved": "已保存",
     "files.saveError": "保存失败：{error}",
+    "files.copyPath": "复制路径",
+    "files.copyPathTitle": "复制此文件路径",
+    "files.copied": "已复制",
+    "files.find": "查找",
+    "files.findTitle": "在文件内查找（⌘/Ctrl+F）",
     // ── GitView (Source Control) ──────────────────────────────────
     "git.title": "源代码管理",
     "git.description": "暂存、提交和丢弃工作区改动。",

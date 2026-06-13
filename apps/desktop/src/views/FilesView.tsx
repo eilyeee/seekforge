@@ -1,47 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
-import { CodeEditor } from "../components/CodeEditor";
-import { highlightLines, isKnownLang, langFromPath, type TokenClass } from "../lib/highlight";
+import { CodeEditor, type CodeEditorHandle } from "../components/CodeEditor";
 import { useT } from "../lib/i18n";
-import { Badge, Button, EmptyState, IconChevron, IconFiles } from "../components/ui";
+import { Badge, Button, EmptyState, IconChevron, IconFiles, IconSearch } from "../components/ui";
 import type { FileContent, TreeEntry } from "../types";
-
-/** Highlighter token class → semantic-token color (mirrors Markdown). */
-const TOKEN_CLASS: Record<TokenClass, string> = {
-  comment: "text-tertiary italic",
-  string: "text-ok",
-  number: "text-warn",
-  keyword: "text-accent",
-  literal: "text-warn",
-};
-
-/** Read-only file content with dependency-free syntax highlighting by extension. */
-function CodeView({ path, content }: { path: string; content: string }) {
-  const lang = langFromPath(path);
-  const lines = useMemo(() => highlightLines(content, lang), [content, lang]);
-  if (!isKnownLang(lang)) {
-    return <pre className="px-4 py-3 font-mono text-xs leading-relaxed text-primary">{content}</pre>;
-  }
-  return (
-    <pre className="px-4 py-3 font-mono text-xs leading-relaxed text-primary">
-      <code>
-        {lines.map((tokens, i) => (
-          <div key={i}>
-            {tokens.length === 0
-              ? "\n"
-              : tokens.map((tk, j) => (
-                  <span key={j} className={tk.cls ? TOKEN_CLASS[tk.cls] : undefined}>
-                    {tk.text}
-                  </span>
-                ))}
-          </div>
-        ))}
-      </code>
-    </pre>
-  );
-}
 
 /** A directory node in the lazy-loaded tree: its children + load/expand state. */
 type DirState = {
@@ -247,6 +211,8 @@ function FilePane({ path }: { path: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const editorRef = useRef<CodeEditorHandle>(null);
 
   useEffect(() => {
     setFile(null);
@@ -286,13 +252,43 @@ function FilePane({ path }: { path: string }) {
   };
 
   const isMarkdown = MARKDOWN_RE.test(path);
+  // Find works whenever a CodeMirror instance is mounted: while editing, or when
+  // viewing a non-markdown file (markdown renders to HTML, which has no editor).
+  const editorShown = !!file && (editing || !isMarkdown);
+
+  const copyPath = () => {
+    void navigator.clipboard.writeText(path).then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-subtle px-4 py-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-secondary">{path}</span>
+        <button
+          type="button"
+          onClick={copyPath}
+          title={t("files.copyPathTitle")}
+          className="min-w-0 flex-1 truncate text-left font-mono text-xs text-secondary hover:text-primary"
+        >
+          {path}
+        </button>
+        {copied && <span className="text-2xs text-ok">{t("files.copied")}</span>}
         {file?.truncated && <Badge tone="warn">{t("files.truncated")}</Badge>}
         {saved && !editing && <span className="text-2xs text-ok">{t("files.saved")}</span>}
+        <Button size="sm" variant="ghost" onClick={copyPath} title={t("files.copyPathTitle")}>
+          {t("files.copyPath")}
+        </Button>
+        {editorShown && (
+          <Button size="sm" variant="ghost" onClick={() => editorRef.current?.openSearch()} title={t("files.findTitle")}>
+            <IconSearch size={13} />
+            {t("files.find")}
+          </Button>
+        )}
         {file && !editing && (
           <Button size="sm" onClick={startEdit} disabled={file.truncated}>
             {t("files.edit")}
@@ -322,13 +318,13 @@ function FilePane({ path }: { path: string }) {
         ) : file === null ? (
           <p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>
         ) : editing ? (
-          <CodeEditor path={path} value={draft} onChange={setDraft} />
+          <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} />
         ) : isMarkdown ? (
           <div className="px-4 py-3 text-sm leading-relaxed text-secondary">
             <Markdown source={file.content} />
           </div>
         ) : (
-          <CodeView path={path} content={file.content} />
+          <CodeEditor ref={editorRef} path={path} value={file.content} onChange={() => {}} readOnly />
         )}
       </div>
     </div>
