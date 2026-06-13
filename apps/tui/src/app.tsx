@@ -148,6 +148,8 @@ export type AppProps = {
   initialSessionId?: string;
   /** Package version, shown in the header. */
   version?: string;
+  /** One dim line shown once on startup when a newer npm version exists. */
+  updateNotice?: string;
 };
 
 type PendingPermission = {
@@ -173,6 +175,7 @@ export function App({
   mcpEntries = [],
   initialSessionId,
   version,
+  updateNotice,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { setRawMode } = useStdin();
@@ -353,6 +356,12 @@ export function App({
   const notice = useCallback((text: string, tone?: "dim" | "error") => {
     dispatch(tone ? { type: "notice", text, tone } : { type: "notice", text });
   }, []);
+
+  // Surface a "newer version available" line once on startup (dim, non-blocking).
+  // Fires when the async check resolves and the prop arrives via re-render.
+  useEffect(() => {
+    if (updateNotice) notice(updateNotice, "dim");
+  }, [updateNotice, notice]);
 
   /** OS notification + terminal bell (config.notify / config.bell gate each). */
   const ring = useCallback(
