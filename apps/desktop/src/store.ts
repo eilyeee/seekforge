@@ -109,7 +109,7 @@ type AppStore = {
   executePlan: () => void;
   cancel: () => void;
   newSession: () => void;
-  respondPermission: (approved: boolean, remember?: "session") => void;
+  respondPermission: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
   continueSession: (meta: SessionMeta, messages: ChatMessage[]) => void;
@@ -344,7 +344,7 @@ export const useStore = create<AppStore>()((set, get) => {
       }));
     },
 
-    respondPermission: (approved, remember) => {
+    respondPermission: (approved, remember, selectedHunks) => {
       const tab = activeTab(get().tabs);
       const pending = tab.pendingPermission;
       if (!pending) return;
@@ -354,6 +354,8 @@ export const useStore = create<AppStore>()((set, get) => {
         approved,
         // "session" grows the run's session allowlist (core ConfirmResult).
         ...(remember ? { remember } : {}),
+        // Per-hunk selection for multi-hunk apply_patch calls.
+        ...(selectedHunks ? { selectedHunks } : {}),
       });
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingPermission: null }) }));
     },

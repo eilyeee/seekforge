@@ -26,6 +26,8 @@ export type ClientFrame =
       approved: boolean;
       /** "session" = allow this (and similar) for the rest of the session. */
       remember?: "session";
+      /** Per-hunk selection for multi-hunk apply_patch calls. */
+      selectedHunks?: number[];
     }
   | { type: "question.answer"; id: string; answer: string }
   | { type: "cancel" };
