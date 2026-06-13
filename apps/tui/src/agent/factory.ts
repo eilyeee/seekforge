@@ -16,13 +16,13 @@ import {
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 
 export type TuiAgentOptions = {
   config: TuiConfig;
   model?: string;
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (V4 thinking mode). */
   onReasoningDelta?: (chunk: string) => void;

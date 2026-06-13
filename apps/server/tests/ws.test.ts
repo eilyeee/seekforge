@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import type { RunAgentTaskInput } from "@seekforge/core";
+import type { ConfirmResult } from "@seekforge/shared";
 import { startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
 import {
   collectFrames,
@@ -397,26 +398,27 @@ describe("busy rule", () => {
 });
 
 describe("permission bridge", () => {
-  const permissionScript = (observe: (approved: boolean) => void): CreateAgentFn =>
+  const permissionScript = (observe: (result: ConfirmResult) => void): CreateAgentFn =>
     fakeAgentFactory(async function* (opts) {
       yield { type: "session.created", sessionId: "perm-1" };
-      const approved = await opts.confirm({
+      const result = await opts.confirm({
         toolName: "write_file",
         permission: "write",
         description: "Write a.txt",
         path: "a.txt",
       });
-      observe(approved);
+      observe(result);
+      const allowed = typeof result === "boolean" ? result : result.allow;
       yield {
         type: "tool.completed",
         toolName: "write_file",
-        result: { ok: approved },
+        result: { ok: allowed },
       };
       yield { type: "session.completed", report: emptyReport() };
     });
 
   it("round-trips permission.request/response with the raw request", async () => {
-    let approvedSeen: boolean | undefined;
+    let approvedSeen: ConfirmResult | undefined;
     const { server } = await boot(permissionScript((a) => (approvedSeen = a)));
     const { ws, rx } = await open(server.port);
 
@@ -434,6 +436,40 @@ describe("permission bridge", () => {
     expect(approvedSeen).toBe(true);
   });
 
+  it("forwards remember:session as the richer confirm result", async () => {
+    let resultSeen: ConfirmResult | undefined;
+    const { server } = await boot(permissionScript((r) => (resultSeen = r)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: true,
+      remember: "session",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toEqual({ allow: true, remember: "session" });
+  });
+
+  it("a denied response with remember stays a bare false (no session grant)", async () => {
+    let resultSeen: ConfirmResult | undefined;
+    const { server } = await boot(permissionScript((r) => (resultSeen = r)));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "write it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: false,
+      remember: "session",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toBe(false);
+  });
+
   it("rejects responses for unknown requestIds", async () => {
     const { server } = await boot(fakeAgentFactory(async function* () {}));
     const { ws, rx } = await open(server.port);
@@ -443,7 +479,7 @@ describe("permission bridge", () => {
   });
 
   it("denies pending permissions and aborts the run when the socket closes", async () => {
-    let approvedSeen: boolean | undefined;
+    let approvedSeen: ConfirmResult | undefined;
     let abortedSeen: boolean | undefined;
     const { server } = await boot(
       fakeAgentFactory(async function* (opts, input) {

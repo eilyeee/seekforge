@@ -16,7 +16,7 @@ import {
   type AgentCore,
   type RuntimeClient,
 } from "@seekforge/core";
-import type { PermissionRequest } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
 
 /** Per-run model overrides from a start/send frame (win over config). */
@@ -28,8 +28,12 @@ export type RunOverrides = {
 
 export type CreateAgentOptions = {
   workspace: string;
-  /** Permission bridge: resolves with the user's decision over the WS. */
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+  /**
+   * Permission bridge: resolves with the user's decision over the WS. May
+   * return the richer ConfirmResult ({ allow, remember: "session" }) so core
+   * grows its session allowlist on "allow for session".
+   */
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   onModelDelta?: (chunk: string) => void;
   /** Streamed chain-of-thought deltas (thinking mode), mirrored over the WS. */
   onReasoningDelta?: (chunk: string) => void;
