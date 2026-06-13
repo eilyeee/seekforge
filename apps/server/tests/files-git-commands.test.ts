@@ -320,6 +320,20 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
   });
 });
 
+describe("GET /api/search", () => {
+  it("returns case-insensitive content hits with file + line; empty q → no hits", async () => {
+    writeFileIn(workspace, "src/needle.txt", "alpha\nFindMe here\nbeta");
+    const res = await authed(`/api/search?q=${encodeURIComponent("findme")}`);
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    const hit = body.hits.find((h: { path: string }) => h.path === "src/needle.txt");
+    expect(hit).toMatchObject({ line: 2, text: "FindMe here" });
+
+    const empty = await authed("/api/search?q=");
+    expect((await jsonOf(empty)).hits).toEqual([]);
+  });
+});
+
 describe("GET /api/output-styles", () => {
   it("lists the built-ins plus custom .seekforge/output-styles files", async () => {
     writeFileIn(workspace, ".seekforge/output-styles/pirate.md", "Arr");

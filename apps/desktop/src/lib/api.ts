@@ -24,6 +24,7 @@ import type {
   ModelInfo,
   PruneResult,
   RewindResult,
+  SearchResult,
   ServerConfig,
   SessionMeta,
   SessionTurn,
@@ -224,6 +225,8 @@ export const api = {
   // explicit ws so a tab bound to a non-active workspace still hits the right
   // one (an empty/omitted id resolves to the server's default workspace,
   // matching the tab's WS frame semantics).
+  searchContent: (q: string, ws?: string) =>
+    request<SearchResult>("GET", withWorkspace(`/api/search?q=${encodeURIComponent(q)}`, ws)),
   files: (q: string, ws?: string) =>
     request<{ files: string[]; truncated: boolean }>(
       "GET",

@@ -3,7 +3,7 @@ import { EditorView, basicSetup } from "codemirror";
 import { EditorState, Compartment, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
-import { openSearchPanel, search } from "@codemirror/search";
+import { gotoLine, openSearchPanel, search } from "@codemirror/search";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
@@ -119,11 +119,21 @@ export type CodeEditorHandle = { openSearch: () => void };
  */
 export const CodeEditor = forwardRef<
   CodeEditorHandle,
-  { path: string; value: string; onChange: (v: string) => void; readOnly?: boolean }
->(function CodeEditor({ path, value, onChange, readOnly = false }, ref) {
+  {
+    path: string;
+    value: string;
+    onChange: (v: string) => void;
+    readOnly?: boolean;
+    /** Soft-wrap long lines. */
+    wrap?: boolean;
+    /** 1-based line to select and center on open / when it changes. */
+    scrollToLine?: number;
+  }
+>(function CodeEditor({ path, value, onChange, readOnly = false, wrap = false, scrollToLine }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeComp = useRef(new Compartment());
+  const wrapComp = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -147,13 +157,35 @@ export const CodeEditor = forwardRef<
           // Explicit search state so the find panel (and openSearch) work in
           // read-only views too; it renders at the top, VS Code-style.
           search({ top: true }),
-          keymap.of([indentWithTab]),
+          keymap.of([indentWithTab, { key: "Mod-g", run: gotoLine, preventDefault: true }]),
+          wrapComp.current.of(wrap ? EditorView.lineWrapping : []),
           ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           ...languageFor(path),
           // Document-word suggestions for every file type (augments language ones).
           EditorState.languageData.of(() => [{ autocomplete: documentWords }]),
           themeComp.current.of(isDark() ? oneDark : []),
-          EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { fontFamily: "inherit" } }),
+          EditorView.theme({
+            "&": { height: "100%" },
+            ".cm-scroller": { fontFamily: "inherit" },
+            // Theme the find/replace panel to the app tokens (light + dark).
+            ".cm-panels": { backgroundColor: "var(--sf-surface-raised)", color: "var(--sf-text-primary)" },
+            ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--sf-border-subtle)" },
+            ".cm-search input": {
+              backgroundColor: "var(--sf-surface)",
+              color: "var(--sf-text-primary)",
+              border: "1px solid var(--sf-border-subtle)",
+              borderRadius: "4px",
+              padding: "2px 6px",
+            },
+            ".cm-search .cm-button": {
+              backgroundImage: "none",
+              backgroundColor: "var(--sf-surface-overlay)",
+              color: "var(--sf-text-secondary)",
+              border: "1px solid var(--sf-border-subtle)",
+              borderRadius: "4px",
+            },
+            ".cm-search label": { fontSize: "12px", color: "var(--sf-text-secondary)" },
+          }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onChangeRef.current(u.state.doc.toString());
           }),
@@ -173,6 +205,25 @@ export const CodeEditor = forwardRef<
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
     }
   }, [value]);
+
+  // Toggle soft-wrap without recreating the editor.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: wrapComp.current.reconfigure(wrap ? EditorView.lineWrapping : []),
+    });
+  }, [wrap]);
+
+  // Jump to a 1-based line (project-search result → open at that line).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !scrollToLine) return;
+    const lineNo = Math.max(1, Math.min(scrollToLine, view.state.doc.lines));
+    const line = view.state.doc.line(lineNo);
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+  }, [scrollToLine, value]);
 
   // Follow the app's light/dark switch at runtime.
   useEffect(() => {

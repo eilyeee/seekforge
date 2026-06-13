@@ -65,6 +65,7 @@ import {
   FileBrowseError,
   listTree,
   listWorkspaceFiles,
+  searchWorkspaceContent,
   readRawUpload,
   readTextFile,
   writeTextFile,
@@ -606,6 +607,11 @@ export async function handleApi(
     if (method === "GET" && path === "/api/files") {
       // @ file picker index: ignore-aware scan, capped at 2000 paths.
       return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
+    }
+
+    // Project-wide content search (case-insensitive literal), bounded.
+    if (method === "GET" && path === "/api/search") {
+      return sendJson(res, 200, searchWorkspaceContent(workspace, url.searchParams.get("q") ?? ""));
     }
 
     // File browser: one directory listing (dirs first then files, alphabetical;

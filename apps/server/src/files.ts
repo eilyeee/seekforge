@@ -79,6 +79,45 @@ export function listWorkspaceFiles(root: string, q = "", limit = FILE_LIST_LIMIT
   return { files, truncated: false };
 }
 
+export type SearchHit = { path: string; line: number; text: string };
+export type SearchResult = { hits: SearchHit[]; truncated: boolean };
+
+const SEARCH_MAX_HITS = 200;
+const SEARCH_MAX_FILES = 1500;
+const SEARCH_MAX_FILE_BYTES = 500_000;
+const SEARCH_MAX_LINE_LEN = 240;
+
+/**
+ * Case-insensitive literal content search across the workspace (the @-picker's
+ * ignore-aware file set). Bounded on every axis — files scanned, file size, and
+ * total hits — so a query can't run away on a big repo. Skips binary/oversized
+ * files. Returns at most `limit` hits with `truncated` set when the cap was hit.
+ */
+export function searchWorkspaceContent(root: string, q: string, limit = SEARCH_MAX_HITS): SearchResult {
+  const needle = q.toLowerCase();
+  if (needle === "") return { hits: [], truncated: false };
+  const { files, truncated: listTruncated } = listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
+  const hits: SearchHit[] = [];
+  for (const rel of files) {
+    let buf: Buffer;
+    try {
+      buf = readFileSync(join(root, rel));
+    } catch {
+      continue;
+    }
+    if (buf.length > SEARCH_MAX_FILE_BYTES || looksBinary(buf)) continue;
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (line.toLowerCase().includes(needle)) {
+        hits.push({ path: rel, line: i + 1, text: line.slice(0, SEARCH_MAX_LINE_LEN) });
+        if (hits.length >= limit) return { hits, truncated: true };
+      }
+    }
+  }
+  return { hits, truncated: listTruncated };
+}
+
 /** Upload validation failure carrying the HTTP status/code to respond with. */
 export class UploadError extends Error {
   constructor(

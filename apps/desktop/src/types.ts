@@ -324,6 +324,10 @@ export type HookEntry = { command: string; match?: string; pattern?: string };
 /** Project hooks config: stage → entries. */
 export type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
 
+/** One content-search hit (GET /api/search). */
+export type SearchHit = { path: string; line: number; text: string };
+export type SearchResult = { hits: SearchHit[]; truncated: boolean };
+
 /**
  * Loop-mode result status (server LoopResult.status). Mirrors the server
  * contract; not exported by @seekforge/shared.

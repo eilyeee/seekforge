@@ -3,9 +3,10 @@ import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { CodeEditor, type CodeEditorHandle } from "../components/CodeEditor";
+import { Modal } from "../components/ui/Modal";
 import { useT } from "../lib/i18n";
-import { Badge, Button, EmptyState, IconChevron, IconFiles, IconSearch } from "../components/ui";
-import type { FileContent, TreeEntry } from "../types";
+import { Badge, Button, EmptyState, IconChevron, IconFiles, IconSearch, Input } from "../components/ui";
+import type { FileContent, SearchResult, TreeEntry } from "../types";
 
 /** A directory node in the lazy-loaded tree: its children + load/expand state. */
 type DirState = {
@@ -18,11 +19,20 @@ type DirState = {
 export function FilesView() {
   const t = useT();
   const ws = useStore((s) => s.activeWorkspaceId);
+  const wsPath = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.path ?? "");
 
   // Per-directory listing cache keyed by relative path ("" = root).
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedLine, setSelectedLine] = useState<number | undefined>(undefined);
+  const [leftMode, setLeftMode] = useState<"tree" | "search">("tree");
+  const [finderOpen, setFinderOpen] = useState(false);
+
+  const openFile = (path: string, line?: number) => {
+    setSelected(path);
+    setSelectedLine(line);
+  };
 
   const loadDir = (path: string) => {
     setDirs((d) => ({ ...d, [path]: { loaded: false, loading: true, error: null, entries: [] } }));
@@ -44,9 +54,24 @@ export function FilesView() {
     setDirs({});
     setExpanded(new Set());
     setSelected(null);
+    setSelectedLine(undefined);
+    setLeftMode("tree");
+    setFinderOpen(false);
     loadDir("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
+
+  // ⌘/Ctrl+P opens the fuzzy "go to file" finder.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        setFinderOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const toggleDir = (path: string) => {
     setExpanded((prev) => {
@@ -71,28 +96,55 @@ export function FilesView() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="w-72 shrink-0 overflow-y-auto border-r border-subtle py-2">
-          {root === undefined || (root.loading && !root.loaded) ? (
-            <p className="px-4 py-2 text-xs text-tertiary">{t("files.treeLoading")}</p>
-          ) : root.error ? (
-            <p className="px-4 py-2 text-xs text-danger">{t("files.treeError", { error: root.error })}</p>
-          ) : root.entries.length === 0 ? (
-            <p className="px-4 py-2 text-xs text-tertiary">{t("files.treeEmpty")}</p>
+        <aside className="flex w-72 shrink-0 flex-col border-r border-subtle">
+          <div className="flex items-center gap-1 border-b border-subtle px-2 py-1.5">
+            <Button
+              size="sm"
+              variant={leftMode === "tree" ? "primary" : "ghost"}
+              onClick={() => setLeftMode("tree")}
+            >
+              {t("files.tabTree")}
+            </Button>
+            <Button
+              size="sm"
+              variant={leftMode === "search" ? "primary" : "ghost"}
+              onClick={() => setLeftMode("search")}
+            >
+              {t("files.tabSearch")}
+            </Button>
+            <span className="flex-1" />
+            <Button size="sm" variant="ghost" onClick={() => setFinderOpen(true)} title={t("files.goToFileTitle")}>
+              {t("files.goToFile")}
+            </Button>
+          </div>
+
+          {leftMode === "search" ? (
+            <SearchPanel onOpen={openFile} />
           ) : (
-            <ul>
-              {root.entries.map((e) => (
-                <TreeNode
-                  key={e.path}
-                  entry={e}
-                  depth={0}
-                  dirs={dirs}
-                  expanded={expanded}
-                  selected={selected}
-                  onToggle={toggleDir}
-                  onSelect={setSelected}
-                />
-              ))}
-            </ul>
+            <div className="flex-1 overflow-y-auto py-2">
+              {root === undefined || (root.loading && !root.loaded) ? (
+                <p className="px-4 py-2 text-xs text-tertiary">{t("files.treeLoading")}</p>
+              ) : root.error ? (
+                <p className="px-4 py-2 text-xs text-danger">{t("files.treeError", { error: root.error })}</p>
+              ) : root.entries.length === 0 ? (
+                <p className="px-4 py-2 text-xs text-tertiary">{t("files.treeEmpty")}</p>
+              ) : (
+                <ul>
+                  {root.entries.map((e) => (
+                    <TreeNode
+                      key={e.path}
+                      entry={e}
+                      depth={0}
+                      dirs={dirs}
+                      expanded={expanded}
+                      selected={selected}
+                      onToggle={toggleDir}
+                      onSelect={(p) => openFile(p)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </aside>
 
@@ -104,11 +156,133 @@ export function FilesView() {
               description={t("files.noSelectionHint")}
             />
           ) : (
-            <FilePane key={selected} path={selected} />
+            <FilePane key={selected} path={selected} initialLine={selectedLine} wsPath={wsPath} />
           )}
         </section>
       </div>
+
+      {finderOpen && (
+        <FileFinder
+          onClose={() => setFinderOpen(false)}
+          onPick={(p) => {
+            openFile(p);
+            setFinderOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Project-wide content search results (GET /api/search), debounced. */
+function SearchPanel({ onOpen }: { onOpen: (path: string, line: number) => void }) {
+  const t = useT();
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState<SearchResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const term = q.trim();
+    if (term === "") {
+      setRes(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const h = window.setTimeout(() => {
+      api
+        .searchContent(term)
+        .then(setRes)
+        .catch(() => setRes({ hits: [], truncated: false }))
+        .finally(() => setLoading(false));
+    }, 250);
+    return () => window.clearTimeout(h);
+  }, [q]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="p-2">
+        <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("files.searchPlaceholder")} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading ? (
+          <p className="px-4 py-2 text-xs text-tertiary">{t("files.searching")}</p>
+        ) : res === null ? (
+          <p className="px-4 py-2 text-xs text-tertiary">{t("files.searchHint")}</p>
+        ) : res.hits.length === 0 ? (
+          <p className="px-4 py-2 text-xs text-tertiary">{t("files.searchNoResults")}</p>
+        ) : (
+          <ul>
+            {res.hits.map((h, i) => (
+              <li key={`${h.path}:${h.line}:${i}`}>
+                <button
+                  type="button"
+                  onClick={() => onOpen(h.path, h.line)}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-surface-overlay"
+                >
+                  <span className="block truncate font-mono text-2xs text-tertiary">
+                    {h.path}:{h.line}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-secondary">{h.text.trim()}</span>
+                </button>
+              </li>
+            ))}
+            {res.truncated && <li className="px-3 py-1.5 text-2xs text-tertiary">{t("files.searchTruncated")}</li>}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** ⌘P fuzzy "go to file" finder over the ignore-aware file index. */
+function FileFinder({ onClose, onPick }: { onClose: () => void; onPick: (path: string) => void }) {
+  const t = useT();
+  const [q, setQ] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
+
+  useEffect(() => {
+    const h = window.setTimeout(() => {
+      api
+        .files(q.trim())
+        .then((r) => setFiles(r.files))
+        .catch(() => setFiles([]));
+    }, 120);
+    return () => window.clearTimeout(h);
+  }, [q]);
+
+  const shown = files.slice(0, 50);
+
+  return (
+    <Modal title={t("files.goToFile")} onDismiss={onClose}>
+      <Input
+        autoFocus
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && shown[0]) onPick(shown[0]);
+        }}
+        placeholder={t("files.goToFilePlaceholder")}
+        className="font-mono"
+      />
+      <ul className="mt-2 max-h-80 overflow-y-auto">
+        {shown.length === 0 ? (
+          <li className="px-1 py-2 text-xs text-tertiary">{t("files.searchNoResults")}</li>
+        ) : (
+          shown.map((f) => (
+            <li key={f}>
+              <button
+                type="button"
+                onClick={() => onPick(f)}
+                className="block w-full truncate rounded px-2 py-1 text-left font-mono text-xs text-secondary hover:bg-surface-overlay hover:text-primary"
+              >
+                {f}
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+    </Modal>
   );
 }
 
@@ -202,7 +376,7 @@ function TreeNode({
 const MARKDOWN_RE = /\.(md|markdown)$/i;
 
 /** Views one file with an Edit/Save toggle (PUT /api/file). */
-function FilePane({ path }: { path: string }) {
+function FilePane({ path, initialLine, wsPath }: { path: string; initialLine?: number; wsPath: string }) {
   const t = useT();
   const [file, setFile] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +385,9 @@ function FilePane({ path }: { path: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"rel" | "abs" | null>(null);
+  const [viewSource, setViewSource] = useState(false);
+  const [wrap, setWrap] = useState(false);
   const editorRef = useRef<CodeEditorHandle>(null);
 
   useEffect(() => {
@@ -252,26 +428,26 @@ function FilePane({ path }: { path: string }) {
   };
 
   const isMarkdown = MARKDOWN_RE.test(path);
-  // Find works whenever a CodeMirror instance is mounted: while editing, or when
-  // viewing a non-markdown file (markdown renders to HTML, which has no editor).
-  const editorShown = !!file && (editing || !isMarkdown);
+  // A CodeMirror instance is mounted while editing, or when viewing any
+  // non-markdown file, or when viewing markdown source — i.e. not the rendered
+  // Markdown. Find / wrap apply only then.
+  const showRenderedMarkdown = !!file && !editing && isMarkdown && !viewSource;
+  const editorShown = !!file && !showRenderedMarkdown;
 
-  const copyPath = () => {
-    void navigator.clipboard.writeText(path).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1500);
-      },
-      () => {},
-    );
+  const flashCopied = (which: "rel" | "abs") => {
+    setCopied(which);
+    window.setTimeout(() => setCopied((c) => (c === which ? null : c)), 1500);
   };
+  const copyRel = () => void navigator.clipboard.writeText(path).then(() => flashCopied("rel"), () => {});
+  const absPath = wsPath ? `${wsPath.replace(/\/$/, "")}/${path}` : path;
+  const copyAbs = () => void navigator.clipboard.writeText(absPath).then(() => flashCopied("abs"), () => {});
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-subtle px-4 py-2">
         <button
           type="button"
-          onClick={copyPath}
+          onClick={copyRel}
           title={t("files.copyPathTitle")}
           className="min-w-0 flex-1 truncate text-left font-mono text-xs text-secondary hover:text-primary"
         >
@@ -280,9 +456,27 @@ function FilePane({ path }: { path: string }) {
         {copied && <span className="text-2xs text-ok">{t("files.copied")}</span>}
         {file?.truncated && <Badge tone="warn">{t("files.truncated")}</Badge>}
         {saved && !editing && <span className="text-2xs text-ok">{t("files.saved")}</span>}
-        <Button size="sm" variant="ghost" onClick={copyPath} title={t("files.copyPathTitle")}>
+        <Button size="sm" variant="ghost" onClick={copyRel} title={t("files.copyPathTitle")}>
           {t("files.copyPath")}
         </Button>
+        <Button size="sm" variant="ghost" onClick={copyAbs} title={t("files.copyAbsTitle")}>
+          {t("files.copyAbs")}
+        </Button>
+        {file && !editing && isMarkdown && (
+          <Button size="sm" variant="ghost" onClick={() => setViewSource((v) => !v)}>
+            {viewSource ? t("files.viewRendered") : t("files.viewSource")}
+          </Button>
+        )}
+        {editorShown && (
+          <Button
+            size="sm"
+            variant={wrap ? "primary" : "ghost"}
+            onClick={() => setWrap((w) => !w)}
+            title={t("files.wrapTitle")}
+          >
+            {t("files.wrap")}
+          </Button>
+        )}
         {editorShown && (
           <Button size="sm" variant="ghost" onClick={() => editorRef.current?.openSearch()} title={t("files.findTitle")}>
             <IconSearch size={13} />
@@ -318,13 +512,21 @@ function FilePane({ path }: { path: string }) {
         ) : file === null ? (
           <p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>
         ) : editing ? (
-          <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} />
-        ) : isMarkdown ? (
+          <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} wrap={wrap} />
+        ) : showRenderedMarkdown ? (
           <div className="px-4 py-3 text-sm leading-relaxed text-secondary">
             <Markdown source={file.content} />
           </div>
         ) : (
-          <CodeEditor ref={editorRef} path={path} value={file.content} onChange={() => {}} readOnly />
+          <CodeEditor
+            ref={editorRef}
+            path={path}
+            value={file.content}
+            onChange={() => {}}
+            readOnly
+            wrap={wrap}
+            scrollToLine={initialLine}
+          />
         )}
       </div>
     </div>
