@@ -98,10 +98,10 @@ export function Sidebar() {
           onClick={toggleTodos}
           title="cross-session todo list (.seekforge/todos.md)"
           className={`flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
-            todosOpen ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
+            todosOpen ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay/50 hover:text-primary"
           }`}
         >
-          <span className="w-5 font-mono text-xs text-zinc-500">☑</span>
+          <span className="w-5 font-mono text-xs text-tertiary">☑</span>
           Todos
         </button>
       </div>
