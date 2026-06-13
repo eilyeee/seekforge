@@ -1,14 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PermissionRequest, PermissionRule } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
 import { createDefaultDispatcher, enforcePermission } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 const dispatcher = createDefaultDispatcher();
 
-function scriptedConfirm(answer: boolean): {
-  confirm: (req: PermissionRequest) => Promise<boolean>;
+function scriptedConfirm(answer: ConfirmResult): {
+  confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   requests: PermissionRequest[];
 } {
   const requests: PermissionRequest[] = [];
@@ -309,6 +309,159 @@ describe("permission rules", () => {
     expect(res.ok).toBe(true);
     expect(withConfirm.requests).toHaveLength(1); // still confirmed, as without rules
     expect(withConfirm.requests[0]?.permission).toBe("write");
+  });
+});
+
+describe("approvalMode acceptEdits", () => {
+  it("auto-allows in-workspace writes without prompting", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "acceptEdits" }, confirm });
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    expect(res.ok).toBe(true);
+    expect(requests).toHaveLength(0);
+    expect(fs.readFileSync(path.join(ws, "a.txt"), "utf8")).toBe("x");
+  });
+
+  it("still confirms L2 command execution (not auto-allowed)", async () => {
+    const ws = makeWorkspace();
+    const deny = scriptedConfirm(false);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "acceptEdits" }, confirm: deny.confirm });
+    const res = await dispatcher.execute(call("run_command", { command: "echo hi" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_user");
+    expect(deny.requests).toHaveLength(1);
+    expect(deny.requests[0]?.permission).toBe("execute");
+  });
+
+  it("still confirms L3 env changes", async () => {
+    const ws = makeWorkspace();
+    const deny = scriptedConfirm(false);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "acceptEdits" }, confirm: deny.confirm });
+    const res = await dispatcher.execute(
+      call("run_command", { command: "pnpm install left-pad" }),
+      ctx,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_user");
+    expect(deny.requests[0]?.permission).toBe("env");
+  });
+
+  it("never rescues a dangerous command", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const ctx = makeCtx(ws, { policy: { approvalMode: "acceptEdits" }, confirm });
+    const res = await dispatcher.execute(call("run_command", { command: "sudo rm -rf /" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_dangerous");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("still blocks writes in ask mode (deny stays authoritative)", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const ctx = makeCtx(ws, { policy: { mode: "ask", approvalMode: "acceptEdits" }, confirm });
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("forbidden_in_ask_mode");
+    expect(requests).toHaveLength(0);
+  });
+});
+
+describe("allow-for-session confirm channel", () => {
+  it("boolean confirm contract still works (allow once / deny)", async () => {
+    const ws = makeWorkspace();
+    const allow = scriptedConfirm(true);
+    const okRes = await dispatcher.execute(
+      call("write_file", { path: "a.txt", content: "x" }),
+      makeCtx(ws, { policy: { approvalMode: "confirm" }, confirm: allow.confirm }),
+    );
+    expect(okRes.ok).toBe(true);
+
+    const deny = scriptedConfirm(false);
+    const denyRes = await dispatcher.execute(
+      call("write_file", { path: "b.txt", content: "x" }),
+      makeCtx(ws, { policy: { approvalMode: "confirm" }, confirm: deny.confirm }),
+    );
+    expect(denyRes.ok).toBe(false);
+    expect(denyRes.error?.code).toBe("denied_by_user");
+  });
+
+  it("remember:session grows the command allowlist; a second matching call auto-allows", async () => {
+    const ws = makeWorkspace();
+    const sessionAllowlist: string[] = [];
+    const { confirm, requests } = scriptedConfirm({ allow: true, remember: "session" });
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist },
+      confirm,
+    });
+
+    // First call prompts and is remembered (command prefix pushed).
+    const first = await dispatcher.execute(call("run_command", { command: "echo hi" }), ctx);
+    expect(first.ok).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(sessionAllowlist).toContain("echo hi");
+
+    // Second matching call auto-allows WITHOUT prompting.
+    const second = await dispatcher.execute(call("run_command", { command: "echo hi again" }), ctx);
+    expect(second.ok).toBe(true);
+    expect(requests).toHaveLength(1); // no new prompt
+  });
+
+  it("remember:session for a non-command tool remembers the tool name", async () => {
+    const ws = makeWorkspace();
+    const sessionAllowlist: string[] = [];
+    const { confirm, requests } = scriptedConfirm({ allow: true, remember: "session" });
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist },
+      confirm,
+    });
+    const first = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), ctx);
+    expect(first.ok).toBe(true);
+    expect(sessionAllowlist).toContain("write_file");
+    const second = await dispatcher.execute(call("write_file", { path: "b.txt", content: "y" }), ctx);
+    expect(second.ok).toBe(true);
+    expect(requests).toHaveLength(1); // only the first prompted
+  });
+
+  it("a different command still prompts (prefix match only)", async () => {
+    const ws = makeWorkspace();
+    const sessionAllowlist = ["echo hi"];
+    const { confirm, requests } = scriptedConfirm(false);
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist },
+      confirm,
+    });
+    const res = await dispatcher.execute(call("run_command", { command: "echo bye" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("remember is ignored when allow is false (no allowlist growth)", async () => {
+    const ws = makeWorkspace();
+    const sessionAllowlist: string[] = [];
+    const { confirm } = scriptedConfirm({ allow: false, remember: "session" });
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist },
+      confirm,
+    });
+    const res = await dispatcher.execute(call("run_command", { command: "echo hi" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_by_user");
+    expect(sessionAllowlist).toHaveLength(0);
+  });
+
+  it("session allowlist does NOT rescue a dangerous command", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(true);
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist: ["sudo rm"] },
+      confirm,
+    });
+    const res = await dispatcher.execute(call("run_command", { command: "sudo rm -rf /" }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("denied_dangerous");
+    expect(requests).toHaveLength(0);
   });
 });
 

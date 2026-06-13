@@ -5,7 +5,9 @@ import type { ClassifiedCall } from "./registry.js";
 export type PermissionDecision =
   | "auto_readonly" // L0, always allowed
   | "auto_policy" // L1 with approvalMode "auto"
+  | "auto_accept_edits" // L1 write auto-allowed by approvalMode "acceptEdits"
   | "allowlist" // L2 command matched an allowlist
+  | "session_allowlist" // matched the run's allow-for-session allowlist
   | "user_approved" // user said yes
   | "user_denied" // user said no
   | "forbidden_ask_mode" // mode "ask" forbids everything above L0
@@ -17,12 +19,36 @@ export type PermissionOutcome =
   | { allowed: true; decision: PermissionDecision }
   | { allowed: false; decision: PermissionDecision; errorCode: string; errorMessage: string };
 
+/**
+ * The token an allow-for-session confirmation remembers, and that subsequent
+ * calls are matched against: the classified command for run_command/task_kill
+ * (prefix-matched, like commandAllowlist), else the bare tool name.
+ */
+function sessionToken(toolName: string, cls: ClassifiedCall): string {
+  if (toolName === "run_command" || toolName === "task_kill") {
+    return (cls.command ?? "").trim();
+  }
+  return toolName;
+}
+
+/** True when a prior allow-for-session entry covers this call. */
+function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext): boolean {
+  const list = ctx.policy.sessionAllowlist;
+  if (!list || list.length === 0) return false;
+  const token = sessionToken(toolName, cls);
+  if (token === "") return false;
+  if (toolName === "run_command" || toolName === "task_kill") {
+    return list.some((entry) => token.startsWith(entry));
+  }
+  return list.includes(token);
+}
+
 async function confirmWithUser(
   toolName: string,
   cls: ClassifiedCall,
   ctx: ToolContext,
 ): Promise<PermissionOutcome> {
-  const approved = await ctx.confirm({
+  const answer = await ctx.confirm({
     toolName,
     permission: cls.permission,
     description: cls.description,
@@ -31,7 +57,21 @@ async function confirmWithUser(
     ...(cls.path !== undefined ? { path: cls.path } : {}),
     ...(cls.preview !== undefined ? { preview: cls.preview } : {}),
   });
-  if (approved) return { allowed: true, decision: "user_approved" };
+  // Normalize the boolean | { allow, remember } contract. A bare boolean is
+  // treated exactly as before (allow-once / deny, no allowlist growth).
+  const allow = typeof answer === "boolean" ? answer : answer.allow;
+  const remember = typeof answer === "boolean" ? undefined : answer.remember;
+  if (allow) {
+    if (remember === "session") {
+      // Grow the run's in-memory session allowlist in place so the next
+      // matching call auto-allows. Mutating the array the caller shares
+      // across the session's calls is the whole point of the channel.
+      const token = sessionToken(toolName, cls);
+      const list = (ctx.policy.sessionAllowlist ??= []);
+      if (token !== "" && !list.includes(token)) list.push(token);
+    }
+    return { allowed: true, decision: "user_approved" };
+  }
   return {
     allowed: false,
     decision: "user_denied",
@@ -101,19 +141,35 @@ export async function enforcePermission(
     return { allowed: true, decision: "allow_rule" };
   }
 
+  // Allow-for-session: a prior "yes, don't ask again" covers this call. Scanned
+  // after deny/dangerous/allow-rules (which stay authoritative) but before any
+  // fresh prompt, for write/execute/env alike.
+  if (sessionAllowed(toolName, cls, ctx)) {
+    return { allowed: true, decision: "session_allowlist" };
+  }
+
   switch (cls.permission) {
     case "write":
+      // "auto" allows every write; "acceptEdits" auto-allows in-workspace
+      // writes too (the "edit freely, ask before running" tier). Other modes
+      // (confirm/manual) prompt.
       if (ctx.policy.approvalMode === "auto") {
         return { allowed: true, decision: "auto_policy" };
+      }
+      if (ctx.policy.approvalMode === "acceptEdits") {
+        return { allowed: true, decision: "auto_accept_edits" };
       }
       return confirmWithUser(toolName, cls, ctx);
     case "execute":
       if (cls.allowlisted) {
         return { allowed: true, decision: "allowlist" };
       }
+      // acceptEdits deliberately does NOT auto-allow command execution — it
+      // still confirms, so the user approves anything that runs.
       return confirmWithUser(toolName, cls, ctx);
     case "env":
-      // Env changes always require explicit confirmation, even in "auto".
+      // Env changes always require explicit confirmation, even in "auto"/
+      // "acceptEdits".
       return confirmWithUser(toolName, cls, ctx);
     default:
       return confirmWithUser(toolName, cls, ctx);
