@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { ThemeSwitcher } from "../components/ThemeSwitcher";
+import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
@@ -203,6 +205,37 @@ function McpResourcesSection() {
   );
 }
 
+/** Appearance (theme) + native notification on/off. Both persist locally. */
+function PreferencesSection() {
+  const [notify, setNotify] = useState(notificationsEnabled());
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">appearance</h2>
+        <div className="flex items-center gap-3">
+          <ThemeSwitcher />
+          <span className="text-[11px] text-zinc-600">Dark, light, or follow your system.</span>
+        </div>
+      </div>
+      <div>
+        <h2 className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500">notifications</h2>
+        <label className="flex items-center gap-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={notify}
+            onChange={(e) => {
+              setNotify(e.target.checked);
+              setNotificationsEnabled(e.target.checked);
+            }}
+            className="accent-emerald-600"
+          />
+          Notify on permission requests (when unfocused) and finished tasks
+        </label>
+      </div>
+    </div>
+  );
+}
+
 const FIELD_LABEL = "mb-1 block text-[10px] uppercase tracking-wider text-zinc-500";
 const FIELD_INPUT =
   "w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-700 focus:outline-none";
@@ -250,6 +283,8 @@ export function SettingsView() {
             />
             Save to global config (~/.seekforge) instead of this project
           </label>
+
+          <PreferencesSection />
 
           <div>
             <label className={FIELD_LABEL}>model</label>
