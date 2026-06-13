@@ -44,3 +44,17 @@ export type McpResource = {
   description?: string;
   mimeType?: string;
 };
+
+/** One declared argument of a prompt (from prompts/list). */
+export type McpPromptArgument = {
+  name: string;
+  description?: string;
+  required?: boolean;
+};
+
+/** A prompt as advertised by an MCP server via prompts/list. */
+export type McpPrompt = {
+  name: string;
+  description?: string;
+  arguments?: McpPromptArgument[];
+};

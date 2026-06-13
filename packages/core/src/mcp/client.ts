@@ -1,8 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { McpError } from "./errors.js";
 import { createMcpHttpTransport } from "./http.js";
-import type { McpResource, McpServerConfig, McpTool } from "./types.js";
+import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
 
 export { McpError };
 
@@ -12,6 +13,12 @@ export type McpClientOptions = {
   config: McpServerConfig;
   /** Default per-request timeout. */
   requestTimeoutMs?: number;
+  /**
+   * Absolute workspace path(s) advertised to the server as filesystem roots
+   * (capabilities.roots + answers to server-initiated roots/list). When unset,
+   * the client still advertises the roots capability but reports an empty list.
+   */
+  workspaceRoots?: string[];
 };
 
 export type McpClient = {
@@ -31,6 +38,14 @@ export type McpClient = {
    * RESOURCE_READ_MAX_CHARS.
    */
   readResource(uri: string): Promise<string>;
+  /** prompts/list — missing result.prompts is treated as an empty list. */
+  listPrompts(): Promise<McpPrompt[]>;
+  /**
+   * prompts/get — returns the prompt's messages flattened to a single string
+   * (each message rendered as "<role>: <text>", non-text parts become a
+   * placeholder), capped at RESOURCE_READ_MAX_CHARS.
+   */
+  getPrompt(name: string, args?: Record<string, unknown>): Promise<string>;
   dispose(): void;
 };
 
@@ -44,8 +59,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 // npx-launched servers can take a long time to resolve/install on first start
 // (slow registries/proxies) — give the one-time handshake much more room.
 const HANDSHAKE_TIMEOUT_MS = 120_000;
-const PROTOCOL_VERSION = "2024-11-05";
+// Latest stable MCP spec revision. Servers that only speak an older revision
+// version-fallback: they reply to initialize with their own protocolVersion,
+// which we accept (we do not enforce an exact match).
+const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
+
+/**
+ * Client capabilities advertised in initialize. We support filesystem roots
+ * (and notify on change), enabling servers to scope themselves to the
+ * workspace and to issue roots/list requests back to us.
+ */
+const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 
 /** A read resource is capped at this many characters (text after flattening). */
 export const RESOURCE_READ_MAX_CHARS = 50_000;
@@ -54,6 +79,8 @@ type ContentPart = { type: string; text?: string };
 type CallToolResult = { content?: ContentPart[]; isError?: boolean };
 type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
 type ReadResourceResult = { contents?: ResourceContent[] };
+type PromptMessage = { role?: string; content?: ContentPart | ContentPart[] };
+type GetPromptResult = { description?: string; messages?: PromptMessage[] };
 
 function flattenContent(parts: ContentPart[]): string {
   return parts
@@ -65,6 +92,23 @@ function flattenResourceContents(contents: ResourceContent[]): string {
   return contents
     .map((c) => (typeof c.text === "string" ? c.text : `[binary content${c.mimeType ? `: ${c.mimeType}` : ""}]`))
     .join("\n");
+}
+
+/** Renders prompts/get messages to one string: "<role>: <flattened content>" per message. */
+function flattenPromptMessages(messages: PromptMessage[]): string {
+  return messages
+    .map((m) => {
+      const parts = Array.isArray(m.content) ? m.content : m.content ? [m.content] : [];
+      const role = m.role ?? "user";
+      return `${role}: ${flattenContent(parts)}`;
+    })
+    .join("\n\n");
+}
+
+/** Builds the roots/list reply payload from the configured workspace paths. */
+function buildRootsResult(workspaceRoots: string[] | undefined): { roots: Array<{ uri: string; name?: string }> } {
+  const roots = (workspaceRoots ?? []).map((p) => ({ uri: pathToFileURL(p).href, name: "workspace" }));
+  return { roots };
 }
 
 /** Minimal transport contract shared by the stdio and Streamable HTTP backends. */
@@ -126,9 +170,23 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         }
         return;
       }
-      // Server-initiated requests/notifications are not supported in v1.
+      // Server-initiated requests: answer roots/list with the workspace roots.
+      // Any other server request gets a JSON-RPC "method not found"; bare
+      // notifications (no id) are tolerated silently.
       if (typeof msg["method"] === "string") {
-        process.stderr.write(`[mcp:${options.name}] ignoring server message: ${msg["method"]}\n`);
+        const method = msg["method"];
+        if (id === undefined) return; // notification — nothing to answer
+        if (method === "roots/list") {
+          proc.stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,
+            () => {},
+          );
+          return;
+        }
+        proc.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } })}\n`,
+          () => {},
+        );
       }
     });
 
@@ -190,7 +248,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         "initialize",
         {
           protocolVersion: PROTOCOL_VERSION,
-          capabilities: {},
+          capabilities: CLIENT_CAPABILITIES,
           clientInfo: CLIENT_INFO,
         },
         HANDSHAKE_TIMEOUT_MS,
@@ -269,6 +327,23 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     async readResource(uri: string): Promise<string> {
       const res = await transport.request<ReadResourceResult>("resources/read", { uri });
       const text = flattenResourceContents(res?.contents ?? []);
+      return text.length > RESOURCE_READ_MAX_CHARS
+        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
+        : text;
+    },
+
+    async listPrompts(): Promise<McpPrompt[]> {
+      // v1: no pagination (nextCursor ignored), like listTools/listResources.
+      const res = await transport.request<{ prompts?: McpPrompt[] }>("prompts/list", {});
+      return res?.prompts ?? [];
+    },
+
+    async getPrompt(name: string, args?: Record<string, unknown>): Promise<string> {
+      const res = await transport.request<GetPromptResult>("prompts/get", {
+        name,
+        ...(args !== undefined ? { arguments: args } : {}),
+      });
+      const text = flattenPromptMessages(res?.messages ?? []);
       return text.length > RESOURCE_READ_MAX_CHARS
         ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
         : text;

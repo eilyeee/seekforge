@@ -1,7 +1,14 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { createMcpClient, type McpClient } from "../../src/mcp/client.js";
-import { buildMcpToolSpecs, listMcpResources, loadMcpToolSpecs, readMcpResource } from "../../src/mcp/tools.js";
+import {
+  buildMcpToolSpecs,
+  getMcpPrompt,
+  listMcpPrompts,
+  listMcpResources,
+  loadMcpToolSpecs,
+  readMcpResource,
+} from "../../src/mcp/tools.js";
 import { createDefaultDispatcher, createDispatcher } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 import { writeFixtureServer } from "./fixture.js";
@@ -193,6 +200,57 @@ describe("mcp resources", () => {
 
   it("readMcpResource rejects an unknown server name", async () => {
     await expect(readMcpResource("nope", "mem://notes", [makeEntry("fake", false)])).rejects.toMatchObject({
+      name: "McpError",
+      code: "unknown_server",
+    });
+  });
+});
+
+describe("mcp prompts", () => {
+  it("listMcpPrompts aggregates prompts across servers, tagging each with its server", async () => {
+    const refs = await listMcpPrompts([makeEntry("a", false), makeEntry("b", true)]);
+    expect(refs).toEqual([
+      {
+        server: "a",
+        name: "greet",
+        description: "Greets someone.",
+        arguments: [{ name: "name", description: "Who to greet", required: true }],
+      },
+      { server: "a", name: "review", description: "Reviews code." },
+      {
+        server: "b",
+        name: "greet",
+        description: "Greets someone.",
+        arguments: [{ name: "name", description: "Who to greet", required: true }],
+      },
+      { server: "b", name: "review", description: "Reviews code." },
+    ]);
+  });
+
+  it("listMcpPrompts skips a failing server but keeps the others", async () => {
+    const broken = {
+      serverName: "broken",
+      client: createMcpClient({
+        name: "broken",
+        config: { command: "/nonexistent/seekforge-no-such-binary" },
+      }),
+      trusted: false,
+    };
+    clients.push(broken.client);
+    const refs = await listMcpPrompts([broken, makeEntry("fake", false)]);
+    expect(refs.map((r) => r.name)).toEqual(["greet", "review"]);
+    expect(refs.every((r) => r.server === "fake")).toBe(true);
+  });
+
+  it("getMcpPrompt renders the prompt messages to a string", async () => {
+    const entries = [makeEntry("fake", false)];
+    expect(await getMcpPrompt("fake", "greet", { name: "Ada" }, entries)).toBe(
+      "system: Be friendly.\n\nuser: Hello Ada",
+    );
+  });
+
+  it("getMcpPrompt rejects an unknown server name", async () => {
+    await expect(getMcpPrompt("nope", "greet", {}, [makeEntry("fake", false)])).rejects.toMatchObject({
       name: "McpError",
       code: "unknown_server",
     });
