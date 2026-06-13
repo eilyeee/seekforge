@@ -122,6 +122,79 @@ export function imageMarker(text: string, path: string): string {
   return `[image #${max + 1}: ${path}]`;
 }
 
+// ---------------------------------------------------------------------------
+// Image-marker rendering (chat bubbles + composer chips). Pure helpers so the
+// detection logic is unit-testable without the DOM.
+
+/** Extensions we treat as renderable image thumbnails. */
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+
+/** True when a workspace-relative path looks like an image. */
+export function isImagePath(path: string): boolean {
+  return IMAGE_EXT_RE.test(path.trim());
+}
+
+/** One image marker found in chat/composer text. */
+export type ImageMarker = { n: number; path: string };
+
+/**
+ * A text segment for marker-aware rendering: either a literal text run or an
+ * image marker. The concatenation of `text`/`raw` reproduces the input exactly.
+ */
+export type ImageSegment =
+  | { kind: "text"; text: string }
+  | { kind: "image"; marker: ImageMarker; raw: string };
+
+/**
+ * Splits text into literal runs and `[image #N: path]` markers, in order. Used
+ * to render inline image thumbnails while preserving surrounding prose. A
+ * marker whose path is not an image is left as a literal text run.
+ */
+export function splitImageMarkers(text: string): ImageSegment[] {
+  const segments: ImageSegment[] = [];
+  const re = new RegExp(IMAGE_MARKER_RE.source, "g");
+  let last = 0;
+  let m: RegExpExecArray | null;
+  const pushText = (t: string) => {
+    if (t === "") return;
+    const prev = segments[segments.length - 1];
+    if (prev && prev.kind === "text") prev.text += t;
+    else segments.push({ kind: "text", text: t });
+  };
+  while ((m = re.exec(text)) !== null) {
+    const raw = m[0];
+    const path = raw.slice(raw.indexOf(": ") + 2, -1);
+    pushText(text.slice(last, m.index));
+    if (isImagePath(path)) {
+      segments.push({ kind: "image", marker: { n: Number(m[1]), path }, raw });
+    } else {
+      pushText(raw);
+    }
+    last = m.index + raw.length;
+  }
+  pushText(text.slice(last));
+  return segments;
+}
+
+/** Extracts just the image markers from text, in order (drops non-images). */
+export function listImageMarkers(text: string): ImageMarker[] {
+  return splitImageMarkers(text)
+    .filter((s): s is Extract<ImageSegment, { kind: "image" }> => s.kind === "image")
+    .map((s) => s.marker);
+}
+
+/** Removes a specific `[image #N: path]` marker from text (trims stray space). */
+export function removeImageMarker(text: string, marker: ImageMarker): string {
+  const raw = `[image #${marker.n}: ${marker.path}]`;
+  const idx = text.indexOf(raw);
+  if (idx === -1) return text;
+  const before = text.slice(0, idx);
+  const after = text.slice(idx + raw.length);
+  // Collapse a doubled space left where the marker was, then trim a leading/
+  // trailing space introduced at the seam.
+  return (before + after).replace(/ {2,}/g, " ").replace(/^ | $/g, "");
+}
+
 /** Inserts the marker at the selection, padding with spaces where needed. */
 export function insertImageMarker(
   text: string,

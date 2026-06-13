@@ -1,9 +1,54 @@
 import { useState } from "react";
 import type { ChatItem } from "../../lib/events";
+import { isImagePath, splitImageMarkers } from "../../lib/composer";
 import { formatTokens, formatUsd } from "../../lib/usage";
 import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
+
+/**
+ * A small chip standing in for an `[image #N: path]` marker. There is no
+ * raw-file serve endpoint yet (the server only serves SPA assets + the JSON
+ * API), so we render a styled image chip rather than an <img>; once a raw
+ * upload-bytes route exists this becomes a <img> thumbnail (see follow-up).
+ */
+function ImageChip({ n, path }: { n: number; path: string }) {
+  const name = path.split("/").pop() || path;
+  return (
+    <span
+      title={path}
+      className="mx-0.5 inline-flex max-w-[16rem] items-center gap-1 rounded-md border border-subtle bg-surface-raised px-1.5 py-0.5 align-middle font-mono text-xs text-secondary"
+    >
+      <span aria-hidden className="text-tertiary">
+        🖼
+      </span>
+      <span className="truncate">
+        #{n} {name}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Renders text that may contain `[image #N: path]` markers, turning image
+ * markers into chips and leaving the rest as plain text. Whitespace is
+ * preserved by the caller's `whitespace-pre-wrap`.
+ */
+function TextWithImages({ text }: { text: string }) {
+  const segments = splitImageMarkers(text);
+  if (segments.every((s) => s.kind === "text")) return <>{text}</>;
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.kind === "image" ? (
+          <ImageChip key={i} n={seg.marker.n} path={seg.marker.path} />
+        ) : (
+          <span key={i}>{seg.text}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 /**
  * Streamed chain-of-thought: a dim block, expanded while streaming and
@@ -48,7 +93,7 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
             </button>
           )}
           <div className="max-w-[85%] whitespace-pre-wrap rounded-lg border border-emerald-900/60 bg-emerald-950/40 px-3 py-2 text-zinc-100">
-            {item.text}
+            <TextWithImages text={item.text} />
           </div>
         </div>
       );
@@ -72,13 +117,15 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
           <span className="ml-2 font-mono text-zinc-500">{item.steps.join(" · ")}</span>
         </div>
       );
-    case "file":
+    case "file": {
+      const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
       return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-sky-900 bg-sky-950/40 px-2.5 py-0.5 font-mono text-xs text-sky-300">
-          <span>±</span>
+          <span aria-hidden>{isImage ? "🖼" : "±"}</span>
           <span>{item.path}</span>
         </div>
       );
+    }
     case "compacted":
       return (
         <div className="rounded border border-dashed border-zinc-700 px-3 py-1.5 text-center text-xs text-zinc-500">
