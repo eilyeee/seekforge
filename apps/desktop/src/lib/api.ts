@@ -1,7 +1,6 @@
 /** REST client per SERVER-API.md; attaches Authorization: Bearer <token>. */
 import type { ChatMessage } from "@seekforge/shared";
 import { isMock } from "../mock";
-import { mockRequest } from "../mock/api";
 import type {
   AccountBalance,
   AgentInfo,
@@ -80,6 +79,8 @@ export class ApiError extends Error {
 async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
   if (isMock()) {
     try {
+      // Loaded lazily so the dev-only mock + fixtures stay out of the prod bundle.
+      const { mockRequest } = await import("../mock/api");
       return (await mockRequest(method, path, body)) as T;
     } catch (e) {
       // mock errors carry {code, status} props; normalize to ApiError so

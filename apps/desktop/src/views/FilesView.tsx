@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
-import { CodeEditor, type CodeEditorHandle } from "../components/CodeEditor";
+import type { CodeEditorHandle } from "../components/CodeEditor";
+// CodeMirror + its 16 language packages are heavy and only needed here, so the
+// editor is a lazily-loaded chunk (kept out of the initial bundle).
+const CodeEditor = lazy(() => import("../components/CodeEditor").then((m) => ({ default: m.CodeEditor })));
 import { Modal } from "../components/ui/Modal";
 import { fuzzyRank } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
@@ -694,21 +697,25 @@ function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | nul
         ) : file === null ? (
           <p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>
         ) : editing ? (
-          <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} wrap={wrap} />
+          <Suspense fallback={<p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>}>
+            <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} wrap={wrap} />
+          </Suspense>
         ) : showRenderedMarkdown ? (
           <div className="px-4 py-3 text-sm leading-relaxed text-secondary">
             <Markdown source={file.content} />
           </div>
         ) : (
-          <CodeEditor
-            ref={editorRef}
-            path={path}
-            value={file.content}
-            onChange={() => {}}
-            readOnly
-            wrap={wrap}
-            reveal={reveal ?? undefined}
-          />
+          <Suspense fallback={<p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>}>
+            <CodeEditor
+              ref={editorRef}
+              path={path}
+              value={file.content}
+              onChange={() => {}}
+              readOnly
+              wrap={wrap}
+              reveal={reveal ?? undefined}
+            />
+          </Suspense>
         )}
       </div>
     </div>
