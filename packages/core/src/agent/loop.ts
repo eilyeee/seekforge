@@ -43,6 +43,7 @@ import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompac
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
@@ -285,6 +286,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         return e;
       };
 
+      // Surface a hook's JSON `systemMessage` to the user as a notice — for
+      // non-blocking outcomes (a blocking hook's systemMessage is the block
+      // reason instead). Used at the loop-level hook stages below.
+      function* surfaceHookNotices(outcomes: HookOutcome[]): Generator<AgentEvent> {
+        for (const o of outcomes) {
+          if (o.ok && o.systemMessage) yield emit({ type: "notice", level: "info", message: o.systemMessage });
+        }
+      }
+
       yield emit({ type: "session.created", sessionId });
 
       // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
@@ -330,20 +340,24 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       let task = input.task;
       let promptBlocked: HookOutcome | undefined;
       if (depth === 0) {
-        await runHooks("sessionStart", deps.hooks?.sessionStart, {
+        const startOutcomes = await runHooks("sessionStart", deps.hooks?.sessionStart, {
           sessionId,
           workspace: input.projectPath,
           task: input.task,
           mode: input.mode,
           resuming,
         });
+        yield* surfaceHookNotices(startOutcomes);
         const promptOutcomes = await runHooks("userPromptSubmit", deps.hooks?.userPromptSubmit, {
           sessionId,
           workspace: input.projectPath,
           task: input.task,
         });
         promptBlocked = promptOutcomes.find((o) => !o.ok);
-        if (!promptBlocked) task = input.task + buildHookContext(promptOutcomes);
+        if (!promptBlocked) {
+          task = input.task + buildHookContext(promptOutcomes);
+          yield* surfaceHookNotices(promptOutcomes);
+        }
       }
 
       // This run's 0-based user-turn index: how many role:"user" messages the
@@ -371,6 +385,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   projectRules: collectProjectRules(input.projectPath, undefined, input.task),
                   memoryBrief: memoryFor(input.task),
                   subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+                  commandRoster:
+                    depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
                 }),
                 input.appendSystemPrompt,
               ),
@@ -414,6 +430,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             memoryBrief,
             skillBrief: buildSkillBrief(skillSelections),
             subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
+            commandRoster:
+              depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
           }),
           input.appendSystemPrompt,
         );
@@ -910,11 +928,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 : null) ?? compactMessages(messages, budgetTokens);
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.
-              await runHooks("preCompact", deps.hooks?.preCompact, {
-                sessionId,
-                workspace: input.projectPath,
-                reason: "auto",
-              });
+              yield* surfaceHookNotices(
+                await runHooks("preCompact", deps.hooks?.preCompact, {
+                  sessionId,
+                  workspace: input.projectPath,
+                  reason: "auto",
+                }),
+              );
               messages = compacted.messages;
               yield emit({
                 type: "context.compacted",

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadConfig } from "../config.js";
+import { availableProfiles, loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 
 const ALLOWED_KEYS = [
@@ -38,6 +38,10 @@ export function configShowCommand(): void {
       2,
     ),
   );
+  const profiles = availableProfiles(process.cwd());
+  if (profiles.length > 0) {
+    console.log(`\nProfiles (use --profile <name>): ${profiles.join(", ")}`);
+  }
 }
 
 export function configSetCommand(key: string, value: string, opts: { global?: boolean }): void {

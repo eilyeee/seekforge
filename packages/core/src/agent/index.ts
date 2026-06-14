@@ -47,6 +47,7 @@ export {
   commandTakesArguments,
   commandHasShellInjection,
   expandShellInjections,
+  buildCommandRoster,
   COMMAND_ARGUMENTS_PLACEHOLDER,
   type UserCommand,
 } from "./commands.js";

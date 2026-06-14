@@ -15,6 +15,8 @@ export type LoopOptions = {
   yes?: boolean;
   /** Override model. */
   model?: string;
+  /** Named config profile to overlay (CLI --profile / SEEKFORGE_PROFILE). */
+  profile?: string;
 };
 
 const TAIL_LINES = 6;
@@ -65,7 +67,7 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
   const projectPath = process.cwd();
   let config: ReturnType<typeof loadConfig>;
   try {
-    config = loadConfig(projectPath);
+    config = loadConfig(projectPath, undefined, opts.profile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;

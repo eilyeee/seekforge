@@ -29,6 +29,11 @@
  *   `{"decision": "allow"}` explicitly allows and SKIPS the remaining
  *   preToolUse hooks. Any other stdout (including malformed JSON) is ignored
  *   and the exit-code behavior above applies unchanged.
+ * - preToolUse JSON stdout (exit 0) may also carry `continue: false` (blocks
+ *   the call, like a deny, using `systemMessage` as the reason) and
+ *   `updatedInput` (object, top-level or under hookSpecificOutput) — replacement
+ *   tool arguments the dispatcher applies after re-validating the schema.
+ *   `systemMessage` and `continue` are parsed for all stages onto the outcome.
  * - userPromptSubmit stdout (trimmed, non-empty, exit 0) is context for the
  *   model: the loop appends each hook's stdout to the task as
  *   `\n\n<hook-context>\n…\n</hook-context>` (see buildHookContext), capped
@@ -135,6 +140,19 @@ export type HookOutcome = {
    * "ask" means the hook explicitly defers to the normal permission flow.
    */
   decision?: "allow" | "deny" | "ask";
+  /**
+   * JSON stdout `continue: false` — the hook asks to stop. On a blocking stage
+   * (preToolUse) this blocks the call, using systemMessage as the reason.
+   */
+  continue?: boolean;
+  /** JSON stdout `systemMessage` — surfaced text; the block reason when blocking. */
+  systemMessage?: string;
+  /**
+   * preToolUse only: JSON stdout `updatedInput` (top-level or under
+   * hookSpecificOutput) — replacement tool arguments. Applied by the dispatcher
+   * before the tool runs, after re-validating against the tool's schema.
+   */
+  updatedInput?: Record<string, unknown>;
   timedOut: boolean;
 };
 
@@ -300,6 +318,36 @@ function parseToolDecision(stdout: string): { decision: "allow" | "deny" | "ask"
 }
 
 /**
+ * Parses the extra JSON-stdout fields shared across stages: `continue`
+ * (boolean) and `systemMessage` (string) at the top level, plus `updatedInput`
+ * (object — preToolUse only) at the top level or under hookSpecificOutput.
+ * Returns an object with only the fields that were present and well-typed;
+ * malformed JSON / wrong types are ignored.
+ */
+function parseHookExtras(stdout: string): {
+  continue?: boolean;
+  systemMessage?: string;
+  updatedInput?: Record<string, unknown>;
+} {
+  const obj = parseJsonObject(stdout);
+  if (!obj) return {};
+  const specific =
+    obj["hookSpecificOutput"] && typeof obj["hookSpecificOutput"] === "object"
+      ? (obj["hookSpecificOutput"] as Record<string, unknown>)
+      : undefined;
+
+  const out: { continue?: boolean; systemMessage?: string; updatedInput?: Record<string, unknown> } = {};
+  if (typeof obj["continue"] === "boolean") out.continue = obj["continue"];
+  if (typeof obj["systemMessage"] === "string") out.systemMessage = obj["systemMessage"];
+
+  const updated = specific?.["updatedInput"] ?? obj["updatedInput"];
+  if (updated !== null && typeof updated === "object" && !Array.isArray(updated)) {
+    out.updatedInput = updated as Record<string, unknown>;
+  }
+  return out;
+}
+
+/**
  * The context text a userPromptSubmit / sessionStart hook contributes. Prefers
  * an explicit JSON `additionalContext` (top-level or under hookSpecificOutput),
  * matching Claude Code; otherwise the hook's raw stdout is used verbatim.
@@ -367,7 +415,20 @@ export async function runHooks(
 
   for (const entry of hooks) {
     if (!hookApplies(entry, payload)) continue;
-    const outcome = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
+    const ran = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
+
+    // Extra JSON fields (continue / systemMessage / updatedInput) ride along on
+    // every outcome from a clean exit, regardless of stage; consumers pick what
+    // their stage supports. updatedInput is only meaningful for preToolUse.
+    const extras = ran.ok ? parseHookExtras(ran.stdout) : {};
+    const outcome: HookOutcome = {
+      ...ran,
+      ...(extras.continue !== undefined ? { continue: extras.continue } : {}),
+      ...(extras.systemMessage !== undefined ? { systemMessage: extras.systemMessage } : {}),
+      ...(stage === "preToolUse" && extras.updatedInput !== undefined
+        ? { updatedInput: extras.updatedInput }
+        : {}),
+    };
 
     // preToolUse JSON stdout decisions (exit 0 only): deny blocks with the
     // given reason; allow short-circuits the remaining preToolUse hooks.
@@ -387,11 +448,39 @@ export async function runHooks(
         outcomes.push({ ...outcome, decision: "allow" });
         break; // explicit allow: skip the remaining preToolUse hooks
       }
+      // `continue: false` (without an explicit deny) blocks the call too, using
+      // systemMessage as the reason. Checked before "ask"/plain exit so a hook
+      // can stop the run via the documented field.
+      if (outcome.continue === false) {
+        outcomes.push({
+          ...outcome,
+          ok: false,
+          outputTail: (outcome.systemMessage ?? "stopped by preToolUse hook (continue: false)").slice(
+            0,
+            HOOK_OUTPUT_TAIL_CHARS,
+          ),
+        });
+        break; // blocks the tool; later hooks are moot
+      }
       if (d?.decision === "ask") {
         // Explicit deferral to the normal permission flow: record it, keep going.
         outcomes.push({ ...outcome, decision: "ask" });
         continue;
       }
+    }
+
+    // `continue: false` also blocks the other blocking stage (userPromptSubmit);
+    // preToolUse is handled in its branch above. systemMessage is the reason.
+    if (stage !== "preToolUse" && BLOCKING_STAGES.has(stage) && outcome.ok && outcome.continue === false) {
+      outcomes.push({
+        ...outcome,
+        ok: false,
+        outputTail: (outcome.systemMessage ?? `stopped by ${stage} hook (continue: false)`).slice(
+          0,
+          HOOK_OUTPUT_TAIL_CHARS,
+        ),
+      });
+      break;
     }
 
     outcomes.push(outcome);

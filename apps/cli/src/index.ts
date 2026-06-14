@@ -91,11 +91,40 @@ const machineMode = argvWantsMachineFormat(process.argv);
 // Resolve the process-wide color default once: TTY + !NO_COLOR + !machine mode.
 setColorEnabled(useColor({ machine: machineMode }));
 
-// Resolve the CLI chrome locale once at startup: config.locale > env > en.
-setLocale(loadConfig(process.cwd()).locale ?? detectLocale());
+// Scan argv for a global `--profile <name>` before commander parses, so the
+// startup config read below (and the commands that loadConfig() without
+// threading a profile) honor it. Mirrored into SEEKFORGE_PROFILE so loadConfig's
+// env fallback covers every call site; an explicitly-set env still wins if no
+// flag is given. The flag is also declared on the program/commands so it shows
+// in --help and is accepted positionally.
+function argvProfile(argv: string[]): string | undefined {
+  const i = argv.indexOf("--profile");
+  const next = i !== -1 ? argv[i + 1] : undefined;
+  if (next !== undefined && !next.startsWith("-")) return next;
+  const eq = argv.find((a) => a.startsWith("--profile="));
+  return eq ? eq.slice("--profile=".length) : undefined;
+}
+const cliProfile = argvProfile(process.argv);
+if (cliProfile !== undefined) process.env["SEEKFORGE_PROFILE"] = cliProfile;
+
+// Resolve the CLI chrome locale once at startup: config.locale > env > en. An
+// unknown --profile would throw here; swallow it so the locale read never
+// crashes startup — the real command will surface the error via fail().
+setLocale(
+  (() => {
+    try {
+      return loadConfig(process.cwd()).locale;
+    } catch {
+      return undefined;
+    }
+  })() ?? detectLocale(),
+);
 
 /** commander collector for repeatable options (e.g. --add-dir). */
 const collect = (val: string, prev: string[]): string[] => [...prev, val];
+
+/** The global `--profile <name>` value (parsed onto the root program), if any. */
+const rootProfile = (): string | undefined => program.opts<{ profile?: string }>().profile;
 
 /** Parse a positive-integer option string; throws InvalidArgumentError on bad input. */
 function parsePositiveInt(val: string): number {
@@ -126,6 +155,8 @@ program
   .description("A local-first coding agent powered by DeepSeek.")
   // Required for `mcp add`'s passThroughOptions (literal command flags).
   .enablePositionalOptions()
+  // Global: select a named config profile (also: SEEKFORGE_PROFILE env).
+  .option("--profile <name>", "use a named config profile (profiles in config files; also SEEKFORGE_PROFILE env)")
   .version(version);
 
 // Top-level headless print mode: `seekforge -p "<prompt>"` (also reads piped
@@ -170,6 +201,7 @@ program
 type SharedRunOpts = {
   // commander camelCases hyphenated flags, but "--settings" is one word → `settings`.
   settings?: string;
+  profile?: string;
   yes?: boolean;
   model?: string;
   json?: boolean;
@@ -225,6 +257,7 @@ program
   )
   .option("--mcp-config <file>", "load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
   .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
+  .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
   .description("run a development task in the current project")
   .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
@@ -245,6 +278,7 @@ program
       permissionMode: opts.permissionMode,
       fallbackModel: opts.fallbackModel,
       settingsFile: opts.settings,
+      profile: opts.profile ?? rootProfile(),
       outputStyle: opts.outputStyle,
       dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
       mcpConfig: opts.mcpConfig,
@@ -261,11 +295,12 @@ program
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
   .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
   .option("-m, --model <model>", "override model")
+  .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("autonomously run → verify → continue until the verify command passes")
   .action(
     async (
       task: string,
-      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string },
+      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string; profile?: string },
     ) => {
       await loopCommand(task, {
         verify: opts.verify,
@@ -273,6 +308,7 @@ program
         budget: opts.budget,
         yes: opts.yes,
         model: opts.model,
+        profile: opts.profile ?? rootProfile(),
       });
     },
   );
@@ -298,6 +334,7 @@ program
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
+  .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("read-only Q&A about the codebase (no writes, no commands)")
   .action(async (question: string, opts: SharedRunOpts) => {
     await runTaskCommand(question, {
@@ -314,6 +351,7 @@ program
       allowedTools: opts.allowedTools,
       disallowedTools: opts.disallowedTools,
       settingsFile: opts.settings,
+      profile: opts.profile ?? rootProfile(),
       fallbackModel: opts.fallbackModel,
       outputStyle: opts.outputStyle,
     });
@@ -705,6 +743,7 @@ program
       fallbackModel?: string;
       outputStyle?: string;
       settings?: string;
+      profile?: string;
       inputFormat?: string;
       dangerouslySkipPermissions?: boolean;
       mcpConfig?: string;
@@ -732,6 +771,7 @@ program
         permissionMode: root.permissionMode,
         fallbackModel: root.fallbackModel,
         settingsFile: root.settings,
+        profile: root.profile,
         outputStyle: root.outputStyle,
         inputFormat: root.inputFormat,
         dangerouslySkipPermissions: root.dangerouslySkipPermissions,
@@ -742,7 +782,7 @@ program
       });
       return;
     }
-    await replCommand({ yes: opts.yes, model: opts.model, settingsFile: root.settings });
+    await replCommand({ yes: opts.yes, model: opts.model, settingsFile: root.settings, profile: root.profile });
   });
 
 // Non-blocking update check: fire-and-forget at start, print the notice (to

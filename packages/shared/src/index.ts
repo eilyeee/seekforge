@@ -258,6 +258,8 @@ export type AgentEvent =
   | { type: "usage.updated"; usage: TokenUsage }
   | { type: "file.changed"; path: string }
   | { type: "command.output"; stream: "stdout" | "stderr"; chunk: string }
+  /** A user-facing message from a hook (its JSON `systemMessage`); not model output. */
+  | { type: "notice"; level: "info" | "warn"; message: string }
   | { type: "session.completed"; report: FinalReport }
   | { type: "session.failed"; error: AgentError };
 

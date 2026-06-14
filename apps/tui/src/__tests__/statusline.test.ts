@@ -37,4 +37,25 @@ describe("runStatusLine", () => {
   it("returns null on timeout", () => {
     expect(runStatusLine("sleep 3; echo late", input, { timeoutMs: 100 })).toBeNull();
   });
+
+  it("exposes context as SEEKFORGE_* env vars", () => {
+    const full: StatusLineInput = {
+      model: "m",
+      cwd: "/",
+      sessionId: "s1",
+      costUsd: 0.1,
+      contextPercent: 42,
+      approval: "auto",
+      totalTokens: 1234,
+    };
+    expect(runStatusLine('printf "%s" "$SEEKFORGE_MODEL"', full)).toBe("m");
+    expect(runStatusLine('printf "%s" "$SEEKFORGE_APPROVAL"', full)).toBe("auto");
+    expect(runStatusLine('printf "%s" "$SEEKFORGE_TOTAL_TOKENS"', full)).toBe("1234");
+    expect(runStatusLine('printf "%s" "$SEEKFORGE_CONTEXT_PERCENT"', full)).toBe("42");
+  });
+
+  it("runs with the workspace as cwd", () => {
+    // /tmp is symlinked to /private/tmp on macOS, so resolve via the shell's pwd -P.
+    expect(runStatusLine("pwd", { model: "m", cwd: process.cwd(), costUsd: 0 })).toBe(process.cwd());
+  });
 });

@@ -122,25 +122,50 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
               result = fail(
                 "hook_blocked",
                 `Blocked by preToolUse hook${blockedBy.timedOut ? " (timed out)" : ""}: ` +
-                  (blockedBy.outputTail || `exit ${blockedBy.exitCode}`),
+                  (blockedBy.systemMessage || blockedBy.outputTail || `exit ${blockedBy.exitCode}`),
               );
             } else {
-              try {
-                const out = await tool.run(parsed.data as never, ctx);
-                result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
-              } catch (err) {
-                if (err instanceof ToolError) {
-                  result = fail(err.code, err.message, err.detail);
-                } else {
-                  result = fail("internal_error", err instanceof Error ? err.message : String(err));
+              // A non-denying preToolUse hook may rewrite the tool's arguments
+              // via updatedInput. Re-validate against the schema first; on any
+              // validation failure keep the original args rather than crash.
+              let runArgs: unknown = parsed.data;
+              let updatedDenied: ToolResult | undefined;
+              const updated = preOutcomes.find((o) => o.updatedInput !== undefined)?.updatedInput;
+              if (updated !== undefined) {
+                const reparsed = tool.schema.safeParse(updated);
+                if (reparsed.success) {
+                  runArgs = reparsed.data;
+                  // The rewritten args can change the path/command, so re-classify
+                  // and re-enforce permission — a hook must not be able to smuggle
+                  // a denylisted/forbidden call past the gate via updatedInput.
+                  const reClassified = tool.classify(reparsed.data as never, ctx);
+                  const reCheck = await enforcePermission(call.name, reClassified, ctx);
+                  if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
+                  else ctx.selectedHunks = reCheck.selectedHunks;
                 }
               }
-              // postToolUse is advisory: failures log to stderr, never block.
-              // The payload carries ok/errorCode only, never raw tool output.
-              await runHooks("postToolUse", ctx.hooks?.postToolUse, {
-                ...hookPayload,
-                result: { ok: result.ok, errorCode: result.error?.code ?? null },
-              });
+              if (updatedDenied) {
+                result = updatedDenied;
+              } else {
+                try {
+                  const out = await tool.run(runArgs as never, ctx);
+                  result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
+                } catch (err) {
+                  if (err instanceof ToolError) {
+                    result = fail(err.code, err.message, err.detail);
+                  } else {
+                    result = fail("internal_error", err instanceof Error ? err.message : String(err));
+                  }
+                }
+                // postToolUse is advisory: failures log to stderr, never block.
+                // It sees the args actually run (post-updatedInput); the payload
+                // carries ok/errorCode only, never raw tool output.
+                await runHooks("postToolUse", ctx.hooks?.postToolUse, {
+                  ...hookPayload,
+                  args: runArgs,
+                  result: { ok: result.ok, errorCode: result.error?.code ?? null },
+                });
+              }
             }
             // Clear per-hunk selection so it never leaks to the next call.
             delete ctx.selectedHunks;

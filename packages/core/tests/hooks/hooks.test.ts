@@ -197,6 +197,32 @@ describe("runHooks", () => {
     expect(existsSync(join(workspace, "should-not-exist-prompt"))).toBe(false);
   });
 
+  it("userPromptSubmit continue:false blocks (exit 0) with systemMessage as the reason", async () => {
+    const outcomes = await runHooks(
+      "userPromptSubmit",
+      [
+        { command: `echo '{"continue":false,"systemMessage":"stop here"}'` },
+        { command: "touch should-not-exist-cf" },
+      ],
+      payload({ task: "do it" }),
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.outputTail).toContain("stop here");
+    expect(existsSync(join(workspace, "should-not-exist-cf"))).toBe(false);
+  });
+
+  it("a non-blocking stage with continue:false does NOT block (advisory only)", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: `echo '{"continue":false}'` }, { command: "touch post-still-ran" }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((o) => o.ok)).toBe(true);
+    expect(existsSync(join(workspace, "post-still-ran"))).toBe(true);
+  });
+
   it("new advisory stages never block: failures are logged, later hooks run", async () => {
     const errors: string[] = [];
     const outcomes = await runHooks(
@@ -332,6 +358,66 @@ describe("runHooks", () => {
     expect(outcomes[0]!.ok).toBe(true);
     expect(outcomes[0]!.decision).toBe("ask");
     expect(existsSync(join(workspace, "ask-fell-through"))).toBe(true);
+  });
+
+  it("parses systemMessage and continue onto the outcome (any stage, exit 0)", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: `echo '{"continue":false,"systemMessage":"stopping now"}'` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes[0]!.continue).toBe(false);
+    expect(outcomes[0]!.systemMessage).toBe("stopping now");
+  });
+
+  it('preToolUse "continue":false blocks with systemMessage as the reason', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [
+        { command: `echo '{"continue":false,"systemMessage":"halt: policy"}'` },
+        { command: "touch continue-should-skip" },
+      ],
+      payload({ toolName: "run_command", command: "rm -rf /" }),
+    );
+    expect(outcomes).toHaveLength(1); // later hooks skipped
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.outputTail).toBe("halt: policy");
+    expect(existsSync(join(workspace, "continue-should-skip"))).toBe(false);
+  });
+
+  it('preToolUse "continue":false without systemMessage blocks with a default reason', async () => {
+    const outcomes = await runHooks(
+      "preToolUse",
+      [{ command: `echo '{"continue":false}'` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.outputTail).toContain("continue: false");
+  });
+
+  it("parses preToolUse updatedInput (top-level and hookSpecificOutput)", async () => {
+    const top = await runHooks(
+      "preToolUse",
+      [{ command: `echo '{"updatedInput":{"path":"safe.ts"}}'` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(top[0]!.updatedInput).toEqual({ path: "safe.ts" });
+
+    const nested = await runHooks(
+      "preToolUse",
+      [{ command: `echo '{"hookSpecificOutput":{"updatedInput":{"path":"nested.ts"}}}'` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(nested[0]!.updatedInput).toEqual({ path: "nested.ts" });
+  });
+
+  it("does not attach updatedInput on non-preToolUse stages", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: `echo '{"updatedInput":{"path":"x"}}'` }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes[0]!.updatedInput).toBeUndefined();
   });
 
   it("sessionEnd entries run without a toolName and receive the status", async () => {

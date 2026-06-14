@@ -76,13 +76,13 @@ function makeAskUser(rl: Interface): (q: { question: string; options: string[] }
   };
 }
 
-export async function replCommand(opts: { model?: string; yes?: boolean; settingsFile?: string }): Promise<void> {
+export async function replCommand(opts: { model?: string; yes?: boolean; settingsFile?: string; profile?: string }): Promise<void> {
   const projectPath = process.cwd();
   // Custom slash commands from .seekforge/commands/*.md (project + user).
   const userCommands = loadUserCommands(projectPath);
   let config: ReturnType<typeof loadConfig>;
   try {
-    config = loadConfig(projectPath, opts.settingsFile);
+    config = loadConfig(projectPath, opts.settingsFile, opts.profile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;

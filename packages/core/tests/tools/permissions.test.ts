@@ -533,6 +533,7 @@ describe("dispatcher basics", () => {
       "ask_user",
       "image_analyze",
       "search_memory",
+      "run_user_command",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     expect(readFileDef?.parameters).toMatchObject({

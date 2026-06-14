@@ -55,6 +55,14 @@ export type CliConfig = {
    * Edit the file directly; not settable via `config set`.
    */
   memoryAutoApproveConfidence?: number;
+  /**
+   * Named config overlays selectable via `--profile <name>` (or the
+   * SEEKFORGE_PROFILE env var). Each profile is a partial CliConfig whose fields
+   * override the merged base (see loadConfig for exact precedence). The
+   * `profiles` map itself is stripped from the value returned by loadConfig.
+   * Edit the file directly; not settable via `config set`.
+   */
+  profiles?: Record<string, Partial<CliConfig>>;
 };
 
 function readJson(path: string): CliConfig {
@@ -63,6 +71,19 @@ function readJson(path: string): CliConfig {
   } catch {
     return {};
   }
+}
+
+/** Profile names defined across the global/project/local config layers, sorted. */
+export function availableProfiles(projectPath: string): string[] {
+  const names = new Set<string>();
+  for (const path of [
+    join(homedir(), ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.local.json"),
+  ]) {
+    for (const name of Object.keys(readJson(path).profiles ?? {})) names.add(name);
+  }
+  return [...names].sort();
 }
 
 /**
@@ -91,36 +112,116 @@ function readSettingsFile(settingsPath: string): CliConfig {
 }
 
 /**
- * Precedence: env > CLI flags > --settings file > .seekforge/config.local.json
- *   > project .seekforge/config.json > ~/.seekforge/config.json
+ * Resolve a named profile across the file layers and return it as a single
+ * Partial<CliConfig> overlay. On a name clash the project profile wins over the
+ * global one, and the local profile wins over both — matching the precedence of
+ * the plain config layers. Deep-merge fields (mcpServers/permissionRules/hooks)
+ * are combined across layers the same way the base config layers are.
+ *
+ * Returns `undefined` when `name` is unset. Throws a descriptive (hint-carrying)
+ * error when `name` is given but no layer defines a profile of that name.
+ */
+function resolveProfile(
+  name: string | undefined,
+  layers: { global: CliConfig; project: CliConfig; local: CliConfig },
+): Partial<CliConfig> | undefined {
+  if (!name) return undefined;
+  const { global, project, local } = layers;
+  // Order low→high precedence; later entries override earlier on scalars.
+  const sources = [global.profiles?.[name], project.profiles?.[name], local.profiles?.[name]];
+  const present = sources.filter((p): p is Partial<CliConfig> => p !== undefined);
+  if (present.length === 0) {
+    const names = Array.from(
+      new Set([
+        ...Object.keys(global.profiles ?? {}),
+        ...Object.keys(project.profiles ?? {}),
+        ...Object.keys(local.profiles ?? {}),
+      ]),
+    ).sort();
+    const list = names.length > 0 ? names.join(", ") : "(none defined)";
+    throw Object.assign(new Error(`unknown profile "${name}"`), {
+      hint: `available profiles: ${list}`,
+    });
+  }
+
+  const mcpServers: Record<string, McpServerConfig> = {};
+  const permissionRules: PermissionRule[] = [];
+  const hooks: HookConfig = {};
+  const stages = [
+    "preToolUse",
+    "postToolUse",
+    "sessionStart",
+    "userPromptSubmit",
+    "preCompact",
+    "stop",
+    "subagentStop",
+    "notification",
+    "sessionEnd",
+  ] as const;
+  let merged: Partial<CliConfig> = {};
+  for (const src of present) {
+    Object.assign(mcpServers, src.mcpServers);
+    // higher-precedence sources prepend so their rules win first-match.
+    permissionRules.unshift(...(src.permissionRules ?? []));
+    for (const stage of stages) {
+      const existing = hooks[stage] ?? [];
+      if (src.hooks?.[stage]) hooks[stage] = [...existing, ...src.hooks[stage]];
+    }
+    merged = { ...merged, ...src };
+  }
+  // `profiles` must not nest inside a profile overlay.
+  delete merged.profiles;
+  return {
+    ...merged,
+    ...(permissionRules.length > 0 ? { permissionRules } : {}),
+    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
+  };
+}
+
+/**
+ * Precedence: env > CLI flags > --settings file > selected --profile overlay
+ *   > .seekforge/config.local.json > project .seekforge/config.json
+ *   > ~/.seekforge/config.json
  *
  * config.local.json is the gitignored personal layer (per-developer overrides);
  * it slots just above the shared project config. The --settings layer sits
- * above it. For deep-merge fields (mcpServers, permissionRules, hooks), each
- * layer is merged into the existing logic rather than replacing wholesale.
+ * above it. A selected profile (--profile <name> or SEEKFORGE_PROFILE) slots
+ * just below --settings and above config.local — its fields override the merged
+ * base. The profile is looked up across the file layers (project winning over
+ * global on a name clash, local over both), same as the other merges. For
+ * deep-merge fields (mcpServers, permissionRules, hooks), each layer — including
+ * the profile — is merged into the existing logic rather than replacing
+ * wholesale. The `profiles` map itself is stripped from the returned config.
  */
-export function loadConfig(projectPath: string, settingsPath?: string): CliConfig {
+export function loadConfig(projectPath: string, settingsPath?: string, profile?: string): CliConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
   const local = readJson(join(projectPath, ".seekforge", "config.local.json"));
   const settings = settingsPath ? readSettingsFile(settingsPath) : {};
 
-  // mcpServers merges per server name (later wins): settings > local > project > global.
+  const profileName = profile ?? process.env["SEEKFORGE_PROFILE"] ?? undefined;
+  const prof = resolveProfile(profileName, { global, project, local }) ?? {};
+
+  // mcpServers merges per server name (later wins):
+  //   settings > profile > local > project > global.
   const mcpServers = {
     ...global.mcpServers,
     ...project.mcpServers,
     ...local.mcpServers,
+    ...prof.mcpServers,
     ...settings.mcpServers,
   };
-  // permissionRules concatenates settings-then-local-then-project-then-global:
+  // permissionRules concatenates settings-then-profile-then-local-then-project-then-global:
   // first match wins, so settings rules take highest precedence among file layers.
   const permissionRules = [
     ...(settings.permissionRules ?? []),
+    ...(prof.permissionRules ?? []),
     ...(local.permissionRules ?? []),
     ...(project.permissionRules ?? []),
     ...(global.permissionRules ?? []),
   ];
-  // hooks concatenate per stage: global, then project, then local, then settings.
+  // hooks concatenate per stage: global, then project, then local, then profile, then settings.
   const hooks: HookConfig = {};
   for (const stage of [
     "preToolUse",
@@ -137,14 +238,16 @@ export function loadConfig(projectPath: string, settingsPath?: string): CliConfi
       ...(global.hooks?.[stage] ?? []),
       ...(project.hooks?.[stage] ?? []),
       ...(local.hooks?.[stage] ?? []),
+      ...(prof.hooks?.[stage] ?? []),
       ...(settings.hooks?.[stage] ?? []),
     ];
     if (merged.length > 0) hooks[stage] = merged;
   }
-  return {
+  const result: CliConfig = {
     ...global,
     ...project,
     ...local,
+    ...prof,
     ...settings,
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -152,4 +255,7 @@ export function loadConfig(projectPath: string, settingsPath?: string): CliConfi
     ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
+  // `profiles` is a selection mechanism, not effective config — never leak it.
+  delete result.profiles;
+  return result;
 }

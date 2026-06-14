@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildCommandRoster,
   commandHasShellInjection,
   commandTakesArguments,
   expandShellInjections,
@@ -104,6 +105,18 @@ describe("loadUserCommands", () => {
     expect(cmd.body).toBe("Fix $ARGUMENTS and re-run.");
   });
 
+  it("parses disable-model-invocation: true and omits it otherwise", () => {
+    writeCmd(
+      workspace,
+      "private.md",
+      ["---", "disable-model-invocation: true", "---", "secret workflow"].join("\n"),
+    );
+    writeCmd(workspace, "open.md", ["---", "description: open", "---", "do it"].join("\n"));
+    const cmds = loadUserCommands(workspace);
+    expect(cmds.find((c) => c.name === "private")?.disableModelInvocation).toBe(true);
+    expect(cmds.find((c) => c.name === "open")?.disableModelInvocation).toBeUndefined();
+  });
+
   it("falls back to the first body line for description when frontmatter omits it", () => {
     writeCmd(workspace, "m.md", ["---", "model: deepseek-v4-pro", "---", "Do the thing"].join("\n"));
     const cmd = loadUserCommands(workspace)[0]!;
@@ -126,6 +139,24 @@ describe("loadUserCommands", () => {
     writeCmd(workspace, "top.md", "Top-level");
     const names = loadUserCommands(workspace).map((c) => c.name).sort();
     expect(names).toEqual(["frontend:build", "top"]);
+  });
+});
+
+describe("buildCommandRoster", () => {
+  it("lists invocable commands (name + description), excluding disabled ones", () => {
+    const roster = buildCommandRoster([
+      { name: "review", description: "Review the diff", scope: "project", body: "x" },
+      { name: "secret", description: "hidden", scope: "project", body: "y", disableModelInvocation: true },
+      { name: "ship", description: "", scope: "user", body: "z" },
+    ]);
+    expect(roster).toBe("- review — Review the diff\n- ship");
+  });
+
+  it("returns '' when nothing is invocable", () => {
+    expect(buildCommandRoster([])).toBe("");
+    expect(
+      buildCommandRoster([{ name: "x", description: "", scope: "project", body: "b", disableModelInvocation: true }]),
+    ).toBe("");
   });
 });
 

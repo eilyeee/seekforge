@@ -91,6 +91,71 @@ describe("dispatcher hook integration", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("preToolUse updatedInput replaces the tool args when it re-validates", async () => {
+    writeFileSync(join(workspace, "b.txt"), "replaced content\n");
+    const ctx = makeCtx(workspace, {
+      hooks: {
+        preToolUse: [
+          { match: "read_file", command: `echo '{"updatedInput":{"path":"b.txt"}}'` },
+        ],
+      },
+    });
+    const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
+    expect(result.ok).toBe(true);
+    // The hook redirected the read from a.txt to b.txt.
+    expect((result.data as { content: string }).content).toContain("replaced content");
+  });
+
+  it("preToolUse updatedInput is re-permission-checked: a denied rewrite blocks the call", async () => {
+    // Original write to ok.txt is confirmed; the hook rewrites the path to
+    // denied.txt, which the confirm callback rejects — the rewrite must be
+    // re-checked, so neither file is written.
+    const ctx = makeCtx(workspace, {
+      policy: { approvalMode: "confirm" },
+      confirm: async (req) => !(req.path ?? "").includes("denied"),
+      hooks: {
+        preToolUse: [
+          { match: "write_file", command: `echo '{"updatedInput":{"path":"denied.txt","content":"x"}}'` },
+        ],
+      },
+    });
+    const result = await dispatcher.execute(call("write_file", { path: "ok.txt", content: "x" }), ctx);
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(workspace, "denied.txt"))).toBe(false);
+    expect(existsSync(join(workspace, "ok.txt"))).toBe(false);
+  });
+
+  it("preToolUse updatedInput is ignored when it fails schema validation", async () => {
+    const ctx = makeCtx(workspace, {
+      hooks: {
+        preToolUse: [
+          // `path` must be a string; a number fails validation → original args kept.
+          { match: "read_file", command: `echo '{"updatedInput":{"path":123}}'` },
+        ],
+      },
+    });
+    const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
+    expect(result.ok).toBe(true);
+    expect((result.data as { content: string }).content).toContain("hello");
+  });
+
+  it("preToolUse continue:false blocks the tool with systemMessage as the reason", async () => {
+    const ctx = makeCtx(workspace, {
+      hooks: {
+        preToolUse: [
+          {
+            match: "read_file",
+            command: `echo '{"continue":false,"systemMessage":"stop: policy violation"}'`,
+          },
+        ],
+      },
+    });
+    const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("hook_blocked");
+    expect(result.error?.message).toContain("stop: policy violation");
+  });
+
   it("postToolUse does not fire when preToolUse blocked the tool", async () => {
     const marker = join(workspace, "post-blocked.json");
     const ctx = makeCtx(workspace, {

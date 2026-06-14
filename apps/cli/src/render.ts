@@ -103,6 +103,9 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
     case "step.started":
       console.log(c.dim(t("render.step", { title: e.title })));
       break;
+    case "notice":
+      console.log(e.level === "warn" ? c.yellow(`! ${e.message}`) : c.dim(`• ${e.message}`));
+      break;
     case "model.message":
       if (opts.streaming) {
         console.log(""); // content already streamed; close the line

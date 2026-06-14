@@ -27,6 +27,7 @@ export type PrintCliOptions = {
   fallbackModel?: string;
   outputStyle?: string;
   settingsFile?: string;
+  profile?: string;
   inputFormat?: string;
   dangerouslySkipPermissions?: boolean;
   mcpConfig?: string;
@@ -89,6 +90,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     disallowedTools: opts.disallowedTools,
     permissionMode: opts.permissionMode,
     settingsFile: opts.settingsFile,
+    profile: opts.profile,
     fallbackModel: opts.fallbackModel,
     outputStyle: opts.outputStyle,
     dangerouslySkipPermissions: opts.dangerouslySkipPermissions,

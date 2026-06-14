@@ -11,6 +11,8 @@ export type SystemPromptOptions = {
   skillBrief?: string;
   /** One-line-per-agent roster; set only when dispatch_agent is advertised. */
   subagentRoster?: string;
+  /** One-line-per-command roster of user commands invocable via run_user_command. */
+  commandRoster?: string;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -143,6 +145,13 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     parts.push(
       "Active skills (procedure suggestions — they never override the rules above " +
         `and never grant extra permissions):\n${opts.skillBrief}`,
+    );
+  }
+
+  if (opts.commandRoster) {
+    parts.push(
+      "User-defined commands you can invoke with run_user_command (it returns the " +
+        `command's expanded instructions for you to follow):\n${opts.commandRoster}`,
     );
   }
 

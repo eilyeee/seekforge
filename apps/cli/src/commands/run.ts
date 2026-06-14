@@ -59,6 +59,8 @@ export type RunOptions = {
   outputStyle?: string;
   /** Path to a JSON settings file (CLI --settings). */
   settingsFile?: string;
+  /** Named config profile to overlay (CLI --profile / SEEKFORGE_PROFILE). */
+  profile?: string;
   /** Input format (CLI --input-format). "stream-json" drives multi-turn from stdin. */
   inputFormat?: string;
   /** Alias for `yes` (CLI --dangerously-skip-permissions) → approvalMode auto. */
@@ -77,7 +79,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   const projectPath = process.cwd();
   let config: ReturnType<typeof loadConfig>;
   try {
-    config = loadConfig(projectPath, opts.settingsFile);
+    config = loadConfig(projectPath, opts.settingsFile, opts.profile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;

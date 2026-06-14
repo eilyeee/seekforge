@@ -242,4 +242,119 @@ test("config.local.json mcpServers merge above project", () => {
   cleanup();
 });
 
+// ── profiles ─────────────────────────────────────────────────────────────────
+
+test("a selected profile overrides base scalar values", () => {
+  const { projectPath, cleanup } = setupProject({
+    model: "deepseek-chat",
+    baseUrl: "http://base",
+    profiles: {
+      fast: { model: "deepseek-v4-flash", thinking: true },
+    },
+  });
+  // Without selecting the profile, base values stand and `profiles` is stripped.
+  const base = loadConfig(projectPath);
+  assert.equal(base.model, "deepseek-chat");
+  assert.equal(base.profiles, undefined);
+  // Selecting the profile overlays its fields on the merged base.
+  const config = loadConfig(projectPath, undefined, "fast");
+  assert.equal(config.model, "deepseek-v4-flash");
+  assert.equal(config.thinking, true);
+  // untouched base scalar survives
+  assert.equal(config.baseUrl, "http://base");
+  // `profiles` itself never leaks into the returned config
+  assert.equal(config.profiles, undefined);
+  cleanup();
+});
+
+test("profile mcpServers deep-merge with the base (adds new, keeps base servers)", () => {
+  const { projectPath, cleanup } = setupProject({
+    mcpServers: { fs: { command: "npx", args: ["-y", "fs-server"] } },
+    profiles: {
+      research: {
+        mcpServers: { stats: { command: "npx", args: ["-y", "stats-server"] } },
+      },
+    },
+  });
+  const config = loadConfig(projectPath, undefined, "research");
+  assert.ok(config.mcpServers);
+  // base server preserved
+  assert.deepEqual(config.mcpServers["fs"], { command: "npx", args: ["-y", "fs-server"] });
+  // profile server added
+  assert.deepEqual(config.mcpServers["stats"], { command: "npx", args: ["-y", "stats-server"] });
+  cleanup();
+});
+
+test("profile mcpServers win over base for the same server name", () => {
+  const { projectPath, cleanup } = setupProject({
+    mcpServers: { fs: { command: "npx", args: ["-y", "old-fs"] } },
+    profiles: {
+      research: { mcpServers: { fs: { command: "npx", args: ["-y", "new-fs"] } } },
+    },
+  });
+  const config = loadConfig(projectPath, undefined, "research");
+  assert.deepEqual(config.mcpServers?.["fs"], { command: "npx", args: ["-y", "new-fs"] });
+  cleanup();
+});
+
+test("unknown profile throws an error listing available profile names", () => {
+  const { projectPath, cleanup } = setupProject({
+    profiles: { fast: { model: "deepseek-v4-flash" }, slow: { model: "deepseek-v4-pro" } },
+  });
+  assert.throws(
+    () => loadConfig(projectPath, undefined, "nope"),
+    (err: unknown) => {
+      const e = err as Error & { hint?: string };
+      return (
+        typeof e.message === "string" &&
+        e.message.includes('unknown profile "nope"') &&
+        typeof e.hint === "string" &&
+        e.hint.includes("fast") &&
+        e.hint.includes("slow")
+      );
+    },
+  );
+  cleanup();
+});
+
+test("SEEKFORGE_PROFILE env selects a profile when no explicit arg is given", () => {
+  const { projectPath, cleanup } = setupProject({
+    model: "deepseek-chat",
+    profiles: { fast: { model: "deepseek-v4-flash" } },
+  });
+  const prev = process.env["SEEKFORGE_PROFILE"];
+  process.env["SEEKFORGE_PROFILE"] = "fast";
+  try {
+    const config = loadConfig(projectPath);
+    assert.equal(config.model, "deepseek-v4-flash");
+    // explicit arg overrides the env selection
+    const { projectPath: p2, cleanup: c2 } = setupProject({
+      model: "deepseek-chat",
+      profiles: { fast: { model: "deepseek-v4-flash" }, slow: { model: "deepseek-v4-pro" } },
+    });
+    const config2 = loadConfig(p2, undefined, "slow");
+    assert.equal(config2.model, "deepseek-v4-pro");
+    c2();
+  } finally {
+    if (prev === undefined) delete process.env["SEEKFORGE_PROFILE"];
+    else process.env["SEEKFORGE_PROFILE"] = prev;
+  }
+  cleanup();
+});
+
+test("profile slots below --settings: settings wins for keys it sets", () => {
+  const { projectPath, cleanup } = setupProject({
+    model: "deepseek-chat",
+    baseUrl: "http://base",
+    profiles: { fast: { model: "deepseek-v4-flash", baseUrl: "http://profile" } },
+  });
+  const settingsPath = writeSettings(projectPath, "settings.json", { model: "deepseek-v4-pro" });
+  const config = loadConfig(projectPath, settingsPath, "fast");
+  // settings overrides the profile's model
+  assert.equal(config.model, "deepseek-v4-pro");
+  // profile's baseUrl stands since settings didn't touch it
+  assert.equal(config.baseUrl, "http://profile");
+  cleanup();
+});
+
 console.log(`${passed} config tests passed`);

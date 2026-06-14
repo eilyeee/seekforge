@@ -31,13 +31,19 @@ export type UserCommand = {
   allowedTools?: string[];
   /** Frontmatter `argument-hint`: placeholder shown when prompting for args. */
   argumentHint?: string;
+  /**
+   * Frontmatter `disable-model-invocation: true`: the model may not invoke this
+   * command via the run_user_command tool (it stays available to the user).
+   */
+  disableModelInvocation?: boolean;
 };
 
 /**
  * Parses one command file. An optional YAML frontmatter block contributes
- * `description` / `model` / `allowed-tools` / `argument-hint` and is stripped
- * from the body; without it the whole file is the body and the description is
- * its first non-empty line. Malformed frontmatter falls back to the raw file.
+ * `description` / `model` / `allowed-tools` / `argument-hint` /
+ * `disable-model-invocation` and is stripped from the body; without it the
+ * whole file is the body and the description is its first non-empty line.
+ * Malformed frontmatter falls back to the raw file.
  */
 function parseCommandFile(name: string, scope: "project" | "user", raw: string): UserCommand {
   let body = raw;
@@ -45,6 +51,7 @@ function parseCommandFile(name: string, scope: "project" | "user", raw: string):
   let model: string | undefined;
   let allowedTools: string[] | undefined;
   let argumentHint: string | undefined;
+  let disableModelInvocation = false;
 
   if (/^---\r?\n/.test(raw)) {
     try {
@@ -53,6 +60,7 @@ function parseCommandFile(name: string, scope: "project" | "user", raw: string):
       description = parsed.fields.get("description") ?? "";
       model = parsed.fields.get("model") || undefined;
       argumentHint = parsed.fields.get("argument-hint") || undefined;
+      disableModelInvocation = parsed.fields.get("disable-model-invocation") === "true";
       const tools = parsed.fields.get("allowed-tools");
       if (tools) {
         const list = tools
@@ -78,6 +86,7 @@ function parseCommandFile(name: string, scope: "project" | "user", raw: string):
     ...(model ? { model } : {}),
     ...(allowedTools ? { allowedTools } : {}),
     ...(argumentHint ? { argumentHint } : {}),
+    ...(disableModelInvocation ? { disableModelInvocation } : {}),
   };
 }
 
@@ -133,6 +142,18 @@ export function loadUserCommands(workspace: string): UserCommand[] {
     out.push(cmd);
   }
   return out;
+}
+
+/**
+ * One-line-per-command roster of model-invocable commands (those without
+ * disable-model-invocation), for the system prompt so the model knows what
+ * `run_user_command` can invoke. Returns "" when there are none.
+ */
+export function buildCommandRoster(commands: UserCommand[]): string {
+  return commands
+    .filter((c) => !c.disableModelInvocation)
+    .map((c) => `- ${c.name}${c.description ? ` — ${c.description}` : ""}`)
+    .join("\n");
 }
 
 /** The placeholder a command body uses to interpolate all invocation arguments. */

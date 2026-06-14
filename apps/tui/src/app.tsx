@@ -81,7 +81,7 @@ import { loadKeybindings, mergeKeymap } from "./keybindings.js";
 import { KNOWN_MODELS, modelPickerLines } from "./model-list.js";
 import { addTodo, formatTodoLines, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import { expandExtraFileRefs, formatExtraDirLines, normalizeExtraDir } from "./workspace-dirs.js";
-import { runStatusLine } from "./statusline.js";
+import { initialSchedulerState, tick, type SchedulerState } from "./statusline-scheduler.js";
 import { checkBudget, type BudgetState } from "./budget.js";
 import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
@@ -334,8 +334,11 @@ export function App({
   const lastErrorRef = useRef<string | null>(null);
   // Cost-budget warning state (80% / 100%, warned once each).
   const budgetRef = useRef<BudgetState>({ warned80: false, warnedOver: false });
-  // Custom statusline output (config.statusLine command), refreshed per run.
+  // Custom statusline output (config.statusLine command). Throttled + cached
+  // by a scheduler so we never spawn the process on every render; recomputed
+  // on state change and on a light interval, off the render path.
   const [statusLineText, setStatusLineText] = useState<string | null>(null);
+  const statusLineSchedRef = useRef<SchedulerState>(initialSchedulerState);
 
   // "Allow for the session" pushes prefixes into this array IN PLACE: the
   // same reference flows into the dispatcher policy, so additions apply to
@@ -379,6 +382,49 @@ export function App({
     const name = projectPath.split("/").filter(Boolean).pop() ?? "seekforge";
     setTerminalTitle(`seekforge — ${name}${state.running ? " ⚙" : ""}`);
   }, [projectPath, state.running]);
+
+  // Custom statusline driver: when config.statusLine is set, recompute via the
+  // throttled scheduler on relevant state changes and on a light interval. The
+  // spawnSync runs inside setImmediate (off the render path) and is guarded so
+  // at most one is in flight; the scheduler caps the spawn rate independently.
+  const statusLineBusyRef = useRef(false);
+  useEffect(() => {
+    if (!config.statusLine) return;
+    const command = config.statusLine;
+    const compute = (): void => {
+      if (statusLineBusyRef.current) return;
+      statusLineBusyRef.current = true;
+      setImmediate(() => {
+        try {
+          const s = stateRef.current;
+          const result = tick(statusLineSchedRef.current, command, {
+            model: modelRef.current,
+            cwd: projectPath,
+            ...(s.sessionId ? { sessionId: s.sessionId } : {}),
+            costUsd: s.totalUsage.costUsd,
+            approval: s.approval,
+            totalTokens: s.totalUsage.promptTokens + s.totalUsage.completionTokens,
+            ...(s.context ? { contextPercent: s.context.percent } : {}),
+          });
+          statusLineSchedRef.current = result.state;
+          if (result.recomputed) setStatusLineText(result.state.lastOutput);
+        } finally {
+          statusLineBusyRef.current = false;
+        }
+      });
+    };
+    compute();
+    const id = setInterval(compute, 5000);
+    return () => clearInterval(id);
+  }, [
+    config.statusLine,
+    projectPath,
+    state.model,
+    state.approval,
+    state.sessionId,
+    state.totalUsage,
+    state.context,
+  ]);
 
   // Ctrl+Z suspend: restore the terminal, stop, and re-enter raw mode on fg.
   useEffect(() => {
@@ -671,24 +717,13 @@ export function App({
             const budget = checkBudget(budgetRef.current, s.totalUsage.costUsd, config.costBudgetUsd);
             budgetRef.current = budget.state;
             if (budget.warning) dispatchTab({ type: "notice", tone: "error", text: budget.warning });
-            if (config.statusLine) {
-              setStatusLineText(
-                runStatusLine(config.statusLine, {
-                  model: modelRef.current,
-                  cwd: projectPath,
-                  ...(ownSessionId.current ? { sessionId: ownSessionId.current } : {}),
-                  costUsd: s.totalUsage.costUsd,
-                  ...(s.context ? { contextPercent: s.context.percent } : {}),
-                }),
-              );
-            }
           }
         }
         syncBg();
         ring(`Task finished: ${task.slice(0, 60)}`);
       }
     },
-    [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd, config.statusLine],
+    [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd],
   );
 
   /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
