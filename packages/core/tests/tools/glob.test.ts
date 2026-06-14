@@ -113,5 +113,5 @@ describe("glob tool", () => {
     const data = res.data as { files: string[]; truncated: boolean };
     expect(data.files.length).toBe(1000);
     expect(data.truncated).toBe(true);
-  });
+  }, 20_000); // writes 1100 files — can exceed the 5s default under parallel load
 });

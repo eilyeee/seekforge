@@ -41,6 +41,8 @@ export type ChatItem =
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
   | { kind: "microcompacted"; id: number; clearedResults: number }
+  /** A user-facing message from a hook (notice event / its systemMessage). */
+  | { kind: "notice"; id: number; level: "info" | "warn"; message: string }
   | { kind: "report"; id: number; report: FinalReport }
   | { kind: "failed"; id: number; error: AgentError };
 
@@ -247,6 +249,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
 
     case "context.microcompacted":
       return push(state, { kind: "microcompacted", clearedResults: ev.clearedResults });
+
+    case "notice":
+      return push(state, { kind: "notice", level: ev.level, message: ev.message });
 
     // No chat row: the footer renders the latest occupancy.
     case "context.usage":

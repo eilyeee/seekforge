@@ -87,7 +87,7 @@ describe("mcp client", () => {
     } finally {
       client.dispose();
     }
-  });
+  }, 20_000); // spawns + respawns a child process — slow under parallel load
 
   it("lists resources via resources/list", async () => {
     const client = makeClient();

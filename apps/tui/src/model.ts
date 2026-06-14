@@ -527,6 +527,15 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "file.changed":
       return { ...state, items: [...state.items, { kind: "file", id: nextId("f"), path: e.path }] };
 
+    case "notice":
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          { kind: "notice", id: nextId("n"), tone: e.level === "warn" ? "error" : "dim", text: e.message },
+        ],
+      };
+
     case "context.compacted":
       return {
         ...state,

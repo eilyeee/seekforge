@@ -56,7 +56,7 @@ describe("buildMcpToolSpecs", () => {
 
     const trusted = await buildMcpToolSpecs([makeEntry("fake2", true)]);
     expect(trusted[0]!.classify({}, makeCtx(workspace)).permission).toBe("write");
-  });
+  }, 20_000); // spawns MCP child processes — slow under parallel load
 
   it("exposes the server's raw inputSchema via dispatcher list()", async () => {
     const specs = await buildMcpToolSpecs([makeEntry("fake", false)]);

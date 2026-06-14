@@ -197,6 +197,18 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
           {t("chat.microCompacted", { clearedResults: item.clearedResults })}
         </div>
       );
+    case "notice":
+      return (
+        <div
+          className={`rounded-xl border px-3 py-1.5 text-xs ${
+            item.level === "warn"
+              ? "border-warn/40 bg-warn/10 text-warn"
+              : "border-subtle bg-surface-overlay/50 text-secondary"
+          }`}
+        >
+          {item.message}
+        </div>
+      );
     case "report":
       return (
         <div className="rounded-xl border border-ok/40 bg-ok/10 px-4 py-3 text-xs text-secondary">
