@@ -45,6 +45,9 @@ export function CommandPalette() {
         e.preventDefault();
         setOpen(!useStore.getState().paletteOpen);
       } else if ((e.metaKey || e.ctrlKey) && (e.key === "p" || e.key === "P")) {
+        // Don't stack the file finder over an already-open modal/dialog (the
+        // shared Modal component sets role="dialog").
+        if (document.querySelector('[role="dialog"]')) return;
         e.preventDefault();
         useStore.getState().openFilesFinder();
       }

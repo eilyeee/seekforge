@@ -233,8 +233,9 @@ export const CodeEditor = forwardRef<
       selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(from, { y: "center" }),
     });
-    // Re-run on nonce change (same hit re-clicked) and once content has loaded.
-  }, [reveal?.nonce, value]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-run on mount and on nonce change (same hit re-clicked). Deliberately
+    // excludes `value` so editing/saving a file doesn't re-jump to a stale hit.
+  }, [reveal?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Follow the app's light/dark switch at runtime.
   useEffect(() => {

@@ -658,7 +658,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     for (const [p, content] of Object.entries(mockFiles)) {
       content.split("\n").forEach((line, i) => {
         const m = re.exec(line);
-        if (m) hits.push({ path: p, line: i + 1, text: line.slice(0, 240), col: m.index, len: m[0].length });
+        if (m && m[0].length > 0) hits.push({ path: p, line: i + 1, text: line.slice(0, 240), col: m.index, len: m[0].length });
       });
     }
     return { hits, truncated: false };

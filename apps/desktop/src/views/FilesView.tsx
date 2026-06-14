@@ -219,13 +219,15 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => voi
 
   useEffect(() => {
     const term = q.trim();
+    // Bump the token first so any in-flight request is invalidated even when the
+    // box is cleared — otherwise a slow prior response repopulates an empty box.
+    const mine = ++seq.current;
     if (term === "") {
       setRes(null);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const mine = ++seq.current;
     const h = window.setTimeout(() => {
       api
         .searchContent(term, { caseSensitive, regex })

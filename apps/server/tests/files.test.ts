@@ -77,11 +77,11 @@ describe("GET /api/files", () => {
     expect(none.files).toEqual([]);
   });
 
-  it("caps the list and reports truncation (listWorkspaceFiles limit)", () => {
-    const capped = listWorkspaceFiles(workspace, "", 2);
+  it("caps the list and reports truncation (listWorkspaceFiles limit)", async () => {
+    const capped = await listWorkspaceFiles(workspace, "", 2);
     expect(capped.files).toHaveLength(2);
     expect(capped.truncated).toBe(true);
-    const all = listWorkspaceFiles(workspace);
+    const all = await listWorkspaceFiles(workspace);
     expect(all.truncated).toBe(false);
   });
 });

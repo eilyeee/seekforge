@@ -606,7 +606,7 @@ export async function handleApi(
 
     if (method === "GET" && path === "/api/files") {
       // @ file picker index: ignore-aware scan, capped at 2000 paths.
-      return sendJson(res, 200, listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
+      return sendJson(res, 200, await listWorkspaceFiles(workspace, url.searchParams.get("q") ?? ""));
     }
 
     // Project-wide content search (literal or regex), bounded.

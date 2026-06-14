@@ -8,12 +8,26 @@ import { HOOK_STAGES, type HookEntry, type HookStage, type HooksConfig } from ".
 /** Stages where a non-zero exit (or JSON deny) blocks the tool/run. */
 const BLOCKING: ReadonlySet<HookStage> = new Set(["preToolUse", "userPromptSubmit"]);
 
+/**
+ * A draft entry is a hook entry plus a stable client-only `id` used as the React
+ * key, so deleting a middle entry doesn't shuffle focus onto the wrong input.
+ * The id is stripped in `toConfig` and never sent to the server.
+ */
+type DraftEntry = HookEntry & { id: string };
+
 /** A local, always-array view of the hooks config so editing is uniform. */
-type Draft = Record<HookStage, HookEntry[]>;
+type Draft = Record<HookStage, DraftEntry[]>;
+
+let draftEntrySeq = 0;
+function newDraftId(): string {
+  draftEntrySeq += 1;
+  return `entry-${draftEntrySeq}`;
+}
 
 function toDraft(cfg: HooksConfig): Draft {
   const d = {} as Draft;
-  for (const stage of HOOK_STAGES) d[stage] = cfg[stage] ? cfg[stage]!.map((e) => ({ ...e })) : [];
+  for (const stage of HOOK_STAGES)
+    d[stage] = cfg[stage] ? cfg[stage]!.map((e) => ({ ...e, id: newDraftId() })) : [];
   return d;
 }
 
@@ -23,6 +37,7 @@ function toConfig(draft: Draft): HooksConfig {
   for (const stage of HOOK_STAGES) {
     const entries = draft[stage]
       .filter((e) => e.command.trim() !== "")
+      // Strip the client-only `id` so the payload stays {command, match?, pattern?}.
       .map((e) => ({
         command: e.command.trim(),
         ...(e.match && e.match.trim() !== "" ? { match: e.match.trim() } : {}),
@@ -51,10 +66,10 @@ export function HooksView() {
       .catch((e: unknown) => setError(String(e)));
   }, [ws]);
 
-  const update = (stage: HookStage, fn: (entries: HookEntry[]) => HookEntry[]) =>
+  const update = (stage: HookStage, fn: (entries: DraftEntry[]) => DraftEntry[]) =>
     setDraft((d) => (d ? { ...d, [stage]: fn(d[stage]) } : d));
 
-  const addEntry = (stage: HookStage) => update(stage, (es) => [...es, { command: "" }]);
+  const addEntry = (stage: HookStage) => update(stage, (es) => [...es, { command: "", id: newDraftId() }]);
   const removeEntry = (stage: HookStage, i: number) =>
     update(stage, (es) => es.filter((_, idx) => idx !== i));
   const editEntry = (stage: HookStage, i: number, patch: Partial<HookEntry>) =>
@@ -118,7 +133,7 @@ export function HooksView() {
                 ) : (
                   <div className="mt-3 space-y-3">
                     {draft[stage].map((entry, i) => (
-                      <div key={i} className="rounded-lg border border-subtle p-3">
+                      <div key={entry.id} className="rounded-lg border border-subtle p-3">
                         <div className="flex items-center gap-2">
                           <Input
                             value={entry.command}

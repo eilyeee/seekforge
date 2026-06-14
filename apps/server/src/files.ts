@@ -13,7 +13,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { DEFAULT_IGNORE_DIRS, isSensitiveBasename, resolveInsideWorkspace } from "@seekforge/core";
 
@@ -49,17 +49,27 @@ export type FileList = { files: string[]; truncated: boolean };
  * DEFAULT_IGNORE_DIRS members, dot-directories, and symlinks. `q` is a
  * case-insensitive substring filter on the relative path, applied while
  * scanning so deep matches are still found in large repos. `truncated` is
- * true when the limit cut the scan short.
+ * true when the limit cut the scan short. Reads directories asynchronously,
+ * yielding to the event loop periodically so walking a large tree never
+ * starves other requests.
  */
-export function listWorkspaceFiles(root: string, q = "", limit = FILE_LIST_LIMIT): FileList {
+const LIST_YIELD_EVERY = 50;
+
+export async function listWorkspaceFiles(
+  root: string,
+  q = "",
+  limit = FILE_LIST_LIMIT,
+): Promise<FileList> {
   const needle = q.toLowerCase();
   const files: string[] = [];
   const queue: string[] = [""]; // workspace-relative directories
+  let processed = 0;
   while (queue.length > 0) {
     const rel = queue.shift() as string;
+    if (++processed % LIST_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
     let entries: Dirent[];
     try {
-      entries = readdirSync(join(root, rel), { withFileTypes: true });
+      entries = await readdir(join(root, rel), { withFileTypes: true });
     } catch {
       continue; // unreadable directory — skip
     }
@@ -123,7 +133,7 @@ export async function searchWorkspaceContent(
   } catch {
     return { hits: [], truncated: false, error: "invalid regex" };
   }
-  const { files, truncated: listTruncated } = listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
+  const { files, truncated: listTruncated } = await listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
   const hits: SearchHit[] = [];
   const deadline = Date.now() + SEARCH_BUDGET_MS;
   let scanned = 0;
@@ -146,6 +156,7 @@ export async function searchWorkspaceContent(
     if (looksBinary(buf)) continue;
     const lines = buf.toString("utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
+      if ((i & 0x3ff) === 0 && Date.now() > deadline) return { hits, truncated: true };
       const line = lines[i] as string;
       if (opts.regex && line.length > SEARCH_MAX_REGEX_LINE) continue;
       const m = re.exec(line);
