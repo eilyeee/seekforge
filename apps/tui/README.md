@@ -57,8 +57,8 @@ CLI).
   the task for vision-capable models); pastes over 6 lines collapse into a
   `[Pasted text #N]` placeholder expanded on send.
 - **Custom commands**: `.seekforge/commands/<name>.md` (project or
-  `~/.seekforge/commands/`) become `/name` palette entries; `$ARGUMENTS` in
-  the body is replaced with what you type after the command.
+  `~/.seekforge/commands/`) become `/name` palette entries — see
+  [Custom commands](#custom-commands).
 - **Keybindings**: override any binding in `.seekforge/keybindings.json`
   (`{"composer": {"newline": "ctrl+j"}}` style; project overrides global).
 - **Modes**: persistent approval mode auto / confirm / plan — Shift+Tab
@@ -88,6 +88,55 @@ agent task that writes or refreshes AGENTS.md; `/doctor` checks the
 environment (key, node, git, runtime, MCP, editor, clipboard). Permission
 prompts and run completion trigger an OS notification (macOS/Linux) plus a
 terminal bell — `"notify": false` / `"bell": false` disable each.
+
+## Custom commands
+
+Each `*.md` file under `.seekforge/commands/` (project) or
+`~/.seekforge/commands/` (user) becomes a `/name` palette entry, where `name`
+is the filename without `.md`. Subdirectories namespace with `:` —
+`commands/frontend/build.md` is `/frontend:build`. On a name clash the project
+copy wins over the user copy, and a custom command overrides a same-named
+built-in.
+
+The body is the prompt. An optional YAML frontmatter block tunes it:
+
+```markdown
+---
+description: Open a PR for the current branch
+argument-hint: <title>
+model: deepseek-reasoner
+allowed-tools: run_command, read_file, write_file
+disable-model-invocation: false
+---
+Open a pull request titled "$1" for the current branch.
+
+Current diff:
+!`git diff --stat`
+```
+
+- `description` — palette/roster label (defaults to the first non-empty body line).
+- `argument-hint` — placeholder shown when prompting for arguments.
+- `model` — run this command with a specific model.
+- `allowed-tools` — comma/space-separated tool names the run is restricted to.
+- `disable-model-invocation: true` — hides it from the model's
+  `run_user_command` tool (still usable by you).
+
+The frontmatter is stripped from the sent body.
+
+**Arguments.** `$ARGUMENTS` (every occurrence) is replaced with the full
+argument string; positional `$1`..`$9` take the whitespace-split arguments. If
+the body has no placeholder, non-empty arguments are appended as an
+`Arguments: …` line.
+
+**Shell injection.** `` !`command` `` in the body runs in the workspace at
+invoke time and its trimmed output is inlined; a failing command becomes an
+inline `[command failed: …]` marker. This runs only when *you* invoke the
+command.
+
+**Model invocation.** The model can invoke any command not marked
+`disable-model-invocation: true` via the `run_user_command` tool. That path
+only does `$ARGUMENTS`/`$1`..`$9` interpolation — it never runs `` !`shell` ``
+injections.
 
 ## Development
 

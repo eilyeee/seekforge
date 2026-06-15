@@ -23,6 +23,7 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--add-dir <path>` | run, ask, -p | Extra read-only root for `@`-references (repeatable) |
 | `--max-turns <n>` | run, ask, -p | Cap agent turns |
 | `--settings <file>` | run, ask, -p, chat | Path to JSON settings file (layered over project config but below env/CLI flags) |
+| `--profile <name>` ✦ | run, ask, -p, chat | Apply a named `profiles` overlay from the config files; also `SEEKFORGE_PROFILE` env (flag wins). The overlay slots just below `--settings`. Available as a global flag and on `run` / `ask` / `loop` |
 
 ## Run-specific flags
 
@@ -31,7 +32,7 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--plan` | Plan first (read-only), confirm, then execute in the same session |
 | `--permission-mode <mode>` | `default` / `confirm` — prompt on write/execute; `acceptEdits` — auto-allow in-workspace edits, prompt on commands; `plan` — confirm + plan-first; `bypassPermissions` / `auto` — full auto (like `-y`). Overrides `-y` when set |
 | `--fallback-model <model>` | Model to retry with if the primary is overloaded |
-| `--output-style <style>` | `default` (no change), `concise` (maximally terse), `explanatory` (teach as you answer), `learning` (leave 1–3 pieces for the user) |
+| `--output-style <style>` | `default` (no change), `concise` (maximally terse), `explanatory` (teach as you answer), `learning` (leave 1–3 pieces for the user), or a custom `.seekforge/output-styles/<name>.md` (see Configuration) |
 | `--system-prompt <text>` | Replace the system prompt entirely |
 | `--append-system-prompt <text>` | Append text to the system prompt |
 | `--allowedTools <list>` | Only allow these tools (comma-separated) |

@@ -370,6 +370,129 @@ different stage.
 
 Settable via `config set`? **No** — edit the file directly.
 
+#### preToolUse JSON stdout protocol
+
+A `preToolUse` hook that exits 0 may print a JSON object on stdout to control
+the call (anything that isn't a JSON object is ignored and the plain exit-code
+behavior applies). Both the legacy shape and the Claude-Code shape are accepted:
+
+| Field | Where | Effect |
+| --- | --- | --- |
+| `decision` | top-level (`"allow"` / `"deny"`) | `deny` blocks the call (`reason` becomes the block reason). `allow` explicitly allows it and **skips the remaining `preToolUse` hooks**. |
+| `hookSpecificOutput.permissionDecision` | nested (`"allow"` / `"deny"` / `"ask"`) | Same as `decision`, plus `"ask"` — explicitly defer to the normal permission flow and keep running later hooks. Also read at the top level as `permissionDecision`. |
+| `permissionDecisionReason` / `reason` | nested / top-level | The human-readable reason shown when denying. |
+| `updatedInput` | top-level or under `hookSpecificOutput` | Replacement tool arguments. The dispatcher applies them before the tool runs, **re-validating against the tool schema and re-running permission checks** on the new args. `preToolUse` only. |
+| `continue` | top-level (boolean) | `false` blocks the call (treated like a deny), using `systemMessage` as the reason. Parsed on all stages but only blocks on `preToolUse` and `userPromptSubmit`. |
+| `systemMessage` | top-level (string) | Shown to the user as a notice; also the block reason when `continue: false` blocks. Parsed on all stages. |
+| `additionalContext` / `hookSpecificOutput.additionalContext` | top-level / nested (string) | Injected into the prompt as context — used by `userPromptSubmit` and `sessionStart`. When absent, those stages fall back to the hook's raw stdout. |
+
+```json
+{
+  "hookSpecificOutput": {
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "vetted command"
+  }
+}
+```
+
+```json
+{ "hookSpecificOutput": { "updatedInput": { "path": "safe.txt" } } }
+```
+
+A `userPromptSubmit` (or `sessionStart`) hook contributes context via
+`additionalContext` — or, absent that, its trimmed stdout — which is appended to
+the task as a `<hook-context>…</hook-context>` block (capped at 8000 chars).
+
+### `statusLine` (TUI)
+
+A shell command whose stdout becomes a custom status-bar line in the TUI,
+rendered on its own line directly below the built-in status bar. The command
+runs via `/bin/sh -c` with the workspace as cwd, receives the status payload as
+JSON on stdin, and the same fields as `SEEKFORGE_*` environment variables:
+
+| Env var | Meaning |
+| --- | --- |
+| `SEEKFORGE_MODEL` | Active model |
+| `SEEKFORGE_CWD` | Workspace directory (also the command's cwd) |
+| `SEEKFORGE_SESSION_ID` | Current session id (when present) |
+| `SEEKFORGE_APPROVAL` | Approval mode (`confirm` / `acceptEdits` / `auto` / `plan`) |
+| `SEEKFORGE_COST_USD` | Cumulative session cost in USD |
+| `SEEKFORGE_CONTEXT_PERCENT` | Context-window usage percent (when present) |
+| `SEEKFORGE_TOTAL_TOKENS` | Cumulative prompt+completion tokens (when present) |
+
+Only the first line of stdout is used, capped at 80 characters (ANSI escapes are
+allowed through). A non-zero exit, a timeout (default 1.5s), or empty output
+yields nothing and the TUI falls back to its built-in status line.
+
+```json
+{ "statusLine": "echo \"$SEEKFORGE_MODEL | $SEEKFORGE_CONTEXT_PERCENT% ctx\"" }
+```
+
+This key is read by the TUI only. Settable via `config set`? **No** — edit the
+file directly.
+
+### `profiles`
+
+Named config overlays selectable at runtime with `--profile <name>` (or the
+`SEEKFORGE_PROFILE` environment variable). Each profile is a partial `CliConfig`
+whose fields override the merged base config when that profile is selected.
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "profiles": {
+    "review": { "model": "deepseek-v4-pro", "thinking": true },
+    "ci": { "sandbox": "restricted", "commandAllowlist": ["pnpm test"] }
+  }
+}
+```
+
+Selecting a profile:
+
+```bash
+seekforge run "..." --profile review
+SEEKFORGE_PROFILE=ci seekforge run "..."
+```
+
+Profiles are looked up across **all** config layers. On a name clash the project
+profile wins over the global one, and the local profile (`config.local.json`)
+wins over both — the same precedence as the plain config layers. Deep-merge
+fields (`mcpServers`, `permissionRules`, `hooks`) inside a profile are combined
+across those layers like the base config.
+
+In the precedence stack, a selected profile overlay slots **just below
+`--settings` and above `config.local.json`** — see Precedence below. The
+`profiles` map itself is a selection mechanism only and is **stripped** from the
+config returned by `loadConfig` (so `config show` never echoes it). Available
+profile names are discoverable via `availableProfiles()`.
+
+Settable via `config set`? **No** — edit the file directly.
+
+### Custom output styles
+
+Beyond the four built-in output styles (`default`, `concise`, `explanatory`,
+`learning`), you can define your own by dropping a Markdown file at:
+
+- `<project>/.seekforge/output-styles/<name>.md` (project — wins), then
+- `~/.seekforge/output-styles/<name>.md` (user home)
+
+The file's body becomes the system-prompt addendum verbatim; an optional leading
+YAML frontmatter block is stripped first. Select a custom style by its file name
+(without `.md`) via `--output-style <name>` — the same flag the built-ins use.
+Built-in names always resolve to their preset, so a file sharing a built-in name
+does not override it. An unknown style (neither built-in nor a matching file)
+errors.
+
+```markdown
+---
+description: House style
+---
+## Output style: House
+
+- Lead with the change, then a one-line rationale.
+- Reference files as absolute paths.
+```
+
 ---
 
 ## Precedence (layering)
@@ -382,6 +505,8 @@ priority, highest first:
 | **Environment variables** | `DEEPSEEK_API_KEY`, `SEEKFORGE_RUNTIME_BIN` |
 | **CLI flags** | `--model`, `-y`, `--settings <file>`, … |
 | **`--settings <file>`** | JSON file loaded at runtime |
+| **Selected `--profile` overlay** | A profile chosen via `--profile <name>` / `SEEKFORGE_PROFILE` |
+| **Local config** | `<project>/.seekforge/config.local.json` (gitignored, per-developer) |
 | **Project config** | `<project>/.seekforge/config.json` |
 | **Global config** | `~/.seekforge/config.json` |
 
@@ -452,6 +577,9 @@ allowed keys.
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY` | `apiKey` | Overrides all file/flag layers |
 | `SEEKFORGE_RUNTIME_BIN` | `runtimeBin` | Overrides all file/flag layers |
+| `SEEKFORGE_PROFILE` | selects a `profiles` entry | Used when `--profile` is absent; the chosen overlay slots below `--settings` |
 
-These are the only two environment variables the config system reads. They are
-checked at the end of `loadConfig()`, so they always win over any file or flag.
+`DEEPSEEK_API_KEY` and `SEEKFORGE_RUNTIME_BIN` are applied at the end of
+`loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROFILE`
+only chooses which `profiles` overlay is layered in (the explicit `--profile`
+flag takes precedence over it).
