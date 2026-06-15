@@ -120,8 +120,10 @@ seekforge serve                                     # open the printed URL in a 
 pnpm --filter @seekforge/desktop build && pnpm tauri dev   # or the native app (dev)
 ```
 
-The bundled app needs the `seekforge` CLI reachable (it spawns `seekforge serve`);
-see [apps/desktop/src-tauri/README.md](apps/desktop/src-tauri/README.md).
+The bundled DMG app is self-contained — it embeds the server as a sidecar, so a
+user who installs only the bundle needs **no** system `seekforge`. In `tauri dev`
+(no bundle) it falls back to a `seekforge` on PATH or the repo's tsx runner. See
+[apps/desktop/src-tauri/README.md](apps/desktop/src-tauri/README.md).
 
 ## How it works
 
