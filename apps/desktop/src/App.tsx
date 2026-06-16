@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useStore } from "./store";
 import { useT } from "./lib/i18n";
 import { Button } from "./components/ui";
@@ -5,18 +6,22 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
-import { AgentsView } from "./views/AgentsView";
+// ChatView is the default landing view, so it stays eager. The remaining,
+// lower-frequency views are split into on-demand chunks via React.lazy to
+// shrink the initial bundle (they load the first time their nav is opened).
 import { ChatView } from "./views/ChatView";
-import { DiagnosticsView } from "./views/DiagnosticsView";
-import { DiffView } from "./views/DiffView";
-import { EvolutionView } from "./views/EvolutionView";
-import { FilesView } from "./views/FilesView";
-import { GitView } from "./views/GitView";
-import { HooksView } from "./views/HooksView";
-import { MemoryView } from "./views/MemoryView";
-import { SessionsView } from "./views/SessionsView";
-import { SettingsView } from "./views/SettingsView";
-import { SkillsView } from "./views/SkillsView";
+
+const SessionsView = lazy(() => import("./views/SessionsView").then((m) => ({ default: m.SessionsView })));
+const DiffView = lazy(() => import("./views/DiffView").then((m) => ({ default: m.DiffView })));
+const FilesView = lazy(() => import("./views/FilesView").then((m) => ({ default: m.FilesView })));
+const GitView = lazy(() => import("./views/GitView").then((m) => ({ default: m.GitView })));
+const SkillsView = lazy(() => import("./views/SkillsView").then((m) => ({ default: m.SkillsView })));
+const AgentsView = lazy(() => import("./views/AgentsView").then((m) => ({ default: m.AgentsView })));
+const MemoryView = lazy(() => import("./views/MemoryView").then((m) => ({ default: m.MemoryView })));
+const EvolutionView = lazy(() => import("./views/EvolutionView").then((m) => ({ default: m.EvolutionView })));
+const HooksView = lazy(() => import("./views/HooksView").then((m) => ({ default: m.HooksView })));
+const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
+const DiagnosticsView = lazy(() => import("./views/DiagnosticsView").then((m) => ({ default: m.DiagnosticsView })));
 
 /** macOS uses an overlay title bar over the whole window top. The sidebar
  *  reserves its corner with pt-9; the content column reserves a matching
@@ -52,18 +57,26 @@ export function App() {
           </div>
         )}
         <div className="min-h-0 flex-1">
-          {view === "chat" && <ChatView />}
-          {view === "sessions" && <SessionsView />}
-          {view === "diff" && <DiffView />}
-          {view === "files" && <FilesView />}
-          {view === "git" && <GitView />}
-          {view === "skills" && <SkillsView />}
-          {view === "agents" && <AgentsView />}
-          {view === "memory" && <MemoryView />}
-          {view === "evolution" && <EvolutionView />}
-          {view === "hooks" && <HooksView />}
-          {view === "settings" && <SettingsView />}
-          {view === "diagnostics" && <DiagnosticsView />}
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-sm text-tertiary">
+                {t("common.loading")}
+              </div>
+            }
+          >
+            {view === "chat" && <ChatView />}
+            {view === "sessions" && <SessionsView />}
+            {view === "diff" && <DiffView />}
+            {view === "files" && <FilesView />}
+            {view === "git" && <GitView />}
+            {view === "skills" && <SkillsView />}
+            {view === "agents" && <AgentsView />}
+            {view === "memory" && <MemoryView />}
+            {view === "evolution" && <EvolutionView />}
+            {view === "hooks" && <HooksView />}
+            {view === "settings" && <SettingsView />}
+            {view === "diagnostics" && <DiagnosticsView />}
+          </Suspense>
         </div>
       </main>
       {todosOpen && <TodosPanel />}

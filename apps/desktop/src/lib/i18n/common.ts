@@ -82,6 +82,7 @@ export const common = {
     "theme.system": "System",
     "theme.title": "Theme: {label} (click to change)",
     "theme.ariaLabel": "Theme: {label}",
+    "common.loading": "Loading…",
   },
   zh: {
     "nav.chat": "对话",
@@ -162,5 +163,6 @@ export const common = {
     "theme.system": "系统",
     "theme.title": "主题：{label}（点击切换）",
     "theme.ariaLabel": "主题：{label}",
+    "common.loading": "加载中…",
   },
 };
