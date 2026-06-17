@@ -15,6 +15,7 @@ import {
   type ResultOutcome,
 } from "../output-format.js";
 import { t } from "../i18n.js";
+import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
@@ -186,31 +187,24 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
   // -y and --dangerously-skip-permissions both map to approvalMode "auto"
   // (auto-approve write/execute). "auto" is NOT literally every tool: the
   // denylist still refuses dangerous calls and env changes still ask.
-  let approvalMode: ApprovalMode = opts.yes || opts.dangerouslySkipPermissions ? "auto" : "confirm";
-  let planFromMode = false;
-  if (opts.permissionMode) {
-    switch (opts.permissionMode) {
-      case "default":
-      case "confirm":
-        approvalMode = "confirm";
-        break;
-      case "acceptEdits":
-        approvalMode = "acceptEdits";
-        break;
-      case "bypassPermissions":
-      case "auto":
-        approvalMode = "auto";
-        break;
-      case "plan":
-        approvalMode = "confirm";
-        planFromMode = true;
-        break;
-      default:
-        fail(t("err.unknownPermissionMode", { mode: opts.permissionMode }), {
-          hint: t("err.unknownPermissionModeHint"),
-        });
-        return;
+  // The mapping itself is a pure helper (see permission-mode.ts) so it can be
+  // unit-tested; here we just surface an unknown mode as a CLI fail().
+  let approvalMode: ApprovalMode;
+  let planFromMode: boolean;
+  try {
+    ({ approvalMode, planFromMode } = resolvePermissionMode({
+      yes: opts.yes,
+      dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
+      permissionMode: opts.permissionMode,
+    }));
+  } catch (err) {
+    if (err instanceof UnknownPermissionModeError) {
+      fail(t("err.unknownPermissionMode", { mode: err.mode }), {
+        hint: t("err.unknownPermissionModeHint"),
+      });
+      return;
     }
+    throw err;
   }
   const planMode = (opts.plan ?? false) || planFromMode;
 
