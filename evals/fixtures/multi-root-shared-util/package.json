@@ -1,0 +1,8 @@
+{
+  "name": "multi-root-shared-util",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test packages/api/test/*.test.js"
+  }
+}

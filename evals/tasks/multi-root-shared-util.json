@@ -1,0 +1,14 @@
+{
+  "id": "multi-root-shared-util",
+  "title": "Reuse a helper from another workspace root (multi-root / @path)",
+  "fixture": "multi-root-shared-util",
+  "mode": "edit",
+  "task": "Fix `articlePath` in packages/api/src/routes.js so it slugifies the title (lowercase, non-alphanumeric runs collapsed to single hyphens, trimmed) before building the path. Reuse the existing slugify helper from the utils root at packages/utils/src/slugify.js instead of writing a new one. Run `npm test` to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "packages/api/src/routes.js", "pattern": "slugify" },
+    { "type": "file_contains", "path": "packages/api/src/routes.js", "pattern": "utils/src/slugify" },
+    { "type": "file_not_contains", "path": "packages/api/src/routes.js", "pattern": "toLowerCase" }
+  ],
+  "notes": "Multi-root scenario: the fix in the `api` root must reuse code in the `utils` root, so the agent has to navigate across roots (the @path / --add-dir use case). The task names paths under packages/api, which also triggers the path-gated subdir rules file packages/api/AGENTS.md (see collectProjectRules in packages/core/src/agent/rules.js) that forbids re-implementing utilities. file_not_contains toLowerCase pins the reuse: a locally re-implemented slugify would lowercase inline and fail. For a literal multi-root CLI run, point one root at packages/api and add the other with --add-dir packages/utils."
+}

@@ -1,0 +1,13 @@
+{
+  "id": "memory-error-convention",
+  "title": "Recall a memory-only error-handling convention in a later edit",
+  "fixture": "memory-error-convention",
+  "mode": "edit",
+  "task": "In src/account.js, make `withdraw` reject overdrafts: if `amount` is greater than `account.balance`, raise an error instead of returning a negative balance.",
+  "checks": [
+    { "type": "file_contains", "path": "src/account.js", "pattern": "fail\\(" },
+    { "type": "file_contains", "path": "src/account.js", "pattern": "errors" },
+    { "type": "file_not_contains", "path": "src/account.js", "pattern": "throw new Error" }
+  ],
+  "notes": "Companion to memory-convention-recall. The `fail()`-not-`throw new Error` rule lives ONLY in .seekforge/memory/project.md — the task never mentions it. With memory injected (control) the agent should import and use fail() and avoid a bare `throw new Error`; the `no-memory` variant (injectMemory:false) should fail the fail()/throw checks. Measure with: eval --ab control,no-memory --task memory-error-convention."
+}

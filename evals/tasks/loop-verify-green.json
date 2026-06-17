@@ -1,0 +1,15 @@
+{
+  "id": "loop-verify-green",
+  "title": "Drive a failing verify command to green (run → verify → continue)",
+  "fixture": "loop-verify-green",
+  "mode": "edit",
+  "task": "The test suite for the RPN evaluator in src/rpn.js is failing. Two things are wrong: subtraction pops its operands in the wrong order, and division (\"/\") is not implemented. Fix src/rpn.js so the suite passes. Do NOT edit the tests. Run `npm test` and keep iterating until it is green.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/rpn.js", "pattern": "a - b" },
+    { "type": "file_contains", "path": "src/rpn.js", "pattern": "\"/\"|'/'" },
+    { "type": "file_contains", "path": "test/rpn.test.js", "pattern": "supports division" },
+    { "type": "file_not_contains", "path": "test/rpn.test.js", "pattern": "skip" }
+  ],
+  "notes": "Mirrors the auto-loop's success criterion (packages/core/src/agent/auto-loop.ts): a `command_succeeds` verify gate that stays RED until the work is done, so the harness grades exactly what the loop would terminate on (status \"passed\"). The file_contains/file_not_contains pins are anti-reward-hacking guards so the agent cannot satisfy `npm test` by editing/skipping the tests instead of fixing the code. For a true multi-iteration loop run use the core auto-loop with verifyCommand \"npm test\"."
+}

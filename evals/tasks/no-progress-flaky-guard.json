@@ -1,0 +1,15 @@
+{
+  "id": "no-progress-flaky-guard",
+  "title": "Make real progress (no-op edits would trip the no-progress guardrail)",
+  "fixture": "no-progress-flaky-guard",
+  "mode": "edit",
+  "task": "`dedupe` in src/dedupe.js currently returns its input unchanged, so the test suite is failing. Implement it to remove duplicate values while preserving first-seen order. Do NOT edit the tests. Run `npm test` until it is green.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "sh verify-no-progress.sh" },
+    { "type": "file_contains", "path": "verify-no-progress.sh", "pattern": "Anti-no-op guard for the no-progress task" },
+    { "type": "file_not_contains", "path": "src/dedupe.js", "pattern": "^  return items;$" },
+    { "type": "file_contains", "path": "test/dedupe.test.js", "pattern": "preserving first-seen order" }
+  ],
+  "notes": "No-progress guardrail scenario. The auto-loop stops with status \"no_progress\" when a run produces identical verify output and no file change (auto-loop.ts). This case grades the inverse deterministically: verify-no-progress.sh runs the agent's CURRENT tests against the ORIGINAL no-op dedupe and asserts they FAIL there, proving a real change was made — exactly what a stuck (no-progress) agent would NOT achieve. file_not_contains pins out the untouched identity stub; the last pin keeps the original tests. To observe the actual guardrail, drive this fixture through the core auto-loop with verifyCommand \"npm test\" using a no-op/idle agent: it returns status \"no_progress\"."
+}
