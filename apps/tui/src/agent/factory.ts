@@ -10,6 +10,7 @@ import {
   loadMcpToolSpecs,
   wrapProviderWithCache,
   type AgentCore,
+  type AgentCoreDeps,
   type AgentDefinition,
   type BackgroundTasks,
   type McpClientEntry,
@@ -43,10 +44,11 @@ export type TuiAgent = {
 };
 
 /**
- * Assembles an in-process AgentCore from TUI config. Mirrors the CLI's
- * createCliAgent (apps/cli/src/agent-factory.ts) without depending on it.
+ * Builds the AgentCoreDeps from TUI config (the config -> deps mapping), kept
+ * separate from createTuiAgent so the passthrough is unit-testable — mirrors the
+ * CLI's createCliAgentDeps. dispose() releases the runtime.
  */
-export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
+export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; dispose: () => void } {
   const { config } = opts;
 
   let runtime: RuntimeClient | undefined;
@@ -78,7 +80,7 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ? wrapProviderWithCache(baseProvider, join(homedir(), ".seekforge", "llm-cache"))
     : baseProvider;
 
-  const agent = createAgentCore({
+  const deps: AgentCoreDeps = {
     provider,
     retryBus,
     // Per-agent model override: same key/endpoint, different model.
@@ -114,9 +116,18 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),
-  });
+  };
 
-  return { agent, dispose: () => runtime?.dispose() };
+  return { deps, dispose: () => runtime?.dispose() };
+}
+
+/**
+ * Assembles an in-process AgentCore from TUI config. Mirrors the CLI's
+ * createCliAgent (apps/cli/src/agent-factory.ts) without depending on it.
+ */
+export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
+  const { deps, dispose } = buildTuiDeps(opts);
+  return { agent: createAgentCore(deps), dispose };
 }
 
 /**

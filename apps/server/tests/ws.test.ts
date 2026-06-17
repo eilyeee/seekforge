@@ -365,6 +365,55 @@ describe("plan flavor and mode override", () => {
   });
 });
 
+describe("override + output-style contract (frame -> agent)", () => {
+  it("start overrides (model/thinking/reasoningEffort) reach createAgent opts", async () => {
+    let overrides: unknown;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        overrides = opts.overrides;
+        yield { type: "session.created", sessionId: "ov-1" };
+        yield { type: "session.completed", report: emptyReport("ok") };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, {
+      type: "start",
+      task: "go",
+      mode: "edit",
+      approvalMode: "auto",
+      model: "deepseek-v4-pro",
+      thinking: true,
+      reasoningEffort: "max",
+    });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(overrides).toMatchObject({ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" });
+  });
+
+  it("a built-in outputStyle resolves to appendSystemPrompt on runTask input", async () => {
+    let seen: RunAgentTaskInput | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (_opts, input) {
+        seen = input;
+        yield { type: "session.created", sessionId: "os-1" };
+        yield { type: "session.completed", report: emptyReport("ok") };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "go", mode: "edit", approvalMode: "auto", outputStyle: "concise" });
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seen?.appendSystemPrompt).toBeDefined();
+    expect(seen?.appendSystemPrompt).toContain("Concise");
+  });
+
+  it("rejects an empty-string override field (e.g. model)", async () => {
+    const { server } = await boot(recordingAgentFactory([]));
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "x", mode: "edit", approvalMode: "auto", model: "" });
+    const err = await rx.waitFor((f) => f.type === "error");
+    expect(err.code).toBe("bad_frame");
+  });
+});
+
 describe("busy rule", () => {
   it("rejects start/send while a run is active, accepts again after idle", async () => {
     const { server } = await boot(
