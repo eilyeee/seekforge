@@ -1,0 +1,34 @@
+# SeekForge documentation
+
+A local-first, DeepSeek-powered coding agent: CLI, terminal UI, desktop app, and
+an embeddable core. Start with the [project README](../README.md) for the pitch
+and quick start; this folder holds the reference docs.
+
+## Using SeekForge
+- [CLI reference](cli-reference.md) — `run` / `ask` / `serve` and every flag
+  (`--profile`, `--output-style`, `--permission-mode`, …).
+- [Configuration](configuration.md) — config layers & precedence, profiles,
+  permission rules, hooks (incl. the JSON output protocol), output styles,
+  MCP servers, sandbox, and the TUI status line.
+- [MCP](mcp.md) — Model Context Protocol servers (stdio + Streamable HTTP),
+  resources, prompts, and `${ENV}` header expansion.
+- [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
+  loop and its guardrails.
+
+## Surfaces
+- [CLI](../apps/cli/README.md) · [Terminal UI](../apps/tui/README.md) ·
+  Desktop shell: [apps/desktop/src-tauri/README.md](../apps/desktop/src-tauri/README.md)
+- [Server REST + WS API](../apps/server/SERVER-API.md) — the contract the
+  desktop/web workbench speaks.
+- Custom slash commands (frontmatter, `$ARGUMENTS`/`$1..$9`, `:` namespacing,
+  `` !`shell` ``, `run_user_command`) are documented in the
+  [TUI README](../apps/tui/README.md#custom-commands).
+
+## Maintaining quality
+- [Evals & the regression gate](EVALS.md) — the deterministic CI gate, running
+  evals, the baseline convention, and `--fail-on-regression`.
+- [Releasing](RELEASING.md) — the DMG checklist, clean-machine verification
+  gate, and the updater decision.
+
+## Notes & audits
+- [Low-end model audit](low-end-model-audit.md)
