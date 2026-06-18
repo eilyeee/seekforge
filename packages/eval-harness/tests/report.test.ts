@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { compare, regressions, toJson, toMarkdown, writeReport } from "../src/report.js";
+import { compare, regressions, summarize, toJson, toMarkdown, writeReport } from "../src/report.js";
 import type { TaskResult } from "../src/task-runner.js";
 
 function result(overrides: Partial<TaskResult> = {}): TaskResult {
@@ -45,6 +45,34 @@ describe("toMarkdown", () => {
       result({ metrics: { toolCalls: 0, failedToolCalls: 0, costUsd: 0, durationMs: 1 } }),
     ]);
     expect(md).toContain("| title-change | ✓ | 2/2 | - | - | 0 | 0.0000 |");
+  });
+
+  it("renders headline success-rate and total-cost lines", () => {
+    const md = toMarkdown([result(), failing()]);
+    expect(md).toContain("Success rate: 1/2 (50%)");
+    expect(md).toContain("Total cost: 0.0300 USD");
+  });
+});
+
+describe("summarize", () => {
+  it("computes passed, total, rate and total cost", () => {
+    expect(summarize([result(), failing()])).toEqual({
+      passed: 1,
+      total: 2,
+      rate: 50,
+      totalCostUsd: 0.03,
+    });
+  });
+
+  it("rounds the rate to a whole percent", () => {
+    const summary = summarize([result(), result(), failing()]); // 2/3
+    expect(summary.passed).toBe(2);
+    expect(summary.total).toBe(3);
+    expect(summary.rate).toBe(67); // 66.66… rounds to 67
+  });
+
+  it("returns rate 0 (not NaN) for an empty run", () => {
+    expect(summarize([])).toEqual({ passed: 0, total: 0, rate: 0, totalCostUsd: 0 });
   });
 });
 

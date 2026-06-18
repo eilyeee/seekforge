@@ -23,6 +23,26 @@ function fmtOpt(value: number | undefined): string {
   return value === undefined ? "-" : String(value);
 }
 
+export type Summary = {
+  /** Tasks whose session completed and every check passed. */
+  passed: number;
+  /** Total tasks in the run. */
+  total: number;
+  /** passed / total as a whole-number percentage (0 when total is 0). */
+  rate: number;
+  /** Sum of metrics.costUsd across all results. */
+  totalCostUsd: number;
+};
+
+/** Headline run numbers that drive agent-quality work. Pure; no I/O. */
+export function summarize(results: TaskResult[]): Summary {
+  const passed = results.filter((r) => r.success).length;
+  const total = results.length;
+  const rate = total === 0 ? 0 : Math.round((passed / total) * 100);
+  const totalCostUsd = results.reduce((sum, r) => sum + r.metrics.costUsd, 0);
+  return { passed, total, rate, totalCostUsd };
+}
+
 export function toMarkdown(results: TaskResult[]): string {
   const lines: string[] = [
     "| Task | Success | Checks | Score | Turns | Tool calls | Cost (USD) |",
@@ -35,10 +55,11 @@ export function toMarkdown(results: TaskResult[]): string {
         `${fmtOpt(r.metrics.turns)} | ${r.metrics.toolCalls} | ${fmtCost(r.metrics.costUsd)} |`,
     );
   }
-  const succeeded = results.filter((r) => r.success).length;
-  const rate = results.length === 0 ? 0 : Math.round((succeeded / results.length) * 100);
-  const totalCost = results.reduce((sum, r) => sum + r.metrics.costUsd, 0);
-  lines.push(`| **Total** | ${succeeded}/${results.length} (${rate}%) | | | | | ${fmtCost(totalCost)} |`);
+  const { passed, total, rate, totalCostUsd } = summarize(results);
+  lines.push(`| **Total** | ${passed}/${total} (${rate}%) | | | | | ${fmtCost(totalCostUsd)} |`);
+  lines.push("");
+  lines.push(`Success rate: ${passed}/${total} (${rate}%)`);
+  lines.push(`Total cost: ${fmtCost(totalCostUsd)} USD`);
   return lines.join("\n");
 }
 
