@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { compare, toJson, toMarkdown, writeReport } from "../src/report.js";
+import { compare, regressions, toJson, toMarkdown, writeReport } from "../src/report.js";
 import type { TaskResult } from "../src/task-runner.js";
 
 function result(overrides: Partial<TaskResult> = {}): TaskResult {
@@ -87,5 +87,34 @@ describe("writeReport", () => {
     expect(readFileSync(markdownPath, "utf8")).toContain("| title-change |");
     const parsed = JSON.parse(readFileSync(jsonPath, "utf8")) as { results: TaskResult[] };
     expect(parsed.results[0]?.taskId).toBe("title-change");
+  });
+});
+
+describe("regressions", () => {
+  const baseline = toJson([
+    result({ taskId: "a", success: true }),
+    result({ taskId: "b", success: false }),
+    result({ taskId: "c", success: true }),
+  ]);
+
+  it("flags only pass→fail tasks", () => {
+    const current = [
+      result({ taskId: "a", success: false }), // regressed
+      result({ taskId: "b", success: false }), // already red — not a regression
+      result({ taskId: "c", success: true }), // still green
+    ];
+    expect(regressions(current, baseline)).toEqual(["a"]);
+  });
+
+  it("ignores newly-added tasks and fixed tasks", () => {
+    const current = [
+      result({ taskId: "b", success: true }), // fixed (fail→pass)
+      result({ taskId: "d", success: false }), // new, not in baseline
+    ];
+    expect(regressions(current, baseline)).toEqual([]);
+  });
+
+  it("returns [] when nothing regressed", () => {
+    expect(regressions([result({ taskId: "a", success: true })], baseline)).toEqual([]);
   });
 });

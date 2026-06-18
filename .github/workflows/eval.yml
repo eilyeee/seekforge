@@ -1,0 +1,41 @@
+name: Eval (regression gate)
+
+# Evals call the real DeepSeek API (cost + non-determinism), so this is NOT on
+# the PR gate. Run it on demand; it fails ONLY on a pass→fail vs evals/baseline.json
+# (known-red/flaky tasks stay non-blocking). Without the DEEPSEEK_API_KEY secret
+# the harness skips and the job passes.
+on:
+  workflow_dispatch:
+  # Uncomment to also run weekly (Mondays 06:00 UTC):
+  # schedule:
+  #   - cron: "0 6 * * 1"
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: eval vs baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run evals against the baseline
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: pnpm --filter @seekforge/eval-harness eval -- --baseline evals/baseline.json --fail-on-regression
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/reports/
+          if-no-files-found: ignore

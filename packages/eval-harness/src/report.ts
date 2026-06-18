@@ -84,6 +84,17 @@ export function compare(current: TaskResult[], baselineJson: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Task ids that regressed against the baseline: a task the baseline recorded as
+ * a success that is now a failure. Tasks newly added, removed, or already
+ * failing in the baseline are NOT regressions — so a known-red/flaky case never
+ * trips the gate; only a genuine pass→fail does. Used by `--fail-on-regression`.
+ */
+export function regressions(current: TaskResult[], baselineJson: string): string[] {
+  const base = new Map(parseBaseline(baselineJson).map((r) => [r.taskId, r]));
+  return current.filter((r) => base.get(r.taskId)?.success && !r.success).map((r) => r.taskId);
+}
+
 export type WrittenReport = { markdownPath: string; jsonPath: string };
 
 /** Writes <ISO-timestamp>.md and .json under dir; returns both paths. */

@@ -5,6 +5,8 @@
  * Options:
  *   --task <id>            Run only this task.
  *   --baseline <file>      Compare results against a previous report .json.
+ *   --fail-on-regression   With --baseline: exit 1 ONLY on a pass→fail vs the
+ *                          baseline (known-red/flaky tasks stay non-blocking).
  *   --keep                 Keep the throwaway workspaces for debugging.
  *   --variant <name>       Run under a single named variant (repeatable; see
  *                          variants.ts). Default: control.
@@ -23,7 +25,7 @@ import { toAbJson, toAbMarkdown, compareVariants, type VariantRun } from "./ab.j
 import { createDefaultAgentFactory } from "./agent-factory.js";
 import { loadEvalConfig } from "./config.js";
 import { fixturesDir, reportsDir, tasksDir } from "./paths.js";
-import { compare, toMarkdown, writeReport } from "./report.js";
+import { compare, regressions, toMarkdown, writeReport } from "./report.js";
 import { rankSkills, toSkillRankingMarkdown } from "./skill-ranking.js";
 import { assertFixturesExist, loadTasks, type TaskDef } from "./tasks.js";
 import { runTask, type TaskResult } from "./task-runner.js";
@@ -37,10 +39,17 @@ type CliArgs = {
   ab?: [string, string];
   skillRanking: boolean;
   listVariants: boolean;
+  failOnRegression: boolean;
 };
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { keep: false, variants: [], skillRanking: false, listVariants: false };
+  const args: CliArgs = {
+    keep: false,
+    variants: [],
+    skillRanking: false,
+    listVariants: false,
+    failOnRegression: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -64,6 +73,9 @@ function parseArgs(argv: string[]): CliArgs {
       }
       case "--skill-ranking":
         args.skillRanking = true;
+        break;
+      case "--fail-on-regression":
+        args.failOnRegression = true;
         break;
       case "--list-variants":
         args.listVariants = true;
@@ -162,8 +174,11 @@ async function main(): Promise<void> {
   const results = await runVariant(variantName, tasks, config, args.keep);
 
   console.log(`\n${toMarkdown(results)}`);
+  let regressed: string[] = [];
   if (args.baseline !== undefined) {
-    console.log(`\nComparison vs baseline:\n${compare(results, readFileSync(args.baseline, "utf8"))}`);
+    const baselineJson = readFileSync(args.baseline, "utf8");
+    console.log(`\nComparison vs baseline:\n${compare(results, baselineJson)}`);
+    regressed = regressions(results, baselineJson);
   }
   if (args.skillRanking) {
     console.log(`\n${toSkillRankingMarkdown(rankSkills(results))}`);
@@ -172,7 +187,20 @@ async function main(): Promise<void> {
   const { markdownPath, jsonPath } = writeReport(results);
   console.log(`\nReport written:\n  ${markdownPath}\n  ${jsonPath}`);
 
-  if (results.some((r) => !r.success)) process.exitCode = 1;
+  // --fail-on-regression: the gate fails ONLY on a pass→fail vs the baseline
+  // (a known-red/flaky task stays non-blocking). Without it, any absolute
+  // failure fails the run (the default local behavior).
+  if (args.failOnRegression) {
+    if (args.baseline === undefined) throw new Error("--fail-on-regression requires --baseline <file>");
+    if (regressed.length > 0) {
+      console.error(`\n✗ ${regressed.length} regression(s) vs baseline: ${regressed.join(", ")}`);
+      process.exitCode = 1;
+    } else {
+      console.log("\n✓ no regressions vs baseline");
+    }
+  } else if (results.some((r) => !r.success)) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err: unknown) => {
