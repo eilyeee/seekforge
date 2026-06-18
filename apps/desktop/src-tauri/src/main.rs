@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-use serve::{ServeChild, URL_TIMEOUT};
+use serve::{Diagnostics, Resolution, ServeChild, ServeCommand, URL_TIMEOUT};
 
 /// Holds the running serve child so the exit handler can kill it.
 struct ServerState(Mutex<Option<ServeChild>>);
@@ -161,14 +161,32 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
     let workspace = serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref())
         .ok_or_else(|| "could not resolve a workspace directory".to_string())?;
 
-    let mut child = ServeChild::spawn(&cmd, &workspace, &extra_env).map_err(|e| {
-        format!(
-            "failed to start the server (`{} {}` in {}): {e}",
-            cmd.program,
-            cmd.args.join(" "),
-            workspace.display()
-        )
-    })?;
+    let resolution = if from_sidecar {
+        Resolution::Sidecar
+    } else {
+        Resolution::EnvPathOrDev
+    };
+
+    let mut child = match ServeChild::spawn(&cmd, &workspace, &extra_env) {
+        Ok(child) => child,
+        Err(e) => {
+            let msg = format!(
+                "failed to start the server (`{} {}` in {}): {e}",
+                cmd.program,
+                cmd.args.join(" "),
+                workspace.display()
+            );
+            return Err(with_diagnostics(
+                msg,
+                "spawn error",
+                resolution,
+                &cmd,
+                &workspace,
+                false,
+                "",
+            ));
+        }
+    };
 
     match child.wait_for_url(URL_TIMEOUT) {
         Ok(url) => {
@@ -182,7 +200,7 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
         }
         Err(captured) => {
             child.kill();
-            Err(format!(
+            let msg = format!(
                 "the server did not print its URL within {}s.\n\nCaptured output:\n{}",
                 URL_TIMEOUT.as_secs(),
                 if captured.is_empty() {
@@ -190,8 +208,63 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
                 } else {
                     captured.as_str()
                 }
+            );
+            Err(with_diagnostics(
+                msg,
+                "URL-wait timeout",
+                resolution,
+                &cmd,
+                &workspace,
+                false,
+                &captured,
             ))
         }
+    }
+}
+
+/// Builds the diagnostics report for a startup failure, writes it best-effort to
+/// the OS temp dir, and appends the file path to the user-facing `message` so
+/// the dialog tells them where to look. If writing the file fails, the original
+/// message is returned unchanged (best-effort — never panics).
+#[allow(clippy::too_many_arguments)]
+fn with_diagnostics(
+    message: String,
+    failure: &str,
+    resolution: Resolution,
+    cmd: &ServeCommand,
+    workspace: &std::path::Path,
+    url_seen: bool,
+    captured: &str,
+) -> String {
+    // A second-resolution timestamp: ISO-8601 for the body, digits-only for the
+    // filename. Computed from UNIX_EPOCH so we need no chrono dependency.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let timestamp = format!("{now} (unix seconds)");
+
+    let diag = Diagnostics {
+        failure,
+        resolution: Some(resolution),
+        program: Some(&cmd.program),
+        args: &cmd.args,
+        workspace: Some(workspace),
+        port: None,
+        url_seen,
+        captured,
+    };
+    let body = serve::diagnostics_text(
+        &timestamp,
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        &diag,
+    );
+
+    match serve::write_diagnostics_file(&body, &now.to_string()) {
+        Some(path) => format!("{message}\n\nDiagnostics written to:\n{}", path.display()),
+        None => message,
     }
 }
 

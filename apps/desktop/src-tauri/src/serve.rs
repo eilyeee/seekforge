@@ -216,6 +216,127 @@ pub fn resolve_workspace(
 }
 
 // ---------------------------------------------------------------------------
+// Startup-failure diagnostics
+// ---------------------------------------------------------------------------
+
+/// How the serve command was resolved, for the diagnostics report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// Bundled sidecar next to the app binary.
+    Sidecar,
+    /// `SEEKFORGE_SERVE_CMD` override / PATH lookup / repo dev fallback — all
+    /// the cases routed through [`resolve_serve_command`].
+    EnvPathOrDev,
+}
+
+impl Resolution {
+    fn label(self) -> &'static str {
+        match self {
+            Resolution::Sidecar => "bundled sidecar",
+            Resolution::EnvPathOrDev => "env / PATH / dev-fallback",
+        }
+    }
+}
+
+/// All the fields a startup-failure diagnostics report can carry. Everything is
+/// optional except the captured output, because a failure can happen before some
+/// of these are known (e.g. a spawn error has no "URL seen" notion yet).
+#[derive(Debug, Default, Clone)]
+pub struct Diagnostics<'a> {
+    /// What went wrong, e.g. "spawn error" or "URL-wait timeout".
+    pub failure: &'a str,
+    /// How serve was resolved (sidecar vs env/PATH/dev), if a command resolved.
+    pub resolution: Option<Resolution>,
+    /// The program that was (or would have been) executed.
+    pub program: Option<&'a str>,
+    /// The args passed to the program.
+    pub args: &'a [String],
+    /// The workspace dir used as the child's cwd.
+    pub workspace: Option<&'a Path>,
+    /// The port, if known (the shell asks for `--port 0`, so usually unknown).
+    pub port: Option<u16>,
+    /// Whether a URL line was ever observed on stdout.
+    pub url_seen: bool,
+    /// The captured child stdout+stderr (what the dialog already shows).
+    pub captured: &'a str,
+}
+
+/// Builds the diagnostics report body. Pure: takes the timestamp/version/os/arch
+/// explicitly (the caller passes `env!`/`std::env::consts`/a real timestamp) so
+/// it is fully unit-testable without touching the clock or environment.
+pub fn diagnostics_text(
+    timestamp: &str,
+    app_version: &str,
+    os: &str,
+    arch: &str,
+    d: &Diagnostics,
+) -> String {
+    let mut s = String::new();
+    s.push_str("SeekForge desktop startup diagnostics\n");
+    s.push_str("=====================================\n\n");
+    s.push_str(&format!("timestamp:    {timestamp}\n"));
+    s.push_str(&format!("app version:  {app_version}\n"));
+    s.push_str(&format!("os / arch:    {os} / {arch}\n"));
+    s.push_str(&format!("failure:      {}\n", d.failure));
+    s.push_str(&format!(
+        "resolved via: {}\n",
+        d.resolution.map(Resolution::label).unwrap_or("(unresolved)")
+    ));
+    s.push_str(&format!(
+        "command:      {}\n",
+        match d.program {
+            Some(p) if d.args.is_empty() => p.to_string(),
+            Some(p) => format!("{p} {}", d.args.join(" ")),
+            None => "(none)".to_string(),
+        }
+    ));
+    s.push_str(&format!(
+        "binary path:  {}\n",
+        d.program.unwrap_or("(none)")
+    ));
+    s.push_str(&format!(
+        "workspace:    {}\n",
+        d.workspace
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    ));
+    s.push_str(&format!(
+        "port:         {}\n",
+        d.port
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "(unknown)".to_string())
+    ));
+    s.push_str(&format!(
+        "url line seen: {}\n",
+        if d.url_seen { "yes" } else { "no" }
+    ));
+    s.push_str("\nCaptured child stdout + stderr:\n");
+    s.push_str("------------------------------\n");
+    if d.captured.is_empty() {
+        s.push_str("(none)\n");
+    } else {
+        s.push_str(d.captured);
+        if !d.captured.ends_with('\n') {
+            s.push('\n');
+        }
+    }
+    s
+}
+
+/// Writes the diagnostics report to a best-effort file in the OS temp dir and
+/// returns its path. Returns `None` if writing fails — callers must still show
+/// the dialog (never panic). `timestamp_slug` is used in the filename and should
+/// be filesystem-safe (e.g. digits only).
+pub fn write_diagnostics_file(body: &str, timestamp_slug: &str) -> Option<PathBuf> {
+    let path = std::env::temp_dir()
+        .join(format!("seekforge-desktop-diagnostics-{timestamp_slug}.txt"));
+    match std::fs::write(&path, body) {
+        Ok(()) => Some(path),
+        Err(_) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Child process supervision
 // ---------------------------------------------------------------------------
 
@@ -543,6 +664,73 @@ mod tests {
             Some(PathBuf::from("/home/u"))
         );
         assert_eq!(resolve_workspace(None, None, None), None);
+    }
+
+    // --- diagnostics_text ---
+
+    #[test]
+    fn diagnostics_text_includes_all_fields() {
+        let args = vec!["serve".to_string(), "--port".to_string(), "0".to_string()];
+        let d = Diagnostics {
+            failure: "URL-wait timeout",
+            resolution: Some(Resolution::Sidecar),
+            program: Some("/Apps/SeekForge.app/Contents/MacOS/seekforge-server"),
+            args: &args,
+            workspace: Some(Path::new("/home/u/proj")),
+            port: None,
+            url_seen: false,
+            captured: "boot...\nerror: boom",
+        };
+        let out = diagnostics_text("2026-06-22T00:00:00Z", "0.7.0", "macos", "aarch64", &d);
+
+        assert!(out.contains("2026-06-22T00:00:00Z"));
+        assert!(out.contains("0.7.0"));
+        assert!(out.contains("macos / aarch64"));
+        assert!(out.contains("URL-wait timeout"));
+        assert!(out.contains("bundled sidecar"));
+        assert!(out.contains("/Apps/SeekForge.app/Contents/MacOS/seekforge-server serve --port 0"));
+        assert!(out.contains("/home/u/proj"));
+        assert!(out.contains("port:         (unknown)"));
+        assert!(out.contains("url line seen: no"));
+        // Captured output is included and newline-terminated.
+        assert!(out.contains("boot...\nerror: boom\n"));
+    }
+
+    #[test]
+    fn diagnostics_text_handles_missing_fields() {
+        let d = Diagnostics {
+            failure: "spawn error",
+            resolution: None,
+            program: None,
+            args: &[],
+            workspace: None,
+            port: Some(52345),
+            url_seen: true,
+            captured: "",
+        };
+        let out = diagnostics_text("t", "9.9.9", "linux", "x86_64", &d);
+
+        assert!(out.contains("failure:      spawn error"));
+        assert!(out.contains("resolved via: (unresolved)"));
+        assert!(out.contains("command:      (none)"));
+        assert!(out.contains("binary path:  (none)"));
+        assert!(out.contains("workspace:    (none)"));
+        assert!(out.contains("port:         52345"));
+        assert!(out.contains("url line seen: yes"));
+        // Empty capture shows the placeholder.
+        assert!(out.contains("(none)\n"));
+    }
+
+    #[test]
+    fn write_diagnostics_file_roundtrips() {
+        let path = write_diagnostics_file("hello body", "test-12345").unwrap();
+        assert!(path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("seekforge-desktop-diagnostics-test-12345"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello body");
+        let _ = fs::remove_file(&path);
     }
 
     // --- wait_for_url_from_lines ---
