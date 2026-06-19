@@ -17,6 +17,7 @@ import {
 import { t } from "../i18n.js";
 import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
+import { isCostBudgetExceeded } from "../cost-budget.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules } from "../tool-gating.js";
@@ -74,6 +75,12 @@ export type RunOptions = {
   replayUserMessages?: boolean;
   /** stream-json output: emit partial assistant text deltas (--include-partial-messages). */
   includePartialMessages?: boolean;
+  /**
+   * Per-run cost budget in USD (CLI --max-cost). The run aborts gracefully once
+   * cumulative cost reaches it. Falls back to config.maxCostUsd; off when both
+   * are absent/non-positive.
+   */
+  maxCostUsd?: number;
 };
 
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
@@ -146,6 +153,21 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     controller.abort();
   };
   process.on("SIGINT", onSigint);
+
+  // --max-cost (or config.maxCostUsd): stop the run once cumulative cost
+  // reaches the budget by aborting the same controller Ctrl+C uses (graceful
+  // cancel, trace kept). Off when unset/non-positive. costUsd reported on
+  // usage.updated/session.completed is cumulative-per-run, so we just compare
+  // the latest value against the budget and abort once on the crossing.
+  const costBudgetUsd = opts.maxCostUsd ?? config.maxCostUsd;
+  let costBudgetReached = false;
+  const enforceCostBudget = (costUsd: number): void => {
+    if (costBudgetReached || controller.signal.aborted) return;
+    if (!isCostBudgetExceeded(costUsd, costBudgetUsd)) return;
+    costBudgetReached = true;
+    console.error(t("render.costBudgetReached", { budget: (costBudgetUsd as number).toFixed(4) }));
+    controller.abort();
+  };
 
   // Machine formats (json/stream-json): no streaming/colors, and no interactive
   // prompts — anything that would ask is denied (pair with -y). Reasoning
@@ -298,9 +320,13 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       render(event);
       if (event.type === "model.message") numTurns++;
       if (event.type === "session.created") sessionId = event.sessionId;
+      // Prefer aborting mid-run on a usage event; session.completed.report.usage
+      // is the backstop when usage is only reported at the end.
+      if (event.type === "usage.updated") enforceCostBudget(event.usage.costUsd);
       if (event.type === "session.completed") {
         completed = true;
         finalReport = event.report;
+        enforceCostBudget(event.report.usage.costUsd);
       }
       if (event.type === "session.failed") {
         outcome = outcomeFromErrorCode(event.error.code, event.error.message);

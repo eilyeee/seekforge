@@ -30,6 +30,7 @@ import {
   memoryRemoveCommand,
   memoryStatsCommand,
 } from "./commands/memory.js";
+import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { loopCommand } from "./commands/loop.js";
@@ -259,11 +260,13 @@ program
   .option("--strict-mcp-config", "use only --mcp-config servers, ignore config-file MCP servers")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .option("--plan", "plan first (read-only), confirm, then execute in the same session")
+  .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
   .description("run a development task in the current project")
-  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean }) => {
+  .action(async (task: string, opts: SharedRunOpts & { plan?: boolean; maxCost?: number }) => {
     await runTaskCommand(task, {
       mode: "edit",
       yes: opts.yes,
+      maxCostUsd: opts.maxCost,
       model: opts.model,
       outputFormat: resolveOutputFormatOrExit(opts),
       continueLast: opts.continue,
@@ -425,6 +428,15 @@ program
   .description("continue an existing session with its full history")
   .action(async (sessionId: string, task: string, opts: { yes?: boolean; model?: string }) => {
     await runTaskCommand(task, { mode: "edit", yes: opts.yes, model: opts.model, resumeSessionId: sessionId });
+  });
+
+program
+  .command("replay")
+  .argument("<session-id>", "session to replay (see `seekforge sessions`)")
+  .option("--verbose", "print full tool args and results")
+  .description("re-render a stored session to the terminal (deterministic, no model calls)")
+  .action((sessionId: string, opts: { verbose?: boolean }) => {
+    replayCommand(sessionId, { verbose: opts.verbose });
   });
 
 program

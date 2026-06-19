@@ -16,6 +16,7 @@ import {
   resolveOutputFormat,
 } from "../output-format.js";
 import { composePrompt } from "../stdin-prompt.js";
+import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
@@ -33,6 +34,22 @@ function test(name: string, fn: () => void): void {
     process.exit(1);
   }
 }
+
+// --- isCostBudgetExceeded (per-run cost budget) -----------------------------
+test("isCostBudgetExceeded: off when no budget set", () => {
+  assert.equal(isCostBudgetExceeded(999, undefined), false);
+});
+test("isCostBudgetExceeded: non-positive budget is treated as off", () => {
+  assert.equal(isCostBudgetExceeded(5, 0), false);
+  assert.equal(isCostBudgetExceeded(5, -1), false);
+});
+test("isCostBudgetExceeded: below budget keeps running", () => {
+  assert.equal(isCostBudgetExceeded(0.4, 0.5), false);
+});
+test("isCostBudgetExceeded: at or over budget stops", () => {
+  assert.equal(isCostBudgetExceeded(0.5, 0.5), true);
+  assert.equal(isCostBudgetExceeded(0.51, 0.5), true);
+});
 
 // --- composePrompt (stdin precedence) ---------------------------------------
 test("composePrompt: inline only", () => {

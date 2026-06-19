@@ -153,6 +153,13 @@ export const commands = {
       "{verb} session {id}: {restored} restored, {deleted} deleted, {skipped} skipped.",
     "cmd.rewind.review": "Review the working tree with `seekforge diff`.",
 
+    // ── cmd.replay.* ────────────────────────────────────────────────────
+    "cmd.replay.header": "replaying session {id} — {title}",
+    "cmd.replay.userLabel": "user:",
+    "cmd.replay.assistantLabel": "assistant:",
+    "cmd.replay.toolLabel": "tool:",
+    "cmd.replay.empty": "(this session has no recorded events or messages to replay)",
+
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge server: http://127.0.0.1:{port}/?token={token}",
     "cmd.serve.workspaces": "Serving {count} workspace(s) on 127.0.0.1 only:",
@@ -337,6 +344,13 @@ export const commands = {
     "cmd.rewind.summary":
       "{verb} 会话 {id}：恢复 {restored} 个，删除 {deleted} 个，跳过 {skipped} 个。",
     "cmd.rewind.review": "使用 `seekforge diff` 查看工作树。",
+
+    // ── cmd.replay.* ────────────────────────────────────────────────────
+    "cmd.replay.header": "正在回放会话 {id} — {title}",
+    "cmd.replay.userLabel": "用户：",
+    "cmd.replay.assistantLabel": "助手：",
+    "cmd.replay.toolLabel": "工具：",
+    "cmd.replay.empty": "（该会话没有可回放的事件或消息记录）",
 
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge 服务器：http://127.0.0.1:{port}/?token={token}",

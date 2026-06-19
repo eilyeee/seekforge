@@ -37,6 +37,13 @@ export type CliConfig = {
   /** UI language for CLI chrome (errors, prompts, command output). */
   locale?: "en" | "zh-CN";
   /**
+   * Default per-run cost budget in USD: a `run`/`ask` stops once cumulative
+   * cost reaches it (graceful abort, trace kept). Overridden by the CLI
+   * `--max-cost` flag. Off when unset/non-positive. Edit the file directly;
+   * not settable via `config set`.
+   */
+  maxCostUsd?: number;
+  /**
    * Stronger model for plan runs (`/plan`) and failure escalation, resolved on
    * the same key/endpoint (e.g. "deepseek-v4-pro" while edits run on flash).
    * Edit the file directly; not settable via `config set`.
