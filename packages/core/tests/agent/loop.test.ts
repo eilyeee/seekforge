@@ -195,6 +195,46 @@ describe("agent loop", () => {
     expect(execProvider.requests[0]!.messages.some((m) => m.content.includes("## Plan"))).toBe(true);
   });
 
+  it("a run that fails mid-way leaves a resumable trace (interruption recovery)", async () => {
+    // First run does one tool call, then the provider dies on the next turn
+    // (script exhausted) -> the run fails. The turn so far is already persisted.
+    const dyingProvider = fakeProvider([
+      response({
+        toolCalls: [{ id: "t1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+    ]);
+    const first = createAgentCore({
+      provider: dyingProvider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: "x" } }),
+      confirm: async () => true,
+    });
+    const firstEvents = await collect(
+      first.runTask({ ...baseInput, projectPath: workspace, task: "fix the parser bug" }),
+    );
+    const created = firstEvents.find((e) => e.type === "session.created");
+    const sessionId = created && created.type === "session.created" ? created.sessionId : "";
+    expect(firstEvents.some((e) => e.type === "session.failed")).toBe(true);
+    // The interrupted task + first turn are persisted, so the session resumes.
+    expect(loadSessionMessages(workspace, sessionId).some((m) => m.content.includes("fix the parser bug"))).toBe(
+      true,
+    );
+
+    // Resuming continues the SAME session and replays the prior history.
+    const resumeProvider = fakeProvider([response({ content: "## Summary\nfixed" })]);
+    const second = createAgentCore({
+      provider: resumeProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const events = await collect(
+      second.runTask({ ...baseInput, projectPath: workspace, task: "continue", resumeSessionId: sessionId }),
+    );
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+    expect(resumeProvider.requests[0]!.messages.some((m) => m.content.includes("fix the parser bug"))).toBe(true);
+    expect(readSessionMeta(workspace, sessionId)!.status).toBe("completed");
+  });
+
   it("yields command.output events emitted via ctx.emitOutput BEFORE the tool.completed", async () => {
     const provider = fakeProvider([
       response({
