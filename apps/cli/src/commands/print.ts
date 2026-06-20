@@ -12,6 +12,7 @@ export type PrintCliOptions = {
   yes?: boolean;
   model?: string;
   ask?: boolean;
+  maxCost?: number;
   json?: boolean;
   outputFormat?: string;
   continueLast?: boolean;
@@ -77,6 +78,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
   await runTaskCommand(prompt, {
     mode: opts.ask ? "ask" : "edit",
     yes: opts.yes,
+    maxCostUsd: opts.maxCost,
     model: opts.model,
     outputFormat: format,
     continueLast: opts.continueLast,

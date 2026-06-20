@@ -168,6 +168,7 @@ program
   .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
   .option("-y, --yes", "with -p: auto-approve write/execute permissions")
   .option("-m, --model <model>", "with -p: override model")
+  .option("--max-cost <usd>", "with -p: stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
   .option(
     "--output-format <fmt>",
     "with -p: text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
@@ -740,6 +741,7 @@ program
       ask?: boolean;
       yes?: boolean;
       model?: string;
+      maxCost?: number;
       outputFormat?: string;
       json?: boolean;
       continue?: boolean;
@@ -769,6 +771,7 @@ program
         ask: root.ask,
         yes: root.yes ?? opts.yes,
         model: root.model ?? opts.model,
+        maxCost: root.maxCost,
         outputFormat: root.outputFormat,
         json: root.json,
         continueLast: root.continue,

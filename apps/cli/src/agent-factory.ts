@@ -123,6 +123,10 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     ...(config.compaction ? { compaction: config.compaction } : {}),
     ...(config.planModel ? { planModel: config.planModel } : {}),
     ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+    ...(typeof config.verifyCommand === "string" && config.verifyCommand.trim()
+      ? { verifyCommand: config.verifyCommand }
+      : {}),
+    ...(config.finalizeReview ? { finalizeReview: true } : {}),
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),

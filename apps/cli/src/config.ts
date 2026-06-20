@@ -56,6 +56,20 @@ export type CliConfig = {
    */
   escalateOnFailure?: boolean;
   /**
+   * Self-verification: a shell command (e.g. "pnpm test") the agent is nudged to
+   * run before finishing whenever it has edited files but not run it since. The
+   * command runs through the normal run_command path (respecting permission
+   * mode); the nudge fires at most once per run. Off when unset/empty. Edit the
+   * file directly; not settable via `config set`.
+   */
+  verifyCommand?: string;
+  /**
+   * Default-off: when the agent finishes after editing files, nudge it once to
+   * self-review its own diff before completing. Edit the file directly; not
+   * settable via `config set`.
+   */
+  finalizeReview?: boolean;
+  /**
    * Default-off: confidence threshold (0..1) above which auto-extracted memory
    * facts are written DIRECTLY to project.md as approved, instead of queued as
    * pending candidates. Unset = every extracted fact stays pending for review.

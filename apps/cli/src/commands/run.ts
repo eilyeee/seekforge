@@ -115,6 +115,17 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     return;
   }
 
+  // A hand-written config.maxCostUsd of the wrong type (e.g. the string "0.01")
+  // would otherwise crash later at .toFixed() when the budget is hit. Fail fast
+  // with a clear config error. The --max-cost flag is already number-validated.
+  if (
+    config.maxCostUsd !== undefined &&
+    (typeof config.maxCostUsd !== "number" || !Number.isFinite(config.maxCostUsd))
+  ) {
+    fail(t("err.maxCostUsdNumber"), { hint: t("err.maxCostUsdNumberHint") });
+    return;
+  }
+
   // Resolve which session (if any) to resume: explicit --resume wins over -c.
   let resumeSessionId = opts.resumeSessionId;
   if (!resumeSessionId && opts.continueLast) {

@@ -24,6 +24,8 @@ export const common = {
     "err.noPromptHint":
       "pass one inline (seekforge -p \"…\") or pipe it (cat task.md | seekforge -p)",
     "err.maxTurnsPositive": "--max-turns must be a positive integer",
+    "err.maxCostUsdNumber": "config maxCostUsd must be a number",
+    "err.maxCostUsdNumberHint": 'edit .seekforge/config.json and set maxCostUsd to a number, e.g. 0.5 (not "0.5")',
     "err.inputFormatTextStream": "--input-format must be \"text\" or \"stream-json\" (got \"{format}\")",
     "err.configSetUnknown": "Unknown key \"{key}\". Allowed: {allowed}",
     "err.configSetBadValue": "Invalid value for \"{key}\". Allowed: {allowed}",
@@ -126,6 +128,8 @@ export const common = {
     "err.noPromptHint":
       "请内联传入（seekforge -p \"…\"）或通过管道传入（cat task.md | seekforge -p）",
     "err.maxTurnsPositive": "--max-turns 必须是正整数",
+    "err.maxCostUsdNumber": "配置项 maxCostUsd 必须是数字",
+    "err.maxCostUsdNumberHint": '请编辑 .seekforge/config.json，将 maxCostUsd 设为数字，例如 0.5（不要写成 "0.5"）',
     "err.inputFormatTextStream": "--input-format 必须是 \"text\" 或 \"stream-json\"（当前为 \"{format}\"）",
     "err.configSetUnknown": "未知键 \"{key}\"。允许的键：{allowed}",
     "err.configSetBadValue": "\"{key}\" 的值无效。允许的值：{allowed}",
