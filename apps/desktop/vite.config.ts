@@ -7,6 +7,11 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist",
+    // The only chunk over Rollup's default 500 kB warning is the CodeMirror
+    // editor (~1 MB), which is deliberately lazy-loaded (see FilesView) so it
+    // never lands in the initial bundle. Raise the limit just past it so a real
+    // regression in any eagerly-loaded chunk still warns.
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         // Split the rarely-changing React runtime into its own chunk so app
