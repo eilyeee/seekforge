@@ -451,6 +451,91 @@ describe("agent loop: turn-budget wrap-up", () => {
     expect(afterCut.filter((m) => m.role === "user")).toHaveLength(1);
     expect(beforeCut[afterCut.length]!.content).toBe("continue");
   });
+
+  it("finalize gate: nudges to run the verify command after edits, then completes", async () => {
+    // turn 1 edits a file; turn 2 declares done (gate fires verify nudge);
+    // turn 3 declares done again (nudge already spent -> run completes).
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "all done" }),
+      response({ content: "all done" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      // apply_patch result carries meta.path so the loop records a changed file.
+      dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
+      confirm: async () => true,
+      verifyCommand: "pnpm test",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+
+    // The gate surfaced a notice and gave the model another turn.
+    const notice = events.find((e) => e.type === "notice");
+    expect(notice && notice.type === "notice" ? notice.message : "").toContain("verif");
+    expect(provider.requests).toHaveLength(3);
+    // The third request carries the transient verify nudge.
+    expect(
+      provider.requests[2]!.messages.some(
+        (m) => m.content.includes("[harness]") && m.content.includes("pnpm test"),
+      ),
+    ).toBe(true);
+
+    // The run still finishes, and the nudge stayed out of the stored trace.
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+    const created = events.find((e) => e.type === "session.created");
+    const sessionId = created && created.type === "session.created" ? created.sessionId : "";
+    const traced = loadSessionMessages(workspace, sessionId);
+    expect(traced.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(traced.some((m) => m.content.includes("[harness]"))).toBe(false);
+  });
+
+  it("finalize gate: accepts the final answer on the last turn instead of failing", async () => {
+    // maxAgentTurns=2: turn 0 edits, turn 1 declares done. The verify gate
+    // WOULD nudge, but no turn remains — it must accept the completion rather
+    // than continue into a spurious max_turns_exceeded.
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "done at the buzzer" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
+      confirm: async () => true,
+      verifyCommand: "pnpm test",
+      limits: { maxAgentTurns: 2 },
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const completed = events.find((e) => e.type === "session.completed");
+    expect(completed).toBeDefined();
+    expect(events.some((e) => e.type === "session.failed")).toBe(false);
+    expect(events.some((e) => e.type === "notice")).toBe(false); // gate stood down
+    expect(provider.requests).toHaveLength(2);
+  });
+
+  it("finalize gate: no verify command means the run finishes immediately after edits", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "done" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
+      confirm: async () => true,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(provider.requests).toHaveLength(2); // no extra finalize turn
+    expect(events.some((e) => e.type === "notice")).toBe(false);
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+  });
 });
 
 describe("agent loop: LLM compaction", () => {

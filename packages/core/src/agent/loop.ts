@@ -40,6 +40,8 @@ import {
   type DispatchManager,
 } from "../subagents/index.js";
 import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
+import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
+import type { PlanItem } from "../tools/builtins/plan.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -148,6 +150,20 @@ export type AgentCoreDeps = {
    * they regressed quality and cost on every edit — see CHANGELOG round 36.)
    */
   escalateOnFailure?: boolean;
+  /**
+   * Self-verification gate: a shell command (e.g. "pnpm test") the agent is
+   * nudged to run before finishing when it has edited files but not run it
+   * since the last edit. The nudge fires at most once per run; the command
+   * itself runs through the model's normal run_command path (so it respects
+   * the session's permission mode). Off when unset/empty.
+   */
+  verifyCommand?: string;
+  /**
+   * Default-off: when the agent finishes after editing files, nudge it once to
+   * self-review its own diff (leftover debug code, missed cases, task coverage)
+   * before the run completes. Costs one extra turn when it fires.
+   */
+  finalizeReview?: boolean;
   /**
    * Inject the task-relevant project-memory brief into the system prompt.
    * Default true; set false to run without memory (used by the eval A/B that
@@ -890,6 +906,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         let reflectionCooldown = 0;
         // Default-off failure escalation (see AgentCoreDeps): one-shot.
         let escalated = false;
+        // Finalize gate (see finalize.ts): plan/verify/review checks run when
+        // the model declares it is done. Each kind fires at most once per run.
+        const finalizeFired = new Set<FinalizeKind>();
+        let lastPlanItems: PlanItem[] | undefined;
+        // Whether deps.verifyCommand has run since the most recent edit: an edit
+        // resets it, running the command sets it, so the verify nudge fires only
+        // for changes that have not been checked.
+        let verifyRanSinceEdit = false;
 
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
           throwIfCancelled();
@@ -963,6 +987,35 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           if (res.content) yield emit({ type: "model.message", content: res.content });
 
           if (res.toolCalls.length === 0) {
+            // Finalize gate (finalize.ts): before accepting "done", surface the
+            // highest-priority unmet check (finish plan → verify → self-review)
+            // as a one-time transient nudge and let the model continue. Each
+            // kind fires once, so this adds at most a few turns and always
+            // terminates.
+            const nudge = nextFinalizeNudge({
+              planItems: lastPlanItems,
+              changedFiles: changedFiles.size,
+              verifyCommand: deps.verifyCommand,
+              verifyRanSinceEdit,
+              reviewEnabled: deps.finalizeReview === true,
+              fired: finalizeFired,
+            });
+            // Only nudge when at least one more turn remains for the model to
+            // act on it. On the final turn, accept the completion as-is —
+            // otherwise the nudge would consume the model's last answer and the
+            // run would end with finalContent undefined (a spurious
+            // max_turns_exceeded failure instead of the work it just finished).
+            if (nudge && turnsLeft > 1) {
+              finalizeFired.add(nudge.kind);
+              yield emit({ type: "notice", level: "info", message: nudge.notice });
+              // The model's "done" turn joins the in-context history so the
+              // follow-up reads coherently, then the nudge. Both TRANSIENT (not
+              // traced), like the wrap-up/reflection/escalation nudges — the
+              // stored session keeps exactly one user message per run.
+              if (res.content) messages.push({ role: "assistant", content: res.content });
+              messages.push({ role: "user", content: nudge.message });
+              continue;
+            }
             finalContent = res.content;
             // Trace the final assistant message so session resume replays it.
             trace.message({ role: "assistant", content: res.content });
@@ -1083,9 +1136,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             if (result.ok && result.meta?.path && (tc.name === "apply_patch" || tc.name === "write_file")) {
               changedFiles.add(result.meta.path);
               yield emit({ type: "file.changed", path: result.meta.path });
+              // New edits invalidate any earlier verify run (finalize gate #1).
+              verifyRanSinceEdit = false;
             }
             if (tc.name === "run_command" && result.meta?.command) {
               commandsRun.push(result.meta.command);
+              // A verify run counts only when the command actually executed it.
+              const vc = deps.verifyCommand?.trim();
+              if (result.ok && vc && result.meta.command.includes(vc)) verifyRanSinceEdit = true;
+            }
+            // Track the latest published plan for the finalize completeness check.
+            if (tc.name === "update_plan" && result.ok) {
+              const items = (result.data as { items?: PlanItem[] } | undefined)?.items;
+              if (Array.isArray(items)) lastPlanItems = items;
             }
             callResults[i] = result;
             for (const ev of queue.drainNow()) yield ev;

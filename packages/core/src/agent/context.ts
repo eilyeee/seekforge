@@ -1,9 +1,32 @@
-import type { ChatMessage } from "@seekforge/shared";
+import type { ChatMessage, ProviderToolCall } from "@seekforge/shared";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 
-/** Rough estimate: ~4 chars per token plus per-message overhead. */
+/**
+ * CJK ranges where one character roughly equals one token under most
+ * subword tokenizers: CJK Unified Ideographs (incl. Extension A), Hiragana,
+ * Katakana, and Hangul syllables. These cover the bulk of Chinese/Japanese/
+ * Korean text; we deliberately keep the set small and readable rather than
+ * exhaustive (e.g. rare extension planes aren't worth the regex bloat).
+ */
+const CJK_REGEX = /[぀-ヿ㐀-䶿一-鿿가-힯]/gu;
+
+/**
+ * Estimate token count — an HONEST heuristic, NOT a real tokenizer. DeepSeek's
+ * actual tokenizer isn't reliably available in JS, and a wrong one is worse
+ * than a transparent guess, so we keep this dependency-free.
+ *
+ * The plain `length / 4` rule under-counts CJK by ~4x (Chinese/Japanese/Korean
+ * characters cost ~1 token each, not 0.25). So we count CJK characters as ~1
+ * token apiece and the remaining (mostly-ASCII / code) characters at the old
+ * ~4-chars-per-token rate: `cjkCount + ceil(nonCjkLen / 4)`.
+ *
+ * Pure and monotonic: every extra character adds either 1 (CJK) or ≥0 to the
+ * non-CJK bucket, so more text never lowers the estimate.
+ */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  const cjkCount = (text.match(CJK_REGEX) ?? []).length;
+  const nonCjkLength = text.length - cjkCount;
+  return cjkCount + Math.ceil(nonCjkLength / 4);
 }
 
 const PER_MESSAGE_OVERHEAD = 8;
@@ -23,6 +46,59 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
 const CLEAR_MIN_CHARS = 200;
 const CLEARED_TOOL_CONTENT = '{"ok":true,"note":"[old tool output cleared to save context]"}';
 const DEFAULT_KEEP_LAST_TURNS = 2;
+
+/**
+ * Arg keys, in priority order, that identify WHAT a tool call acted on — used
+ * to enrich the cleared-tool note so the agent knows what to re-fetch. Covers
+ * the built-in tools: path (read_file/write_file/list_files/glob/apply_patch/
+ * search_text), pattern (search_text/glob), command (run_command), query
+ * (web_search), url (web_fetch).
+ */
+const SOURCE_ARG_KEYS = ["path", "pattern", "command", "query", "url"] as const;
+
+/** Short, safe label for a JSON arg value: stringified, trimmed, capped. */
+function describeArgValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  return trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed;
+}
+
+/**
+ * Builds the source-aware cleared note for a tool message when it can be mapped
+ * back to its originating tool call (by toolCallId). Falls back to the generic
+ * note when there is no linkage or no usable arg. Stays well under
+ * CLEAR_MIN_CHARS so re-running the clear never re-clears (idempotency).
+ */
+function clearedNoteFor(toolCallId: string | undefined, callsById: Map<string, ProviderToolCall>): string {
+  if (toolCallId === undefined) return CLEARED_TOOL_CONTENT;
+  const call = callsById.get(toolCallId);
+  if (!call) return CLEARED_TOOL_CONTENT;
+
+  let arg: string | undefined;
+  try {
+    const parsed: unknown = JSON.parse(call.argumentsJson);
+    if (parsed !== null && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      for (const key of SOURCE_ARG_KEYS) {
+        const described = describeArgValue(record[key]);
+        if (described !== undefined) {
+          arg = described;
+          break;
+        }
+      }
+    }
+  } catch {
+    // Unparseable args → fall through to the name-only note below.
+  }
+
+  const note =
+    arg !== undefined
+      ? `[old ${call.name} output for ${arg} cleared — re-run if you need it]`
+      : `[old ${call.name} output cleared — re-run if you need it]`;
+  // Keep the JSON-note shape consistent with the generic note.
+  return JSON.stringify({ ok: true, note });
+}
 
 /**
  * Micro-compaction: blanks role:"tool" message contents OLDER than the last
@@ -50,11 +126,19 @@ export function clearOldToolResults(
   }
   if (boundary < 0) return { messages, cleared: 0 };
 
+  // Map every tool call id to its originating assistant call, so a cleared
+  // tool result can name the tool + key arg it answered (re-fetch hint).
+  const callsById = new Map<string, ProviderToolCall>();
+  for (const m of messages) {
+    if (m.role !== "assistant" || !m.toolCalls) continue;
+    for (const tc of m.toolCalls) callsById.set(tc.id, tc);
+  }
+
   let cleared = 0;
   const out = messages.map((m, i) => {
     if (i >= boundary || m.role !== "tool" || m.content.length <= CLEAR_MIN_CHARS) return m;
     cleared++;
-    return { ...m, content: CLEARED_TOOL_CONTENT };
+    return { ...m, content: clearedNoteFor(m.toolCallId, callsById) };
   });
   return cleared > 0 ? { messages: out, cleared } : { messages, cleared: 0 };
 }

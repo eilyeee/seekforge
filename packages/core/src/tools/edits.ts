@@ -59,22 +59,76 @@ export function closestRegion(content: string, oldString: string): string {
 }
 
 /**
+ * Normalize a single line for whitespace-tolerant comparison: drop a trailing
+ * CR (CRLF tolerance), strip leading indentation, trim trailing whitespace, and
+ * collapse interior runs of whitespace to a single space. This makes the match
+ * robust to the most common model mistake — getting indentation or incidental
+ * spacing slightly wrong — without being so loose that distinct lines collide.
+ */
+function normalizeLine(line: string): string {
+  return line.replace(/\r$/, "").replace(/\s+/g, " ").trim();
+}
+
+type FuzzyRegion = { startLine: number; endLineExclusive: number };
+
+/**
+ * Find every contiguous run of N lines in `lines` whose normalized form equals
+ * the normalized `oldLines` (N lines). Returns the matching regions as line
+ * index spans. Empty oldLines never matches.
+ */
+function findFuzzyRegions(lines: string[], oldLines: string[]): FuzzyRegion[] {
+  const n = oldLines.length;
+  if (n === 0) return [];
+  const normTarget = oldLines.map(normalizeLine);
+  const regions: FuzzyRegion[] = [];
+  for (let i = 0; i + n <= lines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < n; j++) {
+      if (normalizeLine(lines[i + j] as string) !== (normTarget[j] as string)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) regions.push({ startLine: i, endLineExclusive: i + n });
+  }
+  return regions;
+}
+
+/**
  * Apply search/replace edits. Each oldString must occur exactly once in the
  * content *at the time it is applied*. All-or-nothing: any failure throws and
  * the caller must not persist anything.
+ *
+ * Matching, per edit, in priority order:
+ *  1. EXACT verbatim match. If oldString occurs exactly once, use it (preferred).
+ *     If it occurs more than once, throw `ambiguous` (never fall back to fuzzy).
+ *  2. If exact count is 0, attempt a WHITESPACE-TOLERANT line-based match:
+ *     compare each line after stripping leading indentation, trimming trailing
+ *     whitespace, and collapsing interior whitespace runs (CRLF-tolerant). If
+ *     exactly one contiguous N-line region matches, replace the file's REAL
+ *     spanned text with newString. Zero -> `no_match`; more than one -> `ambiguous`.
  */
 export function applyEdits(content: string, edits: SearchReplaceEdit[]): string {
   let next = content;
   for (let i = 0; i < edits.length; i++) {
     const edit = edits[i] as SearchReplaceEdit;
-    const count = countOccurrences(next, edit.oldString);
-    if (count === 0) {
+    // Empty oldString is always rejected (matches every position / is meaningless).
+    if (edit.oldString.length === 0) {
       throw new ToolError(
         "no_match",
-        `Edit ${i + 1}/${edits.length}: oldString not found in file`,
-        { editIndex: i, hint: closestRegion(next, edit.oldString) },
+        `Edit ${i + 1}/${edits.length}: oldString is empty`,
+        { editIndex: i, hint: "" },
       );
     }
+
+    const count = countOccurrences(next, edit.oldString);
+
+    // 1a. Exact, unique match — preferred.
+    if (count === 1) {
+      next = next.replace(edit.oldString, () => edit.newString);
+      continue;
+    }
+    // 1b. Exact but ambiguous — never fall back to fuzzy.
     if (count > 1) {
       throw new ToolError(
         "ambiguous",
@@ -82,7 +136,36 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
         { editIndex: i, matchCount: count },
       );
     }
-    next = next.replace(edit.oldString, () => edit.newString);
+
+    // 2. count === 0: whitespace-tolerant fallback.
+    // Drop a single trailing newline from oldString so a trailing-newline block
+    // is compared as its constituent lines, not an extra empty line.
+    const oldForLines = edit.oldString.replace(/\r?\n$/, "");
+    const oldLines = oldForLines.split("\n");
+    const lines = next.split("\n");
+    const regions = findFuzzyRegions(lines, oldLines);
+
+    if (regions.length === 0) {
+      throw new ToolError(
+        "no_match",
+        `Edit ${i + 1}/${edits.length}: oldString not found in file`,
+        { editIndex: i, hint: closestRegion(next, edit.oldString) },
+      );
+    }
+    if (regions.length > 1) {
+      throw new ToolError(
+        "ambiguous",
+        `Edit ${i + 1}/${edits.length}: oldString matches ${regions.length} regions (whitespace-tolerant); add surrounding context to make it unique`,
+        { editIndex: i, matchCount: regions.length },
+      );
+    }
+
+    // Exactly one region: replace the ACTUAL spanned text (preserving the file's
+    // real surrounding content / whitespace) with newString.
+    const region = regions[0] as FuzzyRegion;
+    const before = lines.slice(0, region.startLine);
+    const after = lines.slice(region.endLineExclusive);
+    next = [...before, edit.newString, ...after].join("\n");
   }
   return next;
 }

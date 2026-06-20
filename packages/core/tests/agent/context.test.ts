@@ -7,6 +7,7 @@ import {
   clearOldToolResults,
   compactMessages,
   estimateMessagesTokens,
+  estimateTokens,
   llmCompactMessages,
   llmCompactSessionNow,
   type SummaryProvider,
@@ -27,6 +28,44 @@ function conversation(turns: number, contentSize = 2000): ChatMessage[] {
   }
   return messages;
 }
+
+describe("estimateTokens", () => {
+  it("keeps the ~4-chars-per-token rate for ASCII text", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("a".repeat(40))).toBe(10); // 40 / 4
+    expect(estimateTokens("hello world")).toBe(Math.ceil(11 / 4)); // unchanged heuristic
+  });
+
+  it("counts CJK characters at ~1 token each, far above length/4", () => {
+    const ten = "你好世界今天天气很好"; // 10 Chinese chars
+    expect(ten.length).toBe(10);
+    // Old length/4 would give 3; the CJK-aware estimate is ~10.
+    expect(estimateTokens(ten)).toBe(10);
+    expect(estimateTokens(ten)).toBeGreaterThan(Math.ceil(ten.length / 4));
+    // Japanese kana and Korean Hangul count the same way.
+    expect(estimateTokens("ひらがなカタカナ")).toBe(8);
+    expect(estimateTokens("안녕하세요")).toBe(5);
+  });
+
+  it("mixes CJK and ASCII additively", () => {
+    // 5 Chinese chars (5 tokens) + 8 ASCII chars (ceil(8/4)=2 tokens).
+    expect(estimateTokens("你好世界呀: abcdefgh")).toBe(5 + Math.ceil(9 / 4));
+  });
+
+  it("is monotonic — appending never lowers the estimate", () => {
+    const base = "function foo() { return 42; }";
+    expect(estimateTokens(base + "你")).toBeGreaterThanOrEqual(estimateTokens(base));
+    expect(estimateTokens(base + "x")).toBeGreaterThanOrEqual(estimateTokens(base));
+  });
+
+  it("estimateMessagesTokens reflects the CJK-aware estimate", () => {
+    const cjk = estimateMessagesTokens([msg("user", "你好世界今天天气很好")]);
+    const ascii = estimateMessagesTokens([msg("user", "0123456789")]); // 10 ASCII chars
+    // Same character count, but CJK content costs materially more tokens.
+    expect(cjk).toBeGreaterThan(ascii);
+  });
+});
 
 describe("compactMessages", () => {
   it("returns null when under budget", () => {
@@ -154,15 +193,20 @@ describe("llmCompactMessages", () => {
 });
 
 describe("clearOldToolResults", () => {
-  const CLEARED = '{"ok":true,"note":"[old tool output cleared to save context]"}';
+  const GENERIC = '{"ok":true,"note":"[old tool output cleared to save context]"}';
 
-  /** system + N user turns, each turn: user, assistant(toolCall), tool(content). */
+  /**
+   * system + N user turns, each turn: user, assistant(toolCall), tool(content).
+   * Each call carries a `path` arg so cleared notes can name the source.
+   */
   function multiTurn(turns: number, toolContentSize = 1000): ChatMessage[] {
     const messages: ChatMessage[] = [msg("system", "system prompt")];
     for (let i = 0; i < turns; i++) {
       messages.push(
         msg("user", `turn ${i}`),
-        msg("assistant", "", { toolCalls: [{ id: `c${i}`, name: "read_file", argumentsJson: "{}" }] }),
+        msg("assistant", "", {
+          toolCalls: [{ id: `c${i}`, name: "read_file", argumentsJson: `{"path":"src/file${i}.ts"}` }],
+        }),
         msg("tool", "x".repeat(toolContentSize), { toolCallId: `c${i}` }),
       );
     }
@@ -174,13 +218,77 @@ describe("clearOldToolResults", () => {
     const { messages: out, cleared } = clearOldToolResults(messages);
     // Turns 0 and 1 are older than the last 2 user turns (turns 2 and 3).
     expect(cleared).toBe(2);
-    expect(out[3]!.content).toBe(CLEARED); // turn 0 tool
-    expect(out[6]!.content).toBe(CLEARED); // turn 1 tool
+    expect(out[3]!.content).toContain("[old read_file output for src/file0.ts cleared"); // turn 0 tool
+    expect(out[6]!.content).toContain("[old read_file output for src/file1.ts cleared"); // turn 1 tool
     expect(out[9]!.content).toBe("x".repeat(1000)); // turn 2 tool kept
     expect(out[12]!.content).toBe("x".repeat(1000)); // turn 3 tool kept
     // Non-tool messages and toolCallId pairing are untouched.
     expect(out[3]!.toolCallId).toBe("c0");
     expect(out.map((m) => m.role)).toEqual(messages.map((m) => m.role));
+  });
+
+  it("names the source tool + key arg in the cleared note", () => {
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "turn 0"),
+      msg("assistant", "", {
+        toolCalls: [{ id: "g0", name: "run_command", argumentsJson: '{"command":"pnpm test"}' }],
+      }),
+      msg("tool", "y".repeat(1000), { toolCallId: "g0" }),
+      msg("user", "turn 1"),
+      msg("user", "turn 2"),
+    ];
+    const { messages: out, cleared } = clearOldToolResults(messages);
+    expect(cleared).toBe(1);
+    const note = JSON.parse(out[3]!.content) as { ok: boolean; note: string };
+    expect(note.ok).toBe(true);
+    expect(note.note).toBe("[old run_command output for pnpm test cleared — re-run if you need it]");
+  });
+
+  it("falls back to a name-only note when no key arg is present", () => {
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "turn 0"),
+      msg("assistant", "", { toolCalls: [{ id: "g0", name: "git_status", argumentsJson: "{}" }] }),
+      msg("tool", "z".repeat(1000), { toolCallId: "g0" }),
+      msg("user", "turn 1"),
+      msg("user", "turn 2"),
+    ];
+    const out = clearOldToolResults(messages).messages;
+    expect(out[3]!.content).toBe(
+      JSON.stringify({ ok: true, note: "[old git_status output cleared — re-run if you need it]" }),
+    );
+  });
+
+  it("uses the generic note when the tool message has no linkage", () => {
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "turn 0"),
+      msg("assistant", ""), // no toolCalls
+      msg("tool", "z".repeat(1000)), // no toolCallId → unmappable
+      msg("user", "turn 1"),
+      msg("user", "turn 2"),
+    ];
+    const out = clearOldToolResults(messages).messages;
+    expect(out[3]!.content).toBe(GENERIC);
+  });
+
+  it("keeps the source-aware note below the idempotency threshold", () => {
+    const longPath = `src/${"deep/".repeat(40)}thing.ts`; // > 80 chars, gets truncated
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "turn 0"),
+      msg("assistant", "", {
+        toolCalls: [{ id: "g0", name: "read_file", argumentsJson: JSON.stringify({ path: longPath }) }],
+      }),
+      msg("tool", "z".repeat(1000), { toolCallId: "g0" }),
+      msg("user", "turn 1"),
+      msg("user", "turn 2"),
+    ];
+    const out = clearOldToolResults(messages).messages;
+    expect(out[3]!.content.length).toBeLessThan(200);
+    // Re-running does not re-clear the already-short note.
+    expect(clearOldToolResults(out).cleared).toBe(0);
   });
 
   it("honors a custom keepLastTurns", () => {

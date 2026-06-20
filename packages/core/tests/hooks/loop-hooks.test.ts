@@ -466,7 +466,11 @@ describe("agent loop: micro-compaction", () => {
     // The model sees the cleared note for the old result, the recent one intact.
     const sent = requests[0]!.messages as ChatMessage[];
     const toolMsgs = sent.filter((m) => m.role === "tool");
-    expect(toolMsgs[0]!.content).toBe('{"ok":true,"note":"[old tool output cleared to save context]"}');
+    // Source-aware cleared note: names the originating tool (read_file). The
+    // seeded call has empty args ("{}"), so it falls back to the name-only form.
+    expect(toolMsgs[0]!.content).toBe(
+      '{"ok":true,"note":"[old read_file output cleared — re-run if you need it]"}',
+    );
     expect(toolMsgs[1]!.content).toBe("x".repeat(20_000));
   });
 
