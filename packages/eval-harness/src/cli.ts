@@ -133,7 +133,9 @@ async function main(): Promise<void> {
   let tasks = loadTasks(tasksDir);
   assertFixturesExist(tasks, fixturesDir);
   if (args.taskId !== undefined) {
-    tasks = tasks.filter((t) => t.id === args.taskId);
+    // --task accepts one id or a comma-separated list (run a chosen subset).
+    const ids = new Set(args.taskId.split(",").map((s) => s.trim()).filter(Boolean));
+    tasks = tasks.filter((t) => ids.has(t.id));
     if (tasks.length === 0) {
       console.error(`error: no task with id "${args.taskId}"`);
       process.exitCode = 1;

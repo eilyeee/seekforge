@@ -1,0 +1,13 @@
+{
+  "id": "hard-feature-multistep",
+  "title": "Add once() to an event emitter, integrating with on/off/emit",
+  "fixture": "hard-feature-multistep",
+  "mode": "edit",
+  "task": "Add a once(event, fn) method to the EventEmitter in src/emitter.js. A once-listener must fire AT MOST once and then auto-remove itself. It must also integrate correctly with the existing API: calling off(event, fn) with the ORIGINAL function must remove a once-listener even before it has fired; a once-listener that removes itself during emit must not cause the next listener in line to be skipped; and registration order across on() and once() listeners must be preserved across emits. Do not break the existing on/off/emit behavior. Do not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/emitter.js", "pattern": "once" },
+    { "type": "file_contains", "path": "test/emitter.test.js", "pattern": "B-once" }
+  ],
+  "notes": "Discriminator: long-horizon logic. Naive once (a self-removing wrapper stored directly) breaks off-by-original-fn; naive emit over the live array skips listeners on self-removal. Requires refactoring storage to track original->handler. npm test pins all four sub-behaviors; file_contains pins the order test against tampering."
+}

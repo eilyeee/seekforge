@@ -34,6 +34,10 @@ export type AgentBuildOptions = {
   planModel?: string;
   /** Inject project-memory brief (default true). The no-memory variant sets false. */
   injectMemory?: boolean;
+  /** Self-verification command (AgentCoreDeps.verifyCommand). The verify-gate variant sets it. */
+  verifyCommand?: string;
+  /** One-time self-review nudge after edits (AgentCoreDeps.finalizeReview). */
+  finalizeReview?: boolean;
 };
 
 export type Variant = {
@@ -75,6 +79,13 @@ export const VARIANTS: Variant[] = [
     name: "no-memory",
     describe: "Disables project-memory injection — pair with a memory-seeded task to measure memory's value.",
     apply: (base) => ({ ...base, injectMemory: false }),
+  },
+  {
+    name: "verify-gate",
+    describe:
+      "Enables the self-verification finalize gate (verifyCommand=npm test): after edits the agent " +
+      "is nudged once to run the suite and fix failures before finishing. A/B vs control to measure it.",
+    apply: (base) => ({ ...base, verifyCommand: "npm test" }),
   },
 ];
 

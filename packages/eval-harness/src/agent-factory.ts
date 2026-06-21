@@ -38,6 +38,8 @@ export function createDefaultAgentFactory(
         : {}),
       ...(options.escalateOnFailure ? { escalateOnFailure: true } : {}),
       ...(options.injectMemory === false ? { injectMemory: false } : {}),
+      ...(options.verifyCommand ? { verifyCommand: options.verifyCommand } : {}),
+      ...(options.finalizeReview ? { finalizeReview: true } : {}),
       ...(options.planModel ? { planModel: options.planModel } : {}),
       // Same key/endpoint, different model — needed for plan/escalation.
       ...(options.planModel

@@ -1,0 +1,13 @@
+{
+  "id": "hard-multi-bug",
+  "title": "Find and fix three independent bugs in one module",
+  "fixture": "hard-multi-bug",
+  "mode": "edit",
+  "task": "src/cart.js has THREE separate, independent bugs (not one bug with three symptoms). Find and fix all three so the module behaves as its comments describe: lineTotal is price times quantity; subtotal sums the line totals and is 0 for an empty cart; total applies tax multiplicatively (subtotal times 1+rate) and is 0 for an empty cart. Fix every bug — do not stop after the first. Do not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/cart.js", "pattern": "item\\.price \\+ item\\.qty" },
+    { "type": "file_contains", "path": "test/cart.test.js", "pattern": "subtotal\\(\\[\\]\\), 0" }
+  ],
+  "notes": "Discriminator: thoroughness — three independent bugs, easy to fix one/two and stop. npm test pins all three; file_not_contains pins the lineTotal bug specifically; file_contains stops a test rewrite."
+}

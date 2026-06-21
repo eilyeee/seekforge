@@ -1,0 +1,12 @@
+{
+  "id": "hard-buried-bug-scale",
+  "title": "Find a 1-cent bug buried deep in an 11-file pricing pipeline",
+  "fixture": "hard-buried-bug-scale",
+  "mode": "edit",
+  "task": "`npm test` fails for one case: the widget order total is off by one cent (expected 2645, got 2644). The order-total pipeline spans many small modules (pricing, coupons, discounts, tax, shipping, rounding, currency, inventory, order, ...). Trace the failing total to its ROOT CAUSE and fix it at the source — do not special-case the failing total or paper over it in order.js, and do NOT modify anything under test/. Only one module is actually wrong.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node -e \"const {roundDiv}=require('./src/rounding'); if(roundDiv(15152,100)!==152||roundDiv(15112,100)!==151) process.exit(1)\"" }
+  ],
+  "notes": "Discriminator: navigation/tracing at scale. The bug is roundDiv in src/rounding.js using Math.floor instead of rounding to nearest (documented half-up); it surfaces only when tax has a fractional cent >= 0.5 (the widget case). Several correct decoy modules (currency/inventory/coupons/discounts/shipping) widen the search. The second check verifies the SOURCE module (rounding.js) actually rounds half-up — catching a downstream paper-over (rounding.js still truncates) WITHOUT false-positiving on a valid Math.floor(x+0.5) idiom (an earlier file_not_contains 'Math.floor' check wrongly failed that correct fix)."
+}

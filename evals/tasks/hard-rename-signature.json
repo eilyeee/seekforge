@@ -1,0 +1,14 @@
+{
+  "id": "hard-rename-signature",
+  "title": "Rename a function AND change its signature across a multi-file library",
+  "fixture": "hard-rename-signature",
+  "mode": "edit",
+  "task": "Across the whole src/ tree, rename the function getUser to findUser AND change its signature from taking a positional id — getUser(id) — to taking an options object — findUser({ id }). Update the definition in src/store.js and EVERY call site in the other modules so behavior is unchanged. The public API (src/index.js, which re-exports the modules) must expose findUser and must no longer expose getUser. Do not change the public signatures of profileLine/canEdit/names (they still take a plain id) — only their internal lookups change. Do not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/store.js", "pattern": "getUser" },
+    { "type": "file_not_contains", "path": "src/profile.js", "pattern": "getUser" },
+    { "type": "file_not_contains", "path": "src/batch.js", "pattern": "getUser" }
+  ],
+  "notes": "Discriminator: multi-file coordination. Missing or mis-converting any of the 4 call sites flips a currently-passing test (profileLine/canEdit/names) or the findUser tests. file_not_contains guards pin the rename across files."
+}

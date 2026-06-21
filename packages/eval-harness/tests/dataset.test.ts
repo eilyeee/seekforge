@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the thirty-seven expected tasks", () => {
+  it("contains the forty-four expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -27,6 +27,13 @@ describe("evals/ dataset", () => {
       "feature-edge-cases",
       "fix-without-regression",
       "guarded-no-delete",
+      "hard-buried-bug-scale",
+      "hard-csv-parser",
+      "hard-expr-eval",
+      "hard-feature-multistep",
+      "hard-multi-bug",
+      "hard-rename-signature",
+      "hard-thread-actor",
       "json-config-edit",
       "large-context-nav",
       "loop-verify-green",

@@ -1,0 +1,15 @@
+{
+  "id": "hard-thread-actor",
+  "title": "Thread an actor argument through a 4-layer call chain into the audit log",
+  "fixture": "hard-thread-actor",
+  "mode": "edit",
+  "task": "This task-tracker writes an audit record for every mutation, but the records do not say WHO did it. Add an `actor` (a string) to every audit entry. The public operations in src/operations.js — createTask(title), completeTask(id), reopenTask(id), deleteTask(id) — must each take an additional final `actor` argument, and that actor must be threaded down through the call chain (operations -> service.js -> store.js -> audit.js) so that every recorded entry includes the correct { action, taskId, actor }. Do not change the audit record's other fields or the existing task behavior, and do not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/operations.js", "pattern": "actor" },
+    { "type": "file_contains", "path": "src/service.js", "pattern": "actor" },
+    { "type": "file_contains", "path": "src/store.js", "pattern": "actor" },
+    { "type": "file_contains", "path": "test/audit.test.js", "pattern": "actor: \"cara\"" }
+  ],
+  "notes": "Discriminator: long-horizon plumbing across a deep multi-file call chain (4 layers, 4 operations). Missing the actor at any hop leaves entries with actor undefined -> deepStrictEqual fails. file_contains pins force the thread through each layer; the test pin blocks tampering."
+}

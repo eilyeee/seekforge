@@ -1,0 +1,11 @@
+{
+  "id": "hard-csv-parser",
+  "title": "Make a naive CSV parser handle quoting correctly",
+  "fixture": "hard-csv-parser",
+  "mode": "edit",
+  "task": "src/csv.js has a naive parseCSV(text) that just splits on newlines and commas. Replace it with a correct RFC-4180-style parser that returns an array of rows (each an array of string fields), following these rules exactly:\n- Fields are comma-separated; rows are separated by a single newline (\\n).\n- A field is quoted if its FIRST character is a double quote. Inside a quoted field, commas and newlines are literal, and a doubled quote \"\" means one literal double quote. The surrounding quotes are not part of the value.\n- A double quote that is not the first character of a field is a literal character.\n- Empty fields are preserved. A trailing newline does NOT produce an extra empty row, but an empty input string yields a single row with one empty field ([[\"\"]]).\nDo not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" }
+  ],
+  "notes": "Discriminator: quoted-field state machine with the trailing-newline vs empty-input edge. No 'run the tests' hint — also probes self-verification. npm test alone is airtight here (the quote/escape/embedded-delimiter cases cannot pass with a naive comma split); an earlier file_not_contains '.split(\",\")' guard was dropped to avoid false-positiving a correct parser that happens to use split elsewhere."
+}

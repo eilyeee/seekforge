@@ -1,0 +1,13 @@
+{
+  "id": "hard-expr-eval",
+  "title": "Implement an arithmetic expression evaluator from a spec",
+  "fixture": "hard-expr-eval",
+  "mode": "edit",
+  "task": "Implement evaluate(expr) in src/eval.js (currently a stub returning 0). It takes a string holding an arithmetic expression and returns its numeric value, per this spec:\n- Operators: + - * / as usual, with * and / binding tighter than + and -, and all binary operators left-associative (so 10-2-3 is 5 and 8/4/2 is 1). / is ordinary numeric division.\n- Operands are non-negative integers (one or more digits).\n- Parentheses group sub-expressions.\n- Unary minus is supported, including after another operator and before a parenthesis (2*-3 is -6, -(2+3) is -5).\n- Spaces, tabs and newlines are insignificant.\n- On any malformed input (empty string, a dangling operator, two adjacent numbers, unbalanced parentheses, '**', etc.) throw an Error.\nWrite your own parser. Do not use JavaScript's eval or the Function constructor. Do not modify anything under test/.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/eval.js", "pattern": "\\beval\\s*\\(" },
+    { "type": "file_not_contains", "path": "src/eval.js", "pattern": "Function\\s*\\(" }
+  ],
+  "notes": "Discriminator: a real tokenizer + recursive-descent parser with precedence, left-assoc, unary minus, and error handling — from a spec, no failing test handed over. Guards forbid eval/Function cheats (which also mis-handle '**' and adjacent numbers anyway)."
+}
