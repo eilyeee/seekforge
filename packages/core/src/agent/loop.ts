@@ -1039,7 +1039,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               verifyCommand: deps.verifyCommand,
               verifyRanSinceEdit,
               reviewEnabled: deps.finalizeReview === true,
-              guardNoProgress: deps.guardNoProgress === true,
+              // Not on resumed runs: prior-run edits don't count toward this
+              // run's changedFiles/toolCalls, so a legitimate "already done"
+              // resume must not be flagged as a no-work bail-out.
+              guardNoProgress: deps.guardNoProgress === true && !resuming,
               fired: finalizeFired,
             });
             // Only nudge when at least one more turn remains for the model to
