@@ -20,9 +20,13 @@ import type { PlanItem } from "../tools/builtins/plan.js";
  * results, change counts, whether verify ran since the last edit) and the
  * transient-message plumbing.
  */
-export type FinalizeKind = "plan" | "verify" | "review";
+export type FinalizeKind = "progress" | "plan" | "verify" | "review";
 
 export type FinalizeState = {
+  /** Run mode — the progress guard only applies to edit-mode runs. */
+  mode: "ask" | "edit";
+  /** Cumulative tool calls this run (to detect a no-investigation bail-out). */
+  toolCalls: number;
   /** Latest plan published via update_plan this run, if any. */
   planItems?: PlanItem[];
   /** Number of files changed this run (apply_patch/write_file successes). */
@@ -33,9 +37,18 @@ export type FinalizeState = {
   verifyRanSinceEdit: boolean;
   /** Whether a final self-review pass is enabled (deps.finalizeReview). */
   reviewEnabled: boolean;
+  /** Whether the premature-finish guard is enabled (deps.guardNoProgress). */
+  guardNoProgress: boolean;
   /** Kinds already nudged this run (each fires once). */
   fired: ReadonlySet<FinalizeKind>;
 };
+
+/**
+ * Below this many tool calls, an edit-mode run that changed nothing is treated
+ * as a premature "bail-out" finish (declared done without really investigating
+ * — the failure mode observed on some models) rather than a considered no-op.
+ */
+const MIN_PROGRESS_TOOL_CALLS = 2;
 
 export type FinalizeNudge = {
   kind: FinalizeKind;
@@ -47,6 +60,28 @@ export type FinalizeNudge = {
 
 /** The highest-priority unmet finalize check, or null when the run may finish. */
 export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
+  // 0. Premature finish: an edit-mode run that declares done having changed
+  // nothing AND barely used any tools never really engaged. Push back once.
+  // (A run that investigated — many reads/searches — and concluded no change is
+  // needed is NOT caught: it has the tool calls to show for it.)
+  if (
+    s.guardNoProgress &&
+    !s.fired.has("progress") &&
+    s.mode === "edit" &&
+    s.changedFiles === 0 &&
+    s.toolCalls < MIN_PROGRESS_TOOL_CALLS
+  ) {
+    return {
+      kind: "progress",
+      notice: "Finishing with no investigation or changes — asking the agent to actually work the task.",
+      message:
+        "[harness] You are finishing without having investigated the codebase or changed anything. " +
+        "Actually work the task: orient (repo_map), find the relevant code (search_text/read_file), make " +
+        "the needed edits, and verify. If the task genuinely requires no change, say so explicitly and " +
+        "explain why — do not just stop.",
+    };
+  }
+
   // 1. Finish the work: don't accept "done" while published plan steps are open.
   if (!s.fired.has("plan") && s.planItems && s.planItems.length > 0) {
     const open = s.planItems.filter((i) => i.status !== "done");

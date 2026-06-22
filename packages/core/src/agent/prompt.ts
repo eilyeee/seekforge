@@ -13,6 +13,10 @@ export type SystemPromptOptions = {
   subagentRoster?: string;
   /** One-line-per-command roster of user commands invocable via run_user_command. */
   commandRoster?: string;
+  /** Current plan checklist (restored on resume); rendered so it survives context. */
+  planItems?: { step: string; status: "pending" | "in_progress" | "done" }[];
+  /** Compact structural overview of a large repo (from buildRepoOverview), for orientation. */
+  repoOverview?: string;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -152,6 +156,22 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     parts.push(
       "User-defined commands you can invoke with run_user_command (it returns the " +
         `command's expanded instructions for you to follow):\n${opts.commandRoster}`,
+    );
+  }
+
+  if (opts.repoOverview) {
+    parts.push(
+      "Structural overview of this (large) repository — use it to orient, then " +
+        `use repo_map with a \`path\` to drill in and read_file for specifics:\n${opts.repoOverview}`,
+    );
+  }
+
+  if (opts.planItems && opts.planItems.length > 0) {
+    const mark = { done: "x", in_progress: "~", pending: " " } as const;
+    const lines = opts.planItems.map((i) => `- [${mark[i.status]}] ${i.step}`).join("\n");
+    parts.push(
+      "Current plan (carried over from earlier in this task — keep working it and " +
+        `update it with update_plan as you go):\n${lines}`,
     );
   }
 

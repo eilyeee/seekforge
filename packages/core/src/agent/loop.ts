@@ -41,13 +41,14 @@ import {
 } from "../subagents/index.js";
 import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
+import { buildRepoOverview } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
-import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, writeSessionMeta } from "./trace.js";
+import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readSessionMeta, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 
 /**
@@ -164,6 +165,13 @@ export type AgentCoreDeps = {
    * before the run completes. Costs one extra turn when it fires.
    */
   finalizeReview?: boolean;
+  /**
+   * Default-off premature-finish guard: if an edit-mode run declares done having
+   * changed nothing and made almost no tool calls (a bail-out without really
+   * investigating), nudge it once to actually work the task. Fires only on clear
+   * non-work, so it does not add a turn to legitimate quick finishes.
+   */
+  guardNoProgress?: boolean;
   /**
    * Inject the task-relevant project-memory brief into the system prompt.
    * Default true; set false to run without memory (used by the eval A/B that
@@ -336,6 +344,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         return brief;
       };
 
+      // Long-horizon persistence: restore a plan published in an earlier run so
+      // the task's checklist survives across resume (re-injected into the system
+      // prompt below, and carried through this run's meta writes).
+      const priorPlan = resuming ? readSessionMeta(input.projectPath, sessionId)?.plan : undefined;
+      // Latest plan (seeded from a resumed session); declared out here so the
+      // catch's failed-meta write can preserve it too. Updated on update_plan.
+      let lastPlanItems: PlanItem[] | undefined = priorPlan;
+      // #1: a compact structural overview injected into the system prompt for
+      // LARGE repos (top-level runs only), so the agent orients without grep-
+      // crawling. undefined for small repos / non-local trees.
+      const repoOverview = depth === 0 ? buildRepoOverview(input.projectPath) : undefined;
+
       const startedAt = new Date().toISOString();
       const meta = {
         id: sessionId,
@@ -344,7 +364,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         createdAt: startedAt,
         ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
       };
-      writeSessionMeta(input.projectPath, { ...meta, status: "running", updatedAt: startedAt });
+      writeSessionMeta(input.projectPath, {
+        ...meta,
+        status: "running",
+        updatedAt: startedAt,
+        ...(priorPlan ? { plan: priorPlan } : {}),
+      });
 
       // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
       // (like sessionEnd); nested subagent runs (depth > 0) skip them. They
@@ -403,6 +428,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
                   commandRoster:
                     depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
+                  ...(priorPlan ? { planItems: priorPlan } : {}),
+                  ...(repoOverview ? { repoOverview } : {}),
                 }),
                 input.appendSystemPrompt,
               ),
@@ -448,6 +475,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
             commandRoster:
               depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
+            ...(repoOverview ? { repoOverview } : {}),
           }),
           input.appendSystemPrompt,
         );
@@ -909,7 +937,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // Finalize gate (see finalize.ts): plan/verify/review checks run when
         // the model declares it is done. Each kind fires at most once per run.
         const finalizeFired = new Set<FinalizeKind>();
-        let lastPlanItems: PlanItem[] | undefined;
         // Whether deps.verifyCommand has run since the most recent edit: an edit
         // resets it, running the command sets it, so the verify nudge fires only
         // for changes that have not been checked.
@@ -965,6 +992,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 droppedTurns: compacted.droppedTurns,
                 summaryTokens: compacted.summaryTokens,
               });
+              // #2+: a plan published earlier may have been in the dropped
+              // middle. Re-inject the current plan (transient, like the other
+              // nudges) so a long-horizon task keeps its checklist across
+              // compaction. Self-healing — re-added after every compaction.
+              if (lastPlanItems && lastPlanItems.length > 0) {
+                const mark = { done: "x", in_progress: "~", pending: " " } as const;
+                const lines = lastPlanItems.map((i) => `- [${mark[i.status]}] ${i.step}`).join("\n");
+                messages.push({
+                  role: "user",
+                  content: `[harness] Current plan (kept across a context compaction — keep working it):\n${lines}`,
+                });
+              }
             }
           }
 
@@ -993,11 +1032,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // kind fires once, so this adds at most a few turns and always
             // terminates.
             const nudge = nextFinalizeNudge({
+              mode: input.mode,
+              toolCalls: toolCallCount,
               planItems: lastPlanItems,
               changedFiles: changedFiles.size,
               verifyCommand: deps.verifyCommand,
               verifyRanSinceEdit,
               reviewEnabled: deps.finalizeReview === true,
+              guardNoProgress: deps.guardNoProgress === true,
               fired: finalizeFired,
             });
             // Only nudge when at least one more turn remains for the model to
@@ -1145,10 +1187,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               const vc = deps.verifyCommand?.trim();
               if (result.ok && vc && result.meta.command.includes(vc)) verifyRanSinceEdit = true;
             }
-            // Track the latest published plan for the finalize completeness check.
+            // Track the latest published plan for the finalize completeness check
+            // AND persist it to the session so it survives across resume (#2).
             if (tc.name === "update_plan" && result.ok) {
               const items = (result.data as { items?: PlanItem[] } | undefined)?.items;
-              if (Array.isArray(items)) lastPlanItems = items;
+              if (Array.isArray(items)) {
+                lastPlanItems = items;
+                writeSessionMeta(input.projectPath, {
+                  ...meta,
+                  status: "running",
+                  updatedAt: new Date().toISOString(),
+                  usage,
+                  plan: items,
+                });
+              }
             }
             callResults[i] = result;
             for (const ev of queue.drainNow()) yield ev;
@@ -1244,6 +1296,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           status: "completed",
           updatedAt: new Date().toISOString(),
           usage,
+          ...(lastPlanItems ? { plan: lastPlanItems } : {}),
         });
 
         if (deps.extractMemory && input.mode === "edit") {
@@ -1285,6 +1338,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           status: code === "cancelled" ? "cancelled" : "failed",
           updatedAt: new Date().toISOString(),
           usage,
+          ...(lastPlanItems ? { plan: lastPlanItems } : {}),
         });
         for (const ev of queue.drainNow()) yield ev;
         const cancelled = code === "cancelled";

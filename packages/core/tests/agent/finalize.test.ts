@@ -4,9 +4,12 @@ import type { PlanItem } from "../../src/tools/builtins/plan.js";
 
 function state(overrides: Partial<FinalizeState>): FinalizeState {
   return {
+    mode: "edit",
+    toolCalls: 5, // above the progress threshold unless a test overrides it
     changedFiles: 0,
     verifyRanSinceEdit: false,
     reviewEnabled: false,
+    guardNoProgress: false,
     fired: new Set<FinalizeKind>(),
     ...overrides,
   };
@@ -16,6 +19,30 @@ const plan = (statuses: PlanItem["status"][]): PlanItem[] =>
   statuses.map((status, i) => ({ step: `step ${i}`, status }));
 
 describe("nextFinalizeNudge", () => {
+  it("flags a premature bail-out: edit mode, no changes, ~no tool calls (when enabled)", () => {
+    expect(nextFinalizeNudge(state({ guardNoProgress: true, toolCalls: 0, changedFiles: 0 }))?.kind).toBe("progress");
+    expect(nextFinalizeNudge(state({ guardNoProgress: true, toolCalls: 1, changedFiles: 0 }))?.kind).toBe("progress");
+  });
+
+  it("the progress guard is off by default", () => {
+    expect(nextFinalizeNudge(state({ toolCalls: 0, changedFiles: 0 }))).toBeNull();
+  });
+
+  it("does NOT flag progress when the agent investigated (enough tool calls)", () => {
+    expect(nextFinalizeNudge(state({ guardNoProgress: true, toolCalls: 5, changedFiles: 0 }))).toBeNull();
+  });
+
+  it("does NOT flag progress in ask mode", () => {
+    expect(nextFinalizeNudge(state({ guardNoProgress: true, mode: "ask", toolCalls: 0, changedFiles: 0 }))).toBeNull();
+  });
+
+  it("progress fires before plan/verify/review and only once", () => {
+    const base = { guardNoProgress: true, toolCalls: 0, changedFiles: 0, planItems: plan(["pending"]) };
+    expect(nextFinalizeNudge(state(base))?.kind).toBe("progress");
+    // once spent, it falls through to the plan check
+    expect(nextFinalizeNudge(state({ ...base, fired: new Set(["progress"]) }))?.kind).toBe("plan");
+  });
+
   it("returns null when there is nothing left to do", () => {
     expect(nextFinalizeNudge(state({}))).toBeNull();
     // edits made but no verify command and review disabled = clean finish

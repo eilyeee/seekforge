@@ -49,6 +49,12 @@ export type SessionMeta = {
   usage?: TokenUsage;
   /** Set on sessions spawned by dispatch_agent: the dispatching agent id. */
   parentAgentId?: string;
+  /**
+   * Latest plan published via update_plan, persisted so a long-horizon task's
+   * checklist survives across resume (restored into the system prompt). Kept
+   * structural to avoid a trace -> tools dependency.
+   */
+  plan?: { step: string; status: "pending" | "in_progress" | "done" }[];
 };
 
 function sessionsRoot(workspace: string): string {

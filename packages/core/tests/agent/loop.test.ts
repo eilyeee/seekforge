@@ -518,6 +518,64 @@ describe("agent loop: turn-budget wrap-up", () => {
     expect(provider.requests).toHaveLength(2);
   });
 
+  it("persists the plan and restores it into the system prompt on resume (#2 long-horizon)", async () => {
+    const planArgs = '{"items":[{"step":"migrate auth","status":"done"}]}';
+    const provider = fakeProvider([
+      response({ toolCalls: [{ id: "p1", name: "update_plan", argumentsJson: planArgs }], finishReason: "tool_calls" }),
+      response({ content: "done" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { items: [{ step: "migrate auth", status: "done" }] } }),
+      confirm: async () => true,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const created = events.find((e) => e.type === "session.created");
+    const sessionId = created && created.type === "session.created" ? created.sessionId : "";
+
+    // Persisted to session.json.
+    expect(readSessionMeta(workspace, sessionId)?.plan).toEqual([{ step: "migrate auth", status: "done" }]);
+
+    // Resume rebuilds the system prompt WITH the restored plan.
+    const resumeProvider = fakeProvider([response({ content: "resumed" })]);
+    const second = createAgentCore({
+      provider: resumeProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    await collect(
+      second.runTask({ ...baseInput, projectPath: workspace, task: "continue", resumeSessionId: sessionId }),
+    );
+    const sys = resumeProvider.requests[0]!.messages[0]!;
+    expect(sys.role).toBe("system");
+    expect(sys.content).toContain("Current plan");
+    expect(sys.content).toContain("migrate auth");
+  });
+
+  it("premature-finish guard (opt-in): nudges a no-work bail-out, then completes", async () => {
+    // Model declares done immediately with no tools and no edits.
+    const provider = fakeProvider([response({ content: "done" }), response({ content: "done" })]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+      guardNoProgress: true,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const notice = events.find((e) => e.type === "notice");
+    expect(notice && notice.type === "notice" ? notice.message : "").toContain("work the task");
+    expect(provider.requests).toHaveLength(2); // got an extra turn from the nudge
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+  });
+
+  it("premature-finish guard is OFF by default (no nudge on an immediate finish)", async () => {
+    const provider = fakeProvider([response({ content: "nothing to do" })]);
+    const agent = createAgentCore({ provider, dispatcher: fakeDispatcher({ ok: true }), confirm: async () => true });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice")).toBe(false);
+    expect(provider.requests).toHaveLength(1);
+  });
+
   it("finalize gate: no verify command means the run finishes immediately after edits", async () => {
     const provider = fakeProvider([
       response({
