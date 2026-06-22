@@ -38,6 +38,8 @@ export type AgentBuildOptions = {
   verifyCommand?: string;
   /** One-time self-review nudge after edits (AgentCoreDeps.finalizeReview). */
   finalizeReview?: boolean;
+  /** Premature-finish guard (AgentCoreDeps.guardNoProgress). */
+  guardNoProgress?: boolean;
 };
 
 export type Variant = {
@@ -86,6 +88,13 @@ export const VARIANTS: Variant[] = [
       "Enables the self-verification finalize gate (verifyCommand=npm test): after edits the agent " +
       "is nudged once to run the suite and fix failures before finishing. A/B vs control to measure it.",
     apply: (base) => ({ ...base, verifyCommand: "npm test" }),
+  },
+  {
+    name: "no-progress-guard",
+    describe:
+      "Enables the premature-finish guard: an edit run that declares done having changed nothing and " +
+      "barely used any tools is nudged once to actually work the task. A/B vs control to measure it.",
+    apply: (base) => ({ ...base, guardNoProgress: true }),
   },
 ];
 
