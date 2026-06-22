@@ -70,6 +70,12 @@ export type CliConfig = {
    */
   finalizeReview?: boolean;
   /**
+   * Default-off premature-finish guard: nudge once if an edit-mode run declares
+   * done having changed nothing and barely used any tools (a bail-out). Edit the
+   * file directly; not settable via `config set`.
+   */
+  guardNoProgress?: boolean;
+  /**
    * Default-off: confidence threshold (0..1) above which auto-extracted memory
    * facts are written DIRECTLY to project.md as approved, instead of queued as
    * pending candidates. Unset = every extracted fact stays pending for review.
