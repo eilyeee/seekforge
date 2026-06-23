@@ -27,6 +27,7 @@ export type RepoMapOptions = {
 
 const CODE_EXTS = new Set([
   "js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte", "py", "go", "rs", "java", "rb", "php",
+  "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "cs",
 ]);
 /** Files this large are summarized by size only (avoid pathological reads). */
 const MAX_READ_BYTES = 512 * 1024;
@@ -82,8 +83,8 @@ function walk(root: string, start: string): { files: CodeFile[]; dirCounts: Map<
   return { files, dirCounts };
 }
 
-/** Heuristic, dependency-free symbol outline for one code file. */
-export function extractSymbols(rel: string, content: string): string {
+/** Regex symbol outline — the dependency-free floor backend. */
+function regexOutline(rel: string, content: string): string {
   const ext = rel.slice(rel.lastIndexOf(".") + 1).toLowerCase();
   if (ext === "vue" || ext === "svelte") {
     const nameM = content.match(/name\s*:\s*["']([^"']+)["']/);
@@ -113,6 +114,73 @@ export function extractSymbols(rel: string, content: string): string {
   for (const m of content.matchAll(/^\s*(?:def|func)\s+([A-Za-z0-9_]+)/gm)) names.add(m[1]!);
   const list = [...names].slice(0, MAX_SYMBOLS_PER_FILE);
   return list.length > 0 ? `exports: ${list.join(", ")}` : "";
+}
+
+/** Regex definition scan for one file — the floor backend. `symbol` is a validated identifier. */
+function regexDefinitions(_rel: string, content: string, symbol: string): { line: number; text: string }[] {
+  const s = symbol; // caller validated [A-Za-z0-9_$]+ — safe to interpolate
+  const re = new RegExp(
+    [
+      `(?:function|class|const|let|var|type|interface|enum)\\s+${s}\\b`,
+      `(?:def|func)\\s+${s}\\b`,
+      `\\b${s}\\s*[:=]\\s*(?:async\\s+)?(?:function\\b|\\()`,
+      `export\\s+(?:default\\s+)?(?:async\\s+)?(?:function|class|const|let|var)\\s+${s}\\b`,
+      `^\\s*${s}\\s*\\([^)]*\\)\\s*\\{`,
+    ].join("|"),
+  );
+  const out: { line: number; text: string }[] = [];
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!line.includes(s)) continue; // cheap prefilter
+    if (re.test(line)) out.push({ line: i + 1, text: line.trim().slice(0, 200) });
+  }
+  return out;
+}
+
+/**
+ * A pluggable symbol backend. The resolver tries backends in order and uses the
+ * first that handles a file (returns non-undefined). The regex backend is the
+ * guaranteed floor; a tree-sitter backend can be PREPENDED to symbolBackends for
+ * accurate, scope-aware extraction without touching callers — it returns
+ * undefined for files/languages it can't parse, falling through to regex.
+ */
+export type SymbolBackend = {
+  name: string;
+  /** One-line outline for a file, or undefined to defer to the next backend. */
+  outline(rel: string, content: string): string | undefined;
+  /** Definition sites of `symbol` in a file, or undefined to defer. */
+  definitions(rel: string, content: string, symbol: string): { line: number; text: string }[] | undefined;
+};
+
+const regexBackend: SymbolBackend = {
+  name: "regex",
+  outline: regexOutline,
+  definitions: regexDefinitions,
+};
+
+/** Active backends, highest priority first. Prepend an AST backend; regex stays the fallback. */
+export const symbolBackends: SymbolBackend[] = [regexBackend];
+
+function resolveOutline(rel: string, content: string): string {
+  for (const b of symbolBackends) {
+    const r = b.outline(rel, content);
+    if (r !== undefined) return r;
+  }
+  return "";
+}
+
+function resolveDefinitions(rel: string, content: string, symbol: string): { line: number; text: string }[] {
+  for (const b of symbolBackends) {
+    const r = b.definitions(rel, content, symbol);
+    if (r !== undefined) return r;
+  }
+  return [];
+}
+
+/** One-line symbol outline for a file (regex floor; an AST backend may override). */
+export function extractSymbols(rel: string, content: string): string {
+  return resolveOutline(rel, content);
 }
 
 function outlineFor(abs: string, rel: string, size: number): string {
@@ -190,9 +258,9 @@ function formatRepoMap(
 export type Definition = { file: string; line: number; text: string };
 
 /**
- * Find likely DEFINITION sites of `symbol` (declarations / exports / method
- * shorthands) across the tree — not every mention, unlike search_text. Heuristic
- * (regex over a validated identifier), dependency-free. Read-only.
+ * Find likely DEFINITION sites of `symbol` across the tree — not every mention,
+ * unlike search_text. Per-file extraction routes through the symbol backends
+ * (regex floor; an AST backend overrides when available). Read-only.
  */
 export function findDefinitions(
   root: string,
@@ -203,16 +271,6 @@ export function findDefinitions(
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxResults = opts.maxResults ?? 50;
   const { files } = walk(root, path.resolve(root, sub));
-  const s = symbol;
-  const re = new RegExp(
-    [
-      `(?:function|class|const|let|var|type|interface|enum)\\s+${s}\\b`,
-      `(?:def|func)\\s+${s}\\b`,
-      `\\b${s}\\s*[:=]\\s*(?:async\\s+)?(?:function\\b|\\()`,
-      `export\\s+(?:default\\s+)?(?:async\\s+)?(?:function|class|const|let|var)\\s+${s}\\b`,
-      `^\\s*${s}\\s*\\([^)]*\\)\\s*\\{`,
-    ].join("|"),
-  );
   const results: Definition[] = [];
   for (const f of files) {
     if (results.length >= maxResults) break;
@@ -223,12 +281,9 @@ export function findDefinitions(
     } catch {
       continue;
     }
-    const lines = content.split("\n");
-    for (let i = 0; i < lines.length; i++) {
+    for (const d of resolveDefinitions(f.rel, content, symbol)) {
       if (results.length >= maxResults) break;
-      const line = lines[i]!;
-      if (!line.includes(s)) continue; // cheap prefilter
-      if (re.test(line)) results.push({ file: f.rel, line: i + 1, text: line.trim().slice(0, 200) });
+      results.push({ file: f.rel, line: d.line, text: d.text });
     }
   }
   return results;

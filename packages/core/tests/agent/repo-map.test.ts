@@ -2,7 +2,35 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildRepoMap, buildRepoOverview, extractSymbols, findDefinitions } from "../../src/agent/repo-map.js";
+import {
+  buildRepoMap,
+  buildRepoOverview,
+  extractSymbols,
+  findDefinitions,
+  symbolBackends,
+  type SymbolBackend,
+} from "../../src/agent/repo-map.js";
+
+describe("pluggable symbol backends (tree-sitter seam)", () => {
+  it("a prepended backend overrides regex, and undefined falls through to regex", () => {
+    const fake: SymbolBackend = {
+      name: "fake-ast",
+      outline: (rel) => (rel.endsWith(".vue") ? "[ast component]" : undefined),
+      definitions: (rel) => (rel.endsWith(".vue") ? [{ line: 1, text: "ast def" }] : undefined),
+    };
+    symbolBackends.unshift(fake);
+    try {
+      // .vue: the prepended backend handles it
+      expect(extractSymbols("X.vue", "<template/>")).toBe("[ast component]");
+      // .js: fake defers (undefined) -> regex floor still works
+      expect(extractSymbols("a.js", "export const x = 1;")).toContain("x");
+    } finally {
+      symbolBackends.shift();
+    }
+    // restored: regex behaviour is back
+    expect(extractSymbols("X.vue", "<template/>\n<script>export default { name: 'X' }</script>")).toContain("[vue");
+  });
+});
 
 describe("extractSymbols", () => {
   it("pulls exported names from a JS module", () => {

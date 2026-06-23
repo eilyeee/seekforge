@@ -3,6 +3,7 @@ import { ToolError } from "../errors.js";
 import { resolveInsideWorkspace } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { buildRepoMap, findDefinitions } from "../../agent/repo-map.js";
+import { ensureAstBackend } from "../../agent/repo-map-ast.js";
 
 const repoMapSchema = z.object({
   path: z
@@ -27,6 +28,7 @@ const repoMap = defineTool({
     if (ctx.runtime) {
       throw new ToolError("not_supported", "repo_map is not available with the runtime backend yet");
     }
+    await ensureAstBackend(); // best-effort: upgrades extraction to tree-sitter, else regex
     // Validate the subtree stays inside the workspace (throws on traversal).
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
     const map = buildRepoMap(ctx.workspace, {
@@ -59,6 +61,7 @@ const findDefinition = defineTool({
     if (ctx.runtime) {
       throw new ToolError("not_supported", "find_definition is not available with the runtime backend yet");
     }
+    await ensureAstBackend(); // best-effort: tree-sitter when available, else regex
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
     const definitions = findDefinitions(
       ctx.workspace,
