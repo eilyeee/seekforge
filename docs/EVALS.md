@@ -15,14 +15,27 @@ Two layers protect against regressions:
 ```sh
 # Needs a key; without one the harness prints a skip and exits 0.
 export DEEPSEEK_API_KEY=sk-...
-pnpm --filter @seekforge/eval-harness eval                       # full task set
-pnpm --filter @seekforge/eval-harness eval -- --task add-function  # one task
+pnpm --filter @seekforge/eval-harness eval                          # full task set
+pnpm --filter @seekforge/eval-harness eval -- --task add-function   # one task
+pnpm --filter @seekforge/eval-harness eval -- --task a,b,c          # a subset (comma list)
 ```
 
-Useful flags (see `src/cli.ts`): `--task <id>`, `--baseline <file>`,
-`--fail-on-regression`, `--variant <name>`, `--ab <a,b>`, `--skill-ranking`,
-`--keep`, `--list-variants`. Each run writes a timestamped `.md` + `.json` under
-`evals/reports/`.
+Useful flags (see `src/cli.ts`): `--task <id|id,id,...>` (one id or a
+comma-separated subset), `--baseline <file>`, `--fail-on-regression`,
+`--variant <name>`, `--ab <a,b>`, `--skill-ranking`, `--keep`, `--list-variants`.
+Each run writes a timestamped `.md` + `.json` under `evals/reports/`.
+
+### Variants (for `--variant` / `--ab`)
+
+`--list-variants` prints the registry. Current variants (see `src/variants.ts`):
+`control` (baseline), `terse-prompt`, `llm-compaction`, `no-memory`,
+**`verify-gate`** (enables the self-verification finalize gate, `verifyCommand=npm test`),
+and **`no-progress-guard`** (enables the premature-finish guard). A/B a lever
+against `control`, e.g. `--ab control,verify-gate`.
+
+> Honest note: A/B runs of `verify-gate` showed **no pass-rate gain and ~+10% cost**
+> on the current (verify-prompted) task set — which is why that lever ships opt-in,
+> not on by default.
 
 ## The baseline
 

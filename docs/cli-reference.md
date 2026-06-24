@@ -22,6 +22,7 @@ Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 | `--resume <id>` | run, ask, -p | Resume a specific session (see `seekforge sessions`) |
 | `--add-dir <path>` | run, ask, -p | Extra read-only root for `@`-references (repeatable) |
 | `--max-turns <n>` | run, ask, -p | Cap agent turns |
+| `--max-cost <usd>` | run, -p | Stop the run once cumulative cost reaches this budget (USD); graceful cancel, trace kept. Also settable as the `maxCostUsd` config key (applies to all modes) |
 | `--settings <file>` | run, ask, -p, chat | Path to JSON settings file (layered over project config but below env/CLI flags) |
 | `--profile <name>` ✦ | run, ask, -p, chat | Apply a named `profiles` overlay from the config files; also `SEEKFORGE_PROFILE` env (flag wins). The overlay slots just below `--settings`. Available as a global flag and on `run` / `ask` / `loop` |
 
@@ -98,3 +99,14 @@ for backward compatibility.
 
 For deep-merge fields (`mcpServers`, `permissionRules`, `hooks`), the settings
 layer merges into the existing logic rather than replacing wholesale.
+
+## Session commands
+
+Beyond the run/ask flags above, these subcommands operate on stored sessions
+(under `.seekforge/sessions/`):
+
+| Command | What it does |
+| --- | --- |
+| `seekforge sessions` | List recent sessions (id, status, task) |
+| `seekforge resume <id>` | Continue a session (also `run/ask -c` for the latest) |
+| `seekforge replay <session>` | Deterministically re-render a stored session's events to stdout — no model calls, no cost. `--verbose` for full tool args/results |

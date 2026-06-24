@@ -127,6 +127,11 @@ user who installs only the bundle needs **no** system `seekforge`. In `tauri dev
 
 ## How it works
 
+- **Code navigation** for large repos: `repo_map` gives a compact structural
+  overview (auto-injected for big repos) and `find_definition` jumps to where a
+  symbol is defined. Symbol extraction is hybrid — tree-sitter (accurate, for
+  JS/TS, Python, Java, Rust, Go, C/C++, C#) with a dependency-free regex floor
+  for everything else; tree-sitter ships as an **optional** dependency.
 - **Edits are search/replace patches** (`oldString` must match uniquely),
   applied atomically — far more reliable than unified diffs for LLMs.
   When `apply_patch` contains **more than one edit**, the permission prompt

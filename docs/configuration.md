@@ -213,6 +213,51 @@ the model to stop looping and re-read.
 
 Settable via `config set`? **No** — edit the file directly.
 
+### `maxCostUsd`
+
+**Default off.** A per-run cost budget in USD. Once cumulative cost reaches it, the
+run stops via the graceful cancel path (the trace is kept, so you can `resume`).
+Overridden by the `--max-cost <usd>` CLI flag (which also works with `-p`). Off
+when unset or non-positive. Must be a number — a string like `"0.5"` is rejected
+with a clear error rather than crashing mid-run.
+
+```json
+{ "maxCostUsd": 0.5 }
+```
+
+Settable via `config set`? **No** — edit the file directly.
+
+### `verifyCommand`
+
+**Default off.** A shell command (e.g. `"npm test"`) the agent is nudged to run
+before finishing **when it has edited files but not run it since the last edit**.
+The command runs through the model's normal `run_command` path (respecting the
+session's permission mode); the nudge fires at most once per run.
+
+```json
+{ "verifyCommand": "pnpm test" }
+```
+
+> Honest note: in eval A/B this gate showed **no pass-rate benefit and ~+10% cost**
+> on task sets that already prompt the agent to verify — hence it is opt-in, not a
+> default. It is most useful for workflows where you do *not* tell the agent to run
+> tests. Edit the file directly; not settable via `config set`.
+
+### `finalizeReview`
+
+**Default off.** When the agent finishes after editing files, nudge it once to
+self-review its own diff (leftover debug code, missed cases, task coverage) before
+the run completes. Costs one extra turn when it fires. Edit the file directly; not
+settable via `config set`.
+
+### `guardNoProgress`
+
+**Default off.** Premature-finish guard: if an **edit-mode** run declares done
+having changed nothing and made almost no tool calls (a bail-out without really
+investigating), nudge it once to actually work the task. Fires only on clear
+non-work, and is skipped on resumed runs (where prior-run work doesn't count
+toward this run). Edit the file directly; not settable via `config set`.
+
 ### `memoryAutoApproveConfidence`
 
 **Default off.** When set to a number in `0..1`, auto-extracted memory facts whose model confidence is `>= ` the threshold are written directly to `project.md` as approved (instead of being queued as pending candidates for review); facts below the threshold still wait for `seekforge memory approve`. Inspect extraction quality first with `seekforge memory stats`. Edit the file directly; not settable via `config set`.
@@ -560,7 +605,8 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `thinking` | boolean | `true` / `false` |
 | `reasoningEffort` | enum | `high` / `max` |
 
-The remaining keys — `planModel`, `escalateOnFailure`,
+The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
+`verifyCommand`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
 **not settable** via `config set`. They must be edited directly in the JSON
 config file, or managed through their dedicated subcommands (`seekforge mcp
@@ -583,3 +629,36 @@ allowed keys.
 `loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROFILE`
 only chooses which `profiles` overlay is layered in (the explicit `--profile`
 flag takes precedence over it).
+
+---
+
+## Code navigation (`repo_map` / `find_definition`) & tree-sitter
+
+Two built-in read-only tools help the agent orient in large codebases:
+
+- **`repo_map`** — a compact structural overview (directory rollup + a one-line
+  symbol outline per file). For repos above ~150 code files, a top-level overview
+  is also auto-injected into the system prompt at session start, so the agent
+  starts oriented. Use `path` to drill into a subtree.
+- **`find_definition`** — locates where a symbol is *defined/exported* (functions,
+  classes, consts, methods, components) rather than every mention.
+
+### Hybrid extraction (optional tree-sitter, regex floor)
+
+Symbol extraction uses a **two-backend resolver**:
+
+1. **tree-sitter (AST)** — accurate and comment/string-aware, for
+   JavaScript/JSX, TypeScript/TSX, Python, Java, Rust, Go, C, C++, C#.
+2. **regex** — the dependency-free **floor**: used for every other language
+   (Vue, Svelte, Ruby, PHP, …) and whenever tree-sitter is unavailable or a file
+   fails to parse.
+
+tree-sitter ships as **optional dependencies** (`web-tree-sitter` +
+`tree-sitter-wasms`): installed by default so the AST path works out of the box,
+but skippable (`pnpm install --no-optional`) — extraction then degrades
+gracefully to the regex floor with no loss of correctness, only precision.
+
+> Honest note: dogfooding on a real ~1100-file repo showed `repo_map` orientation
+> gets reliably used, but `find_definition` adoption from the model is weak (it
+> often prefers `search_text`, which also works). These tools are **available, not
+> forced**; no measured efficiency win has been established.

@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### round 51: code navigation, finalize gate, durable plans
+- **Code navigation tools.** New `repo_map` (compact structural overview —
+  directory rollup + per-file symbol outlines; auto-injected into the system
+  prompt for repos > ~150 files) and `find_definition` (locate a symbol's
+  declaration, not every mention). Symbol extraction is a **hybrid resolver**:
+  tree-sitter (accurate, comment/string-aware — JS/TS/JSX/TSX, Python, Java,
+  Rust, Go, C, C++, C#) with a dependency-free **regex floor** for other
+  languages and on any parse/extraction failure. `web-tree-sitter` +
+  `tree-sitter-wasms` are **optionalDependencies** (graceful degrade to regex).
+- **Finalize gate.** When the model declares done, a one-time transient nudge can
+  surface the highest-priority unmet check: finish open plan steps, run the
+  `verifyCommand`, or self-review the diff. Each kind fires once (bounded);
+  skipped on the last turn so it never converts a completion into a failure.
+- **Durable plans (long-horizon).** `update_plan` is persisted to `session.json`,
+  restored into the system prompt on resume, and re-injected after mid-run
+  compaction — a task's checklist now survives across resume and compaction.
+- **Premature-finish guard (opt-in `guardNoProgress`).** Nudge an edit-mode run
+  that declares done with no changes and ~no tool calls; skipped on resume.
+- **CLI/config.** New config keys `maxCostUsd`, `verifyCommand`, `finalizeReview`,
+  `guardNoProgress`; `--max-cost <usd>` now works with `-p` (not just `run`);
+  `maxCostUsd` is type-validated. `seekforge replay <session>` re-renders a stored
+  session's events (no model calls). Tool-choice guidance steers toward
+  `repo_map`/`find_definition` instead of grep-first.
+- **Eval harness.** Harder discriminating tasks (multi-file rename+signature,
+  param-threading, buried-bug-at-scale, CSV/expr/multi-bug); `--task` accepts a
+  comma-separated subset; new `verify-gate` and `no-progress-guard` variants for
+  A/B.
+- **Fixes:** whitespace-tolerant `apply_patch` fallback; CJK-aware token estimate;
+  WASM tree memory leak in the AST backend; `.h` headers parsed as C++.
+- **Honest notes:** the behavioral levers (`verify-gate`, `finalizeReview`,
+  `guardNoProgress`) are **opt-in** — eval A/B showed no pass-rate gain and ~+10%
+  cost on verify-prompted task sets. Dogfooding a real ~1100-file repo: `repo_map`
+  orientation gets adopted; `find_definition` adoption from prompting alone is
+  weak (the model often prefers `search_text`, which works). Tools are
+  available-not-forced; no measured efficiency win is claimed.
+- Verified: core 954 · cli · eval 52 · server 194 · tui 679 · workspace typecheck
+  clean · desktop build clean.
+
 ### round 50: loop engineering — desktop loop panel
 - **Loop mode in the chat.** A collapsible Loop panel at the top of the chat
   window: an explanation line, task + verify-command inputs, max-iterations +
