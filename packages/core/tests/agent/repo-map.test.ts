@@ -96,6 +96,14 @@ describe("buildRepoMap", () => {
     expect(buildRepoOverview(root, 1)).toContain("# Repo map");
   });
 
+  it("refuses to escape the workspace root via a traversal path", () => {
+    expect(buildRepoMap(root, { path: ".." })).toContain("outside the workspace");
+    expect(buildRepoMap(root, { path: "../../etc" })).toContain("outside the workspace");
+    expect(findDefinitions(root, "login", { path: ".." })).toEqual([]);
+    // a normal subtree still works
+    expect(buildRepoMap(root, { path: "src/api" })).toContain("src/api/user.js");
+  });
+
   it("findDefinitions locates a declaration and ignores non-identifiers", () => {
     const defs = findDefinitions(root, "login");
     expect(defs).toHaveLength(1);

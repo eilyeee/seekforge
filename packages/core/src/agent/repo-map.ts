@@ -40,6 +40,13 @@ function isCode(name: string): boolean {
   return dot >= 0 && CODE_EXTS.has(name.slice(dot + 1).toLowerCase());
 }
 
+/** Resolve a subtree path under root; null if it escapes the root (no traversal). */
+function resolveSubtree(root: string, sub: string): string | null {
+  const base = path.resolve(root);
+  const start = path.resolve(base, sub);
+  return start === base || start.startsWith(base + path.sep) ? start : null;
+}
+
 /** Walk a directory collecting code files (rel to root) and per-dir counts. */
 function walk(root: string, start: string): { files: CodeFile[]; dirCounts: Map<string, number> } {
   const files: CodeFile[] = [];
@@ -203,7 +210,9 @@ export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxDepth = opts.maxDepth ?? 3;
   const maxFiles = opts.maxFiles ?? 60;
-  const { files, dirCounts } = walk(root, path.resolve(root, sub));
+  const start = resolveSubtree(root, sub);
+  if (start === null) return `Repo map: "${sub}" is outside the workspace.`;
+  const { files, dirCounts } = walk(root, start);
   return formatRepoMap(root, sub, files, dirCounts, maxDepth, maxFiles);
 }
 
@@ -274,7 +283,9 @@ export function findDefinitions(
   if (!/^[\p{L}\p{N}_$]+$/u.test(symbol)) return [];
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxResults = opts.maxResults ?? 50;
-  const { files } = walk(root, path.resolve(root, sub));
+  const start = resolveSubtree(root, sub);
+  if (start === null) return [];
+  const { files } = walk(root, start);
   const results: Definition[] = [];
   for (const f of files) {
     if (results.length >= maxResults) break;
