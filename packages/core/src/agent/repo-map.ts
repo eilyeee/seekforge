@@ -116,9 +116,11 @@ function regexOutline(rel: string, content: string): string {
   return list.length > 0 ? `exports: ${list.join(", ")}` : "";
 }
 
-/** Regex definition scan for one file — the floor backend. `symbol` is a validated identifier. */
+/** Regex definition scan for one file — the floor backend. */
 function regexDefinitions(_rel: string, content: string, symbol: string): { line: number; text: string }[] {
-  const s = symbol; // caller validated [A-Za-z0-9_$]+ — safe to interpolate
+  // Escape regex metacharacters so any identifier (incl. `$`) interpolates safely.
+  const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const raw = symbol; // unescaped, for the cheap substring prefilter
   const re = new RegExp(
     [
       `(?:function|class|const|let|var|type|interface|enum)\\s+${s}\\b`,
@@ -132,7 +134,7 @@ function regexDefinitions(_rel: string, content: string, symbol: string): { line
   const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    if (!line.includes(s)) continue; // cheap prefilter
+    if (!line.includes(raw)) continue; // cheap prefilter (unescaped)
     if (re.test(line)) out.push({ line: i + 1, text: line.trim().slice(0, 200) });
   }
   return out;
@@ -267,7 +269,9 @@ export function findDefinitions(
   symbol: string,
   opts: { path?: string; maxResults?: number } = {},
 ): Definition[] {
-  if (!/^[A-Za-z0-9_$]+$/.test(symbol)) return []; // identifier only — safe to interpolate
+  // Identifier-shaped only (unicode letters/digits ok); rejects whitespace,
+  // dots, parens, etc. The regex backend additionally escapes the symbol.
+  if (!/^[\p{L}\p{N}_$]+$/u.test(symbol)) return [];
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxResults = opts.maxResults ?? 50;
   const { files } = walk(root, path.resolve(root, sub));

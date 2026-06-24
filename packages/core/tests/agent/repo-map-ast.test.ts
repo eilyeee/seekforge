@@ -43,6 +43,19 @@ describe("tree-sitter AST backend (optional)", () => {
     expect(o).toContain("e");
   });
 
+  it.skipIf(!astReady)("handles unicode identifiers and safely rejects non-identifier input", () => {
+    const d = mkdtempSync(join(tmpdir(), "ast-uni-"));
+    try {
+      writeFileSync(join(d, "u.ts"), "function 你好() {}\nexport const café = 1;\nfunction $util() {}");
+      expect(findDefinitions(d, "你好")).toHaveLength(1);
+      expect(findDefinitions(d, "café")).toHaveLength(1);
+      expect(findDefinitions(d, "$util")).toHaveLength(1); // `$` must not crash the regex floor
+      expect(findDefinitions(d, "a.*b")).toEqual([]); // regex metachars rejected, no throw
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!astReady)("finds definitions in java/rust/go/c/c++/c#", () => {
     const d = mkdtempSync(join(tmpdir(), "ast-langs-"));
     try {
