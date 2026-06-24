@@ -10,6 +10,12 @@ import type { RetryInfo } from "./types.js";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 const BODY_SNIPPET_CHARS = 500;
+/**
+ * Per-request timeout. Without one, a dropped/hung connection blocks the run
+ * forever; with it, the attempt aborts and the normal retry loop takes over.
+ * Generous so it never cuts off a legitimately long (non-streaming) generation.
+ */
+const REQUEST_TIMEOUT_MS = 180_000;
 
 export type FetchWithRetryOptions = {
   /** Reported just before each backoff sleep (attempt is 1-based). */
@@ -20,6 +26,8 @@ export type FetchWithRetryOptions = {
    * one attempt with the alternate model.
    */
   maxRetries?: number;
+  /** Per-request timeout in ms (default REQUEST_TIMEOUT_MS); a hung request aborts and retries. */
+  timeoutMs?: number;
 };
 
 /** Short human-readable cause for a retry, used in the onRetry report. */
@@ -71,6 +79,7 @@ export async function fetchWithRetry(
   // network error). Carried across iterations so onRetry reports it precisely.
   let pendingStatus: number | undefined;
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const delayMs = backoffMs(attempt);
@@ -87,15 +96,30 @@ export async function fetchWithRetry(
       await sleep(delayMs);
     }
     let res: Response;
+    // Timeout guards time-to-headers only, then is cleared — so a long but
+    // progressing STREAMING body (chatStream) is never aborted mid-stream. A
+    // hung connection that never sends headers still aborts and retries. Compose
+    // with any caller signal (e.g. cancel) so cancellation still aborts the body.
+    const controller = new AbortController();
+    const timeoutErr = Object.assign(new Error(`request timed out after ${timeoutMs}ms`), {
+      name: "TimeoutError",
+    });
+    const timer = setTimeout(() => controller.abort(timeoutErr), timeoutMs);
     try {
-      res = await fetch(url, init);
+      const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+      res = await fetch(url, { ...init, signal });
     } catch (err) {
+      clearTimeout(timer);
+      const timedOut = err === timeoutErr;
       lastError = new DeepSeekApiError(
-        `network error calling DeepSeek API: ${err instanceof Error ? err.message : String(err)}`,
+        timedOut
+          ? `DeepSeek API request timed out after ${timeoutMs}ms`
+          : `network error calling DeepSeek API: ${err instanceof Error ? err.message : String(err)}`,
       );
       pendingStatus = undefined;
       continue;
     }
+    clearTimeout(timer); // headers received — let the body stream without the TTFB cap
     if (res.ok) return res;
     const snippet = (await res.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
     const message = `DeepSeek API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;

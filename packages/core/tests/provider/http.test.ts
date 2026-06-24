@@ -92,3 +92,38 @@ describe("fetchWithRetry onRetry", () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 });
+
+describe("fetchWithRetry timeout", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("aborts a hung request and surfaces a timeout (instead of hanging forever)", async () => {
+    // fetch that never resolves until aborted — then rejects with the abort
+    // reason, exactly like the real fetch does.
+    globalThis.fetch = ((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+      })) as unknown as typeof fetch;
+
+    await expect(
+      fetchWithRetry("https://x/y", { method: "POST" }, { maxRetries: 0, timeoutMs: 20 }),
+    ).rejects.toThrow(/timed out/);
+  });
+
+  it("does NOT abort the body after headers arrive (TTFB-only; streaming is safe)", async () => {
+    let captured: AbortSignal | undefined;
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      captured = init.signal ?? undefined;
+      return Promise.resolve(res(200, "ok")); // response/headers resolve immediately
+    }) as unknown as typeof fetch;
+
+    const r = await fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: 20 });
+    expect(r.status).toBe(200);
+    // Past the timeout window: the timer was cleared on success, so the signal a
+    // streaming body would read from is still live (never aborted).
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(captured?.aborted).toBe(false);
+  });
+});
