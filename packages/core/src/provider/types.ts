@@ -24,6 +24,8 @@ export type ProviderConfig = {
   baseUrl?: string;
   /** "deepseek-v4-flash" | "deepseek-v4-pro" (legacy: deepseek-chat/reasoner). */
   model?: string;
+  /** Mid-stream idle timeout (ms): no bytes for this long aborts a stalled stream. Default 120000. */
+  streamIdleTimeoutMs?: number;
   /**
    * Called before each retry backoff in fetchWithRetry, so a frontend can
    * surface retry progress ("⟳ retrying (2/3)…"). Never throws into the

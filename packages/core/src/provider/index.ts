@@ -29,6 +29,25 @@ export {
   type SseResult,
 } from "./sse.js";
 
+/** No bytes for this long mid-stream = the response stalled (complements the TTFB timeout). */
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Read one chunk, rejecting if the stream sends nothing for `idleMs` (a stall). */
+async function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, idleMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new DeepSeekApiError(`streaming response stalled (no data for ${idleMs}ms)`)),
+      idleMs,
+    );
+  });
+  try {
+    return await Promise.race([reader.read(), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   const model = config.model ?? DEFAULT_MODEL;
   const baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -105,13 +124,23 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     const reader = res.body.getReader();
     try {
       for (;;) {
-        const { done, value } = await reader.read();
+        // Idle timeout: if the stream sends no bytes for STREAM_IDLE_TIMEOUT_MS
+        // it has stalled mid-response (the TTFB timeout only covers headers).
+        // Bail with a clear error instead of hanging forever.
+        const { done, value } = await readWithIdleTimeout(
+          reader,
+          config.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+        );
         if (done) break;
         feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
       }
       feedSseChunk(acc, decoder.decode(), onDelta, onReasoningDelta);
-    } finally {
       reader.releaseLock();
+    } catch (err) {
+      // A stall (or any read error) leaves a pending read — cancel to settle it
+      // and tear down the connection, then propagate.
+      await reader.cancel().catch(() => {});
+      throw err;
     }
     const result = finalizeSse(acc);
     return {
