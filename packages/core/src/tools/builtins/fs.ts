@@ -12,6 +12,7 @@ import {
   resolveInsideWorkspace,
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
+import { extractSymbols } from "../../agent/repo-map.js";
 import { callRuntime } from "../runtime-backend.js";
 import { compileGlob } from "./glob.js";
 import { defineTool, type ToolSpec } from "../registry.js";
@@ -222,7 +223,7 @@ const readFileSchema = z.object({
 const readFile = defineTool({
   name: "read_file",
   description:
-    "Read the UTF-8 text file at path. For large files pass offset (1-based line) and limit to read only the range you need — output beyond 20k chars is head/tail truncated. Do not re-read a file you have not changed since the last read; the earlier content is still valid.",
+    "Read the UTF-8 text file at path. For large files pass offset (1-based line) and limit to read only the range you need — output beyond 20k chars is head/tail truncated (and a symbol outline of the whole file is returned so you can re-read the right range). Do not re-read a file you have not changed since the last read; the earlier content is still valid.",
   schema: readFileSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -246,6 +247,7 @@ const readFile = defineTool({
       }
       content = fs.readFileSync(resolved, "utf8");
     }
+    const fullContent = content; // whole file, before offset/limit slicing
     const totalLines = content.split("\n").length;
     if (args.offset !== undefined || args.limit !== undefined) {
       const lines = content.split("\n");
@@ -254,8 +256,12 @@ const readFile = defineTool({
       content = lines.slice(start, end).join("\n");
     }
     const { text, truncated } = truncateHeadTail(content, DEFAULT_LIMITS.toolOutputMaxChars);
+    // On truncation, append a symbol outline of the whole file (regex floor, or
+    // tree-sitter if loaded) so the model knows what's beyond the cut and can
+    // re-read the right range. Empty for non-code/symbol-less files.
+    const outline = truncated ? extractSymbols(args.path, fullContent) : "";
     return {
-      data: { path: args.path, content: text, totalLines },
+      data: { path: args.path, content: text, totalLines, ...(outline ? { outline } : {}) },
       meta: { truncated },
     };
   },

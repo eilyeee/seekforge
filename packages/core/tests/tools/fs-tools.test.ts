@@ -193,6 +193,26 @@ describe("read_file", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("sensitive_path");
   });
+
+  it("appends a symbol outline when a code file is truncated", async () => {
+    const ws = makeWorkspace();
+    const big =
+      "export function head() {}\n" + "// filler line padding\n".repeat(3000) + "export function tail() {}\n";
+    fs.writeFileSync(path.join(ws, "big.ts"), big);
+    const res = await dispatcher.execute(call("read_file", { path: "big.ts" }), makeCtx(ws));
+    expect(res.ok).toBe(true);
+    expect(res.meta?.truncated).toBe(true);
+    const data = res.data as { outline?: string };
+    expect(data.outline).toContain("head");
+    expect(data.outline).toContain("tail"); // beyond the cut — discoverable via the outline
+  });
+
+  it("does not add an outline when not truncated", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "small.ts"), "export function f() {}\n");
+    const res = await dispatcher.execute(call("read_file", { path: "small.ts" }), makeCtx(ws));
+    expect((res.data as { outline?: string }).outline).toBeUndefined();
+  });
 });
 
 describe("edit-review preview (write tools)", () => {
