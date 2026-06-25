@@ -17,6 +17,7 @@ import {
 import { t } from "../i18n.js";
 import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
+import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
@@ -83,6 +84,38 @@ export type RunOptions = {
   maxCostUsd?: number;
 };
 
+/**
+ * Folder-access consent: returns true if `dir` may be accessed. Authorized dirs
+ * pass silently; `-y` pre-authorizes; an interactive TTY prompts once (and
+ * remembers a yes); a non-interactive run without `-y` is refused.
+ */
+export async function ensureWorkspaceAuthorized(
+  dir: string,
+  { yes, machine }: { yes: boolean; machine: boolean },
+): Promise<boolean> {
+  if (isAuthorizedDir(dir)) return true;
+  if (yes) {
+    authorizeDir(dir);
+    return true;
+  }
+  if (machine || !process.stdin.isTTY) {
+    fail(t("err.workspaceNotAuthorized", { dir }), { hint: t("err.workspaceNotAuthorizedHint") });
+    return false;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(t("render.authorizeWorkspacePrompt", { dir }))).trim().toLowerCase();
+    if (answer === "y" || answer === "yes") {
+      authorizeDir(dir);
+      return true;
+    }
+    fail(t("err.workspaceAuthDeclined"));
+    return false;
+  } finally {
+    rl.close();
+  }
+}
+
 export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
   const projectPath = process.cwd();
   let config: ReturnType<typeof loadConfig>;
@@ -123,6 +156,12 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     (typeof config.maxCostUsd !== "number" || !Number.isFinite(config.maxCostUsd))
   ) {
     fail(t("err.maxCostUsdNumber"), { hint: t("err.maxCostUsdNumberHint") });
+    return;
+  }
+
+  // Folder-access consent: SeekForge must be authorized for this directory once
+  // (interactively, or via -y) before it reads/edits files here.
+  if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine }))) {
     return;
   }
 

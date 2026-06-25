@@ -17,6 +17,7 @@ import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { buildToolGatingRules } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
+import { ensureWorkspaceAuthorized } from "./run.js";
 import { expandFileRefs } from "../file-refs.js";
 import { t } from "../i18n.js";
 import { statusCommand } from "./sessions.js";
@@ -93,6 +94,11 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
     fail(t("err.noApiKey"), {
       hint: t("err.noApiKeyHint"),
     });
+    return;
+  }
+
+  // Folder-access consent: authorize this directory once before the session.
+  if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) {
     return;
   }
 
