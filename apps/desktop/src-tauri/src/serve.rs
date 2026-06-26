@@ -193,13 +193,15 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Picks the directory the agent server should operate on:
-/// `SEEKFORGE_WORKSPACE` env > the Tauri process cwd (dev: launch the app
-/// from your project dir) > the user's home dir (bundled app, whose cwd is
-/// typically `/`).
+/// `SEEKFORGE_WORKSPACE` env > the Tauri process cwd (dev: launch the app from
+/// your project dir). Returns `None` for a bundled app launched from Finder
+/// (cwd `/`): we must NOT silently fall back to the user's home folder — the
+/// caller asks the user to pick a folder instead (`home` is unused, kept for
+/// signature stability).
 pub fn resolve_workspace(
     env_workspace: Option<&str>,
     cwd: Option<&Path>,
-    home: Option<&Path>,
+    _home: Option<&Path>,
 ) -> Option<PathBuf> {
     if let Some(ws) = env_workspace {
         if !ws.is_empty() {
@@ -212,7 +214,7 @@ pub fn resolve_workspace(
             return Some(cwd.to_path_buf());
         }
     }
-    home.map(Path::to_path_buf)
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -649,20 +651,18 @@ mod tests {
     }
 
     #[test]
-    fn workspace_falls_back_to_cwd_then_home() {
+    fn workspace_uses_cwd_but_never_falls_back_to_home() {
         assert_eq!(
             resolve_workspace(None, Some(Path::new("/proj")), Some(Path::new("/home/u"))),
             Some(PathBuf::from("/proj"))
         );
-        // cwd "/" (bundled app) is skipped in favor of home.
+        // cwd "/" (bundled app launched from Finder) => None, NOT home: the user
+        // must pick a folder rather than silently getting their home directory.
         assert_eq!(
             resolve_workspace(None, Some(Path::new("/")), Some(Path::new("/home/u"))),
-            Some(PathBuf::from("/home/u"))
+            None
         );
-        assert_eq!(
-            resolve_workspace(Some(""), None, Some(Path::new("/home/u"))),
-            Some(PathBuf::from("/home/u"))
-        );
+        assert_eq!(resolve_workspace(Some(""), None, Some(Path::new("/home/u"))), None);
         assert_eq!(resolve_workspace(None, None, None), None);
     }
 

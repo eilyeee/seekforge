@@ -158,8 +158,23 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
 
     let env_ws = std::env::var("SEEKFORGE_WORKSPACE").ok();
     let cwd = std::env::current_dir().ok();
-    let workspace = serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref())
-        .ok_or_else(|| "could not resolve a workspace directory".to_string())?;
+    let workspace = match serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref()) {
+        Some(ws) => ws,
+        None => {
+            // Launched from Finder with no workspace: ask the user to choose a
+            // folder rather than silently defaulting to their home directory.
+            match handle.dialog().file().blocking_pick_folder() {
+                Some(folder) => folder
+                    .into_path()
+                    .map_err(|e| format!("could not use the selected folder: {e}"))?,
+                None => {
+                    return Err("No project folder was selected. Launch SeekForge again \
+                         and choose a folder for the agent to work on."
+                        .to_string());
+                }
+            }
+        }
+    };
 
     let resolution = if from_sidecar {
         Resolution::Sidecar
