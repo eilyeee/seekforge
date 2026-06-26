@@ -80,10 +80,12 @@ a user who installs only the bundle can launch it with **no** system-installed
 > (run directly with `SEEKFORGE_STATIC_DIR` set); `cargo check`/`cargo test`
 > pass; and `pnpm tauri build` has been run successfully — it produces
 > `SeekForge_<ver>_<arch>.dmg` + `SeekForge.app` with the sidecar laid out at
-> `Contents/MacOS/seekforge-server` and the web resource bundled.
-> **Still pending:** installing that DMG on a clean machine and launching it
-> (the in-app `⏺ chat` connecting end-to-end) — that GUI smoke-test hasn't been
-> done here and is the last pre-release check.
+> `Contents/MacOS/seekforge-server` and the web resource bundled. The DMG has
+> been **installed and launched with the in-app `⏺ chat` working end-to-end**,
+> verified on a maintainer's dev machine.
+> **Remaining (one check):** the same install on a machine/account with **no
+> `seekforge` on PATH** — only that proves the app is served by the *bundled*
+> sidecar rather than incidentally by a system-installed CLI.
 
 ## Which workspace the agent operates on
 

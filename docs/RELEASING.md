@@ -25,13 +25,20 @@ so an end user installs only the DMG — no system `seekforge`.
 GUI end-to-end can't be CI-automated here; do this by hand on a machine (or
 fresh user account) that has **no** `seekforge` on PATH:
 
-- [ ] Install the DMG and launch `SeekForge.app`.
-- [ ] The window loads the workbench (served by the bundled sidecar, not a
-      system CLI).
-- [ ] **⏺ chat end-to-end**: open a project, send a task, get a streamed
-      response, approve a tool call.
+- [x] Install the DMG and launch `SeekForge.app`. _(done — maintainer dev machine)_
+- [ ] The window loads the workbench **served by the BUNDLED sidecar, not a
+      system CLI** — this is the part still unverified: it requires a machine with
+      no `seekforge` on PATH to be meaningful (the dev-machine run could be using
+      the system CLI).
+- [x] **⏺ chat end-to-end**: open a project, send a task, get a streamed
+      response, approve a tool call. _(done — dev machine)_
 - [ ] Quit the app — the sidecar's process group is killed (no orphan
       `seekforge-server`).
+
+> Status: the DMG installs, launches, and the in-app chat works end-to-end
+> (verified on a dev machine). The remaining required check is the **no-PATH /
+> bundled-sidecar** containment — run it on a clean machine or fresh user account
+> before publishing.
 
 Record the result (OS version, arch) in the release notes. This is the last
 pre-release check and is **not** yet wired into CI.
