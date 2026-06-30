@@ -86,7 +86,11 @@ only the target's *path/exports*, and no failing test reveals the location.
 | 3 | 2 turns / 0.0009 | 3 / 0.0010 | A |
 
 **Retrieval reliably wins 3/3: ~1 fewer turn, ~10% cheaper, same (correct)
-answer.** This is the niche the round-52 tasks couldn't show — when the agent
+answer.** Caveat on rigor: the answer check only matches the file + function,
+not the diagnosed cause, and the control prompt names that file in its shortlist
+— so the 1-turn delta is best read as "retrieval saved the grep-to-locate step"
+(control still spent a turn reading the file) rather than a hard lower bound.
+This is the niche the round-52 tasks couldn't show — when the agent
 can't cheaply grep-orient, the precise shortlist saves a navigation turn. So
 retrieval *does* earn its keep, but its value is concentrated on hard-navigation
 tasks and is ~nil when the task term is already greppable. Net: keep it (cheap to
