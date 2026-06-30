@@ -190,6 +190,27 @@ const astBackend: SymbolBackend = {
       tree?.delete(); // free the WASM-backed tree
     }
   },
+  ranges(rel, content) {
+    const parser = parserFor(rel);
+    if (!parser) return undefined;
+    let tree: TsTree | undefined;
+    try {
+      tree = parser.parse(content);
+      const root = tree.rootNode;
+      const out: { start: number; end: number }[] = [];
+      // Top-level constructs only: cutting on these boundaries never splits a
+      // function/class/etc. (their char offsets are plain numbers, safe post-delete).
+      for (let i = 0; i < root.namedChildCount; i++) {
+        const n: TsNode = root.namedChild(i);
+        out.push({ start: n.startIndex as number, end: n.endIndex as number });
+      }
+      return out;
+    } catch {
+      return undefined;
+    } finally {
+      tree?.delete();
+    }
+  },
 };
 
 /**

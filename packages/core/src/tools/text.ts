@@ -1,13 +1,15 @@
 /**
- * Head+tail truncation for large tool outputs. Snaps the cut points to line
- * boundaries so a truncated code/text blob never ends or resumes mid-line —
- * the model always sees whole lines (far easier to parse than a severed
- * `function foo(a, b`). Falls back to a raw char cut when the content has no
- * newline in range (e.g. one giant minified line).
+ * Head+tail truncation for large tool outputs. Cut points snap to line
+ * boundaries so a truncated blob never ends/resumes mid-line. When `ranges`
+ * (char spans of top-level code constructs, from tree-sitter) are supplied AND
+ * a clean split exists, it cuts on CONSTRUCT boundaries instead — so a truncated
+ * code file shows whole functions/classes, not a severed one. Falls back to the
+ * line-aware (then raw char) cut otherwise.
  */
 export function truncateHeadTail(
   text: string,
   maxChars: number,
+  opts?: { ranges?: { start: number; end: number }[] },
 ): { text: string; truncated: boolean } {
   if (text.length <= maxChars) return { text, truncated: false };
   // Reserve a roughly constant marker budget (the digit count varies slightly).
@@ -17,14 +19,36 @@ export function truncateHeadTail(
   if (keep === 0) return { text: text.slice(0, maxChars), truncated: true };
   const head = Math.ceil(keep / 2);
   const tail = keep - head;
-
-  // Snap the head end back to the last newline within budget (keep through it).
-  const lastNl = text.lastIndexOf("\n", head);
-  const headCut = lastNl >= 0 ? lastNl + 1 : head;
-  // Snap the tail start forward to the next newline (resume on a line boundary).
   const tailStart = text.length - tail;
+
+  // Line-aware baseline (always valid: headCut < tailStart <= tailCutStart).
+  const lastNl = text.lastIndexOf("\n", head);
+  let headCut = lastNl >= 0 ? lastNl + 1 : head;
   const nextNl = tail > 0 ? text.indexOf("\n", tailStart) : -1;
-  const tailCutStart = nextNl >= 0 ? nextNl + 1 : tailStart;
+  let tailCutStart = nextNl >= 0 ? nextNl + 1 : tailStart;
+
+  // Prefer construct boundaries: head ends after the last construct fully within
+  // budget; tail resumes at the first construct at/after tailStart. Only applied
+  // when both exist and don't overlap (else keep the safe line-aware baseline).
+  const ranges = opts?.ranges;
+  if (ranges && ranges.length > 0) {
+    let h = -1;
+    for (const r of ranges) {
+      if (r.end <= head) h = r.end;
+      else break; // ranges are in top-level order
+    }
+    let tcs = -1;
+    for (const r of ranges) {
+      if (r.start >= tailStart) {
+        tcs = r.start;
+        break;
+      }
+    }
+    if (h > 0 && tcs > h) {
+      headCut = h;
+      tailCutStart = tcs;
+    }
+  }
 
   const omitted = Math.max(0, tailCutStart - headCut);
   const marker = `\n... [truncated ${omitted} chars] ...\n`;

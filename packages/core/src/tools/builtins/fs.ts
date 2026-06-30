@@ -12,7 +12,8 @@ import {
   resolveInsideWorkspace,
 } from "../sandbox.js";
 import { truncateHeadTail } from "../text.js";
-import { extractSymbols } from "../../agent/repo-map.js";
+import { declRanges, extractSymbols } from "../../agent/repo-map.js";
+import { ensureAstBackend } from "../../agent/repo-map-ast.js";
 import { callRuntime } from "../runtime-backend.js";
 import { compileGlob } from "./glob.js";
 import { defineTool, type ToolSpec } from "../registry.js";
@@ -255,7 +256,19 @@ const readFile = defineTool({
       const end = args.limit !== undefined ? start + args.limit : lines.length;
       content = lines.slice(start, end).join("\n");
     }
-    const { text, truncated } = truncateHeadTail(content, DEFAULT_LIMITS.toolOutputMaxChars);
+    // Code-aware truncation: when the content will be truncated, load tree-sitter
+    // (lazy, once) and cut on top-level construct boundaries so a code file shows
+    // whole functions rather than a severed one. Falls back to line-aware cuts.
+    let ranges: { start: number; end: number }[] | undefined;
+    if (content.length > DEFAULT_LIMITS.toolOutputMaxChars) {
+      void ensureAstBackend(); // warm tree-sitter in the background — never block a read on WASM init
+      ranges = declRanges(args.path, content); // code-aware cut only when AST is already warm; else line-aware
+    }
+    const { text, truncated } = truncateHeadTail(
+      content,
+      DEFAULT_LIMITS.toolOutputMaxChars,
+      ranges ? { ranges } : undefined,
+    );
     // On truncation, append a symbol outline of the whole file (regex floor, or
     // tree-sitter if loaded) so the model knows what's beyond the cut and can
     // re-read the right range. Empty for non-code/symbol-less files.

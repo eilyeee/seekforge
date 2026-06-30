@@ -15,6 +15,9 @@ import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
   createBackgroundTasks,
+  runShellCommand,
+  TEST_COMMAND_TIMEOUT_MS,
+  truncateHeadTail,
   type BackgroundTasks,
   type SandboxLevel,
   type ToolContext,
@@ -41,7 +44,7 @@ import {
 } from "../subagents/index.js";
 import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
-import { buildRepoOverview } from "./repo-map.js";
+import { buildRelevantFiles, buildRepoOverview, scanRepo } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
@@ -152,13 +155,22 @@ export type AgentCoreDeps = {
    */
   escalateOnFailure?: boolean;
   /**
-   * Self-verification gate: a shell command (e.g. "pnpm test") the agent is
-   * nudged to run before finishing when it has edited files but not run it
-   * since the last edit. The nudge fires at most once per run; the command
-   * itself runs through the model's normal run_command path (so it respects
-   * the session's permission mode). Off when unset/empty.
+   * Self-verification gate: a shell command (e.g. "pnpm test") that must pass
+   * before the run finishes when it has edited files but not run it since the
+   * last edit. With autoVerify (default), the LOOP runs it itself on the
+   * finish turn and feeds the real result back — a passing run is accepted, a
+   * failing run continues with the captured output so the agent fixes the
+   * cause. With autoVerify disabled it degrades to a one-time nudge asking the
+   * model to run it. Off when unset/empty.
    */
   verifyCommand?: string;
+  /**
+   * When a verifyCommand is set, run it automatically on the finish turn
+   * instead of only nudging the model to. Default true. Set false to keep the
+   * old nudge-only behavior (e.g. when the command must go through the model's
+   * permission flow, or in environments where the loop should never shell out).
+   */
+  autoVerify?: boolean;
   /**
    * Default-off: when the agent finishes after editing files, nudge it once to
    * self-review its own diff (leftover debug code, missed cases, task coverage)
@@ -351,10 +363,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // Latest plan (seeded from a resumed session); declared out here so the
       // catch's failed-meta write can preserve it too. Updated on update_plan.
       let lastPlanItems: PlanItem[] | undefined = priorPlan;
+      // One tree scan shared by both prompt-injection builders below — avoids
+      // walking the repo twice on every top-level run. undefined off the top
+      // level (these hints are top-level only).
+      const repoScan = depth === 0 ? scanRepo(input.projectPath) : undefined;
       // #1: a compact structural overview injected into the system prompt for
       // LARGE repos (top-level runs only), so the agent orients without grep-
       // crawling. undefined for small repos / non-local trees.
-      const repoOverview = depth === 0 ? buildRepoOverview(input.projectPath) : undefined;
+      const repoOverview = repoScan ? buildRepoOverview(input.projectPath, undefined, repoScan) : undefined;
+      // Task-relevant file shortlist (transparent retrieval): ranks files by
+      // lexical match to THIS task, so the agent starts at the likely sites
+      // instead of grep-crawling. Top-level runs only; undefined for small
+      // trees / generic tasks / no clear match (see buildRelevantFiles).
+      const relevantFiles = repoScan
+        ? buildRelevantFiles(input.projectPath, input.task, undefined, repoScan)
+        : undefined;
 
       const startedAt = new Date().toISOString();
       const meta = {
@@ -430,6 +453,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
                   ...(priorPlan ? { planItems: priorPlan } : {}),
                   ...(repoOverview ? { repoOverview } : {}),
+                  ...(relevantFiles ? { relevantFiles } : {}),
                 }),
                 input.appendSystemPrompt,
               ),
@@ -476,6 +500,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             commandRoster:
               depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
             ...(repoOverview ? { repoOverview } : {}),
+            ...(relevantFiles ? { relevantFiles } : {}),
           }),
           input.appendSystemPrompt,
         );
@@ -1052,12 +1077,96 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // max_turns_exceeded failure instead of the work it just finished).
             if (nudge && turnsLeft > 1) {
               finalizeFired.add(nudge.kind);
-              yield emit({ type: "notice", level: "info", message: nudge.notice });
               // The model's "done" turn joins the in-context history so the
-              // follow-up reads coherently, then the nudge. Both TRANSIENT (not
-              // traced), like the wrap-up/reflection/escalation nudges — the
-              // stored session keeps exactly one user message per run.
+              // follow-up reads coherently, then the nudge/result. Both
+              // TRANSIENT (not traced), like the wrap-up/reflection/escalation
+              // nudges — the stored session keeps one user message per run.
               if (res.content) messages.push({ role: "assistant", content: res.content });
+
+              // #2 Auto-verify: rather than only asking the model to run the
+              // verify command, run it HERE and feed the real result back —
+              // a pass is acknowledged, a failure continues with the captured
+              // output so the model fixes the actual cause. Degrades to the
+              // nudge if the command cannot be run.
+              const vc = deps.verifyCommand?.trim();
+              if (nudge.kind === "verify" && deps.autoVerify !== false && vc) {
+                yield emit({ type: "notice", level: "info", message: `Auto-verifying changes: ${vc}` });
+                let followup: string;
+                try {
+                  const r = await runShellCommand(vc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
+                    sandbox: deps.sandbox,
+                    workspace: input.projectPath,
+                  });
+                  const output = truncateHeadTail(`${r.stdout}${r.stderr}`.trim() || "(no output)", 4000).text;
+                  if (r.exitCode === 0) {
+                    verifyRanSinceEdit = true;
+                    followup =
+                      `[harness] Auto-verify \`${vc}\` PASSED (exit 0). If the task is fully complete, ` +
+                      "finish now; otherwise keep working.";
+                  } else {
+                    // Verify ran (and failed) since the last edit — record that
+                    // so the gate stays quiet until the model edits again, but
+                    // lift the once-guard so any FIX it makes is re-verified
+                    // rather than shipped unchecked. A finish with no new edit
+                    // is accepted (verifyRanSinceEdit stays true → no re-fire),
+                    // so this can't spin on an unfixable failure.
+                    verifyRanSinceEdit = true;
+                    finalizeFired.delete("verify");
+                    followup =
+                      `[harness] Auto-verify \`${vc}\` FAILED (exit ${r.exitCode}). Output:\n${output}\n` +
+                      "Diagnose and fix the cause, then finish — do not claim success until it passes.";
+                  }
+                } catch (err) {
+                  followup =
+                    `[harness] Auto-verify \`${vc}\` could not run (${err instanceof Error ? err.message : String(err)}). ` +
+                    "Run it yourself with run_command, fix any failures, then finish.";
+                }
+                messages.push({ role: "user", content: followup });
+                continue;
+              }
+
+              // #3 Reviewer subagent: when a final review is due and a reviewer
+              // specialist is available, dispatch it (fresh context, read-only)
+              // and feed its findings back — a real second pair of eyes instead
+              // of asking the model to review itself. Degrades to the self-
+              // review nudge when no reviewer is wired in.
+              if (nudge.kind === "review" && dispatchManager !== undefined && roster.some((d) => d.id === "reviewer")) {
+                yield emit({ type: "notice", level: "info", message: "Dispatching the reviewer for a final review." });
+                let followup = nudge.message;
+                try {
+                  const outcome = runDispatch({
+                    agentId: "reviewer",
+                    task:
+                      "Review the changes made in this session for correctness, safety, and quality " +
+                      "defects: inspect git_diff / git_status and the surrounding code. Report findings " +
+                      "as file:line with the smallest fix, ending with a ship / fix-first / needs-rework verdict.",
+                  });
+                  // runDispatch streams nested events onto the queue; drain
+                  // while awaiting, like the regular dispatch execution path.
+                  let r: ToolResult | undefined;
+                  for (;;) {
+                    const next = await Promise.race([outcome.then((v) => ({ v })), queue.wait().then(() => undefined)]);
+                    for (const ev of queue.drainNow()) yield ev;
+                    if (next === undefined) continue;
+                    r = next.v;
+                    break;
+                  }
+                  const report = r.ok ? ((r.data as { report?: string } | undefined)?.report ?? "").trim() : "";
+                  if (report) {
+                    followup =
+                      "[harness] A reviewer agent reviewed your changes:\n\n" +
+                      `${truncateHeadTail(report, 4000).text}\n\n` +
+                      "Address any real Bug/Risk findings (use judgement on pure style), then finish. " +
+                      "If nothing needs fixing, say so briefly and finish.";
+                  }
+                } catch {
+                  // Reviewer dispatch failed → fall back to the self-review nudge.
+                }
+                messages.push({ role: "user", content: followup });
+                continue;
+              }
+
+              yield emit({ type: "notice", level: "info", message: nudge.notice });
               messages.push({ role: "user", content: nudge.message });
               continue;
             }

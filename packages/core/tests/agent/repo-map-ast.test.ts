@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureAstBackend } from "../../src/agent/repo-map-ast.js";
-import { extractSymbols, findDefinitions } from "../../src/agent/repo-map.js";
+import { declRanges, extractSymbols, findDefinitions } from "../../src/agent/repo-map.js";
 
 // Optional backend: load it once. If web-tree-sitter / grammars are unavailable
 // in this environment, `astReady` is false and the AST-specific cases skip
@@ -33,6 +33,18 @@ describe("tree-sitter AST backend (optional)", () => {
     expect(o).toContain("alpha");
     expect(o).toContain("beta");
     expect(o).toContain("Gamma");
+  });
+
+  it.skipIf(!astReady)("reports top-level construct ranges for code-aware truncation", () => {
+    const src = "import x from 'y';\nfunction a() {\n  return 1;\n}\nclass B {}\n";
+    const ranges = declRanges("m.ts", src);
+    expect(ranges).toBeDefined();
+    expect(ranges!.length).toBe(3); // import, function, class
+    for (const r of ranges!) {
+      expect(r.start).toBeGreaterThanOrEqual(0);
+      expect(r.end).toBeGreaterThan(r.start);
+      expect(r.end).toBeLessThanOrEqual(src.length);
+    }
   });
 
   it.skipIf(!astReady)("outlines re-exports from a barrel/index file", () => {

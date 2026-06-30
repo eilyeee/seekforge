@@ -132,6 +132,12 @@ user who installs only the bundle needs **no** system `seekforge`. In `tauri dev
   symbol is defined. Symbol extraction is hybrid — tree-sitter (accurate, for
   JS/TS, Python, Java, Rust, Go, C/C++, C#) with a dependency-free regex floor
   for everything else; tree-sitter ships as an **optional** dependency.
+- **Task-relevant retrieval**: at session start the loop also injects a shortlist
+  of files ranked by how well their path/exports match *this* task (CJK-aware) —
+  a starting point that complements the generic overview and `search_text`.
+- **Verify & review on finish (opt-in)**: with `verifyCommand` set, the loop
+  auto-runs it on completion and feeds failures back to fix; with `finalizeReview`
+  on, it dispatches a read-only **reviewer** subagent over the diff.
 - **Edits are search/replace patches** (`oldString` must match uniquely),
   applied atomically — far more reliable than unified diffs for LLMs.
   When `apply_patch` contains **more than one edit**, the permission prompt

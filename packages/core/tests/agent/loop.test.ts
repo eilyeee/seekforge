@@ -492,6 +492,44 @@ describe("agent loop: turn-budget wrap-up", () => {
     expect(traced.some((m) => m.content.includes("[harness]"))).toBe(false);
   });
 
+  it("finalize gate: a failed auto-verify re-runs after the model edits again, but not without a new edit", async () => {
+    // turn 1 edits; turn 2 declares done -> auto-verify runs and FAILS (empty
+    // workspace has no `pnpm test`); turn 3 edits again (invalidating the failed
+    // verify); turn 4 declares done -> auto-verify must run a SECOND time on the
+    // fix; turn 5 declares done with no new edit -> gate stands down and the run
+    // completes (no infinite re-verify on an unfixable failure).
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "all done" }),
+      response({
+        toolCalls: [{ id: "c2", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "all done" }),
+      response({ content: "all done" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
+      confirm: async () => true,
+      verifyCommand: "pnpm test",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+
+    // Auto-verify ran exactly twice: once per edit, never spinning on the
+    // unfixable failure when no further edit was made.
+    const autoVerifyNotices = events.filter(
+      (e) => e.type === "notice" && e.message.includes("Auto-verifying changes"),
+    );
+    expect(autoVerifyNotices).toHaveLength(2);
+    expect(provider.requests).toHaveLength(5);
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+    expect(events.some((e) => e.type === "session.failed")).toBe(false);
+  });
+
   it("finalize gate: accepts the final answer on the last turn instead of failing", async () => {
     // maxAgentTurns=2: turn 0 edits, turn 1 declares done. The verify gate
     // WOULD nudge, but no turn remains — it must accept the completion rather
@@ -701,5 +739,76 @@ describe("agent loop: LLM compaction", () => {
     expect(
       provider.requests[0]!.messages.some((m) => m.content.includes("Digest of the dropped earlier turns")),
     ).toBe(true);
+  });
+});
+
+describe("auto-verify on completion", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-verify-"));
+  });
+  afterEach(() => rmSync(workspace, { recursive: true, force: true }));
+
+  const baseInput = { task: "do the thing", mode: "edit" as const, approvalMode: "auto" as const };
+
+  /** Dispatcher that marks apply_patch as a real file change (sets meta.path). */
+  function editDispatcher(): ToolDispatcher {
+    return {
+      list: () => [{ name: "apply_patch", description: "d", parameters: {} }],
+      execute: async (call: ToolCall): Promise<ToolResult> =>
+        call.name === "apply_patch" ? { ok: true, meta: { path: "a.ts" } } : { ok: true },
+    };
+  }
+
+  const editThenDone = (): ChatResponse[] => [
+    response({
+      toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+      finishReason: "tool_calls",
+    }),
+    response({ content: "## Summary\ndone" }), // declares done -> triggers auto-verify
+    response({ content: "## Summary\nverified" }), // after the verify result is fed back
+  ];
+
+  it("runs the verify command itself on a finish and accepts a pass", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      verifyCommand: "true", // exits 0
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying changes: true"))).toBe(true);
+    // The third provider call carries the injected PASSED result as its last message.
+    expect(provider.requests[2]!.messages.at(-1)!.content).toContain("PASSED");
+    expect(events.find((e) => e.type === "session.completed")).toBeDefined();
+  });
+
+  it("feeds the failing output back when verify fails", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      verifyCommand: "false", // exits 1
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const injected = provider.requests[2]!.messages.at(-1)!.content;
+    expect(injected).toContain("FAILED");
+    expect(injected).toContain("exit 1");
+  });
+
+  it("degrades to the nudge when autoVerify is disabled", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      verifyCommand: "true",
+      autoVerify: false,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying"))).toBe(false);
+    expect(provider.requests[2]!.messages.at(-1)!.content).toContain("have not run the verification");
   });
 });

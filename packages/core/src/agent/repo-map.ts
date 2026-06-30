@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { taskKeywords, taskPathTokens } from "../memory/brief.js";
 import { DEFAULT_IGNORE_DIRS } from "../tools/sandbox.js";
 
 /**
@@ -154,12 +155,20 @@ function regexDefinitions(_rel: string, content: string, symbol: string): { line
  * accurate, scope-aware extraction without touching callers — it returns
  * undefined for files/languages it can't parse, falling through to regex.
  */
+export type DeclRange = { start: number; end: number };
+
 export type SymbolBackend = {
   name: string;
   /** One-line outline for a file, or undefined to defer to the next backend. */
   outline(rel: string, content: string): string | undefined;
   /** Definition sites of `symbol` in a file, or undefined to defer. */
   definitions(rel: string, content: string, symbol: string): { line: number; text: string }[] | undefined;
+  /**
+   * Char ranges of the file's TOP-LEVEL constructs (functions, classes, …), so
+   * truncation can cut between them instead of mid-construct. Undefined when the
+   * backend can't parse the file (only an AST backend implements this).
+   */
+  ranges?(rel: string, content: string): DeclRange[] | undefined;
 };
 
 const regexBackend: SymbolBackend = {
@@ -185,6 +194,19 @@ function resolveDefinitions(rel: string, content: string, symbol: string): { lin
     if (r !== undefined) return r;
   }
   return [];
+}
+
+/**
+ * Top-level construct char ranges (for code-aware truncation), or undefined if
+ * no backend can parse the file (e.g. tree-sitter not loaded). Regex has no
+ * reliable ranges, so this is effectively AST-only.
+ */
+export function declRanges(rel: string, content: string): DeclRange[] | undefined {
+  for (const b of symbolBackends) {
+    const r = b.ranges?.(rel, content);
+    if (r !== undefined) return r;
+  }
+  return undefined;
 }
 
 /** One-line symbol outline for a file (regex floor; an AST backend may override). */
@@ -216,15 +238,113 @@ export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
   return formatRepoMap(root, sub, files, dirCounts, maxDepth, maxFiles);
 }
 
+/** A single tree scan, shareable across the prompt-injection builders below. */
+export type RepoScan = { files: CodeFile[]; dirCounts: Map<string, number> };
+
+/** Walk the tree once; pass the result to both builders to avoid a double walk. */
+export function scanRepo(root: string): RepoScan {
+  return walk(root, root);
+}
+
 /**
  * Compact top-level overview for auto-injection into the system prompt at
  * session start. Returns undefined for small repos (not worth the tokens) or
- * when the tree can't be read. Walks once.
+ * when the tree can't be read. Reuses a shared scan when provided.
  */
-export function buildRepoOverview(root: string, minFiles = 150): string | undefined {
-  const { files, dirCounts } = walk(root, root);
+export function buildRepoOverview(root: string, minFiles = 150, scan?: RepoScan): string | undefined {
+  const { files, dirCounts } = scan ?? walk(root, root);
   if (files.length < minFiles) return undefined;
   return formatRepoMap(root, ".", files, dirCounts, 2, 25);
+}
+
+/**
+ * Task-relevant file retrieval for prompt injection — the transparent
+ * counterpart to buildRepoOverview. The overview is breadth-first and
+ * task-agnostic ("here is the repo"); this is task-targeted ("here is where to
+ * look for THIS task"): it ranks code files by lexical overlap of their PATH
+ * and symbol outline with the task, and returns the strongest matches with a
+ * one-line outline each.
+ *
+ * Scoring (reuses the memory-brief tokenizers so CJK tasks work):
+ *   +4 per task path-token found in the file path (e.g. "auth/session.ts"),
+ *   +3 per task keyword that IS a whole path segment, +1 if only a substring,
+ *   then, for the top path-matches only, +2 / +1 for path-token / keyword hits
+ *   in the file's symbol outline.
+ *
+ * Deliberately a CHEAP orientation hint, not a search engine: a file whose
+ * relevance lives only in its CONTENTS (not its name/exports) won't surface —
+ * that is what search_text is for. Returns undefined when the task has no
+ * specific terms, the tree is small enough to navigate directly, or nothing
+ * clears the relevance floor (silence beats noise, like buildMemoryBrief).
+ *
+ * Cost is bounded: path scoring reads no files; only the top `maxCandidates`
+ * path-matches are read to refine with symbol matches.
+ */
+export function buildRelevantFiles(
+  root: string,
+  task: string,
+  opts: { maxFiles?: number; maxCandidates?: number; minScore?: number; minRepoFiles?: number } = {},
+  scan?: RepoScan,
+): string | undefined {
+  const keywords = taskKeywords(task);
+  const pathTokens = taskPathTokens(task);
+  if (keywords.length === 0 && pathTokens.length === 0) return undefined;
+  const maxFiles = opts.maxFiles ?? 8;
+  const maxCandidates = opts.maxCandidates ?? 24;
+  const minScore = opts.minScore ?? 3;
+  const minRepoFiles = opts.minRepoFiles ?? 40;
+
+  const { files } = scan ?? walk(root, path.resolve(root));
+  // Small trees are navigable directly (and the hint would be mostly noise).
+  if (files.length < minRepoFiles) return undefined;
+
+  // Stage 1 — PATH-only scoring (no file reads).
+  const pathScored: { f: CodeFile; score: number }[] = [];
+  for (const f of files) {
+    const lower = f.rel.toLowerCase();
+    const segs = new Set(lower.split(/[/\\.\-_]+/u).filter(Boolean));
+    let score = 0;
+    // Boundary-aware: a path token must match a full path component, not be an
+    // arbitrary substring — else "index.ts" spuriously hits "reindex.ts" and
+    // "auth.ts" hits "oauth.ts", injecting unrelated files into the shortlist.
+    for (const pt of pathTokens) if (lower.startsWith(pt) || lower.includes(`/${pt}`)) score += 4;
+    for (const kw of keywords) {
+      if (segs.has(kw)) score += 3;
+      else if (lower.includes(kw)) score += 1;
+    }
+    if (score > 0) pathScored.push({ f, score });
+  }
+  if (pathScored.length === 0) return undefined;
+
+  // Stage 2 — read the top path-matches and refine with symbol-outline matches.
+  const candidates = pathScored
+    .sort((a, b) => b.score - a.score || a.f.rel.localeCompare(b.f.rel))
+    .slice(0, maxCandidates);
+  const refined = candidates.map(({ f, score }) => {
+    let outline = "";
+    if (f.size <= MAX_READ_BYTES) {
+      try {
+        const content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
+        outline = extractSymbols(f.rel, content);
+        const hay = outline.toLowerCase();
+        for (const pt of pathTokens) if (hay.includes(pt)) score += 2;
+        for (const kw of keywords) if (hay.includes(kw)) score += 1;
+      } catch {
+        // Unreadable -> keep the path-only score.
+      }
+    }
+    return { rel: f.rel, outline, score };
+  });
+
+  const top = refined
+    .filter((r) => r.score >= minScore)
+    .sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel))
+    .slice(0, maxFiles);
+  if (top.length === 0) return undefined;
+
+  const lines = ["# Task-relevant files (ranked by lexical match — verify by reading)"];
+  for (const r of top) lines.push(`${r.rel}${r.outline ? `  ${r.outline}` : ""}`);
+  return lines.join("\n");
 }
 
 function formatRepoMap(
