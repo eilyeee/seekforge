@@ -1,0 +1,12 @@
+{
+  "id": "cjk-find-checkout",
+  "title": "CJK ask task: locate the checkout-total bug among grep-noisy files",
+  "fixture": "cjk-find-checkout",
+  "mode": "ask",
+  "task": "结算（checkout）总价算错了：买 3 件单价 10 元的商品、整单打 9 折，应付 27，但算出来不对。请告诉我：是哪个文件里的哪个函数有这个 bug，以及原因是什么？（只回答，不要修改代码。）",
+  "checks": [
+    { "type": "answer_matches", "pattern": "total\\.js" },
+    { "type": "answer_matches", "pattern": "computeCheckoutTotal" }
+  ],
+  "notes": "Discriminator for the relevant-files retrieval capability — an ASK (locate, don't fix) task, so no failing test reveals the location. The word 'checkout' appears in ALL 41 code files' CONTENTS (comments/strings/var names) so `search_text checkout` is maximally noisy, but only the target src/checkout/total.js has it in its PATH and EXPORT name, so buildRelevantFiles surfaces exactly that one file (verified) and none of the 40 noise modules. Hypothesis: with retrieval the agent is pointed straight at the file; without it must wade through 41 grep hits — so turns/cost (and possibly answer correctness) should favor control. This breaks the 'squeeze' from the round-52 measurement (where the task term was also grep-findable): here grep is deliberately useless but retrieval is precise. answer_matches grades that the agent named the right file + function."
+}

@@ -1,0 +1,14 @@
+{
+  "id": "cjk-review-edge",
+  "title": "CJK task: fix parseRange so a reviewer-catchable edge case is handled",
+  "fixture": "cjk-review-edge",
+  "mode": "edit",
+  "task": "区间解析函数 parseRange 坏了：`'3-7'` 应该解析成 `[3, 7]`，现在结果不对。请修好 src/parse/parseRange.js，并确保它对所有合法的区间输入都正确。改完跑 `npm test` 直到通过。",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "command_succeeds", "command": "node --input-type=module -e 'import {parseRange} from \"./src/parse/parseRange.js\"; const r=JSON.stringify(parseRange(\"-3-7\")); if(r!==\"[-3,7]\"){console.error(\"negative range:\",r);process.exit(1)}'" },
+    { "type": "file_contains", "path": "test/range.test.js", "pattern": "parses a simple ascending range" },
+    { "type": "file_not_contains", "path": "test/range.test.js", "pattern": "skip" }
+  ],
+  "notes": "Discriminator for the review-gate (finalizeReview) capability. The shipped bug reverses the two numbers; the MINIMAL fix (split on '-', correct order) passes the provided test (positives only) AND the agent's `npm test`, but leaves a latent edge case — negative bounds like '-3-7' (a naive split mis-parses them). The second command_succeeds is a HIDDEN check (not in the fixture, an inline node assertion) so the agent's own verification can't see it. The task asks for 'all valid range inputs' but does NOT spell out the negative example, so only a run that reviews for unhandled edge cases (what review-gate nudges) is likely to use a robust parse and pass. Pair with --ab control,review-gate: control should pass npm test but FAIL the negative check; review-gate should catch it. Success rate discriminates, unlike the round-52 measurement where everything passed and only turns/cost moved."
+}
