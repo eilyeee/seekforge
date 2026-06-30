@@ -69,11 +69,18 @@ describe("variant registry", () => {
     expect(out.autoVerify).toBe(false);
   });
 
+  it("model-pro overrides the main model only", () => {
+    const out = getVariant("model-pro").apply({ taskSuffix: "keep" });
+    expect(out.model).toBe("deepseek-v4-pro");
+    expect(out.taskSuffix).toBe("keep");
+  });
+
   it("the new variants never mutate the input base", () => {
     const base: AgentBuildOptions = {};
     getVariant("no-retrieval").apply(base);
     getVariant("review-gate").apply(base);
     getVariant("no-auto-verify").apply(base);
+    getVariant("model-pro").apply(base);
     expect(base).toEqual({});
   });
 });

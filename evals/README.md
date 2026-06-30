@@ -74,6 +74,8 @@ Built-in variants:
   `cjk-buried-retry`) — smaller fixtures never trigger retrieval, so the A/B is a no-op.
 - `review-gate` — enables the final-review gate (`finalizeReview`).
 - `no-progress-guard` — enables the premature-finish guard.
+- `model-pro` — runs the suite under `deepseek-v4-pro` instead of the configured
+  default, so a capability A/B can be re-run under a stronger model.
 
 Suggested A/B pairs for the round-52 capabilities:
 `--ab control,no-retrieval --task cjk-buried-discount,cjk-buried-retry` (retrieval, on the
@@ -101,6 +103,44 @@ pnpm --filter @seekforge/eval-harness eval -- --ab control,terse-prompt
 The A/B table reports, per task, each variant's success / score / turns / cost
 and a per-task winner (success, then higher score, then fewer turns, then
 cheaper), plus win/loss/tie totals.
+
+## Measurement runbook: round-52 transparent capabilities
+
+The round-52 features (relevant-files retrieval, auto-verify, reviewer subagent)
+shipped explicitly unmeasured ("wants dogfooding"). These commands put numbers on
+them. All need a configured `DEEPSEEK_API_KEY` and are billed real runs.
+
+```bash
+cd packages/eval-harness
+
+# 1) Retrieval — ONLY on fixtures that clear the 40-code-file floor. The
+#    cjk-large-paginate fixture (159 files) also triggers the repo-overview
+#    (>=150) — the only fixture that exercises either orientation feature.
+pnpm exec tsx src/cli.ts --ab control,no-retrieval \
+  --task cjk-buried-discount,cjk-buried-retry,cjk-large-paginate
+
+# 2) Auto-verify — does auto-running the verify command beat just nudging?
+pnpm exec tsx src/cli.ts --ab verify-gate,no-auto-verify --task loop-verify-green
+
+# 3) Reviewer/self-review gate — worth its tokens?
+pnpm exec tsx src/cli.ts --ab control,review-gate
+
+# 4) Weak vs strong — re-run any capability A/B under the stronger model to
+#    check whether a transparent lever helps the weaker default model MORE.
+#    (model-pro flips the model; compose by editing config.model for the other arm.)
+pnpm exec tsx src/cli.ts --ab control,model-pro
+```
+
+Record a baseline once a run looks representative, then gate later runs on it:
+
+```bash
+# Write a report, copy it to evals/baseline.json, then on later runs:
+pnpm exec tsx src/cli.ts --baseline ../../evals/baseline.json --fail-on-regression
+```
+
+Dogfood the loop on a real repo (complements the synthetic fixtures): point the
+core auto-loop at SeekForge itself with `verifyCommand="pnpm -r test"` and watch
+where it self-verifies to green vs stalls (see docs/loop-engineering.md).
 
 ## Skill-effectiveness ranking
 

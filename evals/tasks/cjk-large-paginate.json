@@ -1,0 +1,15 @@
+{
+  "id": "cjk-large-paginate",
+  "title": "CJK task on a 150+ file repo: find and fix the paginate boundary bug",
+  "fixture": "cjk-large-paginate",
+  "mode": "edit",
+  "task": "商品列表的 paginate 分页有个边界 bug：翻到第 1 页时显示的却是第 2 页的内容，而且最后一页的数据丢了。页码是从 1 开始的。请在 159 个文件、十几个目录里定位负责分页的模块，修正它的边界计算（有一个命名相近的模块是对的，别动它，也别改测试）。改完运行 `npm test` 直到全部通过。",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/catalog/paginate.js", "pattern": "const start = page \\* size" },
+    { "type": "file_contains", "path": "src/catalog/pageMeta.js", "pattern": "Math.ceil" },
+    { "type": "file_contains", "path": "test/paginate.test.js", "pattern": "the last \\(partial\\) page" },
+    { "type": "file_not_contains", "path": "test/paginate.test.js", "pattern": "skip" }
+  ],
+  "notes": "The ONLY eval fixture large enough (159 code files across 13 dirs) to trigger BOTH buildRepoOverview (>=150 file floor) and buildRelevantFiles (>=40); every other fixture is far smaller, so the auto-injected orientation features never fired in evals before round 53. Chinese (code-switched) task: the English bridge word 'paginate' is the lexical hook to src/catalog/paginate.js (off-by-one on the page boundary: start uses page*size instead of (page-1)*size). Decoy src/catalog/pageMeta.js must stay untouched. Pair with --ab control,no-retrieval to measure the shortlist where it matters most — navigating a realistically large tree. command_succeeds is the real grade; file pins are anti-reward-hacking (bug gone, decoy + tests untouched)."
+}

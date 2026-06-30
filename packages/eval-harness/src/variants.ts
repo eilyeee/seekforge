@@ -32,6 +32,12 @@ export type AgentBuildOptions = {
   escalateOnFailure?: boolean;
   /** Stronger model for plan/escalation; required for escalateOnFailure. */
   planModel?: string;
+  /**
+   * Override the main agent model (else the configured config.model). Lets an
+   * A/B run the same task set under a weaker vs stronger model — useful because
+   * the round-52 transparent levers are expected to help a weaker model more.
+   */
+  model?: string;
   /** Inject project-memory brief (default true). The no-memory variant sets false. */
   injectMemory?: boolean;
   /** Self-verification command (AgentCoreDeps.verifyCommand). The verify-gate variant sets it. */
@@ -125,6 +131,14 @@ export const VARIANTS: Variant[] = [
       "Verify gate WITHOUT auto-run (verifyCommand=npm test, autoVerify=false): degrades to the " +
       "one-time nudge. A/B vs verify-gate to isolate the value of auto-running the command.",
     apply: (base) => ({ ...base, verifyCommand: "npm test", autoVerify: false }),
+  },
+  {
+    name: "model-pro",
+    describe:
+      "Runs the suite under the stronger deepseek-v4-pro model instead of the configured default. " +
+      "A/B vs control to see how much the model tier alone moves results (and re-run a capability " +
+      "A/B under it to check whether a transparent lever helps the weaker model more).",
+    apply: (base) => ({ ...base, model: "deepseek-v4-pro" }),
   },
 ];
 
