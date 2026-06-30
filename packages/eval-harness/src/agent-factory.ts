@@ -39,6 +39,8 @@ export function createDefaultAgentFactory(
       ...(options.escalateOnFailure ? { escalateOnFailure: true } : {}),
       ...(options.injectMemory === false ? { injectMemory: false } : {}),
       ...(options.verifyCommand ? { verifyCommand: options.verifyCommand } : {}),
+      ...(options.autoVerify === false ? { autoVerify: false } : {}),
+      ...(options.injectRelevantFiles === false ? { injectRelevantFiles: false } : {}),
       ...(options.finalizeReview ? { finalizeReview: true } : {}),
       ...(options.guardNoProgress ? { guardNoProgress: true } : {}),
       ...(options.planModel ? { planModel: options.planModel } : {}),

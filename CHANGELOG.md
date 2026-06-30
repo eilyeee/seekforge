@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### round 53: measure round 52 — A/B toggles + verify-output/internal polish
+- **Eval A/B toggles for the round-52 capabilities.** New core dep
+  `injectRelevantFiles` (default on) gates the task-relevant shortlist, mirroring
+  `injectMemory`; the eval factory now also forwards `autoVerify`. New A/B
+  variants `no-retrieval`, `review-gate`, and `no-auto-verify` let
+  `--ab control,no-retrieval` (retrieval), `--ab control,review-gate` (final
+  review), and `--ab verify-gate,no-auto-verify` (auto-run) put real numbers on
+  whether each capability helps — addressing the "wants dogfooding" note.
+- **Smarter auto-verify output.** A failed verify now feeds back a digest that
+  surfaces failure-signal lines (FAIL/Error/AssertionError/…) pulled from the
+  omitted middle, so a buried failing assertion isn't lost to an even head/tail
+  cut (`digestCommandOutput`).
+- **Internal.** The two "drain the event queue while awaiting an outcome" loops
+  (tool-call + finalize-reviewer) share one `drainUntil` helper.
+- Verified: core 986 · eval-harness 56 · workspace typecheck + tests clean.
+
 ### round 52: transparent agent capability — retrieval, auto-verify, reviewer subagent
 - **Task-relevant file retrieval (auto-injected).** Alongside the generic repo
   overview, the loop injects a **task-targeted** shortlist at session start

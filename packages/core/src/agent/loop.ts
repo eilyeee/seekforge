@@ -15,6 +15,7 @@ import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
   createBackgroundTasks,
+  digestCommandOutput,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
@@ -190,6 +191,13 @@ export type AgentCoreDeps = {
    * measures whether memory actually helps — see the `no-memory` variant).
    */
   injectMemory?: boolean;
+  /**
+   * Inject the task-relevant file shortlist (buildRelevantFiles) into the system
+   * prompt. Default true; set false to run without retrieval (used by the eval
+   * A/B that measures whether retrieval actually helps — see the `no-retrieval`
+   * variant).
+   */
+  injectRelevantFiles?: boolean;
   /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
@@ -375,9 +383,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // lexical match to THIS task, so the agent starts at the likely sites
       // instead of grep-crawling. Top-level runs only; undefined for small
       // trees / generic tasks / no clear match (see buildRelevantFiles).
-      const relevantFiles = repoScan
-        ? buildRelevantFiles(input.projectPath, input.task, undefined, repoScan)
-        : undefined;
+      const relevantFiles =
+        repoScan && deps.injectRelevantFiles !== false
+          ? buildRelevantFiles(input.projectPath, input.task, undefined, repoScan)
+          : undefined;
 
       const startedAt = new Date().toISOString();
       const meta = {
@@ -610,6 +619,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // generator: producers push (traced immediately), the loop drains.
       const queue = createEventQueue<AgentEvent>();
       const pushEvent = (ev: AgentEvent): void => queue.push(emit(ev));
+
+      // Drain queued events (live command output, nested-dispatch completions)
+      // WHILE awaiting `outcome`, yielding each into this generator's stream,
+      // then return the settled value. Shared by the tool-call and the finalize-
+      // reviewer paths so both interleave events identically (the final drain
+      // runs before the value is returned, so queued output precedes the result).
+      async function* drainUntil<T>(outcome: Promise<T>): AsyncGenerator<AgentEvent, T> {
+        for (;;) {
+          const next = await Promise.race([outcome.then((v) => ({ v })), queue.wait().then(() => undefined)]);
+          for (const ev of queue.drainNow()) yield ev;
+          if (next !== undefined) return next.v;
+        }
+      }
 
       // Surface provider retries as provider.retry events for the duration of
       // this run. The provider (built in the app factory) calls retryBus.emit;
@@ -1097,7 +1119,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     sandbox: deps.sandbox,
                     workspace: input.projectPath,
                   });
-                  const output = truncateHeadTail(`${r.stdout}${r.stderr}`.trim() || "(no output)", 4000).text;
+                  const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
                   if (r.exitCode === 0) {
                     verifyRanSinceEdit = true;
                     followup =
@@ -1143,14 +1165,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   });
                   // runDispatch streams nested events onto the queue; drain
                   // while awaiting, like the regular dispatch execution path.
-                  let r: ToolResult | undefined;
-                  for (;;) {
-                    const next = await Promise.race([outcome.then((v) => ({ v })), queue.wait().then(() => undefined)]);
-                    for (const ev of queue.drainNow()) yield ev;
-                    if (next === undefined) continue;
-                    r = next.v;
-                    break;
-                  }
+                  const r = yield* drainUntil(outcome);
                   const report = r.ok ? ((r.data as { report?: string } | undefined)?.report ?? "").trim() : "";
                   if (report) {
                     followup =
@@ -1276,14 +1291,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               // executeNestedRun uses against the queue. The final drain after
               // the tool settles runs BEFORE its tool.completed is emitted,
               // so output events always precede their call's completion.
-              for (;;) {
-                const next = await Promise.race([outcome, queue.wait().then(() => undefined)]);
-                for (const ev of queue.drainNow()) yield ev;
-                if (next === undefined) continue;
-                if (!next.ok) throw next.err; // preserve pre-streaming rejection behavior
-                result = next.result;
-                break;
-              }
+              const settled = yield* drainUntil(outcome);
+              if (!settled.ok) throw settled.err; // preserve pre-streaming rejection behavior
+              result = settled.result;
             }
             yield emit({ type: "tool.completed", toolName: tc.name, result });
 

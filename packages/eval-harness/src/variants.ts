@@ -36,6 +36,14 @@ export type AgentBuildOptions = {
   injectMemory?: boolean;
   /** Self-verification command (AgentCoreDeps.verifyCommand). The verify-gate variant sets it. */
   verifyCommand?: string;
+  /**
+   * Run the verify command automatically on the finish turn (AgentCoreDeps.autoVerify,
+   * default true when verifyCommand is set). The no-auto-verify variant sets false to
+   * measure auto-run-and-feed-back vs the nudge-only path.
+   */
+  autoVerify?: boolean;
+  /** Inject the task-relevant file shortlist (AgentCoreDeps.injectRelevantFiles, default true). */
+  injectRelevantFiles?: boolean;
   /** One-time self-review nudge after edits (AgentCoreDeps.finalizeReview). */
   finalizeReview?: boolean;
   /** Premature-finish guard (AgentCoreDeps.guardNoProgress). */
@@ -95,6 +103,27 @@ export const VARIANTS: Variant[] = [
       "Enables the premature-finish guard: an edit run that declares done having changed nothing and " +
       "barely used any tools is nudged once to actually work the task. A/B vs control to measure it.",
     apply: (base) => ({ ...base, guardNoProgress: true }),
+  },
+  {
+    name: "no-retrieval",
+    describe:
+      "Disables the auto-injected task-relevant file shortlist — pair with a buried-code task " +
+      "(e.g. buried-feature-flag, large-context-nav) to measure whether retrieval actually helps.",
+    apply: (base) => ({ ...base, injectRelevantFiles: false }),
+  },
+  {
+    name: "review-gate",
+    describe:
+      "Enables the final-review gate (finalizeReview): after edits the agent gets one self-review " +
+      "pass over its diff (or a reviewer subagent if wired in). A/B vs control to measure it.",
+    apply: (base) => ({ ...base, finalizeReview: true }),
+  },
+  {
+    name: "no-auto-verify",
+    describe:
+      "Verify gate WITHOUT auto-run (verifyCommand=npm test, autoVerify=false): degrades to the " +
+      "one-time nudge. A/B vs verify-gate to isolate the value of auto-running the command.",
+    apply: (base) => ({ ...base, verifyCommand: "npm test", autoVerify: false }),
   },
 ];
 

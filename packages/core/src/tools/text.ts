@@ -57,3 +57,35 @@ export function truncateHeadTail(
     truncated: true,
   };
 }
+
+/** Lines that signal a failure in test/build output (used to bias the digest). */
+const FAILURE_LINE = /\b(?:fail(?:ed|ing|ure|ures)?|errors?|exception|assert|expected|not ok|panic|traceback)\b|[✕✗✘✖×]/iu;
+
+/**
+ * Condense captured command output (e.g. a verify run) for feeding back to the
+ * model. Returns it unchanged when it fits. When it overflows, keeps a line-
+ * aware head+tail AND surfaces failure-signal lines from the OMITTED middle —
+ * so a buried failing assertion survives instead of being lost between an even
+ * head/tail split. Stays within ~maxChars (the surfaced lines borrow a third of
+ * the budget; falls back to a plain head+tail when nothing looks like a failure).
+ */
+export function digestCommandOutput(output: string, maxChars: number): string {
+  const trimmed = output.trim() || "(no output)";
+  if (trimmed.length <= maxChars) return trimmed;
+  const failBudget = Math.floor(maxChars / 3);
+  const headTail = truncateHeadTail(trimmed, maxChars - failBudget).text;
+  const failing: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of trimmed.split("\n")) {
+    if (failing.length >= 40) break;
+    const line = raw.trim();
+    if (!line || seen.has(line)) continue;
+    if (FAILURE_LINE.test(line) && !headTail.includes(line)) {
+      failing.push(line);
+      seen.add(line);
+    }
+  }
+  if (failing.length === 0) return truncateHeadTail(trimmed, maxChars).text;
+  const extra = truncateHeadTail(failing.join("\n"), failBudget).text;
+  return `${headTail}\n... [failure lines from the omitted region] ...\n${extra}`;
+}
