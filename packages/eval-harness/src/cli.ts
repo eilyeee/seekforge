@@ -21,6 +21,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseArgs } from "./args.js";
 import { toAbJson, toAbMarkdown, compareVariants, type VariantRun } from "./ab.js";
 import { createDefaultAgentFactory } from "./agent-factory.js";
 import { loadEvalConfig } from "./config.js";
@@ -30,62 +31,6 @@ import { rankSkills, toSkillRankingMarkdown } from "./skill-ranking.js";
 import { assertFixturesExist, loadTasks, type TaskDef } from "./tasks.js";
 import { runTask, type TaskResult } from "./task-runner.js";
 import { getVariant, listVariants } from "./variants.js";
-
-type CliArgs = {
-  taskId?: string;
-  baseline?: string;
-  keep: boolean;
-  variants: string[];
-  ab?: [string, string];
-  skillRanking: boolean;
-  listVariants: boolean;
-  failOnRegression: boolean;
-};
-
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = {
-    keep: false,
-    variants: [],
-    skillRanking: false,
-    listVariants: false,
-    failOnRegression: false,
-  };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--task":
-        args.taskId = argv[++i];
-        break;
-      case "--baseline":
-        args.baseline = argv[++i];
-        break;
-      case "--keep":
-        args.keep = true;
-        break;
-      case "--variant":
-        args.variants.push(argv[++i] ?? "");
-        break;
-      case "--ab": {
-        const pair = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-        if (pair.length !== 2) throw new Error("--ab expects exactly two comma-separated variant names");
-        args.ab = [pair[0]!, pair[1]!];
-        break;
-      }
-      case "--skill-ranking":
-        args.skillRanking = true;
-        break;
-      case "--fail-on-regression":
-        args.failOnRegression = true;
-        break;
-      case "--list-variants":
-        args.listVariants = true;
-        break;
-      default:
-        throw new Error(`unknown argument: ${arg}`);
-    }
-  }
-  return args;
-}
 
 /** Runs every task under one named variant, printing per-task progress. */
 async function runVariant(
