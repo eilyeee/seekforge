@@ -30,12 +30,26 @@ Each run writes a timestamped `.md` + `.json` under `evals/reports/`.
 `--list-variants` prints the registry. Current variants (see `src/variants.ts`):
 `control` (baseline), `terse-prompt`, `llm-compaction`, `no-memory`,
 **`verify-gate`** (enables the self-verification finalize gate, `verifyCommand=npm test`),
-and **`no-progress-guard`** (enables the premature-finish guard). A/B a lever
-against `control`, e.g. `--ab control,verify-gate`.
+**`no-auto-verify`** (verify-gate but nudge-only), **`no-retrieval`** (disables the
+task-relevant shortlist), **`review-gate`** (enables `finalizeReview`),
+**`model-pro`** (runs under `deepseek-v4-pro`), and **`no-progress-guard`** (enables
+the premature-finish guard). A/B a lever against `control`, e.g. `--ab control,verify-gate`.
 
 > Honest note: A/B runs of `verify-gate` showed **no pass-rate gain and ~+10% cost**
 > on the current (verify-prompted) task set — which is why that lever ships opt-in,
 > not on by default.
+
+### Round-52 capability measurements
+
+[`evals/round-52-measurements.md`](../evals/round-52-measurements.md) records the
+real-run A/B of the round-52 levers and the runbook to reproduce them. Summary:
+**auto-verify** is positive (fewer turns, ~30% cheaper → default on); **retrieval**
+shows no gain on greppable tasks but wins 3/3 reps on a deliberately grep-noisy
+ask task (→ default on, value concentrated on hard navigation); **review-gate**
+adds cost with no measured benefit, even on a fixture built to need it (→ opt-in).
+The discriminating fixtures are `cjk-find-checkout` (retrieval) and
+`cjk-review-edge` (review); `cjk-large-paginate` (159 files) is the only fixture
+large enough to trigger the retrieval (≥40) **and** repo-overview (≥150) floors.
 
 ## The baseline
 
