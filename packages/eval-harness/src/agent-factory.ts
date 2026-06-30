@@ -23,7 +23,8 @@ export function createDefaultAgentFactory(
       provider: createDeepSeekProvider({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
-        model: config.model,
+        // A variant may override the main model (e.g. model-pro); else config.
+        model: options.model ?? config.model,
       }),
       dispatcher: createDefaultDispatcher(),
       // Deny anything that needs interactive approval: eval fixtures only
