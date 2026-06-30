@@ -1,0 +1,14 @@
+{
+  "id": "cjk-buried-retry",
+  "title": "CJK task: find and fix the buried retry off-by-one",
+  "fixture": "cjk-buried-retry",
+  "mode": "edit",
+  "task": "网络请求的 retry 重试逻辑有个边界 bug：设置重试 3 次时，实际只尝试了 2 次就放弃了，少算了一次。请找到负责重试的模块，修正循环的边界条件，让它按设置的次数完整尝试（有一个命名相近的模块是对的，别动它，也不要改测试）。改完运行 `npm test` 验证直到通过。",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/net/retryDelay.js", "pattern": "attempt - 1" },
+    { "type": "file_contains", "path": "test/retry.test.js", "pattern": "attempts the call" },
+    { "type": "file_not_contains", "path": "test/retry.test.js", "pattern": "skip" }
+  ],
+  "notes": "Chinese (code-switched) task for measuring relevant-files retrieval on CJK prompts, with a boundary-bug theme. The English bridge word 'retry' is the lexical hook to src/net/retry.js (loop bound `i < times - 1` drops the last attempt; should attempt `times` times total). 48 code files clear buildRelevantFiles' floor. Pair with --ab control,no-retrieval. command_succeeds is the real grade; the loop fix is intentionally NOT pinned by pattern (a correct `i <= times - 1` would still contain 'times - 1'), so grading rests on the suite plus anti-reward-hack pins (retryDelay.js decoy and the test file untouched)."
+}

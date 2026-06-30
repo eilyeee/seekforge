@@ -1,0 +1,15 @@
+{
+  "id": "cjk-buried-discount",
+  "title": "CJK task: find and fix the buried discount-sign bug",
+  "fixture": "cjk-buried-discount",
+  "mode": "edit",
+  "task": "购物车的 discount 折扣计算反了：现在「打折」之后价格反而比原价更高，方向搞错了——折扣应该让价格变低。请定位负责折扣计算的模块并在源头修复（注意有一个命名相近的模块是正确的，不要改它，也不要改测试）。改完运行 `npm test`，直到全部通过。",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/pricing/discount.js", "pattern": "1 \\+ percentOff" },
+    { "type": "file_contains", "path": "src/pricing/discountTable.js", "pattern": "silver: 10" },
+    { "type": "file_contains", "path": "test/discount.test.js", "pattern": "applyDiscount lowers the price" },
+    { "type": "file_not_contains", "path": "test/discount.test.js", "pattern": "skip" }
+  ],
+  "notes": "Chinese (code-switched) task for measuring the auto-injected relevant-files retrieval on CJK prompts. The English bridge word 'discount' is the only lexical hook the tokenizer can match to src/pricing/discount.js — pure-CJK words never match ASCII paths. The fixture has 48 code files so it clears buildRelevantFiles' minRepoFiles floor (40); none of the existing fixtures do, so retrieval never fired in evals before. Pair with --ab control,no-retrieval to measure whether the shortlist helps navigate ~44 noise modules + a discountTable.js decoy to the real bug (discount.js adds the percentage instead of subtracting it). command_succeeds is the real grade; the file pins are anti-reward-hacking (bug gone, decoy and tests untouched) and deliberately do not pin the exact corrected formula."
+}

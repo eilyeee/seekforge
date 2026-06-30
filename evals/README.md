@@ -69,13 +69,18 @@ Built-in variants:
 - `verify-gate` — sets `verifyCommand=npm test` so edits are verified before finishing.
 - `no-auto-verify` — `verify-gate` but with `autoVerify=false` (nudge-only); A/B vs
   `verify-gate` to isolate the value of the loop auto-running the command.
-- `no-retrieval` — disables the auto-injected task-relevant file shortlist; pair with
-  a buried-code task (`buried-feature-flag`, `large-context-nav`) to measure retrieval.
+- `no-retrieval` — disables the auto-injected task-relevant file shortlist; pair with a
+  fixture that clears the 40-code-file retrieval floor (`cjk-buried-discount`,
+  `cjk-buried-retry`) — smaller fixtures never trigger retrieval, so the A/B is a no-op.
 - `review-gate` — enables the final-review gate (`finalizeReview`).
 - `no-progress-guard` — enables the premature-finish guard.
 
-Suggested A/B pairs for the round-52 capabilities: `control,no-retrieval` (retrieval),
-`verify-gate,no-auto-verify` (auto-run), `control,review-gate` (final review).
+Suggested A/B pairs for the round-52 capabilities:
+`--ab control,no-retrieval --task cjk-buried-discount,cjk-buried-retry` (retrieval, on the
+CJK fixtures that clear the 40-file floor), `--ab verify-gate,no-auto-verify` (auto-run),
+`--ab control,review-gate` (final review). The `cjk-*` tasks are Chinese (code-switched)
+prompts: only an English bridge word in the task can match ASCII code, so they also probe
+how retrieval behaves on CJK prompts.
 
 Add one by appending an entry to the `VARIANTS` array. Knobs available without
 forking core: `compaction`, `contextWindowTokens`, `injectMemory`, `verifyCommand`,
