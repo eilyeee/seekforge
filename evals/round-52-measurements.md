@@ -68,3 +68,50 @@ the feature's intended *value*.
    fails; a bug whose quality fix isn't covered by the failing test), or (b) run
    more repetitions for variance. Until then, treat their default-on status as
    unproven, not validated.
+
+## Follow-up: discriminating tasks (2026-06-30, 3 reps each)
+
+Built two fixtures designed to stress the intended hard case of each capability
+(takeaway 2a), and ran each A/B three times.
+
+### Retrieval — `cjk-find-checkout` (ask mode; grep returns 41 hits, retrieval 1)
+
+`--ab control,no-retrieval`, where "checkout" is in every file's *contents* but
+only the target's *path/exports*, and no failing test reveals the location.
+
+| rep | control (retrieval) | no-retrieval | win |
+| --- | --- | --- | --- |
+| 1 | 2 turns / 0.0009 | 3 / 0.0010 | A |
+| 2 | 2 turns / 0.0009 | 3 / 0.0011 | A |
+| 3 | 2 turns / 0.0009 | 3 / 0.0010 | A |
+
+**Retrieval reliably wins 3/3: ~1 fewer turn, ~10% cheaper, same (correct)
+answer.** This is the niche the round-52 tasks couldn't show — when the agent
+can't cheaply grep-orient, the precise shortlist saves a navigation turn. So
+retrieval *does* earn its keep, but its value is concentrated on hard-navigation
+tasks and is ~nil when the task term is already greppable. Net: keep it (cheap to
+compute, helps the hard cases, never observed to hurt).
+
+### Review-gate — `cjk-review-edge` (naive fix passes `npm test`, fails a hidden negative-bounds check)
+
+| rep | control passes hidden edge check? | control cost | review-gate cost |
+| --- | --- | --- | --- |
+| 1 | yes | 0.0022 | 0.0026 |
+| 2 | yes | 0.0020 | 0.0027 |
+| 3 | yes | 0.0018 | 0.0033 |
+
+**In all 3 reps control already handled the edge case** — flash writes a robust
+parse unprompted, so the latent-bug-catch never triggers and review-gate is pure
+overhead (always more expensive, no success/quality gain). Stronger evidence it
+doesn't pay off for this model. The discriminator is sound (a naive split fix
+*does* fail the hidden check — verified), so this is about the model, not the
+task: flash doesn't make the naive mistake here. Review-gate might still help a
+weaker model that does — but flash is already the weakest available tier, so that
+hypothesis is currently untestable.
+
+### Net recommendation
+
+- `autoVerify` on, **retrieval on** (now validated on hard-navigation).
+- **Review-gate: leave off by default.** No measured benefit across two task
+  families and a built-to-need-it discriminator; only cost. Revisit if/when a
+  weaker model or a quality-regression task can exercise its intended value.
