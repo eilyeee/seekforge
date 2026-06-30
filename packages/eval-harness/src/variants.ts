@@ -107,8 +107,9 @@ export const VARIANTS: Variant[] = [
   {
     name: "no-retrieval",
     describe:
-      "Disables the auto-injected task-relevant file shortlist — pair with a buried-code task " +
-      "(e.g. buried-feature-flag, large-context-nav) to measure whether retrieval actually helps.",
+      "Disables the auto-injected task-relevant file shortlist — pair with a fixture that clears the " +
+      "40-code-file retrieval floor (cjk-buried-discount, cjk-buried-retry) to measure whether the " +
+      "shortlist actually helps; smaller fixtures never trigger retrieval so the A/B would be a no-op.",
     apply: (base) => ({ ...base, injectRelevantFiles: false }),
   },
   {

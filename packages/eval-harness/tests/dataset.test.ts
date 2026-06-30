@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the forty-four expected tasks", () => {
+  it("contains the forty-six expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -18,6 +18,8 @@ describe("evals/ dataset", () => {
       "ask-codebase",
       "async-race-fix",
       "buried-feature-flag",
+      "cjk-buried-discount",
+      "cjk-buried-retry",
       "cross-module-bug",
       "deprecated-api-migration",
       "error-handling",
