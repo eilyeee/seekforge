@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### round 54: round-52 verdict — ran the A/Bs, kept what earns its cost
+- **Measured all three round-52 levers** (deepseek-v4-flash), recorded in
+  `evals/round-52-measurements.md`. Verdict: **auto-verify** positive (fewer
+  turns, ~30% cheaper → stays default-on); **retrieval** no gain on greppable
+  tasks but **wins 3/3 reps** on a deliberately grep-noisy ask task (→ stays
+  default-on, value concentrated on hard navigation); **review-gate** adds cost
+  with no measured benefit even on a fixture built to need it (→ stays opt-in).
+- **Found the eval suite couldn't exercise the orientation features**: every
+  prior fixture is under the 40-code-file retrieval floor (and the 150-file
+  repo-overview floor), so neither ever fired in evals. Added fixtures that do:
+  `cjk-buried-discount`/`cjk-buried-retry` (48 files), `cjk-large-paginate` (159
+  files, triggers both), plus discriminators `cjk-find-checkout` (retrieval,
+  grep-noisy ask) and `cjk-review-edge` (review, hidden edge-case check). All are
+  Chinese (code-switched) prompts.
+- **Eval harness**: new `injectRelevantFiles` core dep + `autoVerify`/`model`
+  forwarding; A/B variants `no-retrieval`, `review-gate`, `no-auto-verify`,
+  `model-pro`; fixed the CLI to tolerate the `--` that `pnpm … eval -- <flags>`
+  forwards. Docs (EVALS.md, configuration.md) updated with the findings.
+
 ### round 53: measure round 52 — A/B toggles + verify-output/internal polish
 - **Eval A/B toggles for the round-52 capabilities.** New core dep
   `injectRelevantFiles` (default on) gates the task-relevant shortlist, mirroring

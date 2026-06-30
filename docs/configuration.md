@@ -256,6 +256,10 @@ e.g. when the command must go through the model's permission flow, or in
 environments where the loop should never shell out directly. Edit the file
 directly; not settable via `config set`.
 
+> Measured (see [`evals/round-52-measurements.md`](../evals/round-52-measurements.md)):
+> auto-run finished a failing-suite fixture in fewer turns and ~30% cheaper than
+> the nudge-only path — the reason it defaults on.
+
 ### `finalizeReview`
 
 **Default off.** When the agent finishes after editing files, run a final review
@@ -265,6 +269,12 @@ it** — a fresh-context, read-only second pair of eyes — and feeds its findin
 back for the agent to address. When no reviewer is wired in, it degrades to a
 one-time self-review nudge. Costs one extra turn (or one reviewer sub-run) when
 it fires. Edit the file directly; not settable via `config set`.
+
+> Measured (see [`evals/round-52-measurements.md`](../evals/round-52-measurements.md)):
+> across two task families — including a fixture built so the naive fix passes
+> the test but leaves a hidden edge case — review added cost with **no** success
+> or quality gain on the default model (it wrote robust code unprompted). Hence
+> opt-in. Revisit for a weaker model that does make the naive mistake.
 
 ### `guardNoProgress`
 
@@ -670,6 +680,14 @@ a search engine**: relevance that lives only in a file's *contents* (not its nam
 or exports) won't surface — that is what `search_text` is for, and the prompt
 says so. Nothing is injected for small trees, generic tasks, or when nothing
 clears the relevance floor (silence beats noise).
+
+> Measured (see [`evals/round-52-measurements.md`](../evals/round-52-measurements.md)):
+> on bug-fix tasks whose term is already greppable the shortlist showed no gain,
+> but on an ask-mode task where `search_text` returns 41 noisy hits and only the
+> target's path/exports match, retrieval won **3/3 reps** (~1 fewer turn, ~10%
+> cheaper). Its value is concentrated on hard navigation; it never hurt, so it
+> stays on. NB: the shortlist only fires on repos with ≥40 code files (the repo
+> overview needs ≥150) — most small repos never trigger either.
 
 ### Hybrid extraction (optional tree-sitter, regex floor)
 
