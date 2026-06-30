@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { truncateHeadTail } from "../../src/tools/text.js";
+import { digestCommandOutput, truncateHeadTail } from "../../src/tools/text.js";
 
 describe("truncateHeadTail", () => {
   it("returns text unchanged when within budget", () => {
@@ -57,5 +57,33 @@ describe("truncateHeadTail", () => {
     expect(r.truncated).toBe(true);
     expect(r.text).toContain("[truncated");
     expect(r.text.startsWith("x")).toBe(true);
+  });
+});
+
+describe("digestCommandOutput", () => {
+  it("returns trimmed output unchanged when it fits", () => {
+    expect(digestCommandOutput("  all green  ", 100)).toBe("all green");
+  });
+
+  it("maps empty output to a placeholder", () => {
+    expect(digestCommandOutput("   \n  ", 100)).toBe("(no output)");
+  });
+
+  it("surfaces a buried failure line that the head/tail cut would drop", () => {
+    const noise = Array.from({ length: 400 }, (_, i) => `ok ${i} passing case`).join("\n");
+    // The failing assertion sits in the omitted middle, away from head and tail.
+    const output = `${noise}\nAssertionError: expected 1 to be 2\n${noise}`;
+    const digest = digestCommandOutput(output, 600);
+    expect(digest).toContain("failure lines from the omitted region");
+    expect(digest).toContain("AssertionError: expected 1 to be 2");
+    // Budget is respected (within a small marker slack).
+    expect(digest.length).toBeLessThanOrEqual(700);
+  });
+
+  it("falls back to a plain head+tail when nothing looks like a failure", () => {
+    const output = Array.from({ length: 400 }, (_, i) => `ok ${i} passing case`).join("\n");
+    const digest = digestCommandOutput(output, 400);
+    expect(digest).toContain("[truncated");
+    expect(digest).not.toContain("failure lines from the omitted region");
   });
 });

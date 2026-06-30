@@ -50,4 +50,30 @@ describe("variant registry", () => {
     expect(names).toContain("terse-prompt");
     expect(names).toContain("llm-compaction");
   });
+
+  it("no-retrieval disables relevant-files injection only", () => {
+    const out = getVariant("no-retrieval").apply({ taskSuffix: "keep" });
+    expect(out.injectRelevantFiles).toBe(false);
+    expect(out.taskSuffix).toBe("keep");
+  });
+
+  it("review-gate enables finalizeReview only", () => {
+    const out = getVariant("review-gate").apply({ compaction: "mechanical" });
+    expect(out.finalizeReview).toBe(true);
+    expect(out.compaction).toBe("mechanical");
+  });
+
+  it("no-auto-verify sets the verify command but disables auto-run", () => {
+    const out = getVariant("no-auto-verify").apply({});
+    expect(out.verifyCommand).toBe("npm test");
+    expect(out.autoVerify).toBe(false);
+  });
+
+  it("the new variants never mutate the input base", () => {
+    const base: AgentBuildOptions = {};
+    getVariant("no-retrieval").apply(base);
+    getVariant("review-gate").apply(base);
+    getVariant("no-auto-verify").apply(base);
+    expect(base).toEqual({});
+  });
 });
