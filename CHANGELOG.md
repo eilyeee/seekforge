@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### round 52: transparent agent capability — retrieval, auto-verify, reviewer subagent
+- **Task-relevant file retrieval (auto-injected).** Alongside the generic repo
+  overview, the loop injects a **task-targeted** shortlist at session start
+  (top-level runs): code files ranked by lexical overlap of their path + symbol
+  outline with the task, each with a one-line outline. Reuses the memory-brief
+  tokenizers (CJK tasks work). A cheap orientation hint, not a search engine —
+  content-only relevance still needs `search_text`; nothing is injected for small
+  trees, generic tasks, or when nothing clears the relevance floor.
+- **Auto-verify on completion.** `verifyCommand` is no longer just a nudge: by
+  default (`autoVerify`) the loop **runs it itself** on the finish turn and feeds
+  the real result back — a pass is accepted, a failure continues with the captured
+  output so the agent fixes the cause. Degrades to the nudge on `autoVerify:false`
+  or when the command can't run.
+- **Reviewer subagent on completion.** With `finalizeReview` on and a reviewer
+  specialist available (a built-in), the loop **dispatches the reviewer** (fresh
+  context, read-only) instead of asking the model to self-review, and feeds its
+  findings back. Degrades to the self-review nudge when no reviewer is wired in.
+- **Code-aware compaction.** `read_file` truncation of large code files now cuts
+  on **construct boundaries** (whole functions/classes via tree-sitter ranges)
+  instead of mid-function, with a line-aware fallback; offsets are UTF-16-safe
+  (verified on CJK sources).
+- **Why these three:** all are **transparent** — they take effect without relying
+  on the model to adopt a tool/lever (the failure mode of earlier add-ons). Net
+  value on real tasks still wants dogfooding; not claimed as a measured win.
+- **Config.** New `autoVerify` (default on when `verifyCommand` is set).
+- **Review hardening.** A failed auto-verify now re-runs after the model edits
+  again (and only then — a finish with no new edit is accepted, so it can't spin
+  on an unfixable command). Task-relevant retrieval matches path tokens on
+  component boundaries (no `index.ts` → `reindex.ts` false hits), and the repo
+  overview + retrieval now share a single tree walk per run.
+- Verified: core 980 · cli typecheck · workspace typecheck clean. (11 new tests:
+  retrieval 6, auto-verify 4, reviewer auto-dispatch 1.)
+
 ### round 51: code navigation, finalize gate, durable plans
 - **Code navigation tools.** New `repo_map` (compact structural overview —
   directory rollup + per-file symbol outlines; auto-injected into the system

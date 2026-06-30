@@ -28,6 +28,23 @@ describe("truncateHeadTail", () => {
     for (const line of tail!.split("\n").filter(Boolean)) expect(originals.has(line)).toBe(true);
   });
 
+  it("cuts on construct boundaries when ranges are given (whole functions, not severed)", () => {
+    let src = "";
+    const ranges: { start: number; end: number }[] = [];
+    for (let i = 0; i < 60; i++) {
+      const start = src.length;
+      src += `function fn${i}() {\n  return ${i};\n}\n`; // multi-line: line-aware could split it
+      ranges.push({ start, end: src.length });
+    }
+    const { text, truncated } = truncateHeadTail(src, 500, { ranges });
+    expect(truncated).toBe(true);
+    const [head, tail] = text.split(/\n\.\.\. \[truncated \d+ chars\] \.\.\.\n/);
+    // head ends at a complete function (closing brace), not mid-function
+    expect(head!.trimEnd().endsWith("}")).toBe(true);
+    // tail resumes at the start of a function, not mid-body
+    expect(tail!.trimStart().startsWith("function fn")).toBe(true);
+  });
+
   it("respects the budget even when maxChars is smaller than the marker", () => {
     const r = truncateHeadTail("x".repeat(500), 8);
     expect(r.truncated).toBe(true);

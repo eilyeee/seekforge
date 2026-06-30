@@ -106,6 +106,7 @@ export {
   looksLikeSandboxDenial,
   normalizeCommand,
   runShellCommand,
+  TEST_COMMAND_TIMEOUT_MS,
 } from "./run-command.js";
 export { buildSandboxSpec, sandboxedShell } from "./os-sandbox.js";
 export type { SandboxLevel, SandboxSpec } from "./os-sandbox.js";

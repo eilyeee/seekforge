@@ -17,6 +17,8 @@ export type SystemPromptOptions = {
   planItems?: { step: string; status: "pending" | "in_progress" | "done" }[];
   /** Compact structural overview of a large repo (from buildRepoOverview), for orientation. */
   repoOverview?: string;
+  /** Task-relevant file shortlist (from buildRelevantFiles), ranked by lexical match. */
+  relevantFiles?: string;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -167,6 +169,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     parts.push(
       "Structural overview of this (large) repository — use it to orient, then " +
         `use repo_map with a \`path\` to drill in and read_file for specifics:\n${opts.repoOverview}`,
+    );
+  }
+
+  if (opts.relevantFiles) {
+    parts.push(
+      "These files look most relevant to the task by name/exports — a starting " +
+        "point, not a guarantee. Read them to confirm, and still search_text for " +
+        `logic that lives in file contents rather than names:\n${opts.relevantFiles}`,
     );
   }
 

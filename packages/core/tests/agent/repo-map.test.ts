@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildRelevantFiles,
   buildRepoMap,
   buildRepoOverview,
   extractSymbols,
@@ -111,5 +112,69 @@ describe("buildRepoMap", () => {
     expect(defs[0]!.line).toBe(1);
     expect(findDefinitions(root, "a.*b")).toEqual([]); // regex metachars rejected
     expect(findDefinitions(root, "nonexistentThing")).toEqual([]);
+  });
+});
+
+describe("buildRelevantFiles", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "relevant-"));
+    mkdirSync(join(root, "src/auth"), { recursive: true });
+    mkdirSync(join(root, "src/billing"), { recursive: true });
+    mkdirSync(join(root, "src/util"), { recursive: true });
+    // A login site whose RELEVANCE is in its path/exports.
+    writeFileSync(join(root, "src/auth/login.ts"), "export function login(){}\nexport function logout(){}");
+    writeFileSync(join(root, "src/auth/session.ts"), "export function refreshSession(){}");
+    writeFileSync(join(root, "src/billing/invoice.ts"), "export function createInvoice(){}");
+    // Bulk noise so the tree clears minRepoFiles for the default path.
+    for (let i = 0; i < 50; i++) {
+      writeFileSync(join(root, `src/util/u${i}.ts`), `export const helper${i} = ${i};`);
+    }
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("surfaces the file whose path matches the task, with its outline", () => {
+    const out = buildRelevantFiles(root, "fix the login bug")!;
+    expect(out).toContain("# Task-relevant files");
+    expect(out).toContain("src/auth/login.ts");
+    expect(out).toContain("login, logout"); // outline included
+    expect(out).not.toContain("invoice.ts"); // unrelated
+    expect(out).not.toContain("util/u0.ts"); // generic noise excluded
+  });
+
+  it("ranks a path-token hit highest", () => {
+    const out = buildRelevantFiles(root, "update src/billing/invoice.ts totals")!;
+    // The path-token match must appear before any weaker keyword match.
+    expect(out.indexOf("invoice.ts")).toBeGreaterThan(-1);
+    const firstFileLine = out.split("\n")[1]!;
+    expect(firstFileLine).toContain("invoice.ts");
+  });
+
+  it("matches a path-token on component boundaries, not as a bare substring", () => {
+    // "index.ts" must hit src/util/index.ts but NOT src/util/reindex.ts.
+    writeFileSync(join(root, "src/util/index.ts"), "export function buildIndex(){}");
+    writeFileSync(join(root, "src/util/reindex.ts"), "export function reindexAll(){}");
+    const out = buildRelevantFiles(root, "refactor index.ts")!;
+    expect(out).toContain("src/util/index.ts");
+    expect(out).not.toContain("reindex.ts"); // boundary-aware: no spurious match
+  });
+
+  it("returns undefined for a generic task (no specific terms)", () => {
+    expect(buildRelevantFiles(root, "make it better")).toBeUndefined();
+  });
+
+  it("returns undefined for a small tree (navigable directly)", () => {
+    const small = mkdtempSync(join(tmpdir(), "relevant-small-"));
+    try {
+      writeFileSync(join(small, "login.ts"), "export function login(){}");
+      expect(buildRelevantFiles(small, "fix login")).toBeUndefined();
+    } finally {
+      rmSync(small, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined when nothing clears the relevance floor", () => {
+    // A keyword that only substring-matches a few paths weakly stays below floor.
+    expect(buildRelevantFiles(root, "xyzzy nonexistent feature")).toBeUndefined();
   });
 });

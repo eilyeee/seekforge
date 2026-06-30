@@ -126,6 +126,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     ...(typeof config.verifyCommand === "string" && config.verifyCommand.trim()
       ? { verifyCommand: config.verifyCommand }
       : {}),
+    ...(config.autoVerify === false ? { autoVerify: false } : {}),
     ...(config.finalizeReview ? { finalizeReview: true } : {}),
     ...(config.guardNoProgress ? { guardNoProgress: true } : {}),
     ...(config.memoryAutoApproveConfidence !== undefined

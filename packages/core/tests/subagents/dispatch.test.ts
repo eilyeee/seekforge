@@ -339,4 +339,44 @@ describe("dispatch_agent (loop-level)", () => {
     expect(done!.result.error!.message).toContain("1 turns");
     expect(events.some((e) => e.type === "session.completed")).toBe(true);
   });
+
+  it("auto-dispatches the reviewer on completion when finalizeReview is on", async () => {
+    // Dispatcher whose apply_patch registers a real file change (meta.path),
+    // so the finalize 'review' check fires.
+    const editDispatcher: ToolDispatcher & { calls: { call: ToolCall; policyMode: string }[] } = {
+      calls: [],
+      list: () => [{ name: "apply_patch", description: "d", parameters: {} }],
+      execute: async (call: ToolCall, ctx: ToolContext): Promise<ToolResult> => {
+        editDispatcher.calls.push({ call, policyMode: ctx.policy.mode });
+        return call.name === "apply_patch" ? { ok: true, meta: { path: "a.ts" } } : { ok: true };
+      },
+    };
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone" }), // declares done -> auto-dispatch reviewer
+      response({ content: "## Findings\nLooks good, no issues found" }), // nested reviewer final
+      response({ content: "## Summary\nacknowledged" }), // parent finishes after the review
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher,
+      confirm: async () => true,
+      subagents: [reviewer],
+      finalizeReview: true,
+    });
+    const events = await collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, approvalMode: "auto" }),
+    );
+    // The loop dispatched the reviewer on its own (no dispatch_agent tool call).
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Dispatching the reviewer"))).toBe(true);
+    // The reviewer's findings were fed back into the PARENT conversation.
+    const parentReqs = provider.requests.filter((r) => r.messages[0]!.content.includes("You are SeekForge"));
+    const lastParentMsg = parentReqs.at(-1)!.messages.at(-1)!;
+    expect(lastParentMsg.content).toContain("reviewer agent reviewed your changes");
+    expect(lastParentMsg.content).toContain("Looks good");
+    expect(events.some((e) => e.type === "session.completed")).toBe(true);
+  });
 });

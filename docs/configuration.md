@@ -229,26 +229,42 @@ Settable via `config set`? **No** — edit the file directly.
 
 ### `verifyCommand`
 
-**Default off.** A shell command (e.g. `"npm test"`) the agent is nudged to run
-before finishing **when it has edited files but not run it since the last edit**.
-The command runs through the model's normal `run_command` path (respecting the
-session's permission mode); the nudge fires at most once per run.
+**Default off.** A shell command (e.g. `"npm test"`) that must pass before the
+run finishes **when it has edited files but not run it since the last edit**. By
+default (`autoVerify`, below) the loop **runs it automatically on the finish
+turn** and feeds the real result back: a passing run is accepted, a failing run
+continues with the captured output so the agent fixes the actual cause. The
+check fires at most once per run.
 
 ```json
 { "verifyCommand": "pnpm test" }
 ```
 
-> Honest note: in eval A/B this gate showed **no pass-rate benefit and ~+10% cost**
-> on task sets that already prompt the agent to verify — hence it is opt-in, not a
-> default. It is most useful for workflows where you do *not* tell the agent to run
+> Honest note: in earlier eval A/B the *nudge-only* form showed **no pass-rate
+> benefit and ~+10% cost** on task sets that already prompt the agent to verify.
+> Auto-running it (rather than relying on the model to) removes the adoption gap,
+> but its net value on real tasks still wants dogfooding — hence opt-in, not a
+> default. Most useful for workflows where you do *not* tell the agent to run
 > tests. Edit the file directly; not settable via `config set`.
+
+### `autoVerify`
+
+**Default on** (only relevant when `verifyCommand` is set). The loop runs
+`verifyCommand` itself on the finish turn and feeds the result back. Set to
+`false` to degrade to a one-time **nudge** asking the model to run it instead —
+e.g. when the command must go through the model's permission flow, or in
+environments where the loop should never shell out directly. Edit the file
+directly; not settable via `config set`.
 
 ### `finalizeReview`
 
-**Default off.** When the agent finishes after editing files, nudge it once to
-self-review its own diff (leftover debug code, missed cases, task coverage) before
-the run completes. Costs one extra turn when it fires. Edit the file directly; not
-settable via `config set`.
+**Default off.** When the agent finishes after editing files, run a final review
+of the diff before completing. If a **reviewer** specialist agent is available
+(it is a built-in; present whenever subagents are loaded), the loop **dispatches
+it** — a fresh-context, read-only second pair of eyes — and feeds its findings
+back for the agent to address. When no reviewer is wired in, it degrades to a
+one-time self-review nudge. Costs one extra turn (or one reviewer sub-run) when
+it fires. Edit the file directly; not settable via `config set`.
 
 ### `guardNoProgress`
 
@@ -606,7 +622,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
-`verifyCommand`, `finalizeReview`, `guardNoProgress`,
+`verifyCommand`, `autoVerify`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
 **not settable** via `config set`. They must be edited directly in the JSON
 config file, or managed through their dedicated subcommands (`seekforge mcp
@@ -642,6 +658,18 @@ Two built-in read-only tools help the agent orient in large codebases:
   starts oriented. Use `path` to drill into a subtree.
 - **`find_definition`** — locates where a symbol is *defined/exported* (functions,
   classes, consts, methods, components) rather than every mention.
+
+### Task-relevant file shortlist (auto-injected)
+
+Alongside the generic overview, the loop injects a **task-targeted** shortlist at
+session start (top-level runs only): code files ranked by lexical overlap of
+their **path and symbol outline** with the task, each with a one-line outline —
+"here is where to look for *this* task". It reuses the memory-brief tokenizers,
+so Chinese/Japanese/Korean tasks work too. It is a **cheap orientation hint, not
+a search engine**: relevance that lives only in a file's *contents* (not its name
+or exports) won't surface — that is what `search_text` is for, and the prompt
+says so. Nothing is injected for small trees, generic tasks, or when nothing
+clears the relevance floor (silence beats noise).
 
 ### Hybrid extraction (optional tree-sitter, regex floor)
 
