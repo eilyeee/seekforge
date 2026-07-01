@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-12T09:58:53.145Z",
+  "generatedAt": "2026-07-01T00:00:51.371Z",
   "results": [
     {
       "taskId": "add-function",
@@ -22,13 +22,30 @@
         }
       ],
       "metrics": {
-        "turns": 6,
-        "toolCalls": 8,
+        "turns": 5,
+        "toolCalls": 6,
         "failedToolCalls": 0,
-        "costUsd": 0.0025038720000000003,
-        "durationMs": 13205,
+        "costUsd": 0.0014395136,
+        "durationMs": 10644,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 2.3
+        }
+      ]
     },
     {
       "taskId": "add-missing-tests",
@@ -75,12 +92,140 @@
       ],
       "metrics": {
         "turns": 5,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0013659855999999999,
+        "durationMs": 9403,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "ambiguous-dedup",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/dedupe.js",
+            "pattern": "TODO: implement"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/dedupe.test.js",
+            "pattern": "either keep-first or keep-last is valid"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
         "toolCalls": 6,
         "failedToolCalls": 0,
-        "costUsd": 0.001989064,
-        "durationMs": 9258,
+        "costUsd": 0.00157388,
+        "durationMs": 11368,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "api-version-migration",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/invoice.js",
+            "pattern": "USD"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/receipt.js",
+            "pattern": "USD"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/money.test.js",
+            "pattern": "12\\.34 USD"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 11,
+        "failedToolCalls": 0,
+        "costUsd": 0.0016745792000000003,
+        "durationMs": 12351,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        }
+      ]
     },
     {
       "taskId": "ask-codebase",
@@ -98,10 +243,422 @@
         "turns": 2,
         "toolCalls": 2,
         "failedToolCalls": 0,
-        "costUsd": 0.0008633800000000001,
-        "durationMs": 2279,
+        "costUsd": 0.0007962360000000001,
+        "durationMs": 2202,
         "score": 100
-      }
+      },
+      "skills": []
+    },
+    {
+      "taskId": "async-race-fix",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/queue.js",
+            "pattern": "await"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/queue.js",
+            "pattern": "const doubled = doubleAsync\\(value\\);"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/queue.test.js",
+            "pattern": "not pending Promises"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.001462608,
+        "durationMs": 11925,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "buried-feature-flag",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test >/tmp/bff.out 2>&1; code=$?; tail -c 4000 /tmp/bff.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/matchStatic.js",
+            "pattern": "routeSeg === reqSeg"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/matchStatic.js",
+            "pattern": "lower\\(routeSeg\\) === lower\\(reqSeg\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/router.test.js",
+            "pattern": "static segment is case-sensitive"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0019077128,
+        "durationMs": 14894,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "cjk-buried-discount",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/pricing/discount.js",
+            "pattern": "1 \\+ percentOff"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/pricing/discountTable.js",
+            "pattern": "silver: 10"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/discount.test.js",
+            "pattern": "applyDiscount lowers the price"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/discount.test.js",
+            "pattern": "skip"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0014929656000000002,
+        "durationMs": 10752,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 4.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "cjk-buried-retry",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/net/retryDelay.js",
+            "pattern": "attempt - 1"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/retry.test.js",
+            "pattern": "attempts the call"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/retry.test.js",
+            "pattern": "skip"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 8,
+        "toolCalls": 10,
+        "failedToolCalls": 0,
+        "costUsd": 0.0017826816000000001,
+        "durationMs": 14336,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "cjk-find-checkout",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "answer_matches",
+            "pattern": "total\\.js"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "answer_matches",
+            "pattern": "computeCheckoutTotal"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 2,
+        "toolCalls": 1,
+        "failedToolCalls": 0,
+        "costUsd": 0.0008783544000000001,
+        "durationMs": 3906,
+        "score": 100
+      },
+      "skills": []
+    },
+    {
+      "taskId": "cjk-large-paginate",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/catalog/paginate.js",
+            "pattern": "const start = page \\* size"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/catalog/pageMeta.js",
+            "pattern": "Math.ceil"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/paginate.test.js",
+            "pattern": "the last \\(partial\\) page"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/paginate.test.js",
+            "pattern": "skip"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 4,
+        "toolCalls": 5,
+        "failedToolCalls": 0,
+        "costUsd": 0.0014526736000000002,
+        "durationMs": 10488,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "cjk-review-edge",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node --input-type=module -e 'import {parseRange} from \"./src/parse/parseRange.js\"; const r=JSON.stringify(parseRange(\"-3-7\")); if(r!==\"[-3,7]\"){console.error(\"negative range:\",r);process.exit(1)}'"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/range.test.js",
+            "pattern": "parses a simple ascending range"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/range.test.js",
+            "pattern": "skip"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0015862392000000002,
+        "durationMs": 16006,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
     },
     {
       "taskId": "cross-module-bug",
@@ -132,13 +689,30 @@
         }
       ],
       "metrics": {
-        "turns": 7,
+        "turns": 8,
         "toolCalls": 10,
         "failedToolCalls": 0,
-        "costUsd": 0.0028616839999999998,
-        "durationMs": 15205,
+        "costUsd": 0.0018522448000000003,
+        "durationMs": 18359,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 6.6
+        }
+      ]
     },
     {
       "taskId": "deprecated-api-migration",
@@ -185,13 +759,30 @@
         }
       ],
       "metrics": {
-        "turns": 11,
-        "toolCalls": 15,
+        "turns": 9,
+        "toolCalls": 19,
         "failedToolCalls": 0,
-        "costUsd": 0.0038768519999999996,
-        "durationMs": 20053,
-        "score": 99
-      }
+        "costUsd": 0.0021365232000000005,
+        "durationMs": 20361,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
     },
     {
       "taskId": "error-handling",
@@ -230,13 +821,156 @@
         }
       ],
       "metrics": {
-        "turns": 7,
-        "toolCalls": 9,
+        "turns": 6,
+        "toolCalls": 10,
         "failedToolCalls": 0,
-        "costUsd": 0.002408672,
-        "durationMs": 11218,
+        "costUsd": 0.001635004,
+        "durationMs": 14576,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "error-path-typed",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/extract.js",
+            "pattern": "TypeError"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/extract.js",
+            "pattern": "RangeError"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/extract.js",
+            "pattern": "catch \\{\\s*return undefined;"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/extract.test.js",
+            "pattern": "missing key throws RangeError"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 8,
+        "failedToolCalls": 1,
+        "costUsd": 0.0016782248000000001,
+        "durationMs": 12815,
+        "score": 97
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "extend-without-regress",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test >/tmp/ewr.out 2>&1; code=$?; tail -c 4000 /tmp/ewr.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node --test test/existing.test.js >/tmp/ewr_e.out 2>&1; code=$?; tail -c 4000 /tmp/ewr_e.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/existing.test.js",
+            "pattern": "spaces around unquoted fields are preserved verbatim"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/quoted.test.js",
+            "pattern": "doubled quotes inside a quoted field become one quote"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 8,
+        "toolCalls": 10,
+        "failedToolCalls": 0,
+        "costUsd": 0.0026475736,
+        "durationMs": 33517,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 4.6
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
     },
     {
       "taskId": "failing-test-fix",
@@ -270,10 +1004,568 @@
         "turns": 6,
         "toolCalls": 8,
         "failedToolCalls": 0,
-        "costUsd": 0.0022868999999999997,
-        "durationMs": 11811,
+        "costUsd": 0.0014611296000000002,
+        "durationMs": 10341,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "feature-edge-cases",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/median.js",
+            "pattern": "TODO: implement"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/median.test.js",
+            "pattern": "do not become Infinity"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0015416912,
+        "durationMs": 10751,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "fix-without-regression",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/joinNames.test.js",
+            "pattern": "two names use 'and' with no comma"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/joinNames.test.js",
+            "pattern": "Oxford comma before 'and'"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 6,
+        "failedToolCalls": 0,
+        "costUsd": 0.0015197616,
+        "durationMs": 11073,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "guarded-no-delete",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "test -f src/config.js"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/config.js",
+            "pattern": "retries: 3"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/config.js",
+            "pattern": "timeoutMs: 5000"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 4,
+        "toolCalls": 3,
+        "failedToolCalls": 0,
+        "costUsd": 0.0011174016,
+        "durationMs": 6212,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "hard-buried-bug-scale",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node -e \"const {roundDiv}=require('./src/rounding'); if(roundDiv(15152,100)!==152||roundDiv(15112,100)!==151) process.exit(1)\""
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 17,
+        "failedToolCalls": 0,
+        "costUsd": 0.0021800296,
+        "durationMs": 20077,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 4.6
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "hard-csv-parser",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 8,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0023324000000000005,
+        "durationMs": 20071,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "hard-expr-eval",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/eval.js",
+            "pattern": "\\beval\\s*\\("
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/eval.js",
+            "pattern": "Function\\s*\\("
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0023786000000000007,
+        "durationMs": 34274,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 4.6
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "hard-feature-multistep",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/emitter.js",
+            "pattern": "once"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/emitter.test.js",
+            "pattern": "B-once"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0037940728000000006,
+        "durationMs": 55444,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "hard-multi-bug",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/cart.js",
+            "pattern": "item\\.price \\+ item\\.qty"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/cart.test.js",
+            "pattern": "subtotal\\(\\[\\]\\), 0"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0019235776000000003,
+        "durationMs": 18972,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "hard-rename-signature",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/store.js",
+            "pattern": "getUser"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/profile.js",
+            "pattern": "getUser"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/batch.js",
+            "pattern": "getUser"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 9,
+        "toolCalls": 16,
+        "failedToolCalls": 0,
+        "costUsd": 0.0021817264000000003,
+        "durationMs": 21666,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 14.3
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "hard-thread-actor",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/operations.js",
+            "pattern": "actor"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/service.js",
+            "pattern": "actor"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/store.js",
+            "pattern": "actor"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/audit.test.js",
+            "pattern": "actor: \"cara\""
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 16,
+        "failedToolCalls": 0,
+        "costUsd": 0.0023943248,
+        "durationMs": 19160,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "security-review",
+          "scope": "builtin",
+          "score": 4.45
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
     },
     {
       "taskId": "json-config-edit",
@@ -295,13 +1587,464 @@
         }
       ],
       "metrics": {
+        "turns": 4,
+        "toolCalls": 5,
+        "failedToolCalls": 0,
+        "costUsd": 0.0011844616000000001,
+        "durationMs": 7241,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 10.3
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "large-context-nav",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/clamp.js",
+            "pattern": "n > hi"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/clamp.js",
+            "pattern": "if \\(n < hi\\) return hi;"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/clamp.test.js",
+            "pattern": "caps values above the upper bound"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
         "turns": 6,
         "toolCalls": 9,
         "failedToolCalls": 0,
-        "costUsd": 0.003155124,
-        "durationMs": 11683,
+        "costUsd": 0.0015066968000000001,
+        "durationMs": 10328,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "loop-verify-green",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/rpn.js",
+            "pattern": "a - b"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/rpn.js",
+            "pattern": "\"/\"|'/'"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/rpn.test.js",
+            "pattern": "supports division"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "test/rpn.test.js",
+            "pattern": "skip"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0016175488000000004,
+        "durationMs": 12139,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "memory-convention-recall",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/log.js",
+            "pattern": "createdAt"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/log.js",
+            "pattern": "nowIso"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/log.js",
+            "pattern": "new Date"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 10,
+        "toolCalls": 14,
+        "failedToolCalls": 1,
+        "costUsd": 0.0014929880000000002,
+        "durationMs": 17024,
+        "score": 97
+      },
+      "skills": []
+    },
+    {
+      "taskId": "memory-error-convention",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/account.js",
+            "pattern": "fail\\("
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/account.js",
+            "pattern": "errors"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/account.js",
+            "pattern": "throw new Error"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 10,
+        "toolCalls": 11,
+        "failedToolCalls": 1,
+        "costUsd": 0.0017492664,
+        "durationMs": 22095,
+        "score": 97
+      },
+      "skills": []
+    },
+    {
+      "taskId": "multi-file-extract-helper",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/posts.js",
+            "pattern": "DUP-SLUGIFY"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/tags.js",
+            "pattern": "DUP-SLUGIFY"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/users.js",
+            "pattern": "DUP-SLUGIFY"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/categories.js",
+            "pattern": "DUP-SLUGIFY"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/posts.js",
+            "pattern": "replace\\(/\\[\\^a-z0-9\\]"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/slug.js",
+            "pattern": "replace\\(/\\[\\^a-z0-9\\]"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "test $(grep -rl \"require.*slug\" src | wc -l) -ge 4"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 10,
+        "toolCalls": 17,
+        "failedToolCalls": 0,
+        "costUsd": 0.0033128368000000003,
+        "durationMs": 42583,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "multi-root-shared-util",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "packages/api/src/routes.js",
+            "pattern": "slugify"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "packages/api/src/routes.js",
+            "pattern": "utils/src/slugify"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "packages/api/src/routes.js",
+            "pattern": "toLowerCase"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0013905976000000003,
+        "durationMs": 10210,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "no-progress-flaky-guard",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "sh verify-no-progress.sh"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "verify-no-progress.sh",
+            "pattern": "Anti-no-op guard for the no-progress task"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/dedupe.js",
+            "pattern": "^  return items;$"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/dedupe.test.js",
+            "pattern": "preserving first-seen order"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0013026272000000003,
+        "durationMs": 9117,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
     },
     {
       "taskId": "off-by-one-fix",
@@ -332,13 +2075,30 @@
         }
       ],
       "metrics": {
-        "turns": 5,
-        "toolCalls": 7,
+        "turns": 9,
+        "toolCalls": 10,
         "failedToolCalls": 0,
-        "costUsd": 0.0022587320000000003,
-        "durationMs": 11891,
+        "costUsd": 0.0019483128,
+        "durationMs": 19088,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
     },
     {
       "taskId": "perf-nested-loop",
@@ -369,13 +2129,161 @@
         }
       ],
       "metrics": {
-        "turns": 5,
-        "toolCalls": 7,
+        "turns": 9,
+        "toolCalls": 9,
         "failedToolCalls": 0,
-        "costUsd": 0.00282814,
-        "durationMs": 12290,
+        "costUsd": 0.0024392592000000005,
+        "durationMs": 32228,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 8.3
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "pipeline-transform-bug",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/normalize.js",
+            "pattern": "record\\.price \\* rate"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/render.js",
+            "pattern": "toFixed\\(2\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/pipeline.test.js",
+            "pattern": "Widget \\$90\\.00"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 5,
+        "toolCalls": 9,
+        "failedToolCalls": 0,
+        "costUsd": 0.0014611128,
+        "durationMs": 11301,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        }
+      ]
+    },
+    {
+      "taskId": "regression-guard",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/titlecase.js",
+            "pattern": "split\\(\" \"\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "sh verify-regression.sh"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "verify-regression.sh",
+            "pattern": "Anti-cheat for the regression-guard task"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/titlecase.test.js",
+            "pattern": "title-cases a normal sentence"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 7,
+        "toolCalls": 8,
+        "failedToolCalls": 1,
+        "costUsd": 0.0017487344000000002,
+        "durationMs": 21530,
+        "score": 97
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 12.5
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 4.6
+        }
+      ]
     },
     {
       "taskId": "rename-across-files",
@@ -430,13 +2338,178 @@
         }
       ],
       "metrics": {
-        "turns": 12,
-        "toolCalls": 18,
+        "turns": 8,
+        "toolCalls": 16,
         "failedToolCalls": 0,
-        "costUsd": 0.007797775999999999,
-        "durationMs": 25621,
-        "score": 98
-      }
+        "costUsd": 0.0018809504,
+        "durationMs": 19328,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 10.3
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "rounding-half-even",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test >/tmp/rhe.out 2>&1; code=$?; tail -c 4000 /tmp/rhe.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/round.js",
+            "pattern": "TODO"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/round.test.js",
+            "pattern": "ties round away from zero \\(negative"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 8,
+        "toolCalls": 8,
+        "failedToolCalls": 1,
+        "costUsd": 0.0029156848000000007,
+        "durationMs": 52149,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
+    },
+    {
+      "taskId": "schema-migration",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "node -e \"const c=require('./config/settings.json'); const ok = c.schemaVersion===2 && c.service==='billing' && c.timeout===30000 && !('timeoutSeconds' in c) && !Array.isArray(c.endpoints) && c.endpoints.create.path==='/v1/create' && c.endpoints.create.retry.max===3 && c.endpoints.status.retry.max===0; process.exit(ok?0:1)\""
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 8,
+        "failedToolCalls": 0,
+        "costUsd": 0.0016658320000000003,
+        "durationMs": 14210,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 10.3
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
+    },
+    {
+      "taskId": "settle-currency-bug",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test >/tmp/scb.out 2>&1; code=$?; tail -c 4000 /tmp/scb.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/money.js",
+            "pattern": "padEnd\\(\\s*2"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/settle.test.js",
+            "pattern": "single-digit fractions are worth ten times the cents"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 6,
+        "toolCalls": 7,
+        "failedToolCalls": 0,
+        "costUsd": 0.0016645104000000003,
+        "durationMs": 13667,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
     },
     {
       "taskId": "spec-to-feature",
@@ -467,13 +2540,95 @@
         }
       ],
       "metrics": {
-        "turns": 6,
-        "toolCalls": 7,
+        "turns": 5,
+        "toolCalls": 5,
         "failedToolCalls": 0,
-        "costUsd": 0.002644264,
-        "durationMs": 15156,
+        "costUsd": 0.0017770424,
+        "durationMs": 20095,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "staged-rollout-refactor",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test >/tmp/sr.out 2>&1; code=$?; tail -c 4000 /tmp/sr.out 1>&2; exit $code"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/checkout.js",
+            "pattern": "isEnabled\\(\\s*\"new-checkout\"\\s*,\\s*user\\.id\\s*\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/search.js",
+            "pattern": "isEnabled\\(\\s*\"beta-search\"\\s*,\\s*user\\.id\\s*\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/theme.js",
+            "pattern": "isEnabled\\(\\s*\"dark-mode\"\\s*,\\s*user\\.id\\s*\\)"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "test/rollout.test.js",
+            "pattern": "themeFor splits users for the 50% dark-mode flag"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
+        "turns": 10,
+        "toolCalls": 17,
+        "failedToolCalls": 0,
+        "costUsd": 0.0025175304,
+        "durationMs": 25056,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 4.3
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 2.35
+        }
+      ]
     },
     {
       "taskId": "title-change",
@@ -504,13 +2659,92 @@
         }
       ],
       "metrics": {
+        "turns": 8,
+        "toolCalls": 9,
+        "failedToolCalls": 0,
+        "costUsd": 0.0014326312,
+        "durationMs": 14522,
+        "score": 100
+      },
+      "skills": [
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 10.3
+        },
+        {
+          "skillId": "verify-change",
+          "scope": "builtin",
+          "score": 8.35
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
+    },
+    {
+      "taskId": "ts-generic-inference",
+      "success": true,
+      "checks": [
+        {
+          "check": {
+            "type": "command_succeeds",
+            "command": "npm test"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_contains",
+            "path": "src/store.ts",
+            "pattern": "fn: \\(value: V\\) => U"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/app.ts",
+            "pattern": ": any"
+          },
+          "passed": true
+        },
+        {
+          "check": {
+            "type": "file_not_contains",
+            "path": "src/store.ts",
+            "pattern": ": any"
+          },
+          "passed": true
+        }
+      ],
+      "metrics": {
         "turns": 5,
         "toolCalls": 6,
         "failedToolCalls": 0,
-        "costUsd": 0.0019130160000000002,
-        "durationMs": 7981,
+        "costUsd": 0.001536808,
+        "durationMs": 16645,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "test-failure-fix",
+          "scope": "builtin",
+          "score": 2.6
+        }
+      ]
     },
     {
       "taskId": "ts-typing-fix",
@@ -541,13 +2775,30 @@
         }
       ],
       "metrics": {
-        "turns": 5,
-        "toolCalls": 7,
+        "turns": 4,
+        "toolCalls": 5,
         "failedToolCalls": 0,
-        "costUsd": 0.001970612,
-        "durationMs": 13718,
+        "costUsd": 0.0011545968,
+        "durationMs": 10917,
         "score": 100
-      }
+      },
+      "skills": [
+        {
+          "skillId": "bugfix",
+          "scope": "builtin",
+          "score": 6.5
+        },
+        {
+          "skillId": "small-code-change",
+          "scope": "builtin",
+          "score": 6.3
+        },
+        {
+          "skillId": "github-issue-pr",
+          "scope": "builtin",
+          "score": 4.4
+        }
+      ]
     }
   ]
 }
