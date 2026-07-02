@@ -258,6 +258,11 @@ function runOneHook(
           child.kill("SIGKILL");
         }
       }
+      // Resolve now rather than waiting for `close`: if the kill didn't land
+      // (pid already undefined, or a stuck child), the close event may never
+      // fire and the awaited hook Promise would hang the whole run. finish() is
+      // idempotent, so a later close is a no-op.
+      finish(null);
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -382,7 +387,14 @@ export function buildHookContext(outcomes: HookOutcome[]): string {
     if (!o.ok || budget <= 0) continue;
     const text = hookContextText(o.stdout).trim();
     if (!text) continue;
-    const clipped = text.slice(0, budget);
+    let clipped = text.slice(0, budget);
+    // Don't end on a lone high surrogate (a split surrogate pair, e.g. an emoji
+    // in the hook output straddling the budget) — it would inject an invalid
+    // code unit into the model payload.
+    if (clipped.length > 0) {
+      const last = clipped.charCodeAt(clipped.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) clipped = clipped.slice(0, -1);
+    }
     budget -= clipped.length;
     const marker = clipped.length < text.length ? "…[truncated]" : "";
     suffix += `\n\n<hook-context>\n${clipped}${marker}\n</hook-context>`;
