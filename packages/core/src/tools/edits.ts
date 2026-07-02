@@ -163,16 +163,29 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     // Exactly one region: replace the ACTUAL spanned text (preserving the file's
     // real surrounding content / whitespace) with newString.
     const region = regions[0] as FuzzyRegion;
-    // `lines` came from split("\n"); on a CRLF file every element still carries a
-    // trailing "\r". Rejoin with the file's dominant EOL after stripping those,
-    // and normalize newString to the same EOL — otherwise the inserted block gets
-    // bare "\n" endings, leaving mixed CRLF/LF around the replaced region.
-    const eol = next.includes("\r\n") ? "\r\n" : "\n";
-    const stripCr = (l: string): string => (eol === "\r\n" ? l.replace(/\r$/, "") : l);
-    const before = lines.slice(0, region.startLine).map(stripCr);
-    const after = lines.slice(region.endLineExclusive).map(stripCr);
-    const newBlock = eol === "\r\n" ? edit.newString.replace(/\r?\n/g, eol) : edit.newString;
-    next = [...before, newBlock, ...after].join(eol);
+    // `lines` came from split("\n"), so every element that ended in CRLF still
+    // carries a trailing "\r". Rebuild the file preserving EACH original line's
+    // OWN terminator: a single global EOL would, in a MIXED-EOL file, silently
+    // rewrite the CRLF/LF of every untouched line outside the edited span. Only
+    // the replaced block's terminator is chosen fresh (from the line it replaces).
+    const lastIdx = lines.length - 1;
+    // Terminator that originally followed line i: "" for the final token (no
+    // trailing newline), else CRLF/LF per whether split("\n") left a "\r".
+    const termAfter = (i: number): string =>
+      i >= lastIdx ? "" : (lines[i] as string).endsWith("\r") ? "\r\n" : "\n";
+    const content = (i: number): string => (lines[i] as string).replace(/\r$/, "");
+
+    const out: string[] = [];
+    for (let k = 0; k < region.startLine; k++) out.push(content(k) + termAfter(k));
+    // The inserted block inherits the terminator of the line it replaces (the
+    // region's last line): a CRLF line stays CRLF, a bare-LF line stays LF, and
+    // its interior newlines are normalized to that same terminator so the block
+    // itself is internally consistent.
+    const blockEol = termAfter(region.endLineExclusive - 1);
+    const newBlock = blockEol === "\r\n" ? edit.newString.replace(/\r?\n/g, "\r\n") : edit.newString;
+    out.push(newBlock + blockEol);
+    for (let k = region.endLineExclusive; k < lines.length; k++) out.push(content(k) + termAfter(k));
+    next = out.join("");
   }
   return next;
 }

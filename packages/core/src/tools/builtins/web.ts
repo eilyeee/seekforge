@@ -30,6 +30,62 @@ function mappedIpv4(host: string): string | null {
   return null;
 }
 
+/**
+ * Parse one part of a numeric host as `inet_aton` does: `0x..` is hex, a leading
+ * `0` (with more digits) is octal, otherwise decimal. Returns the numeric value,
+ * or null when the token is malformed for the base it declares (e.g. `08` is not
+ * valid octal, `0xzz` not hex) — the caller treats null as "block".
+ */
+function parseNumericPart(part: string): number | null {
+  if (/^0x[0-9a-f]+$/i.test(part)) return Number.parseInt(part.slice(2), 16);
+  if (/^0[0-7]*$/.test(part)) return Number.parseInt(part, 8); // "0", "00", octal
+  if (/^[1-9][0-9]*$/.test(part)) return Number.parseInt(part, 10); // decimal
+  return null; // digit-led token that is not a valid number in its base
+}
+
+/**
+ * Bare integer / octal / hex hosts (`2130706433`, `0177.0.0.1`, `0x7f.0.0.1`,
+ * `0`) resolve to the same address as a dotted-quad but sail past a plain
+ * regex, so decode them to canonical dotted-quad first. Returns:
+ *   - the dotted-quad string when `host` is a numeric IPv4 form,
+ *   - "invalid" when it *looks* numeric (every dot-part is a digit/hex token)
+ *     but is malformed or out of range — fail closed and let the caller block,
+ *   - null when it is a normal hostname (leave it for the string checks).
+ * Follows `inet_aton` part-count semantics (1→32-bit, 2→a.24-bit, 3→a.b.16-bit,
+ * 4→a.b.c.d), which is what the OS resolver actually applies.
+ *
+ * Exported for direct testing: in practice Node's WHATWG `URL` parser already
+ * canonicalizes these numeric hosts (and rejects out-of-range ones), so within
+ * `checkFetchUrl` this is a redundant safety net — but it must be correct for
+ * any caller that hands us a host string that did not go through `new URL`.
+ */
+export function normalizeNumericIpv4(host: string): string | "invalid" | null {
+  const parts = host.split(".");
+  if (parts.length < 1 || parts.length > 4) return null;
+  // Only a host whose every part is a numeric token is an IPv4 candidate; a
+  // single non-numeric label (e.g. "com", "3com") means it's a real hostname.
+  if (!parts.every((p) => /^(0x[0-9a-f]+|[0-9]+)$/i.test(p))) return null;
+
+  const values = parts.map(parseNumericPart);
+  if (values.some((v) => v === null)) return "invalid"; // numeric-looking but malformed
+  const nums = values as number[];
+
+  // inet_aton: the last part absorbs the remaining low-order bytes; every
+  // earlier part must fit in a single byte.
+  const last = nums[nums.length - 1]!;
+  const head = nums.slice(0, -1);
+  const maxLast = 2 ** (8 * (4 - head.length)) - 1;
+  if (last < 0 || last > maxLast) return "invalid";
+  if (head.some((n) => n < 0 || n > 0xff)) return "invalid";
+
+  let value = last >>> 0;
+  for (let i = 0; i < head.length; i++) {
+    value += head[i]! * 2 ** (8 * (3 - i));
+  }
+  value = value >>> 0;
+  return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff].join(".");
+}
+
 export function checkFetchUrl(raw: string): URL {
   let url: URL;
   try {
@@ -44,8 +100,15 @@ export function checkFetchUrl(raw: string): URL {
   // remember it was a literal (so "fc2.com" isn't mistaken for fc00::/7).
   const isIpv6Literal = url.hostname.startsWith("[");
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // Numeric hosts (bare integer / octal / hex) resolve to a real IPv4 but bypass
+  // the dotted-quad regexes — decode them first. A numeric-looking but malformed
+  // or out-of-range host is treated as suspicious and blocked (fail closed).
+  const numeric = isIpv6Literal ? null : normalizeNumericIpv4(host);
+  if (numeric === "invalid") {
+    throw new ToolError("private_address", `Refusing to fetch a suspicious numeric address: ${host}`);
+  }
   // An IPv4-mapped literal resolves to its embedded IPv4 — check that instead.
-  const ipv4 = mappedIpv4(host) ?? host;
+  const ipv4 = numeric ?? mappedIpv4(host) ?? host;
   const isPrivate =
     host === "localhost" ||
     host.endsWith(".local") ||

@@ -103,6 +103,31 @@ describe("applyEdits — whitespace-tolerant fallback", () => {
     expect(out).toBe("alpha\r\n  BETA\r\ngamma\r\n");
   });
 
+  it("preserves each untouched line's own terminator in a MIXED-EOL file", () => {
+    // Mixed endings on purpose: line 0 CRLF, line 1 LF, line 2 CRLF, line 3 LF,
+    // final newline LF. A fuzzy edit on line 1 must not rewrite the terminators
+    // of the CRLF lines it does not touch.
+    const file = "alpha\r\nbeta\ngamma\r\ndelta\n";
+    // Trailing space -> no exact substring; fuzzy normalizes it and matches "beta".
+    const out = applyEdits(file, [{ oldString: "beta ", newString: "BETA" }]);
+    // Untouched lines keep exactly their original CRLF vs LF terminators.
+    expect(out).toBe("alpha\r\nBETA\ngamma\r\ndelta\n");
+    // Specifically: the CRLF lines were NOT downgraded to LF...
+    expect(out).toContain("alpha\r\n");
+    expect(out).toContain("gamma\r\n");
+    // ...and the LF-terminated edited line was NOT upgraded to CRLF.
+    expect(out).toContain("BETA\n");
+    expect(out).not.toContain("BETA\r\n");
+  });
+
+  it("keeps the replaced line's own terminator when it is CRLF in a mixed file", () => {
+    // Here the edited line (gamma) is CRLF-terminated; the new block should stay
+    // CRLF, while the surrounding LF/CRLF lines are each left untouched.
+    const file = "alpha\nbeta\r\ngamma\r\ndelta\n";
+    const out = applyEdits(file, [{ oldString: "gamma ", newString: "GAMMA" }]);
+    expect(out).toBe("alpha\nbeta\r\nGAMMA\r\ndelta\n");
+  });
+
   it("throws ambiguous when more than one fuzzy region matches (no silent guess)", () => {
     const file = ["  foo();", "bar();", "  foo();", "baz();", ""].join("\n");
     // "foo();" (no indent) fuzzy-matches both indented occurrences.
