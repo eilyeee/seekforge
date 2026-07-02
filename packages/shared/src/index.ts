@@ -296,3 +296,495 @@ export const DEFAULT_LIMITS = {
 } as const;
 
 export type AgentLimits = { -readonly [K in keyof typeof DEFAULT_LIMITS]: number };
+
+// ---------------------------------------------------------------------------
+// Server API contract (apps/server/SERVER-API.md)
+//
+// The REST response shapes + WS frame unions of `seekforge serve`, shared by
+// @seekforge/server (the producer) and the desktop client (the consumer) as a
+// SINGLE SOURCE OF TRUTH. apps/desktop/src/types.ts and lib/ws-types.ts used to
+// hand-mirror these; they now re-export from here. Types already declared above
+// (AgentEvent, ChatMessage, PermissionRequest, SessionStatus, TokenUsage, …)
+// are reused, never reduplicated. These are the ACTUAL server shapes (source of
+// truth = apps/server/src/rest.ts + ws.ts, which can drift from prose docs).
+// ---------------------------------------------------------------------------
+
+/** GET /api/workspaces entry (one hosted workspace). */
+export type Workspace = {
+  id: string;
+  name: string;
+  path: string;
+};
+
+/** A recently-opened workspace path (not necessarily hosted right now). */
+export type RecentWorkspace = {
+  name: string;
+  path: string;
+};
+
+/** GET /api/workspaces response: currently-hosted workspaces + recent paths. */
+export type WorkspacesResponse = {
+  workspaces: Workspace[];
+  recents: RecentWorkspace[];
+};
+
+/** POST /api/worktrees result (the worktree is also a registered Workspace). */
+export type WorktreeCreated = {
+  /** Workspace id of the worktree (`wt-<slug>`). */
+  id: string;
+  path: string;
+  /** Branch the worktree session runs on (`seekforge/<slug>`). */
+  branch: string;
+};
+
+/** GET /api/worktrees entry. */
+export type WorktreeStatus = {
+  id: string;
+  branch: string;
+  path: string;
+  /** Uncommitted changes in the worktree. */
+  dirty: boolean;
+  /** Commits on the branch not yet on the base HEAD. */
+  ahead: number;
+};
+
+/** POST /api/worktrees/:id/merge result; conflicts abort and report files. */
+export type WorktreeMergeResult = { merged: true } | { conflict: true; files: string[] };
+
+/** GET /api/sessions entry (and GET /api/sessions/:id `meta`). */
+export type SessionMeta = {
+  id: string;
+  task: string;
+  mode: "ask" | "edit";
+  status: SessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  usage?: TokenUsage;
+};
+
+export type SkillScope = "builtin" | "global" | "project";
+
+/** GET /api/skills[/:id] entry. */
+export type Skill = {
+  id: string;
+  scope: SkillScope;
+  name: string;
+  description: string;
+  tags: string[];
+  triggers: string[];
+  priority: number;
+  enabled: boolean;
+  risk: "low" | "medium" | "high";
+  /** Full SKILL.md content (only present on GET /api/skills/:id). */
+  content?: string;
+};
+
+export type MemoryCandidateType = "command" | "path" | "convention" | "tech" | "task_pattern";
+
+export type MemoryCandidate = {
+  id: string;
+  content: string;
+  type: MemoryCandidateType;
+  /** 0..1, model-assessed. */
+  confidence: number;
+  sourceSessionId: string;
+  createdAt: string;
+  status: "pending" | "approved" | "rejected";
+};
+
+/** An approved project-memory fact joined with its lifecycle metadata. */
+export type MemoryFact = {
+  /** 1-based position among the bullets of project.md. */
+  index: number;
+  /** Bullet type, or null when the bullet has no `[type]` prefix. */
+  type: MemoryCandidateType | null;
+  content: string;
+  addedAt?: string;
+  uses: number;
+  lastUsedAt?: string;
+};
+
+/**
+ * GET /api/memory response. NOTE: the server (rest.ts) returns `facts` in
+ * addition to what SERVER-API.md's prose table lists — the table is stale;
+ * code is the source of truth, so `facts` is part of the contract.
+ */
+export type MemoryResponse = {
+  projectMd: string | null;
+  candidates: MemoryCandidate[];
+  facts: MemoryFact[];
+};
+
+/** GET /api/config payload (apiKey masked; engine knobs always present). */
+export type ServerConfig = {
+  model?: string;
+  baseUrl?: string;
+  runtimeBin?: string;
+  commandAllowlist?: string[];
+  /** Selectable model ids for the pickers (always present on GET /api/config). */
+  models?: string[];
+  /** Masked by the server (`sk-xxx****`). */
+  apiKey?: string;
+  /** Engine knobs — always present on GET /api/config (effective defaults). */
+  sandbox?: "off" | "workspace-write" | "restricted";
+  compaction?: "mechanical" | "llm";
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max" | null;
+  /** Model used for plan-mode generation (empty = follow the default model). */
+  planModel?: string;
+  /** Re-run a failed task with a stronger model/effort once before giving up. */
+  escalateOnFailure?: boolean;
+  /** Auto-approve extracted memory candidates at/above this confidence (0..1). */
+  memoryAutoApproveConfidence?: number;
+};
+
+/** PUT /api/config `key` values (same keys as `seekforge config set`). */
+export type ConfigKey =
+  | "apiKey"
+  | "model"
+  | "baseUrl"
+  | "runtimeBin"
+  | "commandAllowlist"
+  | "models"
+  | "sandbox"
+  | "compaction"
+  | "thinking"
+  | "reasoningEffort"
+  | "planModel"
+  | "escalateOnFailure"
+  | "memoryAutoApproveConfidence";
+
+/** GET /api/memory/stats — mirror of @seekforge/core MemoryStats. */
+export type MemoryStats = {
+  totalApprovedFacts: number;
+  autoExtractedFacts: number;
+  directAddedFacts: number;
+  /** Fraction (0..1) of approved facts used at least once. */
+  usedFraction: number;
+  /** Candidate rejection rate (0..1). */
+  rejectionRate: number;
+  avgConfidenceUsed: number | null;
+  avgConfidenceUnused: number | null;
+  pending: number;
+  approved: number;
+  rejected: number;
+};
+
+/** POST /api/memory/compact — mirror of @seekforge/core CompactResult. */
+export type CompactResult = {
+  /** Bullet count before compaction. */
+  before: number;
+  /** Bullet count after compaction. */
+  after: number;
+  /** Bullet lines removed as exact duplicates. */
+  removed: string[];
+  /** Near-duplicate merges (longer kept, shorter dropped). */
+  merged: Array<{ kept: string; dropped: string }>;
+  /** Stale bullets moved to project-archive.md. */
+  archived: string[];
+};
+
+/** POST /api/sessions/prune result. */
+export type PruneResult = { removed: string[]; kept: number };
+
+/** GET /api/doctor — environment health checks. */
+export type DoctorReport = {
+  apiKeyConfigured: boolean;
+  nodeVersion: string;
+  git: string | null;
+  runtimeBin: { set: boolean; exists: boolean };
+  mcpServerCount: number;
+  modelCount: number;
+  workspace: string;
+};
+
+export type AgentScope = "global" | "project" | "builtin";
+
+/** Mirror of @seekforge/core AgentDefinition (GET /api/agents[/:id]). */
+export type AgentInfo = {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  /** Tool-name whitelist; undefined = all tools. */
+  tools?: string[];
+  /** "ask" = read-only governance/review agents; "edit" = executors. */
+  mode: "ask" | "edit";
+  own?: string;
+  doNotTouch?: string;
+  boundary?: string;
+  maxTurns?: number;
+  model?: string;
+  scope: AgentScope;
+  /** AGENT.md markdown body (only present on GET /api/agents/:id). */
+  body?: string;
+};
+
+export type EvolutionProposalType = "project_memory" | "agent_rule" | "skill";
+export type EvolutionProposalRisk = "low" | "medium" | "high";
+export type EvolutionProposalStatus = "pending" | "accepted" | "rejected" | "applied";
+
+/** Mirror of @seekforge/core EvolutionProposal (GET /api/evolution). */
+export type EvolutionProposal = {
+  id: string;
+  sessionId: string;
+  type: EvolutionProposalType;
+  title: string;
+  problem: string;
+  evidence: { files?: string[]; commands?: string[]; errors?: string[] };
+  proposal: { content: string; skillId?: string };
+  risk: EvolutionProposalRisk;
+  status: EvolutionProposalStatus;
+  createdAt: string;
+  reviewedAt?: string;
+};
+
+/** GET /api/mcp entry (configured server; nothing is spawned for the list). */
+export type McpServer = {
+  name: string;
+  command: string;
+  args: string[];
+  trusted: boolean;
+  /** Names of configured env vars (values never leave the server). */
+  envKeys?: string[];
+};
+
+export type McpTool = { name: string; description: string };
+
+/** POST /api/rewind result (mirror of @seekforge/core RewindResult). */
+export type RewindResult = {
+  restored: string[];
+  deleted: string[];
+  skipped: Array<{ path: string; reason: string }>;
+};
+
+/** GET /api/sessions/:id/turns entry — all-user-messages indexing (turn 0 = original task). */
+export type SessionTurn = { turn: number; text: string; backtrackable: boolean };
+
+/** POST /api/sessions/:id/backtrack result (files is null when restore was not requested). */
+export type BacktrackResult = {
+  removedMessages: number;
+  keptMessages: number;
+  files: { restored: number; deleted: number; skipped: number } | null;
+};
+
+/** GET/POST /api/todos entry (.seekforge/todos.md checklist line; 1-based index). */
+export type Todo = { index: number; text: string; done: boolean };
+
+/** GET /api/balance payload (DeepSeek account balance; null = unknown). */
+export type AccountBalance = { currency: string; totalBalance: string };
+
+/** GET /api/mcp/resources entry. Inline reference syntax: @mcp:<server>:<uri>. */
+export type McpResource = { server: string; uri: string; name?: string };
+
+/** GET /api/tree entry (one file or directory in a workspace-relative dir). */
+export type TreeEntry = { name: string; path: string; type: "file" | "dir" };
+
+/** GET /api/tree?path=<reldir> response (a single directory's listing). */
+export type TreeResponse = { path: string; entries: TreeEntry[] };
+
+/** GET /api/file?path=<rel> response (text content; truncated when too large). */
+export type FileContent = { path: string; content: string; truncated: boolean };
+
+/** A single changed file in GET /api/git/status. */
+export type GitFileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+/** GET /api/git/status entry. */
+export type GitFile = { path: string; status: GitFileStatus; staged: boolean };
+
+/** GET /api/git/status response (notGit set when the workspace is not a repo). */
+export type GitStatus = {
+  notGit?: boolean;
+  branch: string;
+  files: GitFile[];
+};
+
+/** A custom slash command (GET /api/commands). */
+export type SlashCommand = {
+  name: string;
+  description: string;
+  scope: "project" | "user";
+  /** Template text inserted into the composer draft when chosen. */
+  body: string;
+  /** Frontmatter `model`: preferred model for this command (informational here). */
+  model?: string;
+  /** Frontmatter `allowed-tools`: tool whitelist (informational here). */
+  allowedTools?: string[];
+  /** Frontmatter `argument-hint`: placeholder shown in the args popup. */
+  argumentHint?: string;
+};
+
+/** GET /api/commands response. */
+export type CommandsResponse = { commands: SlashCommand[] };
+
+/** The nine hook stages, mirroring core's HookStage. */
+export const HOOK_STAGES = [
+  "preToolUse",
+  "postToolUse",
+  "sessionStart",
+  "userPromptSubmit",
+  "preCompact",
+  "stop",
+  "subagentStop",
+  "notification",
+  "sessionEnd",
+] as const;
+export type HookStage = (typeof HOOK_STAGES)[number];
+
+/** One shell hook entry (matches core's HookEntry). */
+export type HookEntry = { command: string; match?: string; pattern?: string };
+
+/** Project hooks config: stage → entries. */
+export type HooksConfig = Partial<Record<HookStage, HookEntry[]>>;
+
+/** One content-search hit (GET /api/search); col/len locate the match in text. */
+export type SearchHit = { path: string; line: number; text: string; col: number; len: number };
+export type SearchResult = { hits: SearchHit[]; truncated: boolean; error?: string };
+
+/**
+ * Loop-mode result status (server LoopResult.status; mirror of @seekforge/core
+ * LoopStatus).
+ * - passed: the verify command exited 0.
+ * - exhausted: maxIterations reached without passing.
+ * - no_progress: the agent stopped making changes / verify stayed failing.
+ * - budget: the USD budget was exceeded.
+ * - cancelled: the user stopped the loop (cancel frame / closed socket).
+ * - verify_error: the verify command itself could not be run.
+ */
+export type LoopStatus = "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error";
+
+/** Final summary of a loop run (server LoopResult). */
+export type LoopResult = {
+  status: LoopStatus;
+  /** Iterations actually run. */
+  iterations: number;
+  /** Total cost across all iterations. */
+  costUsd: number;
+  /** Session id of the underlying agent run. */
+  sessionId: string;
+  /** Output + exit code of the last verify command. */
+  finalVerify: { code: number; output: string };
+};
+
+/** A single streamed loop event (server LoopEvent). */
+export type LoopEvent =
+  | { type: "iteration.start"; iteration: number }
+  | { type: "run.completed"; iteration: number; costUsd: number }
+  | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
+  | { type: "loop.done"; result: LoopResult };
+
+/** GET /api/models entry (mirror of core MODEL_PRICING with metadata). */
+export type ModelInfo = {
+  id: string;
+  isDefault: boolean;
+  deprecated: boolean;
+  pricing: {
+    inputCacheMissPer1M: number;
+    inputCacheHitPer1M: number;
+    outputPer1M: number;
+  };
+};
+
+/**
+ * Every `code` string the server emits in an error response — REST
+ * `{error:{code,message}}` (apps/server/src/rest.ts `sendApiError` plus the
+ * files.ts / worktrees.ts error classes) and WS `{type:"error",code,message}`
+ * frames (apps/server/src/ws.ts). Enumerated so frontends can exhaustively
+ * switch on it; this is a type only — it does NOT constrain the server runtime.
+ */
+export type ApiErrorCode =
+  // REST (rest.ts sendApiError + files.ts/worktrees.ts error classes)
+  | "bad_request"
+  | "not_found"
+  | "conflict"
+  | "internal"
+  | "mcp_error"
+  | "too_large"
+  | "unsupported_media_type"
+  | "git_error"
+  | "not_a_git_repo"
+  // WS (ws.ts error frames)
+  | "bad_frame"
+  | "busy"
+  | "unknown_workspace"
+  | "unknown_session"
+  | "unknown_request"
+  | "not_running"
+  | "agent_error"
+  | "loop_error";
+
+/** Per-run model/thinking overrides (win over server config for that run only). */
+export type RunOverrides = {
+  model?: string;
+  thinking?: boolean;
+  reasoningEffort?: "high" | "max";
+  /** Output style name (built-in or custom); resolved server-side. */
+  outputStyle?: string;
+};
+
+/** WS client → server frames (path /ws). */
+export type ClientFrame =
+  | ({
+      type: "start";
+      task: string;
+      mode: "edit" | "ask";
+      approvalMode: "auto" | "acceptEdits" | "confirm";
+      plan?: boolean;
+      /** Workspace id (default: first workspace when omitted). */
+      ws?: string;
+    } & RunOverrides)
+  | ({
+      type: "send";
+      sessionId: string;
+      task: string;
+      /** edit/ask switchable per follow-up; absent keeps the session's mode. */
+      mode?: "edit" | "ask";
+      /** Approval mode can change between turns; absent defaults to "confirm". */
+      approvalMode?: "auto" | "acceptEdits" | "confirm";
+      ws?: string;
+    } & RunOverrides)
+  | {
+      type: "permission.response";
+      requestId: string;
+      approved: boolean;
+      /** "session" = allow this (and similar) for the rest of the session. */
+      remember?: "session";
+      /** Per-hunk selection for multi-hunk apply_patch calls. */
+      selectedHunks?: number[];
+    }
+  | { type: "question.answer"; id: string; answer: string }
+  | ({
+      /**
+       * Loop mode: run the task, then `verifyCommand`; if it fails, keep fixing
+       * and re-running until it passes — autonomously (the server forces
+       * acceptEdits), within the iteration/budget limits. Streamed back as
+       * `loop.event` frames; the existing `cancel` frame stops it. model/
+       * thinking/reasoningEffort overrides (from the run-toolbar) ride along.
+       */
+      type: "loop";
+      task: string;
+      verifyCommand: string;
+      /** Hard cap on run→verify cycles (server default when omitted). */
+      maxIterations?: number;
+      /** Optional total USD budget; the loop stops once exceeded. */
+      budget?: number;
+      ws?: string;
+    } & RunOverrides)
+  | { type: "cancel" };
+
+/** WS server → client frames (path /ws). */
+export type ServerFrame =
+  | {
+      type: "event";
+      sessionId: string;
+      /**
+       * Every AgentEvent plus the server-level model.delta / reasoning.delta
+       * streaming events (see SERVER-API.md).
+       */
+      event: AgentEvent | { type: "model.delta"; chunk: string } | { type: "reasoning.delta"; chunk: string };
+    }
+  | { type: "permission.request"; requestId: string; request: PermissionRequest }
+  | { type: "question.request"; id: string; question: string; options: string[] }
+  | { type: "loop.event"; event: LoopEvent }
+  | { type: "error"; code: ApiErrorCode; message: string }
+  | { type: "idle" };
