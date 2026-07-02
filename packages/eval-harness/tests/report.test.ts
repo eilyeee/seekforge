@@ -52,6 +52,17 @@ describe("toMarkdown", () => {
     expect(md).toContain("Success rate: 1/2 (50%)");
     expect(md).toContain("Total cost: 0.0300 USD");
   });
+
+  it("renders cost-per-success as total cost over successes", () => {
+    // 1 success, total cost 0.0300 → 0.0300 per success.
+    const md = toMarkdown([result(), failing()]);
+    expect(md).toContain("Cost per success: 0.0300 USD");
+  });
+
+  it("renders cost-per-success as 'n/a' when nothing passed", () => {
+    const md = toMarkdown([failing(), failing()]);
+    expect(md).toContain("Cost per success: n/a");
+  });
 });
 
 describe("summarize", () => {

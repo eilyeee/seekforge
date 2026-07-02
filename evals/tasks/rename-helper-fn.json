@@ -1,0 +1,15 @@
+{
+  "id": "rename-helper-fn",
+  "title": "Rename a helper function across every call site",
+  "fixture": "rename-helper-fn",
+  "mode": "edit",
+  "task": "Rename the function `calcTax` (defined in src/tax.js) to `computeTax`, updating the definition, the export, and every call site across the codebase (it is required from src/invoice.js and src/checkout.js). Behavior must not change and no stray references to the old name may remain. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/tax.js", "pattern": "computeTax" },
+    { "type": "file_not_contains", "path": "src/tax.js", "pattern": "calcTax" },
+    { "type": "file_not_contains", "path": "src/invoice.js", "pattern": "calcTax" },
+    { "type": "file_not_contains", "path": "src/checkout.js", "pattern": "calcTax" }
+  ],
+  "notes": "Both consumer modules are exercised by the suite, so a partial rename breaks npm test; the file_not_contains checks catch a missed call site even if a require was left aliased."
+}

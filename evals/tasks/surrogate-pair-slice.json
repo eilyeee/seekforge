@@ -1,0 +1,13 @@
+{
+  "id": "surrogate-pair-slice",
+  "title": "Fix a string truncate that splits emoji across a surrogate pair",
+  "fixture": "surrogate-pair-slice",
+  "mode": "edit",
+  "task": "`npm test` fails: `truncate` in src/truncate.js counts and slices by UTF-16 code units, so it splits astral characters (emoji, some CJK) across their surrogate pair and emits a broken \"�\" half. Fix it to count and slice by Unicode code points so a character is never split, keeping the trailing \"…\" behavior and the no-op when the string already fits. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "src/truncate.js", "pattern": "str\\.slice\\(0, maxChars\\)" },
+    { "type": "file_contains", "path": "test/truncate.test.js", "pattern": "truncate\\(\"👍👍👍\", 1\\), \"👍…\"" }
+  ],
+  "notes": "Classic surrogate-pair boundary bug mirrored from a real review: code-unit slicing halves an emoji. file_not_contains removes the code-unit slice on the raw string (a code-point-aware fix slices an array of code points instead); the test pin keeps the emoji assertion."
+}

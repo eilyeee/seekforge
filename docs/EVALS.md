@@ -170,6 +170,29 @@ and a test `test/sum.test.js` that currently fails, and the pass condition is
 After that the task runs exactly like a native one
 (`pnpm --filter @seekforge/eval-harness eval -- --task ext-sum-bug`).
 
+## Failure-sample archive
+
+When real-world dogfooding hits a genuine miss — the agent botches something it
+should have handled — capture it here instead of letting it evaporate. Minimize
+the failure into a **hermetic fixture** in the exact format above (only Node
+built-ins, a failing `node --test` that encodes the pass condition, plus a
+`file_not_contains` guard so the agent can't "pass" by editing the test), then
+register the id in `packages/eval-harness/tests/dataset.test.ts`.
+
+Two things make this safe to do eagerly:
+
+- **A brand-new task never trips `--fail-on-regression`.** The gate only fires on
+  a baseline pass→fail; a task absent from the baseline (or already red in it) is
+  ignored. So you can commit a fixture that captures a capability we don't have
+  yet and leave it **red** — it documents the gap without blocking anyone.
+- The fixture stays red until the capability actually lands. Once a real run
+  turns it green and you refresh `evals/baseline.json`, it becomes a protected
+  case like any other: from then on a regression on it *does* trip the gate.
+
+The point is to grow the set from observed reality, not just imagined tasks — a
+minimized repro of a real miss is worth more than a synthetic one. Keep each
+fixture as small as the bug allows.
+
 ## CI
 
 The eval workflow is `workflow_dispatch` (run it from the Actions tab) and reads

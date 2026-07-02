@@ -1,0 +1,14 @@
+{
+  "id": "null-guard-fix",
+  "title": "Add a null/undefined guard to avoid a TypeError",
+  "fixture": "null-guard-fix",
+  "mode": "edit",
+  "task": "`npm test` fails: `displayName` in src/user.js dereferences `user.name` unconditionally, so a null/undefined user throws a TypeError and a missing/empty name leaks through. Add the guards per the spec comment: return the non-empty `name`, otherwise fall back to \"Anonymous\". Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/user.js", "pattern": "Anonymous" },
+    { "type": "file_contains", "path": "test/user.test.js", "pattern": "displayName\\(null\\), \"Anonymous\"" },
+    { "type": "file_not_contains", "path": "test/user.test.js", "pattern": "displayName\\(\\{ name: \"Ada\" \\}\\), \"Anonymous\"" }
+  ],
+  "notes": "Missing null/undefined guard: the buggy body throws on a null user. The test pin keeps the fallback assertion; file_not_contains rejects the obvious cheat of weakening the happy-path expectation (\"Ada\") down to the fallback so the buggy code trivially matches."
+}

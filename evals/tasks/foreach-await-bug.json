@@ -1,0 +1,14 @@
+{
+  "id": "foreach-await-bug",
+  "title": "Fix a fire-and-forget forEach(async …) that returns before its work",
+  "fixture": "foreach-await-bug",
+  "mode": "edit",
+  "task": "`npm test` fails: `loadAll` in src/loader.js uses `.forEach(async …)`, so the async callbacks are fire-and-forget and the function returns an empty array before any fetch resolves. Fix the async bug so it awaits every result and returns them in input order (a plain array of resolved numbers). Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/loader.js", "pattern": "await" },
+    { "type": "file_not_contains", "path": "src/loader.js", "pattern": "\\.forEach\\(async" },
+    { "type": "file_contains", "path": "test/loader.test.js", "pattern": "\\[10, 20, 30\\]" }
+  ],
+  "notes": "Classic `forEach(async …)` pitfall: the loop returns before the microtasks run, so the buggy version yields []. file_not_contains removes the fire-and-forget forEach; the test pin blocks rewriting the in-order assertion."
+}

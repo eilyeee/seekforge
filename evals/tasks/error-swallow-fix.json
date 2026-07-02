@@ -1,0 +1,14 @@
+{
+  "id": "error-swallow-fix",
+  "title": "Stop a catch block from swallowing a thrown error",
+  "fixture": "error-swallow-fix",
+  "mode": "edit",
+  "task": "`npm test` fails: `lookup` in src/registry.js wraps its body in a try/catch that swallows the RangeError it throws for a missing key and returns `undefined` instead, so a real miss is indistinguishable from a stored `undefined`. Fix the error handling so the RangeError propagates to the caller, while the happy path still returns the stored value (including a value that is itself `undefined`). Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/registry.js", "pattern": "RangeError" },
+    { "type": "file_not_contains", "path": "src/registry.js", "pattern": "catch \\(err\\) \\{\\s*return undefined;" },
+    { "type": "file_contains", "path": "test/registry.test.js", "pattern": "throws\\(\\(\\) => lookup\\(\\{ a: 1 \\}, \"b\"\\), RangeError\\)" }
+  ],
+  "notes": "The swallowing catch masks a thrown RangeError. file_not_contains removes the error-swallowing catch body; the test pin keeps the propagation assertion from being deleted."
+}

@@ -23,6 +23,14 @@ function fmtOpt(value: number | undefined): string {
   return value === undefined ? "-" : String(value);
 }
 
+/**
+ * Total cost divided by number of successes, guarding divide-by-zero: "n/a"
+ * when nothing passed (so the metric never invents a cost for zero wins).
+ */
+function costPerSuccess(passed: number, totalCostUsd: number): string {
+  return passed === 0 ? "n/a" : `${fmtCost(totalCostUsd / passed)} USD`;
+}
+
 export type Summary = {
   /** Tasks whose session completed and every check passed. */
   passed: number;
@@ -60,6 +68,7 @@ export function toMarkdown(results: TaskResult[]): string {
   lines.push("");
   lines.push(`Success rate: ${passed}/${total} (${rate}%)`);
   lines.push(`Total cost: ${fmtCost(totalCostUsd)} USD`);
+  lines.push(`Cost per success: ${costPerSuccess(passed, totalCostUsd)}`);
   return lines.join("\n");
 }
 

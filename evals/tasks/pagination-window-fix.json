@@ -1,0 +1,14 @@
+{
+  "id": "pagination-window-fix",
+  "title": "Clamp a pagination window so the last page does not overrun",
+  "fixture": "pagination-window-fix",
+  "mode": "edit",
+  "task": "`npm test` fails: `pageBounds` in src/window.js computes the `[start, end)` window for a 1-based page but does not clamp the indices to `total`, so the final partial page (and pages past the end) report a window that overruns the data. Fix it to clamp both indices to `total`, keeping 1-based paging and an empty `[total, total]` window past the end. Do not modify the tests. Run the tests to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/window.js", "pattern": "Math\\.min" },
+    { "type": "file_not_contains", "path": "src/window.js", "pattern": "const end = page \\* perPage;" },
+    { "type": "file_contains", "path": "test/window.test.js", "pattern": "pageBounds\\(10, 3, 4\\), \\[9, 10\\]" }
+  ],
+  "notes": "An off-by-one/window-overrun distinct from off-by-one-fix (which is about page COUNT rounding): here the boundary bug is a missing clamp on the slice bounds. file_not_contains removes the unclamped end line; the test pin keeps the clamped-window assertion."
+}

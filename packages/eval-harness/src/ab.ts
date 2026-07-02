@@ -22,6 +22,11 @@ function fmtOpt(value: number | undefined): string {
   return value === undefined ? "-" : String(value);
 }
 
+/** Cost per success for one variant; "n/a" when it had zero successes. */
+function costPerSuccess(successes: number, cost: number): string {
+  return successes === 0 ? "n/a" : `${fmtCost(cost / successes)} USD`;
+}
+
 function signed(value: number, digits: number): string {
   const fixed = value.toFixed(digits);
   // Decide the sign AFTER rounding so a near-zero delta renders an unsigned "0"
@@ -163,6 +168,10 @@ export function toAbMarkdown(summary: AbSummary): string {
   lines.push(
     `**Win/Loss/Tie (A vs B):** ${summary.aWins} / ${summary.bWins} / ${summary.ties} ` +
       `· cost Δ (B−A): ${signed(b.cost - a.cost, 4)}`,
+  );
+  lines.push(
+    `**Cost per success:** A ${costPerSuccess(a.successes, a.cost)} · ` +
+      `B ${costPerSuccess(b.successes, b.cost)}`,
   );
   return lines.join("\n");
 }
