@@ -95,8 +95,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   // question id -> settle(answer); same lifecycle as `pending`.
   const pendingQuestions = new Map<string, (answer: string) => void>();
 
+  // Connection-level errors (protocol violations, invalid UTF-8, oversized
+  // frames, async send failures) are emitted as an "error" event; without a
+  // listener the EventEmitter rethrows and crashes the whole server process.
+  // They are non-fatal to us — the "close" event that follows drives cleanup.
+  ws.on("error", () => {});
+
   const send = (frame: ServerFrame): void => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+    // Pass a callback so an async send failure surfaces as the (ignored) "error"
+    // event above rather than an unhandled emitter throw.
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame), () => {});
   };
   const fail = (code: string, message: string): void => send({ type: "error", code, message });
 

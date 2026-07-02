@@ -24,7 +24,7 @@ import type { Readable, Writable } from "node:stream";
 import { createDefaultDispatcher, type ToolContext } from "../tools/index.js";
 
 /** Must match what our own client sends (client.ts PROTOCOL_VERSION). */
-const PROTOCOL_VERSION = "2024-11-05";
+const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "seekforge", version: "0.7.0" };
 
 /** Tools exposed in read-only mode (all classify as L0 readonly). */

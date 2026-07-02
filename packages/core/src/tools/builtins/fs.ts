@@ -360,7 +360,16 @@ const searchText = defineTool({
     // The agent's own session transcripts live under .seekforge/sessions; if
     // search descended into them it would ingest escaped copies of its own
     // prior tool output (a self-pollution feedback loop that also burns tokens).
-    const sessionsDir = path.join(ctx.workspace, ".seekforge", "sessions");
+    // Build this from the SAME realpath the walk root uses (resolveInsideWorkspace
+    // resolves symlinks) — otherwise on a symlinked workspace (e.g. /tmp ->
+    // /private/tmp on macOS) the strings never match and the guard is skipped.
+    let workspaceReal = ctx.workspace;
+    try {
+      workspaceReal = fs.realpathSync(ctx.workspace);
+    } catch {
+      // keep the raw path if it can't be resolved
+    }
+    const sessionsDir = path.join(workspaceReal, ".seekforge", "sessions");
 
     const matches: SearchMatch[] = [];
     const filesWithMatches: string[] = [];

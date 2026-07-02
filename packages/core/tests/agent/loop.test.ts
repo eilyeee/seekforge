@@ -468,7 +468,7 @@ describe("agent loop: turn-budget wrap-up", () => {
       // apply_patch result carries meta.path so the loop records a changed file.
       dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
       confirm: async () => true,
-      verifyCommand: "pnpm test",
+      verifyCommand: "exit 1",
     });
     const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
 
@@ -479,7 +479,7 @@ describe("agent loop: turn-budget wrap-up", () => {
     // The third request carries the transient verify nudge.
     expect(
       provider.requests[2]!.messages.some(
-        (m) => m.content.includes("[harness]") && m.content.includes("pnpm test"),
+        (m) => m.content.includes("[harness]") && m.content.includes("exit 1"),
       ),
     ).toBe(true);
 
@@ -493,8 +493,8 @@ describe("agent loop: turn-budget wrap-up", () => {
   });
 
   it("finalize gate: a failed auto-verify re-runs after the model edits again, but not without a new edit", async () => {
-    // turn 1 edits; turn 2 declares done -> auto-verify runs and FAILS (empty
-    // workspace has no `pnpm test`); turn 3 edits again (invalidating the failed
+    // turn 1 edits; turn 2 declares done -> auto-verify runs and FAILS (the
+    // verify command `exit 1` always fails); turn 3 edits again (invalidating
     // verify); turn 4 declares done -> auto-verify must run a SECOND time on the
     // fix; turn 5 declares done with no new edit -> gate stands down and the run
     // completes (no infinite re-verify on an unfixable failure).
@@ -515,7 +515,7 @@ describe("agent loop: turn-budget wrap-up", () => {
       provider,
       dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
       confirm: async () => true,
-      verifyCommand: "pnpm test",
+      verifyCommand: "exit 1",
     });
     const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
 
@@ -545,7 +545,7 @@ describe("agent loop: turn-budget wrap-up", () => {
       provider,
       dispatcher: fakeDispatcher({ ok: true, meta: { path: "a.ts" } }),
       confirm: async () => true,
-      verifyCommand: "pnpm test",
+      verifyCommand: "exit 1",
       limits: { maxAgentTurns: 2 },
     });
     const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));

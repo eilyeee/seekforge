@@ -3,6 +3,7 @@ import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
+import { ensureWorkspaceAuthorized } from "./run.js";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required. */
@@ -82,6 +83,12 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
   }
   if (!config.apiKey) {
     fail(t("err.noApiKey"), { hint: t("err.noApiKeyHint2") });
+    return;
+  }
+
+  // Per-folder access consent, same gate as `run`/`repl` — the loop edits files
+  // autonomously (acceptEdits, no per-tool prompt), so it must NOT bypass it.
+  if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) {
     return;
   }
 

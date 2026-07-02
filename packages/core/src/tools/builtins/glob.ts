@@ -115,7 +115,15 @@ export function globToRegExpSource(pattern: string): string {
 export function compileGlob(pattern: string): RegExp {
   // Normalize a leading "./".
   const clean = pattern.replace(/^\.\//, "");
-  return new RegExp("^" + globToRegExpSource(clean) + "$");
+  const source = "^" + globToRegExpSource(clean) + "$";
+  try {
+    return new RegExp(source);
+  } catch {
+    // A malformed pattern (e.g. an out-of-order char class like `[z-a]`) yields
+    // an invalid RegExp source — surface it as a recoverable tool error rather
+    // than an opaque SyntaxError rejection.
+    throw new ToolError("invalid_input", `Invalid glob pattern: ${pattern}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
