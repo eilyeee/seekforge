@@ -781,5 +781,47 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     return { ok: true, sessionId: meta.id, before: 42, after: 12, summary: "Mock compaction summary." };
   }
 
+  // --- Reviewable session audit --------------------------------------------
+  m = /^\/api\/sessions\/([^/]+)\/audit$/.exec(path);
+  if (method === "GET" && m) {
+    const meta = sessions.find((s) => s.id === m![1]);
+    if (!meta) throw mockError(404, "not_found", "session not found");
+    const markdown = [
+      `# Audit — ${meta.task}`,
+      "",
+      `Session \`${meta.id}\` · status **${meta.status}**`,
+      "",
+      "## Turn 1",
+      "",
+      "- Tool `read_file` — `src/app.ts`",
+      "- Tool `edit_file` — `src/app.ts`",
+      "",
+      "**Files changed:** `src/app.ts`",
+      "",
+      "## Totals",
+      "",
+      "- Tokens: 4,210 in · 1,180 out",
+      `- Cost: ${meta.usage ? `$${meta.usage.costUsd.toFixed(4)}` : "$0.0000"}`,
+    ].join("\n");
+    return {
+      markdown,
+      audit: {
+        sessionId: meta.id,
+        turns: [
+          {
+            turn: 1,
+            toolCalls: ["read_file", "edit_file"],
+            filesChanged: ["src/app.ts"],
+          },
+        ],
+        totals: {
+          tokensIn: 4210,
+          tokensOut: 1180,
+          costUsd: meta.usage?.costUsd ?? 0,
+        },
+      },
+    };
+  }
+
   throw new Error(`mock: unhandled ${method} ${path}`);
 }

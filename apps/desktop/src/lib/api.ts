@@ -336,4 +336,12 @@ export const api = {
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string) =>
     request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`)),
+
+  // Reviewable session audit (workspace-scoped): a rendered markdown timeline plus
+  // the structured audit payload (treated as opaque). 404 for an unknown id.
+  sessionAudit: (id: string) =>
+    request<{ markdown: string; audit: unknown }>(
+      "GET",
+      withWorkspace(`/api/sessions/${encodeURIComponent(id)}/audit`),
+    ),
 };

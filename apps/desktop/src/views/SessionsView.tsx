@@ -7,8 +7,9 @@ import { formatUsd } from "../lib/usage";
 import { useStore } from "../store";
 import { ChatItems } from "../components/chat/ChatItems";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
-import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, type BadgeTone } from "../components/ui";
+import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, Modal, type BadgeTone } from "../components/ui";
 import type { PruneResult, RewindResult, SessionMeta } from "../types";
 
 /** Short, human time for a card corner: today → "10:24", else a compact date. */
@@ -50,6 +51,11 @@ export function SessionsView() {
   const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
   /** Open "Prune old…" panel. */
   const [pruneOpen, setPruneOpen] = useState(false);
+  /**
+   * Read-only audit modal. `markdown === null && !error` = loading; `error`
+   * holds a formatted failure message (404 → a short "no audit" note).
+   */
+  const [audit, setAudit] = useState<{ sessionId: string; markdown: string | null; error: string | null } | null>(null);
 
   const refresh = () =>
     api
@@ -64,6 +70,7 @@ export function SessionsView() {
     setRewindNotes({});
     setPendingDelete(null);
     setPruneOpen(false);
+    setAudit(null);
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
@@ -123,6 +130,23 @@ export function SessionsView() {
         })),
       )
       .catch((e: unknown) => setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(sessionId, e) })));
+  };
+
+  /** Fetch and show the read-only per-turn audit for a session in a modal. */
+  const openAudit = (id: string) => {
+    setAudit({ sessionId: id, markdown: null, error: null });
+    api
+      .sessionAudit(id)
+      .then(({ markdown }) =>
+        setAudit((a) => (a && a.sessionId === id ? { ...a, markdown } : a)),
+      )
+      .catch((e: unknown) => {
+        const msg =
+          e instanceof ApiError && e.status === 404
+            ? t("sessions.auditNotFound")
+            : t("sessions.auditError", { error: String(e) });
+        setAudit((a) => (a && a.sessionId === id ? { ...a, error: msg } : a));
+      });
   };
 
   if (detail) {
@@ -257,6 +281,17 @@ export function SessionsView() {
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
+                            openAudit(s.id);
+                          }}
+                          title={t("sessions.auditBtnTitle")}
+                        >
+                          {t("sessions.auditBtn")}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             openSession(s.id);
                           }}
                         >
@@ -345,6 +380,25 @@ export function SessionsView() {
             void refresh();
           }}
         />
+      )}
+
+      {audit && (
+        <Modal
+          title={t("sessions.auditTitle", { sessionId: audit.sessionId })}
+          wide
+          onDismiss={() => setAudit(null)}
+          footer={<Button onClick={() => setAudit(null)}>{t("sessions.auditCloseBtn")}</Button>}
+        >
+          {audit.error ? (
+            <p className="text-xs text-danger">{audit.error}</p>
+          ) : audit.markdown === null ? (
+            <p className="text-xs text-tertiary">{t("sessions.auditLoading")}</p>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto text-sm leading-relaxed text-secondary">
+              <Markdown source={audit.markdown} />
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );
