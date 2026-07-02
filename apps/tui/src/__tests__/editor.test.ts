@@ -53,6 +53,16 @@ describe("backspace / deleteForward", () => {
   it("deleteForward at the end is a no-op", () => {
     expect(deleteForward(at("abc", 3))).toEqual({ text: "abc", cursor: 3 });
   });
+  it("backspace deletes a whole astral char (surrogate pair) without corruption", () => {
+    // "🎉" is 2 UTF-16 code units; cursor at 2 sits just after it.
+    const s = backspace(at("🎉", 2));
+    expect(s).toEqual({ text: "", cursor: 0 });
+    // The result must be a valid string (no lone surrogate).
+    expect(JSON.stringify(s.text)).toBe('""');
+  });
+  it("deleteForward deletes a whole astral char", () => {
+    expect(deleteForward(at("🔥x", 0))).toEqual({ text: "x", cursor: 0 });
+  });
 });
 
 describe("horizontal movement", () => {

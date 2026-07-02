@@ -56,7 +56,11 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
     try {
       current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     } catch {
+      // Abort rather than clobber a config we couldn't parse — writing the
+      // default {} back would silently drop every existing key.
       console.error(t("err.configInvalidJson", { path }));
+      process.exitCode = 1;
+      return;
     }
   }
   if (key === "commandAllowlist" || key === "models") {

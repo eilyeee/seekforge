@@ -15,7 +15,7 @@ import {
   appendProjectFact,
   projectMemoryPath,
   readCandidates,
-  readProjectMemory,
+  readRawProjectMemory,
   writeCandidates,
   type MemoryCandidate,
   type MemoryCandidateType,
@@ -90,7 +90,9 @@ type ParsedFact = ProjectFact & { lineNo: number };
 
 /** Bullet lines of project.md with their original line numbers. */
 function parseProjectFacts(workspace: string): { raw: string; facts: ParsedFact[] } {
-  const raw = readProjectMemory(workspace) ?? "";
+  // Raw (unexpanded) content: line numbers must match the file we write back,
+  // and we must not inline @import'd files into project.md.
+  const raw = readRawProjectMemory(workspace) ?? "";
   const facts: ParsedFact[] = [];
   raw.split("\n").forEach((line, lineNo) => {
     const trimmed = line.trim();

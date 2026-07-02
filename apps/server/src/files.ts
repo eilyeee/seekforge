@@ -5,9 +5,12 @@
 
 import { randomBytes } from "node:crypto";
 import {
+  closeSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -385,6 +388,18 @@ export function listTree(workspace: string, rel: string): Tree {
   return { path: relRoot, entries: [...dirs, ...files] };
 }
 
+/** Reads at most `max` leading bytes of a file without loading the rest. */
+function readPrefix(filePath: string, max: number): Buffer {
+  const fd = openSync(filePath, "r");
+  try {
+    const buf = Buffer.allocUnsafe(max);
+    const bytesRead = readSync(fd, buf, 0, max, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Heuristic: a NUL byte in the leading bytes marks the file as binary. */
 function looksBinary(buf: Buffer): boolean {
   const sample = buf.subarray(0, Math.min(buf.length, 8000));
@@ -408,16 +423,17 @@ export function readTextFile(workspace: string, rel: string): FileView {
   if (!stat.isFile()) {
     throw new FileBrowseError(400, "bad_request", "path is not a file");
   }
-  const buf = readFileSync(resolved);
+  // Size-gate BEFORE reading so a multi-hundred-MB file can't be slurped whole
+  // into memory (per request) only to be truncated afterward — read at most the
+  // cap. The binary probe only needs the leading bytes, so a prefix suffices.
+  const truncated = stat.size > MAX_FILE_BYTES;
+  const buf = truncated ? readPrefix(resolved, MAX_FILE_BYTES) : readFileSync(resolved);
   if (looksBinary(buf)) {
     throw new FileBrowseError(400, "bad_request", "file is binary, not text");
   }
   const wsReal = realpathSync(resolve(workspace));
   const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
-  if (buf.length > MAX_FILE_BYTES) {
-    return { path: relPosix, content: buf.subarray(0, MAX_FILE_BYTES).toString("utf8"), truncated: true };
-  }
-  return { path: relPosix, content: buf.toString("utf8"), truncated: false };
+  return { path: relPosix, content: buf.toString("utf8"), truncated };
 }
 
 /**

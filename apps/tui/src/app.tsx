@@ -1558,6 +1558,13 @@ export function App({
         applyEditor(emptyEditor());
         const custom = (customCommandsRef.current ?? []).find((c) => c.name === spec.name);
         if (custom) {
+          // Guard like every other runTask entry point: starting a second run
+          // here would overwrite the active controller in runsByTabRef, orphaning
+          // the first run so Esc/Ctrl+C can no longer abort it.
+          if (controllerRef.current) {
+            notice("a task is already running — Esc cancels it, or wait for it to finish", "error");
+            return;
+          }
           dispatch({ type: "user", text: `/${spec.name}` });
           void runTask(expandCustomCommand(custom, ""), { echoUser: false });
           return;

@@ -31,28 +31,52 @@ export function insertText(s: EditorState, input: string): EditorState {
   };
 }
 
+// The cursor is a UTF-16 code-unit index, but an astral character (emoji,
+// CJK ext, …) is a surrogate PAIR — two code units. Moving/deleting by a fixed
+// 1 would split the pair, producing a lone surrogate that corrupts the string
+// (JSON.stringify emits U+FFFD, the API payload breaks). These helpers report
+// how many code units the previous/next whole code point occupies.
+function isHighSurrogate(cu: number): boolean {
+  return cu >= 0xd800 && cu <= 0xdbff;
+}
+function isLowSurrogate(cu: number): boolean {
+  return cu >= 0xdc00 && cu <= 0xdfff;
+}
+function stepLeft(text: string, pos: number): number {
+  return pos >= 2 && isHighSurrogate(text.charCodeAt(pos - 2)) && isLowSurrogate(text.charCodeAt(pos - 1))
+    ? 2
+    : 1;
+}
+function stepRight(text: string, pos: number): number {
+  return pos + 1 < text.length && isHighSurrogate(text.charCodeAt(pos)) && isLowSurrogate(text.charCodeAt(pos + 1))
+    ? 2
+    : 1;
+}
+
 export function backspace(s: EditorState): EditorState {
   if (s.cursor === 0) return s;
+  const step = stepLeft(s.text, s.cursor);
   return {
-    text: s.text.slice(0, s.cursor - 1) + s.text.slice(s.cursor),
-    cursor: s.cursor - 1,
+    text: s.text.slice(0, s.cursor - step) + s.text.slice(s.cursor),
+    cursor: s.cursor - step,
   };
 }
 
 export function deleteForward(s: EditorState): EditorState {
   if (s.cursor >= s.text.length) return s;
+  const step = stepRight(s.text, s.cursor);
   return {
-    text: s.text.slice(0, s.cursor) + s.text.slice(s.cursor + 1),
+    text: s.text.slice(0, s.cursor) + s.text.slice(s.cursor + step),
     cursor: s.cursor,
   };
 }
 
 export function moveLeft(s: EditorState): EditorState {
-  return { text: s.text, cursor: Math.max(0, s.cursor - 1) };
+  return { text: s.text, cursor: Math.max(0, s.cursor - stepLeft(s.text, s.cursor)) };
 }
 
 export function moveRight(s: EditorState): EditorState {
-  return { text: s.text, cursor: Math.min(s.text.length, s.cursor + 1) };
+  return { text: s.text, cursor: Math.min(s.text.length, s.cursor + stepRight(s.text, s.cursor)) };
 }
 
 /** Same column on the previous line, clamped to that line's length. */

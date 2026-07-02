@@ -640,7 +640,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         for (;;) {
           const next = await Promise.race([outcome.then((v) => ({ v })), queue.wait().then(() => undefined)]);
           for (const ev of queue.drainNow()) yield ev;
-          if (next !== undefined) return next.v;
+          if (next !== undefined) {
+            // Drain once more: events pushed onto the queue while the yields
+            // above were suspended would otherwise surface only after the
+            // returned value (e.g. final command output after tool.completed).
+            for (const ev of queue.drainNow()) yield ev;
+            return next.v;
+          }
         }
       }
 
@@ -1350,6 +1356,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // arrive (every completion pushes its tool.completed, so waiting
           // always makes progress).
           while (pendingDispatches > 0) {
+            // Honor cancellation here too: without this, an abort mid-turn waits
+            // for the slowest in-flight dispatch's next yield (seconds under a
+            // slow provider) instead of unwinding promptly.
+            throwIfCancelled();
             await queue.wait();
             for (const ev of queue.drainNow()) yield ev;
           }

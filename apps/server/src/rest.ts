@@ -550,7 +550,8 @@ export async function handleApi(
     if (method === "POST" && path === "/api/sessions/prune") {
       let body: unknown;
       try {
-        body = JSON.parse(await readBody(req));
+        const raw = await readBody(req);
+        body = raw.trim() === "" ? {} : JSON.parse(raw); // all params optional
       } catch {
         return sendApiError(res, 400, "bad_request", "body must be valid JSON");
       }
@@ -1073,7 +1074,8 @@ export async function handleApi(
     if (method === "POST" && path === "/api/memory/compact") {
       let body: unknown;
       try {
-        body = JSON.parse(await readBody(req));
+        const raw = await readBody(req);
+        body = raw.trim() === "" ? {} : JSON.parse(raw); // all params optional
       } catch {
         return sendApiError(res, 400, "bad_request", "body must be valid JSON");
       }

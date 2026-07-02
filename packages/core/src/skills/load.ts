@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
+import { seekforgeHome } from "../memory/store.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 import type { Skill, SkillScope } from "./types.js";
 
@@ -116,7 +116,7 @@ function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
  */
 export function loadSkills(workspace: string): Skill[] {
   return loadSkillsFromDirs([
-    { scope: "global", path: path.join(os.homedir(), ".seekforge", "skills") },
+    { scope: "global", path: path.join(seekforgeHome(), ".seekforge", "skills") },
     { scope: "project", path: path.join(workspace, ".seekforge", "skills") },
   ]);
 }

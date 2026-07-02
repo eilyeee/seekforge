@@ -17,6 +17,7 @@ import {
   readProjectMd,
   writeCandidatesRaw,
   writeProjectMemory,
+  writeWorkspaceFile,
 } from "./helpers.js";
 
 describe("addMemoryFact", () => {
@@ -175,6 +176,21 @@ describe("removeProjectFact", () => {
     const ws = makeWorkspace();
     seedFacts(ws);
     expect(() => removeProjectFact(ws, { match: "docker" })).toThrowError(/no fact matches/);
+  });
+
+  it("preserves @import directives when removing a bullet (no expansion write-back)", () => {
+    const ws = makeWorkspace();
+    writeWorkspaceFile(ws, "conventions.md", "- [command] imported: use pnpm\n");
+    writeProjectMemory(ws, "# Project Memory\n@import conventions.md\n- [tech] root fact\n");
+
+    removeProjectFact(ws, { match: "root fact" });
+
+    const md = readProjectMd(ws);
+    // The @import line must survive verbatim — not be inlined with the imported
+    // file's content — and the imported bullet must not be duplicated into root.
+    expect(md).toContain("@import conventions.md");
+    expect(md).not.toContain("imported: use pnpm");
+    expect(md).not.toContain("root fact");
   });
 });
 

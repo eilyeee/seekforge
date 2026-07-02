@@ -6,7 +6,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { projectMemoryPath, readFactMeta, readProjectMemory, reconcileFactMeta } from "./store.js";
+import { projectMemoryPath, readFactMeta, readRawProjectMemory, reconcileFactMeta } from "./store.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
 const NEAR_DUP_JACCARD = 0.8;
@@ -179,7 +179,9 @@ function pruneUnused(
  * the plan without writing. Header / non-bullet lines are preserved verbatim.
  */
 export function compactProjectMemory(workspace: string, opts: CompactOptions = {}): CompactResult {
-  const raw = readProjectMemory(workspace);
+  // Raw (unexpanded): compaction rewrites project.md, so it must operate on and
+  // preserve the literal file — never the @import-inlined form.
+  const raw = readRawProjectMemory(workspace);
   if (raw === undefined) {
     return { before: 0, after: 0, removed: [], merged: [], archived: [] };
   }

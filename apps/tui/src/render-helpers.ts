@@ -23,6 +23,74 @@ function middleTruncate(s: string, max: number): string {
   return `${s.slice(0, head)}…${tail > 0 ? s.slice(s.length - tail) : ""}`;
 }
 
+/**
+ * Terminal column width of a single code point (East Asian Width approximation).
+ * 0 for combining/zero-width marks, 2 for wide CJK / fullwidth / most emoji,
+ * 1 otherwise. Good enough to align tables without pulling in `string-width`.
+ */
+function charWidth(cp: number): number {
+  if (cp === 0) return 0;
+  if ((cp >= 0x0300 && cp <= 0x036f) || (cp >= 0x200b && cp <= 0x200f) || cp === 0xfeff) return 0;
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0x303e) || // CJK radicals … Kangxi
+    (cp >= 0x3041 && cp <= 0x33ff) || // Hiragana … CJK symbols
+    (cp >= 0x3400 && cp <= 0x4dbf) || // CJK Ext A
+    (cp >= 0x4e00 && cp <= 0x9fff) || // CJK Unified
+    (cp >= 0xa000 && cp <= 0xa4cf) || // Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compatibility forms
+    (cp >= 0xff00 && cp <= 0xff60) || // Fullwidth forms
+    (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth signs
+    (cp >= 0x1f300 && cp <= 0x1faff) || // emoji / symbols & pictographs
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK Ext B+
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+/** Terminal column width of a whole string (sum of per-code-point widths). */
+function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += charWidth(ch.codePointAt(0) ?? 0);
+  return w;
+}
+
+/** Leading (or trailing) run of `s` fitting within `maxW` columns. */
+function sliceToWidth(s: string, maxW: number, fromStart: boolean): string {
+  const chars = [...s];
+  if (!fromStart) chars.reverse();
+  const out: string[] = [];
+  let w = 0;
+  for (const ch of chars) {
+    const cw = charWidth(ch.codePointAt(0) ?? 0);
+    if (w + cw > maxW) break;
+    w += cw;
+    out.push(ch);
+  }
+  if (!fromStart) out.reverse();
+  return out.join("");
+}
+
+/** Middle-truncate by terminal columns (wide-char aware), cut marked with "…". */
+function truncateToWidth(s: string, max: number): string {
+  if (displayWidth(s) <= max) return s;
+  if (max <= 1) return "…";
+  const headW = Math.ceil((max - 1) / 2);
+  const tailW = max - 1 - headW;
+  const head = sliceToWidth(s, headW, true);
+  const tail = tailW > 0 ? sliceToWidth(s, tailW, false) : "";
+  return `${head}…${tail}`;
+}
+
+/** Right-pad `s` with spaces until it occupies `w` terminal columns. */
+function padEndToWidth(s: string, w: number): string {
+  const pad = w - displayWidth(s);
+  return pad > 0 ? s + " ".repeat(pad) : s;
+}
+
 /** First `max` chars of `s` (single-line), with a trailing "…" when cut. */
 function headTruncate(s: string, max: number): string {
   const flat = s.replace(/\s+/g, " ").trim();
@@ -379,7 +447,9 @@ export function layoutTable(rows: string[]): string[] | null {
   if (cols === 0) return null;
   const widths: number[] = [];
   for (let c = 0; c < cols; c += 1) {
-    widths.push(Math.max(1, ...body.map((r) => (r[c] ?? "").length)));
+    // Terminal columns, not code units: a CJK/fullwidth cell is 2 wide, so
+    // .length would under-measure and misalign every following column.
+    widths.push(Math.max(1, ...body.map((r) => displayWidth(r[c] ?? ""))));
   }
 
   // Shrink the widest column until the total fits the cap.
@@ -392,10 +462,7 @@ export function layoutTable(rows: string[]): string[] | null {
 
   const renderRow = (cells: string[]): string =>
     widths
-      .map((w, c) => {
-        const cell = middleTruncate(cells[c] ?? "", w);
-        return cell.padEnd(w);
-      })
+      .map((w, c) => padEndToWidth(truncateToWidth(cells[c] ?? "", w), w))
       .join(TABLE_GAP)
       .trimEnd();
 

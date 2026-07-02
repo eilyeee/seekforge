@@ -260,7 +260,13 @@ export function classifyCommand(
   // raw command. Only inspect single, unpiped commands — a compound line keeps
   // the conservative generic treatment.
   const tokens = normalized.split(" ");
-  if (!/[|&;]/.test(normalized)) {
+  // Only single, unpiped commands qualify for the read-only fast-path. Test the
+  // ORIGINAL command, not the normalized one: normalizeCommand collapses \n/\r
+  // into spaces, so a newline-separated sequence like "git log\nenv" would
+  // otherwise look like a lone read-only "git log" yet execute `env` too when
+  // handed to `/bin/sh -c`. Backticks and $(...) inject commands the same way.
+  const injectsCommands = /[|&;\n\r`]/.test(command) || command.includes("$(");
+  if (!injectsCommands) {
     if (tokens[0] === "gh" && classifyGh(tokens) === "readonly") {
       return {
         permission: "readonly",
