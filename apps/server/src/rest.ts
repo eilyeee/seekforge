@@ -59,6 +59,7 @@ import {
   DEFAULT_MODEL,
   DEPRECATED_MODELS,
   MODEL_PRICING,
+  resolveProviderPreset,
 } from "@seekforge/core";
 import { ConfigValueError, loadConfig, maskedConfig, setConfigValue } from "./config.js";
 import {
@@ -442,6 +443,20 @@ export async function handleApi(
     }
 
     if (method === "GET" && path === "/api/models") {
+      // The active provider is the default workspace's configured provider. A
+      // named provider with its own catalog that isn't the DeepSeek pricing set
+      // (e.g. Ark) returns its model ids with no pricing table.
+      const provider = loadConfig(ctx.registry.default.path).provider;
+      const preset = resolveProviderPreset(provider);
+      if (preset && provider?.toLowerCase() !== "deepseek") {
+        const models = preset.models.map((id) => ({
+          id,
+          isDefault: id === DEFAULT_MODEL,
+          deprecated: DEPRECATED_MODELS.includes(id as never),
+          pricing: null,
+        }));
+        return sendJson(res, 200, models);
+      }
       const models = Object.entries(MODEL_PRICING).map(([id, pricing]) => ({
         id,
         isDefault: id === DEFAULT_MODEL,

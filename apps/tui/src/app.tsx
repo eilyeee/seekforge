@@ -88,7 +88,7 @@ import {
   setTerminalTitle,
 } from "./terminal.js";
 import { loadKeybindings, mergeKeymap } from "./keybindings.js";
-import { KNOWN_MODELS, modelPickerLines } from "./model-list.js";
+import { modelPickerLines, modelsForProvider } from "./model-list.js";
 import { addTodo, formatTodoLines, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import { expandExtraFileRefs, formatExtraDirLines, normalizeExtraDir } from "./workspace-dirs.js";
 import { initialSchedulerState, tick, type SchedulerState } from "./statusline-scheduler.js";
@@ -508,7 +508,7 @@ export function App({
       sessions: metas.map((m) => ({ id: m.id, title: sessionTitle(projectPath, m.id), status: m.status })),
       todos: loadTodos(projectPath),
       bgTasks: (bgRef.current?.list() ?? []).map((t) => ({ id: t.id, command: t.command, status: t.status })),
-      models: [...KNOWN_MODELS],
+      models: [...modelsForProvider(config.provider)],
       memoryFactCount: listProjectFacts(projectPath).length,
       memoryFiles: (() => {
         try {
@@ -992,13 +992,14 @@ export function App({
         }
         case "model":
           if (!command.arg) {
+            const models = modelsForProvider(config.provider);
             dispatch({
               type: "overlay",
               overlay: {
                 kind: "model",
-                ids: KNOWN_MODELS.map((m) => m.id),
-                lines: modelPickerLines(KNOWN_MODELS, modelRef.current),
-                index: Math.max(0, KNOWN_MODELS.findIndex((m) => m.id === modelRef.current)),
+                ids: models.map((m) => m.id),
+                lines: modelPickerLines(models, modelRef.current),
+                index: Math.max(0, models.findIndex((m) => m.id === modelRef.current)),
               },
             });
           } else if (command.arg === "deepseek-reasoner") {

@@ -14,13 +14,36 @@ import {
   type RetryInfo,
 } from "./types.js";
 
-export type ProviderPreset = { baseUrl: string; capabilities: ProviderCapabilities };
+export type ProviderPreset = {
+  baseUrl: string;
+  capabilities: ProviderCapabilities;
+  /** Model ids offered by this provider, for the /model picker and GET /api/models. */
+  models: readonly string[];
+};
 
 export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
-  deepseek: { baseUrl: DEFAULT_BASE_URL, capabilities: DEEPSEEK_CAPABILITIES },
+  deepseek: {
+    baseUrl: DEFAULT_BASE_URL,
+    capabilities: DEEPSEEK_CAPABILITIES,
+    // The current non-deprecated V4 models; keep in sync with MODEL_PRICING's V4 entries.
+    models: ["deepseek-v4-pro", "deepseek-v4-flash"],
+  },
   ark: {
     baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
     capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    models: [
+      "doubao-seed-2.0-code",
+      "doubao-seed-2.0-pro",
+      "doubao-seed-2.0-lite",
+      "doubao-seed-2.0-mini",
+      "glm-5.2",
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "minimax-m3",
+      "minimax-m2.7",
+    ],
   },
 };
 

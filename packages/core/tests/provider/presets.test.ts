@@ -21,6 +21,20 @@ describe("resolveProviderPreset", () => {
     // Case-insensitive lookup.
     expect(resolveProviderPreset("ARK")).toBe(lower);
     expect(resolveProviderPreset("Ark")).toBe(lower);
+    // Ark exposes its own 11-model catalog.
+    expect(lower?.models).toEqual([
+      "doubao-seed-2.0-code",
+      "doubao-seed-2.0-pro",
+      "doubao-seed-2.0-lite",
+      "doubao-seed-2.0-mini",
+      "glm-5.2",
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "minimax-m3",
+      "minimax-m2.7",
+    ]);
   });
 
   it("returns the DeepSeek preset with full capabilities for 'deepseek'", () => {
@@ -29,6 +43,8 @@ describe("resolveProviderPreset", () => {
     expect(preset?.baseUrl).toBe(DEFAULT_BASE_URL);
     expect(preset?.capabilities).toEqual(DEEPSEEK_CAPABILITIES);
     expect(preset?.capabilities.thinking).toBe(true);
+    // DeepSeek exposes only the non-deprecated V4 models.
+    expect(preset?.models).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
   });
 
   it("returns undefined for an unknown or missing preset name", () => {

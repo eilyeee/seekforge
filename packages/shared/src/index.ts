@@ -673,16 +673,20 @@ export type LoopEvent =
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
   | { type: "loop.done"; result: LoopResult };
 
-/** GET /api/models entry (mirror of core MODEL_PRICING with metadata). */
+/**
+ * GET /api/models entry. For DeepSeek this mirrors core MODEL_PRICING with
+ * metadata; providers without a pricing table (e.g. Ark) return `null`/no
+ * pricing, so the field is nullable/optional.
+ */
 export type ModelInfo = {
   id: string;
   isDefault: boolean;
   deprecated: boolean;
-  pricing: {
+  pricing?: {
     inputCacheMissPer1M: number;
     inputCacheHitPer1M: number;
     outputPer1M: number;
-  };
+  } | null;
 };
 
 /**
