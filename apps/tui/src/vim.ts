@@ -218,7 +218,11 @@ function deleteToLineEnd(vim: VimState, editor: EditorState, insert: boolean): V
 
 /** Deletes the char under the cursor ("x"); `insert` makes it "s". */
 function deleteChar(vim: VimState, editor: EditorState, insert: boolean): VimResult {
-  const ch = editor.text[editor.cursor];
+  // codePointAt (not text[cursor]) so an astral char (emoji) yields the whole
+  // character in the register, matching what deleteForward removes — otherwise
+  // `x` then `p` would re-insert a lone surrogate and corrupt the buffer.
+  const cp = editor.text.codePointAt(editor.cursor);
+  const ch = cp === undefined ? undefined : String.fromCodePoint(cp);
   const removable = ch !== undefined && ch !== "\n";
   return mutate(vim, editor, removable ? deleteForward(editor) : editor, {
     ...(removable ? { register: ch } : {}),

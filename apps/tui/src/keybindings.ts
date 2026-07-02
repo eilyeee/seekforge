@@ -40,7 +40,9 @@ const MODIFIERS = new Set(["ctrl", "shift", "meta"]);
  * or otherwise malformed specs.
  */
 export function parseKeySpec(spec: string): KeyStroke | null {
-  const parts = spec.trim().toLowerCase().split("+");
+  // Split on the raw spec so the key char's case is preserved; only modifier
+  // names and named keys are matched case-insensitively.
+  const parts = spec.trim().split("+");
   if (parts.some((p) => p === "")) return null;
 
   let ctrl = false;
@@ -48,10 +50,11 @@ export function parseKeySpec(spec: string): KeyStroke | null {
   let meta = false;
   const rest: string[] = [];
   for (const part of parts) {
-    if (MODIFIERS.has(part)) {
-      if ((part === "ctrl" && ctrl) || (part === "shift" && shift) || (part === "meta" && meta)) return null;
-      if (part === "ctrl") ctrl = true;
-      else if (part === "shift") shift = true;
+    const lower = part.toLowerCase();
+    if (MODIFIERS.has(lower)) {
+      if ((lower === "ctrl" && ctrl) || (lower === "shift" && shift) || (lower === "meta" && meta)) return null;
+      if (lower === "ctrl") ctrl = true;
+      else if (lower === "shift") shift = true;
       else meta = true;
     } else {
       rest.push(part);
@@ -59,12 +62,17 @@ export function parseKeySpec(spec: string): KeyStroke | null {
   }
   if (rest.length !== 1) return null;
 
-  const key = rest[0] as string;
+  const raw = rest[0] as string;
+  const lowerKey = raw.toLowerCase();
   let stroke: KeyStroke;
-  if (NAMED_KEYS.has(key)) {
-    stroke = { input: "", name: key as NonNullable<KeyStroke["name"]> };
-  } else if ([...key].length === 1) {
-    stroke = { input: key };
+  if (NAMED_KEYS.has(lowerKey)) {
+    stroke = { input: "", name: lowerKey as NonNullable<KeyStroke["name"]> };
+  } else if ([...raw].length === 1) {
+    // Mirror keymap.toStroke's normalization so a spec matches the stroke the
+    // terminal actually delivers: ctrl lowercases the letter; a shifted letter
+    // arrives in its uppercase form (e.g. Shift+A -> input "A").
+    const input = ctrl ? raw.toLowerCase() : shift ? raw.toUpperCase() : raw;
+    stroke = { input };
   } else {
     return null;
   }

@@ -127,7 +127,11 @@ function pct(value: number): string {
 
 function signedPct(value: number): string {
   const rounded = Math.round(value * 100);
-  return rounded >= 0 ? `+${rounded}%` : `${rounded}%`;
+  // Check the sign AFTER rounding, but treat a rounded-to-zero delta as "0%":
+  // Math.round(-0.4) is -0, and -0 >= 0 is true, so a marginally-worse skill
+  // would otherwise print a misleading "+0%".
+  if (rounded === 0) return "0%";
+  return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
 }
 
 function num(value: number | undefined, digits = 1): string {
@@ -137,7 +141,10 @@ function num(value: number | undefined, digits = 1): string {
 function signedNum(value: number | undefined, digits = 1): string {
   if (value === undefined) return "-";
   const fixed = value.toFixed(digits);
-  return value >= 0 ? `+${fixed}` : fixed;
+  // toFixed can render a tiny negative as "-0.0"; show a rounded-to-zero delta
+  // unsigned rather than "+0.0"/"-0.0".
+  if (Number.parseFloat(fixed) === 0) return (0).toFixed(digits);
+  return value > 0 ? `+${fixed}` : fixed;
 }
 
 /** Renders the skill ranking as a markdown table (sparse when skills rarely fire). */

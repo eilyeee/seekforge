@@ -138,8 +138,12 @@ export function recordFactUse(workspace: string, briefText: string): void {
     const m = /^-\s*(\[[a-z_]+\].+)$/.exec(line.trim());
     if (!m || m[1] === undefined) continue;
     const key = m[1].trim();
-    const entry = meta[key] ?? { addedAt: now, uses: 0 };
-    entry.uses += 1;
+    // A hand-edited/corrupt fact-meta.json may hold a non-object (or a missing
+    // numeric `uses`) at this key; coerce rather than throw mid-run.
+    const prev = meta[key];
+    const entry: FactMeta =
+      prev !== null && typeof prev === "object" ? prev : { addedAt: now, uses: 0 };
+    entry.uses = (typeof entry.uses === "number" && Number.isFinite(entry.uses) ? entry.uses : 0) + 1;
     entry.lastUsedAt = now;
     meta[key] = entry;
     changed = true;

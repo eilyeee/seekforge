@@ -35,18 +35,23 @@ function parseBullet(raw: string): Bullet {
   const type = typeMatch ? typeMatch[1] : undefined;
   const text = typeMatch ? body.slice(typeMatch[0].length) : body;
   const lower = text.toLowerCase();
-  // CJK has no word boundaries, so split it into single characters; latin/digit
-  // runs stay as words. Otherwise different phrasings of the same Chinese fact
-  // never overlap (each clause becomes one giant token).
+  // Scripts without word boundaries (Han, Hangul, Kana, Cyrillic, Greek, Arabic,
+  // …) are split into single characters; latin/digit runs stay as words.
+  // Otherwise different phrasings of the same fact never overlap — and, worse,
+  // two *distinct* facts in such a script both tokenize to the empty set and
+  // would be treated as duplicates (see jaccard). Match any letter that isn't
+  // ASCII a–z as a single-char token.
   const words = new Set<string>([
-    ...(lower.match(/[\p{Script=Han}]/gu) ?? []),
+    ...(lower.match(/[^\P{Letter}a-z]/gu) ?? []),
     ...lower.split(/[^a-z0-9]+/i).filter((w) => w.length > 0),
   ]);
   return { raw, type, words };
 }
 
 function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
+  // Two token-less bullets (e.g. pure punctuation/emoji) are NOT assumed
+  // duplicates — treating them as identical silently dropped distinct facts.
+  if (a.size === 0 || b.size === 0) return 0;
   let inter = 0;
   for (const w of a) if (b.has(w)) inter++;
   const union = a.size + b.size - inter;

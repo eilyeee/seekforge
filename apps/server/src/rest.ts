@@ -162,7 +162,9 @@ async function gitDiff(
   workspace: string,
   staged: boolean,
 ): Promise<{ diff: string; truncated: boolean; notGit?: boolean }> {
-  const args = staged ? ["diff", "--cached"] : ["diff"];
+  // core.quotepath=false: emit non-ASCII paths verbatim (UTF-8) rather than
+  // octal-escaped and double-quoted, matching the discard endpoint's probe.
+  const args = ["-c", "core.quotepath=false", ...(staged ? ["diff", "--cached"] : ["diff"])];
   try {
     const { stdout } = await execFileAsync("git", args, GIT_EXEC(workspace));
     const MAX = 2_000_000;
@@ -220,7 +222,14 @@ function mapStatusCode(code: string): GitFileStatus["status"] {
 async function gitStatus(workspace: string): Promise<GitStatusResult> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-b"], GIT_EXEC(workspace)));
+    // core.quotepath=false: keep non-ASCII paths as raw UTF-8 so the names the
+    // UI sends back to stage/unstage/discard match the real files (git's
+    // default octal-escapes them, breaking those mutations for e.g. CJK names).
+    ({ stdout } = await execFileAsync(
+      "git",
+      ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b"],
+      GIT_EXEC(workspace),
+    ));
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
     const stderr = e.stderr ?? e.message ?? "";

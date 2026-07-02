@@ -165,6 +165,14 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       if (newSession) sessionId = newSession;
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});
+        // 404 on a request carrying our session id means the server expired or
+        // forgot it (e.g. it restarted mid-run). Drop the stale session and
+        // handshake so the next call re-initializes, instead of re-sending the
+        // dead id forever and getting a permanent 404.
+        if (res.status === 404 && sessionId) {
+          sessionId = undefined;
+          handshake = undefined;
+        }
         throw new McpError("mcp_http_error", `MCP server "${options.name}" answered ${method} with HTTP ${res.status}`);
       }
       if (id === undefined) {

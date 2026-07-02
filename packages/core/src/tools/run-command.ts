@@ -265,7 +265,10 @@ export function classifyCommand(
   // into spaces, so a newline-separated sequence like "git log\nenv" would
   // otherwise look like a lone read-only "git log" yet execute `env` too when
   // handed to `/bin/sh -c`. Backticks and $(...) inject commands the same way.
-  const injectsCommands = /[|&;\n\r`]/.test(command) || command.includes("$(");
+  // Redirects (`>`, `>>`, `<`) never inject a command but let a "read-only"
+  // form clobber/read an arbitrary file (`git log > ~/.zshrc`), so they also
+  // disqualify the fast-path.
+  const injectsCommands = /[|&;<>\n\r`]/.test(command) || command.includes("$(");
   if (!injectsCommands) {
     if (tokens[0] === "gh" && classifyGh(tokens) === "readonly") {
       return {

@@ -17,6 +17,10 @@ describe("parseKeySpec", () => {
     ["backspace", { input: "", name: "backspace" }],
     ["x", { input: "x" }],
     ["CTRL+G", { input: "g", ctrl: true }],
+    // A shifted letter arrives from the terminal uppercased (matches toStroke).
+    ["shift+a", { input: "A", shift: true }],
+    // A bare uppercase letter keeps its case so it's bindable at all.
+    ["A", { input: "A" }],
   ])("parses %s", (spec, expected) => {
     expect(parseKeySpec(spec)).toEqual(expected);
   });

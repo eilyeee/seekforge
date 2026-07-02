@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
@@ -65,8 +66,8 @@ type TaskRecord = {
   exitCode: number | null;
 };
 
-function appendRing(cur: string, chunk: Buffer): string {
-  const next = cur + chunk.toString("utf8");
+function appendRing(cur: string, text: string): string {
+  const next = cur + text;
   return next.length > RING_BUFFER_CHARS ? next.slice(next.length - RING_BUFFER_CHARS) : next;
 }
 
@@ -117,16 +118,23 @@ export function createBackgroundTasks(): BackgroundTasks {
       };
       tasks.set(id, task);
 
-      child.stdout?.on("data", (c: Buffer) => (task.stdout = appendRing(task.stdout, c)));
-      child.stderr?.on("data", (c: Buffer) => (task.stderr = appendRing(task.stderr, c)));
+      // Decode each stream through its own StringDecoder so a multi-byte UTF-8
+      // sequence split across two `data` chunks isn't mangled into U+FFFD.
+      const outDecoder = new StringDecoder("utf8");
+      const errDecoder = new StringDecoder("utf8");
+      child.stdout?.on("data", (c: Buffer) => (task.stdout = appendRing(task.stdout, outDecoder.write(c))));
+      child.stderr?.on("data", (c: Buffer) => (task.stderr = appendRing(task.stderr, errDecoder.write(c))));
       child.on("error", (err) => {
-        task.stderr = appendRing(task.stderr, Buffer.from(`spawn failed: ${err.message}\n`));
+        task.stderr = appendRing(task.stderr, `spawn failed: ${err.message}\n`);
         if (task.status === "running") {
           task.status = "exited";
           task.endedAt = Date.now();
         }
       });
       child.on("close", (code) => {
+        // Flush any bytes held back by the decoders (incomplete trailing seq).
+        task.stdout = appendRing(task.stdout, outDecoder.end());
+        task.stderr = appendRing(task.stderr, errDecoder.end());
         task.status = "exited";
         task.exitCode = code;
         task.endedAt = task.endedAt ?? Date.now();

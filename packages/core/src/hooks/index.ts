@@ -45,6 +45,7 @@
  * - Hooks run sequentially in config order.
  */
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 export type HookStage =
   | "preToolUse"
@@ -203,21 +204,34 @@ function runOneHook(
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const append = (chunk: Buffer): void => {
-      output += chunk.toString("utf8");
+    // Decode each stream through its own StringDecoder so a multi-byte UTF-8
+    // sequence split across two `data` chunks isn't mangled into U+FFFD (a hook
+    // emitting non-ASCII context would otherwise inject replacement chars).
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    const append = (text: string): void => {
+      output += text;
       if (output.length > CAPTURE_KEEP_CHARS) output = output.slice(-CAPTURE_KEEP_CHARS);
     };
     // stdout is also captured on its own (head-capped: context reads from the
     // start) — it carries the userPromptSubmit context / preToolUse decisions.
-    const appendStdout = (chunk: Buffer): void => {
+    const appendStdout = (text: string): void => {
       if (stdout.length < CAPTURE_KEEP_CHARS) {
-        stdout = (stdout + chunk.toString("utf8")).slice(0, CAPTURE_KEEP_CHARS);
+        stdout = (stdout + text).slice(0, CAPTURE_KEEP_CHARS);
       }
     };
     const finish = (exitCode: number | null): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      // Flush bytes the decoders held back (incomplete trailing sequences).
+      const outTail = outDecoder.end();
+      if (outTail) {
+        append(outTail);
+        appendStdout(outTail);
+      }
+      const errTail = errDecoder.end();
+      if (errTail) append(errTail);
       const tail = (timedOut ? `${output}\n[hook timed out after ${timeoutMs}ms]` : output)
         .trim()
         .slice(-HOOK_OUTPUT_TAIL_CHARS);
@@ -266,12 +280,13 @@ function runOneHook(
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      append(chunk);
-      appendStdout(chunk);
+      const text = outDecoder.write(chunk);
+      append(text);
+      appendStdout(text);
     });
-    child.stderr?.on("data", append);
+    child.stderr?.on("data", (chunk: Buffer) => append(errDecoder.write(chunk)));
     child.on("error", (err) => {
-      append(Buffer.from(String(err)));
+      append(String(err));
       finish(null);
     });
     child.on("close", (code) => finish(code));

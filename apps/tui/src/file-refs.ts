@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { isSensitiveBasename } from "@seekforge/core";
 
 const MAX_PER_FILE_CHARS = 30_000;
@@ -20,7 +20,11 @@ export function expandFileRefs(task: string, workspace: string): string {
   for (const token of tokens) {
     const rel = token.slice(1).replace(/[.,;:]+$/, ""); // strip trailing punctuation
     const abs = resolve(workspace, rel);
-    if (!abs.startsWith(resolve(workspace))) continue; // stay inside the workspace
+    const root = resolve(workspace);
+    // Stay inside the workspace. Require a path-separator boundary so a sibling
+    // dir sharing the name as a prefix (e.g. `@../proj-secrets/x` from `proj`)
+    // can't escape via a bare startsWith.
+    if (abs !== root && !abs.startsWith(root + sep)) continue;
     if (isSensitiveBasename(basename(abs))) continue;
     try {
       if (!statSync(abs).isFile()) continue;

@@ -52,6 +52,16 @@ function stepRight(text: string, pos: number): number {
     ? 2
     : 1;
 }
+/**
+ * Clamping a code-unit column onto another line can land between the halves of
+ * a surrogate pair; back up onto the pair start so the cursor stays on a whole
+ * code point (otherwise the next stepLeft/backspace desyncs).
+ */
+function snapToBoundary(text: string, pos: number): number {
+  return pos > 0 && isLowSurrogate(text.charCodeAt(pos)) && isHighSurrogate(text.charCodeAt(pos - 1))
+    ? pos - 1
+    : pos;
+}
 
 export function backspace(s: EditorState): EditorState {
   if (s.cursor === 0) return s;
@@ -86,7 +96,7 @@ export function moveUp(s: EditorState): EditorState {
   const column = s.cursor - start;
   const prevStart = lineStart(s.text, start - 1);
   const prevLength = start - 1 - prevStart;
-  return { text: s.text, cursor: prevStart + Math.min(column, prevLength) };
+  return { text: s.text, cursor: snapToBoundary(s.text, prevStart + Math.min(column, prevLength)) };
 }
 
 /** Same column on the next line, clamped to that line's length. */
@@ -96,7 +106,7 @@ export function moveDown(s: EditorState): EditorState {
   const column = s.cursor - lineStart(s.text, s.cursor);
   const nextStart = end + 1;
   const nextLength = lineEnd(s.text, nextStart) - nextStart;
-  return { text: s.text, cursor: nextStart + Math.min(column, nextLength) };
+  return { text: s.text, cursor: snapToBoundary(s.text, nextStart + Math.min(column, nextLength)) };
 }
 
 export function moveHome(s: EditorState): EditorState {

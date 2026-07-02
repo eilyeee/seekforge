@@ -45,9 +45,12 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--keep":
         args.keep = true;
         break;
-      case "--variant":
-        args.variants.push(argv[++i] ?? "");
+      case "--variant": {
+        const val = argv[++i];
+        if (val === undefined) throw new Error("--variant requires a name");
+        args.variants.push(val);
         break;
+      }
       case "--ab": {
         const pair = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
         if (pair.length !== 2) throw new Error("--ab expects exactly two comma-separated variant names");

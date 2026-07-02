@@ -131,6 +131,13 @@ describe("GET /api/file", () => {
     const res = await authed("/api/file?path=.env");
     expect(res.status).toBe(400);
   });
+
+  it("rejects reading a file inside a dot-directory (e.g. .seekforge/config.json)", async () => {
+    // .seekforge/config.json holds the plaintext API key; the file browser
+    // hides dot-dirs, so reading into one must be rejected too.
+    const res = await authed("/api/file?path=.seekforge/config.json");
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("PUT /api/file", () => {
@@ -162,6 +169,15 @@ describe("PUT /api/file", () => {
     });
     expect(res.status).toBe(400);
     expect(existsSync(join(workspace, "..", "escape.txt"))).toBe(false);
+  });
+
+  it("rejects writing into a dot-directory with 400 (no config injection)", async () => {
+    const res = await authed("/api/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: ".seekforge/config.json", content: "{}" }),
+    });
+    expect(res.status).toBe(400);
   });
 });
 

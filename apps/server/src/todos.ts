@@ -55,11 +55,14 @@ export function loadTodos(workspace: string): Todo[] {
 
 /** Appends a new unchecked todo (creating .seekforge/ if needed). */
 export function addTodo(workspace: string, text: string): Todo {
+  // Collapse any interior newlines: a raw "\n" would split one todo into a
+  // checklist line plus a stray prose line, silently truncating it on read-back.
+  const single = text.replace(/\s*[\r\n]+\s*/g, " ");
   const lines = readLines(workspace);
-  lines.push(`- [ ] ${text}`);
+  lines.push(`- [ ] ${single}`);
   writeLines(workspace, lines);
   const index = lines.filter((l) => CHECKLIST_RE.test(l)).length;
-  return { index, text, done: false };
+  return { index, text: single, done: false };
 }
 
 /** Maps a 1-based todo index to its line offset in the file; -1 if out of range. */

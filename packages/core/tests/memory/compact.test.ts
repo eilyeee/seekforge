@@ -77,6 +77,24 @@ describe("compactProjectMemory", () => {
     expect(res.merged[0]?.kept).toContain("作为包管理器"); // the longer survives
   });
 
+  it("does NOT drop distinct facts in scripts without ASCII word chars (regression)", () => {
+    const ws = makeWorkspace();
+    writeProjectMemory(
+      ws,
+      [
+        "# Project Memory",
+        "- [convention] 로그인 검증을 먼저 한다",
+        "- [convention] 데이터베이스 마이그레이션 실행",
+        "",
+      ].join("\n"),
+    );
+    // These two Korean facts are unrelated. Before the fix both tokenized to an
+    // empty set and jaccard(∅,∅)=1 merged them, silently losing one.
+    const res = compactProjectMemory(ws);
+    expect(res.after).toBe(2);
+    expect(res.merged).toEqual([]);
+  });
+
   it("does NOT merge near-duplicates across different types", () => {
     const ws = makeWorkspace();
     writeProjectMemory(

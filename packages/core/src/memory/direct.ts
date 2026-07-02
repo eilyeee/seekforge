@@ -16,6 +16,7 @@ import {
   projectMemoryPath,
   readCandidates,
   readRawProjectMemory,
+  reconcileFactMeta,
   writeCandidates,
   type MemoryCandidate,
   type MemoryCandidateType,
@@ -131,7 +132,11 @@ export function removeProjectFact(workspace: string, selector: ProjectFactSelect
   }
   const lines = raw.split("\n");
   lines.splice(target.lineNo, 1);
-  fs.writeFileSync(projectMemoryPath(workspace), lines.join("\n"), "utf8");
+  const content = lines.join("\n");
+  fs.writeFileSync(projectMemoryPath(workspace), content, "utf8");
+  // Drop the removed fact's sidecar meta so a later re-add starts fresh instead
+  // of resurrecting stale addedAt/uses (which pruneUnused could then misjudge).
+  reconcileFactMeta(workspace, content);
   return target.line;
 }
 

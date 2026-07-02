@@ -87,15 +87,26 @@ async function confirmWithUser(
   };
 }
 
+/** Collapse runs of whitespace so a rule can't be evaded with extra spaces. */
+function normalizeWhitespace(s: string): string {
+  return s.trim().replace(/\s+/g, " ");
+}
+
 /**
  * Rule matching: tool must be "*" or the exact tool name; `match` is a
- * prefix test against the classified raw command (run_command/task_kill)
- * or path (fs tools). No `match` field = matches any call of that tool.
+ * prefix test against the classified command (run_command/task_kill) or path
+ * (fs tools). No `match` field = matches any call of that tool. Commands are
+ * whitespace-normalized on both sides so a deny rule like "rm -rf" isn't
+ * bypassed by inserting extra spaces ("rm  -rf") — the classifier normalizes
+ * the same way before it runs, so the raw command must not slip past here.
  */
 function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall): boolean {
   if (rule.tool !== "*" && rule.tool !== toolName) return false;
   if (rule.match === undefined) return true;
-  const subject = (cls.command ?? cls.path ?? "").trim();
+  if (cls.command !== undefined) {
+    return normalizeWhitespace(cls.command).startsWith(normalizeWhitespace(rule.match));
+  }
+  const subject = (cls.path ?? "").trim();
   return subject.startsWith(rule.match.trim());
 }
 

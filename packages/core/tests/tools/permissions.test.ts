@@ -181,6 +181,24 @@ describe("permission rules", () => {
     expect(requests[0]?.command).toBe("npm run lint");
   });
 
+  it("deny rule can't be evaded by inserting extra whitespace", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [
+      { action: "deny", tool: "run_command", match: "npm run deploy" },
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+    // Extra spaces normalize away — the classifier collapses them the same way
+    // before running, so the deny must still catch it.
+    const blocked = await dispatcher.execute(
+      call("run_command", { command: "npm   run  deploy --prod" }),
+      ctx,
+    );
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error?.code).toBe("denied_by_rule");
+    expect(requests).toHaveLength(0);
+  });
+
   it("allow rule skips write confirmation", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(false);

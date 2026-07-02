@@ -12,6 +12,24 @@ const MAX_BODY_BYTES = 1_000_000;
  * SSRF guard: refuse non-http(s) schemes and private/loopback/link-local
  * targets — the agent must not be able to probe the local network.
  */
+/**
+ * IPv4-mapped IPv6 (`::ffff:a.b.c.d`, which WHATWG serializes as `::ffff:7f00:1`)
+ * lets an attacker smuggle a private IPv4 past the string checks. Decode the
+ * embedded IPv4 so the dotted-quad rules below catch it. Returns null when the
+ * host isn't IPv4-mapped.
+ */
+function mappedIpv4(host: string): string | null {
+  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
+  if (dotted) return dotted[1]!;
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(host);
+  if (hex) {
+    const hi = Number.parseInt(hex[1]!, 16);
+    const lo = Number.parseInt(hex[2]!, 16);
+    return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  }
+  return null;
+}
+
 export function checkFetchUrl(raw: string): URL {
   let url: URL;
   try {
@@ -22,22 +40,27 @@ export function checkFetchUrl(raw: string): URL {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ToolError("invalid_url", `Only http/https URLs are allowed (got ${url.protocol})`);
   }
-  // IPv6 hostnames keep their brackets in WHATWG URLs — strip for matching.
+  // IPv6 hostnames keep their brackets in WHATWG URLs — strip for matching, but
+  // remember it was a literal (so "fc2.com" isn't mistaken for fc00::/7).
+  const isIpv6Literal = url.hostname.startsWith("[");
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // An IPv4-mapped literal resolves to its embedded IPv4 — check that instead.
+  const ipv4 = mappedIpv4(host) ?? host;
   const isPrivate =
     host === "localhost" ||
     host.endsWith(".local") ||
     host.endsWith(".internal") ||
-    /^127\./.test(host) ||
-    host === "0.0.0.0" ||
+    ipv4 === "0.0.0.0" ||
+    /^127\./.test(ipv4) ||
+    /^10\./.test(ipv4) ||
+    /^192\.168\./.test(ipv4) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ipv4) ||
+    /^169\.254\./.test(ipv4) ||
     host === "::1" ||
-    host.startsWith("fe80:") || // IPv6 link-local
-    host.startsWith("fc") || // IPv6 unique-local fc00::/7
-    host.startsWith("fd") ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^169\.254\./.test(host);
+    (isIpv6Literal &&
+      (host.startsWith("fe80:") || // link-local
+        host.startsWith("fc") || // unique-local fc00::/7
+        host.startsWith("fd")));
   if (isPrivate) {
     throw new ToolError("private_address", `Refusing to fetch a private/loopback address: ${host}`);
   }

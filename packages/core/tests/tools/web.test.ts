@@ -29,12 +29,26 @@ describe("checkFetchUrl", () => {
     "http://172.31.255.255/",
     "http://169.254.169.254/latest/meta-data/",
     "http://router.local/",
+    // IPv4-mapped IPv6 must not smuggle a private IPv4 past the guard.
+    "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    "http://[::ffff:10.0.0.1]/",
   ])("refuses private/loopback target: %s", (url) => {
     expect(() => checkFetchUrl(url)).toThrowError(/private|loopback/i);
   });
 
   it("allows 172.x outside the private range", () => {
     expect(checkFetchUrl("http://172.32.0.1/").hostname).toBe("172.32.0.1");
+  });
+
+  it("allows real hostnames that merely start with fc/fd (not IPv6 literals)", () => {
+    expect(checkFetchUrl("http://fc2.com/").hostname).toBe("fc2.com");
+    expect(checkFetchUrl("https://fdic.gov/").hostname).toBe("fdic.gov");
+  });
+
+  it("still refuses genuine IPv6 unique-local/link-local literals", () => {
+    expect(() => checkFetchUrl("http://[fc00::1]/")).toThrowError(/private|loopback/i);
+    expect(() => checkFetchUrl("http://[fe80::1]/")).toThrowError(/private|loopback/i);
   });
 });
 

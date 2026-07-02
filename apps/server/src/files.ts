@@ -334,8 +334,16 @@ function resolveBrowsePath(workspace: string, rel: string): string {
   // Reject .git anywhere in the path, denylisted directory names, and
   // sensitive basenames (.env, *.key, *.pem, ...).
   const parts = relPosix === "" ? [] : relPosix.split("/");
-  for (const part of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
     if (part === ".git" || DEFAULT_IGNORE_DIRS.has(part)) {
+      throw new FileBrowseError(400, "bad_request", `path is not browsable: ${rel}`);
+    }
+    // Hidden directories are not browsable — mirrors listTree, and keeps
+    // .seekforge/config.json (plaintext API key) and other dot-dir contents
+    // out of read/write reach. A leaf dotfile (.gitignore) is still allowed;
+    // sensitive basenames are filtered below.
+    if (i < parts.length - 1 && part.startsWith(".")) {
       throw new FileBrowseError(400, "bad_request", `path is not browsable: ${rel}`);
     }
   }

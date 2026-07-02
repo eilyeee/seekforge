@@ -152,6 +152,19 @@ describe("classifyCommand: gh", () => {
     expect(classifyCommand("gh issue view 1 | cat").permission).toBe("execute");
     expect(classifyCommand("gh issue view 1 && rm x").permission).toBe("execute");
   });
+
+  it("does not auto-allow a read-only form that redirects to a file", () => {
+    // A redirect lets a "read-only" command clobber/read an arbitrary file, so
+    // it must fall through to the confirm path rather than the L0 fast-path.
+    for (const cmd of [
+      "git log > ~/.zshrc",
+      "git diff >> /tmp/out",
+      "gh issue view 1 > secrets",
+      "git status < /etc/passwd",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("execute");
+    }
+  });
 });
 
 describe("classifyCommand: git read vs write", () => {

@@ -213,14 +213,17 @@ const taskOutput = defineTool({
       0,
       Math.min(args.tail ?? DEFAULT_TASK_OUTPUT_TAIL_CHARS, DEFAULT_LIMITS.toolOutputMaxChars),
     );
+    // slice(-0) is slice(0) — the WHOLE buffer — so tail:0 must short-circuit
+    // to empty rather than return everything.
+    const lastChars = (s: string): string => (tail === 0 ? "" : s.slice(-tail));
     return {
       data: {
         taskId: task.id,
         command: task.command,
         status: task.status,
         ...(task.status === "exited" ? { exitCode: task.exitCode ?? null } : {}),
-        stdout: redactSecrets(task.stdout.slice(-tail)),
-        stderr: redactSecrets(task.stderr.slice(-tail)),
+        stdout: redactSecrets(lastChars(task.stdout)),
+        stderr: redactSecrets(lastChars(task.stderr)),
         durationMs: task.durationMs,
       },
     };
