@@ -12,6 +12,8 @@ export type EvalConfig = {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  /** Provider preset: "deepseek" (default) | "ark" | any preset name. Selects base URL + capabilities. */
+  provider?: string;
 };
 
 function readJson(path: string): EvalConfig {

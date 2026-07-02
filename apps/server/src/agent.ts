@@ -13,6 +13,7 @@ import {
   createDefaultDispatcher,
   createRetryBus,
   createRuntimeClient,
+  resolveProviderConfig,
   runAutoLoop,
   type AgentCore,
   type AgentCoreDeps,
@@ -90,13 +91,16 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
     ...(thinking !== undefined ? { thinking } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
-  const provider = createDeepSeekProvider({
-    apiKey: config.apiKey ?? "",
-    baseUrl: config.baseUrl,
-    model,
-    onRetry: retryBus.onRetry,
-    ...thinkingOpts,
-  });
+  const provider = createDeepSeekProvider(
+    resolveProviderConfig({
+      provider: config.provider,
+      apiKey: config.apiKey ?? "",
+      baseUrl: config.baseUrl,
+      model,
+      onRetry: retryBus.onRetry,
+      ...thinkingOpts,
+    }),
+  );
   return {
     provider,
     retryBus,
@@ -105,13 +109,16 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
     // drive the tool-call loop, so fall back to the default model for it.
     providerForModel: (m) => {
       if (m === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider({
-        apiKey: config.apiKey ?? "",
-        baseUrl: config.baseUrl,
-        model: m,
-        onRetry: retryBus.onRetry,
-        ...thinkingOpts,
-      });
+      return createDeepSeekProvider(
+        resolveProviderConfig({
+          provider: config.provider,
+          apiKey: config.apiKey ?? "",
+          baseUrl: config.baseUrl,
+          model: m,
+          onRetry: retryBus.onRetry,
+          ...thinkingOpts,
+        }),
+      );
     },
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,

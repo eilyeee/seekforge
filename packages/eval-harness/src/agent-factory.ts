@@ -6,7 +6,12 @@
  * (e.g. compaction strategy) per run — see variants.ts.
  */
 
-import { createAgentCore, createDeepSeekProvider, createDefaultDispatcher } from "@seekforge/core";
+import {
+  createAgentCore,
+  createDeepSeekProvider,
+  createDefaultDispatcher,
+  resolveProviderConfig,
+} from "@seekforge/core";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
@@ -20,12 +25,15 @@ export function createDefaultAgentFactory(
       throw new Error("no DeepSeek API key configured (env DEEPSEEK_API_KEY or .seekforge/config.json)");
     }
     const agent = createAgentCore({
-      provider: createDeepSeekProvider({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        // A variant may override the main model (e.g. model-pro); else config.
-        model: options.model ?? config.model,
-      }),
+      provider: createDeepSeekProvider(
+        resolveProviderConfig({
+          provider: config.provider,
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          // A variant may override the main model (e.g. model-pro); else config.
+          model: options.model ?? config.model,
+        }),
+      ),
       dispatcher: createDefaultDispatcher(),
       // Deny anything that needs interactive approval: eval fixtures only
       // need allowlisted commands (npm test / node --test) and L1 writes,
@@ -49,7 +57,14 @@ export function createDefaultAgentFactory(
       ...(options.planModel
         ? {
             providerForModel: (m: string) =>
-              createDeepSeekProvider({ apiKey: config.apiKey ?? "", baseUrl: config.baseUrl, model: m }),
+              createDeepSeekProvider(
+                resolveProviderConfig({
+                  provider: config.provider,
+                  apiKey: config.apiKey ?? "",
+                  baseUrl: config.baseUrl,
+                  model: m,
+                }),
+              ),
           }
         : {}),
     });

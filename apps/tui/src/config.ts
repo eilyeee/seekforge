@@ -12,6 +12,8 @@ export type TuiConfig = {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  /** Provider preset: "deepseek" (default) | "ark" | any preset name. Selects base URL + capabilities. */
+  provider?: string;
   /** Path to the seekforge-runtime binary; enables the Rust backend. */
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */

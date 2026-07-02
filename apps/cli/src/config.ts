@@ -8,6 +8,8 @@ export type CliConfig = {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  /** Provider preset: "deepseek" (default) | "ark" | any preset name. Selects base URL + capabilities. */
+  provider?: string;
   /** Path to the seekforge-runtime binary; enables the Rust backend. */
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
@@ -299,7 +301,13 @@ export function loadConfig(projectPath: string, settingsPath?: string, profile?:
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
+    // ARK_API_KEY (Volcengine Ark) takes precedence when set; otherwise
+    // DEEPSEEK_API_KEY behaves exactly as before for existing DeepSeek users.
+    ...(process.env["ARK_API_KEY"]
+      ? { apiKey: process.env["ARK_API_KEY"] }
+      : process.env["DEEPSEEK_API_KEY"]
+        ? { apiKey: process.env["DEEPSEEK_API_KEY"] }
+        : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
   // `profiles` is a selection mechanism, not effective config — never leak it.

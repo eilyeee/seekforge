@@ -55,6 +55,57 @@ Custom API base URL for DeepSeek-compatible proxies or self-hosted endpoints.
 
 Settable via `config set`? **Yes**.
 
+### `provider`
+
+Named provider preset. Selects the API base URL **and** a capability set in one
+switch. `"deepseek"` (the default when unset) targets DeepSeek-direct with all
+features enabled. `"ark"` targets Volcengine Ark, an OpenAI-compatible endpoint
+(see the section below). An explicit `baseUrl` always wins over the preset's URL,
+so you can point a preset at a proxy while keeping its capability profile.
+
+```json
+{ "provider": "ark" }
+```
+
+Leaving `provider` unset behaves exactly as before (full DeepSeek behavior).
+
+Settable via `config set`? **Yes**.
+
+### Volcengine Ark (OpenAI-compatible)
+
+Ark is an OpenAI-compatible endpoint. To use it:
+
+1. Set `provider: "ark"` in your config (this selects the Ark base URL
+   `https://ark.cn-beijing.volces.com/api/plan/v3` and the Ark capability
+   profile). Alternatively, set `baseUrl` yourself — the `ark` preset's
+   capabilities still apply when `provider` is `"ark"`, and an explicit `baseUrl`
+   overrides the preset URL.
+2. Supply the key via the `ARK_API_KEY` environment variable (preferred) or the
+   `apiKey` config field. `ARK_API_KEY` takes precedence over `DEEPSEEK_API_KEY`
+   when both are set.
+3. Choose a `model` from Ark's catalog:
+   - `doubao-seed-2.0-code`, `doubao-seed-2.0-pro`, `doubao-seed-2.0-lite`,
+     `doubao-seed-2.0-mini`
+   - `glm-5.2`
+   - `kimi-k2.7-code`, `kimi-k2.6`
+   - `deepseek-v4-pro`, `deepseek-v4-flash`
+   - `minimax-m3`, `minimax-m2.7`
+
+```json
+{ "provider": "ark", "model": "glm-5.2" }
+```
+
+```bash
+export ARK_API_KEY="…"
+seekforge config set provider ark
+seekforge config set model glm-5.2
+```
+
+Because Ark is OpenAI-compatible, the DeepSeek-only behaviors are disabled under
+this preset: the DeepSeek `thinking` request parameter is not sent, context-cache
+hit tokens are not read, and cost/balance accounting are turned off (cost is
+reported as `0` and the `/user/balance` endpoint is not queried).
+
 ### `runtimeBin`
 
 Path to the `seekforge-runtime` binary (Rust execution backend). When set, file
@@ -623,6 +674,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `apiKey` | string | String |
 | `model` | string | String |
 | `baseUrl` | string | String |
+| `provider` | string | `deepseek` / `ark` / preset name |
 | `runtimeBin` | string | String |
 | `commandAllowlist` | string[] | Comma-separated string (`"pnpm test, cargo build"`) |
 | `models` | string[] | Comma-separated string (`"deepseek-v4-flash, deepseek-v4-pro"`) |
@@ -647,12 +699,13 @@ allowed keys.
 
 | Variable | Maps to | Precedence |
 | --- | --- | --- |
+| `ARK_API_KEY` | `apiKey` | Overrides all file/flag layers; wins over `DEEPSEEK_API_KEY` when both are set |
 | `DEEPSEEK_API_KEY` | `apiKey` | Overrides all file/flag layers |
 | `SEEKFORGE_RUNTIME_BIN` | `runtimeBin` | Overrides all file/flag layers |
 | `SEEKFORGE_PROFILE` | selects a `profiles` entry | Used when `--profile` is absent; the chosen overlay slots below `--settings` |
 
-`DEEPSEEK_API_KEY` and `SEEKFORGE_RUNTIME_BIN` are applied at the end of
-`loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROFILE`
+`ARK_API_KEY`, `DEEPSEEK_API_KEY` and `SEEKFORGE_RUNTIME_BIN` are applied at the
+end of `loadConfig()`, so they always win over any file or flag. `SEEKFORGE_PROFILE`
 only chooses which `profiles` overlay is layered in (the explicit `--profile`
 flag takes precedence over it).
 

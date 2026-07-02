@@ -8,6 +8,7 @@ import {
   createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
+  resolveProviderConfig,
   wrapProviderWithCache,
   type AgentCore,
   type AgentCoreDeps,
@@ -68,13 +69,16 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
   // One retry bus shared by every provider; the active run routes provider
   // retries into its event stream (provider.retry).
   const retryBus = createRetryBus();
-  const baseProvider = createDeepSeekProvider({
-    apiKey: config.apiKey ?? "",
-    baseUrl: config.baseUrl,
-    model: opts.model ?? config.model,
-    onRetry: retryBus.onRetry,
-    ...thinkingOpts,
-  });
+  const baseProvider = createDeepSeekProvider(
+    resolveProviderConfig({
+      provider: config.provider,
+      apiKey: config.apiKey ?? "",
+      baseUrl: config.baseUrl,
+      model: opts.model ?? config.model,
+      onRetry: retryBus.onRetry,
+      ...thinkingOpts,
+    }),
+  );
   // Opt-in disk cache for identical non-streaming calls (evals, subagents).
   const provider = config.llmCache
     ? wrapProviderWithCache(baseProvider, join(homedir(), ".seekforge", "llm-cache"))
@@ -87,13 +91,16 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     // deepseek-reasoner cannot drive the tool-call loop, so fall back.
     providerForModel: (model) => {
       if (model === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider({
-        apiKey: config.apiKey ?? "",
-        baseUrl: config.baseUrl,
-        model,
-        onRetry: retryBus.onRetry,
-        ...thinkingOpts,
-      });
+      return createDeepSeekProvider(
+        resolveProviderConfig({
+          provider: config.provider,
+          apiKey: config.apiKey ?? "",
+          baseUrl: config.baseUrl,
+          model,
+          onRetry: retryBus.onRetry,
+          ...thinkingOpts,
+        }),
+      );
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROVIDER_PRESETS,
   resolveProviderPreset,
+  resolveProviderConfig,
 } from "../../src/provider/presets.js";
 import { DEEPSEEK_CAPABILITIES } from "../../src/provider/types.js";
 import { DEFAULT_BASE_URL } from "../../src/provider/constants.js";
@@ -38,5 +39,60 @@ describe("resolveProviderPreset", () => {
 
   it("exposes both presets on PROVIDER_PRESETS", () => {
     expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(["ark", "deepseek"]);
+  });
+});
+
+describe("resolveProviderConfig", () => {
+  it("folds the ark preset: ark baseUrl + capabilities with thinking disabled", () => {
+    const config = resolveProviderConfig({ provider: "ark", apiKey: "k", model: "glm-5.2" });
+    expect(config.baseUrl).toBe("https://ark.cn-beijing.volces.com/api/plan/v3");
+    expect(config.capabilities).toEqual({
+      thinking: false,
+      cacheHitTokens: false,
+      costAccounting: false,
+      balance: false,
+    });
+    expect(config.capabilities?.thinking).toBe(false);
+    expect(config.model).toBe("glm-5.2");
+    expect(config.apiKey).toBe("k");
+  });
+
+  it("lets an explicit baseUrl override the preset's", () => {
+    const config = resolveProviderConfig({
+      provider: "ark",
+      apiKey: "k",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+    expect(config.baseUrl).toBe("https://proxy.example.com/v1");
+    // Capabilities still come from the preset even when baseUrl is overridden.
+    expect(config.capabilities?.thinking).toBe(false);
+  });
+
+  it("no provider → no capabilities and baseUrl passthrough (DeepSeek default preserved)", () => {
+    const withUrl = resolveProviderConfig({ apiKey: "k", baseUrl: "https://custom/v1" });
+    expect(withUrl.capabilities).toBeUndefined();
+    expect(withUrl.baseUrl).toBe("https://custom/v1");
+
+    const bare = resolveProviderConfig({ apiKey: "k" });
+    expect(bare.capabilities).toBeUndefined();
+    expect(bare.baseUrl).toBeUndefined();
+    // Only apiKey survives — nothing else was provided.
+    expect(Object.keys(bare)).toEqual(["apiKey"]);
+  });
+
+  it("passes optional fields through only when defined", () => {
+    const config = resolveProviderConfig({
+      apiKey: "k",
+      model: "deepseek-v4-flash",
+      thinking: false,
+      reasoningEffort: "max",
+      streamIdleTimeoutMs: 5000,
+      fallbackModel: "deepseek-v4-pro",
+    });
+    expect(config.thinking).toBe(false);
+    expect(config.reasoningEffort).toBe("max");
+    expect(config.streamIdleTimeoutMs).toBe(5000);
+    expect(config.fallbackModel).toBe("deepseek-v4-pro");
+    expect(config.capabilities).toBeUndefined();
   });
 });

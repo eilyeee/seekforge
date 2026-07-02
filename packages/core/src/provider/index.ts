@@ -20,6 +20,7 @@ export { DEEPSEEK_CAPABILITIES } from "./types.js";
 export {
   PROVIDER_PRESETS,
   resolveProviderPreset,
+  resolveProviderConfig,
   type ProviderPreset,
 } from "./presets.js";
 export { estimateCostUsd, type UsageTokens } from "./cost.js";

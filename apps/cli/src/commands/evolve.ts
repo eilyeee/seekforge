@@ -5,6 +5,7 @@ import {
   listSessions,
   readEvolutionProposal,
   reflectOnSession,
+  resolveProviderConfig,
   scoreSession,
   sessionReflectionPath,
   setEvolutionProposalStatus,
@@ -70,11 +71,14 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
   );
   for (const note of score.notes) console.log(t("cmd.evolve.note", { note }));
 
-  const provider = createDeepSeekProvider({
-    apiKey: config.apiKey,
-    ...(config.model ? { model: config.model } : {}),
-    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
-  });
+  const provider = createDeepSeekProvider(
+    resolveProviderConfig({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      ...(config.model ? { model: config.model } : {}),
+      ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    }),
+  );
 
   const result = await reflectOnSession(provider, { workspace, sessionId: target });
   console.log(`\n${t("cmd.evolve.reflectionWritten", { path: sessionReflectionPath(workspace, target) })}`);

@@ -8,6 +8,7 @@ const ALLOWED_KEYS = [
   "apiKey",
   "model",
   "baseUrl",
+  "provider",
   "runtimeBin",
   "commandAllowlist",
   "models",

@@ -6,6 +6,7 @@ import {
   createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
+  resolveProviderConfig,
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
@@ -78,14 +79,17 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   // One retry bus shared by every provider this factory builds; the active
   // run routes its retries into the agent event stream (provider.retry).
   const retryBus = createRetryBus();
-  const provider = createDeepSeekProvider({
-    apiKey: config.apiKey ?? "",
-    baseUrl: config.baseUrl,
-    model: opts.model ?? config.model,
-    onRetry: retryBus.onRetry,
-    ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
-    ...thinkingOpts,
-  });
+  const provider = createDeepSeekProvider(
+    resolveProviderConfig({
+      provider: config.provider,
+      apiKey: config.apiKey ?? "",
+      baseUrl: config.baseUrl,
+      model: opts.model ?? config.model,
+      onRetry: retryBus.onRetry,
+      ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
+      ...thinkingOpts,
+    }),
+  );
 
   const deps: AgentCoreDeps = {
     provider,
@@ -99,13 +103,16 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
         );
         return provider;
       }
-      return createDeepSeekProvider({
-        apiKey: config.apiKey ?? "",
-        baseUrl: config.baseUrl,
-        model,
-        onRetry: retryBus.onRetry,
-        ...thinkingOpts,
-      });
+      return createDeepSeekProvider(
+        resolveProviderConfig({
+          provider: config.provider,
+          apiKey: config.apiKey ?? "",
+          baseUrl: config.baseUrl,
+          model,
+          onRetry: retryBus.onRetry,
+          ...thinkingOpts,
+        }),
+      );
     },
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     ...(opts.maxTurns !== undefined && opts.maxTurns > 0 ? { limits: { maxAgentTurns: opts.maxTurns } } : {}),
