@@ -29,6 +29,8 @@ and quick start; this folder holds the reference docs.
   evals, the baseline convention, and `--fail-on-regression`.
 - [Releasing](RELEASING.md) — the DMG checklist, clean-machine verification
   gate, and the updater decision.
+- [Roadmap and competitive gaps](roadmap.md) — where SeekForge is intentionally
+  strong today, and what it still lacks versus mature open-source coding agents.
 
 ## Notes & audits
 - [Low-end model audit](low-end-model-audit.md)

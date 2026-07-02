@@ -38,7 +38,8 @@ skills, reviewable project memory, optional Rust execution backend.
 Claude-Code-parity terminal UI; `seekforge serve` ships a local web
 workbench (React) plus a Tauri desktop shell; subagents, self-evolution
 and an evaluation harness are in. Current focus: real-world polish
-(dogfooding, eval expansion).
+(dogfooding, eval expansion). See
+[docs/roadmap.md](docs/roadmap.md) for the next-phase gaps and priorities.
 
 ## Install & setup
 
