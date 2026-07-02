@@ -9,3 +9,8 @@ target/
 .env.*
 .seekforge/
 evals/reports/
+
+# Local Claude Code preferences / runtime artifacts (not shared)
+.claude/settings.json
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
