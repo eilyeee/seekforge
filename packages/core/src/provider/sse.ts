@@ -108,7 +108,7 @@ function processLine(
       acc.toolCallsByIndex.set(index, entry);
     }
     if (tc.id) entry.id = tc.id;
-    if (tc.function?.name) entry.name += tc.function.name;
+    if (tc.function?.name) entry.name = tc.function.name;
     if (tc.function?.arguments) entry.argumentsJson += tc.function.arguments;
   }
 }

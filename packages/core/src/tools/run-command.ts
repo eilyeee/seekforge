@@ -395,12 +395,18 @@ export function runShellCommand(
 
     child.stdout.on("data", (c: Buffer) => {
       const text = outDecoder.write(c);
-      if (stdout.length < MAX_CAPTURE_CHARS) stdout += text;
+      if (stdout.length < MAX_CAPTURE_CHARS) {
+        stdout += text;
+        if (stdout.length > MAX_CAPTURE_CHARS) stdout = stdout.slice(0, MAX_CAPTURE_CHARS);
+      }
       observe("stdout", text);
     });
     child.stderr.on("data", (c: Buffer) => {
       const text = errDecoder.write(c);
-      if (stderr.length < MAX_CAPTURE_CHARS) stderr += text;
+      if (stderr.length < MAX_CAPTURE_CHARS) {
+        stderr += text;
+        if (stderr.length > MAX_CAPTURE_CHARS) stderr = stderr.slice(0, MAX_CAPTURE_CHARS);
+      }
       observe("stderr", text);
     });
 

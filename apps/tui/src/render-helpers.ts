@@ -43,6 +43,48 @@ function charWidth(cp: number): number {
     (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compatibility forms
     (cp >= 0xff00 && cp <= 0xff60) || // Fullwidth forms
     (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth signs
+    // BMP emoji that render as 2 columns (✅ ❌ ⭐ ⚠ ▶ … — common in LLM tables).
+    (cp >= 0x231a && cp <= 0x231b) || // watch, hourglass
+    (cp >= 0x23e9 && cp <= 0x23f3) || // media buttons, hourglass
+    (cp >= 0x23f8 && cp <= 0x23fa) || // pause/record buttons
+    cp === 0x24c2 || // circled M
+    (cp >= 0x25aa && cp <= 0x25ab) || // small squares
+    cp === 0x25b6 ||
+    cp === 0x25c0 || // play/reverse
+    (cp >= 0x25fb && cp <= 0x25fe) || // squares
+    // Default-emoji-presentation codepoints (Emoji_Presentation=Yes) that render
+    // as 2 columns; deliberately NOT the whole 0x2600–0x27bf block, most of which
+    // is text/ambiguous width (1 column) absent a variation selector.
+    (cp >= 0x2614 && cp <= 0x2615) || // umbrella, hot beverage
+    (cp >= 0x2648 && cp <= 0x2653) || // zodiac
+    cp === 0x267f || // wheelchair
+    cp === 0x2693 || // anchor
+    cp === 0x26a1 || // high voltage
+    (cp >= 0x26aa && cp <= 0x26ab) || // circles
+    (cp >= 0x26bd && cp <= 0x26be) || // soccer, baseball
+    (cp >= 0x26c4 && cp <= 0x26c5) || // snowman, sun behind cloud
+    cp === 0x26ce || // ophiuchus
+    cp === 0x26d4 || // no entry
+    cp === 0x26ea || // church
+    (cp >= 0x26f2 && cp <= 0x26f3) || // fountain, golf
+    cp === 0x26f5 || // sailboat
+    cp === 0x26fa || // tent
+    cp === 0x26fd || // fuel pump
+    cp === 0x2705 || // white heavy check mark ✅
+    (cp >= 0x270a && cp <= 0x270b) || // raised fist/hand
+    cp === 0x2728 || // sparkles
+    (cp >= 0x274c && cp <= 0x274c) || // cross mark ❌
+    cp === 0x274e || // negative squared cross mark
+    (cp >= 0x2753 && cp <= 0x2755) || // question/exclamation marks
+    cp === 0x2757 || // heavy exclamation
+    (cp >= 0x2795 && cp <= 0x2797) || // heavy plus/minus/division
+    cp === 0x27b0 || // curly loop
+    cp === 0x27bf || // double curly loop
+    (cp >= 0x2934 && cp <= 0x2935) || // curved arrows
+    (cp >= 0x2b05 && cp <= 0x2b07) || // arrows
+    (cp >= 0x2b1b && cp <= 0x2b1c) || // squares
+    cp === 0x2b50 || // star ⭐
+    cp === 0x2b55 || // heavy large circle
     (cp >= 0x1f300 && cp <= 0x1faff) || // emoji / symbols & pictographs
     (cp >= 0x20000 && cp <= 0x3fffd) // CJK Ext B+
   ) {

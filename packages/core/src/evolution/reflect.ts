@@ -253,6 +253,8 @@ export async function reflectOnSession(
   input: ReflectOnSessionInput,
 ): Promise<ReflectOnSessionResult> {
   const { workspace, sessionId } = input;
+  // A missing session is a caller error and intentionally throws (see tests);
+  // only model/parse failures degrade below.
   const score = scoreSession(workspace, sessionId);
 
   let parsed: ParsedReflection | undefined;

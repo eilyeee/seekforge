@@ -252,11 +252,14 @@ export function shrinkToolResultsToFit(messages: ChatMessage[], budgetTokens: nu
     .filter((x) => x.isTool)
     .sort((a, b) => b.len - a.len);
   const half = Math.floor(TOOL_SHRINK_FLOOR_CHARS / 2);
+  // Shrinking rewrites content to `2*half + marker` chars; skip anything at or
+  // below that size, or the "shrink" would grow it (and falsely report success).
+  const minShrinkable = 2 * half + TOOL_SHRINK_MARKER.length;
   let shrunk = 0;
   for (const { i } of toolOrder) {
     if (estimateMessagesTokens(out) <= budgetTokens) break;
     const content = out[i]!.content;
-    if (content.length <= TOOL_SHRINK_FLOOR_CHARS) continue;
+    if (content.length <= minShrinkable) continue;
     out[i] = { ...out[i]!, content: content.slice(0, half) + TOOL_SHRINK_MARKER + content.slice(-half) };
     shrunk++;
   }

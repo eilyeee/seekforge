@@ -131,12 +131,19 @@ export class WorktreeManager {
     // existing seekforge/<slug> branch.
     const wanted = worktreeSlug(name);
     let slug = wanted;
-    for (let n = 2; (await this.slugTaken(base.path, slug)) && n < 100; n++) {
+    // `n <= 100` so the final probe checks whether the candidate we settle on
+    // (`wanted-100`) is actually free rather than exiting on a slug still taken.
+    for (let n = 2; (await this.slugTaken(base.path, slug)) && n <= 100; n++) {
       slug = `${wanted}-${n}`;
     }
     // Close the await-gap: bump past any slug reserved by a concurrent create
     // (synchronously, no await) and claim it before doing the async git work.
+    // Bounded so a saturated namespace surfaces an error instead of spinning the
+    // event loop forever (this loop never awaits).
     for (let n = 2; this.reservedSlugs.has(slug) || this.registry.resolve(`wt-${slug}`); n++) {
+      if (n > 1000) {
+        throw new WorktreeError("bad_request", `too many worktrees named "${wanted}"`, 409);
+      }
       slug = `${wanted}-${n}`;
     }
     this.reservedSlugs.add(slug);
@@ -209,11 +216,16 @@ export class WorktreeManager {
         () => false,
       );
       if (!midMerge) throw err; // e.g. dirty base blocking the merge — surfaced as git_error
-      const files = (await git(r.basePath, ["diff", "--name-only", "--diff-filter=U"]))
-        .split("\n")
-        .filter(Boolean);
-      await git(r.basePath, ["merge", "--abort"]).catch(() => undefined);
-      return { conflict: true, files };
+      // Always abort, even if collecting the conflict list throws, so the base
+      // repo is never left mid-merge (which blocks all later operations on it).
+      try {
+        const files = (await git(r.basePath, ["diff", "--name-only", "--diff-filter=U"]))
+          .split("\n")
+          .filter(Boolean);
+        return { conflict: true, files };
+      } finally {
+        await git(r.basePath, ["merge", "--abort"]).catch(() => undefined);
+      }
     }
   }
 
