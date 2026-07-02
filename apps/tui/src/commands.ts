@@ -43,6 +43,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
   { name: "fork", summary: "fork the current session (continue without touching the original)" , group: "session" },
   { name: "tab", args: "[new|close|next|<n>]", summary: "tabs: parallel sessions (Ctrl+N new, Ctrl+T cycle)", group: "session" },
+  { name: "worktree", args: "[list | new [name] | remove <slug>]", summary: "git worktree sessions: isolated checkouts under .seekforge/worktrees", group: "tools" },
   { name: "diff", summary: "git diff of the working tree" , group: "review" },
   { name: "review", summary: "review the uncommitted changes (read-only)" , group: "review" },
   { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" , group: "context" },
@@ -88,6 +89,7 @@ export type SlashCommand =
   | { name: "backtrack" }
   | { name: "fork" }
   | { name: "tab"; arg?: string }
+  | { name: "worktree"; arg?: string }
   | { name: "diff" }
   | { name: "review" }
   | { name: "todo"; arg?: string }
@@ -162,7 +164,7 @@ const NO_ARG = new Set([
   "quit",
 ]);
 /** Commands whose argument is the whole rest of the line (free text). */
-const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory"]);
+const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory", "worktree"]);
 /** Commands taking a single word argument. */
 const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "config", "tab", "theme", "handoff", "stash"]);
 

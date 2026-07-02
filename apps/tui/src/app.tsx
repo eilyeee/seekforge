@@ -29,6 +29,12 @@ import {
   writeSessionMeta,
   llmCompactSessionNow,
   createDeepSeekProvider,
+  listGitWorktrees,
+  isWorktreeDirty,
+  createWorktree,
+  worktreeBranchExists,
+  removeWorktree,
+  WorktreeGitError,
   BUILTIN_COMMAND_ALLOWLIST,
   type BackgroundTasks,
   type McpClientEntry,
@@ -57,6 +63,7 @@ import { buildHandoff, handoffPath, latestHandoff, listHandoffs } from "./handof
 import { formatUsageDetail, kfmt } from "./format.js";
 import { COMMANDS, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
+import { parseWorktreeCommand, pickFreeSlug, resolveWorktreeTarget, seekforgeWorktrees } from "./worktree-cmd.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
 import { helpRows, selectableIndices } from "./command-meta.js";
 import {
@@ -1199,6 +1206,82 @@ export function App({
             break;
           }
           dispatch({ type: "diff", path: "working tree (git diff)", lines: classifyUnifiedDiff(text) });
+          break;
+        }
+        case "worktree": {
+          const sub = parseWorktreeCommand(command.arg);
+          if (sub.kind === "usage") {
+            notice("usage: /worktree [list | new [name] | remove <slug-or-branch>]");
+            notice("  list                 show SeekForge worktree sessions");
+            notice("  new [name]           create an isolated checkout on a new branch");
+            notice("  remove <slug|branch> delete a worktree session");
+            break;
+          }
+          if (sub.kind === "list") {
+            void (async () => {
+              try {
+                const entries = seekforgeWorktrees(await listGitWorktrees(projectPath));
+                if (entries.length === 0) {
+                  notice("no SeekForge worktree sessions — create one with /worktree new [name]");
+                  return;
+                }
+                notice(`SeekForge worktree sessions (${entries.length}):`);
+                for (const e of entries) {
+                  const dirty = await isWorktreeDirty(e.path).catch(() => false);
+                  notice(`  ${e.branch}${dirty ? "  (dirty)" : ""}`);
+                  notice(`    ${e.path}`, "dim");
+                }
+              } catch (err) {
+                notice(`worktree list failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+              }
+            })();
+            break;
+          }
+          if (sub.kind === "new") {
+            const name = sub.name;
+            void (async () => {
+              try {
+                const slug = await pickFreeSlug(name, (s) => worktreeBranchExists(projectPath, s));
+                const { path, branch } = await createWorktree(projectPath, slug);
+                notice(`created worktree on ${branch}`);
+                notice(`  ${path}`, "dim");
+                notice(`  isolated checkout — open in a new terminal: cd ${path} && seekforge`, "dim");
+              } catch (err) {
+                if (err instanceof WorktreeGitError && err.code === "not_a_git_repo") {
+                  notice("not a git repository — /worktree needs a git repo", "error");
+                } else {
+                  notice(`worktree new failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+                }
+              }
+            })();
+            break;
+          }
+          // sub.kind === "remove"
+          if (!sub.target) {
+            notice("usage: /worktree remove <slug-or-branch>", "error");
+            break;
+          }
+          const target = sub.target;
+          void (async () => {
+            try {
+              const entries = await listGitWorktrees(projectPath);
+              const entry = resolveWorktreeTarget(entries, target);
+              if (!entry) {
+                const managed = seekforgeWorktrees(entries);
+                if (managed.length === 0) {
+                  notice(`no SeekForge worktree matches "${target}" — there are none`, "error");
+                } else {
+                  notice(`no SeekForge worktree matches "${target}". available:`, "error");
+                  for (const e of managed) notice(`  ${e.branch}`);
+                }
+                return;
+              }
+              await removeWorktree(projectPath, entry.path, entry.branch);
+              notice(`removed worktree ${entry.branch}`);
+            } catch (err) {
+              notice(`worktree remove failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+            }
+          })();
           break;
         }
         case "export": {

@@ -127,6 +127,12 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
         { value: "", hint: "write a handoff document" },
         { value: "list", hint: "recent handoffs" },
       ];
+    case "worktree":
+      return [
+        { value: "list", hint: "show SeekForge worktree sessions" },
+        { value: "new", hint: "create an isolated checkout on a new branch" },
+        { value: "remove", hint: "delete a worktree session (slug or branch)" },
+      ];
     case "export":
       return [{ value: "", hint: "default path" }];
     default:
