@@ -37,6 +37,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "sessions", summary: "pick a session to resume (interactive)" , group: "session" },
   { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
+  { name: "loop", args: "<verify command>", summary: "auto-loop: run→verify until the command passes (task = composer lines below)" , group: "run" },
   { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" , group: "run" },
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
@@ -80,6 +81,8 @@ export type SlashCommand =
   | { name: "sessions" }
   | { name: "resume"; arg?: string }
   | { name: "plan"; arg?: string }
+  /** Auto-loop: `verify` is the success command; `task` is the composer text. */
+  | { name: "loop"; verify?: string; task?: string }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
@@ -188,6 +191,20 @@ export function parseInput(line: string): ParsedInput {
   const name = (head ?? "").toLowerCase();
   const ALIAS: Record<string, string> = { exit: "quit", q: "quit", h: "help", todos: "todo", cost: "usage" };
   const alias = ALIAS[name] ?? name;
+
+  // /loop is multi-line: the first line carries the verify command, every line
+  // below it is the task handed to the agent (so "the composer text is the
+  // task"). Split on the first newline before the generic arg handling.
+  if (alias === "loop") {
+    const newlineIdx = trimmed.indexOf("\n");
+    const firstLine = newlineIdx === -1 ? trimmed : trimmed.slice(0, newlineIdx);
+    const task = newlineIdx === -1 ? "" : trimmed.slice(newlineIdx + 1).trim();
+    const verify = firstLine.replace(/^\/\s*loop\s*/i, "").trim();
+    return {
+      kind: "slash",
+      command: { name: "loop", ...(verify ? { verify } : {}), ...(task ? { task } : {}) },
+    };
+  }
 
   if (NO_ARG.has(alias)) return { kind: "slash", command: { name: alias } as SlashCommand };
   if (REST_ARG.has(alias)) {

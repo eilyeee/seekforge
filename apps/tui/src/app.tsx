@@ -87,6 +87,8 @@ import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
 import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
+import { runLoop } from "./agent/run-loop.js";
+import { formatLoopEvent } from "./loop-format.js";
 import {
   atTokenAt,
   backspace,
@@ -726,6 +728,54 @@ export function App({
     [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd],
   );
 
+  /**
+   * Runs an autonomous run→verify loop (CORE's runAutoLoop) in the active tab.
+   * Registers its controller in runsByTabRef so Esc / Ctrl+C abort it exactly
+   * like a normal turn; streams each LoopEvent into the tab's transcript as
+   * notices. The loop forces acceptEdits internally (see run-loop.ts).
+   */
+  const runLoopTask = useCallback(
+    async (task: string, verifyCommand: string) => {
+      const controller = new AbortController();
+      const runId = ++runIdCounterRef.current;
+      const runTabId = activeIdRef.current;
+      const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
+      runsByTabRef.current.set(runTabId, { controller, runId });
+      sigintCountRef.current = 0;
+      dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
+      dispatchTab({ type: "notice", text: `loop task: ${task.replace(/\s+/g, " ").slice(0, 120)}` });
+      dispatchTab({ type: "run-start" });
+      try {
+        const result = await runLoop(task, verifyCommand, controller.signal, {
+          config: runConfigRef.current,
+          model: modelRef.current,
+          projectPath,
+          mcpToolSpecs,
+          maxIterations: 8,
+          onEvent: (event) => {
+            for (const line of formatLoopEvent(event)) {
+              dispatchTab({ type: "notice", text: line.text, tone: line.tone });
+            }
+          },
+        });
+        // Adopt the loop's session so a follow-up message resumes it.
+        if (result.sessionId) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lastErrorRef.current = message;
+        if (!controller.signal.aborted) {
+          dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
+        }
+      } finally {
+        if (runsByTabRef.current.get(runTabId)?.runId === runId) runsByTabRef.current.delete(runTabId);
+        dispatchTab({ type: "run-end" });
+        syncBg();
+        ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+      }
+    },
+    [projectPath, mcpToolSpecs, syncBg, ring],
+  );
+
   /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
   const detachRun = useCallback(() => {
     const tabId = activeIdRef.current;
@@ -867,6 +917,30 @@ export function App({
           }
           void runTask(command.arg, { mode: "ask", plan: true });
           break;
+        case "loop": {
+          if (controllerRef.current) {
+            notice("a task is already running — Esc cancels it, or wait for it to finish", "error");
+            break;
+          }
+          const verifyCommand = command.verify?.trim();
+          const task = command.task?.trim();
+          if (!verifyCommand) {
+            notice(
+              "usage: /loop <verify command> — put the task on the line(s) below (Shift+Enter for a newline)",
+              "error",
+            );
+            break;
+          }
+          if (!task) {
+            notice(
+              "add the task on the line(s) below the /loop command — the composer text is the task",
+              "error",
+            );
+            break;
+          }
+          void runLoopTask(task, verifyCommand);
+          break;
+        }
         case "approve": {
           if (!command.arg) {
             notice(`approval mode: ${approvalRef.current} (confirm | acceptEdits | auto | plan — Shift+Tab cycles)`);
@@ -1484,7 +1558,7 @@ export function App({
         }
       }
     },
-    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, openExternalEditor, quit, syncBg, setRawMode],
+    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, runLoopTask, openExternalEditor, quit, syncBg, setRawMode],
   );
 
   // ---------------------------------------------------------------------

@@ -62,6 +62,33 @@ describe("parseInput v2.1 additions", () => {
   });
 });
 
+describe("parseInput /loop", () => {
+  it("splits the verify command (first line) from the task (lines below)", () => {
+    expect(parseInput("/loop npm test\nFix the failing auth tests")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "npm test", task: "Fix the failing auth tests" },
+    });
+  });
+
+  it("keeps a multi-word verify command intact and joins multi-line tasks", () => {
+    expect(parseInput("/loop pnpm -w test -- foo\nline one\nline two")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "pnpm -w test -- foo", task: "line one\nline two" },
+    });
+  });
+
+  it("omits the task when only the verify line is present", () => {
+    expect(parseInput("/loop npm test")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "npm test" },
+    });
+  });
+
+  it("omits the verify command when /loop is bare", () => {
+    expect(parseInput("/loop")).toEqual({ kind: "slash", command: { name: "loop" } });
+  });
+});
+
 describe("parseInput v3 additions", () => {
   it("parses the new management commands", () => {
     expect(parseInput("/backtrack")).toEqual({ kind: "slash", command: { name: "backtrack" } });
