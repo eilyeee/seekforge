@@ -1,0 +1,151 @@
+# Boundary-defect checklist
+
+A running list of the boundary/edge-case bug *classes* found in this repo, so we
+stop reintroducing them. Each entry is a reusable pattern: the anti-pattern, the
+fix, and the real site it was caught. Use it two ways:
+
+- **Writing** parsing / matching / cursor / cache / serialization / lifecycle /
+  classification code — check the relevant entries before you commit.
+- **Reviewing** a change that touches those areas — walk the list as a checklist.
+
+Most of these pass `typecheck` and even the happy-path tests. They only bite on a
+specific boundary input, so they need a deliberate look, not just a green run.
+
+---
+
+## 1. `parse` functions return `NaN`, and every `NaN` comparison is `false`
+
+`Date.parse(x)`, `parseInt(x)`, `parseFloat(x)`, `Number(x)` return `NaN` on bad
+input. `NaN >= cutoff`, `NaN < limit`, `NaN === n` are **all** `false`, so a guard
+written as "recent → keep" silently takes the *else* branch on unparseable input.
+
+- **Do:** `const n = Date.parse(x); if (Number.isNaN(n) || n >= cutoff) …` — decide
+  what an unparseable value means and handle it explicitly.
+- **Caught:** `packages/core/src/memory/compact.ts` — a corrupt `addedAt` made
+  `NaN >= cutoff` false, so an unknown-age memory fact was silently archived.
+
+## 2. Prefix matching needs a separator boundary
+
+`subject.startsWith(match)` lets `src/foo` match `src/foobar.ts` and
+`npm run build` match `npm run build-all` — a sibling smuggled past the gate.
+
+- **Do:** for an **allow / authorize** decision, require a boundary: `subject ===
+  match`, or the match already ends at a separator, or `subject[match.length]` is a
+  separator (`" "` for commands, `/` or `path.sep` for paths). For a **deny**
+  decision, keep the broad `startsWith` — over-matching a deny fails closed.
+- **Caught:** `packages/core/src/tools/permissions.ts` (`ruleMatches` /
+  `boundaryPrefix`); the same rationale already lived in `sessionAllowed`.
+
+## 3. A cache / memo key must include every input that affects the output
+
+If two different requests hash to the same key, the second silently gets the
+first one's answer.
+
+- **Do:** hash **all** output-affecting fields, not just the obvious ones.
+- **Caught:** `packages/core/src/provider/cache.ts` — the key omitted
+  `temperature` and `maxTokens`, so a follow-up call with a larger `maxTokens`
+  replayed the earlier truncated reply.
+
+## 4. Serialize and deserialize must be exact inverses
+
+If the writer uses `JSON.stringify` but the reader only strips the outer quotes,
+any value containing `"` or `\` is corrupted on a render→reload round-trip.
+
+- **Do:** pair the encoder and decoder deliberately; when the writer JSON-encodes,
+  the reader must `JSON.parse`. Add a round-trip test with a quote/backslash value.
+- **Caught:** `packages/core/src/subagents/frontmatter.ts` vs `import.ts`.
+
+## 5. Cursor / index math must be surrogate-pair & multibyte aware
+
+Astral characters (emoji, CJK-ext) are two UTF-16 code units. A bare `cursor ± 1`
+lands *between* the halves and corrupts the text on the next edit.
+
+- **Do:** step by whole code points (`stepLeft`/`stepRight`/`moveLeft`/`moveRight`)
+  and `snapToBoundary` any clamped position. Test with `"😀"`.
+- **Caught:** `apps/tui/src/vim.ts` (insert-mode Escape, charwise `p`) — the
+  helpers already existed in `editor.ts`; vim just bypassed them.
+
+## 6. Every `addEventListener` needs a matching `removeEventListener`
+
+`{ once: true }` only removes the listener *if it fires*. On the normal
+settle/cleanup path it never fires, so a listener attached to a long-lived signal
+leaks once per operation.
+
+- **Do:** name the handler and `removeEventListener` it in a `finally` / settle
+  callback (or use `AbortSignal.any`). Same for timers, streams, child processes.
+- **Caught:** `packages/core/src/subagents/manager.ts` — abort listener on the
+  shared parent `AbortSignal`.
+
+## 7. Enforce protocol invariants at the serialization / request boundary
+
+State persisted mid-operation (cancel / error / limit hit between two writes) can
+violate an invariant a downstream consumer requires. Fixing only the one write
+path leaves every other path exposed.
+
+- **Do:** enforce the invariant centrally where the data leaves the system, so it
+  holds no matter how the data got there. Make it a no-op for well-formed input.
+- **Caught:** `packages/core/src/provider/mapping.ts` (`toWireMessages`) — an
+  assistant `tool_calls` with no matching `tool` results (turn cancelled/capped
+  mid-flight) 400'd the OpenAI-compatible API on `/resume`. Now unanswered
+  tool_calls and orphan tool results are dropped before the request is built.
+
+## 8. `JSON.parse` succeeding does not mean you got an object
+
+`null`, `42`, `"x"`, `[]` are all valid JSON. Code that then spreads
+`...parsed.field` throws an opaque `TypeError`.
+
+- **Do:** after parsing config-shaped input, assert it's a non-null, non-array
+  object before using it; return `{}` or throw a descriptive error otherwise.
+- **Caught:** `apps/cli/src/config.ts` (`readJson` / `readSettingsFile`).
+
+## 9. "Read-only vs mutating" classification: check each command's real effect
+
+Empty-args ≠ listing. Bare `git stash` is `git stash push` and mutates the working
+tree; treating "no args = read-only" auto-ran it with no confirmation.
+
+- **Do:** classify by the command's actual side effect, per subcommand. When in
+  doubt, treat as mutating (require confirmation) — fail closed.
+- **Caught:** `packages/core/src/tools/run-command.ts` (`classifyGit`).
+
+## 10. Clamp externally-supplied numbers that feed ranking / sizing / budgets
+
+An unbounded value from a user-authored file can dominate a score meant to be a
+tie-breaker, or blow past a budget.
+
+- **Do:** clamp to the intended range at the load boundary (`Math.max(lo,
+  Math.min(hi, x))`) rather than trusting the input.
+- **Caught:** `packages/core/src/skills/load.ts` — a crafted `priority: 500`
+  outweighed genuine match signal (priority is meant to be `[0,100]`).
+
+## 11. Handle empty / unborn / zero states in parsers
+
+Fresh repo (no commits), empty collection, empty string, single element, zero
+trials — these produce output shapes the happy path never sees.
+
+- **Do:** enumerate the zero/one/unborn cases for any parser or stats function and
+  test them.
+- **Caught:** `apps/server/src/rest.ts` (`gitStatus`) — `## No commits yet on main`
+  parsed the branch as `"No"`. (See also empty-set guards across
+  `packages/eval-harness`.)
+
+## 12. Decide the sign of a formatted number *after* rounding
+
+`value >= 0 ? "+"+fixed : fixed` prints `+0` for an unchanged delta and `-0.0000`
+for a tiny negative that rounds to zero — both misleading.
+
+- **Do:** round first, then if the rounded value is `0` emit an unsigned zero.
+- **Caught:** `packages/eval-harness/src/{report,ab}.ts` (`signed`).
+
+## 13. When a comment/doc and a test disagree, the test is the spec
+
+A doc comment claimed "solo-run task = tie" while a test asserted it's credited to
+the variant that ran it. Don't "fix" the code to match the comment — confirm intent
+(the test encodes it) and fix the comment.
+
+- **Caught:** `packages/eval-harness/src/ab.ts` (`AbSummary` doc vs
+  `compareVariants` behavior).
+
+---
+
+*Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the
+file — not just the one-off.*

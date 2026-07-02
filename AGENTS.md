@@ -40,6 +40,12 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
 
 ## Agent Rules
 
+- Before writing or reviewing code that parses input, matches prefixes, does
+  cursor/index math, caches by a key, serializes/deserializes, manages listener/
+  resource lifecycles, or classifies commands, consult
+  [docs/boundary-checklist.md](docs/boundary-checklist.md) — a running list of the
+  boundary bug *classes* already found here. When you fix a new boundary defect,
+  add its pattern there.
 - Always inspect relevant files before editing.
 - Do not modify `packages/shared/src/index.ts` types without explicit instruction —
   other work streams build against them.
