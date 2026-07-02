@@ -34,7 +34,17 @@ export function isAuthorizedDir(dir: string, storePath: string = authorizedStore
 export function authorizeDir(dir: string, storePath: string = authorizedStorePath()): void {
   const target = resolve(dir);
   const dirs = readDirs(storePath);
-  if (dirs.some((d) => resolve(d) === target)) return;
+  // Skip when already covered by an exact match OR an authorized ANCESTOR — the
+  // same containment rule isAuthorizedDir uses — so a redundant subdir entry is
+  // never appended (which would bloat the store).
+  if (
+    dirs.some((d) => {
+      const a = resolve(d);
+      return target === a || target.startsWith(`${a}/`);
+    })
+  ) {
+    return;
+  }
   dirs.push(target);
   mkdirSync(dirname(storePath), { recursive: true });
   writeFileSync(storePath, `${JSON.stringify({ dirs }, null, 2)}\n`);

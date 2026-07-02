@@ -56,7 +56,27 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
           return msg;
         }
       }
-      if (done) throw new McpError("mcp_parse_error", `SSE stream ended without a response for request ${id}`);
+      if (done) {
+        // Some servers/proxies flush the final `data:` event and close the
+        // connection without the trailing blank line that delimits events —
+        // parse whatever remains in the buffer as a last event before giving up.
+        const data = buffer
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (data) {
+          try {
+            const msg = JSON.parse(data) as JsonRpcResponse;
+            if (msg !== null && typeof msg === "object" && msg.id === id && ("result" in msg || "error" in msg)) {
+              return msg;
+            }
+          } catch {
+            // fall through to the parse error below
+          }
+        }
+        throw new McpError("mcp_parse_error", `SSE stream ended without a response for request ${id}`);
+      }
     }
   } finally {
     // Stop reading once we have (or failed to get) the answer.

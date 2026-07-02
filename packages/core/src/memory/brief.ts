@@ -61,9 +61,12 @@ export function taskKeywords(task: string): string[] {
     if (word.length >= 3) keywords.add(word);
   }
   for (const run of lower.match(CJK_RUN) ?? []) {
-    for (let i = 0; i + 2 <= run.length; i++) {
-      keywords.add(run.slice(i, i + 2));
-    }
+    // Iterate by code point, not UTF-16 code unit: a supplementary-plane Han
+    // char (CJK Ext B) is a surrogate pair, and slicing by code unit would emit
+    // orphaned-surrogate "bigrams" that never match. Identical to slice for the
+    // common BMP case.
+    const cps = [...run];
+    for (let i = 0; i + 1 < cps.length; i++) keywords.add(cps[i]! + cps[i + 1]!);
   }
   return [...keywords];
 }

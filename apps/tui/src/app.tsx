@@ -1647,7 +1647,7 @@ export function App({
         dispatch({
           type: "scroll",
           delta: wheel === "up" ? 3 : -3,
-          max: Math.max(0, stateRef.current.items.length - 1),
+          max: Math.max(0, stateRef.current.items.length - VIEW_ITEMS),
         });
       }
       return;
@@ -1656,13 +1656,16 @@ export function App({
     // 0.5 Pager (Ctrl+L): modal full-transcript scroller.
     if (pager) {
       const h = 20;
+      // The last useful offset is length - h (the window clamps start there);
+      // going past it just shows the same final page and wastes keystrokes.
+      const maxOffset = Math.max(0, pager.lines.length - h);
       if (stroke.name === "escape" || rawInput === "q") setPager(null);
       else if (stroke.name === "up") setPager({ ...pager, offset: Math.max(0, pager.offset - 1) });
-      else if (stroke.name === "down") setPager({ ...pager, offset: pager.offset + 1 });
+      else if (stroke.name === "down") setPager({ ...pager, offset: Math.min(maxOffset, pager.offset + 1) });
       else if (stroke.name === "pageup") setPager({ ...pager, offset: Math.max(0, pager.offset - h) });
-      else if (stroke.name === "pagedown") setPager({ ...pager, offset: pager.offset + h });
+      else if (stroke.name === "pagedown") setPager({ ...pager, offset: Math.min(maxOffset, pager.offset + h) });
       else if (rawInput === "g") setPager({ ...pager, offset: 0 });
-      else if (rawInput === "G") setPager({ ...pager, offset: pager.lines.length });
+      else if (rawInput === "G") setPager({ ...pager, offset: maxOffset });
       return;
     }
 
@@ -1964,7 +1967,7 @@ export function App({
       dispatch({
         type: "scroll",
         delta: globalAction === "scroll-up" ? SCROLL_PAGE : -SCROLL_PAGE,
-        max: Math.max(0, stateRef.current.items.length - 1),
+        max: Math.max(0, stateRef.current.items.length - VIEW_ITEMS),
       });
       return;
     }
