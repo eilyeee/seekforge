@@ -140,6 +140,36 @@ export const VARIANTS: Variant[] = [
       "A/B under it to check whether a transparent lever helps the weaker model more).",
     apply: (base) => ({ ...base, model: "deepseek-v4-pro" }),
   },
+  {
+    name: "context-tight",
+    describe:
+      "Shrinks the model context window to 32000 tokens (no other variant exercises this knob), " +
+      "forcing full compaction to trigger earlier and more often. A/B vs control.",
+    // Hypothesis: a tighter context window makes the agent compact sooner, so it
+    // carries fewer stale tokens per turn. Does that net-save tokens/cost without
+    // hurting completion (compaction can drop context the agent still needed)?
+    // Read cost-per-success + Win/Loss/Tie: a real win is lower cost at equal or
+    // better completion; a loss is more Losses (dropped context breaks tasks).
+    apply: (base) => ({ ...base, contextWindowTokens: 32000 }),
+  },
+  {
+    name: "verify-and-review",
+    describe:
+      "Stacks both quality gates: self-verify (verifyCommand=npm test, autoVerify=true) PLUS a final " +
+      "diff self-review (finalizeReview=true). A/B vs control to price the combined gate.",
+    // Hypothesis: auto-running the test suite AND doing a one-time self-review of
+    // the diff before finishing raises the completion rate versus control. This
+    // is the capability question — measure the token/turn cost the combined gate
+    // adds. Decide with cost-per-success: keep it only if the completion gain
+    // outweighs the extra cost (verify-gate and review-gate alone each measured
+    // as cost with little/no benefit — does stacking them clear that bar?).
+    apply: (base) => ({
+      ...base,
+      verifyCommand: "npm test",
+      autoVerify: true,
+      finalizeReview: true,
+    }),
+  },
 ];
 
 const BY_NAME = new Map(VARIANTS.map((v) => [v.name, v]));

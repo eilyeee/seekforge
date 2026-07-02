@@ -75,12 +75,35 @@ describe("variant registry", () => {
     expect(out.taskSuffix).toBe("keep");
   });
 
+  it("context-tight sets a 32000-token context window only", () => {
+    const out = getVariant("context-tight").apply({ taskSuffix: "keep" });
+    expect(out).toEqual({ taskSuffix: "keep", contextWindowTokens: 32000 });
+  });
+
+  it("verify-and-review stacks verify + auto-run + finalize review", () => {
+    const out = getVariant("verify-and-review").apply({ compaction: "mechanical" });
+    expect(out).toEqual({
+      compaction: "mechanical",
+      verifyCommand: "npm test",
+      autoVerify: true,
+      finalizeReview: true,
+    });
+  });
+
+  it("the new capability variants are registered and listed", () => {
+    const names = listVariants().map((v) => v.name);
+    expect(names).toContain("context-tight");
+    expect(names).toContain("verify-and-review");
+  });
+
   it("the new variants never mutate the input base", () => {
     const base: AgentBuildOptions = {};
     getVariant("no-retrieval").apply(base);
     getVariant("review-gate").apply(base);
     getVariant("no-auto-verify").apply(base);
     getVariant("model-pro").apply(base);
+    getVariant("context-tight").apply(base);
+    getVariant("verify-and-review").apply(base);
     expect(base).toEqual({});
   });
 });

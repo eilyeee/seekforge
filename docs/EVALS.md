@@ -32,12 +32,47 @@ Each run writes a timestamped `.md` + `.json` under `evals/reports/`.
 **`verify-gate`** (enables the self-verification finalize gate, `verifyCommand=npm test`),
 **`no-auto-verify`** (verify-gate but nudge-only), **`no-retrieval`** (disables the
 task-relevant shortlist), **`review-gate`** (enables `finalizeReview`),
-**`model-pro`** (runs under `deepseek-v4-pro`), and **`no-progress-guard`** (enables
-the premature-finish guard). A/B a lever against `control`, e.g. `--ab control,verify-gate`.
+**`model-pro`** (runs under `deepseek-v4-pro`), **`no-progress-guard`** (enables
+the premature-finish guard), **`context-tight`** (shrinks the context window to
+`32000` tokens to force earlier compaction), and **`verify-and-review`** (stacks
+self-verify `npm test` + auto-run + final diff self-review). A/B a lever against
+`control`, e.g. `--ab control,verify-gate`.
 
 > Honest note: A/B runs of `verify-gate` showed **no pass-rate gain and ~+10% cost**
 > on the current (verify-prompted) task set — which is why that lever ships opt-in,
 > not on by default.
+
+### Capability experiments
+
+Two zero-core-change capability A/Bs you can run in **one command** each once
+`DEEPSEEK_API_KEY` is set (no key ⇒ the run skips and exits 0). Each runs the full
+task set under `control` and the variant, then prints the `toAbMarkdown` table
+(per-task ✓/score/turns/cost, plus Win/Loss/Tie, cost Δ, and cost-per-success) and
+writes `evals/reports/ab-<ts>.json`.
+
+```sh
+# Does a tighter context window (earlier/more compaction) save tokens without hurting completion?
+pnpm --filter @seekforge/eval-harness eval -- --ab control,context-tight
+
+# Do self-verify (npm test, auto-run) + a final diff self-review raise completion, and at what cost?
+pnpm --filter @seekforge/eval-harness eval -- --ab control,verify-and-review
+```
+
+- **`context-tight`** measures the token/cost effect of forcing compaction sooner
+  (window `32000`). The win case is **lower cost at equal-or-better completion**;
+  the risk is compaction dropping context the agent still needed.
+- **`verify-and-review`** measures whether stacking both quality gates raises the
+  **completion rate**, and prices the extra turns/tokens the gates cost.
+
+**How to read the result and decide:**
+- **Win/Loss/Tie** counts tasks where the variant did better / worse / same on
+  the pass-and-score. More Wins than Losses ⇒ the change helps completion; more
+  Losses ⇒ it hurts (for `context-tight`, Losses usually mean over-eager
+  compaction).
+- **cost-per-success** is total cost ÷ tasks passed — the bottom line. Keep the
+  change only if cost-per-success **drops** (or holds while Wins > Losses). If
+  completion is flat and cost-per-success rises (as `verify-gate` did solo), the
+  lever stays opt-in, not default.
 
 ### Round-52 capability measurements
 
