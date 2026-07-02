@@ -175,7 +175,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       // notifications (no id) are tolerated silently.
       if (typeof msg["method"] === "string") {
         const method = msg["method"];
-        if (id === undefined) return; // notification — nothing to answer
+        if (id === undefined || id === null) return; // notification — nothing to answer
         if (method === "roots/list") {
           proc.stdin.write(
             `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,

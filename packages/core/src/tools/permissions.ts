@@ -38,7 +38,10 @@ function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext)
   const token = sessionToken(toolName, cls);
   if (token === "") return false;
   if (toolName === "run_command" || toolName === "task_kill") {
-    return list.some((entry) => token.startsWith(entry));
+    // Prefix-match on a command boundary — exact match or the entry followed by
+    // a space. A bare `startsWith` would let `npm run build` auto-approve
+    // `npm run build-all` or `npm run build; rm -rf .`, smuggling past the gate.
+    return list.some((entry) => token === entry || token.startsWith(`${entry} `));
   }
   return list.includes(token);
 }

@@ -315,8 +315,12 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
             break;
           }
           if (arg === "on") config.thinking = true;
-          else if (arg === "off") config.thinking = false;
-          else if (arg === "high" || arg === "max") {
+          else if (arg === "off") {
+            config.thinking = false;
+            // Clear any effort set by a prior `/think high|max`; otherwise a
+            // stale effort leaks into the next run (and a later `/think on`).
+            delete (config as { reasoningEffort?: string }).reasoningEffort;
+          } else if (arg === "high" || arg === "max") {
             config.thinking = true;
             config.reasoningEffort = arg;
           } else {

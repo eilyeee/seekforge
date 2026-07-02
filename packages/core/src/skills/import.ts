@@ -98,7 +98,12 @@ export type ImportSkillOptions = {
  */
 export function importExternalSkill(sourcePath: string, opts: ImportSkillOptions): { dir: string; skill: ParsedExternalSkill } {
   let file = sourcePath;
-  const stat = fs.statSync(file);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    throw new Error(`skill source not found: ${sourcePath}`);
+  }
   if (stat.isDirectory()) {
     file = path.join(file, "SKILL.md");
   }

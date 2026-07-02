@@ -30,12 +30,18 @@ export function parseArgs(argv: string[]): CliArgs {
         // `--` token before the flags; skip it and keep parsing (this CLI has
         // no positional args, so the flags after `--` are still options).
         break;
-      case "--task":
-        args.taskId = argv[++i];
+      case "--task": {
+        const val = argv[++i];
+        if (val === undefined) throw new Error("--task requires a task id");
+        args.taskId = val;
         break;
-      case "--baseline":
-        args.baseline = argv[++i];
+      }
+      case "--baseline": {
+        const val = argv[++i];
+        if (val === undefined) throw new Error("--baseline requires a file path");
+        args.baseline = val;
         break;
+      }
       case "--keep":
         args.keep = true;
         break;

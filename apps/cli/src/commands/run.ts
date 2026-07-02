@@ -329,7 +329,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     config,
     model,
     mcpToolSpecs: mcp.specs,
-    confirm: machine ? async () => false : confirmInTerminal,
+    // stream-json input consumes process.stdin as an async generator; a live
+    // terminal prompt would race it for the same fd and corrupt the next
+    // envelope. Deny automatically in that mode (as `machine` output already does).
+    confirm: machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal,
     onModelDelta: emitPartial ?? renderer?.modelDelta,
     onReasoningDelta: renderer?.reasoningDelta,
     extractMemory: mode === "edit",
