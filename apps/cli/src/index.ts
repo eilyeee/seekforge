@@ -30,6 +30,7 @@ import {
   memoryRemoveCommand,
   memoryStatsCommand,
 } from "./commands/memory.js";
+import { auditCommand } from "./commands/audit.js";
 import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
@@ -438,6 +439,16 @@ program
   .description("re-render a stored session to the terminal (deterministic, no model calls)")
   .action((sessionId: string, opts: { verbose?: boolean }) => {
     replayCommand(sessionId, { verbose: opts.verbose });
+  });
+
+program
+  .command("audit")
+  .argument("<session-id>", "session to audit (see `seekforge sessions`)")
+  .option("--json", "emit the raw SessionAudit as JSON instead of the markdown report")
+  .option("-o, --output <path>", "write the report to a file instead of stdout")
+  .description("export a reviewable report of what an agent did in a stored session (deterministic, no model calls)")
+  .action((sessionId: string, opts: { json?: boolean; output?: string }) => {
+    auditCommand(sessionId, { json: opts.json, output: opts.output });
   });
 
 program

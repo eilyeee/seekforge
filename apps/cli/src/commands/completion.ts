@@ -17,6 +17,8 @@ const COMMANDS = [
   "status",
   "models",
   "resume",
+  "replay",
+  "audit",
   "rewind",
   "serve",
   "skill",

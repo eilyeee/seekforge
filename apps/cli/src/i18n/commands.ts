@@ -160,6 +160,9 @@ export const commands = {
     "cmd.replay.toolLabel": "tool:",
     "cmd.replay.empty": "(this session has no recorded events or messages to replay)",
 
+    // ── cmd.audit.* ─────────────────────────────────────────────────────
+    "cmd.audit.wrote": "wrote session audit to {path}",
+
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge server: http://127.0.0.1:{port}/?token={token}",
     "cmd.serve.workspaces": "Serving {count} workspace(s) on 127.0.0.1 only:",
@@ -351,6 +354,9 @@ export const commands = {
     "cmd.replay.assistantLabel": "助手：",
     "cmd.replay.toolLabel": "工具：",
     "cmd.replay.empty": "（该会话没有可回放的事件或消息记录）",
+
+    // ── cmd.audit.* ─────────────────────────────────────────────────────
+    "cmd.audit.wrote": "会话审计已写入 {path}",
 
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge 服务器：http://127.0.0.1:{port}/?token={token}",

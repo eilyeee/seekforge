@@ -53,6 +53,14 @@ export {
 } from "./commands.js";
 export { detectThinkingKeyword } from "./thinking.js";
 export {
+  buildSessionAudit,
+  renderSessionAuditMarkdown,
+  type SessionAudit,
+  type AuditTurn,
+  type AuditToolCall,
+  type AuditFileChange,
+} from "./audit.js";
+export {
   OUTPUT_STYLES,
   isOutputStyle,
   outputStylePrompt,
