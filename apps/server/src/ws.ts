@@ -154,32 +154,36 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     running = true;
     controller = new AbortController();
     let sessionId = input.resumeSessionId ?? "";
-    // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
-    // for this turn, on top of (winning over) any frame overrides.
-    const effort = detectThinkingKeyword(input.task);
-    const overrides = effort
-      ? { ...input.overrides, thinking: true, reasoningEffort: effort }
-      : input.overrides;
-    const handle = deps.createAgent({
-      workspace: input.workspace,
-      confirm,
-      askUser,
-      onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
-      onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
-      extractMemory: input.mode === "edit",
-      ...(overrides ? { overrides } : {}),
-    });
-    // An output-style override resolves to a system-prompt addendum; an unknown
-    // style name is ignored (run with the base prompt) rather than failing.
-    let appendSystemPrompt: string | undefined;
-    if (overrides?.outputStyle) {
-      try {
-        appendSystemPrompt = resolveOutputStyle(overrides.outputStyle, input.workspace);
-      } catch {
-        appendSystemPrompt = undefined;
-      }
-    }
+    // createAgent is built INSIDE the try: if it (or resolveOutputStyle) throws,
+    // the finally still resets `running`, drains pending prompts, and sends idle
+    // — otherwise the connection would wedge with running=true forever.
+    let handle: ReturnType<typeof deps.createAgent> | undefined;
     try {
+      // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
+      // for this turn, on top of (winning over) any frame overrides.
+      const effort = detectThinkingKeyword(input.task);
+      const overrides = effort
+        ? { ...input.overrides, thinking: true, reasoningEffort: effort }
+        : input.overrides;
+      handle = deps.createAgent({
+        workspace: input.workspace,
+        confirm,
+        askUser,
+        onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
+        onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
+        extractMemory: input.mode === "edit",
+        ...(overrides ? { overrides } : {}),
+      });
+      // An output-style override resolves to a system-prompt addendum; an unknown
+      // style name is ignored (run with the base prompt) rather than failing.
+      let appendSystemPrompt: string | undefined;
+      if (overrides?.outputStyle) {
+        try {
+          appendSystemPrompt = resolveOutputStyle(overrides.outputStyle, input.workspace);
+        } catch {
+          appendSystemPrompt = undefined;
+        }
+      }
       for await (const event of handle.agent.runTask({
         projectPath: input.workspace,
         task: input.task,
@@ -198,7 +202,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       // against a misbehaving (e.g. injected) agent implementation.
       fail("agent_error", err instanceof Error ? err.message : String(err));
     } finally {
-      handle.dispose();
+      handle?.dispose();
       running = false;
       controller = undefined;
       denyAllPending();

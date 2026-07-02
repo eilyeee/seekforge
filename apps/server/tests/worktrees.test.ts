@@ -109,6 +109,18 @@ describe("POST /api/worktrees", () => {
     expect(b.branch).toBe("seekforge/dup-2");
   });
 
+  it("serializes concurrent creates of the same name (no TOCTOU 500)", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+
+    // Fire two creates for the same name at once (a double-click): without
+    // per-base serialization both would pick the same slug and the second
+    // `git worktree add` would 500. Both must succeed with distinct slugs.
+    const [a, b] = await Promise.all([createWorktree(base, "race"), createWorktree(base, "race")]);
+    const ids = [a.id, b.id].sort();
+    expect(ids).toEqual(["wt-race", "wt-race-2"]);
+  });
+
   it("rejects non-git workspaces with not_a_git_repo", async () => {
     const base = await boot(makeWorkspace());
     const res = await authed(base, "/api/worktrees", { method: "POST" });

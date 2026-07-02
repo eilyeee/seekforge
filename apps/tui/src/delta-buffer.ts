@@ -29,26 +29,37 @@ export function createBufferedDispatch(
   // command.output chunks per stream, in arrival order.
   let outputBuf: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
   let timer: unknown = null;
+  let inFlush = false;
 
   const flush = (): void => {
-    if (timer !== null) {
-      cancel(timer);
-      timer = null;
-    }
-    // Thinking precedes content within a turn; outputs follow their tool row.
-    if (thinkingBuf !== "") {
-      dispatch({ type: "thinking-delta", chunk: thinkingBuf });
-      thinkingBuf = "";
-    }
-    if (modelBuf !== "") {
-      dispatch({ type: "model-delta", chunk: modelBuf });
-      modelBuf = "";
-    }
-    if (outputBuf.length > 0) {
-      for (const o of outputBuf) {
-        dispatch({ type: "event", event: { type: "command.output", stream: o.stream, chunk: o.chunk } });
+    // Re-entrancy guard: flush() calls the downstream dispatch, which could (if
+    // the call graph ever changes) synchronously re-enter this dispatcher and
+    // re-arm/flush, double-emitting a buffer. No current call site re-enters, so
+    // this is purely defensive and a no-op on today's paths.
+    if (inFlush) return;
+    inFlush = true;
+    try {
+      if (timer !== null) {
+        cancel(timer);
+        timer = null;
       }
-      outputBuf = [];
+      // Thinking precedes content within a turn; outputs follow their tool row.
+      if (thinkingBuf !== "") {
+        dispatch({ type: "thinking-delta", chunk: thinkingBuf });
+        thinkingBuf = "";
+      }
+      if (modelBuf !== "") {
+        dispatch({ type: "model-delta", chunk: modelBuf });
+        modelBuf = "";
+      }
+      if (outputBuf.length > 0) {
+        for (const o of outputBuf) {
+          dispatch({ type: "event", event: { type: "command.output", stream: o.stream, chunk: o.chunk } });
+        }
+        outputBuf = [];
+      }
+    } finally {
+      inFlush = false;
     }
   };
 
