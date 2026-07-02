@@ -222,11 +222,19 @@ function classifyGit(tokens: string[]): CommandPermission {
   // `git branch`/`git tag`/`git stash`/`git remote`: read-only only in their
   // listing form; a write argument (e.g. `git branch -D x`, `git tag v1`)
   // makes them mutations.
-  if (sub === "branch" || sub === "tag" || sub === "stash" || sub === "remote") {
+  if (sub === "branch" || sub === "tag" || sub === "remote") {
     const args = tokens.slice(2);
     const listOnly =
       args.length === 0 ||
       args.every((a) => a === "-v" || a === "-vv" || a === "-a" || a === "-r" || a === "-l" || a === "--list" || a === "list");
+    return listOnly ? "readonly" : "execute";
+  }
+  // `git stash` is special: bare `git stash` is `git stash push` — it MUTATES the
+  // working tree. Only the explicit `git stash list` form is read-only (empty
+  // args must NOT be treated as a listing here).
+  if (sub === "stash") {
+    const args = tokens.slice(2);
+    const listOnly = args.length > 0 && args.every((a) => a === "list" || a === "-v" || a === "-vv");
     return listOnly ? "readonly" : "execute";
   }
 

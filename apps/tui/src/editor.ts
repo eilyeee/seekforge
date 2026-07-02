@@ -57,7 +57,7 @@ function stepRight(text: string, pos: number): number {
  * a surrogate pair; back up onto the pair start so the cursor stays on a whole
  * code point (otherwise the next stepLeft/backspace desyncs).
  */
-function snapToBoundary(text: string, pos: number): number {
+export function snapToBoundary(text: string, pos: number): number {
   return pos > 0 && isLowSurrogate(text.charCodeAt(pos)) && isHighSurrogate(text.charCodeAt(pos - 1))
     ? pos - 1
     : pos;

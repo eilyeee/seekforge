@@ -171,7 +171,10 @@ function pruneUnused(
     const key = trimmed.replace(/^-\s*/, "");
     const m = meta[key];
     if (!m || m.uses > 0) return true; // unknown age or used → keep
-    if (Date.parse(m.addedAt) >= cutoff) return true; // recent → keep
+    const added = Date.parse(m.addedAt);
+    // Corrupt/non-ISO timestamp parses to NaN; NaN >= cutoff is false, which
+    // would silently archive a fact of unknown age. Treat unparseable as "keep".
+    if (Number.isNaN(added) || added >= cutoff) return true; // recent/unknown → keep
     archived.push(trimmed);
     return false;
   });

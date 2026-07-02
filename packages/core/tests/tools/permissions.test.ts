@@ -210,6 +210,61 @@ describe("permission rules", () => {
     expect(fs.readFileSync(path.join(ws, "a.txt"), "utf8")).toBe("x");
   });
 
+  it("allow command rule matches on a token boundary, not a bare prefix", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    // Allowing `npm run build` must NOT auto-approve the sibling `npm run
+    // build-all` — that would smuggle a different script past the gate.
+    const rules: PermissionRule[] = [{ action: "allow", tool: "run_command", match: "npm run build" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    const exact = await enforcePermission(
+      "run_command",
+      { permission: "execute", description: "npm run build", command: "npm run build" },
+      ctx,
+    );
+    expect(exact).toEqual({ allowed: true, decision: "allow_rule" });
+
+    const withArgs = await enforcePermission(
+      "run_command",
+      { permission: "execute", description: "npm run build --prod", command: "npm run build --prod" },
+      ctx,
+    );
+    expect(withArgs).toEqual({ allowed: true, decision: "allow_rule" });
+
+    const sibling = await enforcePermission(
+      "run_command",
+      { permission: "execute", description: "npm run build-all", command: "npm run build-all" },
+      ctx,
+    );
+    expect(sibling.allowed).toBe(false);
+    expect(sibling.decision).toBe("user_denied");
+  });
+
+  it("allow path rule matches on a path boundary, not a sibling prefix", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "x");
+    const { confirm } = scriptedConfirm(false);
+    // `match: "src/foo"` must not grant `src/foobar.ts`, but must grant
+    // `src/foo/x.ts` and `src/foo` itself.
+    const rules: PermissionRule[] = [{ action: "allow", tool: "write_file", match: "src/foo" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    const child = await enforcePermission(
+      "write_file",
+      { permission: "write", description: "write src/foo/x.ts", path: "src/foo/x.ts" },
+      ctx,
+    );
+    expect(child).toEqual({ allowed: true, decision: "allow_rule" });
+
+    const sibling = await enforcePermission(
+      "write_file",
+      { permission: "write", description: "write src/foobar.ts", path: "src/foobar.ts" },
+      ctx,
+    );
+    expect(sibling.allowed).toBe(false);
+  });
+
   it("allow rule does NOT rescue a dangerous command", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(true);

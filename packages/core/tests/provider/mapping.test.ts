@@ -46,6 +46,54 @@ describe("toWireMessages", () => {
     expect(wire[0]).toEqual({ role: "assistant", content: "hi" });
     expect(wire[0]).not.toHaveProperty("tool_calls");
   });
+
+  it("drops an assistant tool_call with no matching tool result (mid-turn crash/resume)", () => {
+    // A history persisted between the assistant message and its tool results
+    // (cancel/error/cap mid-turn) would otherwise 400 on resume.
+    const wire = toWireMessages([
+      { role: "user", content: "go" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call_1", name: "run", argumentsJson: "{}" }],
+      },
+    ]);
+    expect(wire).toEqual([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "" },
+    ]);
+    expect(wire[1]).not.toHaveProperty("tool_calls");
+  });
+
+  it("keeps answered tool_calls and drops only the unanswered one in a partial turn", () => {
+    const wire = toWireMessages([
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "call_1", name: "run", argumentsJson: "{}" },
+          { id: "call_2", name: "run", argumentsJson: "{}" },
+        ],
+      },
+      { role: "tool", content: "ok", toolCallId: "call_1" },
+    ]);
+    expect(wire).toEqual([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "call_1", type: "function", function: { name: "run", arguments: "{}" } }],
+      },
+      { role: "tool", content: "ok", tool_call_id: "call_1" },
+    ]);
+  });
+
+  it("drops an orphan tool result with no preceding assistant tool_call", () => {
+    const wire = toWireMessages([
+      { role: "user", content: "hi" },
+      { role: "tool", content: "stray", toolCallId: "ghost" },
+    ]);
+    expect(wire).toEqual([{ role: "user", content: "hi" }]);
+  });
 });
 
 describe("toWireTools", () => {

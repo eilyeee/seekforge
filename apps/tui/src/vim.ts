@@ -23,6 +23,7 @@ import {
   moveLeft,
   moveRight,
   moveUp,
+  snapToBoundary,
   type EditorState,
 } from "./editor.js";
 
@@ -244,10 +245,14 @@ function paste(vim: VimState, editor: EditorState): VimResult {
     };
     return mutate(vim, editor, after);
   }
-  const pos = cursor < text.length && text[cursor] !== "\n" ? cursor + 1 : cursor;
+  // Insert AFTER the character under the cursor. Advance by a whole code point
+  // (surrogate-aware) so an astral char isn't split, and snap the landing cursor
+  // back onto a code-point boundary.
+  const pos = cursor < text.length && text[cursor] !== "\n" ? moveRight({ text, cursor }).cursor : cursor;
+  const newText = text.slice(0, pos) + register + text.slice(pos);
   const after = {
-    text: text.slice(0, pos) + register + text.slice(pos),
-    cursor: pos + register.length - 1,
+    text: newText,
+    cursor: snapToBoundary(newText, Math.max(pos, pos + register.length - 1)),
   };
   return mutate(vim, editor, after);
 }
@@ -381,7 +386,9 @@ export function applyVimKey(vim: VimState, editor: EditorState, key: VimKeyInput
   if (vim.mode === "insert") {
     if (key.name === "escape" && key.ctrl !== true) {
       const ls = moveHome(editor).cursor;
-      const cursor = Math.max(ls, editor.cursor - 1);
+      // Step one whole code point left (surrogate-aware), clamped to line start —
+      // a bare cursor-1 lands between the halves of an astral char (emoji).
+      const cursor = Math.max(ls, moveLeft(editor).cursor);
       return consumed({ ...vim, mode: "normal" }, { text: editor.text, cursor });
     }
     return pass(vim, editor);

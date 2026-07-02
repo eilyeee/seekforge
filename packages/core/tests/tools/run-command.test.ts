@@ -197,6 +197,8 @@ describe("classifyCommand: git read vs write", () => {
       "git branch -D old",
       "git tag v1.0.0",
       "git stash pop",
+      "git stash", // bare `git stash` == `git stash push`: mutates the tree
+      "git stash push -m wip",
       "git remote add up url",
     ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("execute");

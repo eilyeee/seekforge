@@ -87,9 +87,18 @@ export function createDispatchManager(): DispatchManager {
 
   function execute(rec: DispatchRecord, parentSignal: AbortSignal | undefined, run: DispatchRunner): Promise<ToolResult> {
     const controller = new AbortController();
+    // Bridge parent abort → this dispatch's controller. The listener sits on the
+    // long-lived parentSignal, so it must be removed once this dispatch settles;
+    // { once: true } only fires-and-removes on abort, leaking one listener per
+    // dispatch across a session otherwise.
+    let unbindParent: (() => void) | undefined;
     if (parentSignal) {
       if (parentSignal.aborted) controller.abort();
-      else parentSignal.addEventListener("abort", () => controller.abort(), { once: true });
+      else {
+        const onAbort = (): void => controller.abort();
+        parentSignal.addEventListener("abort", onAbort, { once: true });
+        unbindParent = () => parentSignal.removeEventListener("abort", onAbort);
+      }
     }
     rec.controller = controller;
     rec.status = "running";
@@ -104,11 +113,13 @@ export function createDispatchManager(): DispatchManager {
       .then(() => run(controller.signal, hooks))
       .then(
         (result) => {
+          unbindParent?.();
           rec.status = result.ok ? "done" : "failed";
           rec.result = result;
           return result;
         },
         (err: unknown): ToolResult => {
+          unbindParent?.();
           const result: ToolResult = {
             ok: false,
             error: { code: "subagent_failed", message: err instanceof Error ? err.message : String(err) },

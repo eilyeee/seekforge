@@ -141,4 +141,19 @@ describe("renderAgentMarkdown", () => {
     expect(md).not.toContain("tools:");
     expect(md).toContain("max-turns: 7");
   });
+
+  it("roundtrips values containing quotes and backslashes through render→parse", () => {
+    const description = 'Say "hi" and keep the \\ backslash';
+    const md = renderAgentMarkdown({
+      id: "quoter",
+      name: "quoter",
+      description,
+      triggers: [],
+      mode: "edit",
+    });
+    // Renderer emits JSON.stringify'd values; the parser must invert that, not
+    // just strip the outer quotes (which would leave \" and \\ escapes intact).
+    const { def } = parseExternalAgent(md);
+    expect(def.description).toBe(description);
+  });
 });

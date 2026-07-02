@@ -24,7 +24,10 @@ function fmtOpt(value: number | undefined): string {
 
 function signed(value: number, digits: number): string {
   const fixed = value.toFixed(digits);
-  return value >= 0 ? `+${fixed}` : fixed;
+  // Decide the sign AFTER rounding so a near-zero delta renders an unsigned "0"
+  // rather than a misleading "+0.0000" / "-0.0000".
+  if (Number.parseFloat(fixed) === 0) return (0).toFixed(digits);
+  return fixed.startsWith("-") ? fixed : `+${fixed}`;
 }
 
 /** One variant's results plus the variant name they were produced under. */
@@ -50,7 +53,11 @@ export type AbSummary = {
   variantA: string;
   variantB: string;
   tasks: AbTaskComparison[];
-  /** Counts where A beats B / B beats A / neither (tie or missing pair). */
+  /**
+   * Counts where A wins / B wins / neither. A task both variants ran is a win
+   * for the better result (or a tie if equal); a task only one variant ran is
+   * credited to that variant.
+   */
   aWins: number;
   bWins: number;
   ties: number;
@@ -99,7 +106,7 @@ export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
       const cmp = compareResults(row.a, row.b);
       winner = cmp < 0 ? "a" : cmp > 0 ? "b" : "tie";
     } else if (row.a) {
-      winner = "a"; // only A ran/has this task
+      winner = "a"; // only A ran/has this task → credited to A
     } else if (row.b) {
       winner = "b";
     }

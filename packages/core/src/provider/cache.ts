@@ -21,7 +21,15 @@ type CacheEntry = {
 function cacheKey(model: string, req: ChatRequest): string {
   return crypto
     .createHash("sha256")
-    .update(JSON.stringify({ model, messages: req.messages, tools: req.tools ?? null }))
+    .update(
+      JSON.stringify({
+        model,
+        messages: req.messages,
+        tools: req.tools ?? null,
+        temperature: req.temperature ?? null,
+        maxTokens: req.maxTokens ?? null,
+      }),
+    )
     .digest("hex");
 }
 

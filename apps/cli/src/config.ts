@@ -99,9 +99,15 @@ export type CliConfig = {
   profiles?: Record<string, Partial<CliConfig>>;
 };
 
+function isPlainObject(v: unknown): boolean {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function readJson(path: string): CliConfig {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as CliConfig;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    // JSON.parse succeeds for null/true/42/"x"; spreading those downstream throws.
+    return isPlainObject(parsed) ? (parsed as CliConfig) : {};
   } catch {
     return {};
   }
@@ -135,14 +141,21 @@ function readSettingsFile(settingsPath: string): CliConfig {
       hint: "check the path and try again",
     });
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as CliConfig;
+    parsed = JSON.parse(raw);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw Object.assign(new Error(`invalid JSON in settings file ${absPath}: ${msg}`), {
       hint: "ensure the file contains valid JSON",
     });
   }
+  if (!isPlainObject(parsed)) {
+    throw Object.assign(new Error(`invalid settings file ${absPath}: expected a JSON object`), {
+      hint: "the top-level value must be an object, e.g. { \"mcpServers\": {} }",
+    });
+  }
+  return parsed as CliConfig;
 }
 
 /**

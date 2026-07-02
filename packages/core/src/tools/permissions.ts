@@ -1,3 +1,4 @@
+import { sep } from "node:path";
 import { PERMISSION_LEVEL, type PermissionRule } from "@seekforge/shared";
 import type { ToolContext } from "./index.js";
 import type { ClassifiedCall } from "./registry.js";
@@ -100,14 +101,41 @@ function normalizeWhitespace(s: string): string {
  * bypassed by inserting extra spaces ("rm  -rf") — the classifier normalizes
  * the same way before it runs, so the raw command must not slip past here.
  */
+/**
+ * Prefix match that only counts on a separator boundary: the rule must either
+ * already end at a separator (e.g. `docs/`, `GET https://host/`) or the subject
+ * must have a separator immediately after the matched prefix. This preserves
+ * documented prefix rules while stopping `npm run build` from auto-approving
+ * `npm run build-all`, or `src/foo` from granting `src/foobar.ts`.
+ */
+function boundaryPrefix(subject: string, match: string, seps: readonly string[]): boolean {
+  if (subject === match) return true;
+  if (match.length === 0) return true;
+  if (!subject.startsWith(match)) return false;
+  if (seps.includes(match[match.length - 1]!)) return true;
+  return seps.includes(subject[match.length] ?? "");
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall): boolean {
   if (rule.tool !== "*" && rule.tool !== toolName) return false;
   if (rule.match === undefined) return true;
+  // Allow rules require a boundary so a prefix can't smuggle a sibling command/
+  // path past the gate. Deny rules keep the broad prefix test — over-matching a
+  // deny fails closed.
+  const boundary = rule.action === "allow";
   if (cls.command !== undefined) {
-    return normalizeWhitespace(cls.command).startsWith(normalizeWhitespace(rule.match));
+    const subject = normalizeWhitespace(cls.command);
+    const match = normalizeWhitespace(rule.match);
+    // The command-token boundary applies only to shell tools (run_command/
+    // task_kill), matching sessionAllowed's scoping. Other command-bearing tools
+    // (web_fetch/web_search) match a URL prefix, where sub-path matching is the
+    // documented, intended behavior.
+    const shellTool = toolName === "run_command" || toolName === "task_kill";
+    return boundary && shellTool ? boundaryPrefix(subject, match, [" "]) : subject.startsWith(match);
   }
   const subject = (cls.path ?? "").trim();
-  return subject.startsWith(rule.match.trim());
+  const match = rule.match.trim();
+  return boundary ? boundaryPrefix(subject, match, ["/", sep]) : subject.startsWith(match);
 }
 
 export async function enforcePermission(

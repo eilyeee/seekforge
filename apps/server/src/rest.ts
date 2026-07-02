@@ -243,9 +243,11 @@ async function gitStatus(workspace: string): Promise<GitStatusResult> {
   for (const line of stdout.split("\n")) {
     if (line === "") continue;
     if (line.startsWith("## ")) {
-      // "## main...origin/main [ahead 1]" or "## HEAD (no branch)".
+      // "## main...origin/main [ahead 1]", "## HEAD (no branch)", or (on a repo
+      // with no commits yet) "## No commits yet on main".
       const rest = line.slice(3);
-      branch = rest.split(/\.\.\.| /)[0] ?? "";
+      const unborn = /^No commits yet on (.+)$/.exec(rest);
+      branch = unborn ? (unborn[1] as string) : (rest.split(/\.\.\.| /)[0] ?? "");
       continue;
     }
     const x = line[0] ?? " ";

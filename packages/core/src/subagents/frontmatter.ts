@@ -25,16 +25,28 @@ export function parseFrontmatter(markdown: string): ParsedFrontmatter {
     if (!kv) continue;
     const key = (kv[1] as string).toLowerCase();
     let value = (kv[2] as string).trim();
-    if (value === "|" || value === ">") {
-      // Block scalar: consume the indented lines that follow.
+    if (/^[|>][+-]?$/.test(value)) {
+      // Block scalar (incl. chomping indicators |-, |+, >-, >+): consume the
+      // indented lines that follow.
       const block: string[] = [];
       while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")) {
         i++;
         block.push((lines[i] as string).trim());
       }
       value = block.join(" ").trim();
+    } else if (value.startsWith('"')) {
+      // Double-quoted values are emitted via JSON.stringify by renderAgentMarkdown,
+      // so parse them the same way — a bare quote-strip would leave \" and \\
+      // escapes intact and corrupt any value containing a quote or backslash.
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        value = typeof parsed === "string" ? parsed : value.replace(/^["']|["']$/g, "");
+      } catch {
+        value = value.replace(/^["']|["']$/g, "");
+      }
+    } else {
+      value = value.replace(/^["']|["']$/g, "");
     }
-    value = value.replace(/^["']|["']$/g, "");
     fields.set(key, value);
   }
 

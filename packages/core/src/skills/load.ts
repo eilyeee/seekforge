@@ -102,7 +102,10 @@ function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
     tags: json.tags,
     triggers: json.triggers,
     appliesTo: json.appliesTo,
-    priority: json.priority ?? 50,
+    // Clamp to [0,100]: select.ts folds priority/100 into the score as a
+    // tie-breaker, so an out-of-range value (e.g. a crafted priority: 500) would
+    // outweigh genuine match signal and reorder/evict real matches.
+    priority: Math.max(0, Math.min(100, json.priority ?? 50)),
     enabled: json.enabled ?? true,
     risk: json.risk ?? "medium",
     content,

@@ -62,20 +62,42 @@ export function supportsThinking(model: string): boolean {
 // --- request mapping --------------------------------------------------------
 
 export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
-  return messages.map((m) => {
+  // Enforce the tool-call pairing the OpenAI-compatible API requires: every
+  // assistant tool_call must have a matching tool response, and every tool
+  // message must answer a known tool_call. A history persisted mid-turn — a run
+  // cancelled or errored between the assistant message and its tool results, or
+  // hitting the tool-call cap (see agent/loop.ts) — violates this, and replaying
+  // it verbatim 400s the request on /resume. Drop unanswered assistant
+  // tool_calls and orphan tool results so the request is always well-formed;
+  // for a well-paired live history this is a no-op.
+  const respondedIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "tool" && m.toolCallId !== undefined) respondedIds.add(m.toolCallId);
+  }
+  const keptCallIds = new Set<string>();
+  const out: WireMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      // Orphan tool result: no preceding (kept) assistant tool_call — drop it.
+      if (m.toolCallId === undefined || !keptCallIds.has(m.toolCallId)) continue;
+      out.push({ role: m.role, content: m.content, tool_call_id: m.toolCallId });
+      continue;
+    }
     const wire: WireMessage = { role: m.role, content: m.content };
-    if (m.role === "tool" && m.toolCallId !== undefined) {
-      wire.tool_call_id = m.toolCallId;
-    }
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-      wire.tool_calls = m.toolCalls.map((c) => ({
-        id: c.id,
-        type: "function",
-        function: { name: c.name, arguments: c.argumentsJson },
-      }));
+      const kept = m.toolCalls.filter((c) => respondedIds.has(c.id));
+      if (kept.length > 0) {
+        wire.tool_calls = kept.map((c) => ({
+          id: c.id,
+          type: "function",
+          function: { name: c.name, arguments: c.argumentsJson },
+        }));
+        for (const c of kept) keptCallIds.add(c.id);
+      }
     }
-    return wire;
-  });
+    out.push(wire);
+  }
+  return out;
 }
 
 export function toWireTools(

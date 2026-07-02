@@ -41,6 +41,14 @@ describe("insert mode", () => {
     expect(r.editor.cursor).toBe(3);
   });
 
+  it("Escape steps left over a whole astral char without splitting the pair", () => {
+    // "😀" is a surrogate pair (2 code units); cursor at 2 → normal-mode cursor
+    // must land on the pair start (0), never mid-pair (1).
+    const r = applyVimKey(initialVim(), at("😀", 2), { input: "", name: "escape" });
+    expect(r.vim.mode).toBe("normal");
+    expect(r.editor.cursor).toBe(0);
+  });
+
   it("passes printable characters through unchanged", () => {
     const vim = initialVim();
     const editor = at("abc", 1);
@@ -150,6 +158,14 @@ describe("edits and register", () => {
   it("x then p pastes charwise after the cursor", () => {
     const r = feed(normal(), at("abc", 0), [ch("x"), ch("p")]);
     expect(r.editor).toEqual(at("bac", 1));
+  });
+
+  it("charwise p inserts after a whole astral char, not between its surrogates", () => {
+    // Cursor on the emoji (pair at 0..1); paste "X" must land after the emoji,
+    // yielding "😀Xab", never splicing "X" between the surrogate halves.
+    const r = applyVimKey(normal({ register: "X" }), at("😀ab", 0), ch("p"));
+    expect(r.editor.text).toBe("😀Xab");
+    expect(r.editor.cursor).toBe(2); // on the pasted "X"
   });
 
   it("dd deletes the line into a linewise register and lands at the next line start", () => {

@@ -67,6 +67,22 @@ describe("wrapProviderWithCache", () => {
     expect(readdirSync(dir)).toHaveLength(2);
   });
 
+  it("differing maxTokens / temperature are distinct cache entries", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    const base = req("hello");
+    await cached.chat({ ...base, maxTokens: 100 });
+    const bigger = await cached.chat({ ...base, maxTokens: 4000 });
+    // Must NOT replay the 100-token reply for the 4000-token request.
+    expect(bigger.content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+
+    const hot = await cached.chat({ ...base, maxTokens: 100, temperature: 0.9 });
+    expect(hot.content).toBe("reply-3");
+    expect(inner.chats).toBe(3);
+    expect(readdirSync(dir)).toHaveLength(3);
+  });
+
   it("expired entries (past ttl) are re-fetched", async () => {
     const inner = countingProvider();
     const cached = wrapProviderWithCache(inner, dir, { ttlMs: 60_000 });

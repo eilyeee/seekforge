@@ -78,7 +78,10 @@ function parseBaseline(baselineJson: string): TaskResult[] {
 
 function signed(value: number, digits: number): string {
   const fixed = value.toFixed(digits);
-  return value >= 0 ? `+${fixed}` : fixed;
+  // Decide the sign AFTER rounding so a value that rounds to zero renders an
+  // unsigned "0" rather than a misleading "+0" / "-0.0000".
+  if (Number.parseFloat(fixed) === 0) return (0).toFixed(digits);
+  return fixed.startsWith("-") ? fixed : `+${fixed}`;
 }
 
 /** Per-task delta table (current vs a previous toJson report) for regression tracking. */
