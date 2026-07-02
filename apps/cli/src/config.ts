@@ -115,6 +115,35 @@ function readJson(path: string): CliConfig {
   }
 }
 
+/**
+ * Config-layer paths that EXIST on disk but fail JSON.parse — `readJson`
+ * silently drops these to `{}`, so a single typo in config.json otherwise
+ * discards every setting AND `seekforge doctor` reports clean. Returns the
+ * unparseable file paths (empty when all layers parse or are absent). Surfaced
+ * by `seekforge doctor`.
+ */
+export function configParseErrors(projectPath: string): string[] {
+  const broken: string[] = [];
+  for (const path of [
+    join(homedir(), ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.local.json"),
+  ]) {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      continue; // absent/unreadable — not a parse error
+    }
+    try {
+      JSON.parse(raw);
+    } catch {
+      broken.push(path);
+    }
+  }
+  return broken;
+}
+
 /** Profile names defined across the global/project/local config layers, sorted. */
 export function availableProfiles(projectPath: string): string[] {
   const names = new Set<string>();
@@ -350,6 +379,14 @@ export function loadConfig(projectPath: string, settingsPath?: string, profile?:
     ];
     if (merged.length > 0) hooks[stage] = merged;
   }
+  // Provider-aware env key selection: pick the key for the merged provider so a
+  // DeepSeek user who happens to export ARK_API_KEY for another tool never gets
+  // the Ark key sent to the DeepSeek endpoint (and vice versa). Default provider
+  // is "deepseek"; higher layers win, matching the scalar merge below.
+  const mergedProvider = (
+    settings.provider ?? prof.provider ?? local.provider ?? project.provider ?? global.provider ?? "deepseek"
+  ).toLowerCase();
+  const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
   const result: CliConfig = {
     ...global,
     ...project,
@@ -359,13 +396,7 @@ export function loadConfig(projectPath: string, settingsPath?: string, profile?:
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    // ARK_API_KEY (Volcengine Ark) takes precedence when set; otherwise
-    // DEEPSEEK_API_KEY behaves exactly as before for existing DeepSeek users.
-    ...(process.env["ARK_API_KEY"]
-      ? { apiKey: process.env["ARK_API_KEY"] }
-      : process.env["DEEPSEEK_API_KEY"]
-        ? { apiKey: process.env["DEEPSEEK_API_KEY"] }
-        : {}),
+    ...(envKey ? { apiKey: envKey } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
   // `profiles` is a selection mechanism, not effective config — never leak it.

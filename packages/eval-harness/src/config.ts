@@ -1,8 +1,9 @@
 /**
  * Eval config loading, replicated from the CLI (the harness must not depend
- * on apps/cli). Precedence: env ARK_API_KEY > env DEEPSEEK_API_KEY > project
- * .seekforge/config.json > ~/.seekforge/config.json. ARK_API_KEY (Volcengine
- * Ark) wins when set; DEEPSEEK_API_KEY behaves exactly as before otherwise.
+ * on apps/cli). Precedence: env key > project .seekforge/config.json >
+ * ~/.seekforge/config.json. The env key is provider-aware: ARK_API_KEY for an
+ * `ark` provider, DEEPSEEK_API_KEY otherwise — so a DeepSeek user who exports
+ * ARK_API_KEY for another tool never gets the Ark key sent to DeepSeek.
  */
 
 import { readFileSync } from "node:fs";
@@ -28,9 +29,11 @@ function readJson(path: string): EvalConfig {
 export function loadEvalConfig(projectPath: string = process.cwd()): EvalConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
-  // ARK_API_KEY (Volcengine Ark) takes precedence when set; otherwise
-  // DEEPSEEK_API_KEY behaves exactly as before for existing DeepSeek users.
-  const envApiKey = process.env["ARK_API_KEY"] ?? process.env["DEEPSEEK_API_KEY"];
+  // Provider-aware env key: pick ARK_API_KEY only for an `ark` provider,
+  // DEEPSEEK_API_KEY otherwise (default provider is "deepseek"). Higher layer
+  // wins, matching the scalar merge below.
+  const provider = (project.provider ?? global.provider ?? "deepseek").toLowerCase();
+  const envApiKey = provider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
   return {
     ...global,
     ...project,

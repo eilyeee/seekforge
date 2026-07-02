@@ -162,6 +162,7 @@ export const commands = {
 
     // ── cmd.audit.* ─────────────────────────────────────────────────────
     "cmd.audit.wrote": "wrote session audit to {path}",
+    "cmd.audit.writeFailed": "could not write session audit to {path}",
 
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge server: http://127.0.0.1:{port}/?token={token}",
@@ -357,6 +358,7 @@ export const commands = {
 
     // ── cmd.audit.* ─────────────────────────────────────────────────────
     "cmd.audit.wrote": "会话审计已写入 {path}",
+    "cmd.audit.writeFailed": "无法将会话审计写入 {path}",
 
     // ── cmd.serve.* ─────────────────────────────────────────────────────
     "cmd.serve.url": "SeekForge 服务器：http://127.0.0.1:{port}/?token={token}",

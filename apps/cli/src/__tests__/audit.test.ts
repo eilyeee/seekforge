@@ -2,7 +2,7 @@
 // pattern as the other CLI tests (vitest is not resolvable from apps/cli).
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendCheckpoint, createSessionTrace, writeSessionMeta } from "@seekforge/core";
@@ -88,6 +88,30 @@ test("-o writes the report to a file", () => {
   const target = join(ws, "report.md");
   capture(ws, () => auditCommand("s1", { output: target }));
   assert.match(readFileSync(target, "utf8"), /# Session Audit/);
+  rmSync(ws, { recursive: true, force: true });
+});
+
+test("-o creates a missing parent directory", () => {
+  const ws = mkdtempSync(join(tmpdir(), "sf-audit-cli-"));
+  seed(ws, "s1");
+  const target = join(ws, "nested", "deep", "report.md");
+  capture(ws, () => auditCommand("s1", { output: target }));
+  assert.match(readFileSync(target, "utf8"), /# Session Audit/);
+  rmSync(ws, { recursive: true, force: true });
+});
+
+test("-o fails cleanly (non-zero exit) when the target cannot be written", () => {
+  const ws = mkdtempSync(join(tmpdir(), "sf-audit-cli-"));
+  seed(ws, "s1");
+  // A regular file sits where the parent directory would need to be, so the
+  // mkdirSync guard throws (EEXIST) — the command must fail cleanly, not throw.
+  const blocker = join(ws, "blocker");
+  writeFileSync(blocker, "not a dir");
+  const target = join(blocker, "report.md");
+  process.exitCode = 0;
+  assert.doesNotThrow(() => capture(ws, () => auditCommand("s1", { output: target })));
+  assert.notEqual(process.exitCode, 0);
+  process.exitCode = 0; // reset so this test file exits clean
   rmSync(ws, { recursive: true, force: true });
 });
 

@@ -28,7 +28,13 @@ export function loopOutputTail(output: string, max = TAIL_MAX): string {
       break;
     }
   }
-  return last.length <= max ? last : `${last.slice(0, max - 1)}…`;
+  if (last.length <= max) return last;
+  // Back off one code unit if the cut lands mid surrogate pair, so we never
+  // append the ellipsis to a lone high surrogate (which renders as �).
+  let cut = max - 1;
+  const code = last.charCodeAt(cut - 1);
+  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+  return `${last.slice(0, cut)}…`;
 }
 
 /**
@@ -70,6 +76,10 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
     }
     case "loop.done":
       return formatLoopSummary(event.result);
+    default:
+      // Exhaustiveness guard: a future LoopEvent variant yields no lines rather
+      // than `undefined` (the caller iterates the result).
+      return [];
   }
 }
 

@@ -124,6 +124,28 @@ describe("buildSessionAudit / renderSessionAuditMarkdown", () => {
     expect(md).toContain("✗ run_command(");
   });
 
+  it("marks a tool_call with no recorded result as null (interrupted), not success", () => {
+    // Interrupted turn: assistant issues a tool_call but no tool message follows.
+    const trace = createSessionTrace(ws, "interrupted");
+    trace.message({ role: "user", content: "do a thing" });
+    trace.message({
+      role: "assistant",
+      content: "Working.",
+      toolCalls: [{ id: "c1", name: "run_command", argumentsJson: '{"command":"pnpm test"}' }],
+    });
+    // (no role:"tool" message for c1)
+
+    const a = buildSessionAudit(ws, "interrupted")!;
+    const call = a.turns[0]!.toolCalls[0]!;
+    expect(call.ok).toBeNull();
+    expect(call.resultPreview).toBe("");
+
+    const md = renderSessionAuditMarkdown(a);
+    expect(md).toContain("? run_command(");
+    expect(md).toContain("no result recorded");
+    expect(md).not.toContain("✓ run_command(");
+  });
+
   it("returns null for an unknown session id", () => {
     expect(buildSessionAudit(ws, "does-not-exist")).toBeNull();
   });

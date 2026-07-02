@@ -1319,9 +1319,15 @@ export async function handleApi(
 
     // DeepSeek account balance via the server's key. Null-safe by contract:
     // missing key or any fetch failure -> {balance: null}, never an error.
+    // Gated on the provider's `balance` capability: a provider without a
+    // /user/balance endpoint (e.g. Ark) returns null without any fetch, so its
+    // key is never sent to DeepSeek's balance endpoint.
     if (method === "GET" && path === "/api/balance") {
       const config = loadConfig(workspace);
-      const balance = config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
+      const preset = resolveProviderPreset((config.provider ?? "deepseek").toLowerCase());
+      const balanceSupported = preset?.capabilities.balance !== false;
+      const balance =
+        balanceSupported && config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
       return sendJson(res, 200, { balance });
     }
 

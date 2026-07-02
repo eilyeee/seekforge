@@ -287,6 +287,38 @@ describe("GET /api/balance", () => {
     }
   });
 
+  it("returns {balance: null} without any fetch for a provider lacking the balance capability (ark)", async () => {
+    // Stub that records whether /user/balance is ever hit. For an ark provider
+    // (capabilities.balance === false) it must not be — the key is never sent.
+    let hit = false;
+    const stub: Server = createServer((_req, res) => {
+      hit = true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "99.00" }] }));
+    });
+    await new Promise<void>((r) => stub.listen(0, "127.0.0.1", r));
+    const stubPort = (stub.address() as { port: number }).port;
+
+    const wsArk = makeWorkspace();
+    writeFileIn(
+      wsArk,
+      ".seekforge/config.json",
+      JSON.stringify({ provider: "ark", apiKey: "sk-ark", baseUrl: `http://127.0.0.1:${stubPort}` }),
+    );
+    const serverArk = await startServer({ workspace: wsArk, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
+    try {
+      const res = await fetch(`http://127.0.0.1:${serverArk.port}/api/balance`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+      expect(await jsonOf(res)).toEqual({ balance: null });
+      expect(hit).toBe(false); // no fetch to /user/balance
+    } finally {
+      await serverArk.close();
+      await new Promise<void>((r) => stub.close(() => r()));
+    }
+  });
+
   it("returns {balance: null} when the platform is unreachable (never an error)", async () => {
     const ws3 = makeWorkspace();
     // Port 9 (discard) is never listening locally -> fetch fails fast.

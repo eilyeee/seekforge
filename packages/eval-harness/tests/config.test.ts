@@ -32,10 +32,18 @@ describe("loadEvalConfig", () => {
     return dir;
   }
 
-  it("prefers ARK_API_KEY over DEEPSEEK_API_KEY", () => {
+  it("a default (DeepSeek) config with both env keys set uses DEEPSEEK_API_KEY", () => {
+    // No provider => default deepseek: the Ark key exported for another tool
+    // must NOT be sent to the DeepSeek endpoint.
     process.env["ARK_API_KEY"] = "sk-ark";
     process.env["DEEPSEEK_API_KEY"] = "sk-deepseek";
-    expect(loadEvalConfig(projectWithConfig({ apiKey: "from-file" })).apiKey).toBe("sk-ark");
+    expect(loadEvalConfig(projectWithConfig({ apiKey: "from-file" })).apiKey).toBe("sk-deepseek");
+  });
+
+  it("an ark config with both env keys set uses ARK_API_KEY", () => {
+    process.env["ARK_API_KEY"] = "sk-ark";
+    process.env["DEEPSEEK_API_KEY"] = "sk-deepseek";
+    expect(loadEvalConfig(projectWithConfig({ provider: "ark", apiKey: "from-file" })).apiKey).toBe("sk-ark");
   });
 
   it("still uses DEEPSEEK_API_KEY when ARK_API_KEY is unset", () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -107,6 +107,32 @@ describe("compactSessionNow", () => {
     trace.message({ role: "user", content: "t" });
     expect(compactSessionNow(ws, "tiny")).toBeNull();
     expect(compactSessionNow(ws, "missing")).toBeNull();
+  });
+});
+
+describe("loadSessionMessages robustness", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-loadmsgs-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("skips a single corrupt line and keeps the valid messages", async () => {
+    const { loadSessionMessages } = await import("../../src/agent/trace.js");
+    const dir = join(ws, ".seekforge", "sessions", "s1");
+    mkdirSync(dir, { recursive: true });
+    const lines = [
+      JSON.stringify({ ts: "t0", role: "user", content: "hello" }),
+      "{ this is not valid json",
+      JSON.stringify({ ts: "t1", role: "assistant", content: "world" }),
+    ];
+    writeFileSync(join(dir, "messages.jsonl"), `${lines.join("\n")}\n`);
+    const messages = loadSessionMessages(ws, "s1");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.content).toBe("hello");
+    expect(messages[1]?.content).toBe("world");
   });
 });
 

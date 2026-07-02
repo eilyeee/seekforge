@@ -102,4 +102,10 @@ describe("formatCandidateLine", () => {
     ).toBe("[path] src/ index.ts (100%)");
     expect(formatCandidateLine({ type: "tech", content: "x", confidence: -1 })).toBe("[tech] x (0%)");
   });
+
+  it("coerces a non-finite confidence to 0% instead of rendering NaN%", () => {
+    // Both NaN and ±Infinity are non-finite → coerced to 0 before clamping.
+    expect(formatCandidateLine({ type: "tech", content: "x", confidence: NaN })).toBe("[tech] x (0%)");
+    expect(formatCandidateLine({ type: "tech", content: "x", confidence: Infinity })).toBe("[tech] x (0%)");
+  });
 });

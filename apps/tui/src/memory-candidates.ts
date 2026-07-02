@@ -56,7 +56,9 @@ export function removeCandidateAt<T>(
 
 /** One-line summary for a candidate row: "[type] content (NN%)". */
 export function formatCandidateLine(candidate: CandidateRow): string {
-  const clamped = Math.max(0, Math.min(1, candidate.confidence));
+  // Coerce a non-finite confidence (NaN/±Infinity) to 0 so it never renders "(NaN%)".
+  const finite = Number.isFinite(candidate.confidence) ? candidate.confidence : 0;
+  const clamped = Math.max(0, Math.min(1, finite));
   const pct = Math.round(clamped * 100);
   const text = candidate.content.replace(/\s+/g, " ").trim();
   return `[${candidate.type}] ${text} (${pct}%)`;

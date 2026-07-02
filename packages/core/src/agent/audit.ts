@@ -20,9 +20,13 @@ export type AuditToolCall = {
   name: string;
   /** argumentsJson compacted (whitespace collapsed) and truncated for length. */
   argsSummary: string;
-  /** false when the recorded tool result reports an error. */
-  ok: boolean;
-  /** Truncated preview of the raw tool result content (verbatim). */
+  /**
+   * true/false from the recorded tool result; null when NO result was recorded
+   * (an interrupted turn) — rendered distinctly so an unanswered call isn't
+   * shown as a success.
+   */
+  ok: boolean | null;
+  /** Truncated preview of the raw tool result content (verbatim); "" when none. */
   resultPreview: string;
 };
 
@@ -161,7 +165,8 @@ export function buildSessionAudit(workspace: string, sessionId: string): Session
           id: call.id,
           name: call.name,
           argsSummary: summarizeArgs(call.argumentsJson),
-          ok: result ? result.ok : true,
+          // No recorded result → null (interrupted turn), not a bogus success.
+          ok: result ? result.ok : null,
           resultPreview: result ? result.preview : "",
         });
       }
@@ -262,8 +267,10 @@ export function renderSessionAuditMarkdown(audit: SessionAudit): string {
       lines.push(`- Prompt: ${compactTruncate(turn.user, 200) || "(none)"}`);
       lines.push(`- Assistant: ${compactTruncate(turn.assistant, 200) || "(no text)"}`);
       for (const call of turn.toolCalls) {
-        const mark = call.ok ? "✓" : "✗";
-        lines.push(`  - ${mark} ${call.name}(${call.argsSummary})`);
+        // null = no result recorded (interrupted); distinct from success/failure.
+        const mark = call.ok === null ? "?" : call.ok ? "✓" : "✗";
+        const suffix = call.ok === null ? " — no result recorded" : "";
+        lines.push(`  - ${mark} ${call.name}(${call.argsSummary})${suffix}`);
       }
     }
   }

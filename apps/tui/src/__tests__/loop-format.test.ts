@@ -32,6 +32,25 @@ describe("loopOutputTail", () => {
     expect(out).toHaveLength(10);
     expect(out.endsWith("…")).toBe(true);
   });
+
+  it("does not split a surrogate pair at the clip boundary", () => {
+    // Each 😀 is two code units; a naive slice at max-1 would keep a lone high
+    // surrogate (rendered as �). max=10 lands the cut mid-pair.
+    const out = loopOutputTail("😀".repeat(20), 10);
+    expect(out.endsWith("…")).toBe(true);
+    // The char before the ellipsis must not be a lone high surrogate.
+    const beforeEllipsis = out.charCodeAt(out.length - 2);
+    expect(beforeEllipsis >= 0xd800 && beforeEllipsis <= 0xdbff).toBe(false);
+    // Body (sans ellipsis) is an even number of code units — no split pair.
+    expect((out.length - 1) % 2).toBe(0);
+  });
+});
+
+describe("formatLoopEvent exhaustiveness", () => {
+  it("returns [] for an unknown/future event variant (never undefined)", () => {
+    const unknown = { type: "future.variant" } as unknown as LoopEvent;
+    expect(formatLoopEvent(unknown)).toEqual([]);
+  });
 });
 
 describe("loopStatusTone", () => {

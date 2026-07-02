@@ -151,14 +151,22 @@ export function deleteSession(workspace: string, id: string): boolean {
   return true;
 }
 
-/** Replays messages.jsonl back into ChatMessage[] for session resume. */
+/**
+ * Replays messages.jsonl back into ChatMessage[] for session resume. A single
+ * corrupt line is skipped (mirrors readCheckpoints) rather than throwing, so
+ * one bad line can't make an otherwise-valid session unauditable/unresumable.
+ */
 export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
   const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
   const messages: ChatMessage[] = [];
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    const { ts: _ts, ...message } = JSON.parse(line) as ChatMessage & { ts?: string };
-    messages.push(message);
+    try {
+      const { ts: _ts, ...message } = JSON.parse(line) as ChatMessage & { ts?: string };
+      messages.push(message);
+    } catch {
+      // corrupt line: skip, keep the rest usable
+    }
   }
   return messages;
 }

@@ -2,7 +2,13 @@
 // tsx runner + node:assert pattern as config.test.ts.
 
 import assert from "node:assert/strict";
-import { configKeysCheck, runDoctor, type DoctorCheck, type DoctorProbes } from "../commands/doctor.js";
+import {
+  configKeysCheck,
+  configParseCheck,
+  runDoctor,
+  type DoctorCheck,
+  type DoctorProbes,
+} from "../commands/doctor.js";
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -95,6 +101,34 @@ test("configKeysCheck warns (non-fatal) and lists unrecognized keys", () => {
   assert.equal(check.ok, true); // warning, not a failure — must not flip exit code
   assert.equal(check.warn, true);
   assert.ok(check.detail.includes("modle") && check.detail.includes("reasoningEffrt"));
+  assert.ok(check.fixHint);
+});
+
+test("an unrecognized provider value warns and notes the DeepSeek fallback", () => {
+  const check = byName(runDoctor("/proj", { provider: "arkk" }, healthyProbes()), "provider");
+  assert.equal(check.ok, true); // warning, not a failure
+  assert.equal(check.warn, true);
+  assert.ok(check.detail.includes("arkk"));
+  assert.ok(check.detail.toLowerCase().includes("deepseek"));
+});
+
+test("an unrecognized provider with an explicit baseUrl is not a warning", () => {
+  const config = { provider: "arkk", baseUrl: "https://custom.example.com" };
+  const check = byName(runDoctor("/proj", config, healthyProbes()), "provider");
+  assert.equal(check.warn, undefined);
+  assert.equal(check.detail, "arkk (https://custom.example.com)");
+});
+
+test("configParseCheck passes when there are no parse errors", () => {
+  const check = configParseCheck([]);
+  assert.equal(check.ok, true);
+  assert.equal(check.warn, undefined);
+});
+
+test("configParseCheck fails and lists the unparseable files", () => {
+  const check = configParseCheck(["/proj/.seekforge/config.json"]);
+  assert.equal(check.ok, false); // a failure — must flip the exit code
+  assert.ok(check.detail.includes("/proj/.seekforge/config.json"));
   assert.ok(check.fixHint);
 });
 

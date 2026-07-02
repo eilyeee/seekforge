@@ -1,5 +1,5 @@
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { buildSessionAudit, listSessions, renderSessionAuditMarkdown } from "@seekforge/core";
 import { fail } from "../colors.js";
 import { t } from "../i18n.js";
@@ -35,7 +35,15 @@ export function auditCommand(sessionId: string, opts: AuditOptions = {}): void {
 
   if (opts.output) {
     const target = resolve(workspace, opts.output);
-    writeFileSync(target, out);
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, out);
+    } catch (err) {
+      fail(t("cmd.audit.writeFailed", { path: target }), {
+        hint: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
     console.log(t("cmd.audit.wrote", { path: target }));
     return;
   }

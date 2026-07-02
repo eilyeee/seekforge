@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig, unknownConfigKeys } from "../config.js";
+import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -374,6 +374,62 @@ test("unknownConfigKeys flags a typo inside a named profile", () => {
   const unknown = unknownConfigKeys(projectPath);
   assert.ok(unknown.includes("reasoningEffrt"), "profile-nested typo should be reported");
   assert.ok(!unknown.includes("profiles"), "profiles itself is a recognized key");
+  cleanup();
+});
+
+// ── provider-aware env API-key precedence ────────────────────────────────────
+
+/** Run `fn` with the given env keys set, restoring prior values afterward. */
+function withEnv(keys: Record<string, string | undefined>, fn: () => void): void {
+  const saved: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(keys)) {
+    saved[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    fn();
+  } finally {
+    for (const k of Object.keys(keys)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+test("default (DeepSeek) config with both env keys set uses DEEPSEEK_API_KEY", () => {
+  const { projectPath, cleanup } = setupProject({ apiKey: "from-file" });
+  withEnv({ ARK_API_KEY: "sk-ark", DEEPSEEK_API_KEY: "sk-deepseek" }, () => {
+    // No provider => default deepseek: an exported ARK_API_KEY must not leak.
+    assert.equal(loadConfig(projectPath).apiKey, "sk-deepseek");
+  });
+  cleanup();
+});
+
+test("ark config with both env keys set uses ARK_API_KEY", () => {
+  const { projectPath, cleanup } = setupProject({ provider: "ark", apiKey: "from-file" });
+  withEnv({ ARK_API_KEY: "sk-ark", DEEPSEEK_API_KEY: "sk-deepseek" }, () => {
+    assert.equal(loadConfig(projectPath).apiKey, "sk-ark");
+  });
+  cleanup();
+});
+
+// ── configParseErrors ────────────────────────────────────────────────────────
+
+test("configParseErrors is empty when configs are valid or absent", () => {
+  const { projectPath, cleanup } = setupProject({ model: "deepseek-chat" });
+  assert.deepEqual(configParseErrors(projectPath), []);
+  cleanup();
+});
+
+test("configParseErrors reports a syntactically broken project config", () => {
+  const { projectPath, cleanup } = setupProject();
+  const seekDir = join(projectPath, ".seekforge");
+  mkdirSync(seekDir, { recursive: true });
+  const broken = join(seekDir, "config.json");
+  writeFileSync(broken, "{ not valid json ");
+  const errors = configParseErrors(projectPath);
+  assert.ok(errors.includes(broken), "broken config path should be reported");
   cleanup();
 });
 

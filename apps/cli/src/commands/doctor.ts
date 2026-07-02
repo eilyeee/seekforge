@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
-import { loadConfig, unknownConfigKeys } from "../config.js";
+import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 
 /**
  * A diagnostic line. `ok: false` is an error (✗); `ok: true` with `warn: true`
@@ -149,7 +149,22 @@ export function runDoctor(
   const provider = (config.provider ?? "deepseek").toLowerCase();
   const preset = resolveProviderPreset(provider);
   const baseUrl = config.baseUrl ?? preset?.baseUrl ?? DEFAULT_BASE_URL;
-  checks.push({ name: "provider", ok: true, detail: `${provider} (${baseUrl})` });
+  // An explicitly-set provider that resolves to no preset (a typo like "arkk")
+  // and has no explicit baseUrl to fall back on silently uses the DeepSeek
+  // endpoint — warn so it isn't mistaken for a working custom provider.
+  const unrecognizedProvider =
+    config.provider !== undefined && provider !== "deepseek" && !preset && config.baseUrl === undefined;
+  checks.push(
+    unrecognizedProvider
+      ? {
+          name: "provider",
+          ok: true,
+          warn: true,
+          detail: `${provider} unrecognized — falling back to DeepSeek (${baseUrl})`,
+          fixHint: "set a known provider (deepseek/ark) or an explicit baseUrl",
+        }
+      : { name: "provider", ok: true, detail: `${provider} (${baseUrl})` },
+  );
 
   // The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
   // otherwise; an explicit apiKey in config works for either.
@@ -333,6 +348,21 @@ export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
   };
 }
 
+/**
+ * Fails when any existing config.json layer is syntactically broken. `readJson`
+ * swallows the parse error → `{}`, so without this check a malformed config
+ * silently drops every setting AND doctor reports clean. Empty list → ok.
+ */
+export function configParseCheck(errors: string[]): DoctorCheck {
+  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files parse" };
+  return {
+    name: "config parse",
+    ok: false,
+    detail: `unparseable: ${errors.join(", ")}`,
+    fixHint: "fix the JSON syntax",
+  };
+}
+
 /** Renders checks as colored "✓/~/✗ name detail" lines + a pass summary. */
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
   const width = Math.max(0, ...checks.map((c) => c.name.length));
@@ -355,6 +385,7 @@ export function doctorCommand(): void {
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
   const checks = runDoctor(projectPath, config, createDefaultProbes());
+  checks.push(configParseCheck(configParseErrors(projectPath)));
   checks.push(configKeysCheck(unknownConfigKeys(projectPath)));
   for (const line of formatDoctorLines(checks)) console.log(line);
   if (checks.some((c) => !c.ok)) process.exitCode = 1;
