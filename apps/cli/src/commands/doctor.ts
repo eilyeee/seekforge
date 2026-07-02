@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, unknownConfigKeys } from "../config.js";
 
 /**
  * A diagnostic line. `ok: false` is an error (✗); `ok: true` with `warn: true`
@@ -318,6 +318,21 @@ function updaterCheck(projectPath: string, probes: DoctorProbes): DoctorCheck | 
   return { name: "updater", ok: true, detail: "enabled (createUpdaterArtifacts: true)" };
 }
 
+/**
+ * Warns about unrecognized config keys (typos silently ignored otherwise). A
+ * warning, not a failure — an unknown key is harmless, just probably a mistake.
+ */
+export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
+  if (unknownKeys.length === 0) return { name: "config keys", ok: true, detail: "all recognized" };
+  return {
+    name: "config keys",
+    ok: true,
+    warn: true,
+    detail: `unrecognized: ${unknownKeys.join(", ")}`,
+    fixHint: "check for typos — see docs/configuration.md for valid keys",
+  };
+}
+
 /** Renders checks as colored "✓/~/✗ name detail" lines + a pass summary. */
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
   const width = Math.max(0, ...checks.map((c) => c.name.length));
@@ -340,6 +355,7 @@ export function doctorCommand(): void {
   const projectPath = process.cwd();
   const config = loadConfig(projectPath);
   const checks = runDoctor(projectPath, config, createDefaultProbes());
+  checks.push(configKeysCheck(unknownConfigKeys(projectPath)));
   for (const line of formatDoctorLines(checks)) console.log(line);
   if (checks.some((c) => !c.ok)) process.exitCode = 1;
 }

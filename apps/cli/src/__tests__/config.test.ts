@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "../config.js";
+import { loadConfig, unknownConfigKeys } from "../config.js";
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -354,6 +354,26 @@ test("profile slots below --settings: settings wins for keys it sets", () => {
   assert.equal(config.model, "deepseek-v4-pro");
   // profile's baseUrl stands since settings didn't touch it
   assert.equal(config.baseUrl, "http://profile");
+  cleanup();
+});
+
+test("unknownConfigKeys flags a top-level typo but not recognized keys", () => {
+  const { projectPath, cleanup } = setupProject({ model: "deepseek-v4-flash", modle: "typo", provider: "ark" });
+  const unknown = unknownConfigKeys(projectPath);
+  assert.ok(unknown.includes("modle"), "typo key should be reported");
+  assert.ok(!unknown.includes("model"), "recognized key must not be reported");
+  assert.ok(!unknown.includes("provider"), "recognized key must not be reported");
+  cleanup();
+});
+
+test("unknownConfigKeys flags a typo inside a named profile", () => {
+  const { projectPath, cleanup } = setupProject({
+    model: "deepseek-v4-flash",
+    profiles: { fast: { model: "deepseek-v4-pro", reasoningEffrt: "high" } },
+  });
+  const unknown = unknownConfigKeys(projectPath);
+  assert.ok(unknown.includes("reasoningEffrt"), "profile-nested typo should be reported");
+  assert.ok(!unknown.includes("profiles"), "profiles itself is a recognized key");
   cleanup();
 });
 

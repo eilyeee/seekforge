@@ -2,7 +2,7 @@
 // tsx runner + node:assert pattern as config.test.ts.
 
 import assert from "node:assert/strict";
-import { runDoctor, type DoctorCheck, type DoctorProbes } from "../commands/doctor.js";
+import { configKeysCheck, runDoctor, type DoctorCheck, type DoctorProbes } from "../commands/doctor.js";
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -81,6 +81,21 @@ test("an explicit baseUrl override wins in the provider line", () => {
   const config = { provider: "ark", baseUrl: "https://custom.example.com", apiKey: "sk" };
   const check = byName(runDoctor("/proj", config, healthyProbes()), "provider");
   assert.equal(check.detail, "ark (https://custom.example.com)");
+});
+
+test("configKeysCheck passes when there are no unknown keys", () => {
+  const check = configKeysCheck([]);
+  assert.equal(check.ok, true);
+  assert.equal(check.warn, undefined);
+  assert.equal(check.detail, "all recognized");
+});
+
+test("configKeysCheck warns (non-fatal) and lists unrecognized keys", () => {
+  const check = configKeysCheck(["modle", "reasoningEffrt"]);
+  assert.equal(check.ok, true); // warning, not a failure — must not flip exit code
+  assert.equal(check.warn, true);
+  assert.ok(check.detail.includes("modle") && check.detail.includes("reasoningEffrt"));
+  assert.ok(check.fixHint);
 });
 
 console.log(`${passed} doctor tests passed`);

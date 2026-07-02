@@ -128,6 +128,64 @@ export function availableProfiles(projectPath: string): string[] {
   return [...names].sort();
 }
 
+/** Every recognized top-level config key — the source of truth for typo detection. */
+export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "apiKey",
+  "model",
+  "baseUrl",
+  "provider",
+  "runtimeBin",
+  "commandAllowlist",
+  "permissionRules",
+  "mcpServers",
+  "hooks",
+  "sandbox",
+  "compaction",
+  "thinking",
+  "reasoningEffort",
+  "locale",
+  "maxCostUsd",
+  "planModel",
+  "escalateOnFailure",
+  "verifyCommand",
+  "autoVerify",
+  "finalizeReview",
+  "guardNoProgress",
+  "memoryAutoApproveConfidence",
+  "profiles",
+]);
+
+/**
+ * Unrecognized top-level keys across the config layers — a typo like "modle" is
+ * otherwise silently ignored. Also flags typos inside each named `profiles`
+ * entry (which are themselves Partial<CliConfig>). Returns a sorted, deduped
+ * list; empty when everything is recognized. Surfaced by `seekforge doctor`.
+ */
+export function unknownConfigKeys(projectPath: string): string[] {
+  const unknown = new Set<string>();
+  const collect = (obj: Record<string, unknown>): void => {
+    for (const key of Object.keys(obj)) {
+      if (!KNOWN_CONFIG_KEYS.has(key)) unknown.add(key);
+    }
+  };
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  for (const path of [
+    join(homedir(), ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.local.json"),
+  ]) {
+    const cfg = readJson(path) as Record<string, unknown>;
+    collect(cfg);
+    if (isRecord(cfg["profiles"])) {
+      for (const profile of Object.values(cfg["profiles"])) {
+        if (isRecord(profile)) collect(profile);
+      }
+    }
+  }
+  return [...unknown].sort();
+}
+
 /**
  * Read and parse a settings file, throwing a descriptive error on missing or
  * malformed JSON. The error carries a `hint` property so the CLI layer can
