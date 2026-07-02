@@ -44,6 +44,7 @@ const EN: Record<string, string> = {
   "picker.slash":
     "↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval",
   "picker.theme": "↑↓ select · Enter apply · Esc dismiss",
+  "picker.candidates": "↑↓ select · a approve · r reject · s scope · Esc dismiss",
   "picker.emptyCommands": "no matching commands",
   "picker.emptyFiles": "no matching files",
   "picker.emptyList": "nothing to show",
@@ -52,6 +53,7 @@ const EN: Record<string, string> = {
   "picker.titleModel": "Model",
   "picker.titleTheme": "Theme",
   "picker.titleCommands": "Commands",
+  "picker.titleCandidates": "Memory candidates — review pending facts",
 
   // ── ask_user question overlay ─────────────────────────────────────────────
   "question.title": "Question from the agent",
@@ -134,6 +136,7 @@ const ZH_CN: Record<string, string> = {
   "picker.history": "↑↓ 选择 · Tab 填入 · Enter 执行 · Esc 关闭",
   "picker.slash": "↑↓ 选择 · Enter 插入 · Esc 关闭 — @ 文件 · # 记忆 · ! shell · Shift+Tab 审批",
   "picker.theme": "↑↓ 选择 · Enter 应用 · Esc 关闭",
+  "picker.candidates": "↑↓ 选择 · a 批准 · r 拒绝 · s 范围 · Esc 关闭",
   "picker.emptyCommands": "无匹配命令",
   "picker.emptyFiles": "无匹配文件",
   "picker.emptyList": "暂无内容",
@@ -142,6 +145,7 @@ const ZH_CN: Record<string, string> = {
   "picker.titleModel": "模型",
   "picker.titleTheme": "主题",
   "picker.titleCommands": "命令",
+  "picker.titleCandidates": "记忆候选 — 审阅待定事实",
 
   "question.title": "来自代理的提问",
   "question.footerPrefix": "↑↓ 或 1-",

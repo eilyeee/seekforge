@@ -96,6 +96,7 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
       }
       return [
         { value: "", hint: `list ${ctx.memoryFactCount} facts` },
+        { value: "candidates", hint: "review pending candidates" },
         { value: "edit", hint: "open in $EDITOR" },
       ];
     case "config":

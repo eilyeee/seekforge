@@ -57,9 +57,10 @@ describe("argCandidates", () => {
     ]);
   });
 
-  it("memory interpolates the fact count and offers edit", () => {
+  it("memory interpolates the fact count and offers candidates + edit", () => {
     expect(argCandidates("memory", "", ctx)).toEqual([
       { value: "", hint: "list 7 facts" },
+      { value: "candidates", hint: "review pending candidates" },
       { value: "edit", hint: "open in $EDITOR" },
     ]);
   });

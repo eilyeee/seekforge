@@ -6,10 +6,13 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   addMemoryFact,
+  approveMemoryCandidate,
   compactSessionNow,
   createBackgroundTasks,
+  listMemoryCandidates,
   listProjectFacts,
   listSessions,
+  rejectMemoryCandidate,
   loadAgentDefinitions,
   projectMemoryPath,
   fetchBalance,
@@ -115,6 +118,7 @@ import { fuzzyRank } from "./fuzzy.js";
 import { bumpFrecency, loadFrecency, rankFiles, scanWorkspaceFiles, type Frecency } from "./files.js";
 import { sessionAllowPrefix } from "./allowlist.js";
 import { backtrackTargets } from "./backtrack.js";
+import { formatCandidateLine, pendingCandidates, removeCandidateAt } from "./memory-candidates.js";
 import { classifyUnifiedDiff } from "./diff.js";
 import { createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
 import { transcriptToMarkdown, defaultExportPath } from "./export.js";
@@ -1026,6 +1030,21 @@ export function App({
           break;
         }
         case "memory": {
+          if (command.arg?.startsWith("candidates")) {
+            // "/memory candidates" — review pending memory candidates in an
+            // interactive overlay (a approve · r reject · s scope). Core owns
+            // the candidate store; this only lists the pending ones.
+            const pending = pendingCandidates(listMemoryCandidates(projectPath));
+            if (pending.length === 0) {
+              notice("no pending memory candidates — nothing to review");
+              break;
+            }
+            dispatch({
+              type: "overlay",
+              overlay: { kind: "candidates", candidates: pending, index: 0, scope: "project" },
+            });
+            break;
+          }
           if (command.arg?.startsWith("edit")) {
             // "/memory edit [file]" — files restricted to .seekforge/memory/.
             const fileArg = command.arg.slice(4).trim();
@@ -1954,6 +1973,40 @@ export function App({
         if (target) applyBacktrack(target, false);
         return;
       }
+      // Memory candidates: a approves, r rejects, s toggles the approve scope.
+      if (overlay.kind === "candidates") {
+        const key = rawInput.toLowerCase();
+        if (key === "s" && !stroke.ctrl) {
+          const scope = overlay.scope === "project" ? "user" : "project";
+          dispatch({ type: "overlay", overlay: { ...overlay, scope } });
+          return;
+        }
+        if ((key === "a" || key === "r") && !stroke.ctrl) {
+          const candidate = overlay.candidates[overlay.index];
+          if (!candidate) {
+            dispatch({ type: "overlay", overlay: null });
+            return;
+          }
+          try {
+            if (key === "a") approveMemoryCandidate(projectPath, candidate.id, overlay.scope);
+            else rejectMemoryCandidate(projectPath, candidate.id);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            notice(`memory ${key === "a" ? "approve" : "reject"} failed: ${message}`, "error");
+            return;
+          }
+          const gist = candidate.content.replace(/\s+/g, " ").slice(0, 60);
+          notice(key === "a" ? `approved → ${overlay.scope}: ${gist}` : `rejected: ${gist}`);
+          const next = removeCandidateAt(overlay.candidates, overlay.index);
+          if (next.candidates.length === 0) {
+            dispatch({ type: "overlay", overlay: null });
+            notice("no more pending candidates");
+          } else {
+            dispatch({ type: "overlay", overlay: { ...overlay, candidates: next.candidates, index: next.index } });
+          }
+          return;
+        }
+      }
       const action = keys("overlay", stroke);
       const count =
         overlay.kind === "palette"
@@ -1970,7 +2023,9 @@ export function App({
                     ? overlay.candidates.length
                     : overlay.kind === "theme"
                       ? overlay.ids.length
-                      : 0;
+                      : overlay.kind === "candidates"
+                        ? overlay.candidates.length
+                        : 0;
       if (action === "overlay-up") {
         dispatch({ type: "overlay-move", delta: -1, count });
         return;
@@ -2034,7 +2089,14 @@ export function App({
         }
         return;
       }
-      if (overlay.kind === "sessions" || overlay.kind === "backtrack" || overlay.kind === "model" || overlay.kind === "theme") return; // modal
+      if (
+        overlay.kind === "sessions" ||
+        overlay.kind === "backtrack" ||
+        overlay.kind === "model" ||
+        overlay.kind === "theme" ||
+        overlay.kind === "candidates"
+      )
+        return; // modal
       // Anything else falls through: typing keeps filtering via the composer.
     }
 
@@ -2369,6 +2431,14 @@ export function App({
             lines={state.overlay.lines}
             index={state.overlay.index}
             footer={t("picker.theme")}
+          />
+        ) : null}
+        {state.overlay?.kind === "candidates" ? (
+          <ListOverlay
+            title={`${t("picker.titleCandidates")} (scope: ${state.overlay.scope})`}
+            lines={state.overlay.candidates.map(formatCandidateLine)}
+            index={state.overlay.index}
+            footer={t("picker.candidates")}
           />
         ) : null}
         {state.overlay?.kind === "args" ? (

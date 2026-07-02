@@ -4,6 +4,8 @@ import type {
   PermissionRequest,
   TokenUsage,
 } from "@seekforge/shared";
+import type { MemoryCandidate } from "@seekforge/core";
+import type { CandidateScope } from "./memory-candidates.js";
 
 /**
  * The chat model. A flat list of renderable items plus session-level state
@@ -50,6 +52,11 @@ export type Overlay =
   | { kind: "model"; ids: string[]; lines: string[]; index: number }
   /** Theme picker (/theme with no argument). */
   | { kind: "theme"; ids: string[]; lines: string[]; index: number }
+  /**
+   * Memory-candidate review (/memory candidates): a approves, r rejects, s
+   * toggles the approve scope (project|user). `candidates` are pending only.
+   */
+  | { kind: "candidates"; candidates: MemoryCandidate[]; index: number; scope: CandidateScope }
   /** ask_user tool question awaiting an answer. */
   | { kind: "question"; question: string; options: string[]; index: number }
   /** Slash-argument picker ("/resume <cursor>"): Tab fills, Enter runs. */

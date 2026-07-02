@@ -50,7 +50,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "model", args: "<name>", summary: "switch model for subsequent messages" , group: "run" },
   { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" , group: "run" },
   { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" , group: "context" },
-  { name: "memory", args: "[edit <file>]", summary: "list project memory facts (edit opens a memory file)" , group: "context" },
+  { name: "memory", args: "[candidates | edit <file>]", summary: "list project memory facts (candidates reviews pending; edit opens a memory file)" , group: "context" },
   { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" , group: "tools" },
   { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
   { name: "skills", summary: "list installed skills and their status" , group: "tools" },
