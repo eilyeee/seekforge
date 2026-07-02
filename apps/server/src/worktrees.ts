@@ -85,6 +85,11 @@ export function worktreeSlug(name?: string, now: Date = new Date()): string {
 
 export class WorktreeManager {
   private readonly byId = new Map<string, WorktreeRecord>();
+  // Per-base-path serialization: the slug check and `git worktree add` aren't
+  // atomic, so two concurrent creates on the same base (e.g. a double-click)
+  // could pick the same slug and the second `worktree add` would 500. Chain
+  // creates per base so each sees the previous one's worktree/branch.
+  private readonly createLocks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly registry: WorkspaceRegistry) {}
 
@@ -96,7 +101,18 @@ export class WorktreeManager {
    * `git worktree add .seekforge/worktrees/<slug> -b seekforge/<slug>` in the
    * base workspace, then registers the checkout as workspace `wt-<slug>`.
    */
-  async create(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
+  create(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
+    const prev = this.createLocks.get(base.path) ?? Promise.resolve();
+    const result = prev.then(
+      () => this.createLocked(base, name),
+      () => this.createLocked(base, name),
+    );
+    // Keep the chain alive even if this create rejects (swallow only for the lock).
+    this.createLocks.set(base.path, result.catch(() => {}));
+    return result;
+  }
+
+  private async createLocked(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
     if (this.byId.has(base.id)) {
       throw new WorktreeError("bad_request", "cannot create a worktree from another worktree", 400);
     }
