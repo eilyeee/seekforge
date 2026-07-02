@@ -10,6 +10,7 @@ import {
   estimateTokens,
   llmCompactMessages,
   llmCompactSessionNow,
+  shrinkToolResultsToFit,
   type SummaryProvider,
 } from "../../src/agent/context.js";
 import { createSessionTrace, loadSessionMessages, newSessionId } from "../../src/agent/trace.js";
@@ -28,6 +29,46 @@ function conversation(turns: number, contentSize = 2000): ChatMessage[] {
   }
   return messages;
 }
+
+/** The pathological layout: ONE assistant turn with N tool calls + N results. */
+function singleTurnManyTools(n: number, contentSize = 4000): ChatMessage[] {
+  const calls = Array.from({ length: n }, (_, i) => ({ id: `c${i}`, name: "search_text", argumentsJson: "{}" }));
+  const messages: ChatMessage[] = [
+    msg("system", "system prompt"),
+    msg("user", "the task"),
+    msg("assistant", "", { toolCalls: calls }),
+  ];
+  for (let i = 0; i < n; i++) messages.push(msg("tool", "x".repeat(contentSize), { toolCallId: `c${i}` }));
+  return messages;
+}
+
+describe("shrinkToolResultsToFit", () => {
+  it("returns null when the conversation already fits the budget", () => {
+    expect(shrinkToolResultsToFit(singleTurnManyTools(3), 1_000_000)).toBeNull();
+  });
+
+  it("fits the single-turn case that compactMessages cannot compact", () => {
+    const messages = singleTurnManyTools(10, 4000); // ~10K tokens, all in one turn
+    const budget = 3000;
+    // Baseline: nothing droppable without orphaning a tool call -> null.
+    expect(compactMessages(messages, budget)).toBeNull();
+    const result = shrinkToolResultsToFit(messages, budget);
+    expect(result).not.toBeNull();
+    expect(estimateMessagesTokens(result!.messages)).toBeLessThanOrEqual(budget);
+    // Nothing dropped: same message count, tool-call block intact.
+    expect(result!.messages).toHaveLength(messages.length);
+    expect(result!.messages[2]!.toolCalls).toHaveLength(10);
+    expect(result!.droppedTurns).toBe(0);
+  });
+
+  it("preserves head (system + task) and never drops a tool message", () => {
+    const messages = singleTurnManyTools(8, 5000);
+    const result = shrinkToolResultsToFit(messages, 2000)!;
+    expect(result.messages[0]!.content).toBe("system prompt");
+    expect(result.messages[1]!.content).toBe("the task");
+    expect(result.messages.filter((m) => m.role === "tool")).toHaveLength(8);
+  });
+});
 
 describe("estimateTokens", () => {
   it("keeps the ~4-chars-per-token rate for ASCII text", () => {

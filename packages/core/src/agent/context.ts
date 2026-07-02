@@ -227,6 +227,43 @@ export function compactMessages(messages: ChatMessage[], budgetTokens: number): 
   return assembleCompaction(messages, tailStart, compactionSummaryMessage("Digest", digest), dropped.length);
 }
 
+/** A tool result at or below this length isn't worth shrinking further. */
+const TOOL_SHRINK_FLOOR_CHARS = 400;
+const TOOL_SHRINK_MARKER = "\n…[tool output truncated to fit context]…\n";
+
+/**
+ * Last-resort compaction for the case splitForCompaction cannot handle: the
+ * ENTIRE history is one assistant turn plus its tool results (a first turn with
+ * many parallel tool calls), so nothing can be DROPPED without orphaning a tool
+ * call — yet the tool payloads alone exceed budget, and compactMessages returns
+ * null. Rather than send an over-budget request to the provider (which fails
+ * with "context too long"), shrink the largest tool-result CONTENTS in place —
+ * head+tail with a marker, largest first — until the estimate fits or nothing
+ * is left to shrink. Never drops a message or touches a non-tool role, so the
+ * assistant/tool pairing and message count are preserved. Returns null when the
+ * conversation already fits or nothing can be shrunk (caller then proceeds).
+ */
+export function shrinkToolResultsToFit(messages: ChatMessage[], budgetTokens: number): CompactionResult | null {
+  if (estimateMessagesTokens(messages) <= budgetTokens) return null;
+  const out = messages.map((m) => ({ ...m }));
+  // Largest tool results first — shrinking the biggest recovers the most.
+  const toolOrder = out
+    .map((m, i) => ({ i, len: m.content.length, isTool: m.role === "tool" }))
+    .filter((x) => x.isTool)
+    .sort((a, b) => b.len - a.len);
+  const half = Math.floor(TOOL_SHRINK_FLOOR_CHARS / 2);
+  let shrunk = 0;
+  for (const { i } of toolOrder) {
+    if (estimateMessagesTokens(out) <= budgetTokens) break;
+    const content = out[i]!.content;
+    if (content.length <= TOOL_SHRINK_FLOOR_CHARS) continue;
+    out[i] = { ...out[i]!, content: content.slice(0, half) + TOOL_SHRINK_MARKER + content.slice(-half) };
+    shrunk++;
+  }
+  if (shrunk === 0) return null;
+  return { messages: out, droppedTurns: 0, summaryTokens: 0 };
+}
+
 /** Per-message cap for tool outputs in the segment sent to the summarizer. */
 const LLM_TOOL_RESULT_PREVIEW_CHARS = 200;
 /** Total cap for the serialized segment (≈6K tokens of summarizer input). */
