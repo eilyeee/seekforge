@@ -19,6 +19,33 @@ export type RetryInfo = {
   fallbackModel?: string;
 };
 
+/**
+ * Per-provider feature switches. DeepSeek-direct enables all four; an
+ * OpenAI-compatible endpoint (e.g. Volcengine Ark) disables the DeepSeek-only
+ * behaviors so its models are not sent parameters they reject or priced against
+ * the DeepSeek table. When a ProviderConfig leaves `capabilities` unset the
+ * provider defaults to DEEPSEEK_CAPABILITIES, so existing behavior is
+ * byte-for-byte unchanged.
+ */
+export type ProviderCapabilities = {
+  /** Send the DeepSeek-style thinking.{type,reasoning_effort} request body. */
+  thinking: boolean;
+  /** Read prompt_cache_hit_tokens from usage (DeepSeek context cache). */
+  cacheHitTokens: boolean;
+  /** Apply the built-in pricing table; false → costUsd reported as 0. */
+  costAccounting: boolean;
+  /** Provider exposes a /user/balance endpoint (DeepSeek only). */
+  balance: boolean;
+};
+
+/** Full DeepSeek-direct capability set (the default when `capabilities` is unset). */
+export const DEEPSEEK_CAPABILITIES: ProviderCapabilities = {
+  thinking: true,
+  cacheHitTokens: true,
+  costAccounting: true,
+  balance: true,
+};
+
 export type ProviderConfig = {
   apiKey: string;
   baseUrl?: string;
@@ -49,6 +76,12 @@ export type ProviderConfig = {
    * (pre-fallback) error is thrown. Leaving this unset keeps behavior identical.
    */
   fallbackModel?: string;
+  /**
+   * Provider feature switches. When unset the provider defaults to
+   * DEEPSEEK_CAPABILITIES (full DeepSeek-direct behavior), keeping backward
+   * compatibility byte-for-byte.
+   */
+  capabilities?: ProviderCapabilities;
 };
 
 export type ChatRequest = {

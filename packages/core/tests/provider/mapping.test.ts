@@ -256,3 +256,66 @@ describe("V4 thinking mode", () => {
     expect(none.reasoningContent).toBeUndefined();
   });
 });
+
+describe("provider capabilities gating", () => {
+  const req = { messages: [{ role: "user" as const, content: "hi" }] };
+
+  it("omits the thinking body for a v4 model when capabilities.thinking is false (Ark)", () => {
+    const body = buildRequestBody(
+      "deepseek-v4-flash",
+      req,
+      false,
+      { thinking: true },
+      { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    );
+    expect(body.thinking).toBeUndefined();
+    expect(body).not.toHaveProperty("thinking");
+  });
+
+  it("still attaches thinking for a v4 model when capabilities is unset (default unchanged)", () => {
+    const body = buildRequestBody("deepseek-v4-flash", req, false, { thinking: true });
+    expect(body.thinking).toEqual({ type: "enabled" });
+  });
+
+  it("still attaches thinking when capabilities.thinking is true", () => {
+    const body = buildRequestBody(
+      "deepseek-v4-pro",
+      req,
+      false,
+      { thinking: true, reasoningEffort: "max" },
+      { thinking: true, cacheHitTokens: true, costAccounting: true, balance: true },
+    );
+    expect(body.thinking).toEqual({ type: "enabled", reasoning_effort: "max" });
+  });
+
+  it("reports costUsd: 0 when capabilities.costAccounting is false", () => {
+    const usage = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 600 },
+      "deepseek-chat",
+      { thinking: false, cacheHitTokens: true, costAccounting: false, balance: false },
+    );
+    expect(usage.costUsd).toBe(0);
+    // Other fields still mapped normally.
+    expect(usage.promptTokens).toBe(1000);
+    expect(usage.completionTokens).toBe(500);
+    expect(usage.cacheHitTokens).toBe(600);
+  });
+
+  it("reports cacheHitTokens: 0 when capabilities.cacheHitTokens is false", () => {
+    const usage = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 600 },
+      "deepseek-chat",
+      { thinking: false, cacheHitTokens: false, costAccounting: true, balance: false },
+    );
+    expect(usage.cacheHitTokens).toBe(0);
+  });
+
+  it("mapUsage default (no capabilities) is unchanged", () => {
+    const usage = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 600, prompt_cache_miss_tokens: 400 },
+      "deepseek-chat",
+    );
+    expect(usage.cacheHitTokens).toBe(600);
+    expect(usage.costUsd).toBeCloseTo((400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000, 12);
+  });
+});

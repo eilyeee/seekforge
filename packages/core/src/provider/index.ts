@@ -12,9 +12,16 @@ import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
 import { buildRequestBody, mapChatResponse, mapUsage, type WireChatCompletion } from "./mapping.js";
 import { createSseAccumulator, feedSseChunk, finalizeSse } from "./sse.js";
 import { DeepSeekApiError, fetchWithRetry, isRetryableError } from "./http.js";
+import { DEEPSEEK_CAPABILITIES } from "./types.js";
 import type { ChatProvider, ChatRequest, ProviderConfig, RetryInfo } from "./types.js";
 
-export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo } from "./types.js";
+export type { ProviderConfig, ChatRequest, ChatProvider, RetryInfo, ProviderCapabilities } from "./types.js";
+export { DEEPSEEK_CAPABILITIES } from "./types.js";
+export {
+  PROVIDER_PRESETS,
+  resolveProviderPreset,
+  type ProviderPreset,
+} from "./presets.js";
 export { estimateCostUsd, type UsageTokens } from "./cost.js";
 export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type ModelPricing } from "./constants.js";
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
@@ -60,6 +67,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
   };
+  // Unset capabilities → full DeepSeek-direct behavior, so the request/response
+  // path is byte-for-byte unchanged for existing (DeepSeek) callers.
+  const capabilities = config.capabilities ?? DEEPSEEK_CAPABILITIES;
   const retryOpts = config.onRetry ? { onRetry: config.onRetry } : {};
   // Fallback only engages when configured AND it names a different model than
   // the active primary; otherwise the request path is byte-for-byte unchanged.
@@ -74,7 +84,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
    * retry; if it fails (for any reason) the ORIGINAL error is rethrown.
    */
   async function fetchWithFallback(req: ChatRequest, stream: boolean): Promise<Response> {
-    const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking));
+    const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking, capabilities));
     try {
       return await fetchWithRetry(url, { method: "POST", headers, body: primaryBody }, retryOpts);
     } catch (err) {
@@ -90,7 +100,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       } catch {
         // A misbehaving frontend callback must never break the request path.
       }
-      const fallbackBody = JSON.stringify(buildRequestBody(fallbackModel, req, stream, thinking));
+      const fallbackBody = JSON.stringify(
+        buildRequestBody(fallbackModel, req, stream, thinking, capabilities),
+      );
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
         return await fetchWithRetry(
@@ -107,7 +119,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   async function chat(req: ChatRequest): Promise<ChatResponse> {
     const res = await fetchWithFallback(req, false);
     const json = (await res.json()) as WireChatCompletion;
-    return mapChatResponse(json, model);
+    return mapChatResponse(json, model, capabilities);
   }
 
   async function chatStream(
@@ -147,7 +159,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       content: result.content,
       toolCalls: result.toolCalls,
       finishReason: result.finishReason,
-      usage: mapUsage(result.usage, model),
+      usage: mapUsage(result.usage, model, capabilities),
       ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
     };
   }

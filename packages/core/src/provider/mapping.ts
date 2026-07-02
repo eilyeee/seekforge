@@ -12,7 +12,7 @@ import type {
   ToolDefinitionForModel,
 } from "@seekforge/shared";
 import { estimateCostUsd } from "./cost.js";
-import type { ChatRequest } from "./types.js";
+import type { ChatRequest, ProviderCapabilities } from "./types.js";
 
 // --- wire types (only the fields we read/write) -----------------------------
 
@@ -114,6 +114,7 @@ export function buildRequestBody(
   req: ChatRequest,
   stream: boolean,
   thinking?: ThinkingOptions,
+  capabilities?: ProviderCapabilities,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model,
@@ -127,7 +128,11 @@ export function buildRequestBody(
   // V4 thinking mode. Note: reasoning_content from responses is never echoed
   // back (toWireMessages builds from our ChatMessage, which has no such
   // field) — the API 400s on requests containing it.
-  if (supportsThinking(model) && (thinking?.thinking !== undefined || thinking?.reasoningEffort)) {
+  if (
+    (capabilities?.thinking ?? true) &&
+    supportsThinking(model) &&
+    (thinking?.thinking !== undefined || thinking?.reasoningEffort)
+  ) {
     body.thinking = {
       type: thinking.thinking === false ? "disabled" : "enabled",
       ...(thinking.reasoningEffort ? { reasoning_effort: thinking.reasoningEffort } : {}),
@@ -151,13 +156,20 @@ export function mapFinishReason(raw: string | null | undefined): ChatFinishReaso
   }
 }
 
-export function mapUsage(raw: WireUsage | null | undefined, model: string): TokenUsage {
+export function mapUsage(
+  raw: WireUsage | null | undefined,
+  model: string,
+  capabilities?: ProviderCapabilities,
+): TokenUsage {
   const tokens = {
     promptTokens: raw?.prompt_tokens ?? 0,
     completionTokens: raw?.completion_tokens ?? 0,
-    cacheHitTokens: raw?.prompt_cache_hit_tokens ?? 0,
+    cacheHitTokens: (capabilities?.cacheHitTokens ?? true) ? (raw?.prompt_cache_hit_tokens ?? 0) : 0,
   };
-  return { ...tokens, costUsd: estimateCostUsd(tokens, model) };
+  return {
+    ...tokens,
+    costUsd: (capabilities?.costAccounting ?? true) ? estimateCostUsd(tokens, model) : 0,
+  };
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {
@@ -168,14 +180,18 @@ export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolC
   }));
 }
 
-export function mapChatResponse(json: WireChatCompletion, model: string): ChatResponse {
+export function mapChatResponse(
+  json: WireChatCompletion,
+  model: string,
+  capabilities?: ProviderCapabilities,
+): ChatResponse {
   const choice = json.choices?.[0];
   const reasoning = choice?.message?.reasoning_content;
   return {
     content: choice?.message?.content ?? "",
     toolCalls: mapWireToolCalls(choice?.message?.tool_calls),
     finishReason: mapFinishReason(choice?.finish_reason),
-    usage: mapUsage(json.usage, model),
+    usage: mapUsage(json.usage, model, capabilities),
     ...(typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
   };
 }
