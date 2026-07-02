@@ -390,6 +390,15 @@ impl ServeChild {
             Some(s) => s,
             None => return Err("child stdout was not piped".into()),
         };
+        // Drain stderr too: it is piped but otherwise unread, so a child that
+        // writes more than the OS pipe buffer (~64 KiB — e.g. tsx/Node warnings)
+        // to stderr before printing its URL to stdout would block forever on the
+        // full pipe, and wait_for_url would spin until timeout.
+        if let Some(stderr) = self.child.stderr.take() {
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
+            });
+        }
         let (tx, rx) = mpsc::channel::<String>();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);

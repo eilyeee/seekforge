@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { seekforgeHome } from "../memory/store.js";
 import { BUILTIN_AGENTS } from "./builtins.js";
 import { AGENT_ID_RE, parseFrontmatter } from "./frontmatter.js";
 import type { AgentDefinition, AgentScope } from "./types.js";
@@ -38,7 +38,7 @@ export function withBuiltinAgents(defs: AgentDefinition[]): AgentDefinition[] {
 export function loadAgentDefinitions(workspace: string): AgentDefinition[] {
   return withBuiltinAgents(
     loadAgentDefinitionsFromDirs([
-      { scope: "global", path: path.join(os.homedir(), ".seekforge", "agents") },
+      { scope: "global", path: path.join(seekforgeHome(), ".seekforge", "agents") },
       { scope: "project", path: path.join(workspace, ".seekforge", "agents") },
     ]),
   );

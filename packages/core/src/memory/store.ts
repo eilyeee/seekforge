@@ -229,6 +229,16 @@ export function readProjectMemory(workspace: string): string | undefined {
   return readMemoryFileExpanded(projectMemoryPath(workspace));
 }
 
+/**
+ * Reads project.md verbatim, WITHOUT expanding `@import` lines. Callers that
+ * rewrite the file (edit/remove a bullet, compact) must use this — the expanded
+ * form inlines imported files, so writing it back would erase the `@import`
+ * directives and duplicate the imported content into the root file.
+ */
+export function readRawProjectMemory(workspace: string): string | undefined {
+  return readFileIfExists(projectMemoryPath(workspace));
+}
+
 // --- Subdirectory memory cascade (monorepo per-package facts) ----------------
 //
 // A monorepo package can carry its own `.seekforge/memory/project.md`. The brief

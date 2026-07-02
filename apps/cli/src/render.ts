@@ -201,7 +201,9 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<Confirm
         });
       });
       const trimmed = answer.trim().toLowerCase();
-      if (trimmed === "y" || trimmed === "yes" || trimmed === "") return true;
+      // The prompt advertises "[N]" (skip all) as the default, so a bare Enter
+      // must deny — only an explicit y/yes approves every hunk.
+      if (trimmed === "y" || trimmed === "yes") return true;
       // Try to parse as comma-separated hunk indices.
       const parts = trimmed.split(/\s*,\s*/).map((s) => Number.parseInt(s, 10));
       if (parts.length > 0 && parts.every((n) => Number.isInteger(n) && n >= 0)) {

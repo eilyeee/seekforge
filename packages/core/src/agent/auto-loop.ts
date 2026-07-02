@@ -178,6 +178,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
         : `\`${opts.verifyCommand}\` still fails:\n\n${lastVerify.output}\n\nFix the root cause so it passes.`;
 
     let runCost = 0;
+    let filesChangedThisRun = false;
     const events = agent.runTask({
       task: continuation,
       projectPath: opts.workspace,
@@ -189,11 +190,15 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     for await (const ev of events) {
       if (ev.type === "session.created") {
         if (!sessionId) sessionId = ev.sessionId;
+      } else if (ev.type === "file.changed") {
+        filesChangedThisRun = true;
+      } else if (ev.type === "usage.updated") {
+        // Cumulative spend within this run. Tracked here so a failed run — which
+        // emits no FinalReport — still contributes its real cost to the budget
+        // guard below; otherwise repeated expensive failures overshoot silently.
+        runCost = ev.usage.costUsd;
       } else if (ev.type === "session.completed") {
-        runCost += ev.report.usage.costUsd;
-      } else if (ev.type === "session.failed") {
-        // A failed run still consumed budget if it reported any; failures carry
-        // no FinalReport, so there is nothing to add — counted by being a run.
+        runCost = ev.report.usage.costUsd;
       }
     }
     costUsd += runCost;
@@ -227,7 +232,10 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
       return done({ status: "budget", iterations: i, costUsd, sessionId, finalVerify: v });
     }
-    if (prevOutput !== null && v.output === prevOutput) {
+    // Stuck only when the verify output is byte-identical AND this run changed
+    // no files — repeated edits that haven't yet moved the error message are
+    // still progress (per the LoopStatus contract), so don't abort on them.
+    if (prevOutput !== null && v.output === prevOutput && !filesChangedThisRun) {
       return done({ status: "no_progress", iterations: i, costUsd, sessionId, finalVerify: v });
     }
     prevOutput = v.output;

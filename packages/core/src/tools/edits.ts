@@ -163,9 +163,16 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     // Exactly one region: replace the ACTUAL spanned text (preserving the file's
     // real surrounding content / whitespace) with newString.
     const region = regions[0] as FuzzyRegion;
-    const before = lines.slice(0, region.startLine);
-    const after = lines.slice(region.endLineExclusive);
-    next = [...before, edit.newString, ...after].join("\n");
+    // `lines` came from split("\n"); on a CRLF file every element still carries a
+    // trailing "\r". Rejoin with the file's dominant EOL after stripping those,
+    // and normalize newString to the same EOL — otherwise the inserted block gets
+    // bare "\n" endings, leaving mixed CRLF/LF around the replaced region.
+    const eol = next.includes("\r\n") ? "\r\n" : "\n";
+    const stripCr = (l: string): string => (eol === "\r\n" ? l.replace(/\r$/, "") : l);
+    const before = lines.slice(0, region.startLine).map(stripCr);
+    const after = lines.slice(region.endLineExclusive).map(stripCr);
+    const newBlock = eol === "\r\n" ? edit.newString.replace(/\r?\n/g, eol) : edit.newString;
+    next = [...before, newBlock, ...after].join(eol);
   }
   return next;
 }

@@ -100,9 +100,12 @@ fn flag_matches(token: &str, prefix: &str) -> bool {
 
 fn check_rm(s: &str) -> Option<&'static str> {
     for tokens in token_runs_after(s, "rm") {
+        // Scan ALL tokens, not just a leading run: GNU rm permutes arguments, so
+        // `rm ./build -rf` is exactly `rm -rf ./build`. A take_while stopping at
+        // the first path operand would miss trailing flags and wave it through.
         let flags: Vec<&str> = tokens
             .iter()
-            .take_while(|t| t.starts_with('-'))
+            .filter(|t| t.starts_with('-'))
             .copied()
             .collect();
         // Dangerous when the flags carry BOTH a recursive and a force flag, in
@@ -216,9 +219,50 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 
 fn read_all(mut r: impl Read) -> String {
-    let mut buf = Vec::new();
-    let _ = r.read_to_end(&mut buf);
-    String::from_utf8_lossy(&buf).into_owned()
+    // Bound memory: read_to_end on a flooding child (`yes`, `cat /dev/zero`) would
+    // buffer gigabytes before the char cap is ever applied and OOM the process.
+    // Keep at most the leading and trailing CAP bytes — the middle is discarded,
+    // mirroring truncate_head_tail's head+tail retention — while still draining
+    // the pipe so the child isn't left blocked on a full buffer.
+    const CAP: usize = MAX_OUTPUT_CHARS * 4; // bytes; generous vs. the char cap
+    let mut head: Vec<u8> = Vec::new();
+    let mut tail: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0u8; 16_384];
+    loop {
+        let n = match r.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        let data = &chunk[..n];
+        if head.len() < CAP {
+            let take = (CAP - head.len()).min(n);
+            head.extend_from_slice(&data[..take]);
+            if take < n {
+                truncated = true;
+                tail.extend_from_slice(&data[take..]);
+            }
+        } else {
+            truncated = true;
+            tail.extend_from_slice(data);
+        }
+        if tail.len() > 2 * CAP {
+            let drop = tail.len() - CAP;
+            tail.drain(..drop);
+        }
+    }
+    if !truncated {
+        return String::from_utf8_lossy(&head).into_owned();
+    }
+    if tail.len() > CAP {
+        let drop = tail.len() - CAP;
+        tail.drain(..drop);
+    }
+    let mut out = String::from_utf8_lossy(&head).into_owned();
+    out.push_str("\n…[output truncated]…\n");
+    out.push_str(&String::from_utf8_lossy(&tail));
+    out
 }
 
 pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -> RtResult<Value> {
@@ -334,6 +378,11 @@ mod tests {
             ("rm --recursive --force dir", "rm recursive+force"),
             ("rm --force --recursive dir", "rm recursive+force"),
             ("rm -fR .", "rm recursive+force"),
+            // Flags AFTER the path operand (GNU rm permutes args) must still be
+            // caught — a leading-run scan would miss these.
+            ("rm ./build -rf", "rm recursive+force"),
+            ("rm . -rf", "rm recursive+force"),
+            ("rm dir -r -f", "rm recursive+force"),
             ("sudo ls", "sudo"),
             ("echo hi && sudo make install", "sudo"),
             ("chmod -R 777 .", "chmod -R"),

@@ -6,15 +6,15 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { seekforgeHome } from "../memory/store.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 
 export type ManageSkillOptions = { global?: boolean };
 
 function skillsRoot(workspace: string, global: boolean): string {
   return global
-    ? path.join(os.homedir(), ".seekforge", "skills")
+    ? path.join(seekforgeHome(), ".seekforge", "skills")
     : path.join(workspace, ".seekforge", "skills");
 }
 

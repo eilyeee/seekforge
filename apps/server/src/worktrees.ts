@@ -90,6 +90,11 @@ export class WorktreeManager {
   // could pick the same slug and the second `worktree add` would 500. Chain
   // creates per base so each sees the previous one's worktree/branch.
   private readonly createLocks = new Map<string, Promise<unknown>>();
+  // Globally reserved slugs (the workspace id `wt-<slug>` is base-independent, so
+  // per-base createLocks don't serialize two DIFFERENT bases creating the same
+  // name). Held synchronously across the async git work so a concurrent create
+  // can't pick the same id and orphan a worktree on the second register().
+  private readonly reservedSlugs = new Set<string>();
 
   constructor(private readonly registry: WorkspaceRegistry) {}
 
@@ -129,27 +134,39 @@ export class WorktreeManager {
     for (let n = 2; (await this.slugTaken(base.path, slug)) && n < 100; n++) {
       slug = `${wanted}-${n}`;
     }
+    // Close the await-gap: bump past any slug reserved by a concurrent create
+    // (synchronously, no await) and claim it before doing the async git work.
+    for (let n = 2; this.reservedSlugs.has(slug) || this.registry.resolve(`wt-${slug}`); n++) {
+      slug = `${wanted}-${n}`;
+    }
+    this.reservedSlugs.add(slug);
 
-    // Keep worktree checkouts out of `git status` without touching the repo's
-    // .gitignore: append to .git/info/exclude (per-clone, never committed).
-    await this.ensureExcluded(base.path);
+    try {
+      // Keep worktree checkouts out of `git status` without touching the repo's
+      // .gitignore: append to .git/info/exclude (per-clone, never committed).
+      await this.ensureExcluded(base.path);
 
-    const relPath = join(".seekforge", "worktrees", slug);
-    const branch = `seekforge/${slug}`;
-    await git(base.path, ["worktree", "add", relPath, "-b", branch]);
+      const relPath = join(".seekforge", "worktrees", slug);
+      const branch = `seekforge/${slug}`;
+      await git(base.path, ["worktree", "add", relPath, "-b", branch]);
 
-    const absPath = resolve(base.path, relPath);
-    const record: WorktreeRecord = {
-      id: `wt-${slug}`,
-      slug,
-      branch,
-      path: absPath,
-      baseId: base.id,
-      basePath: base.path,
-    };
-    this.registry.register({ id: record.id, path: absPath, name: slug });
-    this.byId.set(record.id, record);
-    return { id: record.id, path: absPath, branch };
+      const absPath = resolve(base.path, relPath);
+      const record: WorktreeRecord = {
+        id: `wt-${slug}`,
+        slug,
+        branch,
+        path: absPath,
+        baseId: base.id,
+        basePath: base.path,
+      };
+      this.registry.register({ id: record.id, path: absPath, name: slug });
+      this.byId.set(record.id, record);
+      return { id: record.id, path: absPath, branch };
+    } finally {
+      // Registered slugs stay "taken" via the registry; drop the reservation so
+      // the set doesn't grow unbounded, and so a failed create frees the slug.
+      this.reservedSlugs.delete(slug);
+    }
   }
 
   /** Worktrees created from `base`, with live dirty/ahead git status. */
@@ -218,7 +235,7 @@ export class WorktreeManager {
   }
 
   private async slugTaken(basePath: string, slug: string): Promise<boolean> {
-    if (this.registry.resolve(`wt-${slug}`)) return true;
+    if (this.reservedSlugs.has(slug) || this.registry.resolve(`wt-${slug}`)) return true;
     return git(basePath, ["rev-parse", "-q", "--verify", `refs/heads/seekforge/${slug}`]).then(
       () => true,
       () => false,

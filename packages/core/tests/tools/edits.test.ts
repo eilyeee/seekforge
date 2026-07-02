@@ -98,9 +98,9 @@ describe("applyEdits — whitespace-tolerant fallback", () => {
     const crlf = "alpha\r\nbeta\r\ngamma\r\n";
     // Trailing space means "beta " is not an exact substring; fuzzy normalizes it.
     const out = applyEdits(crlf, [{ oldString: "beta ", newString: "  BETA" }]);
-    // The matched line is replaced with newString verbatim (newString has no CR,
-    // so the replaced line gets LF); surviving lines keep their original CRLF.
-    expect(out).toBe("alpha\r\n  BETA\ngamma\r\n");
+    // The whole file stays consistently CRLF: the fuzzy path rejoins with the
+    // file's dominant EOL, so the replaced line does NOT regress to a bare LF.
+    expect(out).toBe("alpha\r\n  BETA\r\ngamma\r\n");
   });
 
   it("throws ambiguous when more than one fuzzy region matches (no silent guess)", () => {

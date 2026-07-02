@@ -119,9 +119,15 @@ export async function fetchWithRetry(
       pendingStatus = undefined;
       continue;
     }
-    clearTimeout(timer); // headers received — let the body stream without the TTFB cap
-    if (res.ok) return res;
+    if (res.ok) {
+      clearTimeout(timer); // success: let the body stream without the TTFB cap
+      return res;
+    }
+    // Error response: keep the timer armed while reading the (bounded) error
+    // body. clearing it first would leave the read with no abort path, so a
+    // server that sends error headers but stalls the body would hang forever.
     const snippet = (await res.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
+    clearTimeout(timer);
     const message = `DeepSeek API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;
     const retryable = res.status === 429 || res.status >= 500;
     if (!retryable) throw new DeepSeekApiError(message, res.status);

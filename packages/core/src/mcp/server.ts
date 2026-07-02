@@ -158,7 +158,14 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
         respond(id, listToolsResult());
         return;
       case "tools/call":
-        await callTool(id, params);
+        // dispatcher.execute normally reports tool failures as ok:false, but an
+        // unexpected throw must still yield a JSON-RPC error — otherwise the
+        // client gets no response and blocks until its per-request timeout.
+        try {
+          await callTool(id, params);
+        } catch (err) {
+          respondError(id, -32603, `Internal error: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return;
       case "resources/list":
         respond(id, { resources: [] });

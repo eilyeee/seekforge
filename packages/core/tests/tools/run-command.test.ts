@@ -195,6 +195,21 @@ describe("classifyCommand: git read vs write", () => {
       expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
     }
   });
+
+  it("does not auto-allow a readonly command with a smuggled second command", () => {
+    // The readonly fast-path collapses whitespace; a newline / backtick / $()
+    // would otherwise hide a second command that /bin/sh -c still runs. These
+    // must fall through to "execute" (which prompts) rather than "readonly".
+    for (const cmd of [
+      "git log\nenv",
+      "git status\ncat ~/.netrc",
+      "git log `env`",
+      "git log $(printenv)",
+      "gh pr list\nenv",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).not.toBe("readonly");
+    }
+  });
 });
 
 describe("permission flow: gh read vs write", () => {

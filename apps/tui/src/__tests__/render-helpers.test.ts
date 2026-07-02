@@ -246,6 +246,16 @@ describe("layoutTable", () => {
     expect(out).not.toBeNull();
     expect(out[2]?.trimEnd()).toBe("1");
   });
+
+  it("aligns columns by terminal width, counting CJK/wide chars as 2", () => {
+    // "名前" is 2 CJK glyphs = 4 terminal columns; the column must reserve 4 so
+    // the "age" column stays aligned across rows (naive .length would give 2).
+    const out = layoutTable(["| 名前 | age |", "|---|---|", "| ada | 36 |"]) as string[];
+    expect(out).not.toBeNull();
+    expect(out[0]).toBe("名前  age");
+    expect(out[1]).toBe("─".repeat(9));
+    expect(out[2]).toBe("ada   36");
+  });
 });
 
 describe("numberDiffLines", () => {

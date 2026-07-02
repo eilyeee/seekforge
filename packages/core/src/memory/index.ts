@@ -20,6 +20,7 @@ export {
   readFactMeta,
   readGlobalMemory,
   readProjectMemory,
+  readRawProjectMemory,
   readSubdirMemories,
   recordFactAdded,
   recordFactUse,
