@@ -38,6 +38,13 @@ export function sessionsPruneCommand(opts: PruneOptions): void {
     process.exitCode = 1;
     return;
   }
+  // Reject nonsensical bounds: a negative --older-than is a future cutoff and
+  // --keep-last 0 (or negative) keeps nothing — both would delete every session.
+  if ((olderThanDays !== undefined && olderThanDays < 0) || (keepLast !== undefined && keepLast <= 0)) {
+    console.error(t("cmd.sessions.pruneNumbers"));
+    process.exitCode = 1;
+    return;
+  }
   const result = pruneSessions(process.cwd(), { olderThanDays, keepLast, dryRun: opts.dryRun });
   if (result.removed.length === 0) {
     console.log(t("cmd.sessions.pruneNone"));

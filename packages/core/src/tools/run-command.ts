@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
@@ -371,25 +372,30 @@ export function runShellCommand(
     let timedOut = false;
     let settled = false;
 
-    const append = (cur: string, chunk: Buffer): string =>
-      cur.length >= MAX_CAPTURE_CHARS ? cur : cur + chunk.toString("utf8");
+    // Decode per stream through a StringDecoder so a multi-byte UTF-8 sequence
+    // split across two `data` chunks isn't turned into U+FFFD replacement
+    // characters — it buffers the incomplete tail until the next chunk.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
 
-    const observe = (stream: "stdout" | "stderr", chunk: Buffer): void => {
-      if (onOutput === undefined) return;
+    const observe = (stream: "stdout" | "stderr", text: string): void => {
+      if (onOutput === undefined || text === "") return;
       try {
-        onOutput(stream, chunk.toString("utf8"));
+        onOutput(stream, text);
       } catch {
         // observers must never break the command
       }
     };
 
     child.stdout.on("data", (c: Buffer) => {
-      stdout = append(stdout, c);
-      observe("stdout", c);
+      const text = outDecoder.write(c);
+      if (stdout.length < MAX_CAPTURE_CHARS) stdout += text;
+      observe("stdout", text);
     });
     child.stderr.on("data", (c: Buffer) => {
-      stderr = append(stderr, c);
-      observe("stderr", c);
+      const text = errDecoder.write(c);
+      if (stderr.length < MAX_CAPTURE_CHARS) stderr += text;
+      observe("stderr", text);
     });
 
     const timer = setTimeout(() => {
@@ -413,6 +419,11 @@ export function runShellCommand(
     child.on("error", (err) => settle(() => reject(new ToolError("spawn_failed", err.message))));
     child.on("close", (code) =>
       settle(() => {
+        // Flush any bytes the decoders buffered mid-sequence at stream end.
+        const outTail = outDecoder.end();
+        const errTail = errDecoder.end();
+        if (outTail && stdout.length < MAX_CAPTURE_CHARS) stdout += outTail;
+        if (errTail && stderr.length < MAX_CAPTURE_CHARS) stderr += errTail;
         const durationMs = Date.now() - started;
         if (timedOut) {
           reject(

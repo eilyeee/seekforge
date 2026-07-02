@@ -75,7 +75,9 @@ describe("mcp server", () => {
     const res = await c.request("initialize", { protocolVersion: "2024-11-05" });
     expect(res.error).toBeUndefined();
     expect(res.result).toMatchObject({
-      protocolVersion: "2024-11-05",
+      // The server declares its own supported version (kept in lockstep with our
+      // client's PROTOCOL_VERSION), not necessarily the one the caller requested.
+      protocolVersion: "2025-06-18",
       serverInfo: { name: "seekforge" },
       capabilities: { tools: {} },
     });
