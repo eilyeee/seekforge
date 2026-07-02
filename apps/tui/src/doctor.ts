@@ -7,6 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 
 /** A single diagnostic result rendered as one line by formatDoctorLines. */
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fixHint?: string };
@@ -57,15 +58,31 @@ function clipboardCandidates(platform: string): string[] {
  */
 export function runDoctor(
   projectPath: string,
-  config: { apiKey?: string; runtimeBin?: string; mcpServers?: Record<string, unknown> },
+  config: {
+    apiKey?: string;
+    provider?: string;
+    baseUrl?: string;
+    runtimeBin?: string;
+    mcpServers?: Record<string, unknown>;
+  },
   probes: DoctorProbes,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
 
+  // Active provider preset (default "deepseek"); an explicit baseUrl always wins.
+  const provider = (config.provider ?? "deepseek").toLowerCase();
+  const preset = resolveProviderPreset(provider);
+  const baseUrl = config.baseUrl ?? preset?.baseUrl ?? DEFAULT_BASE_URL;
+  checks.push({ name: "provider", ok: true, detail: `${provider} (${baseUrl})` });
+
+  // The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
+  // otherwise; an explicit apiKey in config works for either.
+  const keyEnv = provider === "ark" ? "ARK_API_KEY" : "DEEPSEEK_API_KEY";
+  const hasKey = Boolean(config.apiKey ?? probes.env(keyEnv));
   checks.push(
-    config.apiKey
+    hasKey
       ? { name: "api key", ok: true, detail: "configured" }
-      : { name: "api key", ok: false, detail: "missing", fixHint: "restart seekforge-tui for the setup wizard, or export DEEPSEEK_API_KEY" },
+      : { name: "api key", ok: false, detail: "missing", fixHint: `restart seekforge-tui for the setup wizard, or export ${keyEnv}` },
   );
 
   const version = probes.nodeVersion();

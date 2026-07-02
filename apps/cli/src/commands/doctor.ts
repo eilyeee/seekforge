@@ -7,6 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
@@ -133,19 +134,35 @@ const DISABLED_UPDATER_PUBKEY = "dW50cnVzdGVkIGNvbW1lbnQ6IHVwZGF0ZXIgZGlzYWJsZWQ
 /** Runs every diagnostic. Pure given the probes (no direct fs/env access). */
 export function runDoctor(
   projectPath: string,
-  config: { apiKey?: string; runtimeBin?: string; mcpServers?: Record<string, unknown> },
+  config: {
+    apiKey?: string;
+    provider?: string;
+    baseUrl?: string;
+    runtimeBin?: string;
+    mcpServers?: Record<string, unknown>;
+  },
   probes: DoctorProbes,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
 
+  // Active provider preset (default "deepseek"); an explicit baseUrl always wins.
+  const provider = (config.provider ?? "deepseek").toLowerCase();
+  const preset = resolveProviderPreset(provider);
+  const baseUrl = config.baseUrl ?? preset?.baseUrl ?? DEFAULT_BASE_URL;
+  checks.push({ name: "provider", ok: true, detail: `${provider} (${baseUrl})` });
+
+  // The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
+  // otherwise; an explicit apiKey in config works for either.
+  const keyEnv = provider === "ark" ? "ARK_API_KEY" : "DEEPSEEK_API_KEY";
+  const hasKey = Boolean(config.apiKey ?? probes.env(keyEnv));
   checks.push(
-    config.apiKey
+    hasKey
       ? { name: "api key", ok: true, detail: "configured" }
       : {
           name: "api key",
           ok: false,
           detail: "missing",
-          fixHint: "export DEEPSEEK_API_KEY, or `seekforge config set apiKey <key>`",
+          fixHint: `export ${keyEnv}, or \`seekforge config set apiKey <key>\``,
         },
   );
 

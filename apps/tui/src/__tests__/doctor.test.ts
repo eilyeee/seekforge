@@ -29,7 +29,7 @@ function byName(checks: DoctorCheck[], name: string): DoctorCheck {
 describe("runDoctor", () => {
   it("reports all-ok in a healthy environment", () => {
     const checks = runDoctor("/proj", healthyConfig, healthyProbes());
-    expect(checks.length).toBe(11);
+    expect(checks.length).toBe(12);
     expect(checks.every((c) => c.ok)).toBe(true);
     expect(byName(checks, "node").detail).toContain("v22.4.0");
     expect(byName(checks, "platform").detail).toBe("darwin");
@@ -37,6 +37,39 @@ describe("runDoctor", () => {
     expect(byName(checks, "sessions").detail).toBe("3 recorded");
     expect(byName(checks, "editor").detail).toBe("vim");
     expect(byName(checks, "clipboard").detail).toBe("pbcopy");
+  });
+
+  it("defaults to the deepseek provider with its base URL", () => {
+    const check = byName(runDoctor("/proj", healthyConfig, healthyProbes()), "provider");
+    expect(check.ok).toBe(true);
+    expect(check.detail).toBe("deepseek (https://api.deepseek.com)");
+  });
+
+  it("reports the ark provider and its base URL", () => {
+    const config = { ...healthyConfig, provider: "ark" };
+    const check = byName(runDoctor("/proj", config, healthyProbes()), "provider");
+    expect(check.ok).toBe(true);
+    expect(check.detail).toContain("ark");
+    expect(check.detail).toContain("ark.cn-beijing.volces.com");
+  });
+
+  it("honors an explicit baseUrl override in the provider line", () => {
+    const config = { ...healthyConfig, provider: "ark", baseUrl: "https://custom.example.com" };
+    const check = byName(runDoctor("/proj", config, healthyProbes()), "provider");
+    expect(check.detail).toBe("ark (https://custom.example.com)");
+  });
+
+  it("passes the api key check for ark when ARK_API_KEY is set", () => {
+    const probes = healthyProbes({ env: (key) => (key === "ARK_API_KEY" ? "sk-ark" : undefined) });
+    const check = byName(runDoctor("/proj", { provider: "ark" }, probes), "api key");
+    expect(check.ok).toBe(true);
+    expect(check.detail).toBe("configured");
+  });
+
+  it("fails the ark api key check pointing at ARK_API_KEY when unset", () => {
+    const check = byName(runDoctor("/proj", { provider: "ark" }, healthyProbes()), "api key");
+    expect(check.ok).toBe(false);
+    expect(check.fixHint).toContain("ARK_API_KEY");
   });
 
   it("fails the api key check when no key is configured", () => {
