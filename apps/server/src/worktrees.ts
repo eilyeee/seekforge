@@ -9,17 +9,29 @@
  * auto-committed first ("seekforge worktree checkpoint"). A conflicted merge
  * is always aborted — the base repo is never left mid-merge.
  *
+ * The stateless git primitives live in `@seekforge/core`; this module keeps the
+ * server-coupled bookkeeping: the workspace registry, the in-memory `byId` map,
+ * `wt-<slug>` ids, per-base create serialization, and HTTP status mapping.
+ *
  * Registrations live in server memory: after a restart the directories and
  * branches still exist on disk but must be recreated/cleaned up manually.
  */
 
-import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import {
+  createWorktree,
+  isWorktreeDirty,
+  mergeWorktree,
+  removeWorktree,
+  worktreeAhead,
+  worktreeBranchExists,
+  WorktreeGitError,
+  worktreeSlug,
+  type WorktreeMergeResult,
+} from "@seekforge/core";
 import type { Workspace, WorkspaceRegistry } from "./workspaces.js";
 
-const execFileAsync = promisify(execFile);
+// `worktreeSlug` now lives in core; re-export so existing importers keep working.
+export { worktreeSlug };
 
 /** Structured failure: rest.ts maps this to {error: {code, message}} + status. */
 export class WorktreeError extends Error {
@@ -32,6 +44,23 @@ export class WorktreeError extends Error {
     this.name = "WorktreeError";
   }
 }
+
+/** Core git-error code -> HTTP status; anything unknown is a 500. */
+const CORE_STATUS: Record<string, number> = { git_error: 500, not_a_git_repo: 400 };
+
+/** Runs a core git op, remapping {@link WorktreeGitError} to {@link WorktreeError}. */
+async function delegate<T>(op: Promise<T>): Promise<T> {
+  try {
+    return await op;
+  } catch (err) {
+    if (err instanceof WorktreeGitError) {
+      throw new WorktreeError(err.code, err.message, CORE_STATUS[err.code] ?? 500);
+    }
+    throw err;
+  }
+}
+
+export type MergeResult = WorktreeMergeResult;
 
 export type WorktreeRecord = {
   /** Workspace id (`wt-<slug>`) the worktree is registered under. */
@@ -55,33 +84,6 @@ export type WorktreeStatus = {
   /** Commits on the branch that are not on the base HEAD. */
   ahead: number;
 };
-
-export type MergeResult = { merged: true } | { conflict: true; files: string[] };
-
-/** Spawns git (no shell) and returns trimmed stdout; failures carry stderr. */
-async function git(cwd: string, args: string[]): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: 10_000_000, timeout: 60_000 });
-    return stdout.trim();
-  } catch (err) {
-    const e = err as { stderr?: string; stdout?: string; message?: string };
-    const detail = (e.stderr || e.stdout || e.message || "").trim().slice(0, 500);
-    throw new WorktreeError("git_error", `git ${args[0]} failed: ${detail}`, 500);
-  }
-}
-
-/** `name` -> a url/branch-safe slug; empty input falls back to a timestamp. */
-export function worktreeSlug(name?: string, now: Date = new Date()): string {
-  const fromName = (name ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .replace(/-+$/, "");
-  if (fromName) return fromName;
-  // e.g. 20260612-153000 (UTC, second precision).
-  return now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
-}
 
 export class WorktreeManager {
   private readonly byId = new Map<string, WorktreeRecord>();
@@ -121,11 +123,6 @@ export class WorktreeManager {
     if (this.byId.has(base.id)) {
       throw new WorktreeError("bad_request", "cannot create a worktree from another worktree", 400);
     }
-    try {
-      await git(base.path, ["rev-parse", "--is-inside-work-tree"]);
-    } catch {
-      throw new WorktreeError("not_a_git_repo", `workspace is not a git repository: ${base.path}`, 400);
-    }
 
     // Pick a slug that collides with neither a registered workspace nor an
     // existing seekforge/<slug> branch.
@@ -149,15 +146,7 @@ export class WorktreeManager {
     this.reservedSlugs.add(slug);
 
     try {
-      // Keep worktree checkouts out of `git status` without touching the repo's
-      // .gitignore: append to .git/info/exclude (per-clone, never committed).
-      await this.ensureExcluded(base.path);
-
-      const relPath = join(".seekforge", "worktrees", slug);
-      const branch = `seekforge/${slug}`;
-      await git(base.path, ["worktree", "add", relPath, "-b", branch]);
-
-      const absPath = resolve(base.path, relPath);
+      const { path: absPath, branch } = await delegate(createWorktree(base.path, slug));
       const record: WorktreeRecord = {
         id: `wt-${slug}`,
         slug,
@@ -184,8 +173,8 @@ export class WorktreeManager {
         id: r.id,
         branch: r.branch,
         path: r.path,
-        dirty: await this.isDirty(r.path),
-        ahead: Number((await git(r.basePath, ["rev-list", "--count", `HEAD..${r.branch}`])) || "0"),
+        dirty: await delegate(isWorktreeDirty(r.path)),
+        ahead: await delegate(worktreeAhead(r.basePath, r.branch)),
       })),
     );
   }
@@ -199,43 +188,13 @@ export class WorktreeManager {
    */
   async merge(id: string): Promise<MergeResult> {
     const r = this.require(id);
-
-    if (await this.isDirty(r.path)) {
-      await git(r.path, ["add", "-A"]);
-      await git(r.path, ["commit", "-m", "seekforge worktree checkpoint"]);
-    }
-
-    try {
-      await git(r.basePath, ["merge", "--no-ff", r.branch, "-m", `merge ${r.branch} (seekforge worktree)`]);
-      return { merged: true };
-    } catch (err) {
-      // Mid-merge (MERGE_HEAD exists) = a real conflict: collect the
-      // conflicting files, then always abort so the base repo stays clean.
-      const midMerge = await git(r.basePath, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
-        () => true,
-        () => false,
-      );
-      if (!midMerge) throw err; // e.g. dirty base blocking the merge — surfaced as git_error
-      // Always abort, even if collecting the conflict list throws, so the base
-      // repo is never left mid-merge (which blocks all later operations on it).
-      try {
-        const files = (await git(r.basePath, ["diff", "--name-only", "--diff-filter=U"]))
-          .split("\n")
-          .filter(Boolean);
-        return { conflict: true, files };
-      } finally {
-        await git(r.basePath, ["merge", "--abort"]).catch(() => undefined);
-      }
-    }
+    return delegate(mergeWorktree(r.basePath, r.path, r.branch));
   }
 
   /** `git worktree remove --force` + branch delete + workspace unregister. */
   async remove(id: string): Promise<void> {
     const r = this.require(id);
-    await git(r.basePath, ["worktree", "remove", "--force", r.path]);
-    // -D: the branch may be unmerged (discard flow). Failure to delete the
-    // branch is not fatal — the worktree itself is already gone.
-    await git(r.basePath, ["branch", "-D", r.branch]).catch(() => undefined);
+    await delegate(removeWorktree(r.basePath, r.path, r.branch));
     this.registry.unregister(r.id);
     this.byId.delete(r.id);
   }
@@ -248,26 +207,6 @@ export class WorktreeManager {
 
   private async slugTaken(basePath: string, slug: string): Promise<boolean> {
     if (this.reservedSlugs.has(slug) || this.registry.resolve(`wt-${slug}`)) return true;
-    return git(basePath, ["rev-parse", "-q", "--verify", `refs/heads/seekforge/${slug}`]).then(
-      () => true,
-      () => false,
-    );
-  }
-
-  private async isDirty(worktreePath: string): Promise<boolean> {
-    return (await git(worktreePath, ["status", "--porcelain"])) !== "";
-  }
-
-  /** Appends `.seekforge/worktrees/` to `<gitdir>/info/exclude` (idempotent). */
-  private async ensureExcluded(basePath: string): Promise<void> {
-    const commonDir = await git(basePath, ["rev-parse", "--git-common-dir"]);
-    const gitDir = isAbsolute(commonDir) ? commonDir : resolve(basePath, commonDir);
-    const infoDir = join(gitDir, "info");
-    const excludeFile = join(infoDir, "exclude");
-    const line = ".seekforge/worktrees/";
-    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
-    if (current.split("\n").some((l) => l.trim() === line)) return;
-    mkdirSync(infoDir, { recursive: true });
-    appendFileSync(excludeFile, `${current.endsWith("\n") || current === "" ? "" : "\n"}${line}\n`);
+    return delegate(worktreeBranchExists(basePath, slug));
   }
 }

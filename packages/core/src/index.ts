@@ -8,3 +8,4 @@ export * from "./runtime/index.js";
 export * from "./mcp/index.js";
 export * from "./evolution/index.js";
 export * from "./hooks/index.js";
+export * from "./worktree.js";
