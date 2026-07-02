@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### round 55: full-project boundary/edge-case review — 16 verified fixes
+A parallel-subagent review of every subsystem for boundary bugs; each finding
+verified before fixing (a claimed AST byte-vs-char offset bug was disproved by a
+direct test and dropped). Landed in three batches:
+- **Security/correctness:** `loop` command bypassed per-folder access consent
+  (now gated like `run`/`repl`); `search_text`'s `.seekforge/sessions`
+  self-pollution guard failed on a symlinked workspace (`/tmp`→`/private/tmp`);
+  `run_command` corrupted multi-byte UTF-8 split across chunks (→ StringDecoder);
+  server WS had no `error` handler so a bad frame crashed the process;
+  `sessions prune --keep-last 0`/negative would delete all sessions.
+- **Robustness:** `glob` threw an opaque SyntaxError on a bad pattern (→
+  ToolError); MCP server advertised a stale protocolVersion; MCP SSE without a
+  trailing blank line dropped a valid response; a hook timeout could hang the
+  run if the kill didn't land; surrogate-pair splits in the CJK bigram tokenizer
+  and hook-context slice; `authorizeDir` idempotency wasn't ancestor-aware; TUI
+  pager `G`/scroll ran past the useful offset (dead-zone of wasted keystrokes).
+- **Compaction (the two deferred design items):** when an entire turn is one
+  assistant message + many tool results, nothing can be dropped without orphaning
+  a tool call, so compaction returned null even when over budget — added
+  `shrinkToolResultsToFit`, a last resort that truncates the oversized tool
+  payloads in place (no message dropped) so the provider isn't handed an
+  over-budget request. `budgetTokens` floored at 1 so a pathologically small
+  window can't yield a zero/negative budget.
+- **Test reliability:** the auto-verify finalize-gate tests spawned a real
+  `pnpm test` subprocess against a 5s limit (flaky under load) → `exit 1`.
+- Verified: core 989 · tui 679 · server 194 · cli all · workspace typecheck clean.
+
 ### round 54: round-52 verdict — ran the A/Bs, kept what earns its cost
 - **Measured all three round-52 levers** (deepseek-v4-flash), recorded in
   `evals/round-52-measurements.md`. Verdict: **auto-verify** positive (fewer

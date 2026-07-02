@@ -43,7 +43,13 @@ import {
   type DispatchHooks,
   type DispatchManager,
 } from "../subagents/index.js";
-import { clearOldToolResults, compactMessages, estimateMessagesTokens, llmCompactMessages } from "./context.js";
+import {
+  clearOldToolResults,
+  compactMessages,
+  estimateMessagesTokens,
+  llmCompactMessages,
+  shrinkToolResultsToFit,
+} from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
 import { buildRelevantFiles, buildRepoOverview, scanRepo } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
@@ -315,7 +321,12 @@ function appendUserPrompt(base: string, append?: string): string {
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
   const windowTokens = deps.contextWindowTokens ?? 131_072;
-  const budgetTokens = Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS;
+  // Floor at 1 so a pathologically small contextWindowTokens (where the output
+  // reserve exceeds the whole budget) can't yield a zero/negative budget that
+  // makes the over-budget comparison meaningless; the shrink-to-fit last resort
+  // then still runs against a positive target. (Kept below any realistic budget
+  // so it never affects a normally-configured window.)
+  const budgetTokens = Math.max(1, Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS);
   const depth = deps._depth ?? 0;
   // dispatch_agent is only advertised at depth 0 — dispatched runs never recurse.
   const roster: AgentDefinition[] = depth === 0 ? (deps.subagents ?? []) : [];
@@ -1015,7 +1026,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
             // LLM compaction when configured; null (under budget OR provider
             // failure) falls back to the mechanical digest.
-            const compacted =
+            let compacted =
               (deps.compaction === "llm"
                 ? await llmCompactMessages(
                     provider,
@@ -1024,6 +1035,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     deps.compactFocus !== undefined ? { focus: deps.compactFocus } : undefined,
                   )
                 : null) ?? compactMessages(messages, budgetTokens);
+            // Last resort: when the whole history is one assistant turn plus its
+            // tool results, nothing can be dropped without orphaning a tool call
+            // (compactMessages returns null) — shrink the oversized tool payloads
+            // in place so the provider isn't handed an over-budget request.
+            if (!compacted && estimateMessagesTokens(messages) > budgetTokens) {
+              compacted = shrinkToolResultsToFit(messages, budgetTokens);
+            }
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.
               yield* surfaceHookNotices(
