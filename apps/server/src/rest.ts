@@ -13,6 +13,7 @@ import {
   addMemoryFact,
   applyProposal,
   approveMemoryCandidate,
+  buildSessionAudit,
   BUILTIN_SKILLS,
   compactProjectMemory,
   createDefaultDispatcher,
@@ -44,6 +45,7 @@ import {
   readFactMeta,
   readProjectMemory,
   readSessionMeta,
+  renderSessionAuditMarkdown,
   rejectMemoryCandidate,
   removeProjectFact,
   rewindSession,
@@ -869,6 +871,21 @@ export async function handleApi(
         .filter((m) => m.role === "user")
         .map((m, turn) => ({ turn, text: m.content, backtrackable: turn > 0 }));
       return sendJson(res, 200, turns);
+    }
+
+    // Reviewable audit of a stored session: structured summary plus rendered
+    // markdown. buildSessionAudit returns null for an unknown id / missing
+    // trace, which we surface as 404.
+    if (method === "GET" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "audit") {
+      const id = segs[2]!;
+      if (!isSafeId(id)) {
+        return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      }
+      const audit = buildSessionAudit(workspace, id);
+      if (!audit) {
+        return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      }
+      return sendJson(res, 200, { markdown: renderSessionAuditMarkdown(audit), audit });
     }
 
     if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "backtrack") {

@@ -295,6 +295,24 @@ describe("REST endpoints", () => {
     expect((await authed("/api/sessions/..%2F..%2Fetc")).status).toBe(404);
   });
 
+  it("GET /api/sessions/:id/audit returns rendered markdown and a structured audit", async () => {
+    const res = await authed("/api/sessions/s1/audit");
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(typeof body.markdown).toBe("string");
+    expect(body.markdown.length).toBeGreaterThan(0);
+    expect(body.audit.meta.id).toBe("s1");
+    expect(body.audit).toHaveProperty("turns");
+    expect(body.audit).toHaveProperty("filesChanged");
+    expect(body.audit).toHaveProperty("totals");
+  });
+
+  it("GET /api/sessions/:id/audit is 404 for an unknown session", async () => {
+    const res = await authed("/api/sessions/nope/audit");
+    expect(res.status).toBe(404);
+    expect((await jsonOf(res)).error.code).toBe("not_found");
+  });
+
   it("GET /api/skills lists skills without content", async () => {
     const res = await authed("/api/skills");
     const body = await jsonOf(res);

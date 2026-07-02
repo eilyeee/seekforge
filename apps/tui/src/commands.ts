@@ -68,6 +68,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "usage", summary: "cumulative token usage and cost" , group: "context" },
   { name: "balance", summary: "DeepSeek account balance", group: "info" },
   { name: "export", args: "[path]", summary: "export the transcript as markdown" , group: "review" },
+  { name: "audit", args: "[sessionId]", summary: "write a reviewable audit of a session (timeline, tool calls, files, cost)" , group: "review" },
   { name: "handoff", args: "[list]", summary: "write a session handoff document for the next session", group: "review" },
   { name: "stash", args: "[pop|list]", summary: "stash / restore the composer draft", group: "session" },
   { name: "copy", summary: "copy the last assistant message to the clipboard" , group: "review" },
@@ -116,6 +117,7 @@ export type SlashCommand =
   | { name: "compact"; arg?: string }
   | { name: "usage" }
   | { name: "export"; arg?: string }
+  | { name: "audit"; arg?: string }
   | { name: "copy" }
   | { name: "editor" }
   | { name: "status" }
@@ -166,7 +168,7 @@ const NO_ARG = new Set([
 /** Commands whose argument is the whole rest of the line (free text). */
 const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory", "worktree"]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "config", "tab", "theme", "handoff", "stash"]);
+const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "audit", "config", "tab", "theme", "handoff", "stash"]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();

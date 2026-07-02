@@ -67,3 +67,9 @@ export function defaultExportPath(now = new Date()): string {
   const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
   return `.seekforge/exports/tui-${stamp}.md`;
 }
+
+/** Audit export path: .seekforge/exports/audit-<sessionId>-<timestamp>.md */
+export function auditExportPath(sessionId: string, now = new Date()): string {
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
+  return `.seekforge/exports/audit-${sessionId}-${stamp}.md`;
+}

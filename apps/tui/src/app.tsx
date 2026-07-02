@@ -7,6 +7,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   addMemoryFact,
   approveMemoryCandidate,
+  buildSessionAudit,
+  renderSessionAuditMarkdown,
   compactSessionNow,
   createBackgroundTasks,
   listMemoryCandidates,
@@ -128,7 +130,7 @@ import { backtrackTargets } from "./backtrack.js";
 import { formatCandidateLine, pendingCandidates, removeCandidateAt } from "./memory-candidates.js";
 import { classifyUnifiedDiff } from "./diff.js";
 import { createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
-import { transcriptToMarkdown, defaultExportPath } from "./export.js";
+import { transcriptToMarkdown, defaultExportPath, auditExportPath } from "./export.js";
 import {
   currentMatch,
   searchBackspace,
@@ -1294,6 +1296,28 @@ export function App({
             notice(`exported transcript → ${rel}`);
           } catch (err) {
             notice(`export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+          }
+          break;
+        }
+        case "audit": {
+          const sessionId = command.arg ?? sessionIdRef.current;
+          if (!sessionId) {
+            notice("no active session to audit", "error");
+            break;
+          }
+          const audit = buildSessionAudit(projectPath, sessionId);
+          if (!audit) {
+            notice(`no trace for session ${sessionId}`, "error");
+            break;
+          }
+          const rel = auditExportPath(sessionId);
+          const target = resolve(projectPath, rel);
+          try {
+            mkdirSync(dirname(target), { recursive: true });
+            writeFileSync(target, renderSessionAuditMarkdown(audit));
+            notice(`wrote audit → ${rel}`);
+          } catch (err) {
+            notice(`audit failed: ${err instanceof Error ? err.message : String(err)}`, "error");
           }
           break;
         }

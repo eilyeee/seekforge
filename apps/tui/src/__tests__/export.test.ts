@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultExportPath, transcriptToMarkdown } from "../export.js";
+import { auditExportPath, defaultExportPath, transcriptToMarkdown } from "../export.js";
 import type { ChatItem } from "../model.js";
 
 describe("transcriptToMarkdown", () => {
@@ -46,5 +46,10 @@ describe("transcriptToMarkdown", () => {
   it("defaultExportPath is timestamped under .seekforge/exports", () => {
     const p = defaultExportPath(new Date("2026-06-12T10:00:00Z"));
     expect(p).toBe(".seekforge/exports/tui-20260612T100000.md");
+  });
+
+  it("auditExportPath embeds the session id and timestamp under .seekforge/exports", () => {
+    const p = auditExportPath("sess-abc", new Date("2026-06-12T10:00:00Z"));
+    expect(p).toBe(".seekforge/exports/audit-sess-abc-20260612T100000.md");
   });
 });

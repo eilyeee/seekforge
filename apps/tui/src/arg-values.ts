@@ -135,6 +135,11 @@ export function argCandidates(command: string, argSoFar: string, ctx: ArgContext
       ];
     case "export":
       return [{ value: "", hint: "default path" }];
+    case "audit":
+      return [
+        { value: "", hint: "audit the current session" },
+        ...ctx.sessions.map((s) => ({ value: s.id, hint: `[${s.status}] ${cap(s.title, 40)}` })),
+      ];
     default:
       return null;
   }
