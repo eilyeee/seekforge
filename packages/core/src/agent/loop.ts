@@ -17,6 +17,7 @@ import {
   createBackgroundTasks,
   digestCommandOutput,
   disposeBrowser,
+  disposeLspServers,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
@@ -1592,6 +1593,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // Playwright process is not leaked past the session. No-op when the
         // browser was never launched; runs only for the top-level session.
         if (depth === 0) await disposeBrowser().catch(() => {});
+        // Tear down any language-server sessions (lsp_* tools) for the same
+        // reason — no spawned server process should outlive the session.
+        if (depth === 0) await disposeLspServers().catch(() => {});
         // sessionEnd hooks fire once per top-level session, after cleanup.
         // Advisory only; never affects the (already emitted) outcome. Nested
         // subagent sessions (depth > 0) do not fire it.

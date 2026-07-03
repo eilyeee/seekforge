@@ -613,6 +613,9 @@ describe("dispatcher basics", () => {
       "browser_screenshot",
       "browser_snapshot",
       "browser_console",
+      "lsp_definition",
+      "lsp_references",
+      "lsp_diagnostics",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     expect(readFileDef?.parameters).toMatchObject({

@@ -19,6 +19,9 @@ and quick start; this folder holds the reference docs.
 - [Browser / visual verification](browser.md) — the optional Playwright-backed
   `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
   `browser_console` tools and the frontend verify loop.
+- [LSP / precise symbol intelligence](lsp.md) — the optional language-server-backed
+  `lsp_definition` / `lsp_references` / `lsp_diagnostics` tools for precise
+  definitions/references/diagnostics vs. the lexical `repo_map`/`find_definition`.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
   loop and its guardrails.
 - [Scheduled jobs](scheduling.md) — register local cron/interval jobs
