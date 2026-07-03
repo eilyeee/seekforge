@@ -13,6 +13,7 @@ const COMMANDS = [
   "ask",
   "init",
   "diff",
+  "schedule",
   "sessions",
   "status",
   "models",

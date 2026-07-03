@@ -36,6 +36,13 @@ import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { loopCommand } from "./commands/loop.js";
 import { runTaskCommand } from "./commands/run.js";
+import {
+  scheduleAddCommand,
+  scheduleListCommand,
+  scheduleRemoveCommand,
+  scheduleRunCommand,
+  scheduleSetEnabledCommand,
+} from "./commands/schedule.js";
 import { resolveOutputFormat } from "./output-format.js";
 import { serveCommand } from "./commands/serve.js";
 import { updateCommand } from "./commands/update.js";
@@ -317,6 +324,70 @@ program
       });
     },
   );
+
+// Local scheduled jobs (Track E automation). Register a task to run on an
+// interval or cron; `schedule run` is the tick the OS scheduler invokes. Every
+// run is headless + cost-bounded (maxCostUsd is required) and produces a normal
+// auditable session. See docs/scheduling.md.
+const schedule = program.command("schedule").description("local scheduled agent jobs (cron/launchd wire `schedule run`)");
+schedule
+  .command("add")
+  .requiredOption("--task <prompt>", "the prompt the agent runs each tick")
+  .option("--every <interval>", "run on an interval: 30m | 2h | 1d (seconds/minutes/hours/days/weeks)")
+  .option("--cron <expr>", "run on a 5-field cron schedule (e.g. \"0 9 * * 1-5\")")
+  .requiredOption("--max-cost <usd>", "REQUIRED per-run cost cap in USD (a scheduled run must be bounded)", parsePositiveFloat)
+  .option("--mode <mode>", "ask (read-only) | edit (may modify files)", "ask")
+  .option("--id <name>", "explicit job id (default: derived from the task)")
+  .description("register a scheduled job in .seekforge/schedules.json")
+  .action((opts: { task: string; every?: string; cron?: string; maxCost: number; mode?: string; id?: string }) => {
+    if (opts.mode !== undefined && opts.mode !== "ask" && opts.mode !== "edit") {
+      fail(`invalid --mode "${opts.mode}" (expected ask | edit)`);
+      return;
+    }
+    scheduleAddCommand({
+      task: opts.task,
+      every: opts.every,
+      cron: opts.cron,
+      maxCost: opts.maxCost,
+      mode: opts.mode as "ask" | "edit" | undefined,
+      id: opts.id,
+    });
+  });
+schedule
+  .command("list", { isDefault: true })
+  .description("list scheduled jobs (id, schedule, mode, budget, enabled, last run)")
+  .action(() => {
+    scheduleListCommand();
+  });
+schedule
+  .command("remove")
+  .alias("rm")
+  .argument("<id>", "job id to remove")
+  .description("remove a scheduled job")
+  .action((id: string) => {
+    scheduleRemoveCommand(id);
+  });
+schedule
+  .command("enable")
+  .argument("<id>", "job id to enable")
+  .description("enable a scheduled job")
+  .action((id: string) => {
+    scheduleSetEnabledCommand(id, true);
+  });
+schedule
+  .command("disable")
+  .argument("<id>", "job id to disable")
+  .description("disable a scheduled job (kept in the registry, skipped by `run`)")
+  .action((id: string) => {
+    scheduleSetEnabledCommand(id, false);
+  });
+schedule
+  .command("run")
+  .option("--id <id>", "run one specific job now (forced), instead of all due jobs")
+  .description("run all DUE jobs now (the tick to wire into cron/launchd); each run is headless + cost-bounded")
+  .action(async (opts: { id?: string }) => {
+    await scheduleRunCommand({ id: opts.id });
+  });
 
 program
   .command("ask")

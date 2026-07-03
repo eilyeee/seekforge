@@ -16,8 +16,14 @@ and quick start; this folder holds the reference docs.
   MCP servers, sandbox, and the TUI status line.
 - [MCP](mcp.md) — Model Context Protocol servers (stdio + Streamable HTTP),
   resources, prompts, and `${ENV}` header expansion.
+- [Browser / visual verification](browser.md) — the optional Playwright-backed
+  `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
+  `browser_console` tools and the frontend verify loop.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
   loop and its guardrails.
+- [Scheduled jobs](scheduling.md) — register local cron/interval jobs
+  (`seekforge schedule`), the mandatory per-run cost budget, headless safety,
+  and wiring the tick into cron/launchd/systemd.
 
 ## Surfaces
 - [Embedding SeekForge (`@seekforge/core`)](sdk.md) — use the agent engine
