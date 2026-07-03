@@ -47,14 +47,47 @@ describe("resolveProviderPreset", () => {
     expect(preset?.models).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
   });
 
+  it.each([
+    ["openai", "https://api.openai.com/v1", ["gpt-4o", "gpt-4o-mini", "o3-mini"]],
+    ["ollama", "http://localhost:11434/v1", ["llama3.1", "qwen2.5-coder", "deepseek-r1"]],
+    [
+      "openrouter",
+      "https://openrouter.ai/api/v1",
+      ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "deepseek/deepseek-chat"],
+    ],
+  ] as const)(
+    "returns the %s OpenAI-compatible preset (all capabilities disabled), case-insensitively",
+    (name, baseUrl, models) => {
+      const preset = resolveProviderPreset(name);
+      expect(preset).toBeDefined();
+      expect(preset?.baseUrl).toBe(baseUrl);
+      expect(preset?.capabilities).toEqual({
+        thinking: false,
+        cacheHitTokens: false,
+        costAccounting: false,
+        balance: false,
+      });
+      expect(preset?.models).toEqual(models);
+      expect(preset?.models.length).toBeGreaterThan(0);
+      // Case-insensitive lookup returns the same object.
+      expect(resolveProviderPreset(name.toUpperCase())).toBe(preset);
+    },
+  );
+
   it("returns undefined for an unknown or missing preset name", () => {
-    expect(resolveProviderPreset("openai")).toBeUndefined();
+    expect(resolveProviderPreset("nope")).toBeUndefined();
     expect(resolveProviderPreset("")).toBeUndefined();
     expect(resolveProviderPreset(undefined)).toBeUndefined();
   });
 
-  it("exposes both presets on PROVIDER_PRESETS", () => {
-    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(["ark", "deepseek"]);
+  it("exposes all presets on PROVIDER_PRESETS", () => {
+    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual([
+      "ark",
+      "deepseek",
+      "ollama",
+      "openai",
+      "openrouter",
+    ]);
   });
 });
 

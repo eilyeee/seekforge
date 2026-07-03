@@ -37,7 +37,13 @@ describe("modelsForProvider", () => {
   it("returns KNOWN_MODELS for an unset, deepseek, or unknown provider", () => {
     expect(modelsForProvider(undefined)).toBe(KNOWN_MODELS);
     expect(modelsForProvider("deepseek")).toBe(KNOWN_MODELS);
-    expect(modelsForProvider("openai")).toBe(KNOWN_MODELS);
+    expect(modelsForProvider("totally-unknown-provider")).toBe(KNOWN_MODELS);
+  });
+
+  it("returns a preset's own catalog for a non-deepseek provider (e.g. openai)", () => {
+    const models = modelsForProvider("openai");
+    expect(models.map((m) => m.id)).toEqual(["gpt-4o", "gpt-4o-mini", "o3-mini"]);
+    expect(models.every((m) => m.note === "openai model")).toBe(true);
   });
 });
 

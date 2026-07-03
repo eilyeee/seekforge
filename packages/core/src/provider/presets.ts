@@ -45,6 +45,28 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       "minimax-m2.7",
     ],
   },
+  // The presets below are generic OpenAI-compatible endpoints. Like `ark`, they
+  // carry no built-in pricing table, so costAccounting is false and reported
+  // cost stays 0 until a per-model price override exists; the DeepSeek-only
+  // thinking body, context-cache tokens, and /user/balance are likewise off.
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    // Short representative catalog; users can point at any OpenAI model id.
+    models: ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+  },
+  ollama: {
+    baseUrl: "http://localhost:11434/v1",
+    capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    // Common local models; users can type any model they have pulled.
+    models: ["llama3.1", "qwen2.5-coder", "deepseek-r1"],
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    capabilities: { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false },
+    // Short representative catalog; OpenRouter exposes many more model ids.
+    models: ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "deepseek/deepseek-chat"],
+  },
 };
 
 /** Case-insensitive lookup; returns undefined for an unknown preset name. */
