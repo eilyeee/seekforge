@@ -5,6 +5,10 @@ an embeddable core. Start with the [project README](../README.md) for the pitch
 and quick start; this folder holds the reference docs.
 
 ## Using SeekForge
+- [Cookbook](cookbook.md) — task-oriented recipes (fix a test, refactor, review
+  a diff, verify loop, MCP, skills, memory, worktrees, audits, Ark provider).
+- [Migrating from Aider / Cline / Claude Code / Codex](migration.md) — concept
+  mapping and what's distinctive about SeekForge.
 - [CLI reference](cli-reference.md) — `run` / `ask` / `serve` and every flag
   (`--profile`, `--output-style`, `--permission-mode`, …).
 - [Configuration](configuration.md) — config layers & precedence, profiles,
@@ -16,6 +20,9 @@ and quick start; this folder holds the reference docs.
   loop and its guardrails.
 
 ## Surfaces
+- [Embedding SeekForge (`@seekforge/core`)](sdk.md) — use the agent engine
+  programmatically: provider factory, `createAgentCore`/`runTask`, the
+  autonomous loop, and the extension points (custom tools, hooks, MCP, subagents).
 - [CLI](../apps/cli/README.md) · [Terminal UI](../apps/tui/README.md) ·
   Desktop shell: [apps/desktop/src-tauri/README.md](../apps/desktop/src-tauri/README.md)
 - [Server REST + WS API](../apps/server/SERVER-API.md) — the contract the
