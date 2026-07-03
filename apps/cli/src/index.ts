@@ -35,6 +35,7 @@ import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { loopCommand } from "./commands/loop.js";
+import { resolveCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
 import { sandboxRunCommand } from "./commands/sandbox.js";
 import {
@@ -342,6 +343,31 @@ program
       });
     },
   );
+
+// Autonomous GitHub issue→PR resolver (the OpenHands-style flagship). The
+// COMMAND is user-initiated, so the git push + `gh pr create` are the USER's
+// explicit action — the agent itself never pushes, keeping the push-approval
+// moat intact. Headless + cost-bounded (--max-cost REQUIRED, like `schedule`).
+// See docs/github.md. --dry-run does the fetch+branch+fix+verify but prints
+// (never runs) the push/PR.
+program
+  .command("resolve")
+  .argument("<issue>", "GitHub issue number or URL to resolve (e.g. 42 or https://github.com/o/r/issues/42)")
+  .requiredOption("--max-cost <usd>", "REQUIRED per-run cost cap in USD (an autonomous fix must be bounded)", parsePositiveFloat)
+  .option("--base <branch>", "base branch to open the PR against (default: main)")
+  .option("-m, --model <model>", "override the model for the headless fix run")
+  .option("--no-draft", "open a ready-for-review PR instead of a draft")
+  .option("--dry-run", "fetch + branch + fix + verify, but print (don't run) the push/PR")
+  .description("autonomously fix a GitHub issue on a work branch and open a PR (agent fixes; the command pushes/PRs)")
+  .action(async (issue: string, opts: { maxCost: number; base?: string; model?: string; draft?: boolean; dryRun?: boolean }) => {
+    await resolveCommand(issue, {
+      maxCost: opts.maxCost,
+      base: opts.base,
+      model: opts.model,
+      draft: opts.draft,
+      dryRun: opts.dryRun,
+    });
+  });
 
 program
   .command("loop")

@@ -11,6 +11,7 @@
 const COMMANDS = [
   "run",
   "sandbox-run",
+  "resolve",
   "ask",
   "init",
   "diff",
