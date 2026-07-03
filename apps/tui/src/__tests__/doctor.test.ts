@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatDoctorLines, runDoctor, type DoctorCheck, type DoctorProbes } from "../doctor.js";
+import {
+  configKeysCheck,
+  configParseCheck,
+  formatDoctorLines,
+  runDoctor,
+  type DoctorCheck,
+  type DoctorProbes,
+} from "../doctor.js";
 
 /** Probes describing a fully healthy darwin environment. */
 function healthyProbes(over: Partial<DoctorProbes> = {}): DoctorProbes {
@@ -141,7 +148,49 @@ describe("runDoctor", () => {
   });
 });
 
+describe("configKeysCheck", () => {
+  it("passes when there are no unknown keys", () => {
+    const check = configKeysCheck([]);
+    expect(check.ok).toBe(true);
+    expect(check.warn).toBeUndefined();
+    expect(check.detail).toBe("all recognized");
+  });
+
+  it("warns (non-fatal) and lists unrecognized keys", () => {
+    const check = configKeysCheck(["modle", "reasoningEffrt"]);
+    expect(check.ok).toBe(true); // warning, not a failure — must not flip the summary
+    expect(check.warn).toBe(true);
+    expect(check.detail).toContain("modle");
+    expect(check.detail).toContain("reasoningEffrt");
+    expect(check.fixHint).toBeTruthy();
+  });
+});
+
+describe("configParseCheck", () => {
+  it("passes when there are no parse errors", () => {
+    const check = configParseCheck([]);
+    expect(check.ok).toBe(true);
+    expect(check.warn).toBeUndefined();
+  });
+
+  it("fails and lists the unparseable files", () => {
+    const check = configParseCheck(["/proj/.seekforge/config.json"]);
+    expect(check.ok).toBe(false); // a failure — flips the summary
+    expect(check.detail).toContain("/proj/.seekforge/config.json");
+    expect(check.fixHint).toBeTruthy();
+  });
+});
+
 describe("formatDoctorLines", () => {
+  it("marks warnings with ~ and shows their fix hint", () => {
+    const lines = formatDoctorLines([
+      { name: "config keys", ok: true, warn: true, detail: "unrecognized: modle", fixHint: "check for typos" },
+    ]);
+    expect(lines[0]).toBe("~ config keys  unrecognized: modle");
+    expect(lines[1]).toContain("→ fix: check for typos");
+    expect(lines.at(-1)).toBe("1/1 checks passed"); // warning counts as passed
+  });
+
   it("renders ✓/✗ lines with aligned names and a summary", () => {
     const lines = formatDoctorLines([
       { name: "api key", ok: true, detail: "configured" },

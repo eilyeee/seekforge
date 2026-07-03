@@ -9,8 +9,12 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 
-/** A single diagnostic result rendered as one line by formatDoctorLines. */
-export type DoctorCheck = { name: string; ok: boolean; detail: string; fixHint?: string };
+/**
+ * A single diagnostic result rendered as one line by formatDoctorLines.
+ * `ok: false` is a failure (✗); `ok: true` with `warn: true` is a non-fatal
+ * warning (~) that does not flip the summary.
+ */
+export type DoctorCheck = { name: string; ok: boolean; warn?: boolean; detail: string; fixHint?: string };
 
 /** System probes injected into runDoctor; swap with fakes in tests. */
 export type DoctorProbes = {
@@ -155,15 +159,47 @@ export function runDoctor(
 }
 
 /**
- * Renders checks as "✓ name  detail" / "✗ name  detail" lines plus a final
- * "N/M checks passed" summary, padded so details line up.
+ * Warns about unrecognized config keys (typos silently ignored otherwise). A
+ * warning, not a failure — an unknown key is harmless, just probably a mistake.
+ */
+export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
+  if (unknownKeys.length === 0) return { name: "config keys", ok: true, detail: "all recognized" };
+  return {
+    name: "config keys",
+    ok: true,
+    warn: true,
+    detail: `unrecognized: ${unknownKeys.join(", ")}`,
+    fixHint: "check for typos — see the config docs for valid keys",
+  };
+}
+
+/**
+ * Fails when any existing config.json layer is syntactically broken. `readJson`
+ * swallows the parse error → `{}`, so without this check a malformed config
+ * silently drops every setting AND /doctor reports clean. Empty list → ok.
+ */
+export function configParseCheck(errors: string[]): DoctorCheck {
+  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files parse" };
+  return {
+    name: "config parse",
+    ok: false,
+    detail: `unparseable: ${errors.join(", ")}`,
+    fixHint: "fix the JSON syntax",
+  };
+}
+
+/**
+ * Renders checks as "✓ name  detail" / "~ name  detail" (warning) / "✗ name
+ * detail" (failure) lines plus a final "N/M checks passed" summary, padded so
+ * details line up. Fix hints are shown for failures and warnings alike.
  */
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
   const width = Math.max(0, ...checks.map((c) => c.name.length));
   const lines: string[] = [];
   for (const c of checks) {
-    lines.push(`${c.ok ? "✓" : "✗"} ${c.name.padEnd(width)}  ${c.detail}`);
-    if (!c.ok && c.fixHint) lines.push(`  ${" ".repeat(width)}  → fix: ${c.fixHint}`);
+    const mark = !c.ok ? "✗" : c.warn ? "~" : "✓";
+    lines.push(`${mark} ${c.name.padEnd(width)}  ${c.detail}`);
+    if ((!c.ok || c.warn) && c.fixHint) lines.push(`  ${" ".repeat(width)}  → fix: ${c.fixHint}`);
   }
   const passed = checks.filter((c) => c.ok).length;
   lines.push(`${passed}/${checks.length} checks passed`);

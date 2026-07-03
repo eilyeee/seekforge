@@ -45,6 +45,7 @@ import {
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "./config.js";
+import { configParseErrors, unknownConfigKeys } from "./config.js";
 import {
   approvalModeFor,
   nextApproval,
@@ -129,7 +130,7 @@ import { sessionAllowPrefix } from "./allowlist.js";
 import { backtrackTargets } from "./backtrack.js";
 import { formatCandidateLine, pendingCandidates, removeCandidateAt } from "./memory-candidates.js";
 import { classifyUnifiedDiff } from "./diff.js";
-import { createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
+import { configKeysCheck, configParseCheck, createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
 import { transcriptToMarkdown, defaultExportPath, auditExportPath } from "./export.js";
 import {
   currentMatch,
@@ -1335,12 +1336,16 @@ export function App({
           dispatch({ type: "user", text: "/init — analyze the codebase and write AGENTS.md" });
           void runTask(INIT_PROMPT, { echoUser: false });
           break;
-        case "doctor":
+        case "doctor": {
           notice("doctor:");
-          for (const line of formatDoctorLines(runDoctor(projectPath, config, createDefaultProbes()))) {
+          const doctorChecks = runDoctor(projectPath, config, createDefaultProbes());
+          doctorChecks.push(configParseCheck(configParseErrors(projectPath)));
+          doctorChecks.push(configKeysCheck(unknownConfigKeys(projectPath)));
+          for (const line of formatDoctorLines(doctorChecks)) {
             notice(`  ${line}`);
           }
           break;
+        }
         case "mouse":
           setMouseOn((on) => {
             notice(
@@ -1534,12 +1539,15 @@ export function App({
           for (const line of formatReleaseNotes(findChangelogSection([projectPath]), versionRef.current)) notice(line);
           break;
         case "bug": {
+          const bugDoctorChecks = runDoctor(projectPath, config, createDefaultProbes());
+          bugDoctorChecks.push(configParseCheck(configParseErrors(projectPath)));
+          bugDoctorChecks.push(configKeysCheck(unknownConfigKeys(projectPath)));
           const report = buildBugReport({
             ...(versionRef.current ? { version: versionRef.current } : {}),
             platform: process.platform,
             nodeVersion: process.version,
             model: modelRef.current,
-            doctorLines: formatDoctorLines(runDoctor(projectPath, config, createDefaultProbes())),
+            doctorLines: formatDoctorLines(bugDoctorChecks),
             ...(lastErrorRef.current ? { lastError: lastErrorRef.current } : {}),
           });
           const copied = copyToClipboard(report);

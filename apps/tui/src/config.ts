@@ -70,6 +70,86 @@ function readJson(path: string): TuiConfig {
   }
 }
 
+/** Every recognized top-level config key — the source of truth for typo detection. */
+export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "apiKey",
+  "model",
+  "baseUrl",
+  "provider",
+  "runtimeBin",
+  "commandAllowlist",
+  "permissionRules",
+  "mcpServers",
+  "hooks",
+  "accent",
+  "bell",
+  "notify",
+  "vim",
+  "sandbox",
+  "statusLine",
+  "costBudgetUsd",
+  "thinking",
+  "reasoningEffort",
+  "compaction",
+  "mouse",
+  "locale",
+  "visionModel",
+  "llmCache",
+  "planModel",
+  "routing",
+  "escalateOnFailure",
+  "memoryAutoApproveConfidence",
+]);
+
+/**
+ * Unrecognized top-level keys across the config layers — a typo like "modle" is
+ * otherwise silently ignored. Returns a sorted, deduped list; empty when
+ * everything is recognized. Surfaced by the TUI /doctor.
+ */
+export function unknownConfigKeys(projectPath: string): string[] {
+  const unknown = new Set<string>();
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  for (const path of [
+    join(homedir(), ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.json"),
+  ]) {
+    const cfg = readJson(path) as unknown;
+    if (!isRecord(cfg)) continue;
+    for (const key of Object.keys(cfg)) {
+      if (!KNOWN_CONFIG_KEYS.has(key)) unknown.add(key);
+    }
+  }
+  return [...unknown].sort();
+}
+
+/**
+ * Config-layer paths that EXIST on disk but fail JSON.parse — `readJson`
+ * silently drops these to `{}`, so a single typo in config.json otherwise
+ * discards every setting AND /doctor reports clean. Returns the unparseable
+ * file paths (empty when all layers parse or are absent). Surfaced by /doctor.
+ */
+export function configParseErrors(projectPath: string): string[] {
+  const broken: string[] = [];
+  for (const path of [
+    join(homedir(), ".seekforge", "config.json"),
+    join(projectPath, ".seekforge", "config.json"),
+  ]) {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      continue; // absent/unreadable — not a parse error
+    }
+    try {
+      JSON.parse(raw);
+    } catch {
+      broken.push(path);
+    }
+  }
+  return broken;
+}
+
 /** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
 export function loadConfig(projectPath: string): TuiConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
@@ -95,13 +175,19 @@ export function loadConfig(projectPath: string): TuiConfig {
     const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
     if (merged.length > 0) hooks[stage] = merged;
   }
+  // Provider-aware env key selection: pick the key for the merged provider so a
+  // DeepSeek user who happens to export ARK_API_KEY for another tool never gets
+  // the Ark key sent to the DeepSeek endpoint (and vice versa). Default provider
+  // is "deepseek"; project wins over global, matching the scalar merge below.
+  const mergedProvider = (project.provider ?? global.provider ?? "deepseek").toLowerCase();
+  const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
   return {
     ...global,
     ...project,
     ...(permissionRules.length > 0 ? { permissionRules } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
+    ...(envKey ? { apiKey: envKey } : {}),
     ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
   };
 }
