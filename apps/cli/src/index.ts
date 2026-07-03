@@ -36,6 +36,7 @@ import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { loopCommand } from "./commands/loop.js";
 import { runTaskCommand } from "./commands/run.js";
+import { sandboxRunCommand } from "./commands/sandbox.js";
 import {
   scheduleAddCommand,
   scheduleListCommand,
@@ -298,6 +299,49 @@ program
       plan: opts.plan,
     });
   });
+
+// Track E: run a task inside an isolated Docker container against the current
+// workspace. The docker argv is built by the pure buildDockerRunArgs; --check
+// prints it without spawning docker (no Docker install / no spend needed). The
+// provider API key is passed by env-var NAME only; see docs/remote.md.
+program
+  .command("sandbox-run")
+  .argument("<task>", "development task to perform inside an isolated container")
+  .option("--image <img>", "runner image tag (default seekforge-runner; build with `docker build -t seekforge-runner .`)")
+  .option("--network <mode>", "container network: none | bridge | host (default bridge — the provider API needs egress)")
+  .option("--memory <m>", "container memory limit (e.g. 2g, 512m)")
+  .option("--cpus <n>", "container CPU limit (e.g. 1.5)")
+  .option("-m, --model <model>", "override model inside the container")
+  .option("--permission-mode <mode>", "in-container permission mode (e.g. acceptEdits)")
+  .option("--max-cost <usd>", "stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option("--check", "dry-run: print the `docker run` command without executing it (no Docker/spend)")
+  .description("run a task inside an isolated Docker container (mounts only this workspace)")
+  .action(
+    async (
+      task: string,
+      opts: {
+        image?: string;
+        network?: string;
+        memory?: string;
+        cpus?: string;
+        model?: string;
+        permissionMode?: string;
+        maxCost?: number;
+        check?: boolean;
+      },
+    ) => {
+      await sandboxRunCommand(task, {
+        image: opts.image,
+        network: opts.network,
+        memory: opts.memory,
+        cpus: opts.cpus,
+        model: opts.model,
+        permissionMode: opts.permissionMode,
+        maxCost: opts.maxCost,
+        check: opts.check,
+      });
+    },
+  );
 
 program
   .command("loop")

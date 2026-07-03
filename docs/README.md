@@ -24,6 +24,9 @@ and quick start; this folder holds the reference docs.
 - [Scheduled jobs](scheduling.md) — register local cron/interval jobs
   (`seekforge schedule`), the mandatory per-run cost budget, headless safety,
   and wiring the tick into cron/launchd/systemd.
+- [Remote / isolated execution](remote.md) — the agent-runner contract and the
+  Docker reference runner (`seekforge sandbox-run`): single-workspace mount,
+  key-via-env, the network tradeoff, and auditing containerized runs.
 
 ## Surfaces
 - [Embedding SeekForge (`@seekforge/core`)](sdk.md) — use the agent engine

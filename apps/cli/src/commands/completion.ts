@@ -10,6 +10,7 @@
 /** Top-level commands registered in index.ts (keep in sync when adding commands). */
 const COMMANDS = [
   "run",
+  "sandbox-run",
   "ask",
   "init",
   "diff",
