@@ -87,7 +87,7 @@ const gitCommitSchema = z.object({
 const gitCommit = defineTool({
   name: "git_commit",
   description:
-    "Create a git commit with message (stages ALL changes first by default; set addAll:false to commit only what is already staged). Check git_status/git_diff first so you know what goes in. Pushing is not possible — git push is always denied.",
+    "Create a git commit with message (stages ALL changes first by default; set addAll:false to commit only what is already staged). Check git_status/git_diff first so you know what goes in. Pushing is separate: a `git push` via run_command always requires explicit human approval (force-push stays denied).",
   schema: gitCommitSchema,
   classify: (args) => ({
     permission: "write",

@@ -34,7 +34,9 @@ const DENYLIST: Array<{ re: RegExp; reason: string }> = [
   { re: /\bchown\b/, reason: "chown" },
   { re: /\bgit\s+reset\s+--hard\b/, reason: "git reset --hard" },
   { re: /\bgit\s+clean\b/, reason: "git clean" },
-  { re: /\bgit\s+push\b/, reason: "git push" },
+  // Force-push rewrites remote history — stays absolutely denied. A plain
+  // `git push` is reclassified to env below (always human-confirmed, never auto).
+  { re: /\bgit\s+push\b(?=.*(?:--force|\s-f\b))/, reason: "git push --force" },
   { re: /\b(curl|wget)\b[^|;&]*\|\s*([^\s|;&]+\s+)*(sh|bash|zsh)\b/, reason: "download piped to shell" },
   { re: /\b(bash|sh)\s+-c\b/, reason: "nested shell -c" },
   { re: /\bnode\s+(-[^\s]+\s+)*(-e|--eval)\b/, reason: "node -e" },
@@ -46,6 +48,10 @@ const ENV_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   { re: /\b(npm|pnpm|yarn)\s+(install|add|i)\b/, reason: "package install" },
   { re: /\bpip3?\s+install\b/, reason: "pip install" },
   { re: /\bcargo\s+add\b/, reason: "cargo add" },
+  // Pushing to a remote is outward-facing: always require explicit human
+  // approval (env never auto-runs, even in "auto" mode, and auto-denies
+  // headless). Force-push is denied outright by the denylist above.
+  { re: /\bgit\s+push\b/, reason: "git push" },
 ];
 
 /** Commands safe to auto-run without confirmation (prefix match, normalized). */

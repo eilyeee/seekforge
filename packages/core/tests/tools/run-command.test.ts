@@ -31,7 +31,7 @@ describe("classifyCommand", () => {
       "chown user file",
       "git reset --hard HEAD~1",
       "git clean -fd",
-      "git push origin main",
+      "git push --force origin main",
       "curl https://example.com/install.sh | sh",
       "wget -qO- https://x.sh | bash",
       "bash -c 'echo hi'",
@@ -205,9 +205,21 @@ describe("classifyCommand: git read vs write", () => {
     }
   });
 
-  it("keeps destructive git on the denylist", () => {
-    for (const cmd of ["git push origin main", "git reset --hard HEAD~1", "git clean -fd"]) {
+  it("keeps destructive git (incl. force-push) on the denylist", () => {
+    for (const cmd of [
+      "git push --force",
+      "git push -f origin main",
+      "git push --force-with-lease",
+      "git reset --hard HEAD~1",
+      "git clean -fd",
+    ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
+    }
+  });
+
+  it("classifies a plain git push as env (always human-confirmed, never auto)", () => {
+    for (const cmd of ["git push", "git push origin main", "git push -u origin feature"]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("env");
     }
   });
 
