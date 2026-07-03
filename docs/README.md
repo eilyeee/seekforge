@@ -27,6 +27,12 @@ and quick start; this folder holds the reference docs.
 - [Scheduled jobs](scheduling.md) — register local cron/interval jobs
   (`seekforge schedule`), the mandatory per-run cost budget, headless safety,
   and wiring the tick into cron/launchd/systemd.
+- [Event-triggered automation](automation.md) — server webhook triggers that fire
+  a headless, cost-bounded run on an external event (GitHub/CI), the dual-auth
+  (server token + per-trigger secret) model, and pointing a webhook at it.
+- [Autonomous GitHub issue → PR](github.md) — `seekforge resolve <issue>`: fetch
+  an issue, fix it headless on a work branch, verify, and open a draft PR. The
+  agent fixes; the user's `resolve` command performs the push/PR (moat preserved).
 - [Remote / isolated execution](remote.md) — the agent-runner contract and the
   Docker reference runner (`seekforge sandbox-run`): single-workspace mount,
   key-via-env, the network tradeoff, and auditing containerized runs.

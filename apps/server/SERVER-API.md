@@ -124,8 +124,30 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
 | POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
 | PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key |
+| GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
+| POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
+| DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |
+| POST /api/triggers/:id | **fire** the trigger — start a headless, cost-bounded run → `202 {sessionId, triggerId}`. Requires the per-trigger secret (`x-seekforge-trigger-secret` header or `?secret=`, constant-time) **on top of** the server token. Optional JSON body (e.g. a GitHub webhook payload) is summarised and appended to the task. 401 bad server token, 403 bad/missing secret, 404 unknown id, 409 disabled |
 
 Errors: `{error: {code, message}}` with appropriate HTTP status.
+
+### Event-triggered automation (webhooks)
+
+`POST /api/triggers/:id` fires a webhook trigger: it starts a **headless,
+cost-bounded** agent run of the trigger's task and returns `202` with the new
+(auditable) session id. Two safety invariants — see
+[docs/automation.md](../../docs/automation.md):
+
+- **Dual auth.** Every `/api` route already requires the server bearer token;
+  the fire endpoint *also* requires the trigger's own `secret` (constant-time
+  compared). A leaked trigger URL can't fire a run without the secret and can't
+  reach any other endpoint.
+- **Bounded + headless.** `maxCostUsd` is mandatory (unbounded triggers are
+  rejected at creation) and the run aborts on reaching it. The run is
+  non-interactive: the approval callback auto-denies anything that would prompt
+  (dangerous stays denied, commands/env refused); an `edit` trigger runs in
+  *acceptEdits* so in-workspace edits still apply. Triggers persist to the
+  workspace `.seekforge/triggers.json` (owner-only, `0600`).
 
 ## WebSocket (path /ws?token=...)
 

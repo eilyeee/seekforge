@@ -84,7 +84,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (!isAuthorized(req, token)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
-      handleApi(req, res, url, { registry, worktrees, version }).catch((e: unknown) => {
+      handleApi(req, res, url, { registry, worktrees, version, createAgent }).catch((e: unknown) => {
         // Defense-in-depth: handleApi answers its own errors, but never leave a
         // request hanging on an unexpected rejection.
         if (!res.headersSent) {
