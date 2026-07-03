@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ChatItem } from "../model.js";
+import { groupSubagentSteps, type RenderNode } from "../subagent-group.js";
 import { computeWindow } from "../viewport.js";
 import { ACCENT } from "./Header.js";
 import { Markdown } from "./Markdown.js";
@@ -66,7 +67,8 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
       );
     }
     case "step":
-      // Nested subagent activity renders as an indented branch row.
+      // Subagent steps (agentId) are grouped into a SubagentGroup upstream; a
+      // stray one still renders as an indented branch row here.
       if (item.agentId) {
         return (
           <Text dimColor>
@@ -138,6 +140,29 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
  */
 const MemoItem = React.memo(Item);
 
+/**
+ * A run of consecutive subagent steps rendered as a one-level tree: an
+ * `↳ [agentId]` header with each tool call listed one indent deeper.
+ */
+function SubagentGroup({ group }: { group: Extract<RenderNode, { kind: "subagent-group" }> }): React.ReactElement {
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>
+        {"  ↳ "}
+        <Text color={ACCENT}>[{group.agentId}]</Text>
+      </Text>
+      {group.steps.map((s) => (
+        <Text key={s.id} dimColor>
+          {"      • "}
+          {s.title}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+const MemoSubagentGroup = React.memo(SubagentGroup);
+
 type TranscriptProps = {
   items: ChatItem[];
   /** Items hidden below the viewport (0 = pinned to latest). */
@@ -150,12 +175,17 @@ type TranscriptProps = {
 
 export function Transcript({ items, offset, size, verbose }: TranscriptProps): React.ReactElement {
   const { start, end, hiddenAbove, hiddenBelow } = computeWindow(items.length, offset, size);
+  const nodes = groupSubagentSteps(items.slice(start, end));
   return (
     <Box flexDirection="column">
       {hiddenAbove > 0 ? <Text dimColor>… {hiddenAbove} earlier items (PageUp to scroll)</Text> : null}
-      {items.slice(start, end).map((item) => (
-        <MemoItem key={item.id} item={item} verbose={verbose} />
-      ))}
+      {nodes.map((node) =>
+        node.kind === "subagent-group" ? (
+          <MemoSubagentGroup key={node.id} group={node} />
+        ) : (
+          <MemoItem key={node.item.id} item={node.item} verbose={verbose} />
+        ),
+      )}
       {hiddenBelow > 0 ? (
         <Text dimColor>
           ↓ {hiddenBelow} newer items <Text color={ACCENT}>(Esc jumps to latest)</Text>

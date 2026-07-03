@@ -169,10 +169,17 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
     case "substep":
       return (
         <div className="rounded-xl border border-subtle bg-surface-raised px-3 py-2 text-xs">
-          <span className="font-mono font-semibold text-secondary">
+          <div className="flex items-center gap-1 font-mono font-semibold text-secondary">
             <IconCornerDownRight size={14} className="inline-block align-middle text-tertiary" /> {item.agentId}
-          </span>
-          <span className="ml-2 font-mono text-tertiary">{item.steps.join(" · ")}</span>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {item.steps.map((step, i) => (
+              <li key={i} className="flex items-start gap-1.5 pl-4 font-mono text-tertiary">
+                <span aria-hidden className="text-tertiary/60">•</span>
+                <span className="break-all">{step}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       );
     case "file": {
