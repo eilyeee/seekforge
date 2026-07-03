@@ -319,3 +319,57 @@ describe("provider capabilities gating", () => {
     expect(usage.costUsd).toBeCloseTo((400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000, 12);
   });
 });
+
+describe("user-supplied modelPricing (cost on non-DeepSeek providers)", () => {
+  // Example placeholder rates (NOT real prices) for an Ark model id.
+  const arkCaps = { thinking: false, cacheHitTokens: false, costAccounting: false, balance: false };
+  const pricing = {
+    "ark-model-x": { inputCacheMissPer1M: 2, inputCacheHitPer1M: 0.5, outputPer1M: 6 },
+  };
+
+  it("computes a real cost for a priced model even when costAccounting is false", () => {
+    const usage = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500 },
+      "ark-model-x",
+      arkCaps,
+      pricing,
+    );
+    // cacheHitTokens is off for this provider, so all 1000 prompt tokens are miss.
+    expect(usage.costUsd).toBeCloseTo((1000 * 2 + 500 * 6) / 1_000_000, 12);
+    expect(usage.costUsd).toBeGreaterThan(0);
+  });
+
+  it("stays 0 for an unpriced model on a costAccounting:false provider", () => {
+    const usage = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500 },
+      "ark-model-unpriced",
+      arkCaps,
+      pricing,
+    );
+    expect(usage.costUsd).toBe(0);
+  });
+
+  it("leaves the DeepSeek default (no override, costAccounting true) unchanged", () => {
+    const withPricing = mapUsage(
+      { prompt_tokens: 1000, completion_tokens: 500, prompt_cache_hit_tokens: 600, prompt_cache_miss_tokens: 400 },
+      "deepseek-chat",
+      undefined,
+      pricing,
+    );
+    // deepseek-chat is not in the override table → built-in pricing, identical to no override.
+    expect(withPricing.costUsd).toBeCloseTo((400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000, 12);
+  });
+
+  it("mapChatResponse threads the override into the mapped usage", () => {
+    const res = mapChatResponse(
+      {
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1000, completion_tokens: 500 },
+      },
+      "ark-model-x",
+      arkCaps,
+      pricing,
+    );
+    expect(res.usage.costUsd).toBeCloseTo((1000 * 2 + 500 * 6) / 1_000_000, 12);
+  });
+});

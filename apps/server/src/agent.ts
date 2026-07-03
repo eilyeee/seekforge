@@ -98,6 +98,7 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
       baseUrl: config.baseUrl,
       model,
       onRetry: retryBus.onRetry,
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
       ...thinkingOpts,
     }),
   );
@@ -116,6 +117,7 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
           baseUrl: config.baseUrl,
           model: m,
           onRetry: retryBus.onRetry,
+          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
           ...thinkingOpts,
         }),
       );

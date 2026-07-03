@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HookConfig, McpServerConfig } from "@seekforge/core";
+import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
 /**
@@ -38,6 +38,13 @@ export type TuiConfig = {
   statusLine?: string;
   /** Warn at 80% and 100% of this cumulative cost (USD) per TUI session. */
   costBudgetUsd?: number;
+  /**
+   * User-supplied per-model price table (model id → { inputCacheMissPer1M,
+   * inputCacheHitPer1M, outputPer1M } in USD per 1M tokens). Enables cost/budget
+   * tracking on providers with no built-in price table (Ark, OpenAI, …); without
+   * it cost stays 0 there. Edit the file directly; not settable via `config set`.
+   */
+  modelPricing?: Record<string, ModelPricing>;
   /** DeepSeek V4 thinking mode (default: API default). /think toggles. */
   thinking?: boolean;
   /** V4 reasoning effort: "high" or "max". */
@@ -88,6 +95,7 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "sandbox",
   "statusLine",
   "costBudgetUsd",
+  "modelPricing",
   "thinking",
   "reasoningEffort",
   "compaction",

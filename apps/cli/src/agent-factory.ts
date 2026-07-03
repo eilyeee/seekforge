@@ -87,6 +87,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
       model: opts.model ?? config.model,
       onRetry: retryBus.onRetry,
       ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
       ...thinkingOpts,
     }),
   );
@@ -110,6 +111,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
           baseUrl: config.baseUrl,
           model,
           onRetry: retryBus.onRetry,
+          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
           ...thinkingOpts,
         }),
       );

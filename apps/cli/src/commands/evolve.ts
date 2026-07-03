@@ -77,6 +77,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
       apiKey: config.apiKey,
       ...(config.model ? { model: config.model } : {}),
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
     }),
   );
 

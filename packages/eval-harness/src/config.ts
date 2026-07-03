@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ModelPricing } from "@seekforge/core";
 
 export type EvalConfig = {
   apiKey?: string;
@@ -16,6 +17,13 @@ export type EvalConfig = {
   baseUrl?: string;
   /** Provider preset: "deepseek" (default) | "ark" | any preset name. Selects base URL + capabilities. */
   provider?: string;
+  /**
+   * User-supplied per-model price table (model id → { inputCacheMissPer1M,
+   * inputCacheHitPer1M, outputPer1M } in USD per 1M tokens). Enables cost/budget
+   * tracking on providers with no built-in price table (Ark, OpenAI, …); without
+   * it cost stays 0 there.
+   */
+  modelPricing?: Record<string, ModelPricing>;
 };
 
 function readJson(path: string): EvalConfig {

@@ -32,6 +32,7 @@ export function createDefaultAgentFactory(
           baseUrl: config.baseUrl,
           // A variant may override the main model (e.g. model-pro); else config.
           model: options.model ?? config.model,
+          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
         }),
       ),
       dispatcher: createDefaultDispatcher(),
@@ -63,6 +64,7 @@ export function createDefaultAgentFactory(
                   apiKey: config.apiKey ?? "",
                   baseUrl: config.baseUrl,
                   model: m,
+                  ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
                 }),
               ),
           }

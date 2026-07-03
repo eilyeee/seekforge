@@ -11,6 +11,7 @@ import type {
   TokenUsage,
   ToolDefinitionForModel,
 } from "@seekforge/shared";
+import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
 
@@ -160,16 +161,23 @@ export function mapUsage(
   raw: WireUsage | null | undefined,
   model: string,
   capabilities?: ProviderCapabilities,
+  modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
   const tokens = {
     promptTokens: raw?.prompt_tokens ?? 0,
     completionTokens: raw?.completion_tokens ?? 0,
     cacheHitTokens: (capabilities?.cacheHitTokens ?? true) ? (raw?.prompt_cache_hit_tokens ?? 0) : 0,
   };
-  return {
-    ...tokens,
-    costUsd: (capabilities?.costAccounting ?? true) ? estimateCostUsd(tokens, model) : 0,
-  };
+  // A user-supplied price for this model always wins — it enables cost/budget
+  // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
+  // Otherwise keep the built-in behavior: priced when costAccounting, else 0.
+  const costUsd =
+    modelPricing?.[model] !== undefined
+      ? estimateCostUsd(tokens, model, modelPricing)
+      : (capabilities?.costAccounting ?? true)
+        ? estimateCostUsd(tokens, model)
+        : 0;
+  return { ...tokens, costUsd };
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {
@@ -184,6 +192,7 @@ export function mapChatResponse(
   json: WireChatCompletion,
   model: string,
   capabilities?: ProviderCapabilities,
+  modelPricing?: Record<string, ModelPricing>,
 ): ChatResponse {
   const choice = json.choices?.[0];
   const reasoning = choice?.message?.reasoning_content;
@@ -191,7 +200,7 @@ export function mapChatResponse(
     content: choice?.message?.content ?? "",
     toolCalls: mapWireToolCalls(choice?.message?.tool_calls),
     finishReason: mapFinishReason(choice?.finish_reason),
-    usage: mapUsage(json.usage, model, capabilities),
+    usage: mapUsage(json.usage, model, capabilities, modelPricing),
     ...(typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
   };
 }

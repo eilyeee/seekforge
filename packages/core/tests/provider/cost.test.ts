@@ -59,4 +59,29 @@ describe("estimateCostUsd", () => {
     );
     expect(cost).toBeGreaterThan(0);
   });
+
+  it("uses an explicit pricing override for the model when provided", () => {
+    // Example placeholder rates (NOT real prices) for a provider with no
+    // built-in table (e.g. an Ark model id).
+    const pricing = {
+      "ark-model-x": { inputCacheMissPer1M: 2, inputCacheHitPer1M: 0.5, outputPer1M: 6 },
+    };
+    const cost = estimateCostUsd(
+      { promptTokens: 1_000_000, completionTokens: 1_000_000, cacheHitTokens: 400_000 },
+      "ark-model-x",
+      pricing,
+    );
+    // 600k miss * 2 + 400k hit * 0.5 + 1M output * 6, per 1M tokens.
+    expect(cost).toBeCloseTo((600_000 * 2 + 400_000 * 0.5 + 1_000_000 * 6) / 1_000_000, 10);
+  });
+
+  it("falls back to the built-in table when the override lacks the model", () => {
+    const pricing = {
+      "some-other-model": { inputCacheMissPer1M: 99, inputCacheHitPer1M: 99, outputPer1M: 99 },
+    };
+    const usage = { promptTokens: 1_000_000, completionTokens: 0, cacheHitTokens: 0 };
+    expect(estimateCostUsd(usage, "deepseek-chat", pricing)).toBe(
+      estimateCostUsd(usage, "deepseek-chat"),
+    );
+  });
 });

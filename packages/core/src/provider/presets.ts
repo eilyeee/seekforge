@@ -6,7 +6,7 @@
  * /user/balance) are disabled.
  */
 
-import { DEFAULT_BASE_URL } from "./constants.js";
+import { DEFAULT_BASE_URL, type ModelPricing } from "./constants.js";
 import {
   DEEPSEEK_CAPABILITIES,
   type ProviderCapabilities,
@@ -98,6 +98,7 @@ export function resolveProviderConfig(input: {
   streamIdleTimeoutMs?: number;
   onRetry?: (info: RetryInfo) => void;
   fallbackModel?: string;
+  modelPricing?: Record<string, ModelPricing>;
 }): ProviderConfig {
   const preset = resolveProviderPreset(input.provider);
   const baseUrl = input.baseUrl ?? preset?.baseUrl;
@@ -107,6 +108,7 @@ export function resolveProviderConfig(input: {
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(capabilities !== undefined ? { capabilities } : {}),
+    ...(input.modelPricing !== undefined ? { modelPricing: input.modelPricing } : {}),
     ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.streamIdleTimeoutMs !== undefined

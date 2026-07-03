@@ -8,7 +8,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DEPRECATED_MODELS, MODEL_PRICING, type HookConfig, type McpServerConfig } from "@seekforge/core";
+import {
+  DEPRECATED_MODELS,
+  MODEL_PRICING,
+  type HookConfig,
+  type McpServerConfig,
+  type ModelPricing,
+} from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
 /** Default selectable model list (core's non-deprecated ids) when none configured. */
@@ -28,6 +34,13 @@ export type ServerConfig = {
   commandAllowlist?: string[];
   /** Selectable model ids offered in the UI pickers (your own list). */
   models?: string[];
+  /**
+   * User-supplied per-model price table (model id → { inputCacheMissPer1M,
+   * inputCacheHitPer1M, outputPer1M } in USD per 1M tokens). Enables cost/budget
+   * tracking on providers with no built-in price table (Ark, OpenAI, …); without
+   * it cost stays 0 there. Edit the file directly; not settable via `config set`.
+   */
+  modelPricing?: Record<string, ModelPricing>;
   /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
   sandbox?: "off" | "workspace-write" | "restricted";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */

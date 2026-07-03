@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatResponse, ToolDefinitionForModel } from "@seekforge/shared";
+import type { ModelPricing } from "./constants.js";
 
 /**
  * Reported just before each retry backoff sleep in fetchWithRetry. `attempt`
@@ -82,6 +83,14 @@ export type ProviderConfig = {
    * compatibility byte-for-byte.
    */
   capabilities?: ProviderCapabilities;
+  /**
+   * User-supplied per-model price table (model id → per-1M rates) for providers
+   * that ship no built-in pricing (Ark, OpenAI, …). When an entry exists for the
+   * active model its cost is ALWAYS computed from these rates — even when
+   * `capabilities.costAccounting` is false — so budgets work on those providers.
+   * Unset (the DeepSeek default) leaves cost accounting byte-for-byte unchanged.
+   */
+  modelPricing?: Record<string, ModelPricing>;
 };
 
 export type ChatRequest = {

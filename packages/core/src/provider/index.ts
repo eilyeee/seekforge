@@ -120,7 +120,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   async function chat(req: ChatRequest): Promise<ChatResponse> {
     const res = await fetchWithFallback(req, false);
     const json = (await res.json()) as WireChatCompletion;
-    return mapChatResponse(json, model, capabilities);
+    return mapChatResponse(json, model, capabilities, config.modelPricing);
   }
 
   async function chatStream(
@@ -160,7 +160,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       content: result.content,
       toolCalls: result.toolCalls,
       finishReason: result.finishReason,
-      usage: mapUsage(result.usage, model, capabilities),
+      usage: mapUsage(result.usage, model, capabilities, config.modelPricing),
       ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
     };
   }

@@ -76,6 +76,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
       baseUrl: config.baseUrl,
       model: opts.model ?? config.model,
       onRetry: retryBus.onRetry,
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
       ...thinkingOpts,
     }),
   );
@@ -98,6 +99,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
           baseUrl: config.baseUrl,
           model,
           onRetry: retryBus.onRetry,
+          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
           ...thinkingOpts,
         }),
       );

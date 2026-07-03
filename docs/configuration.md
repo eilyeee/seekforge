@@ -278,6 +278,40 @@ with a clear error rather than crashing mid-run.
 
 Settable via `config set`? **No** — edit the file directly.
 
+### `modelPricing` (cost tracking on other providers)
+
+**Default off.** The DeepSeek provider ships a built-in price table, so cost and
+the `maxCostUsd` budget work out of the box. Other providers (`ark`, `openai`,
+`ollama`, `openrouter`, …) carry **no** price table, so reported cost stays `0`
+there and `maxCostUsd` never triggers. Set `modelPricing` to supply your own
+per-model rates and turn cost/budget tracking on for those providers.
+
+It is a map of **model id → per-1M-token prices** in USD:
+
+```json
+{
+  "modelPricing": {
+    "doubao-seed-2.0-pro": {
+      "inputCacheMissPer1M": 0.00,
+      "inputCacheHitPer1M": 0.00,
+      "outputPer1M": 0.00
+    }
+  }
+}
+```
+
+> The numbers above are **placeholders** — fill in the real per-1M-token prices
+> from your provider's pricing page. `inputCacheMissPer1M` is the ordinary input
+> price; `inputCacheHitPer1M` only matters on providers that report cached input
+> tokens (DeepSeek); `outputPer1M` is the completion price.
+
+A model listed here is **always** priced from your rates — even on a provider
+whose preset disables cost accounting — so its cost and budget tracking work. A
+model on such a provider that you don't list stays `0`. DeepSeek's default
+behavior (no `modelPricing`) is unchanged.
+
+Settable via `config set`? **No** — edit the file directly.
+
 ### `verifyCommand`
 
 **Default off.** A shell command (e.g. `"npm test"`) that must pass before the
@@ -684,7 +718,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
-`verifyCommand`, `autoVerify`, `finalizeReview`, `guardNoProgress`,
+`modelPricing`, `verifyCommand`, `autoVerify`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
 **not settable** via `config set`. They must be edited directly in the JSON
 config file, or managed through their dedicated subcommands (`seekforge mcp

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { HookConfig, McpServerConfig } from "@seekforge/core";
+import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 
 export type CliConfig = {
@@ -45,6 +45,15 @@ export type CliConfig = {
    * not settable via `config set`.
    */
   maxCostUsd?: number;
+  /**
+   * User-supplied per-model price table (model id → { inputCacheMissPer1M,
+   * inputCacheHitPer1M, outputPer1M } in USD per 1M tokens). Enables cost and
+   * `maxCostUsd` budget tracking on providers with no built-in price table
+   * (Ark, OpenAI, …); without it, cost stays 0 there. A priced model always
+   * gets a real cost even on those providers. Edit the file directly; not
+   * settable via `config set`.
+   */
+  modelPricing?: Record<string, ModelPricing>;
   /**
    * Stronger model for plan runs (`/plan`) and failure escalation, resolved on
    * the same key/endpoint (e.g. "deepseek-v4-pro" while edits run on flash).
@@ -174,6 +183,7 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "reasoningEffort",
   "locale",
   "maxCostUsd",
+  "modelPricing",
   "planModel",
   "escalateOnFailure",
   "verifyCommand",
