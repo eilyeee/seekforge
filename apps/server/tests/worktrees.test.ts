@@ -6,10 +6,18 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { worktreeSlug } from "../src/worktrees.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
+
+// These tests drive real `git worktree` operations against tmp repos. Under the
+// full parallel `pnpm -r test` run, filesystem/git I/O contention can push a
+// single test past vitest's default 5s timeout (observed ~27s under load),
+// producing a timeout flake even though the logic is correct. Raise the
+// per-test timeout for THIS FILE ONLY (vi.setConfig is file-scoped) so other
+// suites keep the fast default and we don't serialize the whole run.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 const TOKEN = "test-token-worktrees";
 
