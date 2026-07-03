@@ -48,6 +48,12 @@ export type AgentBuildOptions = {
    * measure auto-run-and-feed-back vs the nudge-only path.
    */
   autoVerify?: boolean;
+  /** Self-lint command (AgentCoreDeps.lintCommand). The lint-gate variant sets it. */
+  lintCommand?: string;
+  /** Run the lint command automatically on the finish turn (AgentCoreDeps.autoLint, default true). */
+  autoLint?: boolean;
+  /** Model-adaptive edit format (AgentCoreDeps.editFormat): "patch" (default) | "whole". */
+  editFormat?: "patch" | "whole";
   /** Inject the task-relevant file shortlist (AgentCoreDeps.injectRelevantFiles, default true). */
   injectRelevantFiles?: boolean;
   /** One-time self-review nudge after edits (AgentCoreDeps.finalizeReview). */
@@ -102,6 +108,20 @@ export const VARIANTS: Variant[] = [
       "Enables the self-verification finalize gate (verifyCommand=npm test): after edits the agent " +
       "is nudged once to run the suite and fix failures before finishing. A/B vs control to measure it.",
     apply: (base) => ({ ...base, verifyCommand: "npm test" }),
+  },
+  {
+    name: "lint-gate",
+    describe:
+      "Enables the self-lint finalize gate (lintCommand=npm run lint): after edits the agent runs " +
+      "the linter (auto-run by default) and fixes issues before finishing. A/B vs control to measure it.",
+    apply: (base) => ({ ...base, lintCommand: "npm run lint" }),
+  },
+  {
+    name: "whole-file-edits",
+    describe:
+      "Guides the agent to prefer write_file (whole-file rewrites) over apply_patch (editFormat=whole) " +
+      "— for weak/local models that mangle search/replace. A/B vs control on a weaker model.",
+    apply: (base) => ({ ...base, editFormat: "whole" }),
   },
   {
     name: "no-progress-guard",

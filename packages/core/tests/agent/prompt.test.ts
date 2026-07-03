@@ -69,6 +69,27 @@ describe("buildSystemPrompt: discipline sections", () => {
   });
 });
 
+describe("buildSystemPrompt: editFormat guidance", () => {
+  it('defaults to apply_patch search/replace guidance ("patch"/unset)', () => {
+    for (const opts of [
+      { ...base, mode: "edit" as const },
+      { ...base, mode: "edit" as const, editFormat: "patch" as const },
+    ]) {
+      const p = buildSystemPrompt(opts);
+      expect(p).toContain("Copy oldString exactly from the latest read_file output");
+      expect(p).not.toContain("Prefer write_file to rewrite the ENTIRE file");
+    }
+  });
+
+  it('guides whole-file rewrites via write_file when editFormat="whole"', () => {
+    const p = buildSystemPrompt({ ...base, mode: "edit", editFormat: "whole" });
+    expect(p).toContain("Prefer write_file to rewrite the ENTIRE file");
+    // apply_patch stays available (guidance, not tool removal).
+    expect(p).toContain("apply_patch");
+    expect(p).not.toContain("Copy oldString exactly from the latest read_file output");
+  });
+});
+
 describe("buildSystemPrompt: optional sections", () => {
   it("appends project rules, memory, roster and skills only when provided", () => {
     const bare = buildSystemPrompt({ ...base, mode: "edit" });

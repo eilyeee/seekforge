@@ -19,6 +19,13 @@ export type SystemPromptOptions = {
   repoOverview?: string;
   /** Task-relevant file shortlist (from buildRelevantFiles), ranked by lexical match. */
   relevantFiles?: string;
+  /**
+   * Edit-format guidance for EDIT mode. "patch" (default) guides apply_patch
+   * search/replace edits; "whole" guides preferring write_file (rewrite the
+   * whole file) — for weak/local models that mangle search/replace. Both tools
+   * stay available; this only changes guidance.
+   */
+  editFormat?: "patch" | "whole";
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -79,8 +86,16 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "- Leave no TODO stubs or placeholder code unless the task explicitly asks for stubs.",
         "",
         "### Editing",
-        "- Copy oldString exactly from the latest read_file output — never reconstruct from memory.",
-        "  It must match the current file content exactly and uniquely.",
+        ...(opts.editFormat === "whole"
+          ? [
+              "- Prefer write_file to rewrite the ENTIRE file for edits: read it, then write back the",
+              "  full updated contents. This avoids brittle exact search/replace matching. Reserve",
+              "  apply_patch for tiny, unambiguous one-line changes.",
+            ]
+          : [
+              "- Copy oldString exactly from the latest read_file output — never reconstruct from memory.",
+              "  It must match the current file content exactly and uniquely.",
+            ]),
         "- After any failed patch, re-read the file before retrying: it may have changed, or your",
         "  snippet drifted.",
         "- Prefer several small targeted patches over one giant one.",

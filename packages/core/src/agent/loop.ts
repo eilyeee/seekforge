@@ -180,6 +180,21 @@ export type AgentCoreDeps = {
    */
   autoVerify?: boolean;
   /**
+   * Self-lint gate: a shell command (e.g. "pnpm lint") that must pass before the
+   * run finishes when it has edited files but not run it since the last edit.
+   * Parallel to verifyCommand — with autoLint (default), the LOOP runs it itself
+   * on the finish turn and feeds the real result back (a passing run is accepted,
+   * a failing run continues with the captured lint output so the agent fixes it).
+   * With autoLint disabled it degrades to a one-time nudge. Off when unset/empty.
+   */
+  lintCommand?: string;
+  /**
+   * When a lintCommand is set, run it automatically on the finish turn instead
+   * of only nudging the model to. Default true. Set false to keep nudge-only
+   * behavior (mirrors autoVerify).
+   */
+  autoLint?: boolean;
+  /**
    * Default-off: when the agent finishes after editing files, nudge it once to
    * self-review its own diff (leftover debug code, missed cases, task coverage)
    * before the run completes. Costs one extra turn when it fires.
@@ -205,6 +220,14 @@ export type AgentCoreDeps = {
    * variant).
    */
   injectRelevantFiles?: boolean;
+  /**
+   * Model-adaptive edit format guidance in the system prompt. Default "patch"
+   * (today's behavior): guide the agent to use apply_patch search/replace edits.
+   * "whole" instead guides it to prefer write_file (rewrite the whole file) —
+   * for weak/local models that struggle to produce exact search/replace blocks.
+   * Guidance only: apply_patch stays fully available either way.
+   */
+  editFormat?: "patch" | "whole";
   /**
    * User-configured shell hooks. preToolUse/postToolUse reach the dispatcher
    * via ToolContext and fire around every tool run (nested subagent runs
@@ -475,6 +498,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   ...(priorPlan ? { planItems: priorPlan } : {}),
                   ...(repoOverview ? { repoOverview } : {}),
                   ...(relevantFiles ? { relevantFiles } : {}),
+                  ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
                 }),
                 input.appendSystemPrompt,
               ),
@@ -522,6 +546,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
             ...(repoOverview ? { repoOverview } : {}),
             ...(relevantFiles ? { relevantFiles } : {}),
+            ...(deps.editFormat ? { editFormat: deps.editFormat } : {}),
           }),
           input.appendSystemPrompt,
         );
@@ -999,13 +1024,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         let reflectionCooldown = 0;
         // Default-off failure escalation (see AgentCoreDeps): one-shot.
         let escalated = false;
-        // Finalize gate (see finalize.ts): plan/verify/review checks run when
-        // the model declares it is done. Each kind fires at most once per run.
+        // Finalize gate (see finalize.ts): plan/verify/lint/review checks run
+        // when the model declares it is done. Each kind fires at most once per run.
         const finalizeFired = new Set<FinalizeKind>();
         // Whether deps.verifyCommand has run since the most recent edit: an edit
         // resets it, running the command sets it, so the verify nudge fires only
         // for changes that have not been checked.
         let verifyRanSinceEdit = false;
+        // Same gating for the parallel lint gate (deps.lintCommand): an edit
+        // resets it, running the lint command sets it, so the lint nudge fires
+        // only for changes that have not been linted.
+        let lintRanSinceEdit = false;
 
         for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
           throwIfCancelled();
@@ -1110,6 +1139,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               changedFiles: changedFiles.size,
               verifyCommand: deps.verifyCommand,
               verifyRanSinceEdit,
+              lintCommand: deps.lintCommand,
+              lintRanSinceEdit,
               reviewEnabled: deps.finalizeReview === true,
               // Not on resumed runs: prior-run edits don't count toward this
               // run's changedFiles/toolCalls, so a legitimate "already done"
@@ -1166,6 +1197,45 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 } catch (err) {
                   followup =
                     `[harness] Auto-verify \`${vc}\` could not run (${err instanceof Error ? err.message : String(err)}). ` +
+                    "Run it yourself with run_command, fix any failures, then finish.";
+                }
+                messages.push({ role: "user", content: followup });
+                continue;
+              }
+
+              // #2b Auto-lint: parallel to auto-verify. Run the lint command
+              // here and feed the real result back — a pass is acknowledged, a
+              // failure continues with the captured output so the model fixes
+              // it. Degrades to the nudge if it cannot run.
+              const lc = deps.lintCommand?.trim();
+              if (nudge.kind === "lint" && deps.autoLint !== false && lc) {
+                yield emit({ type: "notice", level: "info", message: `Auto-linting changes: ${lc}` });
+                let followup: string;
+                try {
+                  const r = await runShellCommand(lc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
+                    sandbox: deps.sandbox,
+                    workspace: input.projectPath,
+                  });
+                  const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
+                  if (r.exitCode === 0) {
+                    lintRanSinceEdit = true;
+                    followup =
+                      `[harness] Auto-lint \`${lc}\` PASSED (exit 0). If the task is fully complete, ` +
+                      "finish now; otherwise keep working.";
+                  } else {
+                    // Same as verify: record it ran (stay quiet until the next
+                    // edit) but lift the once-guard so a FIX is re-linted; a
+                    // finish with no new edit is accepted (no re-fire), so this
+                    // cannot spin on an unfixable lint failure.
+                    lintRanSinceEdit = true;
+                    finalizeFired.delete("lint");
+                    followup =
+                      `[harness] Auto-lint \`${lc}\` FAILED (exit ${r.exitCode}). Output:\n${output}\n` +
+                      "Fix the reported lint issues, then finish — do not claim success until it passes.";
+                  }
+                } catch (err) {
+                  followup =
+                    `[harness] Auto-lint \`${lc}\` could not run (${err instanceof Error ? err.message : String(err)}). ` +
                     "Run it yourself with run_command, fix any failures, then finish.";
                 }
                 messages.push({ role: "user", content: followup });
@@ -1325,14 +1395,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             if (result.ok && result.meta?.path && (tc.name === "apply_patch" || tc.name === "write_file")) {
               changedFiles.add(result.meta.path);
               yield emit({ type: "file.changed", path: result.meta.path });
-              // New edits invalidate any earlier verify run (finalize gate #1).
+              // New edits invalidate any earlier verify/lint run (finalize gate).
               verifyRanSinceEdit = false;
+              lintRanSinceEdit = false;
             }
             if (tc.name === "run_command" && result.meta?.command) {
               commandsRun.push(result.meta.command);
-              // A verify run counts only when the command actually executed it.
+              // A verify/lint run counts only when the command actually ran it.
               const vc = deps.verifyCommand?.trim();
               if (result.ok && vc && result.meta.command.includes(vc)) verifyRanSinceEdit = true;
+              const lc = deps.lintCommand?.trim();
+              if (result.ok && lc && result.meta.command.includes(lc)) lintRanSinceEdit = true;
             }
             // Track the latest published plan for the finalize completeness check
             // AND persist it to the session so it survives across resume (#2).

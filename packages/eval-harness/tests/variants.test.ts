@@ -90,10 +90,23 @@ describe("variant registry", () => {
     });
   });
 
+  it("lint-gate sets the lint command only", () => {
+    const out = getVariant("lint-gate").apply({ compaction: "mechanical" });
+    expect(out.lintCommand).toBe("npm run lint");
+    expect(out.compaction).toBe("mechanical");
+  });
+
+  it("whole-file-edits sets editFormat=whole only", () => {
+    const out = getVariant("whole-file-edits").apply({ taskSuffix: "keep" });
+    expect(out).toEqual({ taskSuffix: "keep", editFormat: "whole" });
+  });
+
   it("the new capability variants are registered and listed", () => {
     const names = listVariants().map((v) => v.name);
     expect(names).toContain("context-tight");
     expect(names).toContain("verify-and-review");
+    expect(names).toContain("lint-gate");
+    expect(names).toContain("whole-file-edits");
   });
 
   it("the new variants never mutate the input base", () => {

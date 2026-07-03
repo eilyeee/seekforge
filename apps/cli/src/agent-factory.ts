@@ -136,6 +136,11 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
       ? { verifyCommand: config.verifyCommand }
       : {}),
     ...(config.autoVerify === false ? { autoVerify: false } : {}),
+    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
+      ? { lintCommand: config.lintCommand }
+      : {}),
+    ...(config.autoLint === false ? { autoLint: false } : {}),
+    ...(config.editFormat ? { editFormat: config.editFormat } : {}),
     ...(config.finalizeReview ? { finalizeReview: true } : {}),
     ...(config.guardNoProgress ? { guardNoProgress: true } : {}),
     ...(config.memoryAutoApproveConfidence !== undefined

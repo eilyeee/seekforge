@@ -8,6 +8,7 @@ import type { PlanItem } from "../tools/builtins/plan.js";
  *
  *   plan   (#6) — published a plan whose steps are not all done.
  *   verify (#1) — edited files but never ran the configured verify command.
+ *   lint   (#1b) — edited files but never ran the configured lint command.
  *   review (#5) — edited files and a final self-review pass is enabled.
  *
  * Each kind fires AT MOST ONCE per run (`fired`), so the gate adds at most a
@@ -20,7 +21,7 @@ import type { PlanItem } from "../tools/builtins/plan.js";
  * results, change counts, whether verify ran since the last edit) and the
  * transient-message plumbing.
  */
-export type FinalizeKind = "progress" | "plan" | "verify" | "review";
+export type FinalizeKind = "progress" | "plan" | "verify" | "lint" | "review";
 
 export type FinalizeState = {
   /** Run mode — the progress guard only applies to edit-mode runs. */
@@ -35,6 +36,10 @@ export type FinalizeState = {
   verifyCommand?: string;
   /** Whether the verify command has run since the most recent edit. */
   verifyRanSinceEdit: boolean;
+  /** Configured lint command (deps.lintCommand), if any. */
+  lintCommand?: string;
+  /** Whether the lint command has run since the most recent edit. */
+  lintRanSinceEdit: boolean;
   /** Whether a final self-review pass is enabled (deps.finalizeReview). */
   reviewEnabled: boolean;
   /** Whether the premature-finish guard is enabled (deps.guardNoProgress). */
@@ -113,6 +118,26 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
       message:
         `[harness] You changed ${s.changedFiles} file(s) but have not run the verification ` +
         `command since the last edit. Run \`${verifyCommand}\` with run_command, fix anything it ` +
+        "reports, then finish. If it genuinely cannot run here, say so explicitly rather than skipping it.",
+    };
+  }
+
+  // 2b. Prove it lints: edits were made but the lint command has not run since.
+  // Parallel to verify — same "only re-run after a NEW edit" gating.
+  const lintCommand = s.lintCommand?.trim();
+  if (
+    !s.fired.has("lint") &&
+    s.changedFiles > 0 &&
+    lintCommand !== undefined &&
+    lintCommand !== "" &&
+    !s.lintRanSinceEdit
+  ) {
+    return {
+      kind: "lint",
+      notice: "Changes not yet linted — asking the agent to run the lint command.",
+      message:
+        `[harness] You changed ${s.changedFiles} file(s) but have not run the lint ` +
+        `command since the last edit. Run \`${lintCommand}\` with run_command, fix anything it ` +
         "reports, then finish. If it genuinely cannot run here, say so explicitly rather than skipping it.",
     };
   }

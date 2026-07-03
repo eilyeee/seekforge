@@ -82,6 +82,27 @@ export type CliConfig = {
    */
   autoVerify?: boolean;
   /**
+   * Self-lint gate (parallel to verifyCommand): a shell command (e.g. "pnpm
+   * lint") the agent runs before finishing whenever it has edited files but not
+   * run it since. By default the loop runs it automatically on the finish turn
+   * and feeds failures back (see autoLint). Off when unset/empty. Edit the file
+   * directly; not settable via `config set`.
+   */
+  lintCommand?: string;
+  /**
+   * Default true (when lintCommand is set): run the lint command automatically
+   * on completion. Set false to only nudge the model to run it. Edit the file
+   * directly.
+   */
+  autoLint?: boolean;
+  /**
+   * Model-adaptive edit format: "patch" (default) guides apply_patch
+   * search/replace edits; "whole" guides preferring write_file (whole-file
+   * rewrites) for weak/local models that mangle search/replace. Edit the file
+   * directly; not settable via `config set`.
+   */
+  editFormat?: "patch" | "whole";
+  /**
    * Default-off: when the agent finishes after editing files, nudge it once to
    * self-review its own diff before completing. Edit the file directly; not
    * settable via `config set`.
@@ -188,6 +209,9 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "escalateOnFailure",
   "verifyCommand",
   "autoVerify",
+  "lintCommand",
+  "autoLint",
+  "editFormat",
   "finalizeReview",
   "guardNoProgress",
   "memoryAutoApproveConfidence",

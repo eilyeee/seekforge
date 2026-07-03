@@ -139,6 +139,10 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),
+    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
+      ? { lintCommand: config.lintCommand }
+      : {}),
+    ...(config.autoLint === false ? { autoLint: false } : {}),
   };
 }
 

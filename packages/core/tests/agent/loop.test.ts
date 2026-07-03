@@ -812,3 +812,138 @@ describe("auto-verify on completion", () => {
     expect(provider.requests[2]!.messages.at(-1)!.content).toContain("have not run the verification");
   });
 });
+
+describe("auto-lint on completion", () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-lint-"));
+  });
+  afterEach(() => rmSync(workspace, { recursive: true, force: true }));
+
+  const baseInput = { task: "do the thing", mode: "edit" as const, approvalMode: "auto" as const };
+
+  function editDispatcher(): ToolDispatcher {
+    return {
+      list: () => [{ name: "apply_patch", description: "d", parameters: {} }],
+      execute: async (call: ToolCall): Promise<ToolResult> =>
+        call.name === "apply_patch" ? { ok: true, meta: { path: "a.ts" } } : { ok: true },
+    };
+  }
+
+  const editThenDone = (): ChatResponse[] => [
+    response({
+      toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+      finishReason: "tool_calls",
+    }),
+    response({ content: "## Summary\ndone" }), // declares done -> triggers auto-lint
+    response({ content: "## Summary\nlinted" }), // after the lint result is fed back
+  ];
+
+  it("runs the lint command after an edit and accepts a pass", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      lintCommand: "true", // exits 0
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting changes: true"))).toBe(true);
+    expect(provider.requests[2]!.messages.at(-1)!.content).toContain("PASSED");
+    expect(events.find((e) => e.type === "session.completed")).toBeDefined();
+  });
+
+  it("feeds the failing lint output back when lint fails", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      lintCommand: "false", // exits 1
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const injected = provider.requests[2]!.messages.at(-1)!.content;
+    expect(injected).toContain("FAILED");
+    expect(injected).toContain("exit 1");
+  });
+
+  it("a passing lint doesn't nudge again (run finishes)", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      lintCommand: "true",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    // exactly the edit turn + done turn + one post-lint turn (no extra nudge).
+    expect(provider.requests).toHaveLength(3);
+    expect(events.find((e) => e.type === "session.completed")).toBeDefined();
+  });
+
+  it("no lint command means the run finishes immediately after edits", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "done" }),
+    ]);
+    const agent = createAgentCore({ provider, dispatcher: editDispatcher(), confirm: async () => true });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(provider.requests).toHaveLength(2); // no extra finalize turn
+    expect(events.some((e) => e.type === "notice")).toBe(false);
+  });
+
+  it("degrades to the nudge when autoLint is disabled", async () => {
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      lintCommand: "true",
+      autoLint: false,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting"))).toBe(false);
+    expect(provider.requests[2]!.messages.at(-1)!.content).toContain("have not run the lint");
+  });
+
+  it("lint does not re-run without a new edit (manual lint run is respected)", async () => {
+    // turn 1 edits; turn 2 runs the lint command itself via run_command (sets
+    // lintRanSinceEdit) then declares done in turn 3 -> the gate stays quiet.
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({
+        toolCalls: [{ id: "r1", name: "run_command", argumentsJson: '{"command":"pnpm lint"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [
+        { name: "apply_patch", description: "d", parameters: {} },
+        { name: "run_command", description: "d", parameters: {} },
+      ],
+      execute: async (call: ToolCall): Promise<ToolResult> => {
+        if (call.name === "apply_patch") return { ok: true, meta: { path: "a.ts" } };
+        if (call.name === "run_command") return { ok: true, meta: { command: "pnpm lint" } };
+        return { ok: true };
+      },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      lintCommand: "pnpm lint",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    // The model ran lint itself, so the gate did not auto-lint or nudge.
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting"))).toBe(false);
+    expect(provider.requests).toHaveLength(3);
+    expect(events.find((e) => e.type === "session.completed")).toBeDefined();
+  });
+});

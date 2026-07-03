@@ -67,6 +67,12 @@ export type TuiConfig = {
   escalateOnFailure?: boolean;
   /** Auto-approve extracted memories at/above this confidence (0-1); unset = no auto-approve. */
   memoryAutoApproveConfidence?: number;
+  /** Self-lint gate (parallel to verifyCommand): lint command run before finishing after edits. */
+  lintCommand?: string;
+  /** Default true (when lintCommand set): run the lint command automatically on completion. */
+  autoLint?: boolean;
+  /** Edit format: "patch" (default) or "whole" (prefer write_file — for weak/local models). */
+  editFormat?: "patch" | "whole";
 };
 
 function readJson(path: string): TuiConfig {
@@ -107,6 +113,9 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "routing",
   "escalateOnFailure",
   "memoryAutoApproveConfidence",
+  "lintCommand",
+  "autoLint",
+  "editFormat",
 ]);
 
 /**

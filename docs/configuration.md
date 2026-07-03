@@ -345,6 +345,46 @@ directly; not settable via `config set`.
 > auto-run finished a failing-suite fixture in fewer turns and ~30% cheaper than
 > the nudge-only path — the reason it defaults on.
 
+### `lintCommand`
+
+**Default off.** A shell command (e.g. `"pnpm lint"`) run as a **parallel gate to
+`verifyCommand`**: it must pass before the run finishes **when it has edited files
+but not run it since the last edit**. By default (`autoLint`, below) the loop
+**runs it automatically on the finish turn** and feeds the real result back — a
+passing run is accepted, a failing run continues with the captured lint output so
+the agent fixes the reported issues. Fires at most once per run, and re-fires only
+after a *new* edit (same gating as verify).
+
+```json
+{ "lintCommand": "pnpm lint" }
+```
+
+Edit the file directly; not settable via `config set`.
+
+### `autoLint`
+
+**Default on** (only relevant when `lintCommand` is set). The loop runs
+`lintCommand` itself on the finish turn and feeds the result back. Set to `false`
+to degrade to a one-time **nudge** asking the model to run it instead (mirrors
+`autoVerify`). Edit the file directly; not settable via `config set`.
+
+### `editFormat`
+
+**Default `"patch"`.** Selects the edit-format guidance in the system prompt
+(guidance only — both `apply_patch` and `write_file` stay available either way):
+
+- `"patch"` (default): guide the agent to use `apply_patch` search/replace edits.
+- `"whole"`: guide the agent to prefer `write_file` (rewrite the **whole file**)
+  over `apply_patch`. Use this for **small/local models** (e.g. small Ollama
+  models) that mangle exact search/replace blocks — a whole-file rewrite avoids
+  brittle exact-match failures.
+
+```json
+{ "editFormat": "whole" }
+```
+
+Edit the file directly; not settable via `config set`.
+
 ### `finalizeReview`
 
 **Default off.** When the agent finishes after editing files, run a final review
@@ -718,7 +758,8 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `reasoningEffort` | enum | `high` / `max` |
 
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
-`modelPricing`, `verifyCommand`, `autoVerify`, `finalizeReview`, `guardNoProgress`,
+`modelPricing`, `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
+`editFormat`, `finalizeReview`, `guardNoProgress`,
 `memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
 **not settable** via `config set`. They must be edited directly in the JSON
 config file, or managed through their dedicated subcommands (`seekforge mcp

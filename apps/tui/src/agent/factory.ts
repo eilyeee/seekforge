@@ -125,6 +125,11 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     ...(config.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
       : {}),
+    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
+      ? { lintCommand: config.lintCommand }
+      : {}),
+    ...(config.autoLint === false ? { autoLint: false } : {}),
+    ...(config.editFormat ? { editFormat: config.editFormat } : {}),
   };
 
   return { deps, dispose: () => runtime?.dispose() };

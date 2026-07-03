@@ -62,6 +62,18 @@ export type ServerConfig = {
    * Edit the file directly; not settable via `config set`.
    */
   memoryAutoApproveConfidence?: number;
+  /**
+   * Self-lint gate (parallel to a verify gate): a shell command (e.g. "pnpm
+   * lint") the loop runs before finishing when files were edited but not linted
+   * since. By default runs automatically on the finish turn (see autoLint). Off
+   * when unset/empty. Edit the file directly; not settable via `config set`.
+   */
+  lintCommand?: string;
+  /**
+   * Default true (when lintCommand is set): run the lint command automatically
+   * on completion. Set false to only nudge the model. Edit the file directly.
+   */
+  autoLint?: boolean;
   /** Shell hooks fired around tool calls / lifecycle. Edit the file directly. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
