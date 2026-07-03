@@ -227,6 +227,171 @@ function outlineFor(abs: string, rel: string, size: number): string {
   return `${sym}${sym ? "  " : ""}(${lines} ln)`.trim();
 }
 
+/* ------------------------------------------------------------------------- *
+ * Dependency-graph ranking (Aider-style).
+ *
+ * Aider ranks a repo not by name-matching but by CENTRALITY: it builds a graph
+ * whose nodes are files and whose edges A→B mean "A references a symbol DEFINED
+ * in B", then runs PageRank to surface the most-referenced files. We reuse the
+ * symbol outline (AST when loaded, regex floor otherwise) for definitions and a
+ * cheap identifier tokenization for references — matching Aider's "file A's text
+ * contains a symbol defined in file B" heuristic. The result blends with the
+ * lexical score in buildRelevantFiles and orders buildRepoOverview.
+ *
+ * Deterministic (no Date/random), bounded (MAX_GRAPH_FILES cap + existing
+ * file-count guards), and a clean no-op when the graph has no edges.
+ * ------------------------------------------------------------------------- */
+
+/** Hard cap on nodes so a huge repo can't blow up the graph build / power iteration. */
+const MAX_GRAPH_FILES = 600;
+const PAGERANK_ITERATIONS = 25;
+const PAGERANK_DAMPING = 0.85;
+const IDENT_RE = /[\p{L}_$][\p{L}\p{N}_$]*/gu;
+const IDENT_OK = /^[\p{L}_$][\p{L}\p{N}_$]*$/u;
+
+export type FileGraph = {
+  /** Node ids (rel paths), sorted deterministically. */
+  files: string[];
+  /** Adjacency: from-file -> (to-file -> summed edge weight). */
+  edges: Map<string, Map<string, number>>;
+  /** False when the graph is trivial (no cross-file references) -> callers fall back to lexical. */
+  hasEdges: boolean;
+};
+
+/** Names DEFINED by a file, parsed from its symbol outline ("exports: a, b, …"). */
+function definedNames(rel: string, content: string): string[] {
+  const outline = extractSymbols(rel, content);
+  if (!outline.startsWith("exports:")) return [];
+  const out: string[] = [];
+  for (const part of outline.slice("exports:".length).split(",")) {
+    const n = part.trim();
+    if (n && IDENT_OK.test(n)) out.push(n);
+  }
+  return out;
+}
+
+/** Per-file identifier occurrence counts — the "references" side of the heuristic. */
+function identifierCounts(content: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const m of content.matchAll(IDENT_RE)) {
+    const t = m[0];
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Build the file dependency graph: an edge A→B for every symbol defined in B
+ * that A references, weighted by reference count (a symbol defined in K files
+ * splits its weight K ways so ubiquitous names don't dominate). Reads each file
+ * once, bounded by MAX_GRAPH_FILES and MAX_READ_BYTES.
+ */
+export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
+  const capped =
+    files.length > MAX_GRAPH_FILES
+      ? [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel)).slice(0, MAX_GRAPH_FILES)
+      : files;
+
+  const defs = new Map<string, string[]>(); // symbol -> files defining it
+  const refCounts = new Map<string, Map<string, number>>(); // file -> identifier counts
+  const nodes: string[] = [];
+  for (const f of capped) {
+    nodes.push(f.rel);
+    if (f.size > MAX_READ_BYTES) continue;
+    let content: string;
+    try {
+      content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
+    } catch {
+      continue;
+    }
+    for (const name of definedNames(f.rel, content)) {
+      const arr = defs.get(name);
+      if (arr) arr.push(f.rel);
+      else defs.set(name, [f.rel]);
+    }
+    refCounts.set(f.rel, identifierCounts(content));
+  }
+
+  const edges = new Map<string, Map<string, number>>();
+  let hasEdges = false;
+  for (const [from, counts] of refCounts) {
+    for (const [name, c] of counts) {
+      const definers = defs.get(name);
+      if (!definers) continue;
+      const others = definers.filter((d) => d !== from);
+      if (others.length === 0) continue;
+      const w = c / others.length; // distribute a reference across all definers
+      let to = edges.get(from);
+      if (!to) {
+        to = new Map();
+        edges.set(from, to);
+      }
+      for (const d of others) {
+        to.set(d, (to.get(d) ?? 0) + w);
+        hasEdges = true;
+      }
+    }
+  }
+  nodes.sort((a, b) => a.localeCompare(b));
+  return { files: nodes, edges, hasEdges };
+}
+
+/**
+ * PageRank via deterministic power iteration (damping 0.85, fixed 25 iterations,
+ * no randomness). An optional personalization vector biases the teleport toward
+ * seed files (their weights need not sum to 1 — normalized here), giving
+ * personalized PageRank: rank flows from the task's seed files out along the
+ * dependency edges, so files CENTRAL to what the task touches score high even if
+ * their names don't match. Returns per-file centrality (larger = more central).
+ */
+export function computePageRank(graph: FileGraph, personalization?: Map<string, number>): Map<string, number> {
+  const { files, edges } = graph;
+  const n = files.length;
+  const rank = new Map<string, number>();
+  if (n === 0) return rank;
+
+  // Teleport vector p (normalized to sum 1); uniform when no/empty personalization.
+  const p = new Map<string, number>();
+  let pSum = 0;
+  if (personalization && personalization.size > 0) {
+    for (const f of files) {
+      const v = Math.max(0, personalization.get(f) ?? 0);
+      p.set(f, v);
+      pSum += v;
+    }
+  }
+  if (pSum <= 0) {
+    for (const f of files) p.set(f, 1);
+    pSum = n;
+  }
+  for (const f of files) p.set(f, p.get(f)! / pSum);
+
+  // Out-weight per node (0 => dangling; its mass is redistributed via teleport).
+  const outW = new Map<string, number>();
+  for (const [from, to] of edges) {
+    let s = 0;
+    for (const w of to.values()) s += w;
+    outW.set(from, s);
+  }
+
+  for (const f of files) rank.set(f, p.get(f)!);
+  const d = PAGERANK_DAMPING;
+  for (let it = 0; it < PAGERANK_ITERATIONS; it++) {
+    let dangling = 0;
+    for (const f of files) if ((outW.get(f) ?? 0) === 0) dangling += rank.get(f)!;
+    const next = new Map<string, number>();
+    for (const f of files) next.set(f, (1 - d) * p.get(f)! + d * dangling * p.get(f)!);
+    for (const [from, to] of edges) {
+      const ow = outW.get(from)!;
+      if (ow === 0) continue;
+      const rf = rank.get(from)!;
+      for (const [t, w] of to) next.set(t, (next.get(t) ?? 0) + d * rf * (w / ow));
+    }
+    for (const f of files) rank.set(f, next.get(f)!);
+  }
+  return rank;
+}
+
 /** Build the repo map string for `root` (an absolute directory). */
 export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
@@ -254,7 +419,12 @@ export function scanRepo(root: string): RepoScan {
 export function buildRepoOverview(root: string, minFiles = 150, scan?: RepoScan): string | undefined {
   const { files, dirCounts } = scan ?? walk(root, root);
   if (files.length < minFiles) return undefined;
-  return formatRepoMap(root, ".", files, dirCounts, 2, 25);
+  // Order the Files section by dependency-graph centrality (Aider-style ranked
+  // map): most-referenced files first, within the token budget. Falls back to
+  // breadth-first when the graph is trivial (no cross-file references).
+  const graph = buildFileGraph(root, files);
+  const rank = graph.hasEdges ? computePageRank(graph) : undefined;
+  return formatRepoMap(root, ".", files, dirCounts, 2, 25, rank);
 }
 
 /**
@@ -316,11 +486,49 @@ export function buildRelevantFiles(
   }
   if (pathScored.length === 0) return undefined;
 
-  // Stage 2 — read the top path-matches and refine with symbol-outline matches.
-  const candidates = pathScored
+  // Personalized PageRank over the file dependency graph, biased toward the
+  // lexical seeds (the path-matched files, weighted by their score). This is the
+  // key win over pure lexical: a file CENTRAL to what the task touches surfaces
+  // even when its own name/exports don't match the task terms. Trivial graph
+  // (no cross-file references) -> prBoost is 0 and we fall back to pure lexical.
+  const graph = buildFileGraph(root, files);
+  let pr: Map<string, number> | undefined;
+  let prMax = 0;
+  if (graph.hasEdges) {
+    const personalization = new Map<string, number>();
+    for (const { f, score } of pathScored) personalization.set(f.rel, score);
+    pr = computePageRank(graph, personalization);
+    for (const v of pr.values()) if (v > prMax) prMax = v;
+  }
+  const PR_WEIGHT = 4; // a maximally-central-to-task file earns ~a path-token hit
+  const prBoost = (rel: string): number =>
+    pr && prMax > 0 ? PR_WEIGHT * ((pr.get(rel) ?? 0) / prMax) : 0;
+
+  // Candidate set: the strongest path-matches, plus the most central files by
+  // personalized PageRank (so a central-but-unnamed file gets a chance to clear
+  // the floor). Bounded by maxCandidates on each side.
+  const byPath = pathScored
     .sort((a, b) => b.score - a.score || a.f.rel.localeCompare(b.f.rel))
     .slice(0, maxCandidates);
-  const refined = candidates.map(({ f, score }) => {
+  const chosen = new Map<string, { f: CodeFile; pathScore: number }>();
+  for (const { f, score } of byPath) chosen.set(f.rel, { f, pathScore: score });
+  if (pr && prMax > 0) {
+    const fileByRel = new Map(files.map((f) => [f.rel, f] as const));
+    const prSorted = [...pr.entries()]
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, maxCandidates);
+    for (const [rel] of prSorted) {
+      if (chosen.has(rel)) continue;
+      const f = fileByRel.get(rel);
+      if (f) chosen.set(rel, { f, pathScore: 0 });
+    }
+  }
+
+  // Read each candidate once, refine with symbol-outline matches, blend in the
+  // (personalized) centrality boost.
+  const refined = [...chosen.values()].map(({ f, pathScore }) => {
+    let score = pathScore;
     let outline = "";
     if (f.size <= MAX_READ_BYTES) {
       try {
@@ -333,6 +541,7 @@ export function buildRelevantFiles(
         // Unreadable -> keep the path-only score.
       }
     }
+    score += prBoost(f.rel);
     return { rel: f.rel, outline, score };
   });
 
@@ -342,7 +551,7 @@ export function buildRelevantFiles(
     .slice(0, maxFiles);
   if (top.length === 0) return undefined;
 
-  const lines = ["# Task-relevant files (ranked by lexical match — verify by reading)"];
+  const lines = ["# Task-relevant files (ranked by lexical match + dependency centrality — verify by reading)"];
   for (const r of top) lines.push(`${r.rel}${r.outline ? `  ${r.outline}` : ""}`);
   return lines.join("\n");
 }
@@ -354,6 +563,7 @@ function formatRepoMap(
   dirCounts: Map<string, number>,
   maxDepth: number,
   maxFiles: number,
+  rank?: Map<string, number>,
 ): string {
   if (files.length === 0) return `Repo map: no code files under ${sub}.`;
 
@@ -373,9 +583,15 @@ function formatRepoMap(
     }
   }
 
-  // Files: breadth-first (shallow first), budgeted, with symbol outlines.
+  // Files: ranked by dependency centrality when a rank map is supplied
+  // (most-referenced first, Aider-style), else breadth-first (shallow first).
+  // Both are budgeted, with symbol outlines.
   out.push("", "## Files");
-  const sorted = [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel));
+  const sorted = rank
+    ? [...files].sort(
+        (a, b) => (rank.get(b.rel) ?? 0) - (rank.get(a.rel) ?? 0) || a.depth - b.depth || a.rel.localeCompare(b.rel),
+      )
+    : [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel));
   for (const f of sorted.slice(0, maxFiles)) {
     const outline = outlineFor(path.resolve(root, f.rel), f.rel, f.size);
     out.push(`${f.rel}${outline ? `  ${outline}` : ""}`);

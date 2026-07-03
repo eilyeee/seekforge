@@ -3,11 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildFileGraph,
   buildRelevantFiles,
   buildRepoMap,
   buildRepoOverview,
+  computePageRank,
   extractSymbols,
   findDefinitions,
+  scanRepo,
   symbolBackends,
   type SymbolBackend,
 } from "../../src/agent/repo-map.js";
@@ -176,5 +179,169 @@ describe("buildRelevantFiles", () => {
   it("returns undefined when nothing clears the relevance floor", () => {
     // A keyword that only substring-matches a few paths weakly stays below floor.
     expect(buildRelevantFiles(root, "xyzzy nonexistent feature")).toBeUndefined();
+  });
+});
+
+describe("dependency graph + PageRank (Aider-style ranking)", () => {
+  // A hub file `core/registry.ts` referenced by many feature files. The feature
+  // files reference each other not at all, so the hub is the graph's center.
+  function makeHubRepo(dir: string, features: number): void {
+    mkdirSync(join(dir, "src/core"), { recursive: true });
+    mkdirSync(join(dir, "src/feat"), { recursive: true });
+    writeFileSync(join(dir, "src/core/registry.ts"), "export function registry(){ return 1; }");
+    for (let i = 0; i < features; i++) {
+      // Each feature references the hub's exported symbol `registry`.
+      writeFileSync(
+        join(dir, `src/feat/feature${i}.ts`),
+        `export function feature${i}(){ return registry(); }`,
+      );
+    }
+  }
+
+  it("ranks the most-referenced file (the hub) highest", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-hub-"));
+    try {
+      makeHubRepo(root, 12);
+      const graph = buildFileGraph(root, scanRepo(root).files);
+      expect(graph.hasEdges).toBe(true);
+      const pr = computePageRank(graph);
+      const ranked = [...pr.entries()].sort((a, b) => b[1] - a[1]);
+      expect(ranked[0]![0]).toBe("src/core/registry.ts"); // C is imported by many -> highest
+      // Every feature file is strictly less central than the hub.
+      const hub = pr.get("src/core/registry.ts")!;
+      for (const [rel, v] of pr) if (rel !== "src/core/registry.ts") expect(v).toBeLessThan(hub);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is deterministic: same input -> identical scores", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-det-"));
+    try {
+      makeHubRepo(root, 10);
+      const files = scanRepo(root).files;
+      const a = computePageRank(buildFileGraph(root, files));
+      const b = computePageRank(buildFileGraph(root, files));
+      expect([...a.entries()]).toEqual([...b.entries()]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("personalization biases centrality toward the seed's neighborhood", () => {
+    // Two disjoint hubs. Personalizing toward hub-A's satellite lifts hub A over hub B.
+    const root = mkdtempSync(join(tmpdir(), "pr-pers-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src/hubA.ts"), "export function hubA(){ return 1; }");
+      writeFileSync(join(root, "src/hubB.ts"), "export function hubB(){ return 1; }");
+      writeFileSync(join(root, "src/a1.ts"), "export function a1(){ return hubA(); }");
+      writeFileSync(join(root, "src/a2.ts"), "export function a2(){ return hubA(); }");
+      writeFileSync(join(root, "src/b1.ts"), "export function b1(){ return hubB(); }");
+      writeFileSync(join(root, "src/b2.ts"), "export function b2(){ return hubB(); }");
+      const graph = buildFileGraph(root, scanRepo(root).files);
+      const seeded = computePageRank(graph, new Map([["src/a1.ts", 1]]));
+      // Rank flows from a1 -> hubA, so hub A outranks hub B under this personalization.
+      expect(seeded.get("src/hubA.ts")!).toBeGreaterThan(seeded.get("src/hubB.ts")!);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("empty / trivial graph yields no edges (callers fall back to lexical)", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-triv-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      // No cross-file references -> no edges.
+      writeFileSync(join(root, "src/x.ts"), "export function x(){ return 1; }");
+      writeFileSync(join(root, "src/y.ts"), "export function y(){ return 2; }");
+      const graph = buildFileGraph(root, scanRepo(root).files);
+      expect(graph.hasEdges).toBe(false);
+      // computePageRank still returns a well-formed (uniform) map, never throws.
+      const pr = computePageRank(graph);
+      expect(pr.size).toBe(2);
+      expect(computePageRank({ files: [], edges: new Map(), hasEdges: false }).size).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("buildRepoOverview orders the Files section by centrality (hub surfaces first)", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-overview-"));
+    try {
+      // Hub buried deep so breadth-first ordering would NOT list it; 160 shallow
+      // feature files reference it, so PageRank ranking lifts it to the top.
+      mkdirSync(join(root, "src/core/deep/nested"), { recursive: true });
+      mkdirSync(join(root, "src/feat"), { recursive: true });
+      writeFileSync(join(root, "src/core/deep/nested/hub.ts"), "export function hub(){ return 1; }");
+      for (let i = 0; i < 160; i++) {
+        writeFileSync(join(root, `src/feat/f${i}.ts`), `export function f${i}(){ return hub(); }`);
+      }
+      const map = buildRepoOverview(root, 150)!;
+      expect(map).toContain("# Repo map");
+      const lines = map.split("\n");
+      const filesIdx = lines.indexOf("## Files");
+      expect(filesIdx).toBeGreaterThan(-1);
+      // First file line after the "## Files" header is the most central file.
+      expect(lines[filesIdx + 1]).toContain("hub.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildRelevantFiles + PageRank blend", () => {
+  // 45 feature files reference a central `service`; the task names ONE feature.
+  function makeServiceRepo(dir: string): void {
+    mkdirSync(join(dir, "src/lib"), { recursive: true });
+    mkdirSync(join(dir, "src/feat"), { recursive: true });
+    writeFileSync(join(dir, "src/lib/service.ts"), "export function service(){ return 1; }");
+    for (let i = 0; i < 45; i++) {
+      writeFileSync(join(dir, `src/feat/feature${i}.ts`), `export function feature${i}(){ return service(); }`);
+    }
+  }
+
+  it("surfaces a central file the task doesn't name, via personalized centrality", () => {
+    const root = mkdtempSync(join(tmpdir(), "blend-"));
+    try {
+      makeServiceRepo(root);
+      // Task names feature7 (lexical seed). `service` matches no task term but is
+      // central to feature7's dependency neighborhood -> it should surface.
+      const out = buildRelevantFiles(root, "fix feature7 handler")!;
+      expect(out).toContain("src/feat/feature7.ts"); // the lexical seed
+      expect(out).toContain("src/lib/service.ts"); // central, surfaced via PageRank
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is deterministic and respects the maxFiles cap", () => {
+    const root = mkdtempSync(join(tmpdir(), "blend-det-"));
+    try {
+      makeServiceRepo(root);
+      const a = buildRelevantFiles(root, "fix feature7 handler", { maxFiles: 3 })!;
+      const b = buildRelevantFiles(root, "fix feature7 handler", { maxFiles: 3 })!;
+      expect(a).toBe(b); // same input -> identical output
+      // Header line + at most maxFiles file lines (the cap still holds after the blend).
+      expect(a.split("\n").length).toBeLessThanOrEqual(1 + 3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back cleanly to lexical ranking when the graph has no edges", () => {
+    const root = mkdtempSync(join(tmpdir(), "blend-triv-"));
+    try {
+      mkdirSync(join(root, "src/auth"), { recursive: true });
+      mkdirSync(join(root, "src/util"), { recursive: true });
+      writeFileSync(join(root, "src/auth/login.ts"), "export function login(){}\nexport function logout(){}");
+      // 50 unrelated files with no cross-references -> trivial graph.
+      for (let i = 0; i < 50; i++) writeFileSync(join(root, `src/util/u${i}.ts`), `export const helper${i} = ${i};`);
+      const out = buildRelevantFiles(root, "fix the login bug")!;
+      expect(out).toContain("src/auth/login.ts"); // lexical behaviour preserved
+      expect(out).not.toContain("util/u0.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
