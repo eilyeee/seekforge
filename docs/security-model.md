@@ -86,10 +86,12 @@ Shell commands are classified deterministically before they can run, in
 
 - **Denylist (L4 `dangerous`)** — matched first; never run, never prompted:
   `rm -rf` (recursive **and** force, order-independent), `sudo`, `chmod -R`,
-  `chown`, `git reset --hard`, `git clean`, `git push`, `curl|wget … | sh`,
-  nested `sh -c`, `node -e`, `python -c`
-  (`run-command.ts::DENYLIST`, `run-command.ts:23`; applied `:250`).
-- **Env (L3)** — package installs and dependency changes always confirm
+  `chown`, `git reset --hard`, `git clean`, `git push --force` (incl. `-f` /
+  `--force-with-lease`), `curl|wget … | sh`, nested `sh -c`, `node -e`,
+  `python -c` (`run-command.ts::DENYLIST`, `run-command.ts:23`; applied `:250`).
+- **Env (L3)** — always confirm, even in "auto"/"acceptEdits", and auto-denied
+  headless: package installs / dependency changes, and a plain `git push`
+  (outward-facing → mandatory human approval, but force-push stays denied above)
   (`run-command.ts::ENV_PATTERNS`, `run-command.ts:45`).
 - **Readonly fast-path** — only single, unpiped `git`/`gh` inspection commands
   auto-run. A command containing any shell metacharacter that could inject or
