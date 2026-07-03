@@ -35,6 +35,9 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
   decision, keep the broad `startsWith` — over-matching a deny fails closed.
 - **Caught:** `packages/core/src/tools/permissions.ts` (`ruleMatches` /
   `boundaryPrefix`); the same rationale already lived in `sessionAllowed`.
+- **Also caught:** `packages/core/src/hooks/index.ts` (`hookApplies`) — hook
+  `pattern: "npm run build"` matched `npm run build-all`, and `src/foo` matched
+  `src/foobar.ts`.
 
 ## 3. A cache / memo key must include every input that affects the output
 

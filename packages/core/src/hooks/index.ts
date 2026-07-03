@@ -45,6 +45,7 @@
  * - Hooks run sequentially in config order.
  */
 import { spawn } from "node:child_process";
+import { sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 export type HookStage =
@@ -171,17 +172,41 @@ export const HOOK_OUTPUT_TAIL_CHARS = 1000;
 /** Keep a bounded buffer while capturing; only the tail is ever surfaced. */
 const CAPTURE_KEEP_CHARS = 8000;
 
+/** Collapse runs of whitespace so a pattern can't be evaded with extra spaces. */
+function normalizeWhitespace(s: string): string {
+  return s.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Prefix match that only counts on a separator boundary: exact match, the
+ * pattern already ending at a separator, or the subject having a separator
+ * immediately after the matched prefix.
+ */
+function boundaryPrefix(subject: string, match: string, seps: readonly string[]): boolean {
+  if (subject === match) return true;
+  if (match.length === 0) return true;
+  if (!subject.startsWith(match)) return false;
+  if (seps.includes(match[match.length - 1]!)) return true;
+  return seps.includes(subject[match.length] ?? "");
+}
+
+function hookPatternMatches(entry: HookEntry, payload: HookPayload): boolean {
+  if (entry.pattern === undefined) return true;
+  if (payload.command !== undefined) {
+    return boundaryPrefix(normalizeWhitespace(payload.command), normalizeWhitespace(entry.pattern), [" "]);
+  }
+  const subject = (payload.path ?? "").trim();
+  const match = entry.pattern.trim();
+  return boundaryPrefix(subject, match, ["/", sep]);
+}
+
 function hookApplies(entry: HookEntry, payload: HookPayload): boolean {
   const tool = entry.match ?? "*";
   // sessionEnd has no toolName; tool matching only applies to tool stages.
   if (tool !== "*" && payload.toolName !== undefined && tool !== payload.toolName) {
     return false;
   }
-  if (entry.pattern !== undefined) {
-    const subject = (payload.command ?? payload.path ?? "").trim();
-    if (!subject.startsWith(entry.pattern.trim())) return false;
-  }
-  return true;
+  return hookPatternMatches(entry, payload);
 }
 
 /**
