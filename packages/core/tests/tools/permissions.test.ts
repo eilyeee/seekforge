@@ -609,6 +609,10 @@ describe("dispatcher basics", () => {
       "run_user_command",
       "repo_map",
       "find_definition",
+      "browser_navigate",
+      "browser_screenshot",
+      "browser_snapshot",
+      "browser_console",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
     expect(readFileDef?.parameters).toMatchObject({

@@ -16,6 +16,7 @@ import type { RuntimeClient } from "../runtime/index.js";
 import {
   createBackgroundTasks,
   digestCommandOutput,
+  disposeBrowser,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
@@ -1514,6 +1515,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         dispatchManager?.disposeAll();
         // A caller-provided manager outlives the run (multi-turn sessions).
         if (!deps.background) ctx.background?.disposeAll();
+        // Tear down the shared headless browser (browser_* tools) so a
+        // Playwright process is not leaked past the session. No-op when the
+        // browser was never launched; runs only for the top-level session.
+        if (depth === 0) await disposeBrowser().catch(() => {});
         // sessionEnd hooks fire once per top-level session, after cleanup.
         // Advisory only; never affects the (already emitted) outcome. Nested
         // subagent sessions (depth > 0) do not fire it.
