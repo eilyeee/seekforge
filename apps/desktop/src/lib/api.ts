@@ -337,6 +337,11 @@ export const api = {
   sessionCompact: (id: string) =>
     request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`)),
 
+  // Fork a session into a NEW session id (the original is untouched); returns
+  // the new id so the caller can open the forked copy (workspace-scoped).
+  forkSession: (id: string) =>
+    request<{ id: string }>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/fork`)),
+
   // Reviewable session audit (workspace-scoped): a rendered markdown timeline plus
   // the structured audit payload (treated as opaque). 404 for an unknown id.
   sessionAudit: (id: string) =>

@@ -106,6 +106,20 @@ export function SessionsView() {
       .catch((e: unknown) => setError(String(e)));
   };
 
+  /**
+   * Fork this session into a fresh copy (the original is untouched), then open
+   * the forked copy in a new chat tab so the user lands in it — parity with the
+   * TUI's `/fork`.
+   */
+  const doFork = (id: string) => {
+    setError(null);
+    api
+      .forkSession(id)
+      .then(({ id: newId }) => api.session(newId))
+      .then(({ meta, messages }) => continueSession(meta, messages))
+      .catch((e: unknown) => setError(t("sessions.forkError", { error: String(e) })));
+  };
+
   const noteFor = (id: string, e: unknown): string =>
     e instanceof ApiError && e.status === 404 ? t("sessions.rewindNoCheckpoints") : String(e);
 
@@ -286,6 +300,17 @@ export function SessionsView() {
                           title={t("sessions.auditBtnTitle")}
                         >
                           {t("sessions.auditBtn")}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            doFork(s.id);
+                          }}
+                          title={t("sessions.forkBtnTitle")}
+                        >
+                          {t("sessions.forkBtn")}
                         </Button>
                         <Button
                           variant="ghost"

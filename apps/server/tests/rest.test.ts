@@ -313,6 +313,28 @@ describe("REST endpoints", () => {
     expect((await jsonOf(res)).error.code).toBe("not_found");
   });
 
+  it("POST /api/sessions/:id/fork clones into a new, listable session id", async () => {
+    const res = await authed("/api/sessions/s1/fork", { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(typeof body.id).toBe("string");
+    expect(body.id).not.toBe("s1");
+
+    // The forked copy is a real, listable session distinct from the source.
+    const list = await jsonOf(await authed("/api/sessions"));
+    expect(list.map((m: { id: string }) => m.id)).toContain(body.id);
+
+    // The original is untouched (still has its messages).
+    const src = await jsonOf(await authed("/api/sessions/s1"));
+    expect(src.meta.id).toBe("s1");
+  });
+
+  it("POST /api/sessions/:id/fork is 404 for an unknown session", async () => {
+    const res = await authed("/api/sessions/nope/fork", { method: "POST" });
+    expect(res.status).toBe(404);
+    expect((await jsonOf(res)).error.code).toBe("not_found");
+  });
+
   it("GET /api/skills lists skills without content", async () => {
     const res = await authed("/api/skills");
     const body = await jsonOf(res);

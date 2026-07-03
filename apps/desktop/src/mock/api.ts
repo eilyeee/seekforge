@@ -36,6 +36,8 @@ const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p
 // add/remove stick for the page lifetime (mock mode + tests).
 const skills: Skill[] = mockSkills.map((s) => ({ ...s }));
 const sessions: SessionMeta[] = mockSessions.map((s) => ({ ...s }));
+// Monotonic counter so each fork yields a fresh, distinct session id.
+let forkSeq = 0;
 const mcpServers: McpServer[] = mockMcpServers.map((s) => ({ ...s }));
 const todos: Todo[] = [
   { index: 1, text: "ship the v11 capability UI", done: false },
@@ -779,6 +781,27 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     const meta = sessions.find((s) => s.id === m![1]);
     if (!meta) throw mockError(404, "not_found", "session not found");
     return { ok: true, sessionId: meta.id, before: 42, after: 12, summary: "Mock compaction summary." };
+  }
+
+  // --- Fork a session into a new copy --------------------------------------
+  m = /^\/api\/sessions\/([^/]+)\/fork$/.exec(path);
+  if (method === "POST" && m) {
+    const src = sessions.find((s) => s.id === m![1]);
+    if (!src) throw mockError(404, "not_found", "session not found");
+    const now = new Date().toISOString();
+    const forked: SessionMeta = {
+      ...src,
+      id: `mock-fork-${++forkSeq}`,
+      task: `(fork) ${src.task}`,
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+    };
+    sessions.unshift(forked);
+    // The forked copy carries the source transcript so opening it lands in the
+    // continued session (GET /api/sessions/:id reads from this map).
+    mockSessionMessages[forked.id] = [...(mockSessionMessages[src.id] ?? [])];
+    return { id: forked.id };
   }
 
   // --- Reviewable session audit --------------------------------------------

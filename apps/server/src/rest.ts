@@ -23,6 +23,7 @@ import {
   expandShellInjections,
   expandUserCommand,
   fetchBalance,
+  forkSession,
   importExternalAgent,
   importExternalSkill,
   listOutputStyles,
@@ -622,6 +623,15 @@ export async function handleApi(
         return sendApiError(res, 404, "not_found", `session not found: ${id}`);
       }
       return sendJson(res, 200, compactSessionNow(workspace, id));
+    }
+
+    // Fork a stored session into a NEW session id (the original is untouched).
+    if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "fork") {
+      const id = segs[2]!;
+      if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+      const forked = forkSession(workspace, id);
+      if (forked === null) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
+      return sendJson(res, 200, { id: forked });
     }
 
     // Delete a single session directory.
