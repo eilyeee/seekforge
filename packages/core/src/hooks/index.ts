@@ -195,9 +195,14 @@ function hookPatternMatches(entry: HookEntry, payload: HookPayload): boolean {
   if (payload.command !== undefined) {
     return boundaryPrefix(normalizeWhitespace(payload.command), normalizeWhitespace(entry.pattern), [" "]);
   }
-  const subject = (payload.path ?? "").trim();
-  const match = entry.pattern.trim();
-  return boundaryPrefix(subject, match, ["/", sep]);
+  // Normalize separators so a POSIX-style pattern (`src/foo`) matches a path that
+  // arrived with Windows separators (`src\foo`) and vice-versa; without this the
+  // byte-exact prefix check under-matches on Windows and the hook silently
+  // wouldn't fire. `sep` is retained implicitly via the "/"-normalized form.
+  const toSlash = (s: string): string => s.replaceAll(sep, "/");
+  const subject = toSlash((payload.path ?? "").trim());
+  const match = toSlash(entry.pattern.trim());
+  return boundaryPrefix(subject, match, ["/"]);
 }
 
 function hookApplies(entry: HookEntry, payload: HookPayload): boolean {

@@ -103,6 +103,7 @@ export { redactSecrets } from "./redact.js";
 export {
   BUILTIN_COMMAND_ALLOWLIST,
   classifyCommand,
+  commandInvokes,
   looksLikeSandboxDenial,
   normalizeCommand,
   runShellCommand,

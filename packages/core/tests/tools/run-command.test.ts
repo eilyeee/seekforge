@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import {
   classifyCommand,
+  commandInvokes,
   createDefaultDispatcher,
   looksLikeSandboxDenial,
   runShellCommand,
@@ -13,6 +14,22 @@ import type { RunShellOptions, ShellResult } from "../../src/tools/run-command.j
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 const dispatcher = createDefaultDispatcher();
+
+describe("commandInvokes (verify/lint gate matcher)", () => {
+  it("matches an exact or extended invocation at a word boundary", () => {
+    expect(commandInvokes("pnpm test", "pnpm test")).toBe(true);
+    expect(commandInvokes("pnpm test --watch", "pnpm test")).toBe(true);
+    expect(commandInvokes("pnpm  test", "pnpm test")).toBe(true); // whitespace-normalized
+  });
+  it("does NOT match a different command that merely contains the string", () => {
+    expect(commandInvokes("pnpm test:watch", "pnpm test")).toBe(false);
+    expect(commandInvokes('echo "run pnpm test"', "pnpm test")).toBe(false);
+    expect(commandInvokes("pnpm lint:fix", "pnpm lint")).toBe(false);
+  });
+  it("never matches on an empty configured command", () => {
+    expect(commandInvokes("anything", "")).toBe(false);
+  });
+});
 
 describe("classifyCommand", () => {
   it("classifies denylisted commands as dangerous", () => {

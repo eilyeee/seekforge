@@ -72,7 +72,10 @@ export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionI
               resolve({ sessionId: event.sessionId });
             }
           } else if (event.type === "usage.updated") {
-            // Cumulative spend guard — abort the moment it reaches the budget.
+            // Cumulative spend guard — a SOFT, reactive cap: we abort on the
+            // first usage event at/over budget, so the in-flight model turn that
+            // crossed it can overshoot by one call. Bound turns/tokens too if a
+            // hard ceiling is ever required.
             if (event.usage.costUsd >= input.maxCostUsd) controller.abort();
           } else if (event.type === "session.completed") {
             if (event.report.usage.costUsd >= input.maxCostUsd) controller.abort();

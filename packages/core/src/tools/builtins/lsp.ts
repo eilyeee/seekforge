@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { resolveForRead } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
@@ -67,9 +68,9 @@ function formatLocation(workspace: string, loc: LspLocation): {
 }
 
 function fileUriToPath(uri: string): string {
-  // Node's fileURLToPath would also work; do it directly to avoid an import cycle.
-  const u = new URL(uri);
-  return decodeURIComponent(u.pathname);
+  // Node's fileURLToPath handles Windows drive letters (file:///C:/…) and UNC
+  // hosts correctly; a manual `new URL(uri).pathname` mangles both.
+  return fileURLToPath(uri);
 }
 
 const lspDefinitionTool = defineTool({

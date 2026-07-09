@@ -19,6 +19,21 @@ export function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
 
+/**
+ * True if the shell command `ran` is an invocation of the configured command
+ * `configured` — i.e. it equals it, or extends it with extra args at a word
+ * boundary (`pnpm test` matches `pnpm test --watch` but NOT `pnpm test:watch`).
+ * Both sides are whitespace-normalized. Used to decide whether the model's own
+ * run satisfied the verify/lint gate — a bare `.includes()` gives false
+ * positives (`echo "pnpm test"`) and false negatives (extra whitespace).
+ */
+export function commandInvokes(ran: string, configured: string): boolean {
+  const a = normalizeCommand(ran);
+  const b = normalizeCommand(configured);
+  if (!b) return false;
+  return a === b || a.startsWith(b + " ");
+}
+
 /** Destructive / escape-hatch commands. Never run, never prompt. */
 const DENYLIST: Array<{ re: RegExp; reason: string }> = [
   // rm with BOTH a recursive flag (-r/-R/-rf/--recursive, any case/order) AND a

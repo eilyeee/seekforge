@@ -17,6 +17,7 @@ import {
   createBackgroundTasks,
   digestCommandOutput,
   disposeBrowser,
+  commandInvokes,
   disposeLspServers,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
@@ -1404,9 +1405,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               commandsRun.push(result.meta.command);
               // A verify/lint run counts only when the command actually ran it.
               const vc = deps.verifyCommand?.trim();
-              if (result.ok && vc && result.meta.command.includes(vc)) verifyRanSinceEdit = true;
+              if (result.ok && vc && commandInvokes(result.meta.command, vc)) verifyRanSinceEdit = true;
               const lc = deps.lintCommand?.trim();
-              if (result.ok && lc && result.meta.command.includes(lc)) lintRanSinceEdit = true;
+              if (result.ok && lc && commandInvokes(result.meta.command, lc)) lintRanSinceEdit = true;
             }
             // Track the latest published plan for the finalize completeness check
             // AND persist it to the session so it survives across resume (#2).

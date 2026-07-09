@@ -137,6 +137,22 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   const config = loadConfig(projectPath);
   const branch = buildBranchName(issue.number);
 
+  // Remember the branch we started on so we can restore it on any failure path
+  // (leaving the user stranded on a half-finished work branch is surprising and
+  // blocks a clean retry). Empty if we're in a detached HEAD / can't determine it.
+  const originalBranch = (() => {
+    const r = run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+    const name = r.code === 0 ? r.stdout.trim() : "";
+    return name && name !== "HEAD" ? name : "";
+  })();
+  // Restore the starting branch and delete the (freshly-created) work branch.
+  // Best-effort: never overrides the primary failure being reported.
+  const cleanupWorkBranch = (): void => {
+    if (!originalBranch) return;
+    run("git", ["checkout", "--force", originalBranch]);
+    run("git", ["branch", "-D", branch]);
+  };
+
   // 2. Create the work branch.
   const branchResult = run("git", buildBranchArgs(branch));
   if (branchResult.code !== 0) {
@@ -149,18 +165,30 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
 
   // 3. Run the agent HEADLESS to fix the issue (edit mode, acceptEdits, budget).
   console.log("  running the agent to fix the issue…\n");
-  await runTaskCommand(buildTaskPrompt(issue), {
+  const completed = await runTaskCommand(buildTaskPrompt(issue), {
     mode: "edit",
     permissionMode: "acceptEdits",
     maxCostUsd: opts.maxCost,
     model: opts.model,
   });
 
+  // The agent run did NOT complete (errored, hit the --max-cost budget mid-fix,
+  // was cancelled, or a guard rejected it). Any files it touched are likely a
+  // half-finished change — do NOT commit/push/PR it. Restore the branch first.
+  if (!completed) {
+    cleanupWorkBranch();
+    fail("the agent run did not complete — not committing or opening a PR", {
+      hint: "inspect the run above (it may have hit --max-cost); raise the budget or retry",
+    });
+    return;
+  }
+
   // Nothing changed? There is nothing to commit / PR.
   const status = run("git", ["status", "--porcelain"]);
   if (status.code === 0 && status.stdout.trim() === "") {
+    cleanupWorkBranch();
     fail("the agent made no changes — nothing to commit or open a PR for", {
-      hint: `inspect the run, then remove the empty branch: git checkout - && git branch -D ${branch}`,
+      hint: "inspect the run; the work branch was removed and your original branch restored",
     });
     return;
   }

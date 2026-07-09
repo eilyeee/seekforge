@@ -182,7 +182,11 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     // its interior newlines are normalized to that same terminator so the block
     // itself is internally consistent.
     const blockEol = termAfter(region.endLineExclusive - 1);
-    const newBlock = blockEol === "\r\n" ? edit.newString.replace(/\r?\n/g, "\r\n") : edit.newString;
+    // Normalize the inserted block to the block's terminator in BOTH directions:
+    // a CRLF block gets CRLF, and a bare-LF block gets LF — the latter strips any
+    // stray "\r" the model emitted (echoed CRLF) so an LF file stays pure LF.
+    const newBlock =
+      blockEol === "\r\n" ? edit.newString.replace(/\r?\n/g, "\r\n") : edit.newString.replace(/\r\n/g, "\n");
     out.push(newBlock + blockEol);
     for (let k = region.endLineExclusive; k < lines.length; k++) out.push(content(k) + termAfter(k));
     next = out.join("");

@@ -4,6 +4,7 @@ import { lspTools } from "../../src/tools/builtins/lsp.js";
 import {
   encodeLspMessage,
   parseLspMessages,
+  MAX_CONTENT_LENGTH,
   commandExistsOnPath,
   resolveServerCommand,
   severityLabel,
@@ -71,6 +72,15 @@ describe("lsp wire framing (pure)", () => {
     const good = { jsonrpc: "2.0", id: 9, result: "ok" };
     const buf = Buffer.concat([Buffer.from("Garbage-Header: nope\r\n\r\n"), encodeLspMessage(good)]);
     const { messages, rest } = parseLspMessages(buf);
+    expect(messages).toEqual([good]);
+    expect(rest.length).toBe(0);
+  });
+
+  it("drops a frame with an absurd Content-Length instead of buffering forever", () => {
+    const good = { jsonrpc: "2.0", id: 1, result: "ok" };
+    const evil = Buffer.from(`Content-Length: ${MAX_CONTENT_LENGTH + 1}\r\n\r\n`, "ascii");
+    // The oversized header is skipped (resync); the following valid message parses.
+    const { messages, rest } = parseLspMessages(Buffer.concat([evil, encodeLspMessage(good)]));
     expect(messages).toEqual([good]);
     expect(rest.length).toBe(0);
   });

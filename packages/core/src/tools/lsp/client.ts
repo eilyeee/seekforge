@@ -49,6 +49,13 @@ export type ParseResult = {
  *   - a MALFORMED header block (no `Content-Length`) → skipped past to resync,
  *     so one bad frame cannot wedge the stream forever.
  */
+/**
+ * Upper bound on a single message body. A well-behaved server never approaches
+ * this; a garbage/malicious `Content-Length` (or one that never completes) would
+ * otherwise grow the receive buffer without bound and OOM the process.
+ */
+export const MAX_CONTENT_LENGTH = 64 * 1024 * 1024;
+
 export function parseLspMessages(buffer: Buffer): ParseResult {
   const messages: unknown[] = [];
   let buf = buffer;
@@ -63,6 +70,12 @@ export function parseLspMessages(buffer: Buffer): ParseResult {
       continue;
     }
     const length = Number(match[1]);
+    if (!Number.isInteger(length) || length < 0 || length > MAX_CONTENT_LENGTH) {
+      // Absurd/garbage Content-Length: drop this frame and resync rather than
+      // wait forever for a body that will never (sanely) arrive.
+      buf = buf.subarray(sep + 4);
+      continue;
+    }
     const bodyStart = sep + 4;
     if (buf.length < bodyStart + length) break; // body still arriving — wait.
     const body = buf.subarray(bodyStart, bodyStart + length).toString("utf8");
@@ -224,12 +237,24 @@ class LspSession {
   private readonly opened = new Map<string, number>(); // uri → document version
   private readonly diagnostics = new Map<string, LspDiagnostic[]>();
   private readonly diagWaiters = new Map<string, () => void>();
+  // uri → the document version we last asked diagnostics for, so a stale
+  // publishDiagnostics for an older version can be ignored.
+  private readonly diagExpected = new Map<string, number>();
   private disposed = false;
+  // Set once the child process errors or exits. A session in this state can
+  // never serve another request, so the registry must discard it (not reuse
+  // the cached-but-dead process, which would hang every call until timeout).
+  private ended = false;
 
   constructor(workspace: string, languageId: string, candidate: Candidate) {
     this.workspace = workspace;
     this.languageId = languageId;
     this.candidate = candidate;
+  }
+
+  /** False once the underlying server has exited/errored or been disposed. */
+  get usable(): boolean {
+    return !this.disposed && !this.ended;
   }
 
   /** Spawn the server and run the initialize/initialized handshake. */
@@ -244,8 +269,16 @@ class LspSession {
       throw new ToolError("lsp_unavailable", `Failed to start ${this.candidate.command}: ${errMsg(err)}`);
     }
     this.child = child;
-    child.on("error", (err) => this.fail(new ToolError("lsp_unavailable", `${this.candidate.command}: ${err.message}`)));
-    child.on("exit", () => this.fail(new ToolError("lsp_exited", `${this.candidate.command} exited`)));
+    // Don't let a lingering server keep the Node event loop alive on exit.
+    child.unref();
+    child.on("error", (err) => {
+      this.ended = true;
+      this.fail(new ToolError("lsp_unavailable", `${this.candidate.command}: ${err.message}`));
+    });
+    child.on("exit", () => {
+      this.ended = true;
+      this.fail(new ToolError("lsp_exited", `${this.candidate.command} exited`));
+    });
     child.stdout?.on("data", (chunk: Buffer) => this.onData(chunk));
     // Drain stderr so a chatty server cannot block on a full pipe.
     child.stderr?.on("data", () => {});
@@ -273,13 +306,22 @@ class LspSession {
 
   private onData(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+    // A wedged/garbage stream (e.g. a header that never terminates) would grow
+    // this buffer unbounded. Abort the session rather than risk OOM.
+    if (this.buffer.length > MAX_CONTENT_LENGTH * 2) {
+      this.buffer = Buffer.alloc(0);
+      this.ended = true;
+      this.fail(new ToolError("lsp_error", `${this.candidate.command} sent an oversized/garbled stream`));
+      void this.dispose();
+      return;
+    }
     const { messages, rest } = parseLspMessages(this.buffer);
     this.buffer = rest;
     for (const msg of messages) this.dispatch(msg as Record<string, unknown>);
   }
 
   private dispatch(msg: Record<string, unknown>): void {
-    // Response to one of our requests.
+    // Response to one of our requests. Our ids are always numbers (nextId++).
     if (typeof msg.id === "number" && ("result" in msg || "error" in msg)) {
       const p = this.pending.get(msg.id);
       if (!p) return;
@@ -293,28 +335,44 @@ class LspSession {
       }
       return;
     }
-    // Server → client notifications: we only care about diagnostics.
+    // Server → client REQUEST (has both an id AND a method): must be answered or
+    // the server stalls. Per JSON-RPC the id may be a string OR a number — echo
+    // it back verbatim. `workspace/configuration` expects an array (one entry per
+    // requested item), not null, or strict servers error.
+    if (msg.id !== undefined && typeof msg.method === "string") {
+      let result: unknown = null;
+      if (msg.method === "workspace/configuration") {
+        const items = (msg.params as { items?: unknown[] } | undefined)?.items;
+        result = Array.isArray(items) ? items.map(() => ({})) : [];
+      }
+      this.send({ jsonrpc: "2.0", id: msg.id, result });
+      return;
+    }
+    // Server → client NOTIFICATION: we only care about diagnostics.
     if (msg.method === "textDocument/publishDiagnostics") {
-      const params = msg.params as { uri?: string; diagnostics?: LspDiagnostic[] } | undefined;
+      const params = msg.params as { uri?: string; version?: number; diagnostics?: LspDiagnostic[] } | undefined;
       if (params?.uri) {
+        const expected = this.diagExpected.get(params.uri);
+        // Ignore a publish for an OLDER document version than the one we asked
+        // about — it reflects pre-edit state and would answer the wrong question.
+        if (expected != null && params.version != null && params.version < expected) return;
         this.diagnostics.set(params.uri, params.diagnostics ?? []);
         const waiter = this.diagWaiters.get(params.uri);
-        if (waiter) {
-          this.diagWaiters.delete(params.uri);
-          waiter();
-        }
+        if (waiter) waiter(); // `done` (below) clears itself and diagExpected
       }
-    }
-    // Server → client requests (e.g. registerCapability) are acknowledged so the
-    // server does not stall waiting; we reply with a null result / empty ack.
-    if (typeof msg.id === "number" && typeof msg.method === "string") {
-      this.send({ jsonrpc: "2.0", id: msg.id, result: null });
     }
   }
 
-  private send(message: object): void {
-    if (!this.child?.stdin?.writable) return;
-    this.child.stdin.write(encodeLspMessage(message));
+  /** Write a framed message; returns false if the pipe is not writable. */
+  private send(message: object): boolean {
+    if (!this.child?.stdin?.writable) return false;
+    try {
+      this.child.stdin.write(encodeLspMessage(message));
+      return true;
+    } catch {
+      // EPIPE / closed pipe between the `writable` check and the write.
+      return false;
+    }
   }
 
   private notify(method: string, params: unknown): void {
@@ -322,7 +380,7 @@ class LspSession {
   }
 
   private request(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
-    if (this.disposed) return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
+    if (this.disposed || this.ended) return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -330,7 +388,13 @@ class LspSession {
         reject(new ToolError("lsp_timeout", `${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.send({ jsonrpc: "2.0", id, method, params });
+      // If the write can't go out (dead/closed pipe), fail NOW rather than
+      // leaving the caller to wait out the full timeout.
+      if (!this.send({ jsonrpc: "2.0", id, method, params })) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(new ToolError("lsp_exited", "language server is not accepting requests"));
+      }
     });
   }
 
@@ -369,10 +433,12 @@ class LspSession {
   async diagnosticsFor(absPath: string): Promise<LspDiagnostic[]> {
     const uri = pathToFileURL(absPath).toString();
     // Force a fresh diagnostics pass: clear any cached set, (re)open or bump the
-    // document version, then wait for the next publishDiagnostics for this uri.
+    // document version, then wait for the next publishDiagnostics for THIS
+    // version (older publishes are ignored in dispatch).
     this.diagnostics.delete(uri);
+    let version: number;
     if (this.opened.has(uri)) {
-      const version = (this.opened.get(uri) ?? 1) + 1;
+      version = (this.opened.get(uri) ?? 1) + 1;
       this.opened.set(uri, version);
       const text = fs.readFileSync(absPath, "utf8");
       this.notify("textDocument/didChange", {
@@ -380,18 +446,22 @@ class LspSession {
         contentChanges: [{ text }],
       });
     } else {
-      this.open(absPath);
+      this.open(absPath); // opens at version 1
+      version = 1;
     }
-    if (this.diagnostics.has(uri)) return this.diagnostics.get(uri) ?? [];
+    this.diagExpected.set(uri, version);
     return new Promise<LspDiagnostic[]>((resolve) => {
-      const timer = setTimeout(() => {
-        this.diagWaiters.delete(uri);
-        resolve(this.diagnostics.get(uri) ?? []);
-      }, DIAGNOSTICS_WAIT_MS);
-      this.diagWaiters.set(uri, () => {
+      const done = (): void => {
         clearTimeout(timer);
+        this.diagWaiters.delete(uri);
+        this.diagExpected.delete(uri);
         resolve(this.diagnostics.get(uri) ?? []);
-      });
+      };
+      const timer = setTimeout(done, DIAGNOSTICS_WAIT_MS);
+      this.diagWaiters.set(uri, done);
+      // A matching-version publish may have landed between the delete above and
+      // registering the waiter — settle immediately if so.
+      if (this.diagnostics.has(uri)) done();
     });
   }
 
@@ -418,6 +488,21 @@ class LspSession {
       } catch {
         // best-effort teardown
       }
+    }
+  }
+
+  /**
+   * Synchronous best-effort kill for the process-`exit` hook, where async
+   * teardown (dispose) cannot run to completion. Prevents orphaned servers.
+   */
+  killSync(): void {
+    this.disposed = true;
+    const c = this.child;
+    this.child = null;
+    try {
+      c?.kill("SIGKILL");
+    } catch {
+      // process already gone
     }
   }
 }
@@ -452,8 +537,10 @@ let exitHookInstalled = false;
 async function getSession(workspace: string, absPath: string): Promise<{ session: LspSession }> {
   const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable
   let session = sessions.get(languageId);
-  if (session && session.workspace !== workspace) {
-    // Workspace changed under us — replace the stale session.
+  if (session && (session.workspace !== workspace || !session.usable)) {
+    // Workspace changed under us, OR the cached server has exited/errored —
+    // either way discard the stale session so we don't reuse a dead process
+    // (which would hang every request until it times out).
     await session.dispose();
     sessions.delete(languageId);
     session = undefined;
@@ -493,7 +580,12 @@ function installExitHook(): void {
   process.once("beforeExit", close);
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
-  process.once("exit", close);
+  // `exit` cannot await async work, so kill children SYNCHRONOUSLY here or they
+  // leak as orphaned processes on a hard exit.
+  process.once("exit", () => {
+    for (const s of sessions.values()) s.killSync();
+    sessions.clear();
+  });
 }
 
 // ---------------------------------------------------------------------------

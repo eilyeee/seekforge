@@ -116,7 +116,14 @@ export async function ensureWorkspaceAuthorized(
   }
 }
 
-export async function runTaskCommand(task: string, opts: RunOptions): Promise<void> {
+/**
+ * Runs a headless agent task. Returns `true` iff the agent run COMPLETED
+ * successfully (a final report was produced); returns `false` on any guard
+ * failure, error, cancellation, or budget cutoff. Callers that gate a
+ * side effect on success (e.g. `resolve` committing/pushing) MUST check it —
+ * `process.exitCode` alone is not reliable for every early-return path.
+ */
+export async function runTaskCommand(task: string, opts: RunOptions): Promise<boolean> {
   const projectPath = process.cwd();
   let config: ReturnType<typeof loadConfig>;
   try {
@@ -125,7 +132,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     const msg = err instanceof Error ? err.message : String(err);
     const hint = (err as { hint?: string }).hint;
     fail(msg, hint ? { hint } : undefined);
-    return;
+    return false;
   }
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
@@ -138,14 +145,14 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     fail(t("err.reasonerNoToolCall"), {
       hint: t("err.reasonerHint"),
     });
-    return;
+    return false;
   }
 
   if (!config.apiKey) {
     fail(t("err.noApiKey"), {
       hint: t("err.noApiKeyHint2"),
     });
-    return;
+    return false;
   }
 
   // A hand-written config.maxCostUsd of the wrong type (e.g. the string "0.01")
@@ -156,13 +163,13 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     (typeof config.maxCostUsd !== "number" || !Number.isFinite(config.maxCostUsd))
   ) {
     fail(t("err.maxCostUsdNumber"), { hint: t("err.maxCostUsdNumberHint") });
-    return;
+    return false;
   }
 
   // Folder-access consent: SeekForge must be authorized for this directory once
   // (interactively, or via -y) before it reads/edits files here.
   if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine }))) {
-    return;
+    return false;
   }
 
   // Resolve which session (if any) to resume: explicit --resume wins over -c.
@@ -171,7 +178,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     const recent = listSessions(projectPath)[0];
     if (!recent) {
       fail(t("err.noPreviousSession"), { hint: t("err.noPreviousSessionHint") });
-      return;
+      return false;
     }
     resumeSessionId = recent.id;
   }
@@ -181,7 +188,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
     const meta = readSessionMeta(projectPath, resumeSessionId);
     if (!meta) {
       fail(t("err.sessionNotFound", { id: resumeSessionId }), { hint: t("err.sessionNotFoundHint") });
-      return;
+      return false;
     }
     mode = meta.mode; // a resumed session keeps its original ask/edit mode
   }
@@ -274,7 +281,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       fail(t("err.unknownPermissionMode", { mode: err.mode }), {
         hint: t("err.unknownPermissionModeHint"),
       });
-      return;
+      return false;
     }
     throw err;
   }
@@ -290,7 +297,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       fail(t("err.unknownOutputStyle", { style: opts.outputStyle }), {
         hint: t("err.unknownOutputStyleHint"),
       });
-      return;
+      return false;
     }
   }
   const effectiveAppend =
@@ -307,7 +314,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       fileServers = (parsed.mcpServers as Record<string, unknown>) ?? parsed;
     } catch {
       fail(t("err.mcpConfigRead", { path: opts.mcpConfig }), { hint: t("err.mcpConfigReadHint") });
-      return;
+      return false;
     }
     const merged = opts.strictMcpConfig ? fileServers : { ...config.mcpServers, ...fileServers };
     mcpConfigForRun = { ...config, mcpServers: merged as typeof config.mcpServers };
@@ -432,11 +439,11 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       }
       if (turns === 0) {
         fail(t("err.streamJsonNoTurns"));
-        return;
+        return false;
       }
       emitResult(sid);
       if (!lastCompleted) process.exitCode = 1;
-      return;
+      return lastCompleted;
     }
 
     // Plan mode requires interactive confirmation, so only the human text
@@ -445,7 +452,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       const planRun = await runOnce({ task: expand(task), mode: "ask", plan: true });
       if (!planRun.completed || !planRun.sessionId) {
         process.exitCode = 1;
-        return;
+        return false;
       }
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       let answer: string;
@@ -456,7 +463,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
       }
       if (answer !== "y") {
         console.log(t("render.planKept", { sessionId: planRun.sessionId ?? "" }));
-        return;
+        return false;
       }
       const execRun = await runOnce({
         task: "Execute the plan you produced above, step by step. Make the changes and run the verification.",
@@ -464,12 +471,13 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<vo
         resumeSessionId: planRun.sessionId,
       });
       if (!execRun.completed) process.exitCode = 1;
-      return;
+      return execRun.completed;
     }
 
     const run = await runOnce({ task: expand(task), mode, resumeSessionId });
     emitResult(run.sessionId);
     if (!run.completed) process.exitCode = 1;
+    return run.completed;
   } finally {
     process.removeListener("SIGINT", onSigint);
     dispose();
