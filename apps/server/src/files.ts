@@ -49,21 +49,14 @@ export type FileList = { files: string[]; truncated: boolean };
 /**
  * BFS over the workspace (shallow files first — the likeliest @-targets),
  * returning workspace-relative paths with "/" separators. Skips
- * DEFAULT_IGNORE_DIRS members, dot-directories, and symlinks. `q` is a
- * case-insensitive substring filter on the relative path, applied while
- * scanning so deep matches are still found in large repos. `truncated` is
+ * DEFAULT_IGNORE_DIRS members, dot-directories, and symlinks. `truncated` is
  * true when the limit cut the scan short. Reads directories asynchronously,
  * yielding to the event loop periodically so walking a large tree never
  * starves other requests.
  */
 const LIST_YIELD_EVERY = 50;
 
-export async function listWorkspaceFiles(
-  root: string,
-  q = "",
-  limit = FILE_LIST_LIMIT,
-): Promise<FileList> {
-  const needle = q.toLowerCase();
+async function walkWorkspaceFiles(root: string, limit: number): Promise<FileList> {
   const files: string[] = [];
   const queue: string[] = [""]; // workspace-relative directories
   let processed = 0;
@@ -84,13 +77,60 @@ export async function listWorkspaceFiles(
         if (DEFAULT_IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
         queue.push(childRel);
       } else if (entry.isFile()) {
-        if (needle !== "" && !childRel.toLowerCase().includes(needle)) continue;
         if (files.length >= limit) return { files, truncated: true };
         files.push(childRel);
       }
     }
   }
   return { files, truncated: false };
+}
+
+/** One cached (unfiltered) walk of a workspace root; `ts` = when it was taken. */
+type FilesCacheEntry = { ts: number; files: string[]; truncated: boolean };
+
+/**
+ * GET /api/files is called per keystroke of the @ file picker, and each call
+ * used to re-walk the whole tree. The UNFILTERED walk is memoized per
+ * workspace root for a short TTL; the `q` filter runs over the cached list.
+ * 3s absorbs a typing burst yet is short enough that newly created files show
+ * up almost immediately. searchWorkspaceContent reuses the same cache via
+ * listWorkspaceFiles.
+ */
+const FILES_CACHE_TTL_MS = 3_000;
+const filesCache = new Map<string, FilesCacheEntry>();
+
+/** Test hook: drops every cached walk (fixtures that create files mid-test). */
+export function clearFilesCacheForTests(): void {
+  filesCache.clear();
+}
+
+/**
+ * Ignore-aware file index of the workspace (see walkWorkspaceFiles for scan
+ * semantics), served from the per-root TTL cache. `q` is a case-insensitive
+ * substring filter on the relative path; `truncated` is true when either the
+ * underlying walk hit its cap or the filtered list was cut at `limit`.
+ */
+export async function listWorkspaceFiles(
+  root: string,
+  q = "",
+  limit = FILE_LIST_LIMIT,
+): Promise<FileList> {
+  let entry = filesCache.get(root);
+  if (!entry || Date.now() - entry.ts >= FILES_CACHE_TTL_MS) {
+    entry = { ts: Date.now(), ...(await walkWorkspaceFiles(root, FILE_LIST_LIMIT)) };
+    filesCache.set(root, entry);
+  }
+  // A truncated cache can't serve a limit beyond its own cap — re-walk without
+  // caching. (No current caller asks for more than FILE_LIST_LIMIT.)
+  if (limit > FILE_LIST_LIMIT && entry.truncated) {
+    return walkWorkspaceFiles(root, limit);
+  }
+  const needle = q.toLowerCase();
+  const matched =
+    needle === "" ? entry.files : entry.files.filter((f) => f.toLowerCase().includes(needle));
+  return matched.length > limit
+    ? { files: matched.slice(0, limit), truncated: true }
+    : { files: matched, truncated: entry.truncated };
 }
 
 /** `col`/`len` are the 0-based match offset and length within `text`. */
@@ -136,6 +176,8 @@ export async function searchWorkspaceContent(
   } catch {
     return { hits: [], truncated: false, error: "invalid regex" };
   }
+  // Served from the per-root TTL cache (listWorkspaceFiles) — a burst of
+  // searches shares one walk with the @ file picker.
   const { files, truncated: listTruncated } = await listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
   const hits: SearchHit[] = [];
   const deadline = Date.now() + SEARCH_BUDGET_MS;

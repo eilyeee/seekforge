@@ -32,6 +32,14 @@ export interface AgentCore {
 
 export { createAgentCore, createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 export {
+  buildAgentCoreDeps,
+  buildProvider,
+  type AgentCoreDepsCommon,
+  type BuildAgentCoreDepsExtras,
+  type BuildAgentCoreDepsInput,
+  type ProviderBuildInput,
+} from "./deps-factory.js";
+export {
   runAutoLoop,
   type LoopOptions,
   type LoopResult,

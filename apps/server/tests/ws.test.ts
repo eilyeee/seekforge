@@ -76,11 +76,10 @@ describe("start -> events -> idle", () => {
       sessionId: "fake-1",
       event: { type: "session.created", sessionId: "fake-1" },
     });
+    // Deltas are coalesced server-side: "hel" + "lo" arrive as ONE model.delta
+    // frame whose chunk is the concatenation (flushed before model.message).
     await rx.waitFor(
-      (f) => f.type === "event" && (f.event as { type: string; chunk?: string }).chunk === "hel",
-    );
-    await rx.waitFor(
-      (f) => f.type === "event" && (f.event as { type: string; chunk?: string }).chunk === "lo",
+      (f) => f.type === "event" && (f.event as { type: string; chunk?: string }).chunk === "hello",
     );
     await rx.waitFor((f) => f.type === "event" && (f.event as { type: string }).type === "model.message");
     const completed = await rx.waitFor(
@@ -100,7 +99,7 @@ describe("start -> events -> idle", () => {
     const delta = rx.frames.find(
       (f) => f.type === "event" && (f.event as { type: string }).type === "model.delta",
     );
-    expect(delta).toMatchObject({ sessionId: "fake-1", event: { type: "model.delta", chunk: "hel" } });
+    expect(delta).toMatchObject({ sessionId: "fake-1", event: { type: "model.delta", chunk: "hello" } });
   });
 
   it("send resumes an existing session with its original mode", async () => {
@@ -158,8 +157,10 @@ describe("reasoning + new event forwarding", () => {
     await rx.waitFor((f) => f.type === "idle");
 
     const events = rx.frames.filter((f) => f.type === "event").map((f) => f.event);
-    expect(events).toContainEqual({ type: "reasoning.delta", chunk: "hmm " });
-    expect(events).toContainEqual({ type: "reasoning.delta", chunk: "ok" });
+    // Same-kind deltas are coalesced into one frame ("hmm " + "ok"); the
+    // model.delta that follows forces the reasoning buffer to flush first.
+    expect(events).toContainEqual({ type: "reasoning.delta", chunk: "hmm ok" });
+    expect(events).toContainEqual({ type: "model.delta", chunk: "answer" });
     // Reasoning deltas arrive before the model delta (callback order preserved).
     const reasoningIdx = events.findIndex((e) => (e as { type: string }).type === "reasoning.delta");
     const modelIdx = events.findIndex((e) => (e as { type: string }).type === "model.delta");
@@ -168,6 +169,31 @@ describe("reasoning + new event forwarding", () => {
     // The new AgentEvents pass through unchanged.
     expect(events).toContainEqual({ type: "command.output", stream: "stdout", chunk: "line 1\n" });
     expect(events).toContainEqual({ type: "context.microcompacted", clearedResults: 3 });
+  });
+
+  it("coalesces a same-kind token burst into one frame and flushes on the timer", async () => {
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "co-1" };
+        opts.onModelDelta?.("a");
+        opts.onModelDelta?.("b");
+        // Wait well past DELTA_FLUSH_MS so "ab" flushes on the timer (there is
+        // no intervening structured event to force it out).
+        await new Promise((r) => setTimeout(r, 100));
+        opts.onModelDelta?.("c");
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "burst", mode: "ask", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+
+    const chunks = rx.frames
+      .filter((f) => f.type === "event" && (f.event as { type: string }).type === "model.delta")
+      .map((f) => (f.event as { chunk: string }).chunk);
+    // "a"+"b" coalesce (timer flush); "c" flushes with session.completed.
+    expect(chunks).toEqual(["ab", "c"]);
   });
 
   it("forwards provider.retry events verbatim (generic forwarder)", async () => {

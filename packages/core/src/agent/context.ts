@@ -6,9 +6,19 @@ import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
  * subword tokenizers: CJK Unified Ideographs (incl. Extension A), Hiragana,
  * Katakana, and Hangul syllables. These cover the bulk of Chinese/Japanese/
  * Korean text; we deliberately keep the set small and readable rather than
- * exhaustive (e.g. rare extension planes aren't worth the regex bloat).
+ * exhaustive (e.g. rare extension planes aren't worth the bloat). All four
+ * ranges are BMP, so a charCodeAt test is exact — surrogate halves
+ * (0xD800–0xDFFF) fall outside every range, so astral characters simply
+ * count as non-CJK, same as under the previous regex.
  */
-const CJK_REGEX = /[぀-ヿ㐀-䶿一-鿿가-힯]/gu;
+function isCjkCharCode(c: number): boolean {
+  return (
+    (c >= 0x3040 && c <= 0x30ff) || // Hiragana + Katakana
+    (c >= 0x3400 && c <= 0x4dbf) || // CJK Unified Ideographs Extension A
+    (c >= 0x4e00 && c <= 0x9fff) || // CJK Unified Ideographs
+    (c >= 0xac00 && c <= 0xd7af) // Hangul syllables
+  );
+}
 
 /**
  * Estimate token count — an HONEST heuristic, NOT a real tokenizer. DeepSeek's
@@ -20,25 +30,50 @@ const CJK_REGEX = /[぀-ヿ㐀-䶿一-鿿가-힯]/gu;
  * token apiece and the remaining (mostly-ASCII / code) characters at the old
  * ~4-chars-per-token rate: `cjkCount + ceil(nonCjkLen / 4)`.
  *
+ * Counted with a code-unit loop rather than `.match()` — match() allocates an
+ * array of every CJK character it finds, which on large histories is pure
+ * garbage-collector pressure for a number we only ever count.
+ *
  * Pure and monotonic: every extra character adds either 1 (CJK) or ≥0 to the
  * non-CJK bucket, so more text never lowers the estimate.
  */
 export function estimateTokens(text: string): number {
-  const cjkCount = (text.match(CJK_REGEX) ?? []).length;
+  let cjkCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (isCjkCharCode(text.charCodeAt(i))) cjkCount++;
+  }
   const nonCjkLength = text.length - cjkCount;
   return cjkCount + Math.ceil(nonCjkLength / 4);
 }
 
 const PER_MESSAGE_OVERHEAD = 8;
 
+/**
+ * Per-message estimate cache. The loop calls estimateMessagesTokens on the
+ * FULL history several times per turn (budget check, post-compaction check,
+ * usage snapshot), so without this every turn re-scans megabytes of stable
+ * text. Keyed on the message OBJECT: safe because ChatMessage instances are
+ * treated as immutable everywhere in core — every content rewrite
+ * (clearOldToolResults, shrinkToolResultsToFit, the loop's system-prompt
+ * refresh) REPLACES the object via spread rather than mutating it, so a stale
+ * entry cannot exist, and a WeakMap lets dropped histories collect naturally.
+ */
+const messageTokensCache = new WeakMap<ChatMessage, number>();
+
+function estimateMessageTokens(m: ChatMessage): number {
+  const cached = messageTokensCache.get(m);
+  if (cached !== undefined) return cached;
+  let total = PER_MESSAGE_OVERHEAD + estimateTokens(m.content);
+  if (m.toolCalls) {
+    for (const tc of m.toolCalls) total += estimateTokens(tc.argumentsJson) + 4;
+  }
+  messageTokensCache.set(m, total);
+  return total;
+}
+
 export function estimateMessagesTokens(messages: ChatMessage[]): number {
   let total = 0;
-  for (const m of messages) {
-    total += PER_MESSAGE_OVERHEAD + estimateTokens(m.content);
-    if (m.toolCalls) {
-      for (const tc of m.toolCalls) total += estimateTokens(tc.argumentsJson) + 4;
-    }
-  }
+  for (const m of messages) total += estimateMessageTokens(m);
   return total;
 }
 
@@ -244,7 +279,11 @@ const TOOL_SHRINK_MARKER = "\n…[tool output truncated to fit context]…\n";
  * conversation already fits or nothing can be shrunk (caller then proceeds).
  */
 export function shrinkToolResultsToFit(messages: ChatMessage[], budgetTokens: number): CompactionResult | null {
-  if (estimateMessagesTokens(messages) <= budgetTokens) return null;
+  // Running total instead of re-estimating the whole history per iteration:
+  // only the shrunk message's content term changes, so the total is adjusted
+  // by exactly that delta (per-message estimates are independent sums).
+  let total = estimateMessagesTokens(messages);
+  if (total <= budgetTokens) return null;
   const out = messages.map((m) => ({ ...m }));
   // Largest tool results first — shrinking the biggest recovers the most.
   const toolOrder = out
@@ -257,10 +296,12 @@ export function shrinkToolResultsToFit(messages: ChatMessage[], budgetTokens: nu
   const minShrinkable = 2 * half + TOOL_SHRINK_MARKER.length;
   let shrunk = 0;
   for (const { i } of toolOrder) {
-    if (estimateMessagesTokens(out) <= budgetTokens) break;
+    if (total <= budgetTokens) break;
     const content = out[i]!.content;
     if (content.length <= minShrinkable) continue;
-    out[i] = { ...out[i]!, content: content.slice(0, half) + TOOL_SHRINK_MARKER + content.slice(-half) };
+    const shrunkContent = content.slice(0, half) + TOOL_SHRINK_MARKER + content.slice(-half);
+    out[i] = { ...out[i]!, content: shrunkContent };
+    total += estimateTokens(shrunkContent) - estimateTokens(content);
     shrunk++;
   }
   if (shrunk === 0) return null;

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
+import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
 
 export type CliConfig = {
   apiKey?: string;
@@ -136,13 +137,9 @@ function isPlainObject(v: unknown): boolean {
 }
 
 function readJson(path: string): CliConfig {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    // JSON.parse succeeds for null/true/42/"x"; spreading those downstream throws.
-    return isPlainObject(parsed) ? (parsed as CliConfig) : {};
-  } catch {
-    return {};
-  }
+  // requireObject: JSON.parse succeeds for null/true/42/"x"; spreading those
+  // downstream throws. (The TUI/server layers historically skip this guard.)
+  return readJsonConfigLayer<CliConfig>(path, { requireObject: true });
 }
 
 /**
@@ -314,39 +311,14 @@ function resolveProfile(
     });
   }
 
-  const mcpServers: Record<string, McpServerConfig> = {};
-  const permissionRules: PermissionRule[] = [];
-  const hooks: HookConfig = {};
-  const stages = [
-    "preToolUse",
-    "postToolUse",
-    "sessionStart",
-    "userPromptSubmit",
-    "preCompact",
-    "stop",
-    "subagentStop",
-    "notification",
-    "sessionEnd",
-  ] as const;
-  let merged: Partial<CliConfig> = {};
-  for (const src of present) {
-    Object.assign(mcpServers, src.mcpServers);
-    // higher-precedence sources prepend so their rules win first-match.
-    permissionRules.unshift(...(src.permissionRules ?? []));
-    for (const stage of stages) {
-      const existing = hooks[stage] ?? [];
-      if (src.hooks?.[stage]) hooks[stage] = [...existing, ...src.hooks[stage]];
-    }
-    merged = { ...merged, ...src };
-  }
+  // Same merge algebra as the base layers (scalars later-wins, mcpServers
+  // per-name, permissionRules higher-first, hooks per-stage lower-first) —
+  // env overrides OFF: a profile overlay must stay env-free; loadConfig
+  // applies them once at the end.
+  const merged = mergeConfigLayers<Partial<CliConfig>>(present, { envOverrides: false });
   // `profiles` must not nest inside a profile overlay.
   delete merged.profiles;
-  return {
-    ...merged,
-    ...(permissionRules.length > 0 ? { permissionRules } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-  };
+  return merged;
 }
 
 /**
@@ -373,66 +345,14 @@ export function loadConfig(projectPath: string, settingsPath?: string, profile?:
   const profileName = profile ?? process.env["SEEKFORGE_PROFILE"] ?? undefined;
   const prof = resolveProfile(profileName, { global, project, local }) ?? {};
 
-  // mcpServers merges per server name (later wins):
-  //   settings > profile > local > project > global.
-  const mcpServers = {
-    ...global.mcpServers,
-    ...project.mcpServers,
-    ...local.mcpServers,
-    ...prof.mcpServers,
-    ...settings.mcpServers,
-  };
-  // permissionRules concatenates settings-then-profile-then-local-then-project-then-global:
-  // first match wins, so settings rules take highest precedence among file layers.
-  const permissionRules = [
-    ...(settings.permissionRules ?? []),
-    ...(prof.permissionRules ?? []),
-    ...(local.permissionRules ?? []),
-    ...(project.permissionRules ?? []),
-    ...(global.permissionRules ?? []),
-  ];
-  // hooks concatenate per stage: global, then project, then local, then profile, then settings.
-  const hooks: HookConfig = {};
-  for (const stage of [
-    "preToolUse",
-    "postToolUse",
-    "sessionStart",
-    "userPromptSubmit",
-    "preCompact",
-    "stop",
-    "subagentStop",
-    "notification",
-    "sessionEnd",
-  ] as const) {
-    const merged = [
-      ...(global.hooks?.[stage] ?? []),
-      ...(project.hooks?.[stage] ?? []),
-      ...(local.hooks?.[stage] ?? []),
-      ...(prof.hooks?.[stage] ?? []),
-      ...(settings.hooks?.[stage] ?? []),
-    ];
-    if (merged.length > 0) hooks[stage] = merged;
-  }
-  // Provider-aware env key selection: pick the key for the merged provider so a
-  // DeepSeek user who happens to export ARK_API_KEY for another tool never gets
-  // the Ark key sent to the DeepSeek endpoint (and vice versa). Default provider
-  // is "deepseek"; higher layers win, matching the scalar merge below.
-  const mergedProvider = (
-    settings.provider ?? prof.provider ?? local.provider ?? project.provider ?? global.provider ?? "deepseek"
-  ).toLowerCase();
-  const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
-  const result: CliConfig = {
-    ...global,
-    ...project,
-    ...local,
-    ...prof,
-    ...settings,
-    ...(permissionRules.length > 0 ? { permissionRules } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    ...(envKey ? { apiKey: envKey } : {}),
-    ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
-  };
+  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
+  // later-wins; mcpServers merge per server name (settings > profile > local >
+  // project > global); permissionRules concatenate higher-precedence first
+  // (first match wins, so settings rules take highest precedence among file
+  // layers); hooks concatenate per stage lower-precedence first (every hook
+  // runs); then the provider-aware env API key + SEEKFORGE_RUNTIME_BIN
+  // overrides land on top.
+  const result = mergeConfigLayers<CliConfig>([global, project, local, prof, settings]);
   // `profiles` is a selection mechanism, not effective config — never leak it.
   delete result.profiles;
   return result;

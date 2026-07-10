@@ -1,7 +1,7 @@
 import { loadAgentDefinitions, type BackgroundTasks, type ToolSpec } from "@seekforge/core";
 import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
-import { expandFileRefs } from "../file-refs.js";
+import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { createTuiAgent } from "./factory.js";
 import { createDiffCapture } from "../diff-capture.js";
 import { createBufferedDispatch } from "../delta-buffer.js";

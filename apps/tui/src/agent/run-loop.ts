@@ -6,7 +6,7 @@ import {
   type ToolSpec,
 } from "@seekforge/core";
 import type { TuiConfig } from "../config.js";
-import { expandFileRefs } from "../file-refs.js";
+import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { buildTuiDeps } from "./factory.js";
 
 export type RunLoopDeps = {

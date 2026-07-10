@@ -1,6 +1,18 @@
+/**
+ * @path task-reference expansion — the single implementation of what used to
+ * be character-identical copies in apps/cli/src/file-refs.ts and
+ * apps/tui/src/file-refs.ts (both received the same workspace-escape security
+ * fix in parallel; consolidating prevents the next fix from having to land
+ * twice).
+ *
+ * NODE-ONLY: reads the filesystem, so it lives behind the "./file-refs"
+ * subpath export and is NOT re-exported from index.ts (the package root must
+ * stay browser-safe for the desktop bundle).
+ */
+
 import { readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
-import { isSensitiveBasename } from "@seekforge/core";
+import { isSensitiveBasename } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
@@ -8,8 +20,7 @@ const MAX_TOTAL_CHARS = 60_000;
 /**
  * Expands @path tokens in the task: each existing, readable, non-sensitive
  * file inside the workspace is appended to the task as a referenced section.
- * Unknown tokens (e.g. emails, handles) are left untouched. Ported from the
- * CLI so the TUI does not depend on apps/cli.
+ * Unknown tokens (e.g. emails, handles) are left untouched.
  */
 export function expandFileRefs(task: string, workspace: string): string {
   const tokens = [...new Set(task.match(/@[A-Za-z0-9_\-./]+/g) ?? [])];

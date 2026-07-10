@@ -13,9 +13,18 @@ import type { RawData, WebSocket } from "ws";
 import { detectThinkingKeyword, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
+import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
+
+/**
+ * Model/reasoning delta chunks are buffered per session and flushed as one
+ * concatenated frame at most this often, instead of one JSON.stringify +
+ * ws.send frame per token. 25ms is imperceptible to a reader but collapses a
+ * fast token stream into ~40 frames/s.
+ */
+export const DELTA_FLUSH_MS = 25;
 
 /** Answer reported to the core when the user never answers an ask_user question. */
 export const DECLINED_ANSWER = "(the user declined to answer)";
@@ -108,6 +117,50 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   };
   const fail = (code: string, message: string): void => send({ type: "error", code, message });
 
+  // --- delta coalescing (see DELTA_FLUSH_MS) -------------------------------
+  // At most one delta kind is buffered at a time; a coalesced frame is just a
+  // normal model.delta/reasoning.delta event whose chunk is the concatenation,
+  // so the frame schema is unchanged. CRITICAL ordering rule: anything that is
+  // not a delta of the same kind (a structured event, a permission/question
+  // request, a delta of the other kind) flushes the buffer FIRST, so clients
+  // observe the exact event order the core produced.
+  let pendingDeltaType: "model.delta" | "reasoning.delta" | undefined;
+  let pendingDeltaChunk = "";
+  let pendingDeltaSessionId = "";
+  let deltaTimer: NodeJS.Timeout | undefined;
+
+  const clearDeltaTimer = (): void => {
+    if (deltaTimer !== undefined) {
+      clearTimeout(deltaTimer);
+      deltaTimer = undefined;
+    }
+  };
+
+  /** Sends the buffered delta (if any) as one frame; always clears the timer. */
+  const flushDeltas = (): void => {
+    clearDeltaTimer();
+    if (pendingDeltaType === undefined) return;
+    const event = { type: pendingDeltaType, chunk: pendingDeltaChunk };
+    pendingDeltaType = undefined;
+    pendingDeltaChunk = "";
+    send({ type: "event", sessionId: pendingDeltaSessionId, event });
+  };
+
+  const bufferDelta = (
+    type: "model.delta" | "reasoning.delta",
+    sessionId: string,
+    chunk: string,
+  ): void => {
+    // A kind or session switch flushes first, preserving cross-kind order.
+    if (pendingDeltaType !== undefined && (pendingDeltaType !== type || pendingDeltaSessionId !== sessionId)) {
+      flushDeltas();
+    }
+    pendingDeltaType = type;
+    pendingDeltaSessionId = sessionId;
+    pendingDeltaChunk += chunk;
+    if (deltaTimer === undefined) deltaTimer = setTimeout(flushDeltas, DELTA_FLUSH_MS);
+  };
+
   const denyAllPending = (): void => {
     for (const settle of [...pending.values()]) settle(false);
     for (const settle of [...pendingQuestions.values()]) settle(DECLINED_ANSWER);
@@ -128,6 +181,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       };
       timer = setTimeout(() => settle(false), timeoutMs);
       pending.set(requestId, settle);
+      flushDeltas(); // buffered text must render before the permission prompt
       send({ type: "permission.request", requestId, request });
     });
 
@@ -147,6 +201,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       };
       timer = setTimeout(() => settle(DECLINED_ANSWER), timeoutMs);
       pendingQuestions.set(id, settle);
+      flushDeltas(); // buffered text must render before the question prompt
       send({ type: "question.request", id, question: q.question, options: q.options });
     });
 
@@ -169,8 +224,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         workspace: input.workspace,
         confirm,
         askUser,
-        onModelDelta: (chunk) => send({ type: "event", sessionId, event: { type: "model.delta", chunk } }),
-        onReasoningDelta: (chunk) => send({ type: "event", sessionId, event: { type: "reasoning.delta", chunk } }),
+        onModelDelta: (chunk) => bufferDelta("model.delta", sessionId, chunk),
+        onReasoningDelta: (chunk) => bufferDelta("reasoning.delta", sessionId, chunk),
         extractMemory: input.mode === "edit",
         ...(overrides ? { overrides } : {}),
       });
@@ -195,14 +250,17 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         signal: controller.signal,
       })) {
         if (event.type === "session.created") sessionId = event.sessionId;
+        flushDeltas(); // buffered deltas precede every structured event
         send({ type: "event", sessionId, event });
       }
     } catch (err) {
       // The core reports failures as session.failed events; this is a guard
       // against a misbehaving (e.g. injected) agent implementation.
+      flushDeltas(); // buffered deltas precede the error frame
       fail("agent_error", err instanceof Error ? err.message : String(err));
     } finally {
       handle?.dispose();
+      flushDeltas(); // don't lose a trailing chunk; also clears the timer
       running = false;
       controller = undefined;
       denyAllPending();
@@ -323,10 +381,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if ("error" in parsed) return fail("bad_frame", `send.${parsed.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
-        const meta =
-          /[/\\]/.test(sessionId) || sessionId.includes("..")
-            ? undefined
-            : readSessionMeta(workspace.path, sessionId);
+        // isSafeId keeps a traversal-shaped id from ever reaching the session
+        // store (same predicate the REST session routes use).
+        const meta = isSafeId(sessionId) ? readSessionMeta(workspace.path, sessionId) : undefined;
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute). Approvals default to interactive
@@ -422,6 +479,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
   ws.on("close", () => {
     closed = true;
+    // Drop (not flush) any buffered delta — the socket is gone — and clear the
+    // timer so nothing fires after close.
+    clearDeltaTimer();
+    pendingDeltaType = undefined;
+    pendingDeltaChunk = "";
     denyAllPending();
     controller?.abort();
   });

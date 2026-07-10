@@ -1,13 +1,16 @@
 import {
   appendFileSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmdirSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
@@ -21,13 +24,72 @@ export type SessionTrace = {
   summary: (markdown: string) => void;
 };
 
+/*
+ * Persistent append fds for the trace's JSONL files. appendFileSync opens and
+ * closes the file on EVERY call — three syscalls plus a path resolution per
+ * line, which at events.jsonl rates (one line per AgentEvent) dominates the
+ * trace cost. Instead each file gets ONE fd opened lazily in append mode and
+ * every line is a single writeSync to it.
+ *
+ * Chosen over an fs.WriteStream deliberately: writeSync keeps the EXACT
+ * durability and visibility semantics of appendFileSync — writes are
+ * synchronous and write-through, so mid-session readers (loadSessionMessages
+ * on resume / manual /compact, `seekforge replay` from another process, the
+ * evolution scorer on tool-calls.jsonl) always see complete, current lines,
+ * and nothing can be lost in a process-local buffer on an abrupt exit. A
+ * WriteStream would need a dispose hook (SessionTrace has none, and the
+ * session-end path lives in loop.ts) or an exit-time flush that cannot be
+ * done synchronously.
+ *
+ * The cache is LRU-capped: a long-lived server creates many sessions over its
+ * lifetime and must not accumulate one fd per session forever. Evicted fds
+ * are closed (a later append simply reopens); all remaining fds are closed on
+ * process exit. O_APPEND makes concurrent writers to the same file safe.
+ */
+const APPEND_FD_MAX = 32;
+const appendFds = new Map<string, number>();
+let appendFdsExitHookInstalled = false;
+
+function appendLineSync(file: string, line: string): void {
+  let fd = appendFds.get(file);
+  if (fd !== undefined) {
+    appendFds.delete(file); // re-set below: Map insertion order is the LRU order
+  } else {
+    fd = openSync(file, "a");
+    if (!appendFdsExitHookInstalled) {
+      appendFdsExitHookInstalled = true;
+      process.on("exit", () => {
+        for (const openFd of appendFds.values()) {
+          try {
+            closeSync(openFd);
+          } catch {
+            // best-effort cleanup
+          }
+        }
+        appendFds.clear();
+      });
+    }
+    if (appendFds.size >= APPEND_FD_MAX) {
+      const oldest = appendFds.entries().next().value!;
+      appendFds.delete(oldest[0]);
+      try {
+        closeSync(oldest[1]);
+      } catch {
+        // best-effort eviction
+      }
+    }
+  }
+  appendFds.set(file, fd);
+  writeSync(fd, line);
+}
+
 /** JSONL session trace under <workspace>/.seekforge/sessions/<id>/. */
 export function createSessionTrace(workspace: string, sessionId: string): SessionTrace {
   const dir = join(workspace, ".seekforge", "sessions", sessionId);
   mkdirSync(dir, { recursive: true });
 
   const append = (file: string, value: unknown) => {
-    appendFileSync(join(dir, file), `${JSON.stringify({ ts: new Date().toISOString(), ...(value as object) })}\n`);
+    appendLineSync(join(dir, file), `${JSON.stringify({ ts: new Date().toISOString(), ...(value as object) })}\n`);
   };
 
   return {

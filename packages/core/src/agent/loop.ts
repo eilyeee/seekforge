@@ -54,7 +54,7 @@ import {
   shrinkToolResultsToFit,
 } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
-import { buildRelevantFiles, buildRepoOverview, scanRepo } from "./repo-map.js";
+import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepo } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
 import { classifyAgentError } from "./errors.js";
@@ -412,17 +412,25 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // walking the repo twice on every top-level run. undefined off the top
       // level (these hints are top-level only).
       const repoScan = depth === 0 ? scanRepo(input.projectPath) : undefined;
+      // …and ONE dependency graph shared the same way: each builder used to
+      // rebuild it internally (readFileSync + outline + identifier counts over
+      // up to 600 files — twice per run, i.e. twice per TUI/REPL turn). Lazy
+      // (a memoized thunk) so the builders' cheap early-outs (small repo,
+      // generic task) still skip the build entirely, exactly as before.
+      const repoGraph = repoScan ? lazyFileGraph(input.projectPath, repoScan) : undefined;
       // #1: a compact structural overview injected into the system prompt for
       // LARGE repos (top-level runs only), so the agent orients without grep-
       // crawling. undefined for small repos / non-local trees.
-      const repoOverview = repoScan ? buildRepoOverview(input.projectPath, undefined, repoScan) : undefined;
+      const repoOverview = repoScan
+        ? buildRepoOverview(input.projectPath, undefined, repoScan, repoGraph)
+        : undefined;
       // Task-relevant file shortlist (transparent retrieval): ranks files by
       // lexical match to THIS task, so the agent starts at the likely sites
       // instead of grep-crawling. Top-level runs only; undefined for small
       // trees / generic tasks / no clear match (see buildRelevantFiles).
       const relevantFiles =
         repoScan && deps.injectRelevantFiles !== false
-          ? buildRelevantFiles(input.projectPath, input.task, undefined, repoScan)
+          ? buildRelevantFiles(input.projectPath, input.task, undefined, repoScan, repoGraph)
           : undefined;
 
       const startedAt = new Date().toISOString();

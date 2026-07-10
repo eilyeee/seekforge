@@ -8,12 +8,10 @@
 
 import { existsSync } from "node:fs";
 import {
+  buildAgentCoreDeps,
   createAgentCore,
-  createDeepSeekProvider,
   createDefaultDispatcher,
-  createRetryBus,
   createRuntimeClient,
-  resolveProviderConfig,
   runAutoLoop,
   type AgentCore,
   type AgentCoreDeps,
@@ -84,44 +82,33 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
   const thinking = opts.overrides?.thinking ?? config.thinking;
   const reasoningEffort = opts.overrides?.reasoningEffort ?? config.reasoningEffort;
 
-  // Retry bus: routes provider retries into this run's provider.retry events,
-  // forwarded to the client over the WS by the generic event forwarder.
-  const retryBus = createRetryBus();
-  const thinkingOpts = {
-    ...(thinking !== undefined ? { thinking } : {}),
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-  };
-  const provider = createDeepSeekProvider(
-    resolveProviderConfig({
+  // Shared skeleton (core buildAgentCoreDeps): retry bus (routes provider
+  // retries into this run's provider.retry events, forwarded to the client
+  // over the WS by the generic event forwarder) + provider with the resolved
+  // per-run thinking controls, the deepseek-reasoner providerForModel
+  // fallback (silent here — only the CLI warns), and the common config→deps
+  // conditional spread. Server-only on top: the WS confirm/askUser/
+  // onModelDelta bridges, and permissionRules/hooks spread ONLY when
+  // configured (a contract test asserts the keys are absent otherwise).
+  return {
+    ...buildAgentCoreDeps({
       provider: config.provider,
-      apiKey: config.apiKey ?? "",
+      apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       model,
-      onRetry: retryBus.onRetry,
-      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-      ...thinkingOpts,
+      thinking,
+      reasoningEffort,
+      modelPricing: config.modelPricing,
+      commandAllowlist: config.commandAllowlist,
+      sandbox: config.sandbox,
+      compaction: config.compaction,
+      planModel: config.planModel,
+      escalateOnFailure: config.escalateOnFailure,
+      memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
+      lintCommand: config.lintCommand,
+      autoLint: config.autoLint,
+      editFormat: config.editFormat,
     }),
-  );
-  return {
-    provider,
-    retryBus,
-    // Same key/endpoint, different model — used for plan runs + failure
-    // escalation (mirrors the CLI agent factory). deepseek-reasoner cannot
-    // drive the tool-call loop, so fall back to the default model for it.
-    providerForModel: (m) => {
-      if (m === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider(
-        resolveProviderConfig({
-          provider: config.provider,
-          apiKey: config.apiKey ?? "",
-          baseUrl: config.baseUrl,
-          model: m,
-          onRetry: retryBus.onRetry,
-          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-          ...thinkingOpts,
-        }),
-      );
-    },
     dispatcher: createDefaultDispatcher(),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
@@ -129,20 +116,8 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
     runtime,
-    commandAllowlist: config.commandAllowlist,
     ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
     ...(config.hooks ? { hooks: config.hooks } : {}),
-    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
-    ...(config.compaction ? { compaction: config.compaction } : {}),
-    ...(config.planModel ? { planModel: config.planModel } : {}),
-    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
-    ...(config.memoryAutoApproveConfidence !== undefined
-      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
-      : {}),
-    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
-      ? { lintCommand: config.lintCommand }
-      : {}),
-    ...(config.autoLint === false ? { autoLint: false } : {}),
   };
 }
 

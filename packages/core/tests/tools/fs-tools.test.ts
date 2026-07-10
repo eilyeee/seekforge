@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
+import { unifiedDiff } from "../../src/tools/builtins/fs.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 const dispatcher = createDefaultDispatcher();
@@ -325,5 +326,136 @@ describe("edit-review preview (write tools)", () => {
     expect(preview?.diff).toContain("more lines truncated");
     // Body capped at 400 lines + header(2) + marker; comfortably under 2000.
     expect(preview!.diff.split("\n").length).toBeLessThan(420);
+  });
+});
+
+describe("unifiedDiff prefix/suffix trimming (must stay byte-identical to the naive LCS)", () => {
+  /**
+   * The ORIGINAL untrimmed algorithm, verbatim — full (n+1)×(m+1) LCS table
+   * plus the same emit walk — kept inline as the reference oracle. Any output
+   * difference from the trimmed unifiedDiff is a regression.
+   */
+  function naiveUnifiedDiff(before: string | null, after: string, relPath: string): string {
+    const split = (text: string): string[] => {
+      if (text === "") return [];
+      const lines = text.split("\n");
+      if (lines[lines.length - 1] === "") lines.pop();
+      return lines;
+    };
+    const a = split(before ?? "");
+    const b = split(after);
+    const header = `--- a/${relPath}\n+++ b/${relPath}`;
+    const n = a.length;
+    const m = b.length;
+    const body: string[] = [];
+    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) {
+        body.push(` ${a[i]}`);
+        i++;
+        j++;
+      } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+        body.push(`-${a[i]}`);
+        i++;
+      } else {
+        body.push(`+${b[j]}`);
+        j++;
+      }
+    }
+    while (i < n) body.push(`-${a[i++]}`);
+    while (j < m) body.push(`+${b[j++]}`);
+    body.unshift(`@@ -${n > 0 ? 1 : 0},${n} +${m > 0 ? 1 : 0},${m} @@`);
+    // The MAX_PREVIEW_DIFF_LINES cap, verbatim, so long diffs compare equal too.
+    let lines = body;
+    if (lines.length > 400) {
+      const hidden = lines.length - 400;
+      lines = [...lines.slice(0, 400), `@@ … ${hidden} more lines truncated @@`];
+    }
+    return `${header}\n${lines.join("\n")}`;
+  }
+
+  const expectSame = (before: string | null, after: string): void => {
+    expect(unifiedDiff(before, after, "f.txt")).toBe(naiveUnifiedDiff(before, after, "f.txt"));
+  };
+
+  it("matches the naive diff for an edit at the very start", () => {
+    expectSame("first\nb\nc\nd\n", "FIRST\nb\nc\nd\n");
+  });
+
+  it("matches the naive diff for an edit at the very end", () => {
+    expectSame("a\nb\nc\nlast\n", "a\nb\nc\nLAST\n");
+  });
+
+  it("matches the naive diff for a pure append (before is a full prefix of after)", () => {
+    expectSame("a\nb\n", "a\nb\nc\nd\n");
+  });
+
+  it("matches the naive diff for a pure prepend and a pure truncation", () => {
+    expectSame("c\nd\n", "a\nb\nc\nd\n");
+    expectSame("a\nb\nc\nd\n", "a\nb\n");
+  });
+
+  it("matches the naive diff for creation, emptying, and identical content", () => {
+    expectSame(null, "a\nb\n");
+    expectSame("a\nb\n", "");
+    expectSame("a\nb\nc\n", "a\nb\nc\n");
+  });
+
+  it("matches the naive diff when a trimmed-suffix line equals a middle line (tie-break boundary)", () => {
+    // Adversarial case: naive "diff only the middle" would emit -x,+s,␣s here
+    // while the untrimmed walk emits -x,␣s,+s (it matches a's middle "s"
+    // against b's first line, across the trim boundary). The O(1) full-table
+    // accessor must reproduce the untrimmed walk exactly.
+    expectSame("x\ns\n", "s\ns\n");
+    expectSame("s\ns\n", "x\ns\n"); // mirrored
+    expectSame("p\nx\ns\ns\n", "p\ns\ns\ns\n"); // with a common prefix too
+  });
+
+  it("matches the naive diff on a large file with a tiny middle edit", () => {
+    const lines = Array.from({ length: 1200 }, (_, i) => `line-${i}`);
+    const before = `${lines.join("\n")}\n`;
+    const edited = [...lines];
+    edited[600] = "CHANGED";
+    expectSame(before, `${edited.join("\n")}\n`);
+  });
+
+  it("matches the naive diff on repetitive low-alphabet inputs (deterministic fuzz)", () => {
+    // Small alphabet + short lengths maximize ties and boundary matches — the
+    // exact conditions where a naive trim diverges. Deterministic LCG seed.
+    let seed = 42;
+    const rand = (bound: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % bound;
+    };
+    const alphabet = ["a", "b", "c"];
+    const doc = (): string => {
+      const len = rand(13);
+      return len === 0 ? "" : `${Array.from({ length: len }, () => alphabet[rand(3)]!).join("\n")}\n`;
+    };
+    for (let caseNo = 0; caseNo < 300; caseNo++) {
+      const before = doc();
+      const after = doc();
+      expect(unifiedDiff(before, after, "f.txt"), `case ${caseNo}: ${JSON.stringify({ before, after })}`).toBe(
+        naiveUnifiedDiff(before, after, "f.txt"),
+      );
+    }
+  });
+
+  it("keeps the del-all/add-all fallback for files over the 4000-line guard", () => {
+    const before = `${Array.from({ length: 4001 }, (_, i) => `l${i}`).join("\n")}\n`;
+    const after = `${Array.from({ length: 4001 }, (_, i) => (i === 7 ? "EDIT" : `l${i}`)).join("\n")}\n`;
+    const diff = unifiedDiff(before, after, "f.txt");
+    // header(2) + hunk(1); the preview cap appends a "@@ … truncated @@" marker.
+    const bodyLines = diff.split("\n").slice(3).filter((l) => !l.startsWith("@@"));
+    // Untrimmed behavior preserved: everything deleted then re-added, no context lines.
+    expect(bodyLines.length).toBeGreaterThan(0);
+    expect(bodyLines.every((l) => l.startsWith("-") || l.startsWith("+"))).toBe(true);
   });
 });

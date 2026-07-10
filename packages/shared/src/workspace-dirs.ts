@@ -1,12 +1,20 @@
-// Thin CLI reimplementation of the TUI's /add-dir expansion (the format
-// reference is apps/tui/src/workspace-dirs.ts). We do NOT import across apps;
-// the CLI only needs normalization + @-reference expansion (no file picker /
-// directory scan), so the scan helpers are omitted here.
+/**
+ * Extra read-only directory support (`/add-dir` in the TUI, `--add-dir` in the
+ * CLI) — the genuinely shared half of what used to be parallel copies in
+ * apps/tui/src/workspace-dirs.ts and apps/cli/src/workspace-dirs.ts:
+ * normalization of an extra-dir argument plus @-reference expansion against
+ * those dirs. App-specific extras stay in the apps (the TUI keeps its
+ * scanExtraDirs file-picker scan and formatExtraDirLines display helper).
+ *
+ * NODE-ONLY: reads the filesystem, so it lives behind the "./workspace-dirs"
+ * subpath export and is NOT re-exported from index.ts (the package root must
+ * stay browser-safe for the desktop bundle).
+ */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isSensitiveBasename } from "@seekforge/core";
+import { isSensitiveBasename } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
@@ -18,10 +26,11 @@ function isInside(child: string, parent: string): boolean {
 }
 
 /**
- * Normalizes an --add-dir argument: expands `~`, resolves relative paths
- * against `projectPath`, and requires an existing directory that is NOT inside
- * the project (the project is already covered by the regular @-expansion).
- * Returns null when any check fails; never throws.
+ * Normalizes an /add-dir (TUI) or --add-dir (CLI) argument: expands `~`,
+ * resolves relative paths against `projectPath`, and requires an existing
+ * directory that is NOT inside the project (the project itself is already
+ * covered by the regular workspace scan / @-expansion). Returns null when any
+ * check fails; never throws.
  */
 export function normalizeExtraDir(input: string, projectPath: string): string | null {
   const trimmed = input.trim();
@@ -41,10 +50,11 @@ export function normalizeExtraDir(input: string, projectPath: string): string | 
 
 /**
  * Expands @path tokens that resolve INSIDE one of the extra dirs, appending
- * each referenced file to the task (caps: 30k per file, 60k total; binary and
- * sensitive basenames skipped). Tokens outside every extra dir are left
- * untouched. Runs AFTER the workspace-level expandFileRefs (idempotent: tokens
- * it already consumed simply won't match files here).
+ * each referenced file to the task (same caps as file-refs.ts: 30k per file,
+ * 60k total; binary and sensitive basenames skipped). Tokens that resolve
+ * outside every extra dir are left untouched. Designed to run AFTER the
+ * workspace-level expandFileRefs — tokens it already consumed simply will not
+ * match files here, so the pass is idempotent.
  */
 export function expandExtraFileRefs(task: string, dirs: readonly string[]): string {
   if (dirs.length === 0) return task;

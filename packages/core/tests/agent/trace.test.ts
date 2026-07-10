@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createSessionTrace,
   listSessions,
+  loadSessionMessages,
   pruneSessions,
+  rewriteSessionMessages,
   writeSessionMeta,
   type SessionMeta,
 } from "../../src/agent/trace.js";
@@ -356,5 +359,54 @@ describe("sessionTitle", () => {
   it("falls back to the session id when neither summary nor meta exists", async () => {
     const { sessionTitle } = await import("../../src/agent/trace.js");
     expect(sessionTitle(ws, "unknown-session")).toBe("unknown-session");
+  });
+});
+
+describe("createSessionTrace persistent-fd appends", () => {
+  let ws: string;
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), "seekforge-trace-fd-"));
+  });
+  afterEach(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("writes are immediately visible and complete (read-after-write, mid-session)", () => {
+    const trace = createSessionTrace(ws, "fd-1");
+    trace.event({ type: "task.started", task: "t" } as never);
+    trace.event({ type: "turn.started", turn: 1 } as never);
+    trace.message({ role: "user", content: "hello" });
+    // No dispose/flush happens between write and read — writeSync must have
+    // hit the file already (the invariant resume//compact/replay rely on).
+    const events = readFileSync(join(trace.dir, "events.jsonl"), "utf8").trim().split("\n");
+    expect(events).toHaveLength(2);
+    for (const line of events) expect(() => JSON.parse(line)).not.toThrow();
+    const loaded = loadSessionMessages(ws, "fd-1");
+    expect(loaded).toEqual([{ role: "user", content: "hello" }]);
+  });
+
+  it("a second trace for the same session keeps appending (fd reuse across turns)", () => {
+    const first = createSessionTrace(ws, "fd-2");
+    first.event({ type: "turn.started", turn: 1 } as never);
+    const second = createSessionTrace(ws, "fd-2"); // a new TUI/REPL turn re-creates the trace
+    second.event({ type: "turn.started", turn: 2 } as never);
+    const events = readFileSync(join(first.dir, "events.jsonl"), "utf8").trim().split("\n");
+    expect(events).toHaveLength(2);
+    expect(JSON.parse(events[0]!)).toMatchObject({ turn: 1 });
+    expect(JSON.parse(events[1]!)).toMatchObject({ turn: 2 });
+  });
+
+  it("appends survive an external rewrite of messages.jsonl (O_APPEND after truncate)", () => {
+    const trace = createSessionTrace(ws, "fd-3");
+    trace.message({ role: "user", content: "one" });
+    trace.message({ role: "assistant", content: "two" });
+    // Manual /compact rewrites the file wholesale via writeFileSync…
+    rewriteSessionMessages(ws, "fd-3", [{ role: "user", content: "digest" }]);
+    // …and the cached append fd must keep appending at the NEW end of file.
+    trace.message({ role: "user", content: "three" });
+    expect(loadSessionMessages(ws, "fd-3")).toEqual([
+      { role: "user", content: "digest" },
+      { role: "user", content: "three" },
+    ]);
   });
 });

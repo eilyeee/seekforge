@@ -46,27 +46,74 @@ function splitDiffLines(text: string): string[] {
  * (no core diff util exists) so the preview can be computed at classify time with
  * no I/O beyond reading the current file. `null` before = file creation. Output is
  * capped at MAX_PREVIEW_DIFF_LINES with a truncation marker.
+ *
+ * Performance: the LCS DP table is only filled for the MIDDLE of the files —
+ * the common leading and trailing lines are trimmed first (the standard diff
+ * optimization), so the typical "tiny edit in a big file" costs O(edit²)
+ * instead of O(n·m) (~16M cells at the 4000-line guard). The output stays
+ * byte-identical to the untrimmed algorithm: the emit walk still runs over the
+ * FULL line arrays with the original tie-breaking, backed by an O(1) accessor
+ * that reconstructs exact full-table DP values (see `dp` below) — naive
+ * "diff only the middle" is NOT equivalent, because the walk may legitimately
+ * match a middle line against a trimmed-suffix line (e.g. a=[x,s] b=[s,s]).
+ *
+ * Exported for the regression tests, which compare it line-for-line against
+ * an inline untrimmed reference; not part of the tool surface.
  */
-function unifiedDiff(before: string | null, after: string, relPath: string): string {
+export function unifiedDiff(before: string | null, after: string, relPath: string): string {
   const a = splitDiffLines(before ?? "");
   const b = splitDiffLines(after);
   const header = `--- a/${relPath}\n+++ b/${relPath}`;
 
   const n = a.length;
   const m = b.length;
-  // LCS table; guard pathological sizes by falling back to del-all/add-all.
+  // Guard pathological sizes by falling back to del-all/add-all. Kept on the
+  // FULL lengths (not the trimmed middle) so output is identical to before.
   const body: string[] = [];
   if (n > 4000 || m > 4000) {
     body.push(`@@ -${n > 0 ? 1 : 0},${n} +${m > 0 ? 1 : 0},${m} @@`);
     for (const line of a) body.push(`-${line}`);
     for (const line of b) body.push(`+${line}`);
   } else {
-    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-    for (let i = n - 1; i >= 0; i--) {
-      for (let j = m - 1; j >= 0; j--) {
-        dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    // Trim the common prefix and suffix (suffix bounded so they never overlap).
+    let pre = 0;
+    const maxPre = Math.min(n, m);
+    while (pre < maxPre && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    const maxSuf = maxPre - pre;
+    while (suf < maxSuf && a[n - 1 - suf] === b[m - 1 - suf]) suf++;
+    const midN = n - pre - suf;
+    const midM = m - pre - suf;
+
+    // LCS DP over the middle only, in a flat typed array (row-major, width
+    // midM+1) — cheaper to allocate and index than an array-of-arrays.
+    const width = midM + 1;
+    const table = new Uint32Array((midN + 1) * width);
+    for (let i = midN - 1; i >= 0; i--) {
+      for (let j = midM - 1; j >= 0; j--) {
+        table[i * width + j] =
+          a[pre + i] === b[pre + j]
+            ? table[(i + 1) * width + j + 1]! + 1
+            : Math.max(table[(i + 1) * width + j]!, table[i * width + j + 1]!);
       }
     }
+
+    // Full-table DP value at (i, j), reconstructed in O(1):
+    //  - prefix rows/cols are never consulted (the walk consumes the common
+    //    prefix as matches before its first dp lookup, so i, j >= pre there);
+    //  - middle × middle: LCS(x + S, y + S) = LCS(x, y) + |S| for a common
+    //    suffix S, so the middle table value shifts uniformly by `suf`;
+    //  - once i or j is inside the trimmed suffix, one remainder is a suffix
+    //    of the other's tail (both end in S), so the LCS is just the shorter
+    //    remaining length: min(n - i, m - j).
+    const aSufStart = n - suf;
+    const bSufStart = m - suf;
+    const dp = (i: number, j: number): number =>
+      i >= aSufStart || j >= bSufStart
+        ? Math.min(n - i, m - j)
+        : table[(i - pre) * width + (j - pre)]! + suf;
+
+    // Emit walk over the FULL arrays — logic and tie-breaks unchanged.
     let i = 0;
     let j = 0;
     while (i < n && j < m) {
@@ -74,7 +121,7 @@ function unifiedDiff(before: string | null, after: string, relPath: string): str
         body.push(` ${a[i]}`);
         i++;
         j++;
-      } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+      } else if (dp(i + 1, j) >= dp(i, j + 1)) {
         body.push(`-${a[i]}`);
         i++;
       } else {

@@ -18,7 +18,7 @@ import { buildToolGatingRules } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import { expandFileRefs } from "../file-refs.js";
+import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { t } from "../i18n.js";
 import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";

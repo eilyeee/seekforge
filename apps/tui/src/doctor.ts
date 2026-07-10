@@ -1,60 +1,38 @@
 /**
  * /doctor — environment diagnostics for the TUI.
  *
- * All system access goes through an injectable DoctorProbes bag so runDoctor
- * stays pure and unit-testable; createDefaultProbes() wires the real OS.
+ * The engine (DoctorCheck/DoctorProbes, the probe bag, the shared checks,
+ * configKeysCheck/configParseCheck, formatDoctorLines) lives in
+ * @seekforge/shared/doctor; this module keeps the TUI's composition — its
+ * own wording (the /diff affordance, the ctrl-e editor hint, the
+ * setup-wizard api-key hint) and the TUI-only project-memory check.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
+import {
+  apiKeyCheck,
+  clipboardCheck,
+  configKeysCheck,
+  configParseCheck,
+  createDefaultProbes,
+  editorCheck,
+  formatDoctorLines,
+  gitRepoCheck,
+  mcpServersCheck,
+  nodeCheck,
+  platformCheck,
+  projectConfigCheck,
+  providerCheck,
+  rustRuntimeCheck,
+  sessionsCheck,
+  type DoctorCheck,
+  type DoctorProbes,
+} from "@seekforge/shared/doctor";
 
-/**
- * A single diagnostic result rendered as one line by formatDoctorLines.
- * `ok: false` is a failure (✗); `ok: true` with `warn: true` is a non-fatal
- * warning (~) that does not flip the summary.
- */
-export type DoctorCheck = { name: string; ok: boolean; warn?: boolean; detail: string; fixHint?: string };
-
-/** System probes injected into runDoctor; swap with fakes in tests. */
-export type DoctorProbes = {
-  env: (key: string) => string | undefined;
-  fileExists: (path: string) => boolean;
-  nodeVersion: () => string;
-  platform: () => string;
-  commandExists: (bin: string) => boolean;
-  /** Entries in a directory, null when it does not exist. */
-  countDir: (path: string) => number | null;
-};
-
-/** Real-OS probes used by the app; tests should build their own fakes. */
-export function createDefaultProbes(): DoctorProbes {
-  return {
-    env: (key) => process.env[key],
-    fileExists: (path) => existsSync(path),
-    nodeVersion: () => process.version,
-    platform: () => process.platform,
-    commandExists: (bin) => {
-      try {
-        return spawnSync("which", [bin], { stdio: "ignore" }).status === 0;
-      } catch {
-        return false;
-      }
-    },
-    countDir: (path) => {
-      try {
-        return readdirSync(path).length;
-      } catch {
-        return null;
-      }
-    },
-  };
-}
-
-/** Clipboard binaries probed per platform (first hit wins). */
-function clipboardCandidates(platform: string): string[] {
-  return platform === "darwin" ? ["pbcopy"] : ["wl-copy", "xclip", "xsel"];
-}
+export type { DoctorCheck, DoctorProbes };
+// The shared defaults ARE the TUI wording (plain marks, "→ fix:", the generic
+// config-docs hint), so these re-export unchanged.
+export { configKeysCheck, configParseCheck, createDefaultProbes, formatDoctorLines };
 
 /**
  * Runs every diagnostic and returns one DoctorCheck per concern. Pure given
@@ -71,137 +49,31 @@ export function runDoctor(
   },
   probes: DoctorProbes,
 ): DoctorCheck[] {
-  const checks: DoctorCheck[] = [];
-
   // Active provider preset (default "deepseek"); an explicit baseUrl always wins.
   const provider = (config.provider ?? "deepseek").toLowerCase();
   const preset = resolveProviderPreset(provider);
   const baseUrl = config.baseUrl ?? preset?.baseUrl ?? DEFAULT_BASE_URL;
-  checks.push({ name: "provider", ok: true, detail: `${provider} (${baseUrl})` });
 
-  // The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
-  // otherwise; an explicit apiKey in config works for either.
-  const keyEnv = provider === "ark" ? "ARK_API_KEY" : "DEEPSEEK_API_KEY";
-  const hasKey = Boolean(config.apiKey ?? probes.env(keyEnv));
-  checks.push(
-    hasKey
-      ? { name: "api key", ok: true, detail: "configured" }
-      : { name: "api key", ok: false, detail: "missing", fixHint: `restart seekforge-tui for the setup wizard, or export ${keyEnv}` },
-  );
-
-  const version = probes.nodeVersion();
-  const major = Number.parseInt(version.replace(/^v/, ""), 10);
-  checks.push(
-    Number.isFinite(major) && major >= 20
-      ? { name: "node", ok: true, detail: `${version} (>= 20)` }
-      : { name: "node", ok: false, detail: `${version} — SeekForge requires node >= 20`, fixHint: "nvm install 22 && nvm use 22" },
-  );
-
-  checks.push({ name: "platform", ok: true, detail: probes.platform() });
-
-  checks.push(
-    probes.fileExists(join(projectPath, ".git"))
-      ? { name: "git repo", ok: true, detail: ".git present" }
-      : { name: "git repo", ok: false, detail: "not a git repository — checkpoints and /diff are limited", fixHint: "git init" },
-  );
-
-  checks.push(
-    probes.fileExists(join(projectPath, ".seekforge", "config.json"))
-      ? { name: "project config", ok: true, detail: ".seekforge/config.json" }
-      : { name: "project config", ok: true, detail: "using global defaults" },
-  );
-
-  if (config.runtimeBin) {
-    checks.push(
-      probes.fileExists(config.runtimeBin)
-        ? { name: "rust runtime", ok: true, detail: config.runtimeBin }
-        : { name: "rust runtime", ok: false, detail: `${config.runtimeBin} not found`, fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)" },
-    );
-  } else {
-    checks.push({ name: "rust runtime", ok: true, detail: "not configured (TS fallback)" });
-  }
-
-  const mcpCount = Object.keys(config.mcpServers ?? {}).length;
-  checks.push({
-    name: "mcp servers",
-    ok: true,
-    detail: `${mcpCount} configured`,
-  });
-
-  const sessions = probes.countDir(join(projectPath, ".seekforge", "sessions"));
-  checks.push({
-    name: "sessions",
-    ok: true,
-    detail: sessions === null ? "no sessions yet" : `${sessions} recorded`,
-  });
-
-  checks.push(
+  return [
+    providerCheck(provider, baseUrl),
+    apiKeyCheck(
+      provider,
+      config.apiKey,
+      probes.env,
+      (keyEnv) => `restart seekforge-tui for the setup wizard, or export ${keyEnv}`,
+    ),
+    nodeCheck(probes),
+    platformCheck(probes),
+    gitRepoCheck(projectPath, probes, "/diff"),
+    projectConfigCheck(projectPath, probes),
+    rustRuntimeCheck(config.runtimeBin, probes),
+    mcpServersCheck(config.mcpServers),
+    sessionsCheck(projectPath, probes),
+    // TUI-only: project memory presence (the CLI has no /memory affordance).
     probes.fileExists(join(projectPath, ".seekforge", "memory", "project.md"))
       ? { name: "project memory", ok: true, detail: ".seekforge/memory/project.md" }
       : { name: "project memory", ok: false, detail: "no .seekforge/memory/project.md — /memory creates one" },
-  );
-
-  const editor = probes.env("EDITOR") ?? probes.env("VISUAL");
-  checks.push(
-    editor
-      ? { name: "editor", ok: true, detail: editor }
-      : { name: "editor", ok: false, detail: "$EDITOR/$VISUAL unset — ctrl-e external edit unavailable" },
-  );
-
-  const clip = clipboardCandidates(probes.platform()).find((bin) => probes.commandExists(bin));
-  checks.push(
-    clip
-      ? { name: "clipboard", ok: true, detail: clip }
-      : { name: "clipboard", ok: false, detail: "no clipboard tool found (pbcopy/wl-copy/xclip)" },
-  );
-
-  return checks;
-}
-
-/**
- * Warns about unrecognized config keys (typos silently ignored otherwise). A
- * warning, not a failure — an unknown key is harmless, just probably a mistake.
- */
-export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
-  if (unknownKeys.length === 0) return { name: "config keys", ok: true, detail: "all recognized" };
-  return {
-    name: "config keys",
-    ok: true,
-    warn: true,
-    detail: `unrecognized: ${unknownKeys.join(", ")}`,
-    fixHint: "check for typos — see the config docs for valid keys",
-  };
-}
-
-/**
- * Fails when any existing config.json layer is syntactically broken. `readJson`
- * swallows the parse error → `{}`, so without this check a malformed config
- * silently drops every setting AND /doctor reports clean. Empty list → ok.
- */
-export function configParseCheck(errors: string[]): DoctorCheck {
-  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files parse" };
-  return {
-    name: "config parse",
-    ok: false,
-    detail: `unparseable: ${errors.join(", ")}`,
-    fixHint: "fix the JSON syntax",
-  };
-}
-
-/**
- * Renders checks as "✓ name  detail" / "~ name  detail" (warning) / "✗ name
- * detail" (failure) lines plus a final "N/M checks passed" summary, padded so
- * details line up. Fix hints are shown for failures and warnings alike.
- */
-export function formatDoctorLines(checks: DoctorCheck[]): string[] {
-  const width = Math.max(0, ...checks.map((c) => c.name.length));
-  const lines: string[] = [];
-  for (const c of checks) {
-    const mark = !c.ok ? "✗" : c.warn ? "~" : "✓";
-    lines.push(`${mark} ${c.name.padEnd(width)}  ${c.detail}`);
-    if ((!c.ok || c.warn) && c.fixHint) lines.push(`  ${" ".repeat(width)}  → fix: ${c.fixHint}`);
-  }
-  const passed = checks.filter((c) => c.ok).length;
-  lines.push(`${passed}/${checks.length} checks passed`);
-  return lines;
+    editorCheck(probes, "$EDITOR/$VISUAL unset — ctrl-e external edit unavailable"),
+    clipboardCheck(probes),
+  ];
 }

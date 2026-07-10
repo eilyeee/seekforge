@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
-import type { PermissionRule } from "@seekforge/shared";
+import type { HookStage, PermissionRule } from "@seekforge/shared";
+import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
 
 /**
  * Local copy of the CLI's config type/loader. Apps must not depend on apps,
@@ -76,11 +77,9 @@ export type TuiConfig = {
 };
 
 function readJson(path: string): TuiConfig {
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as TuiConfig;
-  } catch {
-    return {};
-  }
+  // NOTE: no requireObject guard — the TUI historically passes non-object JSON
+  // through as-parsed (only the CLI collapses those layers to {}).
+  return readJsonConfigLayer<TuiConfig>(path);
 }
 
 /** Every recognized top-level config key — the source of truth for typo detection. */
@@ -167,44 +166,31 @@ export function configParseErrors(projectPath: string): string[] {
   return broken;
 }
 
+/**
+ * Historical stage iteration order (sessionEnd third). Passed to the shared
+ * merge so the key insertion order of the merged hooks object — observable
+ * through JSON serialization — stays byte-identical to the old local loop.
+ */
+const HOOK_STAGE_ORDER: readonly HookStage[] = [
+  "preToolUse",
+  "postToolUse",
+  "sessionEnd",
+  "sessionStart",
+  "userPromptSubmit",
+  "preCompact",
+  "stop",
+  "subagentStop",
+  "notification",
+];
+
 /** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
 export function loadConfig(projectPath: string): TuiConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(projectPath, ".seekforge", "config.json"));
-  // mcpServers merges per server name (project wins) instead of replacing wholesale.
-  const mcpServers = { ...global.mcpServers, ...project.mcpServers };
-  // permissionRules concatenates project-then-global: first match wins, so
-  // project rules take precedence over global ones.
-  const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
-  // hooks concatenate per stage, global-then-project: every hook runs.
-  const hooks: HookConfig = {};
-  for (const stage of [
-    "preToolUse",
-    "postToolUse",
-    "sessionEnd",
-    "sessionStart",
-    "userPromptSubmit",
-    "preCompact",
-    "stop",
-    "subagentStop",
-    "notification",
-  ] as const) {
-    const merged = [...(global.hooks?.[stage] ?? []), ...(project.hooks?.[stage] ?? [])];
-    if (merged.length > 0) hooks[stage] = merged;
-  }
-  // Provider-aware env key selection: pick the key for the merged provider so a
-  // DeepSeek user who happens to export ARK_API_KEY for another tool never gets
-  // the Ark key sent to the DeepSeek endpoint (and vice versa). Default provider
-  // is "deepseek"; project wins over global, matching the scalar merge below.
-  const mergedProvider = (project.provider ?? global.provider ?? "deepseek").toLowerCase();
-  const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
-  return {
-    ...global,
-    ...project,
-    ...(permissionRules.length > 0 ? { permissionRules } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
-    ...(envKey ? { apiKey: envKey } : {}),
-    ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
-  };
+  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
+  // project-over-global; mcpServers merge per server name (project wins);
+  // permissionRules concatenate project-then-global (first match wins); hooks
+  // concatenate per stage global-then-project (every hook runs); then the
+  // provider-aware env API key + SEEKFORGE_RUNTIME_BIN overrides land on top.
+  return mergeConfigLayers<TuiConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
 }

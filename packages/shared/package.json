@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./todos": "./src/todos.ts",
+    "./file-refs": "./src/file-refs.ts",
+    "./config-layers": "./src/config-layers.ts",
+    "./doctor": "./src/doctor.ts",
+    "./workspace-dirs": "./src/workspace-dirs.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

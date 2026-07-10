@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { listWorkspaceFiles } from "../src/files.js";
+import { clearFilesCacheForTests, listWorkspaceFiles } from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
@@ -140,5 +140,28 @@ describe("POST /api/upload", () => {
   it("is 404 for an unknown workspace id", async () => {
     const res = await authed("/api/files?ws=nope");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("files TTL cache", () => {
+  it("serves immediate repeat calls from one cached walk, consistently", async () => {
+    clearFilesCacheForTests();
+    const first = (await (await authed("/api/files")).json()) as { files: string[]; truncated: boolean };
+    // A file created AFTER the walk is invisible while the cache entry lives…
+    writeFileIn(workspace, "src/created-after-walk.ts", "export {};\n");
+    const second = (await (await authed("/api/files")).json()) as { files: string[]; truncated: boolean };
+    expect(second).toEqual(first);
+    expect(second.files).not.toContain("src/created-after-walk.ts");
+    // …and shows up once the cache is dropped (in production: after the TTL).
+    clearFilesCacheForTests();
+    const third = (await (await authed("/api/files")).json()) as { files: string[] };
+    expect(third.files).toContain("src/created-after-walk.ts");
+  });
+
+  it("applies the ?q= filter on the cached list (filtered calls stay fresh-consistent)", async () => {
+    clearFilesCacheForTests();
+    const all = (await (await authed("/api/files")).json()) as { files: string[] };
+    const filtered = (await (await authed("/api/files?q=UTIL")).json()) as { files: string[] };
+    expect(filtered.files).toEqual(all.files.filter((f) => f.toLowerCase().includes("util")));
   });
 });

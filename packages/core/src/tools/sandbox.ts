@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isSensitiveBasename } from "@seekforge/shared";
 import { ToolError } from "./errors.js";
+
+// Re-exported so `import { isSensitiveBasename } from "@seekforge/core"` keeps
+// working — the implementation moved to @seekforge/shared (browser-safe, pure)
+// so shared's file-refs/workspace-dirs helpers can use it without a cycle.
+export { isSensitiveBasename };
 
 /** Directories skipped by listing/search tools. */
 export const DEFAULT_IGNORE_DIRS: ReadonlySet<string> = new Set([
@@ -15,20 +21,6 @@ export const DEFAULT_IGNORE_DIRS: ReadonlySet<string> = new Set([
   "target",
   "vendor",
 ]);
-
-/** Files whose contents must never be read back to the model. */
-const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [
-  /^\.env$/,
-  /^\.env\..+$/,
-  /\.pem$/,
-  /\.key$/,
-  /^id_rsa/,
-  /^id_ed25519/,
-];
-
-export function isSensitiveBasename(basename: string): boolean {
-  return SENSITIVE_BASENAME_PATTERNS.some((re) => re.test(basename));
-}
 
 /**
  * Resolve `relPath` against `workspace` and assert containment.

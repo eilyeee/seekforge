@@ -1,33 +1,44 @@
 // `seekforge doctor` — environment diagnostics for the CLI.
 //
-// Thin reimplementation of the TUI's /doctor logic (apps/tui/src/doctor.ts);
-// we do NOT import across apps. Checks are pure given the probes bag so the
-// list logic could be unit-tested; the command itself wires the real OS.
+// The engine (DoctorCheck/DoctorProbes, the base probe bag, the shared
+// checks, configKeysCheck/configParseCheck, the formatDoctorLines renderer)
+// lives in @seekforge/shared/doctor; this module keeps the CLI's composition —
+// its own wording (the `diff` affordance, the `config set` api-key hint, the
+// docs/configuration.md typo hint, colored/localized rendering), the extended
+// probe bag, the unrecognized-provider warning and the desktop/GUI checks.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
+import {
+  apiKeyCheck,
+  clipboardCheck,
+  configKeysCheck as sharedConfigKeysCheck,
+  configParseCheck,
+  createDefaultProbes as createBaseProbes,
+  editorCheck,
+  formatDoctorLines as sharedFormatDoctorLines,
+  gitRepoCheck,
+  mcpServersCheck,
+  nodeCheck,
+  platformCheck,
+  projectConfigCheck,
+  providerCheck,
+  rustRuntimeCheck,
+  sessionsCheck,
+  type DoctorCheck,
+  type DoctorProbes as BaseDoctorProbes,
+} from "@seekforge/shared/doctor";
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 
-/**
- * A diagnostic line. `ok: false` is an error (✗); `ok: true` with `warn: true`
- * is a non-fatal warning (~, does not flip the exit code). The "missing"
- * category is expressed as `ok: false` (an absent thing that should be there)
- * or `warn` (an optional/dev-only thing that is fine to be absent).
- */
-export type DoctorCheck = { name: string; ok: boolean; warn?: boolean; detail: string; fixHint?: string };
+export type { DoctorCheck };
+export { configParseCheck };
 
-export type DoctorProbes = {
-  env: (key: string) => string | undefined;
-  fileExists: (path: string) => boolean;
-  nodeVersion: () => string;
-  platform: () => string;
-  commandExists: (bin: string) => boolean;
-  /** Entry count of a directory, or null when it does not exist. */
-  countDir: (path: string) => number | null;
+/** The shared probe bag plus the CLI's desktop/GUI probes. */
+export type DoctorProbes = BaseDoctorProbes & {
   /** Absolute path of `bin` resolved on PATH, or null. Never throws. */
   which: (bin: string) => string | null;
   /**
@@ -43,24 +54,7 @@ export type DoctorProbes = {
 
 export function createDefaultProbes(): DoctorProbes {
   return {
-    env: (key) => process.env[key],
-    fileExists: (path) => existsSync(path),
-    nodeVersion: () => process.version,
-    platform: () => process.platform,
-    commandExists: (bin) => {
-      try {
-        return spawnSync("which", [bin], { stdio: "ignore" }).status === 0;
-      } catch {
-        return false;
-      }
-    },
-    countDir: (path) => {
-      try {
-        return readdirSync(path).length;
-      } catch {
-        return null;
-      }
-    },
+    ...createBaseProbes(),
     which: (bin) => {
       try {
         const r = spawnSync("which", [bin], { encoding: "utf8" });
@@ -107,10 +101,6 @@ export function createDefaultProbes(): DoctorProbes {
   };
 }
 
-function clipboardCandidates(platform: string): string[] {
-  return platform === "darwin" ? ["pbcopy"] : ["wl-copy", "xclip", "xsel"];
-}
-
 /**
  * Global-bin locations the macOS desktop shell appends to PATH before searching
  * for `seekforge`, because GUI apps inherit a minimal launchd PATH that omits
@@ -152,6 +142,7 @@ export function runDoctor(
   // An explicitly-set provider that resolves to no preset (a typo like "arkk")
   // and has no explicit baseUrl to fall back on silently uses the DeepSeek
   // endpoint — warn so it isn't mistaken for a working custom provider.
+  // (CLI-only; the TUI shows the plain line either way.)
   const unrecognizedProvider =
     config.provider !== undefined && provider !== "deepseek" && !preset && config.baseUrl === undefined;
   checks.push(
@@ -163,75 +154,26 @@ export function runDoctor(
           detail: `${provider} unrecognized — falling back to DeepSeek (${baseUrl})`,
           fixHint: "set a known provider (deepseek/ark) or an explicit baseUrl",
         }
-      : { name: "provider", ok: true, detail: `${provider} (${baseUrl})` },
-  );
-
-  // The right key satisfies the check: ARK_API_KEY for ark, DEEPSEEK_API_KEY
-  // otherwise; an explicit apiKey in config works for either.
-  const keyEnv = provider === "ark" ? "ARK_API_KEY" : "DEEPSEEK_API_KEY";
-  const hasKey = Boolean(config.apiKey ?? probes.env(keyEnv));
-  checks.push(
-    hasKey
-      ? { name: "api key", ok: true, detail: "configured" }
-      : {
-          name: "api key",
-          ok: false,
-          detail: "missing",
-          fixHint: `export ${keyEnv}, or \`seekforge config set apiKey <key>\``,
-        },
-  );
-
-  const version = probes.nodeVersion();
-  const major = Number.parseInt(version.replace(/^v/, ""), 10);
-  checks.push(
-    Number.isFinite(major) && major >= 20
-      ? { name: "node", ok: true, detail: `${version} (>= 20)` }
-      : { name: "node", ok: false, detail: `${version} — SeekForge requires node >= 20`, fixHint: "nvm install 22 && nvm use 22" },
-  );
-
-  checks.push({ name: "platform", ok: true, detail: probes.platform() });
-
-  checks.push(
-    probes.fileExists(join(projectPath, ".git"))
-      ? { name: "git repo", ok: true, detail: ".git present" }
-      : { name: "git repo", ok: false, detail: "not a git repository — checkpoints and `diff` are limited", fixHint: "git init" },
+      : providerCheck(provider, baseUrl),
   );
 
   checks.push(
-    probes.fileExists(join(projectPath, ".seekforge", "config.json"))
-      ? { name: "project config", ok: true, detail: ".seekforge/config.json" }
-      : { name: "project config", ok: true, detail: "using global defaults" },
+    apiKeyCheck(
+      provider,
+      config.apiKey,
+      probes.env,
+      (keyEnv) => `export ${keyEnv}, or \`seekforge config set apiKey <key>\``,
+    ),
   );
-
-  if (config.runtimeBin) {
-    checks.push(
-      probes.fileExists(config.runtimeBin)
-        ? { name: "rust runtime", ok: true, detail: config.runtimeBin }
-        : { name: "rust runtime", ok: false, detail: `${config.runtimeBin} not found`, fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)" },
-    );
-  } else {
-    checks.push({ name: "rust runtime", ok: true, detail: "not configured (TS fallback)" });
-  }
-
-  const mcpCount = Object.keys(config.mcpServers ?? {}).length;
-  checks.push({ name: "mcp servers", ok: true, detail: `${mcpCount} configured` });
-
-  const sessions = probes.countDir(join(projectPath, ".seekforge", "sessions"));
-  checks.push({ name: "sessions", ok: true, detail: sessions === null ? "no sessions yet" : `${sessions} recorded` });
-
-  const editor = probes.env("EDITOR") ?? probes.env("VISUAL");
-  checks.push(
-    editor
-      ? { name: "editor", ok: true, detail: editor }
-      : { name: "editor", ok: false, detail: "$EDITOR/$VISUAL unset — external edit unavailable" },
-  );
-
-  const clip = clipboardCandidates(probes.platform()).find((bin) => probes.commandExists(bin));
-  checks.push(
-    clip
-      ? { name: "clipboard", ok: true, detail: clip }
-      : { name: "clipboard", ok: false, detail: "no clipboard tool found (pbcopy/wl-copy/xclip)" },
-  );
+  checks.push(nodeCheck(probes));
+  checks.push(platformCheck(probes));
+  checks.push(gitRepoCheck(projectPath, probes, "`diff`"));
+  checks.push(projectConfigCheck(projectPath, probes));
+  checks.push(rustRuntimeCheck(config.runtimeBin, probes));
+  checks.push(mcpServersCheck(config.mcpServers));
+  checks.push(sessionsCheck(projectPath, probes));
+  checks.push(editorCheck(probes, "$EDITOR/$VISUAL unset — external edit unavailable"));
+  checks.push(clipboardCheck(probes));
 
   // Best-effort desktop/GUI diagnostics. Each is wrapped so a probe surprise
   // can never abort the whole report; a thrown probe degrades to a warn line.
@@ -333,51 +275,18 @@ function updaterCheck(projectPath: string, probes: DoctorProbes): DoctorCheck | 
   return { name: "updater", ok: true, detail: "enabled (createUpdaterArtifacts: true)" };
 }
 
-/**
- * Warns about unrecognized config keys (typos silently ignored otherwise). A
- * warning, not a failure — an unknown key is harmless, just probably a mistake.
- */
+/** Shared check with the CLI's fix-hint wording (points at docs/configuration.md). */
 export function configKeysCheck(unknownKeys: string[]): DoctorCheck {
-  if (unknownKeys.length === 0) return { name: "config keys", ok: true, detail: "all recognized" };
-  return {
-    name: "config keys",
-    ok: true,
-    warn: true,
-    detail: `unrecognized: ${unknownKeys.join(", ")}`,
-    fixHint: "check for typos — see docs/configuration.md for valid keys",
-  };
+  return sharedConfigKeysCheck(unknownKeys, "check for typos — see docs/configuration.md for valid keys");
 }
 
-/**
- * Fails when any existing config.json layer is syntactically broken. `readJson`
- * swallows the parse error → `{}`, so without this check a malformed config
- * silently drops every setting AND doctor reports clean. Empty list → ok.
- */
-export function configParseCheck(errors: string[]): DoctorCheck {
-  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files parse" };
-  return {
-    name: "config parse",
-    ok: false,
-    detail: `unparseable: ${errors.join(", ")}`,
-    fixHint: "fix the JSON syntax",
-  };
-}
-
-/** Renders checks as colored "✓/~/✗ name detail" lines + a pass summary. */
+/** Shared renderer with the CLI's colored marks and localized hint/summary lines. */
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
-  const width = Math.max(0, ...checks.map((c) => c.name.length));
-  const lines: string[] = [];
-  for (const c of checks) {
-    const mark = !c.ok ? red("✗") : c.warn ? yellow("~") : green("✓");
-    lines.push(`${mark} ${c.name.padEnd(width)}  ${c.detail}`);
-    // Fix hints are shown for failures and warnings alike.
-    if ((!c.ok || c.warn) && c.fixHint)
-      lines.push(`  ${" ".repeat(width)}  ${dim(t("cmd.doctor.fixHint", { hint: c.fixHint }))}`);
-  }
-  // "passed" counts ✓ and ~ (warnings are non-fatal); only ✗ are failures.
-  const passed = checks.filter((c) => c.ok).length;
-  lines.push(t("cmd.doctor.checksHeader", { passed, total: checks.length }));
-  return lines;
+  return sharedFormatDoctorLines(checks, {
+    mark: (mark) => (mark === "✗" ? red(mark) : mark === "~" ? yellow(mark) : green(mark)),
+    fixHint: (hint) => dim(t("cmd.doctor.fixHint", { hint })),
+    summary: (passed, total) => t("cmd.doctor.checksHeader", { passed, total }),
+  });
 }
 
 /** `seekforge doctor` entry point. Exit code 1 if any check failed (warnings do not fail). */

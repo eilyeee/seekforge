@@ -1,11 +1,22 @@
 /**
- * Cross-session todo list over <workspace>/.seekforge/todos.md.
+ * Cross-session todo list stored as a markdown checklist at
+ * <workspace>/.seekforge/todos.md — the SINGLE implementation of the FORMAT
+ * CONTRACT previously duplicated in apps/tui/src/todos.ts and
+ * apps/server/src/todos.ts (which drifted; see the todos newline-collapse fix
+ * that had to be applied twice).
  *
- * FORMAT CONTRACT shared with apps/tui/src/todos.ts (reimplemented here —
- * apps must not import across each other): only `- [ ] text` / `- [x] text`
- * lines are todos; every other line (headings, prose) is preserved verbatim
- * across read/write round-trips. Indices are 1-based and count checklist
- * lines only.
+ * FORMAT CONTRACT: only `- [ ] text` / `- [x] text` lines are todos; every
+ * other line (headings, prose) is preserved verbatim across read/write
+ * round-trips. Indices are 1-based and count checklist lines only.
+ *
+ * NODE-ONLY: this module touches the filesystem, so it lives behind the
+ * "./todos" subpath export and is deliberately NOT re-exported from index.ts —
+ * the package root must stay browser-safe for the desktop bundle.
+ *
+ * Error policy: write failures THROW (the server's behavior — its routes turn
+ * them into 500s). The TUI wants its historical "drop the change silently on
+ * an unwritable workspace" UX instead; its wrapper (apps/tui/src/todos.ts)
+ * catches at the call boundary.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,6 +42,7 @@ function readLines(workspace: string): string[] {
   }
 }
 
+/** Throws on an unwritable workspace (see the error policy note above). */
 function writeLines(workspace: string, lines: readonly string[]): void {
   const file = todosFile(workspace);
   mkdirSync(dirname(file), { recursive: true });
@@ -53,11 +65,19 @@ export function loadTodos(workspace: string): Todo[] {
   return todos;
 }
 
-/** Appends a new unchecked todo (creating .seekforge/ if needed). */
+/**
+ * Collapses interior newlines in a todo text: a raw "\n" would split one todo
+ * into a checklist line plus a stray prose line, silently truncating it on
+ * read-back. Exported so the TUI wrapper can mirror addTodo's return value
+ * when it swallows a write failure.
+ */
+export function collapseTodoText(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, " ");
+}
+
+/** Appends a new unchecked todo (creating .seekforge/ if needed) and returns it. */
 export function addTodo(workspace: string, text: string): Todo {
-  // Collapse any interior newlines: a raw "\n" would split one todo into a
-  // checklist line plus a stray prose line, silently truncating it on read-back.
-  const single = text.replace(/\s*[\r\n]+\s*/g, " ");
+  const single = collapseTodoText(text);
   const lines = readLines(workspace);
   lines.push(`- [ ] ${single}`);
   writeLines(workspace, lines);

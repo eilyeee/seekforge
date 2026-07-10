@@ -6,12 +6,7 @@
  * (e.g. compaction strategy) per run — see variants.ts.
  */
 
-import {
-  createAgentCore,
-  createDeepSeekProvider,
-  createDefaultDispatcher,
-  resolveProviderConfig,
-} from "@seekforge/core";
+import { buildProvider, createAgentCore, createDefaultDispatcher } from "@seekforge/core";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
@@ -24,17 +19,20 @@ export function createDefaultAgentFactory(
     if (!config.apiKey) {
       throw new Error("no DeepSeek API key configured (env DEEPSEEK_API_KEY or .seekforge/config.json)");
     }
+    // Provider construction shared with the app factories (core buildProvider).
+    // The rest of the skeleton deliberately stays NARROWER than the apps' core
+    // buildAgentCoreDeps: no retry bus (no provider.retry noise in recorded
+    // eval event streams), no thinking controls, and providerForModel only
+    // when a planModel variant asks for it — without the reasoner fallback.
+    const providerInput = {
+      provider: config.provider,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
+    };
     const agent = createAgentCore({
-      provider: createDeepSeekProvider(
-        resolveProviderConfig({
-          provider: config.provider,
-          apiKey: config.apiKey,
-          baseUrl: config.baseUrl,
-          // A variant may override the main model (e.g. model-pro); else config.
-          model: options.model ?? config.model,
-          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-        }),
-      ),
+      // A variant may override the main model (e.g. model-pro); else config.
+      provider: buildProvider(providerInput, options.model ?? config.model),
       dispatcher: createDefaultDispatcher(),
       // Deny anything that needs interactive approval: eval fixtures only
       // need allowlisted commands (npm test / node --test) and L1 writes,
@@ -59,18 +57,7 @@ export function createDefaultAgentFactory(
       ...(options.planModel ? { planModel: options.planModel } : {}),
       // Same key/endpoint, different model — needed for plan/escalation.
       ...(options.planModel
-        ? {
-            providerForModel: (m: string) =>
-              createDeepSeekProvider(
-                resolveProviderConfig({
-                  provider: config.provider,
-                  apiKey: config.apiKey ?? "",
-                  baseUrl: config.baseUrl,
-                  model: m,
-                  ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-                }),
-              ),
-          }
+        ? { providerForModel: (m: string) => buildProvider(providerInput, m) }
         : {}),
     });
     return { agent };

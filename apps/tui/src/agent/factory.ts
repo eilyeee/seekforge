@@ -2,13 +2,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
+  buildAgentCoreDeps,
   createAgentCore,
-  createDeepSeekProvider,
   createDefaultDispatcher,
-  createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
-  resolveProviderConfig,
   wrapProviderWithCache,
   type AgentCore,
   type AgentCoreDeps,
@@ -62,74 +60,51 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     }
   }
 
-  const thinkingOpts = {
-    ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
-    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
-  };
-  // One retry bus shared by every provider; the active run routes provider
-  // retries into its event stream (provider.retry).
-  const retryBus = createRetryBus();
-  const baseProvider = createDeepSeekProvider(
-    resolveProviderConfig({
-      provider: config.provider,
-      apiKey: config.apiKey ?? "",
-      baseUrl: config.baseUrl,
-      model: opts.model ?? config.model,
-      onRetry: retryBus.onRetry,
-      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-      ...thinkingOpts,
-    }),
-  );
-  // Opt-in disk cache for identical non-streaming calls (evals, subagents).
-  const provider = config.llmCache
-    ? wrapProviderWithCache(baseProvider, join(homedir(), ".seekforge", "llm-cache"))
-    : baseProvider;
-
+  // Shared skeleton (core buildAgentCoreDeps): retry bus + provider (thinking
+  // controls travel with every provider it builds), the deepseek-reasoner
+  // providerForModel fallback (silent here — only the CLI warns), and the
+  // common config→deps conditional spread. TUI-only on top: the llm-cache wrap
+  // of the MAIN provider (per-model providers stay uncached), the back-compat
+  // routing.planModel fallback (flat key wins), and background/askUser wiring.
   const deps: AgentCoreDeps = {
-    provider,
-    retryBus,
-    // Per-agent model override: same key/endpoint, different model.
-    // deepseek-reasoner cannot drive the tool-call loop, so fall back.
-    providerForModel: (model) => {
-      if (model === "deepseek-reasoner") return provider;
-      return createDeepSeekProvider(
-        resolveProviderConfig({
-          provider: config.provider,
-          apiKey: config.apiKey ?? "",
-          baseUrl: config.baseUrl,
-          model,
-          onRetry: retryBus.onRetry,
-          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-          ...thinkingOpts,
-        }),
-      );
-    },
+    ...buildAgentCoreDeps(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: opts.model ?? config.model,
+        thinking: config.thinking,
+        reasoningEffort: config.reasoningEffort,
+        modelPricing: config.modelPricing,
+        commandAllowlist: config.commandAllowlist,
+        sandbox: config.sandbox,
+        compaction: config.compaction,
+        planModel: config.planModel ?? config.routing?.planModel,
+        escalateOnFailure: config.escalateOnFailure,
+        memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
+        lintCommand: config.lintCommand,
+        autoLint: config.autoLint,
+        editFormat: config.editFormat,
+      },
+      // Opt-in disk cache for identical non-streaming calls (evals, subagents).
+      config.llmCache
+        ? {
+            wrapProvider: (provider) =>
+              wrapProviderWithCache(provider, join(homedir(), ".seekforge", "llm-cache")),
+          }
+        : {},
+    ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     extractMemory: opts.extractMemory,
     runtime,
-    commandAllowlist: config.commandAllowlist,
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     hooks: config.hooks,
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
-    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
-    ...(config.compaction ? { compaction: config.compaction } : {}),
-    ...((config.planModel ?? config.routing?.planModel)
-      ? { planModel: config.planModel ?? config.routing?.planModel }
-      : {}),
-    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
-    ...(config.memoryAutoApproveConfidence !== undefined
-      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
-      : {}),
-    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
-      ? { lintCommand: config.lintCommand }
-      : {}),
-    ...(config.autoLint === false ? { autoLint: false } : {}),
-    ...(config.editFormat ? { editFormat: config.editFormat } : {}),
   };
 
   return { deps, dispose: () => runtime?.dispose() };

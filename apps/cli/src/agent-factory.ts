@@ -1,12 +1,10 @@
 import { existsSync } from "node:fs";
 import {
+  buildAgentCoreDeps,
   createAgentCore,
-  createDeepSeekProvider,
   createDefaultDispatcher,
-  createRetryBus,
   createRuntimeClient,
   loadMcpToolSpecs,
-  resolveProviderConfig,
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
@@ -71,51 +69,40 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     }
   }
 
-  // V4 thinking controls travel with every provider we build (main + per-agent).
-  const thinkingOpts = {
-    ...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
-    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
-  };
-  // One retry bus shared by every provider this factory builds; the active
-  // run routes its retries into the agent event stream (provider.retry).
-  const retryBus = createRetryBus();
-  const provider = createDeepSeekProvider(
-    resolveProviderConfig({
-      provider: config.provider,
-      apiKey: config.apiKey ?? "",
-      baseUrl: config.baseUrl,
-      model: opts.model ?? config.model,
-      onRetry: retryBus.onRetry,
-      ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
-      ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-      ...thinkingOpts,
-    }),
-  );
-
+  // Shared skeleton (core buildAgentCoreDeps): retry bus + provider (the V4
+  // thinking controls travel with every provider it builds, main + per-agent),
+  // the deepseek-reasoner providerForModel fallback, and the common config→deps
+  // conditional spread. CLI-only on top: the --fallback-model input, the stderr
+  // warning when a subagent asks for the reasoner, and the verify/finalize
+  // knobs below.
   const deps: AgentCoreDeps = {
-    provider,
-    retryBus,
-    // Per-agent model override (AgentDefinition.model): same key/endpoint,
-    // different model. deepseek-reasoner cannot drive the tool-call loop.
-    providerForModel: (model) => {
-      if (model === "deepseek-reasoner") {
-        console.error(
-          'warning: subagent model "deepseek-reasoner" does not support tool calls; using the default model',
-        );
-        return provider;
-      }
-      return createDeepSeekProvider(
-        resolveProviderConfig({
-          provider: config.provider,
-          apiKey: config.apiKey ?? "",
-          baseUrl: config.baseUrl,
-          model,
-          onRetry: retryBus.onRetry,
-          ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
-          ...thinkingOpts,
-        }),
-      );
-    },
+    ...buildAgentCoreDeps(
+      {
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: opts.model ?? config.model,
+        fallbackModel: opts.fallbackModel,
+        thinking: config.thinking,
+        reasoningEffort: config.reasoningEffort,
+        modelPricing: config.modelPricing,
+        commandAllowlist: config.commandAllowlist,
+        sandbox: config.sandbox,
+        compaction: config.compaction,
+        planModel: config.planModel,
+        escalateOnFailure: config.escalateOnFailure,
+        memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
+        lintCommand: config.lintCommand,
+        autoLint: config.autoLint,
+        editFormat: config.editFormat,
+      },
+      {
+        onReasonerFallback: () =>
+          console.error(
+            'warning: subagent model "deepseek-reasoner" does not support tool calls; using the default model',
+          ),
+      },
+    ),
     dispatcher: createDefaultDispatcher(opts.mcpToolSpecs ?? []),
     ...(opts.maxTurns !== undefined && opts.maxTurns > 0 ? { limits: { maxAgentTurns: opts.maxTurns } } : {}),
     confirm: opts.confirm,
@@ -124,28 +111,16 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
     runtime,
-    commandAllowlist: config.commandAllowlist,
     permissionRules: opts.permissionRules ?? config.permissionRules,
     subagents: opts.subagents,
     hooks: config.hooks,
-    ...(config.sandbox && config.sandbox !== "off" ? { sandbox: config.sandbox } : {}),
-    ...(config.compaction ? { compaction: config.compaction } : {}),
-    ...(config.planModel ? { planModel: config.planModel } : {}),
-    ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
+    // CLI-only self-verification / finalize knobs (not part of the shared core).
     ...(typeof config.verifyCommand === "string" && config.verifyCommand.trim()
       ? { verifyCommand: config.verifyCommand }
       : {}),
     ...(config.autoVerify === false ? { autoVerify: false } : {}),
-    ...(typeof config.lintCommand === "string" && config.lintCommand.trim()
-      ? { lintCommand: config.lintCommand }
-      : {}),
-    ...(config.autoLint === false ? { autoLint: false } : {}),
-    ...(config.editFormat ? { editFormat: config.editFormat } : {}),
     ...(config.finalizeReview ? { finalizeReview: true } : {}),
     ...(config.guardNoProgress ? { guardNoProgress: true } : {}),
-    ...(config.memoryAutoApproveConfidence !== undefined
-      ? { memoryAutoApproveConfidence: config.memoryAutoApproveConfidence }
-      : {}),
   };
 
   return { deps, dispose: () => runtime?.dispose() };

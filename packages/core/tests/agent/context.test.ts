@@ -106,6 +106,37 @@ describe("estimateTokens", () => {
     // Same character count, but CJK content costs materially more tokens.
     expect(cjk).toBeGreaterThan(ascii);
   });
+
+  it("treats astral (non-BMP) characters as non-CJK, like the old regex", () => {
+    // "𝕏" is a surrogate pair (length 2): neither half is in a CJK range, so
+    // it lands in the ~4-chars-per-token bucket — ceil(2/4) = 1.
+    expect(estimateTokens("𝕏")).toBe(1);
+  });
+});
+
+describe("estimateMessagesTokens memoization", () => {
+  it("is stable across repeated calls on the same message objects", () => {
+    const messages = [
+      msg("user", "fix the login bug 请修复登录"),
+      msg("assistant", "on it", { toolCalls: [{ id: "c1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }] }),
+    ];
+    const first = estimateMessagesTokens(messages);
+    expect(estimateMessagesTokens(messages)).toBe(first);
+    expect(estimateMessagesTokens(messages)).toBe(first);
+  });
+
+  it("a REPLACED message object (the codebase's rewrite pattern) is re-estimated", () => {
+    const original = msg("tool", "x".repeat(4000), { toolCallId: "c1" });
+    const history = [original];
+    const before = estimateMessagesTokens(history);
+    // Content rewrites always spread into a NEW object (clearOldToolResults,
+    // shrinkToolResultsToFit, the loop's system-prompt refresh) — the cache is
+    // keyed on identity, so the replacement must produce a fresh estimate.
+    history[0] = { ...original, content: "short" };
+    const after = estimateMessagesTokens(history);
+    expect(after).toBeLessThan(before);
+    expect(after).toBe(estimateMessagesTokens([msg("tool", "short", { toolCallId: "c1" })]));
+  });
 });
 
 describe("compactMessages", () => {

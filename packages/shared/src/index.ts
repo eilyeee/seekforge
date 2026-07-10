@@ -121,6 +121,31 @@ export type PermissionPolicy = {
 };
 
 // ---------------------------------------------------------------------------
+// Sensitive files (single source of truth; core re-exports this)
+// ---------------------------------------------------------------------------
+
+/**
+ * Files whose contents must never be read back to the model. Pure (regex
+ * only), so it is safe in this browser-safe entry point. Moved here from
+ * @seekforge/core tools/sandbox.ts so shared's Node-only helpers (file-refs,
+ * workspace-dirs) can use it without a shared→core dependency cycle; core
+ * re-exports it, so `import { isSensitiveBasename } from "@seekforge/core"`
+ * keeps working.
+ */
+const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [
+  /^\.env$/,
+  /^\.env\..+$/,
+  /\.pem$/,
+  /\.key$/,
+  /^id_rsa/,
+  /^id_ed25519/,
+];
+
+export function isSensitiveBasename(basename: string): boolean {
+  return SENSITIVE_BASENAME_PATTERNS.some((re) => re.test(basename));
+}
+
+// ---------------------------------------------------------------------------
 // Tool calling
 // ---------------------------------------------------------------------------
 

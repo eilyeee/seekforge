@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clearFilesCacheForTests } from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
@@ -274,6 +275,21 @@ describe("git discard", () => {
   });
 });
 
+describe("oversized request bodies", () => {
+  it("answers 413 too_large (not 500) on a non-upload route past the 1MB cap", async () => {
+    // Regression: readBody's too-large rejection used to fall through to the
+    // trailing catch and surface as a 500 on every route except /api/upload.
+    const res = await authed("/api/git/commit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "x".repeat(1_100_000) }),
+    });
+    expect(res.status).toBe(413);
+    const body = await jsonOf(res);
+    expect(body.error.code).toBe("too_large");
+  });
+});
+
 describe("git on a non-repo", () => {
   it("returns notGit instead of throwing", async () => {
     const plain = makeWorkspace();
@@ -339,6 +355,9 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
 describe("GET /api/search", () => {
   it("returns case-insensitive hits with file/line/col/len; empty q → no hits", async () => {
     writeFileIn(workspace, "src/needle.txt", "alpha\nfoo FindMe here\nbeta");
+    // /api/search shares the TTL-cached file walk — drop it so the file just
+    // written above is indexed immediately.
+    clearFilesCacheForTests();
     const res = await authed(`/api/search?q=${encodeURIComponent("findme")}`);
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
@@ -351,6 +370,8 @@ describe("GET /api/search", () => {
 
   it("supports case-sensitive and regex, and reports an invalid regex", async () => {
     writeFileIn(workspace, "cs.txt", "Foo\nfoo");
+    clearFilesCacheForTests(); // see above — make cs.txt visible to the walk
+
     const cs = await jsonOf(await authed(`/api/search?q=Foo&case=1`));
     const hits = cs.hits.filter((h: { path: string }) => h.path === "cs.txt");
     expect(hits).toHaveLength(1);

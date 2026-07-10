@@ -214,8 +214,12 @@ export function extractSymbols(rel: string, content: string): string {
   return resolveOutline(rel, content);
 }
 
-function outlineFor(abs: string, rel: string, size: number): string {
+function outlineFor(abs: string, rel: string, size: number, cached?: FileGraphFileInfo): string {
   if (size > MAX_READ_BYTES) return `(${Math.round(size / 1024)}KB)`;
+  // Reuse the outline + line count captured during a graph build (same
+  // content, same backends) instead of re-reading the file. Only files the
+  // graph actually read are cached; everything else falls through to a read.
+  if (cached) return `${cached.outline}${cached.outline ? "  " : ""}(${cached.lines} ln)`.trim();
   let content: string;
   try {
     content = fs.readFileSync(abs, "utf8");
@@ -249,6 +253,16 @@ const PAGERANK_DAMPING = 0.85;
 const IDENT_RE = /[\p{L}_$][\p{L}\p{N}_$]*/gu;
 const IDENT_OK = /^[\p{L}_$][\p{L}\p{N}_$]*$/u;
 
+/**
+ * Per-file data captured as a side effect of the graph build (which already
+ * reads every file and computes its outline): enough for the downstream
+ * formatting/refinement steps to skip their own re-reads. Deliberately NOT the
+ * file content itself — holding up to 600 × 512KB of text alive for the whole
+ * run would be a memory hazard, and outline + line count is all the consumers
+ * (outlineFor, buildRelevantFiles' refine pass) actually need.
+ */
+export type FileGraphFileInfo = { outline: string; lines: number };
+
 export type FileGraph = {
   /** Node ids (rel paths), sorted deterministically. */
   files: string[];
@@ -256,11 +270,17 @@ export type FileGraph = {
   edges: Map<string, Map<string, number>>;
   /** False when the graph is trivial (no cross-file references) -> callers fall back to lexical. */
   hasEdges: boolean;
+  /**
+   * Outline + line count per file actually READ during the build (files over
+   * MAX_READ_BYTES, unreadable files and files beyond the MAX_GRAPH_FILES cap
+   * are absent — consumers must fall back to reading). Optional so externally
+   * constructed graphs (tests, future backends) stay valid.
+   */
+  info?: Map<string, FileGraphFileInfo>;
 };
 
 /** Names DEFINED by a file, parsed from its symbol outline ("exports: a, b, …"). */
-function definedNames(rel: string, content: string): string[] {
-  const outline = extractSymbols(rel, content);
+function definedNames(outline: string): string[] {
   if (!outline.startsWith("exports:")) return [];
   const out: string[] = [];
   for (const part of outline.slice("exports:".length).split(",")) {
@@ -294,6 +314,7 @@ export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
 
   const defs = new Map<string, string[]>(); // symbol -> files defining it
   const refCounts = new Map<string, Map<string, number>>(); // file -> identifier counts
+  const info = new Map<string, FileGraphFileInfo>(); // captured for downstream reuse
   const nodes: string[] = [];
   for (const f of capped) {
     nodes.push(f.rel);
@@ -304,7 +325,11 @@ export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
     } catch {
       continue;
     }
-    for (const name of definedNames(f.rel, content)) {
+    // The outline is computed here anyway (for definitions); capture it plus
+    // the line count so buildRepoOverview/buildRelevantFiles don't re-read.
+    const outline = extractSymbols(f.rel, content);
+    info.set(f.rel, { outline, lines: content.split("\n").length });
+    for (const name of definedNames(outline)) {
       const arr = defs.get(name);
       if (arr) arr.push(f.rel);
       else defs.set(name, [f.rel]);
@@ -333,7 +358,19 @@ export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
     }
   }
   nodes.sort((a, b) => a.localeCompare(b));
-  return { files: nodes, edges, hasEdges };
+  return { files: nodes, edges, hasEdges, info };
+}
+
+/**
+ * Memoized graph supplier: build the dependency graph at most ONCE and share
+ * it across buildRepoOverview and buildRelevantFiles (the graph companion to
+ * the shared `scanRepo` result). A thunk rather than an eager value so the
+ * cost is only paid when a builder actually reaches its graph step — each
+ * builder has cheap early-outs (small repo, generic task) that must stay free.
+ */
+export function lazyFileGraph(root: string, scan: RepoScan): () => FileGraph {
+  let graph: FileGraph | undefined;
+  return () => (graph ??= buildFileGraph(root, scan.files));
 }
 
 /**
@@ -414,17 +451,24 @@ export function scanRepo(root: string): RepoScan {
 /**
  * Compact top-level overview for auto-injection into the system prompt at
  * session start. Returns undefined for small repos (not worth the tokens) or
- * when the tree can't be read. Reuses a shared scan when provided.
+ * when the tree can't be read. Reuses a shared scan and a shared (lazy) graph
+ * when provided, so a caller that also runs buildRelevantFiles pays for the
+ * walk and the graph build once, not twice.
  */
-export function buildRepoOverview(root: string, minFiles = 150, scan?: RepoScan): string | undefined {
+export function buildRepoOverview(
+  root: string,
+  minFiles = 150,
+  scan?: RepoScan,
+  graph?: () => FileGraph,
+): string | undefined {
   const { files, dirCounts } = scan ?? walk(root, root);
   if (files.length < minFiles) return undefined;
   // Order the Files section by dependency-graph centrality (Aider-style ranked
   // map): most-referenced files first, within the token budget. Falls back to
   // breadth-first when the graph is trivial (no cross-file references).
-  const graph = buildFileGraph(root, files);
-  const rank = graph.hasEdges ? computePageRank(graph) : undefined;
-  return formatRepoMap(root, ".", files, dirCounts, 2, 25, rank);
+  const g = graph ? graph() : buildFileGraph(root, files);
+  const rank = g.hasEdges ? computePageRank(g) : undefined;
+  return formatRepoMap(root, ".", files, dirCounts, 2, 25, rank, g.info);
 }
 
 /**
@@ -455,6 +499,7 @@ export function buildRelevantFiles(
   task: string,
   opts: { maxFiles?: number; maxCandidates?: number; minScore?: number; minRepoFiles?: number } = {},
   scan?: RepoScan,
+  graph?: () => FileGraph,
 ): string | undefined {
   const keywords = taskKeywords(task);
   const pathTokens = taskPathTokens(task);
@@ -491,13 +536,13 @@ export function buildRelevantFiles(
   // key win over pure lexical: a file CENTRAL to what the task touches surfaces
   // even when its own name/exports don't match the task terms. Trivial graph
   // (no cross-file references) -> prBoost is 0 and we fall back to pure lexical.
-  const graph = buildFileGraph(root, files);
+  const g = graph ? graph() : buildFileGraph(root, files);
   let pr: Map<string, number> | undefined;
   let prMax = 0;
-  if (graph.hasEdges) {
+  if (g.hasEdges) {
     const personalization = new Map<string, number>();
     for (const { f, score } of pathScored) personalization.set(f.rel, score);
-    pr = computePageRank(graph, personalization);
+    pr = computePageRank(g, personalization);
     for (const v of pr.values()) if (v > prMax) prMax = v;
   }
   const PR_WEIGHT = 4; // a maximally-central-to-task file earns ~a path-token hit
@@ -525,21 +570,28 @@ export function buildRelevantFiles(
     }
   }
 
-  // Read each candidate once, refine with symbol-outline matches, blend in the
-  // (personalized) centrality boost.
+  // Refine with symbol-outline matches, blending in the (personalized)
+  // centrality boost. The graph build already read + outlined every capped
+  // file, so most candidates reuse that capture; only files it skipped (over
+  // the MAX_GRAPH_FILES cap, unreadable at the time) are read here.
   const refined = [...chosen.values()].map(({ f, pathScore }) => {
     let score = pathScore;
     let outline = "";
     if (f.size <= MAX_READ_BYTES) {
-      try {
-        const content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
-        outline = extractSymbols(f.rel, content);
-        const hay = outline.toLowerCase();
-        for (const pt of pathTokens) if (hay.includes(pt)) score += 2;
-        for (const kw of keywords) if (hay.includes(kw)) score += 1;
-      } catch {
-        // Unreadable -> keep the path-only score.
+      const cached = g.info?.get(f.rel);
+      if (cached) {
+        outline = cached.outline;
+      } else {
+        try {
+          const content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
+          outline = extractSymbols(f.rel, content);
+        } catch {
+          // Unreadable -> keep the path-only score (outline stays "").
+        }
       }
+      const hay = outline.toLowerCase();
+      for (const pt of pathTokens) if (hay.includes(pt)) score += 2;
+      for (const kw of keywords) if (hay.includes(kw)) score += 1;
     }
     score += prBoost(f.rel);
     return { rel: f.rel, outline, score };
@@ -564,6 +616,7 @@ function formatRepoMap(
   maxDepth: number,
   maxFiles: number,
   rank?: Map<string, number>,
+  info?: Map<string, FileGraphFileInfo>,
 ): string {
   if (files.length === 0) return `Repo map: no code files under ${sub}.`;
 
@@ -593,7 +646,7 @@ function formatRepoMap(
       )
     : [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel));
   for (const f of sorted.slice(0, maxFiles)) {
-    const outline = outlineFor(path.resolve(root, f.rel), f.rel, f.size);
+    const outline = outlineFor(path.resolve(root, f.rel), f.rel, f.size, info?.get(f.rel));
     out.push(`${f.rel}${outline ? `  ${outline}` : ""}`);
   }
   if (sorted.length > maxFiles) {

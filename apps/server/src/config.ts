@@ -15,7 +15,8 @@ import {
   type McpServerConfig,
   type ModelPricing,
 } from "@seekforge/core";
-import type { PermissionRule } from "@seekforge/shared";
+import type { HookStage, PermissionRule } from "@seekforge/shared";
+import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
 
 /** Default selectable model list (core's non-deprecated ids) when none configured. */
 const DEFAULT_MODEL_LIST = Object.keys(MODEL_PRICING).filter(
@@ -74,6 +75,11 @@ export type ServerConfig = {
    * on completion. Set false to only nudge the model. Edit the file directly.
    */
   autoLint?: boolean;
+  /**
+   * Edit-tool format override ("patch" | "whole"); default is model-adaptive.
+   * Mirrors the CLI/TUI config key. Edit the file directly.
+   */
+  editFormat?: "patch" | "whole";
   /** Shell hooks fired around tool calls / lifecycle. Edit the file directly. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
@@ -114,30 +120,40 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
 export class ConfigValueError extends Error {}
 
 function readJson(path: string): ServerConfig {
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as ServerConfig;
-  } catch {
-    return {};
-  }
+  // NOTE: no requireObject guard — the server historically passes non-object
+  // JSON through as-parsed (only the CLI collapses those layers to {}).
+  return readJsonConfigLayer<ServerConfig>(path);
 }
+
+/**
+ * Historical stage iteration order (sessionEnd third). Passed to the shared
+ * merge so the key insertion order of the merged hooks object — observable
+ * through JSON serialization (e.g. GET /api/config) — stays byte-identical to
+ * the old local loop.
+ */
+const HOOK_STAGE_ORDER: readonly HookStage[] = [
+  "preToolUse",
+  "postToolUse",
+  "sessionEnd",
+  "sessionStart",
+  "userPromptSubmit",
+  "preCompact",
+  "stop",
+  "subagentStop",
+  "notification",
+];
 
 /** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
 export function loadConfig(workspace: string): ServerConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   const project = readJson(join(workspace, ".seekforge", "config.json"));
-  // mcpServers merges per server name (project wins) instead of replacing wholesale.
-  const mcpServers = { ...global.mcpServers, ...project.mcpServers };
-  // permissionRules concatenates project-then-global (first match wins), so
-  // project rules take precedence — mirrors the CLI minus the --settings layer.
-  const permissionRules = [...(project.permissionRules ?? []), ...(global.permissionRules ?? [])];
-  return {
-    ...global,
-    ...project,
-    ...(permissionRules.length > 0 ? { permissionRules } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(process.env["DEEPSEEK_API_KEY"] ? { apiKey: process.env["DEEPSEEK_API_KEY"] } : {}),
-    ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
-  };
+  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
+  // project-over-global; mcpServers merge per server name (project wins);
+  // permissionRules concatenate project-then-global (first match wins); hooks
+  // concatenate per stage global-then-project (every hook runs); then the
+  // provider-aware env API key + SEEKFORGE_RUNTIME_BIN overrides land on top.
+  // Mirrors the CLI minus its local/profile/--settings layers.
+  return mergeConfigLayers<ServerConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
 }
 
 /** Merged config with the apiKey masked for transport (GET /api/config). */

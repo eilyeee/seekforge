@@ -10,6 +10,7 @@ import {
   computePageRank,
   extractSymbols,
   findDefinitions,
+  lazyFileGraph,
   scanRepo,
   symbolBackends,
   type SymbolBackend,
@@ -340,6 +341,75 @@ describe("buildRelevantFiles + PageRank blend", () => {
       const out = buildRelevantFiles(root, "fix the login bug")!;
       expect(out).toContain("src/auth/login.ts"); // lexical behaviour preserved
       expect(out).not.toContain("util/u0.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("shared file graph (lazyFileGraph) — build once, byte-identical output", () => {
+  // Big enough for buildRepoOverview's minFiles floor AND buildRelevantFiles'
+  // minRepoFiles floor, with a hub so the graph has edges and ranking engages.
+  function makeSharedRepo(dir: string): void {
+    mkdirSync(join(dir, "src/core"), { recursive: true });
+    mkdirSync(join(dir, "src/feat"), { recursive: true });
+    writeFileSync(join(dir, "src/core/registry.ts"), "export function registry(){ return 1; }");
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(
+        join(dir, `src/feat/feature${i}.ts`),
+        `export function feature${i}(){ return registry(); }`,
+      );
+    }
+  }
+
+  it("builds the graph exactly once and hands the SAME graph to both builders", () => {
+    const root = mkdtempSync(join(tmpdir(), "shared-graph-"));
+    try {
+      makeSharedRepo(root);
+      const scan = scanRepo(root);
+      const graph = lazyFileGraph(root, scan);
+      expect(graph()).toBe(graph()); // memoized: one build, one object
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("buildRepoOverview output with a shared graph is identical to without", () => {
+    const root = mkdtempSync(join(tmpdir(), "shared-ovr-"));
+    try {
+      makeSharedRepo(root);
+      const scan = scanRepo(root);
+      const withShared = buildRepoOverview(root, 40, scan, lazyFileGraph(root, scan));
+      const without = buildRepoOverview(root, 40, scan);
+      expect(withShared).toBeDefined();
+      expect(withShared).toBe(without);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("buildRelevantFiles output with a shared graph is identical to without", () => {
+    const root = mkdtempSync(join(tmpdir(), "shared-rel-"));
+    try {
+      makeSharedRepo(root);
+      const scan = scanRepo(root);
+      const withShared = buildRelevantFiles(root, "fix feature7 handler", {}, scan, lazyFileGraph(root, scan));
+      const without = buildRelevantFiles(root, "fix feature7 handler", {}, scan);
+      expect(withShared).toBeDefined();
+      expect(withShared).toBe(without);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("buildFileGraph captures outline + line count per file it actually read", () => {
+    const root = mkdtempSync(join(tmpdir(), "graph-info-"));
+    try {
+      makeSharedRepo(root);
+      const graph = buildFileGraph(root, scanRepo(root).files);
+      const info = graph.info?.get(join("src", "core", "registry.ts"));
+      expect(info?.outline).toBe("exports: registry");
+      expect(info?.lines).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

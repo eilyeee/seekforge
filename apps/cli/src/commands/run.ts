@@ -5,7 +5,7 @@ import type { AgentEvent, ApprovalMode, FinalReport } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
 import { colorIsEnabled, fail } from "../colors.js";
 import { loadConfig } from "../config.js";
-import { expandFileRefs } from "../file-refs.js";
+import { expandFileRefs } from "@seekforge/shared/file-refs";
 import {
   buildResultEnvelope,
   createStreamJsonMapper,
@@ -22,7 +22,7 @@ import { isCostBudgetExceeded } from "../cost-budget.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
 import { buildToolGatingRules } from "../tool-gating.js";
-import { expandExtraFileRefs, normalizeExtraDir } from "../workspace-dirs.js";
+import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 
 export type RunOptions = {
   mode: "ask" | "edit";
