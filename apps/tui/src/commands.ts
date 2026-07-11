@@ -37,7 +37,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "sessions", summary: "pick a session to resume (interactive)" , group: "session" },
   { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
-  { name: "loop", args: "<verify command>", summary: "auto-loop: run→verify until the command passes (task = composer lines below)" , group: "run" },
+  { name: "loop", args: "[--max-iterations N] [--budget USD] <verify command>", summary: "auto-loop: run→verify until the command passes (task = composer lines below)" , group: "run" },
   { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" , group: "run" },
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
@@ -84,7 +84,14 @@ export type SlashCommand =
   | { name: "resume"; arg?: string }
   | { name: "plan"; arg?: string }
   /** Auto-loop: `verify` is the success command; `task` is the composer text. */
-  | { name: "loop"; verify?: string; task?: string }
+  | {
+      name: "loop";
+      verify?: string;
+      task?: string;
+      maxIterations?: number;
+      costBudgetUsd?: number;
+      error?: string;
+    }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
@@ -135,6 +142,48 @@ export type ParsedInput =
   /** "!cmd" passthrough: run a shell command locally, outside the agent. */
   | { kind: "bash"; command: string }
   | { kind: "task"; text: string };
+
+const LOOP_MAX_ITERATIONS = 100;
+
+function parseLoopFirstLine(input: string): {
+  verify?: string;
+  maxIterations?: number;
+  costBudgetUsd?: number;
+  error?: string;
+} {
+  let rest = input.trim();
+  let maxIterations: number | undefined;
+  let costBudgetUsd: number | undefined;
+
+  while (/^--(?:max-iterations|budget)(?:=|\s|$)/.test(rest)) {
+    const match = /^(--max-iterations|--budget)(?:=|\s+)(\S+)(?:\s+|$)/.exec(rest);
+    if (!match) {
+      const option = rest.startsWith("--max-iterations") ? "--max-iterations" : "--budget";
+      return { error: `${option} requires a value` };
+    }
+    const option = match[1] as "--max-iterations" | "--budget";
+    const raw = match[2] ?? "";
+    const value = Number(raw);
+    if (option === "--max-iterations") {
+      if (maxIterations !== undefined) return { error: "--max-iterations may only be specified once" };
+      if (!Number.isInteger(value) || value < 1 || value > LOOP_MAX_ITERATIONS) {
+        return { error: `--max-iterations must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
+      }
+      maxIterations = value;
+    } else {
+      if (costBudgetUsd !== undefined) return { error: "--budget may only be specified once" };
+      if (!Number.isFinite(value) || value <= 0) return { error: "--budget must be a finite number greater than 0" };
+      costBudgetUsd = value;
+    }
+    rest = rest.slice(match[0].length).trimStart();
+  }
+
+  return {
+    ...(rest ? { verify: rest } : {}),
+    ...(maxIterations !== undefined ? { maxIterations } : {}),
+    ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+  };
+}
 
 const NO_ARG = new Set([
   "help",
@@ -203,10 +252,10 @@ export function parseInput(line: string): ParsedInput {
     const newlineIdx = trimmed.indexOf("\n");
     const firstLine = newlineIdx === -1 ? trimmed : trimmed.slice(0, newlineIdx);
     const task = newlineIdx === -1 ? "" : trimmed.slice(newlineIdx + 1).trim();
-    const verify = firstLine.replace(/^\/\s*loop\s*/i, "").trim();
+    const parsed = parseLoopFirstLine(firstLine.replace(/^\/\s*loop\s*/i, ""));
     return {
       kind: "slash",
-      command: { name: "loop", ...(verify ? { verify } : {}), ...(task ? { task } : {}) },
+      command: { name: "loop", ...parsed, ...(task ? { task } : {}) },
     };
   }
 

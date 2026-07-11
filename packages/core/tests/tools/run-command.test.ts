@@ -385,6 +385,24 @@ describe("run_command", () => {
 });
 
 describe("runShellCommand onOutput", () => {
+  it("kills a running command when its signal is aborted", async () => {
+    const ws = makeWorkspace();
+    const controller = new AbortController();
+    const started = Date.now();
+    const running = runShellCommand("sleep 30", ws, 60_000, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 25);
+    await expect(running).rejects.toMatchObject({ code: "cancelled" });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("rejects an already-aborted signal without spawning", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      runShellCommand("touch should-not-exist", makeWorkspace(), 10_000, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "cancelled" });
+  });
+
   it("streams decoded chunks per stream, in order, matching the captured output", async () => {
     const ws = makeWorkspace();
     const chunks: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];

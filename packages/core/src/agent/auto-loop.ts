@@ -8,8 +8,9 @@
  * NOTE: the public types + signature below are the contract the CLI builds
  * against; the implementation is filled in separately.
  */
-import { execFile } from "node:child_process";
 import type { ApprovalMode } from "@seekforge/shared";
+import { ToolError } from "../tools/errors.js";
+import { runShellCommand } from "../tools/run-command.js";
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 
 export type LoopStatus =
@@ -46,7 +47,7 @@ export type LoopOptions = {
    * (stdout+stderr, tail-capped). Defaults to a real shell exec in `workspace`;
    * injectable for tests.
    */
-  verify?: (workspace: string, command: string) => Promise<{ code: number; output: string }>;
+  verify?: (workspace: string, command: string, signal?: AbortSignal) => Promise<{ code: number; output: string }>;
 };
 
 export type LoopEvent =
@@ -73,45 +74,31 @@ const tail = (s: string): string => (s.length <= TAIL_CAP ? s : s.slice(s.length
  * tail-capped stdout+stderr. A spawn failure (command can't be run at all) is
  * surfaced as a thrown error so the pre-check can map it to `verify_error`.
  */
-function defaultVerify(workspace: string, command: string): Promise<{ code: number; output: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      "/bin/sh",
-      ["-c", command],
-      {
-        cwd: workspace,
-        timeout: 120_000,
-        maxBuffer: 8 * 1024 * 1024,
-        env: { ...process.env, LC_ALL: "C" },
-      },
-      (err, stdout, stderr) => {
-        const output = tail(`${stdout ?? ""}${stderr ?? ""}`);
-        if (err === null) {
-          resolve({ code: 0, output });
-          return;
-        }
-        const e = err as NodeJS.ErrnoException & { code?: number | string; killed?: boolean };
-        // execFile reports a non-zero EXIT via `err.code` being a number; a
-        // genuine SPAWN failure (e.g. /bin/sh missing) surfaces a string code
-        // (ENOENT, …) — that's "can't run the command at all".
-        if (typeof e.code === "number") {
-          resolve({ code: e.code, output });
-          return;
-        }
-        if (e.killed) {
-          // Timed out / killed: ran, but didn't pass.
-          resolve({ code: 1, output: output || String(e.message ?? "killed") });
-          return;
-        }
-        reject(err);
-      },
-    );
-  });
+async function defaultVerify(
+  deps: AgentCoreDeps,
+  workspace: string,
+  command: string,
+  signal?: AbortSignal,
+): Promise<{ code: number; output: string }> {
+  try {
+    const result = await runShellCommand(command, workspace, 120_000, {
+      sandbox: deps.sandbox,
+      workspace,
+      signal,
+    });
+    return { code: result.exitCode, output: tail(`${result.stdout}${result.stderr}`) };
+  } catch (err) {
+    if (err instanceof ToolError && err.code === "timeout") {
+      const detail = err.detail as { stdout?: string; stderr?: string } | undefined;
+      return { code: 1, output: tail(`${detail?.stdout ?? ""}${detail?.stderr ?? ""}`) || err.message };
+    }
+    throw err;
+  }
 }
 
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
   const emit = (event: LoopEvent): void => opts.onEvent?.(event);
-  const verify = opts.verify ?? defaultVerify;
+  const verify = opts.verify ?? ((workspace, command, signal) => defaultVerify(deps, workspace, command, signal));
   // Defensive: ignore non-positive / non-integer / non-finite limits (the WS
   // entry validates too, but core may be called directly).
   const maxIterations =
@@ -137,9 +124,27 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
 
   // --- Pre-check: maybe it's already green. ---------------------------------
   let preVerify: { code: number; output: string };
+  if (opts.signal?.aborted) {
+    return done({
+      status: "cancelled",
+      iterations: 0,
+      costUsd: 0,
+      sessionId: "",
+      finalVerify: { code: -1, output: "cancelled" },
+    });
+  }
   try {
-    preVerify = await verify(opts.workspace, opts.verifyCommand);
+    preVerify = await verify(opts.workspace, opts.verifyCommand, opts.signal);
   } catch {
+    if (opts.signal?.aborted) {
+      return done({
+        status: "cancelled",
+        iterations: 0,
+        costUsd: 0,
+        sessionId: "",
+        finalVerify: { code: -1, output: "cancelled" },
+      });
+    }
     // The command could not be run at all.
     const result: LoopResult = {
       status: "verify_error",
@@ -169,6 +174,12 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   let iterations = 0;
 
   for (let i = 1; i <= maxIterations; i++) {
+    if (opts.signal?.aborted) {
+      return done({ status: "cancelled", iterations, costUsd, sessionId, finalVerify: lastVerify });
+    }
+    if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
+      return done({ status: "budget", iterations, costUsd, sessionId, finalVerify: lastVerify });
+    }
     iterations = i;
     emit({ type: "iteration.start", iteration: i });
 
@@ -179,12 +190,16 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
 
     let runCost = 0;
     let filesChangedThisRun = false;
+    const budgetController = new AbortController();
+    const runSignal = opts.signal
+      ? AbortSignal.any([opts.signal, budgetController.signal])
+      : budgetController.signal;
     const events = agent.runTask({
       task: continuation,
       projectPath: opts.workspace,
       mode: "edit",
       approvalMode,
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal: runSignal,
       ...(sessionId ? { resumeSessionId: sessionId } : {}),
     });
     for await (const ev of events) {
@@ -197,6 +212,9 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
         // emits no FinalReport — still contributes its real cost to the budget
         // guard below; otherwise repeated expensive failures overshoot silently.
         runCost = ev.usage.costUsd;
+        if (costBudgetUsd !== undefined && costUsd + runCost >= costBudgetUsd) {
+          budgetController.abort();
+        }
       } else if (ev.type === "session.completed") {
         runCost = ev.report.usage.costUsd;
       }
@@ -207,8 +225,17 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     // Verify the run's effect.
     let v: { code: number; output: string };
     try {
-      v = await verify(opts.workspace, opts.verifyCommand);
+      v = await verify(opts.workspace, opts.verifyCommand, opts.signal);
     } catch {
+      if (opts.signal?.aborted) {
+        return done({
+          status: "cancelled",
+          iterations: i,
+          costUsd,
+          sessionId,
+          finalVerify: { code: -1, output: "cancelled" },
+        });
+      }
       const result: LoopResult = {
         status: "verify_error",
         iterations: i,

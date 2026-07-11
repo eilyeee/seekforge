@@ -87,6 +87,54 @@ describe("parseInput /loop", () => {
   it("omits the verify command when /loop is bare", () => {
     expect(parseInput("/loop")).toEqual({ kind: "slash", command: { name: "loop" } });
   });
+
+  it("parses explicit iteration and budget options without changing the task", () => {
+    expect(parseInput("/loop --max-iterations 12 --budget=1.5 pnpm test -- --runInBand\nFix tests")).toEqual({
+      kind: "slash",
+      command: {
+        name: "loop",
+        verify: "pnpm test -- --runInBand",
+        task: "Fix tests",
+        maxIterations: 12,
+        costBudgetUsd: 1.5,
+      },
+    });
+  });
+
+  it("keeps unknown leading options as part of the verify command for compatibility", () => {
+    expect(parseInput("/loop --runInBand npm test\nFix tests")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "--runInBand npm test", task: "Fix tests" },
+    });
+  });
+
+  it("does not prefix-match longer verify-command flags as loop options", () => {
+    expect(parseInput("/loop --budgeted npm test\nFix tests")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "--budgeted npm test", task: "Fix tests" },
+    });
+  });
+
+  it.each([
+    ["--max-iterations 0", "--max-iterations must be an integer from 1 to 100"],
+    ["--max-iterations 1.5", "--max-iterations must be an integer from 1 to 100"],
+    ["--max-iterations 101", "--max-iterations must be an integer from 1 to 100"],
+    ["--budget 0", "--budget must be a finite number greater than 0"],
+    ["--budget 1e999", "--budget must be a finite number greater than 0"],
+    ["--budget", "--budget requires a value"],
+  ])("rejects invalid loop option %s", (option, error) => {
+    expect(parseInput(`/loop ${option}\nnothing`)).toEqual({
+      kind: "slash",
+      command: { name: "loop", task: "nothing", error },
+    });
+  });
+
+  it("rejects duplicate options", () => {
+    expect(parseInput("/loop --budget 1 --budget 2 npm test\nFix tests")).toEqual({
+      kind: "slash",
+      command: { name: "loop", task: "Fix tests", error: "--budget may only be specified once" },
+    });
+  });
 });
 
 describe("parseInput v3 additions", () => {

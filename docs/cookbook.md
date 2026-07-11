@@ -54,9 +54,13 @@ seekforge loop "port the module to TS" --verify "pnpm build" --max-iters 12 --bu
 ```
 
 `--verify <cmd>` is **required** (its exit 0 is the success criterion).
-`--max-iters` defaults to 8; `--budget <usd>` caps cumulative cost. The loop is
-inherently autonomous (runs in `acceptEdits`); `-y` only suppresses the
-auto-approve note.
+`--max-iters` defaults to 8. `--budget <usd>` stops further work when observed
+cumulative usage reaches the budget; an already in-flight provider request can
+make the final billed amount slightly higher. The loop is inherently autonomous
+(runs in `acceptEdits`); `-y` only suppresses the auto-approve note.
+
+The verification command uses the shared shell executor with the configured OS
+sandbox and is stopped cooperatively on `Ctrl-C` or the TUI Stop action.
 
 TUI (`seekforge` interactive): `/loop` is multi-line — the first line is the
 verify command, the lines below are the task.
@@ -66,9 +70,17 @@ verify command, the lines below are the task.
 make the failing suite pass without weakening any assertions
 ```
 
+Optional TUI controls go before the verification command:
+
+```text
+/loop --max-iterations 12 --budget 1.50 pnpm test
+make the failing suite pass without weakening any assertions
+```
+
 **Tips:**
-- The loop keeps the session trace on stop/exhaustion — `seekforge resume <id>`
-  to continue. See [Loop engineering](loop-engineering.md).
+- Once an agent iteration creates a session, the loop keeps its trace on
+  stop/exhaustion — `seekforge resume <id>` to continue. A pre-check that is
+  already green creates no session. See [Loop engineering](loop-engineering.md).
 
 ---
 

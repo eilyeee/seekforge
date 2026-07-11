@@ -366,6 +366,8 @@ export type RunShellOptions = {
    * swallowed: a broken listener must never break the command.
    */
   onOutput?: ((stream: "stdout" | "stderr", chunk: string) => void) | undefined;
+  /** Cooperative cancellation; abort kills the whole command process group. */
+  signal?: AbortSignal | undefined;
 };
 
 /**
@@ -401,7 +403,10 @@ export function runShellCommand(
   timeoutMs: number,
   options: RunShellOptions = {},
 ): Promise<ShellResult> {
-  const { sandbox, workspace = cwd, onOutput } = options;
+  const { sandbox, workspace = cwd, onOutput, signal } = options;
+  if (signal?.aborted) {
+    return Promise.reject(new ToolError("cancelled", "Command cancelled"));
+  }
   if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
     return Promise.reject(
       new ToolError(
@@ -422,6 +427,7 @@ export function runShellCommand(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     // Decode per stream through a StringDecoder so a multi-byte UTF-8 sequence
@@ -467,10 +473,29 @@ export function runShellCommand(
       }
     }, timeoutMs);
 
+    const killTree = (): void => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    };
+    const onAbort = (): void => {
+      aborted = true;
+      killTree();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the check→subscribe race: the signal may abort after the early
+    // guard but before the listener is attached.
+    if (signal?.aborted) onAbort();
+
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       fn();
     };
 
@@ -483,6 +508,10 @@ export function runShellCommand(
         if (outTail && stdout.length < MAX_CAPTURE_CHARS) stdout += outTail;
         if (errTail && stderr.length < MAX_CAPTURE_CHARS) stderr += errTail;
         const durationMs = Date.now() - started;
+        if (aborted) {
+          reject(new ToolError("cancelled", "Command cancelled", { stdout, stderr }));
+          return;
+        }
         if (timedOut) {
           reject(
             new ToolError("timeout", `Command timed out after ${timeoutMs}ms`, {

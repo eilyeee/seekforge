@@ -97,5 +97,12 @@ test("formatSummary reflects a non-passed status", () => {
   const s = formatSummary({ ...result, status: "budget" });
   assert.match(s, /budget/);
 });
+test("formatSummary omits session recovery commands when no session was created", () => {
+  const s = formatSummary({ ...result, iterations: 0, costUsd: 0, sessionId: "" });
+  assert.match(s, /passed/);
+  assert.doesNotMatch(s, /session:/);
+  assert.doesNotMatch(s, /seekforge resume/);
+  assert.doesNotMatch(s, /seekforge rewind/);
+});
 
 console.log(`${passed} loop tests passed`);

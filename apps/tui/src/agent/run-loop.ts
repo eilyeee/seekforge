@@ -16,6 +16,8 @@ export type RunLoopDeps = {
   mcpToolSpecs: ToolSpec[];
   /** Max run→verify iterations before giving up (caller supplies the default). */
   maxIterations: number;
+  /** Optional command-level override; otherwise inherits config.costBudgetUsd. */
+  costBudgetUsd?: number;
   /** Forwards each LoopEvent to the caller for transcript rendering. */
   onEvent: (event: LoopEvent) => void;
 };
@@ -47,11 +49,13 @@ export async function runLoop(
   });
 
   try {
+    const costBudgetUsd = deps.costBudgetUsd ?? deps.config.costBudgetUsd;
     return await runAutoLoop(agentDeps, {
       task: expandFileRefs(task, deps.projectPath),
       workspace: deps.projectPath,
       verifyCommand,
       maxIterations: deps.maxIterations,
+      ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
       approvalMode: "acceptEdits",
       signal,
       onEvent: deps.onEvent,

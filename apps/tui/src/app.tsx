@@ -750,7 +750,11 @@ export function App({
    * notices. The loop forces acceptEdits internally (see run-loop.ts).
    */
   const runLoopTask = useCallback(
-    async (task: string, verifyCommand: string) => {
+    async (
+      task: string,
+      verifyCommand: string,
+      options: { maxIterations?: number; costBudgetUsd?: number } = {},
+    ) => {
       const controller = new AbortController();
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
@@ -766,7 +770,8 @@ export function App({
           model: modelRef.current,
           projectPath,
           mcpToolSpecs,
-          maxIterations: 8,
+          maxIterations: options.maxIterations ?? 8,
+          ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
           onEvent: (event) => {
             for (const line of formatLoopEvent(event)) {
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
@@ -937,6 +942,10 @@ export function App({
             notice("a task is already running — Esc cancels it, or wait for it to finish", "error");
             break;
           }
+          if (command.error) {
+            notice(`invalid /loop options: ${command.error}`, "error");
+            break;
+          }
           const verifyCommand = command.verify?.trim();
           const task = command.task?.trim();
           if (!verifyCommand) {
@@ -953,7 +962,10 @@ export function App({
             );
             break;
           }
-          void runLoopTask(task, verifyCommand);
+          void runLoopTask(task, verifyCommand, {
+            ...(command.maxIterations !== undefined ? { maxIterations: command.maxIterations } : {}),
+            ...(command.costBudgetUsd !== undefined ? { costBudgetUsd: command.costBudgetUsd } : {}),
+          });
           break;
         }
         case "approve": {

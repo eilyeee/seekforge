@@ -58,9 +58,13 @@ export function formatSummary(result: LoopResult): string {
     t("cmd.loop.summaryStatus", { status: result.status }),
     t("cmd.loop.summaryIterations", { n: result.iterations }),
     t("cmd.loop.summaryCost", { cost: result.costUsd.toFixed(4) }),
-    t("cmd.loop.summarySession", { id: result.sessionId }),
-    t("cmd.loop.summaryHint", { id: result.sessionId }),
   ];
+  if (result.sessionId) {
+    lines.push(
+      t("cmd.loop.summarySession", { id: result.sessionId }),
+      t("cmd.loop.summaryHint", { id: result.sessionId }),
+    );
+  }
   return lines.join("\n");
 }
 

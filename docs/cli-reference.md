@@ -130,3 +130,23 @@ command performs commit, push, PR creation, and CI inspection.
 
 See [Autonomous GitHub issue → PR](github.md) for lifecycle, cleanup, and
 security details.
+
+## Autonomous verification loop
+
+`seekforge loop <task> --verify <command>` repeatedly runs the agent and the
+verification command until it passes or a guardrail stops the loop. Verification
+uses the shared shell executor with the configured OS sandbox and responds to
+cooperative cancellation.
+
+| Flag | Description |
+| --- | --- |
+| `--verify <command>` | Required success criterion; exit code 0 passes. |
+| `--max-iters <n>` | Maximum agent iterations; defaults to 8. |
+| `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
+| `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
+| `-m, --model <model>` | Override the configured model. |
+| `--profile <name>` | Apply a named configuration profile. |
+
+If the initial verification pre-check passes, no session is created. Otherwise
+the final summary includes commands for resuming or rewinding the retained
+session. The interactive TUI exposes the same workflow through `/loop`.

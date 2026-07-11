@@ -196,6 +196,19 @@ open after navigation begins.
 - **Caught:** `packages/core/src/tools/builtins/browser.ts` — the initial URL was
   checked, but Playwright followed later requests without reapplying the policy.
 
+## 17. Enforce guardrails at the finest observable boundary
+
+Checking a budget or cancellation signal only between high-level iterations lets
+one iteration continue making calls long after the stop condition is observable.
+Likewise, cancelling a parent operation without signalling its child process
+leaves the user waiting for timeout.
+
+- **Do:** check budgets on each usage update, propagate cancellation into active
+  subprocess trees, and check an already-aborted signal before preflight work.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` and
+  `packages/core/src/tools/run-command.ts` — loop budget/cancellation previously
+  took effect only after a full agent run or verification timeout.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

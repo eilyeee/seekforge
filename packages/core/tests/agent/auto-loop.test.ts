@@ -7,6 +7,7 @@ import type { ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
 import { runAutoLoop, type LoopEvent, type LoopOptions } from "../../src/agent/auto-loop.js";
+import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
 
@@ -70,6 +71,7 @@ describe("runAutoLoop", () => {
     workspace = mkdtempSync(join(tmpdir(), "seekforge-autoloop-"));
   });
   afterEach(() => {
+    setSandboxAvailabilityCheckForTests(null);
     rmSync(workspace, { recursive: true, force: true });
   });
 
@@ -156,6 +158,18 @@ describe("runAutoLoop", () => {
     expect(result.costUsd).toBeGreaterThanOrEqual(0.0015);
   });
 
+  it("stops the active run on the first observed usage that reaches the budget", async () => {
+    const { deps } = mkDeps();
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, failNTimes(2)),
+      maxIterations: 8,
+      costBudgetUsd: 0.0005,
+    });
+    expect(result.status).toBe("budget");
+    expect(result.iterations).toBe(1);
+    expect(result.costUsd).toBeCloseTo(0.001, 6);
+  });
+
   it("stops on no_progress when verify output never changes", async () => {
     const { deps } = mkDeps();
     const result = await runAutoLoop(deps, {
@@ -180,6 +194,43 @@ describe("runAutoLoop", () => {
       signal: controller.signal,
     });
     expect(result.status).toBe("cancelled");
+    expect(result.iterations).toBe(0);
+  });
+
+  it("does not run verification when already cancelled", async () => {
+    const { deps, provider } = mkDeps();
+    const controller = new AbortController();
+    controller.abort();
+    let verifies = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        verifies++;
+        return { code: 0, output: "ok" };
+      }),
+      signal: controller.signal,
+    });
+    expect(result.status).toBe("cancelled");
+    expect(result.iterations).toBe(0);
+    expect(verifies).toBe(0);
+    expect(provider.chats).toBe(0);
+  });
+
+  it("cancels while verification is running", async () => {
+    const { deps } = mkDeps();
+    const controller = new AbortController();
+    let calls = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async (_ws, _cmd, signal) => {
+        calls++;
+        if (calls === 1) return { code: 1, output: "red" };
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          controller.abort();
+        });
+      }),
+      signal: controller.signal,
+    });
+    expect(result.status).toBe("cancelled");
     expect(result.iterations).toBe(1);
   });
 
@@ -192,6 +243,19 @@ describe("runAutoLoop", () => {
     });
     expect(result.status).toBe("verify_error");
     expect(result.iterations).toBe(0);
+    expect(provider.chats).toBe(0);
+  });
+
+  it("fails closed when a configured verification sandbox is unavailable", async () => {
+    const { deps, provider } = mkDeps();
+    deps.sandbox = "workspace-write";
+    setSandboxAvailabilityCheckForTests(() => false);
+    const result = await runAutoLoop(deps, {
+      task: "make it green",
+      workspace,
+      verifyCommand: "echo ok",
+    });
+    expect(result.status).toBe("verify_error");
     expect(provider.chats).toBe(0);
   });
 });
