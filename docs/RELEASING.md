@@ -6,7 +6,18 @@ so an end user installs only the DMG — no system `seekforge`.
 
 ## Pre-release checklist
 
-1. **Green baselines** — `pnpm -r typecheck` and `pnpm -r test` all pass.
+1. **Green baselines** — run the same deterministic gates as CI:
+   ```sh
+   pnpm typecheck
+   pnpm test
+   pnpm build
+   pnpm test:coverage:critical
+   node scripts/npm-pack-smoke.mjs
+   cargo test --workspace --exclude seekforge-desktop
+   ```
+   The package smoke builds on the existing CLI `dist`, packs the exact npm
+   artifact, installs it under a clean temporary prefix, and runs both published
+   entry points. It needs registry access to install runtime dependencies.
 2. **Version bump** — set the release version in `apps/cli/package.json` and
    `apps/desktop/src-tauri/tauri.conf.json` (`version`); update `CHANGELOG.md`.
 3. **Build the sidecar** for the target triple (required by Tauri):
@@ -42,6 +53,23 @@ fresh user account) that has **no** `seekforge` on PATH:
 
 Record the result (OS version, arch) in the release notes. This is the last
 pre-release check and is **not** yet wired into CI.
+
+## Automated quality gates
+
+- `.github/workflows/ci.yml` runs full typecheck/build/test on Node 22, enforces
+  scoped coverage floors for the highest-risk URL/browser/command/cache
+  boundaries, then installs and exercises the packed CLI on the supported floor,
+  Node 20.
+- `.github/workflows/integration.yml` runs weekly and on demand. It exercises the
+  real Rust runtime protocol, builds/runs the Docker image, and launches
+  Playwright Chromium for a screenshot smoke test.
+- `.github/workflows/eval.yml` runs weekly and on demand against the committed
+  behavioral baseline. It requires the repository `DEEPSEEK_API_KEY` secret and
+  makes paid, non-deterministic provider calls; review its uploaded report and
+  cost before refreshing `evals/baseline.json`.
+
+The integration and eval schedules complement the deterministic PR gate; they
+do not replace the clean-machine desktop checks above.
 
 ## Updater strategy
 

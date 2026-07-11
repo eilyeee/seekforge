@@ -110,3 +110,23 @@ Beyond the run/ask flags above, these subcommands operate on stored sessions
 | `seekforge sessions` | List recent sessions (id, status, task) |
 | `seekforge resume <id>` | Continue a session (also `run/ask -c` for the latest) |
 | `seekforge replay <session>` | Deterministically re-render a stored session's events to stdout — no model calls, no cost. `--verbose` for full tool args/results |
+
+## GitHub issue and review workflows
+
+These commands require an authenticated `gh`, an `origin` remote, and an
+explicit positive cost budget. The agent edits and verifies; the user-invoked
+command performs commit, push, PR creation, and CI inspection.
+
+| Command / flag | Description |
+| --- | --- |
+| `seekforge resolve <issue> --max-cost <usd>` | Fetch an issue, fix it in an isolated worktree, verify, commit, push, and open a draft PR. `<issue>` may be a number or GitHub issue URL. |
+| `seekforge resolve-review <pr> --max-cost <usd>` | Check out a PR in an isolated worktree, address actionable comments/reviews, verify, commit, and push fixes. |
+| `--base <branch>` | `resolve` only: PR base branch; defaults to `main`. |
+| `-m, --model <model>` | Override the model for the bounded headless run. |
+| `--no-draft` | `resolve` only: create a ready-for-review PR instead of a draft. |
+| `--no-worktree` | Deliberately use and change the current checkout instead of the default temporary worktree. |
+| `--wait-ci` | Wait for `gh pr checks --watch --fail-fast` after pushing. |
+| `--dry-run` | Run the agent and verification, then print commit/push/PR commands without executing outward actions. The worktree is retained for inspection. |
+
+See [Autonomous GitHub issue → PR](github.md) for lifecycle, cleanup, and
+security details.

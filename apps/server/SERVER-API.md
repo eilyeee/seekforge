@@ -127,7 +127,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
 | DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |
-| POST /api/triggers/:id | **fire** the trigger — start a headless, cost-bounded run → `202 {sessionId, triggerId}`. Requires the per-trigger secret (`x-seekforge-trigger-secret` header or `?secret=`, constant-time) **on top of** the server token. Optional JSON body (e.g. a GitHub webhook payload) is summarised and appended to the task. 401 bad server token, 403 bad/missing secret, 404 unknown id, 409 disabled |
+| POST /api/triggers/:id | **fire** the trigger — start a headless, cost-bounded run → `202 {sessionId, triggerId}`. Generic callers use server bearer token + `x-seekforge-trigger-secret` (or `?secret=`). Native GitHub webhooks may instead authenticate with `X-Hub-Signature-256` over the exact raw body plus `X-GitHub-Delivery` and an allowed `X-GitHub-Event`; this signed route is the only `/api` bearer-token exception. Optional JSON is summarised into the task. 400 malformed/unsupported event metadata, 401 missing server token for generic calls, 403 bad secret/signature, 404 unknown id, 409 disabled/duplicate delivery. |
 
 Errors: `{error: {code, message}}` with appropriate HTTP status.
 
@@ -135,13 +135,17 @@ Errors: `{error: {code, message}}` with appropriate HTTP status.
 
 `POST /api/triggers/:id` fires a webhook trigger: it starts a **headless,
 cost-bounded** agent run of the trigger's task and returns `202` with the new
-(auditable) session id. Two safety invariants — see
+(auditable) session id. Safety invariants — see
 [docs/automation.md](../../docs/automation.md):
 
-- **Dual auth.** Every `/api` route already requires the server bearer token;
-  the fire endpoint *also* requires the trigger's own `secret` (constant-time
-  compared). A leaked trigger URL can't fire a run without the secret and can't
-  reach any other endpoint.
+- **Generic caller auth.** CI/services present both the server bearer token and
+  trigger secret; secret comparison is constant-time.
+- **Native GitHub auth.** GitHub signs the exact body with the trigger secret in
+  `X-Hub-Signature-256`. Signed deliveries require a unique
+  `X-GitHub-Delivery`, are deduplicated for 24 hours with a bounded in-memory
+  cache, and accept only `push`, `pull_request`, `issues`, `issue_comment`, and
+  `workflow_run`. No server bearer token is required for this one fire route;
+  management routes remain bearer-protected.
 - **Bounded + headless.** `maxCostUsd` is mandatory (unbounded triggers are
   rejected at creation) and the run aborts on reaching it. The run is
   non-interactive: the approval callback auto-denies anything that would prompt

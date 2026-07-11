@@ -76,6 +76,10 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge update` | check npm for a newer seekforge version and print the install command |
 | `seekforge diff` | show the current git diff |
 | `seekforge doctor` | run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge resolve <issue> --max-cost <usd>` | fix a GitHub issue in an isolated worktree and open a draft PR; supports `--wait-ci` and `--dry-run` — see [GitHub workflow](docs/github.md) |
+| `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR review feedback, verify, commit, and push fixes |
+| `seekforge schedule add\|list\|run` | manage local cost-bounded scheduled agent jobs — see [Scheduling](docs/scheduling.md) |
+| `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |

@@ -31,12 +31,21 @@ seekforge run "修复登录按钮点击无响应的问题"
 | `seekforge sessions` / `status` | list sessions / project overview |
 | `seekforge diff` | show the current git diff |
 | `seekforge doctor` | environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
+| `seekforge resolve <issue> --max-cost <usd>` | fix an issue in an isolated worktree and open a draft PR (`--wait-ci`, `--dry-run`, `--no-worktree`) |
+| `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR feedback, verify, commit, and push fixes |
+| `seekforge schedule add\|list\|run` | register and run local cost-bounded scheduled jobs |
+| `seekforge sandbox-run "<task>"` | execute through the optional Docker runner (`--check` prints the command only) |
 | `seekforge update` (alias `upgrade`) | check npm for a newer release and print the install command |
 | `seekforge init` | scaffold `.seekforge/` and `AGENTS.md` |
 | `seekforge skill list\|show\|create` | manage procedure skills |
 | `seekforge mcp list\|add\|remove` | list/add/remove MCP servers in config |
 | `seekforge memory list\|approve\|reject` | curate long-term project memory |
 | `seekforge config show\|set` | configuration (`apiKey`, `model`, `baseUrl`, `runtimeBin`) |
+
+GitHub workflow details and safety boundaries are documented in
+[`docs/github.md`](../../docs/github.md); scheduling and isolated execution are
+covered by [`docs/scheduling.md`](../../docs/scheduling.md) and
+[`docs/remote.md`](../../docs/remote.md).
 
 ### Flags for `run` / `ask` / `-p`
 
