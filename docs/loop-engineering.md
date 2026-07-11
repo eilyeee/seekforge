@@ -5,13 +5,114 @@ Drive **one** task to "green" across multiple agent runs, fully autonomously:
 budget guardrail trips. This is a layer *above* a single run — the in-run
 tool loop (`packages/core/src/agent/loop.ts`) is unchanged.
 
+## Architecture
+
+Loop is an orchestration layer around the existing agent core. Clients collect
+options and render events; they do not implement iteration, verification,
+budget, or convergence policy.
+
+```mermaid
+flowchart LR
+  subgraph Clients["Client adapters"]
+    CLI["CLI: loop / loop-resume"]
+    TUI["TUI: /loop"]
+    Desktop["Desktop LoopPanel"]
+  end
+
+  Desktop -->|"loop frame"| WS["Server WebSocket"]
+  WS -->|"validated LoopOptions"| Orchestrator
+  CLI --> Orchestrator["runAutoLoop / resumeAutoLoop"]
+  TUI --> Orchestrator
+
+  Orchestrator --> Agent["AgentCore.runTask"]
+  Orchestrator --> Verify["sandboxed shell verifier"]
+  Orchestrator --> Diagnostics["structured diagnostics parser"]
+  Orchestrator --> Fingerprint["workspace fingerprint"]
+  Orchestrator --> State[".seekforge/loops/<id>.json"]
+  Agent --> Trace[".seekforge/sessions/<id>/ JSONL"]
+  Verify -->|"verify.output / verify"| Orchestrator
+  Orchestrator -->|"LoopEvent stream"| Clients
+
+  Worktree["optional retained git worktree"] --> Orchestrator
+  CLI -->|"creates before orchestration"| Worktree
 ```
-goal + verifyCmd ──▶ runTask ──▶ run verifyCmd
-                        ▲             │ exit 0? ──▶ passed ✅
-                        │             │ else
-                        └── continue (failure output) ◀── guardrails ok?
-                                                           └ no ──▶ stop (reason)
+
+The two persisted stores have different ownership:
+
+- Loop JSON stores orchestration state: task, verifier, limits, iteration,
+  cumulative cost, session id, last verification, and terminal status.
+- Session JSONL remains the source of truth for the agent conversation and tool
+  trace. Loop state points to that session; it does not duplicate the trace.
+
+### Run sequence
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant L as Auto-loop
+  participant S as Loop state
+  participant A as AgentCore
+  participant V as Verifier
+
+  C->>L: task + verify command + guardrails
+  L->>S: create state (running)
+  L->>V: pre-check
+  V-->>C: verify.output chunks
+  V-->>L: exit code + bounded output tail
+  alt pre-check passes
+    L->>S: save passed
+    L-->>C: loop.done
+  else pre-check fails
+    loop until pass or guardrail
+      L->>A: runTask / resumeSessionId
+      A-->>L: usage, file, session events
+      L->>S: save iteration, cost, session
+      L->>V: verify
+      V-->>C: verify.output chunks
+      V-->>L: exit code + bounded output tail
+      L->>L: parse diagnostics + fingerprint workspace
+      L->>S: atomically save latest result
+      L-->>C: verify event
+    end
+    L->>S: save terminal status
+    L-->>C: loop.done
+  end
 ```
+
+State is written atomically after observable progress. Live output is bounded
+per verification; the final verification event still carries the normal output
+tail used for diagnostics and continuation prompts.
+
+### Resume and worktree lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> running: loop state created
+  running --> passed: verifier exits 0
+  running --> exhausted: iteration limit reached
+  running --> no_progress: diagnostics and workspace unchanged
+  running --> budget: observed cost reaches budget
+  running --> cancelled: abort signal
+  running --> verify_error: verifier cannot start
+  passed --> running: explicit loop-resume
+  exhausted --> running: explicit loop-resume
+  no_progress --> running: explicit loop-resume
+  budget --> running: explicit loop-resume
+  cancelled --> running: explicit loop-resume
+  verify_error --> running: explicit loop-resume
+```
+
+`resumeAutoLoop` loads state only from the supplied workspace and preserves the
+original task, verifier, maximum iterations, cumulative cost, and session id. It
+runs a fresh pre-check before spending another agent iteration. A terminal loop
+whose iteration or cost limit is already exhausted can only pass that pre-check;
+otherwise the same guardrail stops it without additional agent work.
+
+`--worktree` is a CLI adapter concern: the CLI creates a branch and worktree,
+then passes that directory as the Loop workspace. State and session traces are
+therefore stored inside the worktree. Worktrees are retained for inspection and
+are never automatically removed; resume from that directory and clean it up
+explicitly with normal Git worktree commands when finished.
 
 ## CLI
 
