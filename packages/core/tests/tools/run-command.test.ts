@@ -144,10 +144,15 @@ describe("classifyCommand: gh", () => {
     }
     for (const cmd of [
       "gh api -X POST repos/owner/repo/issues",
+      "gh api -XPOST repos/owner/repo/issues",
       "gh api --method PUT repos/owner/repo",
+      "gh api --method=PATCH repos/owner/repo/issues/1",
       "gh api -X DELETE repos/owner/repo/issues/1",
       "gh api repos/owner/repo/issues -f title=bug",
       "gh api repos/owner/repo/issues -F body=@note.md",
+      "gh api repos/owner/repo/issues --field=title=bug",
+      "gh api repos/owner/repo/issues --raw-field=body=hi",
+      "gh api repos/owner/repo/issues --input=payload.json",
     ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("execute");
     }

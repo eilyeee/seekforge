@@ -30,6 +30,12 @@ function configPath(global: boolean): string {
   return join(base, ".seekforge", "config.json");
 }
 
+function parseConfigDoc(raw: string): Record<string, unknown> | null {
+  const parsed = JSON.parse(raw) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  return parsed as Record<string, unknown>;
+}
+
 export function configShowCommand(): void {
   const merged = loadConfig(process.cwd());
   console.log(
@@ -55,7 +61,9 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
   let current: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
-      current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      const parsed = parseConfigDoc(readFileSync(path, "utf8"));
+      if (!parsed) throw new Error("config root must be an object");
+      current = parsed;
     } catch {
       // Abort rather than clobber a config we couldn't parse — writing the
       // default {} back would silently drop every existing key.

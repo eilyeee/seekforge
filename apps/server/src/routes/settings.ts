@@ -33,6 +33,12 @@ const execFileAsync = promisify(execFile);
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
 
+function parseConfigDoc(raw: string): ConfigDoc {
+  const parsed = JSON.parse(raw) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  return parsed as ConfigDoc;
+}
+
 /**
  * Read-merge-write the workspace .seekforge/config.json mcpServers map: applies
  * `mutate` to the current servers object and writes the file back (mode 0o600).
@@ -46,7 +52,7 @@ function mutateMcpServers(
   let doc: ConfigDoc = {};
   if (existsSync(path)) {
     try {
-      doc = JSON.parse(readFileSync(path, "utf8")) as ConfigDoc;
+      doc = parseConfigDoc(readFileSync(path, "utf8"));
     } catch {
       doc = {};
     }
@@ -64,7 +70,7 @@ function readConfigDoc(workspace: string): ConfigDoc {
   const path = join(workspace, ".seekforge", "config.json");
   if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as ConfigDoc;
+    return parseConfigDoc(readFileSync(path, "utf8"));
   } catch {
     return {};
   }

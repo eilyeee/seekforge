@@ -15,6 +15,7 @@ import {
   type ResultOutcome,
 } from "../output-format.js";
 import { t } from "../i18n.js";
+import { extractMcpServersDoc } from "../mcp-config.js";
 import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 import { confirmInTerminal, createRenderer } from "../render.js";
 import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
@@ -310,8 +311,10 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   if (opts.mcpConfig) {
     let fileServers: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(readFileSync(opts.mcpConfig, "utf8")) as Record<string, unknown>;
-      fileServers = (parsed.mcpServers as Record<string, unknown>) ?? parsed;
+      const parsed = JSON.parse(readFileSync(opts.mcpConfig, "utf8")) as unknown;
+      const extracted = extractMcpServersDoc(parsed);
+      if (!extracted) throw new Error("invalid MCP config shape");
+      fileServers = extracted;
     } catch {
       fail(t("err.mcpConfigRead", { path: opts.mcpConfig }), { hint: t("err.mcpConfigReadHint") });
       return false;

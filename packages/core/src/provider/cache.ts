@@ -70,7 +70,7 @@ export function wrapProviderWithCache(
     try {
       const raw = fs.readFileSync(path.join(dir, `${key}.json`), "utf8");
       const entry = JSON.parse(raw) as Partial<CacheEntry>;
-      if (typeof entry.ts !== "number" || entry.response === undefined) return null;
+      if (typeof entry.ts !== "number" || !Number.isFinite(entry.ts) || entry.response === undefined) return null;
       if (Date.now() - entry.ts > ttlMs) return null;
       return entry.response;
     } catch {

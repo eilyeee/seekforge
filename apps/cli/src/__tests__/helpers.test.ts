@@ -4,8 +4,11 @@
 // first failure is enough signal for `pnpm test`.
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
-import { addMcpServer, removeMcpServer } from "../mcp-config.js";
+import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer } from "../mcp-config.js";
 import type { AgentEvent } from "@seekforge/shared";
 import {
   buildResultEnvelope,
@@ -283,6 +286,31 @@ test("removeMcpServer: keeps siblings", () => {
 });
 test("removeMcpServer: missing throws", () => {
   assert.throws(() => removeMcpServer({}, "nope"));
+});
+test("readConfigDoc: non-object JSON falls back to empty doc", () => {
+  const dir = mkdtempSync(join(tmpdir(), "seekforge-mcp-config-"));
+  try {
+    for (const [name, content] of [
+      ["null.json", "null"],
+      ["array.json", "[]"],
+      ["string.json", '"x"'],
+    ] as const) {
+      const file = join(dir, name);
+      writeFileSync(file, content);
+      assert.deepEqual(readConfigDoc(file), {});
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("extractMcpServersDoc: accepts wrapped and bare object maps only", () => {
+  assert.deepEqual(extractMcpServersDoc({ mcpServers: { fs: { command: "npx" } } }), {
+    fs: { command: "npx" },
+  });
+  assert.deepEqual(extractMcpServersDoc({ fs: { command: "npx" } }), { fs: { command: "npx" } });
+  for (const value of [null, [], "x", { mcpServers: null }, { mcpServers: [] }, { mcpServers: "x" }]) {
+    assert.equal(extractMcpServersDoc(value), null);
+  }
 });
 
 // --- useColor predicate ------------------------------------------------------

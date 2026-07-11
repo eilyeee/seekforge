@@ -132,6 +132,7 @@ import { formatCandidateLine, pendingCandidates, removeCandidateAt } from "./mem
 import { classifyUnifiedDiff } from "./diff.js";
 import { configKeysCheck, configParseCheck, createDefaultProbes, formatDoctorLines, runDoctor } from "./doctor.js";
 import { transcriptToMarkdown, defaultExportPath, auditExportPath } from "./export.js";
+import { resolveMemoryEditTarget } from "./memory-path.js";
 import {
   currentMatch,
   searchBackspace,
@@ -1060,8 +1061,8 @@ export function App({
             // "/memory edit [file]" — files restricted to .seekforge/memory/.
             const fileArg = command.arg.slice(4).trim();
             const memoryDir = dirname(projectMemoryPath(projectPath));
-            const target = fileArg ? resolve(memoryDir, fileArg) : projectMemoryPath(projectPath);
-            if (!target.startsWith(memoryDir)) {
+            const target = resolveMemoryEditTarget(memoryDir, projectMemoryPath(projectPath), fileArg);
+            if (target === null) {
               notice("memory files live under .seekforge/memory/ only", "error");
               break;
             }

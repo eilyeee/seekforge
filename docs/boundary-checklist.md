@@ -38,6 +38,9 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
 - **Also caught:** `packages/core/src/hooks/index.ts` (`hookApplies`) — hook
   `pattern: "npm run build"` matched `npm run build-all`, and `src/foo` matched
   `src/foobar.ts`.
+- **Also caught:** `apps/tui/src/app.tsx` (`/memory edit`) — a raw
+  `target.startsWith(memoryDir)` let `../memory2/project.md` pass because
+  `memory2` shares the same string prefix.
 
 ## 3. A cache / memo key must include every input that affects the output
 
@@ -100,6 +103,16 @@ path leaves every other path exposed.
 - **Do:** after parsing config-shaped input, assert it's a non-null, non-array
   object before using it; return `{}` or throw a descriptive error otherwise.
 - **Caught:** `apps/cli/src/config.ts` (`readJson` / `readSettingsFile`).
+- **Also caught:** `apps/cli/src/mcp-config.ts` (`readConfigDoc`) — JSON
+  `null` / `[]` / `"x"` was returned as a config document and later crashed on
+  `doc.mcpServers`.
+- **Also caught:** `apps/server/src/routes/settings.ts` (`readConfigDoc` /
+  `mutateMcpServers`) — non-object project config JSON crashed settings routes
+  such as `/api/hooks` and `/api/mcp`.
+- **Also caught:** `apps/cli/src/commands/run.ts` (`--mcp-config`),
+  `apps/cli/src/commands/config.ts` (`config set`), and
+  `apps/server/src/config.ts` (`setConfigValue`) — non-object JSON passed the
+  parse step but later failed during MCP merge or config mutation.
 
 ## 9. "Read-only vs mutating" classification: check each command's real effect
 
@@ -109,6 +122,9 @@ tree; treating "no args = read-only" auto-ran it with no confirmation.
 - **Do:** classify by the command's actual side effect, per subcommand. When in
   doubt, treat as mutating (require confirmation) — fail closed.
 - **Caught:** `packages/core/src/tools/run-command.ts` (`classifyGit`).
+- **Also caught:** `packages/core/src/tools/run-command.ts` (`classifyGh`) —
+  `gh api --method=POST` / `-XPOST` and `--field=...` forms were not parsed as
+  mutating, so they could be misclassified as read-only GET requests.
 
 ## 10. Clamp externally-supplied numbers that feed ranking / sizing / budgets
 
@@ -147,6 +163,16 @@ the variant that ran it. Don't "fix" the code to match the comment — confirm i
 
 - **Caught:** `packages/eval-harness/src/ab.ts` (`AbSummary` doc vs
   `compareVariants` behavior).
+
+## 14. Parsed numeric metadata must be finite, not just a number
+
+JSON can parse huge numeric literals such as `1e999` to `Infinity`; `typeof` is
+still `"number"`, but freshness checks and cursor/index arithmetic become wrong.
+
+- **Do:** use `Number.isFinite` for cache timestamps, TTLs, indexes, cursors, and
+  other parsed numeric metadata before arithmetic.
+- **Caught:** `packages/core/src/provider/cache.ts` — a non-finite cache `ts`
+  could make a poisoned entry look fresh.
 
 ---
 

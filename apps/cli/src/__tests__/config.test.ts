@@ -2,10 +2,11 @@
 // helpers.test.ts: tsx runner, node:assert, first failure exits non-zero.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
+import { configSetCommand } from "../commands/config.js";
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -206,6 +207,37 @@ test("invalid JSON in settings file throws a descriptive error", () => {
     },
   );
   cleanup();
+});
+
+test("configSetCommand rejects non-object config JSON without overwriting it", () => {
+  const { projectPath, cleanup } = setupProject();
+  const seekDir = join(projectPath, ".seekforge");
+  mkdirSync(seekDir, { recursive: true });
+  const configPath = join(seekDir, "config.json");
+  writeFileSync(configPath, "null\n", "utf8");
+  const oldCwd = process.cwd();
+  const oldExitCode = process.exitCode;
+  const oldError = console.error;
+  const oldLog = console.log;
+  const errors: string[] = [];
+  try {
+    process.chdir(projectPath);
+    process.exitCode = undefined;
+    console.error = (msg?: unknown) => {
+      errors.push(String(msg));
+    };
+    console.log = () => {};
+    configSetCommand("model", "deepseek-chat", {});
+    assert.equal(process.exitCode, 1);
+    assert.match(errors.join("\n"), /invalid JSON/);
+    assert.equal(readFileSync(configPath, "utf8"), "null\n");
+  } finally {
+    process.chdir(oldCwd);
+    process.exitCode = oldExitCode;
+    console.error = oldError;
+    console.log = oldLog;
+    cleanup();
+  }
 });
 
 // ── config.local.json personal layer ─────────────────────────────────────────

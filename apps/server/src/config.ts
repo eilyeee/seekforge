@@ -119,6 +119,15 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
 
 export class ConfigValueError extends Error {}
 
+function isObjectRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function parseConfigDoc(raw: string): Record<string, unknown> {
+  const parsed = JSON.parse(raw) as unknown;
+  return isObjectRecord(parsed) ? parsed : {};
+}
+
 function readJson(path: string): ServerConfig {
   // NOTE: no requireObject guard — the server historically passes non-object
   // JSON through as-parsed (only the CLI collapses those layers to {}).
@@ -232,7 +241,7 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
   let current: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
-      current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      current = parseConfigDoc(readFileSync(path, "utf8"));
     } catch {
       // invalid JSON: rewrite from scratch (same behaviour as the CLI)
     }

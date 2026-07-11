@@ -190,12 +190,26 @@ function classifyGh(tokens: string[]): CommandPermission {
     // GET is the default and is read-only; any write method or a field/body
     // flag (-f/-F/--field/--raw-field/--input) means a mutation.
     const hasWriteField = tokens.some(
-      (t) => t === "-f" || t === "-F" || t === "--field" || t === "--raw-field" || t === "--input",
+      (t) =>
+        t === "-f" ||
+        t === "-F" ||
+        t === "--field" ||
+        t === "--raw-field" ||
+        t === "--input" ||
+        t.startsWith("--field=") ||
+        t.startsWith("--raw-field=") ||
+        t.startsWith("--input="),
     );
     if (hasWriteField) return "execute";
-    const mIdx = tokens.findIndex((t) => t === "-X" || t === "--method");
-    if (mIdx !== -1) {
-      const method = (tokens[mIdx + 1] ?? "").toLowerCase();
+    const methodToken = tokens.find((t) => t === "-X" || t.startsWith("-X") || t === "--method" || t.startsWith("--method="));
+    if (methodToken !== undefined) {
+      const method = (
+        methodToken === "-X" || methodToken === "--method"
+          ? (tokens[tokens.indexOf(methodToken) + 1] ?? "")
+          : methodToken.startsWith("--method=")
+            ? methodToken.slice("--method=".length)
+            : methodToken.slice("-X".length)
+      ).toLowerCase();
       return GH_API_WRITE_METHOD.test(method) ? "execute" : "readonly";
     }
     return "readonly"; // no method flag → GET

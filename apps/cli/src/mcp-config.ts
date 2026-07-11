@@ -9,6 +9,10 @@ import type { McpServerConfig } from "@seekforge/core";
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
 
+function isObjectRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 /** Resolve the config.json path: project .seekforge/ or global ~/.seekforge/. */
 export function mcpConfigPath(projectPath: string, global: boolean): string {
   const base = global ? homedir() : projectPath;
@@ -51,10 +55,19 @@ export function removeMcpServer(doc: ConfigDoc, name: string): ConfigDoc {
 /** Read a config.json document, tolerating a missing/corrupt file (→ {}). */
 export function readConfigDoc(path: string): ConfigDoc {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as ConfigDoc;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!isObjectRecord(parsed)) return {};
+    return parsed as ConfigDoc;
   } catch {
     return {};
   }
+}
+
+/** Extract --mcp-config servers from either {mcpServers:{...}} or a bare map. */
+export function extractMcpServersDoc(parsed: unknown): Record<string, unknown> | null {
+  if (!isObjectRecord(parsed)) return null;
+  const candidate = parsed.mcpServers === undefined ? parsed : parsed.mcpServers;
+  return isObjectRecord(candidate) ? candidate : null;
 }
 
 /** Write a config.json document, creating .seekforge/ as needed (2-space JSON). */

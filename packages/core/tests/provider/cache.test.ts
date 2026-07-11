@@ -112,6 +112,18 @@ describe("wrapProviderWithCache", () => {
     expect(inner.chats).toBe(2);
   });
 
+  it("cache entries with non-finite timestamps are ignored", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    await cached.chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    writeFileSync(file, `{"ts":1e999,"response":${JSON.stringify(response("poisoned"))}}`);
+
+    const res = await cached.chat(req("hello"));
+    expect(res.content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+  });
+
   it("never caches chatStream — always passes through with live deltas", async () => {
     const inner = countingProvider();
     const cached = wrapProviderWithCache(inner, dir);

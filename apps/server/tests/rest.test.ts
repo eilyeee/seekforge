@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
@@ -475,6 +475,24 @@ describe("REST endpoints", () => {
     });
     expect(bad.status).toBe(400);
     expect((await jsonOf(bad)).error.code).toBe("bad_request");
+  });
+
+  it("PUT /api/config treats existing non-object config JSON as empty", async () => {
+    const configPath = join(workspace, ".seekforge", "config.json");
+    const previous = readFileSync(configPath, "utf8");
+    try {
+      writeFileSync(configPath, "null\n");
+      const res = await authed("/api/config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: "model", value: "deepseek-chat" }),
+      });
+      expect(res.status).toBe(200);
+      const file = JSON.parse(readFileSync(configPath, "utf8"));
+      expect(file).toEqual({ model: "deepseek-chat" });
+    } finally {
+      writeFileSync(configPath, previous);
+    }
   });
 
   it("unknown endpoints return a JSON 404", async () => {

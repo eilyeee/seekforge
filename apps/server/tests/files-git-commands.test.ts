@@ -350,6 +350,13 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
     });
     expect(nullBody.status).toBe(400);
   });
+
+  it("GET /api/hooks treats non-object config JSON as an empty config doc", async () => {
+    writeFileSync(join(workspace, ".seekforge", "config.json"), "null");
+    const res = await authed("/api/hooks");
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toEqual({ hooks: {} });
+  });
 });
 
 describe("GET /api/search", () => {

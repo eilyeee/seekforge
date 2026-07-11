@@ -130,6 +130,25 @@ describe("mcp add + delete", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("POST /api/mcp treats non-object config JSON as an empty config doc", async () => {
+    const cfgPath = join(workspace, ".seekforge/config.json");
+    writeFileIn(workspace, ".seekforge/config.json", "null");
+    const add = await authed("/api/mcp", {
+      method: "POST",
+      body: JSON.stringify({ name: "from-null", command: "node" }),
+    });
+    expect(add.status).toBe(200);
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+    expect(cfg.mcpServers["from-null"]).toEqual({ command: "node" });
+
+    // Restore the fixture keys used by later tests in this file.
+    writeFileIn(
+      workspace,
+      ".seekforge/config.json",
+      JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }),
+    );
+  });
 });
 
 describe("doctor", () => {
