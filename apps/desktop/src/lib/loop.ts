@@ -14,6 +14,9 @@ export type LoopProgress = {
   result: LoopResult | null;
 };
 
+const MAX_LOOP_EVENTS = 500;
+const MAX_LIVE_OUTPUT = 12_000;
+
 export function emptyLoopProgress(): LoopProgress {
   return { events: [], result: null };
 }
@@ -23,8 +26,22 @@ export function emptyLoopProgress(): LoopProgress {
  * final result; every event is appended to the feed.
  */
 export function reduceLoopEvent(progress: LoopProgress, event: LoopEvent): LoopProgress {
+  let events: LoopEvent[];
+  const last = progress.events.at(-1);
+  if (
+    event.type === "verify.output" &&
+    last?.type === "verify.output" &&
+    last.iteration === event.iteration &&
+    last.stream === event.stream
+  ) {
+    const chunk = `${last.chunk}${event.chunk}`.slice(-MAX_LIVE_OUTPUT);
+    events = [...progress.events.slice(0, -1), { ...event, chunk }];
+  } else {
+    events = [...progress.events, event];
+  }
+  if (events.length > MAX_LOOP_EVENTS) events = events.slice(-MAX_LOOP_EVENTS);
   return {
-    events: [...progress.events, event],
+    events,
     result: event.type === "loop.done" ? event.result : progress.result,
   };
 }
@@ -79,6 +96,8 @@ export type LoopRow = {
   costUsd: number | null;
   /** Verify outcome once a verify event arrived for this iteration. */
   verify: { code: number; passed: boolean; tail: string } | null;
+  /** Live verification output before the final verify event arrives. */
+  liveTail: string;
 };
 
 export function loopRows(events: LoopEvent[]): LoopRow[] {
@@ -87,7 +106,7 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
   const ensure = (iteration: number): LoopRow => {
     let row = byIter.get(iteration);
     if (!row) {
-      row = { iteration, costUsd: null, verify: null };
+      row = { iteration, costUsd: null, verify: null, liveTail: "" };
       byIter.set(iteration, row);
       order.push(iteration);
     }
@@ -107,6 +126,9 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
           passed: event.passed,
           tail: outputTail(event.output),
         };
+        break;
+      case "verify.output":
+        ensure(event.iteration).liveTail = outputTail(event.chunk);
         break;
       case "loop.done":
         // Summary is rendered separately from the per-iteration rows.

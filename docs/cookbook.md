@@ -51,10 +51,11 @@ CLI:
 ```bash
 seekforge loop "make the failing suite pass" --verify "pnpm test"
 seekforge loop "port the module to TS" --verify "pnpm build" --max-iters 12 --budget 1.50
+seekforge loop "fix it in isolation" --verify "pnpm test" --worktree
 ```
 
 `--verify <cmd>` is **required** (its exit 0 is the success criterion).
-`--max-iters` defaults to 8. `--budget <usd>` stops further work when observed
+`--max-iters` defaults to 8 and is capped at 100. `--budget <usd>` stops further work when observed
 cumulative usage reaches the budget; an already in-flight provider request can
 make the final billed amount slightly higher. The loop is inherently autonomous
 (runs in `acceptEdits`); `-y` only suppresses the auto-approve note.
@@ -79,8 +80,10 @@ make the failing suite pass without weakening any assertions
 
 **Tips:**
 - Once an agent iteration creates a session, the loop keeps its trace on
-  stop/exhaustion — `seekforge resume <id>` to continue. A pre-check that is
-  already green creates no session. See [Loop engineering](loop-engineering.md).
+  stop/exhaustion. The orchestration state is always persisted; use
+  `seekforge loop-resume <loop-id>` to continue with its prior session, spend,
+  and remaining iterations. A `--worktree` checkout is retained, and resume must
+  run from that directory. See [Loop engineering](loop-engineering.md).
 
 ---
 

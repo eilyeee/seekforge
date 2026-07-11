@@ -1,9 +1,17 @@
-import { loadAgentDefinitions, runAutoLoop, type LoopEvent, type LoopResult } from "@seekforge/core";
+import {
+  MAX_LOOP_ITERATIONS,
+  loadAgentDefinitions,
+  resumeAutoLoop,
+  runAutoLoop,
+  type LoopEvent,
+  type LoopResult,
+} from "@seekforge/core";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
+import { createLoopWorktree, formatLoopWorktree, type LoopWorktree } from "../loop-worktree.js";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required. */
@@ -18,7 +26,11 @@ export type LoopOptions = {
   model?: string;
   /** Named config profile to overlay (CLI --profile / SEEKFORGE_PROFILE). */
   profile?: string;
+  /** Run in a retained isolated worktree, optionally with a user-facing name. */
+  worktree?: boolean | string;
 };
+
+export type LoopResumeOptions = Omit<LoopOptions, "verify" | "worktree">;
 
 const TAIL_LINES = 6;
 
@@ -39,6 +51,8 @@ export function formatLoopEvent(event: LoopEvent): string {
       return t("cmd.loop.iterationStart", { n: event.iteration });
     case "run.completed":
       return t("cmd.loop.runCompleted", { n: event.iteration, cost: event.costUsd.toFixed(4) });
+    case "verify.output":
+      return event.chunk;
     case "verify": {
       const head = event.passed
         ? t("cmd.loop.verifyPassed", { n: event.iteration })
@@ -59,6 +73,7 @@ export function formatSummary(result: LoopResult): string {
     t("cmd.loop.summaryIterations", { n: result.iterations }),
     t("cmd.loop.summaryCost", { cost: result.costUsd.toFixed(4) }),
   ];
+  if (result.loopId) lines.push(`loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`);
   if (result.sessionId) {
     lines.push(
       t("cmd.loop.summarySession", { id: result.sessionId }),
@@ -69,7 +84,56 @@ export function formatSummary(result: LoopResult): string {
 }
 
 export async function loopCommand(task: string, opts: LoopOptions): Promise<void> {
-  const projectPath = process.cwd();
+  if (opts.maxIters !== undefined && opts.maxIters > MAX_LOOP_ITERATIONS) {
+    fail(`--max-iters must be between 1 and ${MAX_LOOP_ITERATIONS}`);
+    process.exitCode = 1;
+    return;
+  }
+  const basePath = process.cwd();
+  let worktree: LoopWorktree | undefined;
+  if (opts.worktree !== undefined && opts.worktree !== false) {
+    try {
+      worktree = await createLoopWorktree(
+        basePath,
+        typeof opts.worktree === "string" ? opts.worktree : undefined,
+      );
+      console.log(formatLoopWorktree(worktree));
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
+  }
+  await executeLoop(task, opts, worktree?.path ?? basePath);
+}
+
+type ResumeAutoLoop = (
+  deps: Parameters<typeof runAutoLoop>[0],
+  loopId: string,
+  opts: {
+    workspace: string;
+    signal?: AbortSignal;
+    onEvent?: (event: LoopEvent) => void;
+    model?: string;
+    planModel?: string;
+    escalateOnFailure?: boolean;
+  },
+) => Promise<LoopResult>;
+
+export function coreResumeAutoLoop(): ResumeAutoLoop {
+  return resumeAutoLoop;
+}
+
+export async function loopResumeCommand(loopId: string, opts: LoopResumeOptions): Promise<void> {
+  await executeLoop(loopId, opts, process.cwd(), coreResumeAutoLoop());
+}
+
+async function executeLoop(
+  taskOrLoopId: string,
+  opts: LoopOptions | LoopResumeOptions,
+  projectPath: string,
+  resume?: ResumeAutoLoop,
+): Promise<void> {
   let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(projectPath, undefined, opts.profile);
@@ -127,19 +191,24 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
   process.on("SIGINT", onSigint);
 
   try {
-    const result = await runAutoLoop(deps, {
-      task,
-      workspace: projectPath,
-      verifyCommand: opts.verify,
-      maxIterations: opts.maxIters ?? 8,
-      ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
-      approvalMode: "acceptEdits",
+    const common = {
       ...(model ? { model } : {}),
       ...(config.planModel ? { planModel: config.planModel } : {}),
       ...(config.escalateOnFailure ? { escalateOnFailure: true } : {}),
       signal: controller.signal,
-      onEvent: (event) => printEvent(event),
-    });
+      onEvent: (event: LoopEvent) => printEvent(event),
+    };
+    const result = resume
+      ? await resume(deps, taskOrLoopId, { workspace: projectPath, ...common })
+      : await runAutoLoop(deps, {
+          task: taskOrLoopId,
+          workspace: projectPath,
+          verifyCommand: (opts as LoopOptions).verify,
+          maxIterations: opts.maxIters ?? 8,
+          ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+          approvalMode: "acceptEdits",
+          ...common,
+        });
     if (result.status !== "passed") process.exitCode = 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
@@ -154,7 +223,10 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
 /** Renders a LoopEvent to the terminal with color (the command's only I/O). */
 function printEvent(event: LoopEvent): void {
   const text = formatLoopEvent(event);
-  if (event.type === "verify") {
+  if (event.type === "verify.output") {
+    const stream = event.stream === "stderr" ? process.stderr : process.stdout;
+    stream.write(text);
+  } else if (event.type === "verify") {
     console.log(event.passed ? green(text) : red(text));
   } else if (event.type === "loop.done") {
     console.log(event.result.status === "passed" ? green(text) : red(text));

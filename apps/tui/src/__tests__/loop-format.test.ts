@@ -79,6 +79,11 @@ describe("formatLoopEvent", () => {
     ]);
   });
 
+  it("formats live verification output as a bounded dim line", () => {
+    const e: LoopEvent = { type: "verify.output", iteration: 1, stream: "stderr", chunk: "first\nboom\n" };
+    expect(formatLoopEvent(e)).toEqual([{ text: "  ! boom", tone: "dim" }]);
+  });
+
   it("formats a passing verify as a dim head plus an output tail", () => {
     const e: LoopEvent = { type: "verify", iteration: 1, code: 0, passed: true, output: "All good\n" };
     expect(formatLoopEvent(e)).toEqual([
@@ -119,6 +124,11 @@ describe("formatLoopSummary", () => {
       { text: "  iterations: 3 · cost: $0.2500", tone: "dim" },
       { text: "  session: abc (/resume abc to continue)", tone: "dim" },
     ]);
+  });
+
+  it("shows the persisted loop resume id", () => {
+    const lines = formatLoopSummary(result({ loopId: "loop-abc" }));
+    expect(lines.some((line) => line.text.includes("seekforge loop-resume loop-abc"))).toBe(true);
   });
 
   it("marks a budget-exhausted summary as an error", () => {

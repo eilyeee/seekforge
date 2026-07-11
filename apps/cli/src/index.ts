@@ -34,7 +34,7 @@ import { auditCommand } from "./commands/audit.js";
 import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
-import { loopCommand } from "./commands/loop.js";
+import { loopCommand, loopResumeCommand } from "./commands/loop.js";
 import { resolveCommand, resolveReviewCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
 import { sandboxRunCommand } from "./commands/sandbox.js";
@@ -395,11 +395,12 @@ program
   .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
   .option("-m, --model <model>", "override model")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
+  .option("--worktree [name]", "run in a retained isolated worktree (optional name)")
   .description("autonomously run → verify → continue until the verify command passes")
   .action(
     async (
       task: string,
-      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string; profile?: string },
+      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string; profile?: string; worktree?: boolean | string },
     ) => {
       await loopCommand(task, {
         verify: opts.verify,
@@ -408,9 +409,25 @@ program
         yes: opts.yes,
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
+        worktree: opts.worktree,
       });
     },
   );
+
+program
+  .command("loop-resume")
+  .argument("<loop-id>", "persisted loop id to continue")
+  .option("-y, --yes", "continue autonomously without the auto-approve note")
+  .option("-m, --model <model>", "override model")
+  .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
+  .description("resume a persisted autonomous loop with its remaining limits and verification state")
+  .action(async (loopId: string, opts: { yes?: boolean; model?: string; profile?: string }) => {
+    await loopResumeCommand(loopId, {
+      yes: opts.yes,
+      model: opts.model,
+      profile: opts.profile ?? rootProfile(),
+    });
+  });
 
 // Local scheduled jobs (Track E automation). Register a task to run on an
 // interval or cron; `schedule run` is the tick the OS scheduler invokes. Every

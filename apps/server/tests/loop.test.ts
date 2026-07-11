@@ -70,6 +70,7 @@ describe("loop -> loop.event -> idle", () => {
         seen = loopOpts;
         const result = loopResult();
         loopOpts.onEvent?.({ type: "iteration.start", iteration: 1 });
+        loopOpts.onEvent?.({ type: "verify.output", iteration: 1, stream: "stdout", chunk: "running\n" });
         loopOpts.onEvent?.({ type: "verify", iteration: 1, code: 0, passed: true, output: "ok" });
         loopOpts.onEvent?.({ type: "loop.done", result });
         return result;
@@ -89,6 +90,10 @@ describe("loop -> loop.event -> idle", () => {
       (f) => f.type === "loop.event" && (f.event as { type: string }).type === "iteration.start",
     );
     expect(start.event).toMatchObject({ type: "iteration.start", iteration: 1 });
+    const output = await rx.waitFor(
+      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "verify.output",
+    );
+    expect(output.event).toMatchObject({ type: "verify.output", stream: "stdout", chunk: "running\n" });
     await rx.waitFor(
       (f) => f.type === "loop.event" && (f.event as { type: string }).type === "verify",
     );
@@ -150,6 +155,7 @@ describe("loop -> loop.event -> idle", () => {
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 0 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: -3 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 1.5 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 101 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: 0 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: -1 });
 

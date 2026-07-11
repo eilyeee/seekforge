@@ -96,7 +96,7 @@ Skills and project memory are discovered automatically from the workspace's
 Instead of a single `runTask`, drive to a verify command's exit 0:
 
 ```ts
-import { runAutoLoop } from "@seekforge/core";
+import { resumeAutoLoop, runAutoLoop } from "@seekforge/core";
 
 const result = await runAutoLoop(deps, {
   task: "make the suite pass",
@@ -104,10 +104,18 @@ const result = await runAutoLoop(deps, {
   verifyCommand: "pnpm test",
   maxIterations: 8,
   approvalMode: "acceptEdits",
-  onEvent: (e) => console.log(e.type),
+  onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
 });
-// result.status: "passed" | ... , result.iterations, result.costUsd, result.sessionId
+// result also includes a persisted loopId.
+
+const resumed = await resumeAutoLoop(deps, result.loopId!, {
+  workspace: process.cwd(),
+});
 ```
+
+Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
+only for embedders that own equivalent durable orchestration. Iterations are
+hard-capped at 100.
 
 ## Extension points
 

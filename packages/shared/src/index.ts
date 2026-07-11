@@ -689,12 +689,15 @@ export type LoopResult = {
   sessionId: string;
   /** Output + exit code of the last verify command. */
   finalVerify: { code: number; output: string };
+  /** Stable persisted orchestration id when persistence is enabled. */
+  loopId?: string;
 };
 
 /** A single streamed loop event (server LoopEvent). */
 export type LoopEvent =
   | { type: "iteration.start"; iteration: number }
   | { type: "run.completed"; iteration: number; costUsd: number }
+  | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
   | { type: "loop.done"; result: LoopResult };
 

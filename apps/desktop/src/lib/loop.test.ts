@@ -62,13 +62,36 @@ describe("loopRows", () => {
       iteration: 1,
       costUsd: 0.004,
       verify: { code: 1, passed: false, tail: "FAIL line b" },
+      liveTail: "",
     });
     expect(rows[1]!.verify?.passed).toBe(true);
   });
 
   it("creates a row even when only iteration.start arrived", () => {
     const rows = loopRows([{ type: "iteration.start", iteration: 3 }]);
-    expect(rows).toEqual([{ iteration: 3, costUsd: null, verify: null }]);
+    expect(rows).toEqual([{ iteration: 3, costUsd: null, verify: null, liveTail: "" }]);
+  });
+
+  it("shows live verify output before the final result", () => {
+    const rows = loopRows([
+      { type: "verify.output", iteration: 1, stream: "stdout", chunk: "running test\ncase 3" },
+    ]);
+    expect(rows[0]?.liveTail).toBe("case 3");
+  });
+});
+
+describe("live output bounds", () => {
+  it("coalesces adjacent chunks and bounds retained events", () => {
+    let progress = emptyLoopProgress();
+    for (let i = 0; i < 700; i++) {
+      progress = reduceLoopEvent(progress, {
+        type: "verify.output",
+        iteration: i,
+        stream: "stdout",
+        chunk: `line ${i}\n`,
+      });
+    }
+    expect(progress.events.length).toBeLessThanOrEqual(500);
   });
 });
 

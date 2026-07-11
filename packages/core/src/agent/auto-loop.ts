@@ -9,9 +9,21 @@
  * against; the implementation is filled in separately.
  */
 import type { ApprovalMode } from "@seekforge/shared";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
+import {
+  createLoopState,
+  loadLoopState,
+  saveLoopState,
+  type LoopState,
+} from "./loop-state.js";
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
+import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
+import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -42,17 +54,29 @@ export type LoopOptions = {
   signal?: AbortSignal;
   /** Per-iteration progress callback. */
   onEvent?: (event: LoopEvent) => void;
+  /** Stable persisted id; generated when omitted. */
+  loopId?: string;
+  /** Internal resume state loaded by resumeAutoLoop. */
+  resumeState?: LoopState;
+  /** Disable `.seekforge/loops` persistence for embedders/tests. Default true. */
+  persist?: boolean;
   /**
    * Runs the verification command and returns its exit code + captured output
    * (stdout+stderr, tail-capped). Defaults to a real shell exec in `workspace`;
    * injectable for tests.
    */
-  verify?: (workspace: string, command: string, signal?: AbortSignal) => Promise<{ code: number; output: string }>;
+  verify?: (
+    workspace: string,
+    command: string,
+    signal?: AbortSignal,
+    onOutput?: (stream: "stdout" | "stderr", chunk: string) => void,
+  ) => Promise<{ code: number; output: string }>;
 };
 
 export type LoopEvent =
   | { type: "iteration.start"; iteration: number }
   | { type: "run.completed"; iteration: number; costUsd: number }
+  | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
   | { type: "loop.done"; result: LoopResult };
 
@@ -62,11 +86,66 @@ export type LoopResult = {
   costUsd: number;
   sessionId: string;
   finalVerify: { code: number; output: string };
+  /** Stable id of the persisted orchestration state. */
+  loopId?: string;
 };
 
 /** Tail-cap captured output to ~4 KB so continuations/results stay bounded. */
 const TAIL_CAP = 4096;
 const tail = (s: string): string => (s.length <= TAIL_CAP ? s : s.slice(s.length - TAIL_CAP));
+
+function workspaceFingerprint(workspace: string): string | null {
+  try {
+    const hash = createHash("sha256");
+    const internalExcludes = [
+      ":(exclude).seekforge/loops/**",
+      ":(exclude).seekforge/sessions/**",
+      ":(exclude).seekforge/uploads/**",
+    ];
+    hash.update(execFileSync("git", ["diff", "--no-ext-diff", "--binary", "HEAD", "--", ".", ...internalExcludes], {
+      cwd: workspace,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    }));
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      cwd: workspace,
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).split("\0").filter((path) =>
+      Boolean(path) &&
+      !path.startsWith(".seekforge/loops/") &&
+      !path.startsWith(".seekforge/sessions/") &&
+      !path.startsWith(".seekforge/uploads/"),
+    ).sort();
+    for (const path of untracked) {
+      hash.update(`\0${path}\0`);
+      try {
+        const content = readFileSync(join(workspace, path));
+        hash.update(content.subarray(0, 1_000_000));
+        hash.update(String(content.length));
+      } catch {
+        hash.update("<unreadable>");
+      }
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function diagnosticPrompt(diagnostics: VerifyDiagnostics, fallback: string): string {
+  if (diagnostics.framework === "unknown") return fallback;
+  const tests = diagnostics.failedTests.length > 0
+    ? `Failed tests:\n${diagnostics.failedTests.map((test) => `- ${test}`).join("\n")}\n\n`
+    : "";
+  const locations = diagnostics.diagnostics.length > 0
+    ? `Diagnostics:\n${diagnostics.diagnostics.map((d) =>
+        `- ${d.file ?? "unknown"}${d.line ? `:${d.line}` : ""}: ${d.message}`).join("\n")}\n\n`
+    : "";
+  return `${tests}${locations}Output tail:\n${fallback}`;
+}
 
 /**
  * Default verify runner: a real shell exec in `workspace`. Resolves with the
@@ -79,12 +158,14 @@ async function defaultVerify(
   workspace: string,
   command: string,
   signal?: AbortSignal,
+  onOutput?: (stream: "stdout" | "stderr", chunk: string) => void,
 ): Promise<{ code: number; output: string }> {
   try {
     const result = await runShellCommand(command, workspace, 120_000, {
       sandbox: deps.sandbox,
       workspace,
       signal,
+      onOutput,
     });
     return { code: result.exitCode, output: tail(`${result.stdout}${result.stderr}`) };
   } catch (err) {
@@ -96,18 +177,43 @@ async function defaultVerify(
   }
 }
 
+const MAX_LIVE_VERIFY_EVENTS = 100;
+const MAX_LIVE_VERIFY_CHUNK = 16_384;
+
+function liveVerifyOutput(
+  iteration: number,
+  emit: (event: LoopEvent) => void,
+): (stream: "stdout" | "stderr", chunk: string) => void {
+  let emitted = 0;
+  return (stream, chunk) => {
+    if (emitted >= MAX_LIVE_VERIFY_EVENTS || chunk.length === 0) return;
+    emitted += 1;
+    emit({
+      type: "verify.output",
+      iteration,
+      stream,
+      chunk: chunk.slice(-MAX_LIVE_VERIFY_CHUNK),
+    });
+  };
+}
+
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
   const emit = (event: LoopEvent): void => opts.onEvent?.(event);
-  const verify = opts.verify ?? ((workspace, command, signal) => defaultVerify(deps, workspace, command, signal));
+  const verify = opts.verify ?? ((workspace, command, signal, onOutput) =>
+    defaultVerify(deps, workspace, command, signal, onOutput));
   // Defensive: ignore non-positive / non-integer / non-finite limits (the WS
   // entry validates too, but core may be called directly).
-  const maxIterations =
-    Number.isInteger(opts.maxIterations) && (opts.maxIterations as number) > 0
-      ? (opts.maxIterations as number)
+  const requestedIterations =
+    Number.isInteger(opts.maxIterations ?? opts.resumeState?.maxIterations) &&
+    (opts.maxIterations ?? opts.resumeState?.maxIterations ?? 0) > 0
+      ? (opts.maxIterations ?? opts.resumeState?.maxIterations as number)
       : 8;
+  const maxIterations = Math.min(requestedIterations, MAX_LOOP_ITERATIONS);
   const costBudgetUsd =
-    typeof opts.costBudgetUsd === "number" && Number.isFinite(opts.costBudgetUsd) && opts.costBudgetUsd > 0
-      ? opts.costBudgetUsd
+    typeof (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd) === "number" &&
+    Number.isFinite(opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd) &&
+    (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd ?? 0) > 0
+      ? (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd ?? undefined)
       : undefined;
   const approvalMode: ApprovalMode = opts.approvalMode ?? "acceptEdits";
 
@@ -117,9 +223,40 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     ...(opts.planModel ? { planModel: opts.planModel } : {}),
   });
 
+  let state: LoopState | undefined = opts.resumeState;
+  if (opts.persist !== false && state === undefined) {
+    state = createLoopState({
+      loopId: opts.loopId,
+      task: opts.task,
+      workspace: opts.workspace,
+      verifyCommand: opts.verifyCommand,
+      maxIterations,
+      costBudgetUsd: costBudgetUsd ?? null,
+    });
+  } else if (state !== undefined) {
+    state = { ...state, status: "running", updatedAt: new Date().toISOString() };
+    saveLoopState(opts.workspace, state);
+  }
+  const persist = (patch: Partial<LoopState>): void => {
+    if (state === undefined) return;
+    state = { ...state, ...patch, updatedAt: new Date().toISOString() };
+    saveLoopState(opts.workspace, state);
+  };
+  const initialIterations = opts.resumeState?.iterations ?? 0;
+  const initialCostUsd = opts.resumeState?.costUsd ?? 0;
+  const initialSessionId = opts.resumeState?.sessionId ?? "";
+
   const done = (result: LoopResult): LoopResult => {
-    emit({ type: "loop.done", result });
-    return result;
+    const withId = state === undefined ? result : { ...result, loopId: state.loopId };
+    persist({
+      status: withId.status,
+      iterations: withId.iterations,
+      costUsd: withId.costUsd,
+      sessionId: withId.sessionId,
+      lastVerify: withId.finalVerify,
+    });
+    emit({ type: "loop.done", result: withId });
+    return withId;
   };
 
   // --- Pre-check: maybe it's already green. ---------------------------------
@@ -127,30 +264,35 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (opts.signal?.aborted) {
     return done({
       status: "cancelled",
-      iterations: 0,
-      costUsd: 0,
-      sessionId: "",
+      iterations: initialIterations,
+      costUsd: initialCostUsd,
+      sessionId: initialSessionId,
       finalVerify: { code: -1, output: "cancelled" },
     });
   }
   try {
-    preVerify = await verify(opts.workspace, opts.verifyCommand, opts.signal);
+    preVerify = await verify(
+      opts.workspace,
+      opts.verifyCommand,
+      opts.signal,
+      liveVerifyOutput(0, emit),
+    );
   } catch {
     if (opts.signal?.aborted) {
       return done({
         status: "cancelled",
-        iterations: 0,
-        costUsd: 0,
-        sessionId: "",
+        iterations: initialIterations,
+        costUsd: initialCostUsd,
+        sessionId: initialSessionId,
         finalVerify: { code: -1, output: "cancelled" },
       });
     }
     // The command could not be run at all.
     const result: LoopResult = {
       status: "verify_error",
-      iterations: 0,
-      costUsd: 0,
-      sessionId: "",
+      iterations: initialIterations,
+      costUsd: initialCostUsd,
+      sessionId: initialSessionId,
       finalVerify: { code: -1, output: "verify command could not be run" },
     };
     return done(result);
@@ -158,22 +300,24 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (preVerify.code === 0) {
     const result: LoopResult = {
       status: "passed",
-      iterations: 0,
-      costUsd: 0,
-      sessionId: "",
+      iterations: initialIterations,
+      costUsd: initialCostUsd,
+      sessionId: initialSessionId,
       finalVerify: preVerify,
     };
     return done(result);
   }
+  persist({ lastVerify: preVerify });
 
   // --- Iterate run → verify → continue. ------------------------------------
-  let sessionId = "";
-  let costUsd = 0;
+  let sessionId = initialSessionId;
+  let costUsd = initialCostUsd;
   let lastVerify = preVerify;
-  let prevOutput: string | null = null;
-  let iterations = 0;
+  let previousDiagnostics = parseVerifyDiagnostics(preVerify.output);
+  let previousWorkspace = workspaceFingerprint(opts.workspace);
+  let iterations = initialIterations;
 
-  for (let i = 1; i <= maxIterations; i++) {
+  for (let i = iterations + 1; i <= maxIterations; i++) {
     if (opts.signal?.aborted) {
       return done({ status: "cancelled", iterations, costUsd, sessionId, finalVerify: lastVerify });
     }
@@ -186,7 +330,7 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     const continuation =
       i === 1
         ? opts.task
-        : `\`${opts.verifyCommand}\` still fails:\n\n${lastVerify.output}\n\nFix the root cause so it passes.`;
+        : `\`${opts.verifyCommand}\` still fails:\n\n${diagnosticPrompt(previousDiagnostics, lastVerify.output)}\n\nFix the root cause so it passes.`;
 
     let runCost = 0;
     let filesChangedThisRun = false;
@@ -220,12 +364,18 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       }
     }
     costUsd += runCost;
+    persist({ iterations: i, costUsd, sessionId });
     emit({ type: "run.completed", iteration: i, costUsd });
 
     // Verify the run's effect.
     let v: { code: number; output: string };
     try {
-      v = await verify(opts.workspace, opts.verifyCommand, opts.signal);
+      v = await verify(
+        opts.workspace,
+        opts.verifyCommand,
+        opts.signal,
+        liveVerifyOutput(i, emit),
+      );
     } catch {
       if (opts.signal?.aborted) {
         return done({
@@ -246,6 +396,9 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       return done(result);
     }
     lastVerify = v;
+    const diagnostics = parseVerifyDiagnostics(v.output);
+    const currentWorkspace = workspaceFingerprint(opts.workspace);
+    persist({ iterations: i, costUsd, sessionId, lastVerify: v });
     emit({ type: "verify", iteration: i, code: v.code, passed: v.code === 0, output: v.output });
 
     if (v.code === 0) {
@@ -259,14 +412,38 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
       return done({ status: "budget", iterations: i, costUsd, sessionId, finalVerify: v });
     }
-    // Stuck only when the verify output is byte-identical AND this run changed
-    // no files — repeated edits that haven't yet moved the error message are
-    // still progress (per the LoopStatus contract), so don't abort on them.
-    if (prevOutput !== null && v.output === prevOutput && !filesChangedThisRun) {
+    // Structured diagnostics ignore incidental timing/format noise. Pair them
+    // with repository content so repeated edits still count as progress.
+    const sameFailure = diagnostics.fingerprint === previousDiagnostics.fingerprint;
+    const sameWorkspace = currentWorkspace !== null && previousWorkspace !== null
+      ? currentWorkspace === previousWorkspace
+      : !filesChangedThisRun;
+    if (sameFailure && sameWorkspace) {
       return done({ status: "no_progress", iterations: i, costUsd, sessionId, finalVerify: v });
     }
-    prevOutput = v.output;
+    previousDiagnostics = diagnostics;
+    previousWorkspace = currentWorkspace;
   }
 
   return done({ status: "exhausted", iterations, costUsd, sessionId, finalVerify: lastVerify });
+}
+
+export async function resumeAutoLoop(
+  deps: AgentCoreDeps,
+  loopId: string,
+  opts: Omit<LoopOptions, "task" | "verifyCommand" | "maxIterations" | "costBudgetUsd" | "resumeState"> & {
+    workspace: string;
+  },
+): Promise<LoopResult> {
+  const state = loadLoopState(opts.workspace, loopId);
+  if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+  return runAutoLoop(deps, {
+    ...opts,
+    task: state.task,
+    workspace: state.workspace,
+    verifyCommand: state.verifyCommand,
+    maxIterations: state.maxIterations,
+    ...(state.costBudgetUsd !== null ? { costBudgetUsd: state.costBudgetUsd } : {}),
+    resumeState: state,
+  });
 }

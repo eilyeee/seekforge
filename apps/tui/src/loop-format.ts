@@ -64,6 +64,10 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
           tone: "dim",
         },
       ];
+    case "verify.output": {
+      const text = event.chunk.replace(/\s+$/, "").split("\n").at(-1)?.slice(0, 240) ?? "";
+      return text ? [{ text: `  ${event.stream === "stderr" ? "!" : "·"} ${text}`, tone: "dim" }] : [];
+    }
     case "verify": {
       const head: LoopNotice = event.passed
         ? { text: `  ✓ loop · iteration ${event.iteration} verify passed`, tone: "dim" }
@@ -93,6 +97,9 @@ export function formatLoopSummary(result: LoopResult): LoopNotice[] {
       tone: "dim",
     },
   ];
+  if (result.loopId) {
+    lines.push({ text: `  loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`, tone: "dim" });
+  }
   if (result.sessionId) {
     lines.push({
       text: `  session: ${result.sessionId} (/resume ${result.sessionId} to continue)`,

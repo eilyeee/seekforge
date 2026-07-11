@@ -141,12 +141,15 @@ cooperative cancellation.
 | Flag | Description |
 | --- | --- |
 | `--verify <command>` | Required success criterion; exit code 0 passes. |
-| `--max-iters <n>` | Maximum agent iterations; defaults to 8. |
+| `--max-iters <n>` | Maximum agent iterations; defaults to 8 and cannot exceed 100. |
 | `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
+| `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
 | `-m, --model <model>` | Override the configured model. |
 | `--profile <name>` | Apply a named configuration profile. |
 
-If the initial verification pre-check passes, no session is created. Otherwise
-the final summary includes commands for resuming or rewinding the retained
-session. The interactive TUI exposes the same workflow through `/loop`.
+Every invocation persists orchestration state in `.seekforge/loops/`. Use
+`seekforge loop-resume <loop-id>` to continue with the saved session, cost, and
+remaining iterations. For `--worktree` loops, run that command inside the
+retained worktree shown at startup. Verification output streams while checks run;
+the interactive TUI exposes the same workflow through `/loop`.

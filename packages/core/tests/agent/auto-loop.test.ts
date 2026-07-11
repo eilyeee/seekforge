@@ -6,7 +6,8 @@ import type { ChatMessage, ChatResponse, ToolCall, ToolResult } from "@seekforge
 import type { ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-import { runAutoLoop, type LoopEvent, type LoopOptions } from "../../src/agent/auto-loop.js";
+import { resumeAutoLoop, runAutoLoop, type LoopEvent, type LoopOptions } from "../../src/agent/auto-loop.js";
+import { loadLoopState } from "../../src/agent/loop-state.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -133,6 +134,39 @@ describe("runAutoLoop", () => {
     expect(provider.chats).toBe(0);
   });
 
+  it("streams live verification output during the pre-check", async () => {
+    const { deps } = mkDeps();
+    const events: LoopEvent[] = [];
+    await runAutoLoop(deps, {
+      ...baseOpts(workspace, async (_ws, _cmd, _signal, onOutput) => {
+        onOutput?.("stdout", "testing 1/2\n");
+        return { code: 0, output: "ok" };
+      }),
+      onEvent: (event) => events.push(event),
+    });
+    expect(events).toContainEqual({
+      type: "verify.output",
+      iteration: 0,
+      stream: "stdout",
+      chunk: "testing 1/2\n",
+    });
+  });
+
+  it("bounds live verification events and chunk size", async () => {
+    const { deps } = mkDeps();
+    const events: LoopEvent[] = [];
+    await runAutoLoop(deps, {
+      ...baseOpts(workspace, async (_ws, _cmd, _signal, onOutput) => {
+        for (let i = 0; i < 150; i++) onOutput?.("stdout", "x".repeat(20_000));
+        return { code: 0, output: "ok" };
+      }),
+      onEvent: (event) => events.push(event),
+    });
+    const output = events.filter((event) => event.type === "verify.output");
+    expect(output).toHaveLength(100);
+    expect(output.every((event) => event.type === "verify.output" && event.chunk.length === 16_384)).toBe(true);
+  });
+
   it("exhausted when verify never passes within maxIterations", async () => {
     const { deps } = mkDeps();
     let n = 0;
@@ -177,8 +211,22 @@ describe("runAutoLoop", () => {
       maxIterations: 8,
     });
     expect(result.status).toBe("no_progress");
-    // iter1 records output; iter2 sees identical output → stop.
-    expect(result.iterations).toBe(2);
+    // The first no-op run is compared with the pre-check fingerprint.
+    expect(result.iterations).toBe(1);
+  });
+
+  it("ignores timing noise when comparing structured verification failures", async () => {
+    const { deps } = mkDeps();
+    let call = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => ({
+        code: 1,
+        output: `vitest\n × parser rejects bad input ${++call * 10}ms`,
+      })),
+      maxIterations: 8,
+    });
+    expect(result.status).toBe("no_progress");
+    expect(result.iterations).toBe(1);
   });
 
   it("cancels via an aborted signal", async () => {
@@ -257,5 +305,34 @@ describe("runAutoLoop", () => {
     });
     expect(result.status).toBe("verify_error");
     expect(provider.chats).toBe(0);
+  });
+
+  it("persists orchestration state and resumes with prior usage/session", async () => {
+    const first = mkDeps();
+    const controller = new AbortController();
+    let checks = 0;
+    const stopped = await runAutoLoop(first.deps, {
+      ...baseOpts(workspace, async () => {
+        checks++;
+        if (checks > 1) controller.abort();
+        return { code: 1, output: "still red" };
+      }),
+      signal: controller.signal,
+    });
+    expect(stopped.status).toBe("cancelled");
+    expect(stopped.loopId).toBeTruthy();
+    const saved = loadLoopState(workspace, stopped.loopId!);
+    expect(saved?.status).toBe("cancelled");
+    expect(saved?.iterations).toBe(1);
+    expect(saved?.sessionId).toBe(stopped.sessionId);
+
+    const resumed = await resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+      workspace,
+      verify: async () => ({ code: 0, output: "green" }),
+    });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.iterations).toBe(1);
+    expect(resumed.costUsd).toBe(stopped.costUsd);
+    expect(loadLoopState(workspace, stopped.loopId!)?.status).toBe("passed");
   });
 });

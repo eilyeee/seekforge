@@ -209,6 +209,16 @@ leaves the user waiting for timeout.
   `packages/core/src/tools/run-command.ts` — loop budget/cancellation previously
   took effect only after a full agent run or verification timeout.
 
+## 18. Exclude internal state from convergence inputs
+
+Persisting orchestration state inside a workspace can make every iteration look
+like progress when that state is also included in the workspace fingerprint.
+
+- **Do:** exclude internal traces, uploads, and loop-state files from content
+  fingerprints, and independently bound live-output event count and chunk size.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — persisted loop updates and
+  unlimited verifier chunks could defeat no-progress detection or grow clients.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

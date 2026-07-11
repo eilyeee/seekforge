@@ -10,7 +10,7 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { detectThinkingKeyword, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
+import { MAX_LOOP_ITERATIONS, detectThinkingKeyword, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
@@ -410,9 +410,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         }
         if (
           maxIterations !== undefined &&
-          (typeof maxIterations !== "number" || !Number.isInteger(maxIterations) || maxIterations <= 0)
+          (typeof maxIterations !== "number" ||
+            !Number.isInteger(maxIterations) ||
+            maxIterations <= 0 ||
+            maxIterations > MAX_LOOP_ITERATIONS)
         ) {
-          return fail("bad_frame", "loop.maxIterations must be a positive integer when present");
+          return fail("bad_frame", `loop.maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
         }
         if (
           budget !== undefined &&

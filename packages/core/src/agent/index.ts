@@ -40,14 +40,35 @@ export {
   type ProviderBuildInput,
 } from "./deps-factory.js";
 export {
+  resumeAutoLoop,
   runAutoLoop,
   type LoopOptions,
   type LoopResult,
   type LoopEvent,
   type LoopStatus,
 } from "./auto-loop.js";
+export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
+export {
+  createLoopState,
+  isValidLoopId,
+  listLoopStates,
+  loadLoopState,
+  removeLoopState,
+  saveLoopState,
+  type CreateLoopStateInput,
+  type LoopState,
+  type LoopVerifyResult,
+  type PersistedLoopStatus,
+} from "./loop-state.js";
 export { classifyAgentError } from "./errors.js";
 export type { AgentErrorKind, ClassifiedAgentError } from "./errors.js";
+export {
+  parseVerifyDiagnostics,
+  type VerifyDiagnostic,
+  type VerifyDiagnostics,
+  type VerifyDiagnosticsOptions,
+  type VerifyFramework,
+} from "./verify-diagnostics.js";
 export { buildSystemPrompt } from "./prompt.js";
 export {
   loadUserCommands,

@@ -6,7 +6,8 @@
 
 import assert from "node:assert/strict";
 import type { LoopEvent, LoopResult } from "@seekforge/core";
-import { formatLoopEvent, formatSummary, outputTail } from "../commands/loop.js";
+import { coreResumeAutoLoop, formatLoopEvent, formatSummary, outputTail } from "../commands/loop.js";
+import { formatLoopWorktree } from "../loop-worktree.js";
 import { setLocale } from "../i18n.js";
 
 setLocale("en"); // deterministic strings
@@ -103,6 +104,25 @@ test("formatSummary omits session recovery commands when no session was created"
   assert.doesNotMatch(s, /session:/);
   assert.doesNotMatch(s, /seekforge resume/);
   assert.doesNotMatch(s, /seekforge rewind/);
+});
+test("formatSummary exposes the persisted loop resume id", () => {
+  const s = formatSummary({ ...result, loopId: "loop-abc" });
+  assert.match(s, /seekforge loop-resume loop-abc/);
+});
+
+test("formatLoopWorktree exposes the retained path and branch", () => {
+  const text = formatLoopWorktree({ path: "/repo/.seekforge/worktrees/fix", branch: "seekforge/fix" });
+  assert.match(text, /retained for inspection/);
+  assert.match(text, /\/repo\/\.seekforge\/worktrees\/fix/);
+  assert.match(text, /seekforge\/fix/);
+});
+
+test("loop resume adapter exposes core support or fails clearly", () => {
+  try {
+    assert.equal(typeof coreResumeAutoLoop(), "function");
+  } catch (err) {
+    assert.match(err instanceof Error ? err.message : String(err), /persisted loop resume state/);
+  }
 });
 
 console.log(`${passed} loop tests passed`);

@@ -16,11 +16,13 @@ goal + verifyCmd ──▶ runTask ──▶ run verifyCmd
 ## CLI
 
 ```
-seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [-y] [-m <model>]
+seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
 - `--verify <cmd>` (required): success = the command exits 0.
-- `--max-iters <n>`: cap on run iterations (default 8).
+- `--max-iters <n>`: cap on run iterations (default 8, hard maximum 100).
+- `--worktree [name]`: create and run in an isolated retained git worktree.
+  An optional name selects the branch suffix; without one a unique name is used.
 - `--budget <usd>`: observed cumulative-cost stopping line across iterations.
   Usage is checked after each provider usage update and prevents further work,
   but an already in-flight request can make the final billed amount slightly
@@ -28,12 +30,17 @@ seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [-y]
 - The loop is inherently autonomous — every run uses `approvalMode: "acceptEdits"`
   (file edits auto-approved; dangerous commands still refused by the denylist).
   `-y` just silences the "auto-approves edits" note.
-- `Ctrl-C` stops cooperatively (status `cancelled`); the session trace is kept,
-  so `seekforge resume <id>` / `seekforge rewind <id>` still work.
+- `Ctrl-C` stops cooperatively (status `cancelled`). Loop orchestration state is
+  saved under `.seekforge/loops/<loop-id>.json`; continue it with
+  `seekforge loop-resume <loop-id>`. Session-level `resume` and `rewind` remain
+  available for manual intervention.
 - Exit code 0 only when the verify command passed.
 
 The whole loop is **one session** (each iteration resumes it), so it is a single
 auditable trace.
+
+Worktrees are deliberately retained for inspection. Run `loop-resume` from the
+worktree directory when the original loop used `--worktree`.
 
 ## Core API
 
@@ -50,14 +57,19 @@ type LoopOptions = {
   model?: string; planModel?: string; escalateOnFailure?: boolean;
   signal?: AbortSignal;         // cooperative stop
   onEvent?: (e: LoopEvent) => void;
-  verify?: (workspace, command) => Promise<{ code; output }>; // test seam
+  loopId?: string; persist?: boolean; // persistence defaults on
+  verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
   status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
+  loopId?: string;
 };
 ```
+
+`resumeAutoLoop(deps, loopId, { workspace })` restores the iteration count,
+cost, session, command, and guardrail configuration from persisted state.
 
 ## Guardrails (all on by default)
 
@@ -66,8 +78,8 @@ Checked before spending another iteration, in order:
 1. `signal.aborted` → `cancelled`
 2. observed cumulative cost ≥ `costBudgetUsd` → cancel the active run and return
    `budget` after verification
-3. verify output byte-identical to the previous iteration **and** the latest
-   agent run changed no files → `no_progress` (stuck)
+3. normalized structured diagnostics unchanged **and** the workspace content
+   fingerprint unchanged → `no_progress` (stuck)
 4. reached `maxIterations` → `exhausted`
 
 A `verify_error` is returned when the verify command can't be run at all.
@@ -81,12 +93,18 @@ stdout+stderr. Cancelling during verification stops the command and returns
 `cancelled`. On failure the output tail is fed back into the next run's prompt
 ("`<verifyCommand>` still fails: …, fix the root cause").
 
+Vitest/Jest, Pytest, and Cargo failures are parsed into bounded test names and
+source locations. Timing and formatting noise is removed from the convergence
+fingerprint. Verification stdout/stderr is streamed through `verify.output`
+events while the command runs; each verification caps event count and chunk
+size, while the final `verify` event retains the normal output tail.
+
 ## Desktop
 
 A collapsible **Loop panel** at the top of the chat window (`LoopPanel`):
 explanation line, task + verify-command inputs, max-iterations + budget, and a
-Run/Stop button. Progress streams live (one row per iteration: run cost + verify
-pass/fail + output tail; a status summary on `loop.done`).
+Run/Stop button. Progress streams live (one row per iteration: run cost + live
+verification output + pass/fail; a status summary and loop id on `loop.done`).
 
 Wire: a `loop` WS client frame `{type:"loop", task, verifyCommand, maxIterations?,
 budget?, ws?, model?, thinking?, reasoningEffort?}` — the model/thinking

@@ -15,6 +15,7 @@ type Props = {
 };
 
 const DEFAULT_MAX_ITERATIONS = 8;
+const MAX_LOOP_ITERATIONS = 100;
 
 /**
  * Collapsible loop-mode panel pinned to the TOP of the chat window. Collapsed
@@ -38,7 +39,7 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
     onRun({
       task: task.trim(),
       verifyCommand: verify.trim(),
-      ...(Number.isFinite(max) && max > 0 ? { maxIterations: max } : {}),
+      ...(Number.isInteger(max) && max > 0 && max <= MAX_LOOP_ITERATIONS ? { maxIterations: max } : {}),
       ...(Number.isFinite(bud) && bud > 0 ? { budget: bud } : {}),
     });
   };
@@ -111,6 +112,7 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                 <Input
                   type="number"
                   min={1}
+                  max={MAX_LOOP_ITERATIONS}
                   value={maxIterations}
                   onChange={(e) => setMaxIterations(e.target.value)}
                   disabled={running}
@@ -166,6 +168,9 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                         )}
                       </>
                     )}
+                    {!row.verify && row.liveTail && (
+                      <span className="truncate font-mono text-2xs text-tertiary">{row.liveTail}</span>
+                    )}
                   </div>
                 ))}
 
@@ -182,6 +187,9 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                         cost: formatCost(result.costUsd),
                       })}
                     </span>
+                    {result.loopId && (
+                      <span className="ml-2 font-mono text-2xs text-tertiary">{result.loopId}</span>
+                    )}
                   </div>
                 )}
             </Card>
