@@ -174,6 +174,28 @@ still `"number"`, but freshness checks and cursor/index arithmetic become wrong.
 - **Caught:** `packages/core/src/provider/cache.ts` — a non-finite cache `ts`
   could make a poisoned entry look fresh.
 
+## 15. Shared security guards may need a narrower capability-specific exception
+
+Reusing a strict guard can silently make the new capability unusable. A web fetcher
+must reject loopback, while a browser verification tool must be able to inspect a
+user-confirmed local development server.
+
+- **Do:** keep the strict shared default and add the smallest explicit exception
+  at the capability boundary; do not broaden the shared guard.
+- **Caught:** `packages/core/src/tools/builtins/browser.ts` — reusing
+  `checkFetchUrl` made the documented `http://localhost:5173` workflow impossible.
+
+## 16. Validate every network hop, not only the initial URL
+
+An approved public URL can redirect to a private address, and a loaded page can
+request private subresources. Checking only the first URL leaves the SSRF guard
+open after navigation begins.
+
+- **Do:** enforce the URL policy at the browser/network request boundary for
+  redirects and subresources as well as the initial navigation.
+- **Caught:** `packages/core/src/tools/builtins/browser.ts` — the initial URL was
+  checked, but Playwright followed later requests without reapplying the policy.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -44,10 +44,16 @@ installed.
 
 `browser_navigate` is the only tool that takes an outward action, so it is
 classified at the **`env`** level — exactly like `web_fetch`/`web_search`. It is
-**always confirmed**, even in auto-approval mode, and the raw url is shown to the
-user verbatim. It reuses `web_fetch`'s SSRF guard: non-`http(s)` schemes and
-private/loopback/link-local addresses (localhost, `127.0.0.0/8`, RFC-1918,
-`169.254.169.254`, IPv6 ULA, IPv4-mapped forms, …) are refused.
+**always confirmed**, even in auto-approval mode, and the raw URL is shown to
+the user verbatim.
+
+Browser verification has one narrow exception to the normal `web_fetch` SSRF
+policy: after that explicit confirmation it may open a loopback development
+server on `localhost`, `127.0.0.0/8`, or `::1`. Other private, link-local, and
+special network targets remain blocked, including RFC-1918 addresses,
+`169.254.169.254`, IPv6 ULA/link-local addresses, IPv4-mapped private forms, and
+non-`http(s)` schemes. This exception is local to `browser_navigate`;
+`web_fetch` continues to reject loopback targets.
 
 The three inspect tools act only on the **already-loaded** page and take no new
 outward action, so they are `readonly` (snapshot/console) or `execute`

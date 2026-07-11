@@ -1,7 +1,9 @@
+import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import {
   buildTriggerTask,
+  checkGitHubSignature,
   checkTriggerSecret,
   loadTriggers,
   maskTrigger,
@@ -64,6 +66,15 @@ describe("validateTrigger", () => {
   it("rejects an invalid mode", () => {
     const result = validateTrigger({ ...good, mode: "yolo" });
     expect("error" in result).toBe(true);
+  });
+});
+
+describe("GitHub webhook authentication", () => {
+  it("verifies the exact raw payload with HMAC SHA-256", () => {
+    const body = '{"action":"opened"}';
+    const sig = `sha256=${createHmac("sha256", "shhhhhh-secret").update(body).digest("hex")}`;
+    expect(checkGitHubSignature("shhhhhh-secret", body, sig)).toBe(true);
+    expect(checkGitHubSignature("shhhhhh-secret", `${body} `, sig)).toBe(false);
   });
 });
 
@@ -286,6 +297,40 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
       headers: { "x-seekforge-trigger-secret": "trigger-secret-1" },
     });
     expect(res.status).toBe(401);
+  });
+
+  it("accepts a native signed GitHub webhook without the server bearer token", async () => {
+    const payload = JSON.stringify({ action: "opened", repository: { full_name: "acme/widgets" } });
+    const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
+    const headers = {
+      "content-type": "application/json",
+      "x-hub-signature-256": signature,
+      "x-github-delivery": "delivery-1",
+      "x-github-event": "pull_request",
+    };
+    const res = await fetch(`${base}/api/triggers/ci`, { method: "POST", headers, body: payload });
+    expect(res.status).toBe(202);
+    const duplicate = await fetch(`${base}/api/triggers/ci`, { method: "POST", headers, body: payload });
+    expect(duplicate.status).toBe(409);
+  });
+
+  it("rejects a bad GitHub signature and unsupported events", async () => {
+    const payload = "{}";
+    const common = { "x-github-delivery": "delivery-2", "x-github-event": "pull_request" };
+    const bad = await fetch(`${base}/api/triggers/ci`, {
+      method: "POST",
+      headers: { ...common, "x-hub-signature-256": "sha256=00" },
+      body: payload,
+    });
+    expect(bad.status).toBe(403);
+
+    const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
+    const unsupported = await fetch(`${base}/api/triggers/ci`, {
+      method: "POST",
+      headers: { ...common, "x-github-delivery": "delivery-3", "x-github-event": "fork", "x-hub-signature-256": signature },
+      body: payload,
+    });
+    expect(unsupported.status).toBe(400);
   });
 });
 

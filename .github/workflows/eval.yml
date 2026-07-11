@@ -6,18 +6,21 @@ name: Eval (regression gate)
 # the harness skips and the job passes.
 on:
   workflow_dispatch:
-  # Uncomment to also run weekly (Mondays 06:00 UTC):
-  # schedule:
-  #   - cron: "0 6 * * 1"
+  schedule:
+    - cron: "0 6 * * 1"
 
 concurrency:
   group: eval-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   eval:
     name: eval vs baseline
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -25,6 +25,9 @@ export const DEFAULT_BASE_BRANCH = "main";
 /** The fixed JSON fields we read from `gh issue view` (title/body/number). */
 export const ISSUE_VIEW_FIELDS = "title,body,number";
 
+/** Review context fetched for `seekforge resolve-review`. */
+export const PR_VIEW_FIELDS = "number,title,body,comments,reviews,headRefName";
+
 /** The parsed issue shape used to build the task prompt / commit / PR text. */
 export interface IssueRef {
   number: number;
@@ -122,6 +125,21 @@ export function buildBranchArgs(branch: string): string[] {
   return ["checkout", "-b", branch];
 }
 
+/** PURE: create an isolated worktree and branch from the selected base. */
+export function buildWorktreeAddArgs(path: string, branch: string, base: string): string[] {
+  return ["worktree", "add", "-b", branch, path, base];
+}
+
+/** PURE: create a detached worktree before `gh pr checkout` selects its head. */
+export function buildDetachedWorktreeArgs(path: string): string[] {
+  return ["worktree", "add", "--detach", path];
+}
+
+/** PURE: remove an isolated worktree after success or an abandoned run. */
+export function buildWorktreeRemoveArgs(path: string, force = false): string[] {
+  return ["worktree", "remove", ...(force ? ["--force"] : []), path];
+}
+
 /** PURE: `git add -A` — stage every change the agent made. */
 export function buildAddArgs(): string[] {
   return ["add", "-A"];
@@ -135,6 +153,11 @@ export function buildCommitArgs(message: string): string[] {
 /** PURE: `git push -u origin <branch>` — push the work branch (user action). */
 export function buildPushArgs(branch: string): string[] {
   return ["push", "-u", "origin", branch];
+}
+
+/** PURE: push commits to the upstream configured by `gh pr checkout`. */
+export function buildReviewPushArgs(): string[] {
+  return ["push"];
 }
 
 /** Inputs for {@link buildPrCreateArgs}. */
@@ -172,6 +195,47 @@ export function buildPrCreateArgs(input: PrCreateInput): string[] {
   ];
   if (draft) args.push("--draft");
   return args;
+}
+
+/** PURE: wait for the PR's checks and return non-zero when a check fails. */
+export function buildPrChecksArgs(pr: string): string[] {
+  return ["pr", "checks", pr, "--watch", "--fail-fast"];
+}
+
+/** PURE: fetch review comments and metadata without changing the checkout. */
+export function buildPrViewArgs(pr: string): string[] {
+  return ["pr", "view", pr, "--json", PR_VIEW_FIELDS];
+}
+
+/** PURE: check out a PR in the current (normally isolated) worktree. */
+export function buildPrCheckoutArgs(pr: string): string[] {
+  return ["pr", "checkout", pr];
+}
+
+export interface ReviewContext {
+  number: number;
+  title: string;
+  body?: string;
+  comments?: unknown[];
+  reviews?: unknown[];
+}
+
+/** PURE: turn GitHub's review payload into an explicit, bounded agent task. */
+export function buildReviewTaskPrompt(review: ReviewContext): string {
+  const context = JSON.stringify(
+    { comments: review.comments ?? [], reviews: review.reviews ?? [] },
+    null,
+    2,
+  );
+  const boundedContext = context.length <= 20_000 ? context : `${context.slice(0, 20_000)}\n[truncated]`;
+  return [
+    `Address review feedback on PR #${review.number}: ${review.title.trim()}`,
+    review.body?.trim(),
+    `Review comments and reviews:\n${boundedContext}`,
+    "Make only changes required by actionable review feedback and ensure tests pass.",
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
 }
 
 /** Render a `<bin> <args…>` argv as a copy-pasteable, minimally-quoted line. */

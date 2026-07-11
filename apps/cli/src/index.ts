@@ -35,7 +35,7 @@ import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import { loopCommand } from "./commands/loop.js";
-import { resolveCommand } from "./commands/resolve.js";
+import { resolveCommand, resolveReviewCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
 import { sandboxRunCommand } from "./commands/sandbox.js";
 import {
@@ -357,16 +357,33 @@ program
   .option("--base <branch>", "base branch to open the PR against (default: main)")
   .option("-m, --model <model>", "override the model for the headless fix run")
   .option("--no-draft", "open a ready-for-review PR instead of a draft")
+  .option("--no-worktree", "run in the current checkout instead of an isolated git worktree")
+  .option("--wait-ci", "wait for PR checks and fail when a check fails")
   .option("--dry-run", "fetch + branch + fix + verify, but print (don't run) the push/PR")
   .description("autonomously fix a GitHub issue on a work branch and open a PR (agent fixes; the command pushes/PRs)")
-  .action(async (issue: string, opts: { maxCost: number; base?: string; model?: string; draft?: boolean; dryRun?: boolean }) => {
+  .action(async (issue: string, opts: { maxCost: number; base?: string; model?: string; draft?: boolean; dryRun?: boolean; worktree?: boolean; waitCi?: boolean }) => {
     await resolveCommand(issue, {
       maxCost: opts.maxCost,
       base: opts.base,
       model: opts.model,
       draft: opts.draft,
       dryRun: opts.dryRun,
+      worktree: opts.worktree,
+      waitCi: opts.waitCi,
     });
+  });
+
+program
+  .command("resolve-review")
+  .argument("<pr>", "GitHub PR number or URL whose review feedback should be addressed")
+  .requiredOption("--max-cost <usd>", "REQUIRED per-run cost cap in USD", parsePositiveFloat)
+  .option("-m, --model <model>", "override the model for the headless review-fix run")
+  .option("--no-worktree", "run in the current checkout instead of an isolated git worktree")
+  .option("--wait-ci", "wait for PR checks after pushing")
+  .option("--dry-run", "fix + verify, but print (don't run) commit/push")
+  .description("address actionable review feedback on an existing PR and push the fixes")
+  .action(async (pr: string, opts: { maxCost: number; model?: string; dryRun?: boolean; worktree?: boolean; waitCi?: boolean }) => {
+    await resolveReviewCommand(pr, opts);
   });
 
 program

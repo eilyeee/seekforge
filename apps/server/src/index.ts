@@ -81,7 +81,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       // The token gates capability (API/WS). Static assets are public: the
       // UI bundle is not a secret, and index.html's subresource requests
       // cannot carry the token anyway.
-      if (!isAuthorized(req, token)) {
+      if (!isAuthorized(req, token) && !isGitHubTriggerRequest(req, url)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
       handleApi(req, res, url, { registry, worktrees, version, createAgent }).catch((e: unknown) => {
@@ -138,6 +138,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     });
 
   return { port, token, close };
+}
+
+/** Signed GitHub trigger calls authenticate in the trigger route using its per-trigger secret. */
+function isGitHubTriggerRequest(req: IncomingMessage, url: URL): boolean {
+  return req.method === "POST" && /^\/api\/triggers\/[^/]+$/.test(url.pathname) &&
+    typeof req.headers["x-hub-signature-256"] === "string" &&
+    typeof req.headers["x-github-delivery"] === "string";
 }
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {

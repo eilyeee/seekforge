@@ -28,8 +28,8 @@ and quick start; this folder holds the reference docs.
   (`seekforge schedule`), the mandatory per-run cost budget, headless safety,
   and wiring the tick into cron/launchd/systemd.
 - [Event-triggered automation](automation.md) — server webhook triggers that fire
-  a headless, cost-bounded run on an external event (GitHub/CI), the dual-auth
-  (server token + per-trigger secret) model, and pointing a webhook at it.
+  a headless, cost-bounded run on an external event: native GitHub HMAC delivery
+  or generic server-token + trigger-secret authentication.
 - [Autonomous GitHub issue → PR](github.md) — `seekforge resolve <issue>`: fetch
   an issue, fix it headless on a work branch, verify, and open a draft PR. The
   agent fixes; the user's `resolve` command performs the push/PR (moat preserved).
@@ -38,9 +38,10 @@ and quick start; this folder holds the reference docs.
   key-via-env, the network tradeoff, and auditing containerized runs.
 
 ## Surfaces
-- [Embedding SeekForge (`@seekforge/core`)](sdk.md) — use the agent engine
-  programmatically: provider factory, `createAgentCore`/`runTask`, the
-  autonomous loop, and the extension points (custom tools, hooks, MCP, subagents).
+- [Internal embedding API (`@seekforge/core`)](sdk.md) — use the private
+  workspace engine in monorepo integrations: provider factory,
+  `createAgentCore`/`runTask`, the autonomous loop, and extension points. It is
+  not currently a published public SDK.
 - [CLI](../apps/cli/README.md) · [Terminal UI](../apps/tui/README.md) ·
   Desktop shell: [apps/desktop/src-tauri/README.md](../apps/desktop/src-tauri/README.md)
 - [Server REST + WS API](../apps/server/SERVER-API.md) — the contract the
@@ -54,8 +55,8 @@ and quick start; this folder holds the reference docs.
   evals, the baseline convention, and `--fail-on-regression`.
 - [Releasing](RELEASING.md) — the DMG checklist, clean-machine verification
   gate, and the updater decision.
-- [Roadmap and competitive gaps](roadmap.md) — where SeekForge is intentionally
-  strong today, and what it still lacks versus mature open-source coding agents.
+- [Roadmap and maturity](roadmap.md) — what is production-ready, what remains
+  experimental, and the next hardening priorities.
 
 ## Notes & audits
 - [Low-end model audit](low-end-model-audit.md)

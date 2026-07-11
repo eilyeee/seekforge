@@ -14,7 +14,7 @@
  * existing agent run path (see trigger-run.ts / rest.ts).
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -157,6 +157,15 @@ export function checkTriggerSecret(expected: string, presented: string | null | 
   const a = createHash("sha256").update(expected).digest();
   const b = createHash("sha256").update(presented).digest();
   return timingSafeEqual(a, b);
+}
+
+/** Verify GitHub's native `X-Hub-Signature-256` over the exact request bytes. */
+export function checkGitHubSignature(secret: string, rawBody: string, presented: string | string[] | undefined): boolean {
+  if (typeof presented !== "string" || !presented.startsWith("sha256=")) return false;
+  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(presented);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** Redacts the secret before a trigger is returned in any API response. */

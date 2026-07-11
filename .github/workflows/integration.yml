@@ -1,0 +1,55 @@
+name: Integration (runtime environments)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 5 * * 1"
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-runtime:
+    name: Rust runtime binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and exercise the real stdio runtime
+        run: cargo test -p seekforge-runtime --test protocol
+
+  docker:
+    name: Docker runner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm Docker daemon
+        run: docker info
+      - name: Build runner image
+        run: docker build --tag seekforge-runner:integration .
+      - name: Start the packaged CLI in Docker
+        run: docker run --rm seekforge-runner:integration --help
+
+  playwright:
+    name: Playwright Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Chromium
+        run: pnpm dlx playwright@1.55.0 install --with-deps chromium
+      - name: Exercise a real headless browser
+        run: node scripts/playwright-smoke.mjs

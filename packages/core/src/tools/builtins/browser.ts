@@ -32,6 +32,22 @@ const MAX_ELEMENTS = 100;
 const INSTALL_HINT =
   "browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium";
 
+/** Browser verification may target a developer's loopback server, but no other private network. */
+export function checkBrowserUrl(raw: string): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ToolError("invalid_url", `Not a valid URL: ${raw}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ToolError("invalid_url", `Only http/https URLs are allowed (got ${url.protocol})`);
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || /^127\./.test(host)) return url;
+  return checkFetchUrl(raw);
+}
+
 // Loosely-typed Playwright surface — the dependency may be absent at type-check
 // time, so we describe only what we use and treat everything as `any`.
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -78,7 +94,19 @@ async function getPage(): Promise<any> {
     browser = await pw.chromium.launch({ headless: true });
     installExitHook();
   }
-  if (!context) context = await browser.newContext();
+  if (!context) {
+    context = await browser.newContext();
+    // Re-check every navigation/subresource so a public URL cannot redirect the
+    // browser into an unapproved private network target.
+    await context.route("**/*", async (route: any) => {
+      try {
+        checkBrowserUrl(String(route.request().url()));
+        await route.continue();
+      } catch {
+        await route.abort("blockedbyclient");
+      }
+    });
+  }
   if (!page) {
     page = await context.newPage();
     // Attach capture listeners once per page; buffers are reset on navigate.
@@ -157,7 +185,7 @@ const browserNavigate = defineTool({
   description:
     "Open an absolute http(s) url in a shared headless browser so you can verify a frontend change; reuses one browser+page across calls. " +
     "Returns the final url, HTTP status, and page title, and starts capturing console/errors/failed-requests for browser_console. " +
-    "Outward network action — always requires user confirmation and private/loopback addresses are refused. Run your dev server first, then navigate to it.",
+    "Outward network action — always requires user confirmation. Loopback dev servers are allowed; other private addresses are refused.",
   schema: navigateSchema,
   // "env" level: always confirmed even in auto mode, like web_fetch — this
   // takes an outward network action and the raw url is shown to the user.
@@ -167,8 +195,7 @@ const browserNavigate = defineTool({
     command: `GET ${args.url}`,
   }),
   async run(args) {
-    // Reuse web_fetch's SSRF guard: reject non-http(s) and private/loopback.
-    const url = checkFetchUrl(args.url);
+    const url = checkBrowserUrl(args.url);
     const p = await getPage();
     // Reset capture so browser_console reflects only the new page.
     consoleMessages = [];

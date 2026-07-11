@@ -9,10 +9,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   node:
-    name: node (typecheck / test / build)
+    name: node 22 (typecheck / test / build)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,9 +44,44 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      - name: Critical boundary coverage
+        run: pnpm test:coverage:critical
+
+      - name: Upload CLI build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-dist
+          path: apps/cli/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  node-20-package:
+    name: node 20 (published CLI smoke)
+    needs: node
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download CLI build
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-dist
+          path: apps/cli/dist
+
+      - name: Pack, install, and run published commands
+        run: node scripts/npm-pack-smoke.mjs
+
   rust:
     name: rust (check / test)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4

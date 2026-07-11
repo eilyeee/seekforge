@@ -10,6 +10,7 @@ import { startTriggerRun } from "../trigger-run.js";
 import {
   addTrigger,
   buildTriggerTask,
+  checkGitHubSignature,
   checkTriggerSecret,
   getTrigger,
   loadTriggers,
@@ -18,6 +19,11 @@ import {
   validateTrigger,
 } from "../triggers.js";
 import type { RouteCtx } from "./context.js";
+
+const seenDeliveries = new Map<string, number>();
+const DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_SEEN_DELIVERIES = 10_000;
+const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment", "workflow_run"]);
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   await routes(ctx);
@@ -57,12 +63,6 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const id = segs[2]!;
     const trigger = getTrigger(workspace, id);
     if (!trigger) return sendApiError(res, 404, "not_found", `trigger not found: ${id}`);
-    const header = req.headers["x-seekforge-trigger-secret"];
-    const presented =
-      (typeof header === "string" ? header : undefined) ?? url.searchParams.get("secret");
-    if (!checkTriggerSecret(trigger.secret, presented)) {
-      return sendApiError(res, 403, "forbidden", "invalid or missing trigger secret");
-    }
     if (!trigger.enabled) {
       return sendApiError(res, 409, "conflict", `trigger is disabled: ${id}`);
     }
@@ -75,6 +75,35 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     } catch (err) {
       if (isBodyTooLarge(err)) return sendApiError(res, 413, "too_large", "request body too large");
       throw err;
+    }
+    const signature = req.headers["x-hub-signature-256"];
+    const githubDelivery = req.headers["x-github-delivery"];
+    const githubEvent = req.headers["x-github-event"];
+    const githubSigned = checkGitHubSignature(trigger.secret, rawPayload, signature);
+    const header = req.headers["x-seekforge-trigger-secret"];
+    const presented = (typeof header === "string" ? header : undefined) ?? url.searchParams.get("secret");
+    if (!githubSigned && !checkTriggerSecret(trigger.secret, presented)) {
+      return sendApiError(res, 403, "forbidden", "invalid trigger secret or GitHub signature");
+    }
+    if (githubSigned) {
+      if (typeof githubDelivery !== "string" || githubDelivery.length === 0) {
+        return sendApiError(res, 400, "bad_request", "missing x-github-delivery");
+      }
+      if (typeof githubEvent !== "string" || !GITHUB_EVENTS.has(githubEvent)) {
+        return sendApiError(res, 400, "bad_request", "unsupported x-github-event");
+      }
+      const now = Date.now();
+      for (const [key, ts] of seenDeliveries) if (now - ts > DELIVERY_TTL_MS) seenDeliveries.delete(key);
+      const deliveryKey = `${workspace}\0${id}\0${githubDelivery}`;
+      if (seenDeliveries.has(deliveryKey)) {
+        return sendApiError(res, 409, "conflict", "duplicate GitHub delivery");
+      }
+      seenDeliveries.set(deliveryKey, now);
+      while (seenDeliveries.size > MAX_SEEN_DELIVERIES) {
+        const oldest = seenDeliveries.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        seenDeliveries.delete(oldest);
+      }
     }
     let payload: unknown;
     try {

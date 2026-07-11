@@ -20,14 +20,11 @@ and undone with `seekforge rewind <id>`.
 A webhook can be called by an external system with no human watching, so a
 triggered run is locked down three ways:
 
-1. **Dual authentication.** The server already gates *every* `/api` route behind
-   its bearer token (127.0.0.1-bound, `Authorization: Bearer <token>` or
-   `?token=`). The fire endpoint requires that **and** the trigger's own
-   per-trigger `secret`, compared in constant time. This lets you hand a
-   GitHub/CI webhook the trigger URL + secret without giving it the full server
-   token — but for now the trigger is still behind the server token too (see
-   [Exposing to the internet](#exposing-to-the-internet)). A wrong or missing
-   secret is a `403`; a wrong or missing server token is a `401`.
+1. **Authenticated delivery.** A generic caller uses the server bearer token
+   plus the trigger's per-trigger secret. A native GitHub webhook instead signs
+   the exact request body with that trigger secret and sends
+   `X-Hub-Signature-256`; it does not need to invent custom GitHub headers or
+   expose the server bearer token. Secret comparisons are constant-time.
 2. **A cost budget is mandatory.** Every trigger requires `maxCostUsd`. The run
    aborts gracefully the moment cumulative spend reaches the budget (the trace
    is kept). A trigger with no budget is **rejected at creation** — there is no
@@ -66,8 +63,10 @@ owner-only `0600` because it holds secrets). Each trigger is:
 
 ## Endpoints
 
-All endpoints are under `/api` and require the server bearer token. Secrets are
-**masked** (`"***"`) in every response.
+Management endpoints are under `/api` and require the server bearer token.
+Secrets are **masked** (`"***"`) in every response. The fire route also accepts
+a correctly signed native GitHub delivery without the bearer token; this is the
+only authentication exception.
 
 | Method + path | Purpose |
 | --- | --- |
@@ -81,11 +80,23 @@ The workspace is selected with `?ws=<id>` like every other scoped route
 
 ### Firing a trigger
 
-`POST /api/triggers/:id` needs **both** credentials:
+For a generic CI or service caller, `POST /api/triggers/:id` needs **both**:
 
 - the server bearer token (`Authorization: Bearer <token>`), and
 - the trigger secret, as the `x-seekforge-trigger-secret` header **or** a
   `?secret=` query parameter.
+
+For a native GitHub webhook, configure the trigger's `secret` as GitHub's
+webhook secret. GitHub sends:
+
+- `X-Hub-Signature-256: sha256=<HMAC>` over the exact request bytes,
+- `X-GitHub-Delivery: <unique-delivery-id>`, and
+- `X-GitHub-Event: <event-name>`.
+
+Signed GitHub requests do not require the server bearer token or
+`x-seekforge-trigger-secret`. Accepted events are `push`, `pull_request`,
+`issues`, `issue_comment`, and `workflow_run`. Deliveries are deduplicated by
+workspace, trigger, and delivery ID for 24 hours; a duplicate returns `409`.
 
 An optional JSON request body (e.g. a GitHub webhook payload) is distilled into
 a short summary — action, repo, ref, PR/issue number + title, sender, head
@@ -99,9 +110,10 @@ immediately; the run continues in the background:
 { "sessionId": "20260703-...-ab12", "triggerId": "ci-review" }
 ```
 
-Responses: `202` fired · `400` malformed body · `401` bad/missing server token ·
-`403` bad/missing trigger secret · `404` unknown trigger · `409` trigger
-disabled.
+Responses: `202` fired · `400` malformed body or invalid GitHub event metadata ·
+`401` bad/missing server token for a generic request · `403` bad trigger secret
+or GitHub signature · `404` unknown trigger · `409` trigger disabled or duplicate
+GitHub delivery.
 
 ## Pointing a GitHub / CI webhook at it
 
@@ -114,11 +126,14 @@ disabled.
      -d '{"id":"ci-review","task":"Review the latest push.","mode":"ask","maxCostUsd":0.5,"secret":"'"$TRIGGER_SECRET"'"}'
    ```
 
-2. Point the webhook at the fire URL, carrying both credentials. For a GitHub
-   webhook you control the headers via the delivery, so send the server token as
-   the `Authorization` header and the trigger secret as
-   `x-seekforge-trigger-secret` (GitHub's own HMAC `secret` field is separate and
-   not used here). A generic CI job can simply `curl`:
+2. For GitHub, set the payload URL to the fire endpoint, choose JSON content,
+   and enter the same value as the trigger's `secret` in GitHub's **Secret**
+   field. Select only supported events. SeekForge verifies GitHub's native
+   `X-Hub-Signature-256`, requires its delivery/event headers, and rejects
+   duplicate deliveries. No custom `Authorization` or
+   `x-seekforge-trigger-secret` header is needed.
+
+3. A generic CI job retains the dual-secret mode and can simply `curl`:
 
    ```bash
    curl -X POST "http://127.0.0.1:7373/api/triggers/ci-review" \
@@ -130,11 +145,12 @@ disabled.
 
 ## Exposing to the internet
 
-The server binds `127.0.0.1` only and requires its bearer token, so a trigger is
-not directly reachable from the public internet by design. To receive real
-GitHub/CI webhooks, front the server with something you control — a reverse
-proxy or an authenticated tunnel — and forward the two credentials through it.
-The per-trigger secret means a single leaked trigger URL still can't fire a run
-without the secret, and can't touch any other endpoint. Rotate a secret by
+The server binds `127.0.0.1` only, so a trigger is not directly reachable from
+the public internet by design. To receive real GitHub/CI webhooks, front it with
+a reverse proxy or tunnel you control. Forward GitHub's signature, delivery,
+event, and content-type headers without rewriting the body; HMAC verification
+depends on the exact bytes. Generic callers must also forward the bearer and
+trigger-secret headers. The per-trigger secret means a leaked URL alone cannot
+fire a run or access management endpoints. Rotate a secret by
 `DELETE`-ing and re-creating the trigger (or editing `triggers.json` and
 restarting).

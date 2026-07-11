@@ -10,6 +10,11 @@ Two layers protect against regressions:
    real tasks via the DeepSeek API and fails on a regression vs the baseline.
    Because it costs money and is non-deterministic, it is **not** on the PR gate.
 
+The deterministic gate also runs `pnpm test:coverage:critical`. Its deliberately
+scoped thresholds cover the highest-risk URL, browser, command-classification,
+and provider-cache boundaries. This is a regression floor, not a claim that a
+single whole-repository percentage measures agent quality.
+
 ## Running evals locally
 
 ```sh

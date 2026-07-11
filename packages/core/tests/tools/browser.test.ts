@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { createDefaultDispatcher, disposeBrowser } from "../../src/tools/index.js";
-import { browserTools } from "../../src/tools/builtins/browser.js";
+import { browserTools, checkBrowserUrl } from "../../src/tools/builtins/browser.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 /**
@@ -45,6 +45,18 @@ describe("browser tools registration", () => {
     expect(level("browser_console")).toBe("readonly");
     expect(level("browser_screenshot")).toBe("execute");
   });
+});
+
+describe("browser URL policy", () => {
+  it.each(["http://localhost:5173/", "http://127.0.0.1:3000/", "http://[::1]:8080/"])(
+    "allows an explicitly confirmed loopback dev server: %s",
+    (url) => expect(checkBrowserUrl(url).href).toBe(url),
+  );
+
+  it.each(["http://10.0.0.1/", "http://192.168.1.2/", "http://169.254.169.254/"])(
+    "still blocks non-loopback private targets: %s",
+    (url) => expect(() => checkBrowserUrl(url)).toThrowError(/private|loopback/i),
+  );
 });
 
 describe("browser tools graceful degradation (Playwright absent)", () => {

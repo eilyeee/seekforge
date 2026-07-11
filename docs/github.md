@@ -4,8 +4,14 @@
 branch with a headless, cost-bounded agent run, verifies the result, and opens a
 draft pull request — the OpenHands-style "give it an issue, get a PR" flow.
 
+**Maturity:** implemented and usable, with an explicit human-initiated push/PR
+boundary. Issue fixes run in an isolated worktree by default, `--wait-ci` can
+wait for hosted checks, and `seekforge resolve-review` can address review
+feedback. CI failure-log feedback and safe resume of an existing issue branch
+remain future work.
+
 ```
-seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--model <m>] [--no-draft] [--dry-run]
+seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--model <m>] [--no-draft] [--no-worktree] [--wait-ci] [--dry-run]
 ```
 
 ## The moat: the agent fixes, the command pushes
@@ -21,7 +27,8 @@ command.
 
 1. **Fetch the issue** (read-only): `gh issue view <n> --json title,body,number`.
    A full issue URL is accepted too — the number is extracted from it.
-2. **Create a work branch**: `git checkout -b seekforge/issue-<n>`.
+2. **Create an isolated worktree and work branch** from the selected base. Pass
+   `--no-worktree` only when you intentionally want to change the current checkout.
 3. **Run the agent headless** to fix it. The task prompt is built from the issue:
 
    > Resolve GitHub issue #\<n>: \<title>
@@ -52,6 +59,8 @@ If the agent made no changes, `resolve` stops before committing (nothing to PR).
 | `--model <m>` | Model override for the headless fix run. |
 | `--no-draft` | Open a ready-for-review PR instead of a draft (draft is the default). |
 | `--dry-run` | Do steps 1–4 (fetch + branch + fix + verify), then **print** the exact commit/push/PR commands that *would* run — without pushing or opening a PR. |
+| `--no-worktree` | Use the current checkout instead of the default temporary isolated worktree. |
+| `--wait-ci` | Wait for hosted PR checks after creation and return failure when a check fails. |
 
 ## Prerequisites
 
@@ -77,3 +86,16 @@ seekforge resolve 42 --max-cost 1.00 --dry-run
 
 Each fix is a normal, auditable SeekForge session — inspect it with
 `seekforge sessions` / `seekforge audit`, or undo it with `seekforge rewind`.
+
+## Review feedback
+
+`seekforge resolve-review <pr> --max-cost <usd>` checks out an existing PR in an
+isolated worktree, gives its comments and reviews to a bounded headless agent
+run, verifies the changes, then commits and pushes them. It supports
+`--no-worktree`, `--dry-run`, `--wait-ci`, and `--model` with the same safety
+model as `resolve`.
+
+## Next hardening steps
+
+- Feed bounded hosted CI failure logs into an explicit follow-up repair run.
+- Resume an existing issue branch safely without duplicating commits or PRs.

@@ -1,14 +1,24 @@
 # Embedding SeekForge (`@seekforge/core`)
 
-`@seekforge/core` is the engine behind the CLI, TUI, and desktop app. You can
-embed it directly: build a provider, assemble the agent core, and stream a task
-to completion. Every name below is a real export from
-`packages/core/src/index.ts` (which re-exports the provider, agent, tools,
+`@seekforge/core` is the engine behind the CLI, TUI, and desktop app. It is
+currently a **private workspace package**, not a published or semver-stable npm
+SDK: `packages/core/package.json` has `"private": true` and exports TypeScript
+source directly. The examples below are for in-repository integrations and
+contributors. External applications should not depend on this package until it
+has a build artifact, public package contract, and compatibility policy.
+
+Inside the monorepo, you can embed it directly: build a provider, assemble the
+agent core, and stream a task to completion. Every name below is a real export
+from `packages/core/src/index.ts` (which re-exports the provider, agent, tools,
 memory, skills, subagents, runtime, mcp, evolution, hooks, and worktree
 modules).
 
 The canonical wiring lives in `apps/cli/src/agent-factory.ts` — this guide
 mirrors it.
+
+**Maturity:** internal and functional, but not a supported public distribution.
+Skills, hooks, MCP, and subagents are the supported user-facing extension
+surfaces today.
 
 ## Core entry points
 

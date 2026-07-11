@@ -14,12 +14,20 @@ import {
   buildBranchName,
   buildCommitArgs,
   buildCommitMessage,
+  buildDetachedWorktreeArgs,
   buildIssueViewArgs,
+  buildPrChecksArgs,
+  buildPrCheckoutArgs,
   buildPrBody,
   buildPrCreateArgs,
+  buildPrViewArgs,
   buildPrTitle,
   buildPushArgs,
+  buildReviewPushArgs,
+  buildReviewTaskPrompt,
   buildTaskPrompt,
+  buildWorktreeAddArgs,
+  buildWorktreeRemoveArgs,
   formatCommand,
   parseIssueNumber,
   type IssueRef,
@@ -84,6 +92,15 @@ test("git checkout -b uses the derived branch", () => {
   assert.deepEqual(buildBranchArgs("seekforge/issue-42"), ["checkout", "-b", "seekforge/issue-42"]);
 });
 
+test("isolated worktree args create a branch from the requested base", () => {
+  assert.deepEqual(buildWorktreeAddArgs("/tmp/work", "seekforge/issue-42", "develop"), [
+    "worktree", "add", "-b", "seekforge/issue-42", "/tmp/work", "develop",
+  ]);
+  assert.deepEqual(buildDetachedWorktreeArgs("/tmp/review"), ["worktree", "add", "--detach", "/tmp/review"]);
+  assert.deepEqual(buildWorktreeRemoveArgs("/tmp/work"), ["worktree", "remove", "/tmp/work"]);
+  assert.deepEqual(buildWorktreeRemoveArgs("/tmp/work", true), ["worktree", "remove", "--force", "/tmp/work"]);
+});
+
 // --- task prompt ------------------------------------------------------------
 test("task prompt has the objective header, body, and the minimal-change directive", () => {
   const p = buildTaskPrompt(ISSUE);
@@ -119,6 +136,10 @@ test("push targets origin and sets upstream for the work branch", () => {
   assert.deepEqual(buildPushArgs("seekforge/issue-42"), ["push", "-u", "origin", "seekforge/issue-42"]);
 });
 
+test("review fixes push to the checked-out PR branch upstream", () => {
+  assert.deepEqual(buildReviewPushArgs(), ["push"]);
+});
+
 // --- gh pr create argv ------------------------------------------------------
 test("pr create defaults to a draft, base main, head branch, and Resolves #<n> body", () => {
   const args = buildPrCreateArgs({ issue: ISSUE, branch: "seekforge/issue-42" });
@@ -146,6 +167,38 @@ test("a run summary is appended under Resolves #<n>", () => {
 
 test("pr title matches the commit subject", () => {
   assert.equal(buildPrTitle(ISSUE), buildCommitMessage(ISSUE));
+});
+
+test("CI checks use watch and fail-fast", () => {
+  assert.deepEqual(buildPrChecksArgs("https://github.com/o/r/pull/42"), [
+    "pr", "checks", "https://github.com/o/r/pull/42", "--watch", "--fail-fast",
+  ]);
+});
+
+test("review mode fetches context and checks out the requested PR", () => {
+  assert.deepEqual(buildPrViewArgs("42"), [
+    "pr", "view", "42", "--json", "number,title,body,comments,reviews,headRefName",
+  ]);
+  assert.deepEqual(buildPrCheckoutArgs("42"), ["pr", "checkout", "42"]);
+});
+
+test("review prompt includes comments and limits the task to actionable feedback", () => {
+  const prompt = buildReviewTaskPrompt({
+    number: 42,
+    title: "Fix crash",
+    comments: [{ body: "Add a null guard" }],
+    reviews: [{ state: "CHANGES_REQUESTED", body: "Please add a test" }],
+  });
+  assert.ok(prompt.includes("PR #42: Fix crash"));
+  assert.ok(prompt.includes("Add a null guard"));
+  assert.ok(prompt.includes("CHANGES_REQUESTED"));
+  assert.ok(prompt.includes("only changes required by actionable review feedback"));
+});
+
+test("review prompt bounds untrusted GitHub context", () => {
+  const prompt = buildReviewTaskPrompt({ number: 42, title: "Fix", comments: [{ body: "x".repeat(30_000) }] });
+  assert.ok(prompt.includes("[truncated]"));
+  assert.ok(prompt.length < 21_000);
 });
 
 // --- formatting -------------------------------------------------------------
