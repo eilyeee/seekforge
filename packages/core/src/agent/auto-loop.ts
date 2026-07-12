@@ -11,7 +11,7 @@
 import type { ApprovalMode } from "@seekforge/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readlinkSync, readSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
@@ -118,8 +118,12 @@ async function captureVerify(
 
 function workspaceFingerprint(workspace: string): string | null {
   const hashFile = (hash: ReturnType<typeof createHash>, absolute: string, path: string): void => {
-    const stat = statSync(absolute);
+    const stat = lstatSync(absolute);
     hash.update(`\0${path}\0${stat.mode}\0${stat.size}\0`);
+    if (stat.isSymbolicLink()) {
+      hash.update(readlinkSync(absolute));
+      return;
+    }
     if (stat.isDirectory()) {
       try {
         hash.update(execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
@@ -199,7 +203,7 @@ function workspaceFingerprint(workspace: string): string | null {
               path.startsWith(".seekforge/uploads/")) continue;
           const absolute = join(workspace, path);
           if (entry.isDirectory()) visit(absolute, path);
-          else if (entry.isFile()) {
+          else if (entry.isFile() || entry.isSymbolicLink()) {
             hashFile(hash, absolute, path);
           }
         }
@@ -581,6 +585,9 @@ export async function resumeAutoLoop(
   const costBudgetUsd = addedBudget > 0
     ? (state.costBudgetUsd ?? state.costUsd) + addedBudget
     : state.costBudgetUsd;
+  if (costBudgetUsd !== null && !Number.isFinite(costBudgetUsd)) {
+    throw new Error("resulting cost budget must be finite");
+  }
   const { additionalIterations: _additionalIterations, additionalCostBudgetUsd: _additionalBudget, ...runOpts } = opts;
   return runAutoLoop(deps, {
     ...runOpts,

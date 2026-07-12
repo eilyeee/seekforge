@@ -124,7 +124,8 @@ otherwise the same guardrail stops it without additional agent work.
 Resume may add `additionalIterations` and `additionalCostBudgetUsd`. Iterations
 are added to the saved maximum and capped at 100. Added budget extends the saved
 total; without a prior budget it starts from cost already incurred, so historical
-spend is never reset.
+spend is never reset. The resulting budget must remain finite; numeric overflow
+is rejected rather than interpreted as an absent limit.
 
 `--worktree` is a CLI adapter concern: the CLI creates a branch and worktree,
 then passes that directory as the Loop workspace. State and session traces are
@@ -139,9 +140,10 @@ worktrees. A duplicate Loop id across workspaces is rejected as ambiguous rather
 than selecting one implicitly. Cleanup is blocked while any live lease exists,
 including with `--force`.
 
-Loop management also works outside Git repositories. Existing workspace paths
-are canonicalized to their physical path so symlink aliases and platform path
-aliases resolve to the same persisted state.
+Loop management also works outside Git repositories. Existing workspace paths,
+including values stored by older versions, are canonicalized to their physical
+path so symlink aliases and platform path aliases resolve to the same persisted
+state.
 
 ## CLI
 
@@ -239,7 +241,8 @@ source locations. Timing and formatting noise is removed from the convergence
 fingerprint. Parsing scans a bounded aggregate while retaining all parsed failure
 identities within that bound. The workspace fingerprint hashes the full content
 of changed, staged, and untracked files in Git repositories, and all files in a
-non-Git workspace, while excluding SeekForge runtime state. Verification
+non-Git workspace, while excluding SeekForge runtime state. Symbolic links are
+hashed as links and are never followed outside the workspace. Verification
 stdout/stderr is streamed through `verify.output` events while the command runs;
 each verification caps event count and chunk size, while the final `verify` event
 retains the normal output tail.
@@ -265,6 +268,10 @@ IDs are rejected at the protocol boundary.
 If the Desktop connection drops during a run, the operation is marked
 interrupted, prompts are cleared, and requests queued for the failed connection
 are discarded rather than replayed after reconnect.
+
+Server errors that prove no operation exists (such as `not_running`) also clear
+the running state and stale prompts. Errors for a concurrent operation or stale
+prompt response remain non-terminal because the active server run may continue.
 
 ## TUI
 

@@ -176,4 +176,21 @@ describe("loop state persistence", () => {
       expect(loadLoopState(other, "valid")).toBeNull();
     } finally { rmSync(other, { recursive: true, force: true }); }
   });
+
+  it("loads legacy state written with a symlinked workspace path", () => {
+    const state = createLoopState({
+      loopId: "legacy-alias", task: "x", workspace, verifyCommand: "test", maxIterations: 1,
+    });
+    const aliasRoot = mkdtempSync(join(tmpdir(), "seekforge-loop-alias-"));
+    const alias = join(aliasRoot, "workspace");
+    try {
+      symlinkSync(workspace, alias);
+      const file = join(workspace, ".seekforge", "loops", "legacy-alias.json");
+      writeFileSync(file, JSON.stringify({ ...state, workspace: alias }));
+      expect(loadLoopState(workspace, state.loopId)).toEqual(state);
+      expect(loadLoopState(alias, state.loopId)).toEqual(state);
+    } finally {
+      rmSync(aliasRoot, { recursive: true, force: true });
+    }
+  });
 });

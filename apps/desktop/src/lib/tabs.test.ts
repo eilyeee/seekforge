@@ -205,17 +205,22 @@ describe("routeFrame", () => {
     expect(s.tabs.find((t) => t.tabId === "t2")!.pendingQuestion).toBeNull();
   });
 
-  it("fatal errors stop the spinner; nonfatal operation errors keep it", () => {
-    const base = updateTab(threeTabs(), "t1", (tab) => ({ chat: { ...tab.chat, running: true } }));
+  it("terminal errors stop the operation and clear prompts; nonfatal errors preserve it", () => {
+    const base = updateTab(threeTabs(), "t1", (tab) => ({
+      chat: { ...tab.chat, running: true },
+      pendingQuestion: { id: "q1", question: "?", options: [] },
+    }));
     const bad = routeFrame(base, "t1", { type: "error", code: "unknown_session", message: "?" });
     expect(bad.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(false);
     expect(bad.tabs.find((t) => t.tabId === "t1")!.wsError).toBe("unknown_session: ?");
     const busy = routeFrame(base, "t1", { type: "error", code: "busy", message: "running" });
     expect(busy.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
-    for (const code of ["unknown_request", "not_running"] as const) {
-      const next = routeFrame(base, "t1", { type: "error", code, message: "stale operation" });
-      expect(next.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
-    }
+    const stale = routeFrame(base, "t1", { type: "error", code: "unknown_request", message: "stale operation" });
+    expect(stale.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
+    expect(stale.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).not.toBeNull();
+    const stopped = routeFrame(base, "t1", { type: "error", code: "not_running", message: "stale operation" });
+    expect(stopped.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(false);
+    expect(stopped.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).toBeNull();
   });
 
   it("session.completed on a plan run flips planPending → planReady", () => {

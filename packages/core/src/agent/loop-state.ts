@@ -246,7 +246,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     !isIsoDate(value.createdAt) || !isIsoDate(value.updatedAt)
   ) return null;
 
-  const workspace = resolve(value.workspace);
+  const workspace = requireWorkspace(value.workspace);
   if (expectedWorkspace !== undefined && workspace !== requireWorkspace(expectedWorkspace)) return null;
   return {
     loopId: value.loopId, task: value.task, workspace, verifyCommand: value.verifyCommand,

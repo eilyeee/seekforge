@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -329,6 +329,27 @@ describe("runAutoLoop", () => {
     expect(result.iterations).toBe(2);
   });
 
+  it("does not follow workspace symlinks when fingerprinting", async () => {
+    const { deps } = mkDeps();
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-autoloop-outside-"));
+    const target = join(outside, "changing.txt");
+    writeFileSync(target, "before");
+    symlinkSync(target, join(workspace, "outside-link"));
+    let checks = 0;
+    try {
+      const result = await runAutoLoop(deps, {
+        ...baseOpts(workspace, async () => {
+          writeFileSync(target, `outside-${++checks}`);
+          return { code: 1, output: "identical failure" };
+        }),
+      });
+      expect(result.status).toBe("no_progress");
+      expect(result.iterations).toBe(1);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("parses early diagnostics while exposing only the 4KB output tail", async () => {
     const { deps, provider } = mkDeps();
     let checks = 0;
@@ -552,6 +573,7 @@ describe("runAutoLoop", () => {
     const stopped = await runAutoLoop(mkDeps().deps, {
       ...baseOpts(workspace, failNTimes(1)),
       maxIterations: 1,
+      costBudgetUsd: Number.MAX_VALUE,
     });
     await expect(resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
       workspace,
@@ -561,5 +583,9 @@ describe("runAutoLoop", () => {
       workspace,
       additionalCostBudgetUsd: Number.POSITIVE_INFINITY,
     })).rejects.toThrow(/finite positive number/);
+    await expect(resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+      workspace,
+      additionalCostBudgetUsd: Number.MAX_VALUE,
+    })).rejects.toThrow(/resulting cost budget must be finite/);
   });
 });

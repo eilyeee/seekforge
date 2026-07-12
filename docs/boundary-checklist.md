@@ -305,6 +305,25 @@ large file and can trigger a false no-progress stop.
 - **Do:** stream the complete file through the hash in bounded-memory chunks.
 - **Caught:** `packages/core/src/agent/auto-loop.ts` — Loop convergence detection.
 
+## 28. Validate arithmetic results, not only their operands
+
+Two finite positive numbers can overflow to `Infinity`. If a later layer treats
+non-finite values as "unset", an overflow can silently remove a guardrail.
+
+- **Do:** validate the result after additions and multiplications that produce
+  budgets, limits, timestamps, or sizes.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — additive resume budget.
+
+## 29. Metadata calls may follow symlinks across a sandbox boundary
+
+`stat` follows a symlink, so code that intends to fingerprint a workspace entry
+can accidentally read a target outside the workspace. Ignoring symlinks entirely
+also misses changes to the link itself.
+
+- **Do:** use `lstat` to classify entries and hash `readlink` output for symlinks;
+  never open the target as workspace content.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — convergence fingerprinting.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

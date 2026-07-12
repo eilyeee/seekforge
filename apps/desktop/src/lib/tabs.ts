@@ -227,12 +227,14 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
 
     case "error":
       return updateTab(state, tabId, (tab) => {
-        const nonfatal = frame.code === "busy" || frame.code === "unknown_request" || frame.code === "not_running";
+        const nonfatal = frame.code === "busy" || frame.code === "unknown_request";
         return {
           wsError: `${frame.code}: ${frame.message}`,
           chat: nonfatal ? tab.chat : { ...tab.chat, running: false },
           loopRunning: nonfatal ? tab.loopRunning : false,
           loopResetPending: nonfatal ? tab.loopResetPending : false,
+          pendingPermission: nonfatal ? tab.pendingPermission : null,
+          pendingQuestion: nonfatal ? tab.pendingQuestion : null,
         };
       });
 
