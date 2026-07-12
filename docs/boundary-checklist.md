@@ -240,6 +240,26 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
   the retained worktree root and the Loop-only `seekforge/loop-*` branch prefix,
   so it cannot delete another SeekForge workflow's checkout.
 
+## 21. Checkpoint at the event that makes cost or ownership observable
+
+Persisting only after a whole agent run loses the session id and billed usage if
+the process exits between provider events and the final report.
+
+- **Do:** checkpoint session identity immediately and persist cumulative usage
+  updates idempotently; final writes should repeat the same absolute totals.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — crash recovery could open a
+  new session and undercount the Loop budget.
+
+## 22. Never replay a request after declaring it interrupted
+
+A reconnect queue can outlive the UI operation that created it. Replaying the
+request later starts invisible work and desynchronizes controls from the server.
+
+- **Do:** clear connection-bound queued requests when that connection fails;
+  requests intentionally submitted while disconnected belong to the next attempt.
+- **Caught:** `apps/desktop/src/lib/ws.ts` — a queued Loop could start after the
+  store had already cleared its running state.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

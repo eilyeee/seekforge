@@ -50,6 +50,8 @@ export {
 export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 export {
   createLoopState,
+  hasActiveLoopLease,
+  isLoopLeaseActive,
   isValidLoopId,
   listLoopStates,
   loadLoopState,

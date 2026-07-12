@@ -61,22 +61,98 @@ const activeLeases = new Set<string>();
 
 export type LoopLease = { release: () => void };
 
+const leaseKey = (workspace: string, loopId: string): string =>
+  `${requireWorkspace(workspace)}\0${loopId}`;
+
+function leaseFile(workspace: string, loopId: string): string {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `.${loopId}.lock`));
+}
+
+type LockSnapshot = { content: string; alive: boolean };
+
+function readLockSnapshot(target: string): LockSnapshot {
+  const content = readFileSync(target, "utf8");
+  let owner: { pid?: unknown };
+  try {
+    owner = JSON.parse(content) as { pid?: unknown };
+  } catch {
+    return { content, alive: true };
+  }
+  if (!Number.isInteger(owner.pid) || (owner.pid as number) <= 0) return { content, alive: false };
+  try {
+    process.kill(owner.pid as number, 0);
+    return { content, alive: true };
+  } catch (error) {
+    return { content, alive: (error as NodeJS.ErrnoException).code !== "ESRCH" };
+  }
+}
+
+function removeStaleLock(target: string, expectedContent: string): boolean {
+  try {
+    if (readFileSync(target, "utf8") !== expectedContent) return false;
+    rmSync(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return true;
+  }
+}
+
+/** Returns whether a live process-local or filesystem lease owns this loop. */
+export function isLoopLeaseActive(workspace: string, loopId: string): boolean {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  if (activeLeases.has(leaseKey(workspace, loopId))) return true;
+  const target = leaseFile(workspace, loopId);
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = readLockSnapshot(target);
+      if (snapshot.alive) return true;
+      if (removeStaleLock(target, snapshot.content)) return false;
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Returns whether any live Loop lease exists in this workspace. */
+export function hasActiveLoopLease(workspace: string): boolean {
+  const prefix = `${requireWorkspace(workspace)}\0`;
+  if ([...activeLeases].some((key) => key.startsWith(prefix))) return true;
+  let names: string[];
+  try {
+    names = readdirSync(loopsRoot(workspace));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  for (const name of names) {
+    const match = /^\.(.+)\.lock$/.exec(name);
+    if (!match?.[1]) continue;
+    if (!isValidLoopId(match[1])) return true;
+    if (isLoopLeaseActive(workspace, match[1])) return true;
+  }
+  return false;
+}
+
 /**
  * Acquires a process- and filesystem-wide lease. A dead PID is stale; release
  * verifies its random token so an old owner can never remove a successor lock.
  */
 export function acquireLoopLease(workspace: string, loopId: string, persist: boolean): LoopLease {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
-  const key = `${requireWorkspace(workspace)}\0${loopId}`;
+  const key = leaseKey(workspace, loopId);
   if (activeLeases.has(key)) throw new Error(`Loop is already running: ${loopId}`);
   activeLeases.add(key);
   if (!persist) return { release: () => { activeLeases.delete(key); } };
 
-  const target = resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `.${loopId}.lock`));
-  mkdirSync(dirname(target), { recursive: true });
-  const token = randomUUID();
-  const payload = JSON.stringify({ pid: process.pid, token });
   try {
+    const target = leaseFile(workspace, loopId);
+    mkdirSync(dirname(target), { recursive: true });
+    const token = randomUUID();
+    const payload = JSON.stringify({ pid: process.pid, token });
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const fd = openSync(target, "wx", 0o600);
@@ -92,21 +168,9 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
         };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        let stale = false;
-        try {
-          const owner = JSON.parse(readFileSync(target, "utf8")) as { pid?: unknown };
-          if (!Number.isInteger(owner.pid) || (owner.pid as number) <= 0) stale = true;
-          else {
-            try { process.kill(owner.pid as number, 0); }
-            catch (killError) { stale = (killError as NodeJS.ErrnoException).code === "ESRCH"; }
-          }
-        } catch {
-          throw new Error(`Loop is already running: ${loopId}`);
-        }
-        if (!stale) throw new Error(`Loop is already running: ${loopId}`);
-        try { rmSync(target); } catch (removeError) {
-          if ((removeError as NodeJS.ErrnoException).code !== "ENOENT") throw removeError;
-        }
+        const snapshot = readLockSnapshot(target);
+        if (snapshot.alive) throw new Error(`Loop is already running: ${loopId}`);
+        if (!removeStaleLock(target, snapshot.content)) continue;
       }
     }
     throw new Error(`Could not acquire loop lease: ${loopId}`);
@@ -194,6 +258,9 @@ export function listLoopStates(workspace: string): LoopState[] {
 }
 
 export function removeLoopState(workspace: string, loopId: string): boolean {
+  if (isLoopLeaseActive(workspace, loopId)) {
+    throw new Error(`Cannot remove running loop: ${loopId}`);
+  }
   try { rmSync(loopFile(workspace, loopId)); return true; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;

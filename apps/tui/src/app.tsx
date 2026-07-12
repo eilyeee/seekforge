@@ -33,6 +33,7 @@ import {
   createDeepSeekProvider,
   listGitWorktrees,
   isWorktreeDirty,
+  isValidLoopId,
   createWorktree,
   worktreeBranchExists,
   removeWorktree,
@@ -760,6 +761,9 @@ export function App({
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
       runsByTabRef.current.set(runTabId, { controller, runId });
+      const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
+      const detached = (): boolean => detachedRunsRef.current.has(runId);
+      const label = task.replace(/\s+/g, " ").slice(0, 48);
       sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
       dispatchTab({ type: "notice", text: `loop task: ${task.replace(/\s+/g, " ").slice(0, 120)}` });
@@ -773,24 +777,33 @@ export function App({
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
           onEvent: (event) => {
+            if (!ownsRun()) return;
             for (const line of formatLoopEvent(event)) {
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
             }
           },
         });
         // Adopt the loop's session so a follow-up message resumes it.
-        if (result.sessionId) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        lastErrorRef.current = message;
-        if (!controller.signal.aborted) {
+        if (ownsRun()) lastErrorRef.current = message;
+        if (ownsRun() && !controller.signal.aborted) {
           dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
         }
       } finally {
-        if (runsByTabRef.current.get(runTabId)?.runId === runId) runsByTabRef.current.delete(runTabId);
-        dispatchTab({ type: "run-end" });
-        syncBg();
-        ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+        if (detached()) {
+          detachedRunsRef.current.delete(runId);
+          detachedControllersRef.current.delete(runId);
+          dispatchTab({ type: "run-detach-done", label });
+          syncBg();
+          ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+        } else if (ownsRun()) {
+          runsByTabRef.current.delete(runTabId);
+          dispatchTab({ type: "run-end" });
+          syncBg();
+          ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+        }
       }
     },
     [projectPath, mcpToolSpecs, syncBg, ring],
@@ -803,6 +816,9 @@ export function App({
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
       runsByTabRef.current.set(runTabId, { controller, runId });
+      const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
+      const detached = (): boolean => detachedRunsRef.current.has(runId);
+      const label = `loop ${loopId}`.slice(0, 48);
       sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop-resume ${loopId}` });
       dispatchTab({ type: "run-start" });
@@ -814,19 +830,28 @@ export function App({
           mcpToolSpecs,
           ...options,
           onEvent: (event) => {
+            if (!ownsRun()) return;
             for (const line of formatLoopEvent(event)) dispatchTab({ type: "notice", text: line.text, tone: line.tone });
           },
         });
-        if (result.sessionId) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        lastErrorRef.current = message;
-        if (!controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
+        if (ownsRun()) lastErrorRef.current = message;
+        if (ownsRun() && !controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
       } finally {
-        if (runsByTabRef.current.get(runTabId)?.runId === runId) runsByTabRef.current.delete(runTabId);
-        dispatchTab({ type: "run-end" });
-        syncBg();
-        ring(`Loop finished: ${loopId.slice(0, 60)}`);
+        if (detached()) {
+          detachedRunsRef.current.delete(runId);
+          detachedControllersRef.current.delete(runId);
+          dispatchTab({ type: "run-detach-done", label });
+          syncBg();
+          ring(`Loop finished: ${loopId.slice(0, 60)}`);
+        } else if (ownsRun()) {
+          runsByTabRef.current.delete(runTabId);
+          dispatchTab({ type: "run-end" });
+          syncBg();
+          ring(`Loop finished: ${loopId.slice(0, 60)}`);
+        }
       }
     },
     [projectPath, mcpToolSpecs, syncBg, ring],
@@ -1013,7 +1038,7 @@ export function App({
             notice(`invalid /loop-resume options: ${command.error}`, "error");
             break;
           }
-          if (!command.loopId || /\s/.test(command.loopId)) {
+          if (!command.loopId || !isValidLoopId(command.loopId)) {
             notice("usage: /loop-resume [--add-iterations N] [--add-budget USD] <loop-id>", "error");
             break;
           }

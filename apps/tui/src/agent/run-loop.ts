@@ -1,5 +1,6 @@
 import {
   loadAgentDefinitions,
+  isValidLoopId,
   runAutoLoop,
   resumeAutoLoop,
   type LoopEvent,
@@ -74,6 +75,7 @@ export async function resumeLoop(
     addedCostBudgetUsd?: number;
   },
 ): Promise<LoopResult> {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
   const { deps: agentDeps, dispose } = buildTuiDeps({
     config: deps.config,
     model: deps.model,

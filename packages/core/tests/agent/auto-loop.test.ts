@@ -328,6 +328,30 @@ describe("runAutoLoop", () => {
     expect(result.finalVerify.output.length).toBeLessThanOrEqual(4096);
   });
 
+  it("keeps streamed verifier output authoritative over a raw captured prefix", async () => {
+    const { deps, provider } = mkDeps();
+    let checks = 0;
+    const streamedFailure = (attempt: number) =>
+      `Vitest\n× tests/streamed.test.ts > preserves the tail ${attempt}\nTest Files 1 failed\n`;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async (_ws, _cmd, _signal, onOutput) => {
+        checks++;
+        if (checks <= 2) {
+          onOutput?.("stdout", streamedFailure(checks));
+          return { code: 1, output: "raw captured prefix only" };
+        }
+        return { code: 0, output: "green" };
+      }),
+    });
+    expect(result.status).toBe("passed");
+    expect(provider.seen.flat().some((message) =>
+      typeof message.content === "string" && message.content.includes("tests/streamed.test.ts > preserves the tail"),
+    )).toBe(true);
+    expect(provider.seen.flat().some((message) =>
+      typeof message.content === "string" && message.content.includes("raw captured prefix only"),
+    )).toBe(false);
+  });
+
   it("cancels via an aborted signal", async () => {
     const { deps } = mkDeps();
     const controller = new AbortController();

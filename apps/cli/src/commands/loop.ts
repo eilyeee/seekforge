@@ -14,7 +14,7 @@ import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import { cleanupLoopWorktree, createLoopWorktree, formatLoopWorktree, type LoopWorktree } from "../loop-worktree.js";
+import { cleanupLoopWorktree, createLoopWorktree, formatLoopWorktree, resolveLoopRepository, type LoopWorktree } from "../loop-worktree.js";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required. */
@@ -97,7 +97,16 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
     process.exitCode = 1;
     return;
   }
-  const basePath = process.cwd();
+  let basePath: string;
+  try {
+    basePath = (await resolveLoopRepository(process.cwd())).basePath;
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
+  const preflight = await preflightLoop(basePath, opts);
+  if (!preflight) return;
   let worktree: LoopWorktree | undefined;
   if (opts.worktree !== undefined && opts.worktree !== false) {
     try {
@@ -112,7 +121,7 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
       return;
     }
   }
-  await executeLoop(task, opts, worktree?.path ?? basePath);
+  await executeLoop(task, opts, worktree?.path ?? basePath, undefined, preflight);
 }
 
 type ResumeAutoLoop = (
@@ -135,7 +144,8 @@ export function coreResumeAutoLoop(): ResumeAutoLoop {
 }
 
 export async function loopResumeCommand(loopId: string, opts: LoopResumeOptions): Promise<void> {
-  await executeLoop(loopId, opts, process.cwd(), coreResumeAutoLoop());
+  const workspace = await findLoopWorkspace(loopId);
+  if (workspace) await executeLoop(loopId, opts, workspace, coreResumeAutoLoop());
 }
 
 export function resumeExtensionOptions(opts: LoopResumeOptions): {
@@ -161,18 +171,24 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
   ].join("\n");
 }
 
-export function loopListCommand(): void {
-  const states = listLoopStates(process.cwd());
-  if (states.length === 0) {
-    console.log("No persisted loops.");
-    return;
+export async function loopListCommand(): Promise<void> {
+  try {
+    const states = (await loopWorkspaces()).flatMap((workspace) => listLoopStates(workspace));
+    if (states.length === 0) {
+      console.log("No persisted loops.");
+      return;
+    }
+    console.log(states.map((state) => formatLoopState(state)).join("\n\n"));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
   }
-  console.log(states.map((state) => formatLoopState(state)).join("\n\n"));
 }
 
-export function loopShowCommand(loopId: string): void {
+export async function loopShowCommand(loopId: string): Promise<void> {
   try {
-    const state = loadLoopState(process.cwd(), loopId);
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : undefined;
     if (!state) {
       fail(`Persisted loop not found or invalid: ${loopId}`);
       process.exitCode = 1;
@@ -185,9 +201,10 @@ export function loopShowCommand(loopId: string): void {
   }
 }
 
-export function loopDeleteCommand(loopId: string): void {
+export async function loopDeleteCommand(loopId: string): Promise<void> {
   try {
-    if (!removeLoopState(process.cwd(), loopId)) {
+    const workspace = await findLoopWorkspace(loopId, false);
+    if (!workspace || !removeLoopState(workspace, loopId)) {
       fail(`Persisted loop not found: ${loopId}`);
       process.exitCode = 1;
       return;
@@ -202,7 +219,9 @@ export function loopDeleteCommand(loopId: string): void {
 export async function loopCleanupCommand(name: string, opts: { force?: boolean }): Promise<void> {
   try {
     const removed = await cleanupLoopWorktree(process.cwd(), name, opts.force === true);
-    console.log(`Removed loop worktree: ${removed.path}\nRemoved branch: ${removed.branch}`);
+    console.log(removed.branchRemoved === false
+      ? `Removed loop worktree: ${removed.path}\nRetained branch (remove manually): ${removed.branch}`
+      : `Removed loop worktree: ${removed.path}\nRemoved branch: ${removed.branch}`);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
@@ -214,7 +233,17 @@ async function executeLoop(
   opts: LoopOptions | LoopResumeOptions,
   projectPath: string,
   resume?: ResumeAutoLoop,
+  prepared?: LoopPreflight,
 ): Promise<void> {
+  const preflight = prepared ?? await preflightLoop(projectPath, opts);
+  if (!preflight) return;
+  const { config, model } = preflight;
+  await runPreparedLoop(taskOrLoopId, opts, projectPath, config, model, resume);
+}
+
+type LoopPreflight = { config: ReturnType<typeof loadConfig>; model: string | undefined };
+
+async function preflightLoop(projectPath: string, opts: LoopOptions | LoopResumeOptions): Promise<LoopPreflight | undefined> {
   let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(projectPath, undefined, opts.profile);
@@ -240,6 +269,17 @@ async function executeLoop(
   if (!(await ensureWorkspaceAuthorized(projectPath, { yes: opts.yes === true, machine: false }))) {
     return;
   }
+  return { config, model };
+}
+
+async function runPreparedLoop(
+  taskOrLoopId: string,
+  opts: LoopOptions | LoopResumeOptions,
+  projectPath: string,
+  config: ReturnType<typeof loadConfig>,
+  model: string | undefined,
+  resume?: ResumeAutoLoop,
+): Promise<void> {
 
   // The loop is inherently autonomous: it must apply edits without a human in
   // the loop. We always run in acceptEdits. Without -y we still proceed (that
@@ -305,6 +345,28 @@ async function executeLoop(
     dispose();
     mcp.dispose();
   }
+}
+
+async function loopWorkspaces(): Promise<string[]> {
+  return (await resolveLoopRepository(process.cwd())).workspaces;
+}
+
+async function findLoopWorkspace(loopId: string, reportMissing = true): Promise<string | undefined> {
+  try {
+    const matches = (await loopWorkspaces()).filter((workspace) => loadLoopState(workspace, loopId));
+    if (matches.length > 1) {
+      throw new Error(`Persisted loop id is ambiguous across workspaces: ${loopId}`);
+    }
+    if (matches[0]) return matches[0];
+    if (reportMissing) {
+      fail(`Persisted loop not found or invalid: ${loopId}`);
+      process.exitCode = 1;
+    }
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+  return undefined;
 }
 
 /** Renders a LoopEvent to the terminal with color (the command's only I/O). */

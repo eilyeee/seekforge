@@ -84,6 +84,11 @@ State is written atomically after observable progress. Live output is bounded
 per verification; the final verification event still carries the normal output
 tail used for diagnostics and continuation prompts.
 
+The active iteration, session id, and cumulative provider usage are checkpointed
+as their events arrive. After a process crash, resume therefore reuses the same
+session and includes already observed spend instead of replaying it outside the
+budget.
+
 Only one process may own a persisted Loop at a time. A token-protected lock next
 to the state file rejects concurrent runs and recovers locks whose owner process
 is gone. A persistence write failure is reported once as `loop.warning` and does
@@ -126,6 +131,11 @@ are never automatically removed; resume from that directory and clean it up
 with `seekforge loop-cleanup <name>` when finished. Loop-owned branches use the
 `seekforge/loop-*` prefix; cleanup refuses dirty worktrees unless `--force` is
 explicit.
+
+Loop management invoked from the base checkout discovers state in retained Loop
+worktrees. A duplicate Loop id across workspaces is rejected as ambiguous rather
+than selecting one implicitly. Cleanup is blocked while any live lease exists,
+including with `--force`.
 
 ## CLI
 
@@ -240,6 +250,10 @@ runs use the existing modals.
 Resume uses `{type:"loop.resume", loopId, addedIterations?, addedBudget?, ws?,
 ...overrides}` and returns the same event stream. Invalid numeric fields and Loop
 IDs are rejected at the protocol boundary.
+
+If the Desktop connection drops during a run, the operation is marked
+interrupted, prompts are cleared, and requests queued for the failed connection
+are discarded rather than replayed after reconnect.
 
 ## TUI
 

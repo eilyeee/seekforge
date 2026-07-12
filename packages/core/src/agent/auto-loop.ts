@@ -112,8 +112,8 @@ async function captureVerify(
     onOutput(stream, chunk);
   };
   const raw = await verify(workspace, command, signal, capture);
-  const aggregate = diagnosticAggregate(streamed ? `${streamed}\n${raw.output}` : raw.output);
-  return { result: { code: raw.code, output: tail(raw.output || aggregate) }, diagnostics: aggregate };
+  const aggregate = streamed || diagnosticAggregate(raw.output);
+  return { result: { code: raw.code, output: tail(streamed || raw.output) }, diagnostics: aggregate };
 }
 
 function workspaceFingerprint(workspace: string): string | null {
@@ -414,7 +414,10 @@ async function runAutoLoopWithLease(
     });
     for await (const ev of events) {
       if (ev.type === "session.created") {
-        if (!sessionId) sessionId = ev.sessionId;
+        if (!sessionId) {
+          sessionId = ev.sessionId;
+          persist({ iterations: i, costUsd: costUsd + runCost, sessionId });
+        }
       } else if (ev.type === "file.changed") {
         filesChangedThisRun = true;
       } else if (ev.type === "usage.updated") {
@@ -422,6 +425,7 @@ async function runAutoLoopWithLease(
         // emits no FinalReport — still contributes its real cost to the budget
         // guard below; otherwise repeated expensive failures overshoot silently.
         runCost = ev.usage.costUsd;
+        persist({ iterations: i, costUsd: costUsd + runCost, sessionId });
         if (costBudgetUsd !== undefined && costUsd + runCost >= costBudgetUsd) {
           budgetController.abort();
         }

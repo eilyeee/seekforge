@@ -14,6 +14,7 @@ import {
   initialTabsState,
   openTab as openTabPure,
   routeFrame,
+  routeConnectionState,
   switchTab,
   titleFromTask,
   updateTab,
@@ -241,7 +242,7 @@ export const useStore = create<AppStore>()((set, get) => {
       client = createWsClient({
         getToken: () => get().token,
         onFrame: (frame) => handleFrame(tabId, frame),
-        onState: (conn) => set((s) => ({ tabs: updateTab(s.tabs, tabId, { conn }) })),
+        onState: (conn) => set((s) => ({ tabs: routeConnectionState(s.tabs, tabId, conn) })),
       });
       wsByTab.set(tabId, client);
     }
@@ -516,6 +517,8 @@ export const useStore = create<AppStore>()((set, get) => {
           // clear any prior loop feed so the panel starts fresh.
           chat: { ...tab.chat, running: true },
           loop: emptyLoopProgress(),
+          loopRunning: true,
+          loopResetPending: false,
           wsError: null,
         }),
       }));
@@ -538,7 +541,8 @@ export const useStore = create<AppStore>()((set, get) => {
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...tab.chat, running: true },
-          loop: emptyLoopProgress(),
+          loopRunning: true,
+          loopResetPending: true,
           wsError: null,
         }),
       }));
@@ -574,6 +578,8 @@ export const useStore = create<AppStore>()((set, get) => {
           planPending: false,
           planReady: false,
           loop: emptyLoopProgress(),
+          loopRunning: false,
+          loopResetPending: false,
         }),
       }));
     },

@@ -9,6 +9,8 @@ type Props = {
   progress: LoopProgress;
   /** True while ANY run (chat or loop) is active on the tab — disables Run. */
   running: boolean;
+  /** True only while the active operation is a Loop — controls Stop/progress UI. */
+  loopRunning: boolean;
   /** Starts a loop run (sends the `loop` frame via the store). */
   onRun: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
   onResume: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
@@ -23,7 +25,7 @@ const DEFAULT_MAX_ITERATIONS = 8;
  * by default so normal chat is unaffected. Drives an autonomous
  * run→verify→fix loop on the server and renders the streamed progress.
  */
-export function LoopPanel({ progress, running, onRun, onResume, onStop }: Props) {
+export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onStop }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState("");
@@ -67,7 +69,7 @@ export function LoopPanel({ progress, running, onRun, onResume, onStop }: Props)
           className={`text-secondary transition-transform ${open ? "rotate-90" : ""}`}
         />
         <span className="text-xs font-semibold text-primary">{t("chat.loop.title")}</span>
-        {running && progress.events.length === 0 && (
+        {loopRunning && progress.events.length === 0 && (
           <span className="flex items-center gap-1.5 text-2xs text-warn">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-warn" />
             {t("chat.loop.waiting")}
@@ -147,7 +149,7 @@ export function LoopPanel({ progress, running, onRun, onResume, onStop }: Props)
                 {bud.error && <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>}
               </label>
 
-              {running ? (
+              {loopRunning ? (
                 <Button variant="danger" onClick={onStop}>
                   {t("chat.loop.stop")}
                 </Button>

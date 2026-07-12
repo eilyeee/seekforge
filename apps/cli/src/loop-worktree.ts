@@ -1,5 +1,6 @@
 import {
   createWorktree,
+  hasActiveLoopLease,
   isWorktreeDirty,
   listGitWorktrees,
   worktreeBranchExists,
@@ -14,10 +15,36 @@ const execFileAsync = promisify(execFile);
 export type LoopWorktree = {
   path: string;
   branch: string;
+  branchRemoved?: boolean;
 };
+
+export type LoopRepository = {
+  basePath: string;
+  workspaces: string[];
+};
+
+/** Resolve a subdirectory or retained worktree back to the repository's base checkout. */
+export async function resolveLoopRepository(path: string): Promise<LoopRepository> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: path,
+    timeout: 10_000,
+  });
+  const currentRoot = stdout.trim();
+  const entries = await listGitWorktrees(currentRoot);
+  // Git documents the main worktree as the first porcelain entry.
+  const base = entries[0]?.path ?? currentRoot;
+  const workspaces = [
+    base,
+    ...entries
+      .filter((entry) => isRetainedLoopWorktree(base, entry))
+      .map((entry) => entry.path),
+  ];
+  return { basePath: base, workspaces: [...new Set(workspaces)] };
+}
 
 /** Resolve a user-provided name to a unique, safe SeekForge worktree slug. */
 export async function createLoopWorktree(basePath: string, name?: string): Promise<LoopWorktree> {
+  basePath = (await resolveLoopRepository(basePath)).basePath;
   const requestedSuffix = name?.replace(/^loop-/, "") ?? String(Date.now());
   const baseSlug = worktreeSlug(`loop-${requestedSuffix}`);
   let slug = baseSlug;
@@ -44,6 +71,7 @@ export async function cleanupLoopWorktree(
   name: string,
   force = false,
 ): Promise<LoopWorktree> {
+  basePath = (await resolveLoopRepository(basePath)).basePath;
   const resolvedName = resolve(basePath, name);
   const entries = await listGitWorktrees(basePath);
   const entry = entries.find((candidate) =>
@@ -53,6 +81,9 @@ export async function cleanupLoopWorktree(
   if (!entry || !isRetainedLoopWorktree(basePath, entry)) {
     throw new Error(`Retained loop worktree not found: ${name}`);
   }
+  if (hasActiveLoopLease(entry.path)) {
+    throw new Error(`Loop worktree has an active loop and cannot be removed: ${entry.path}`);
+  }
   if (!force && await isWorktreeDirty(entry.path)) {
     throw new Error(`Loop worktree has uncommitted changes: ${entry.path}\nRe-run with --force to discard them.`);
   }
@@ -61,7 +92,10 @@ export async function cleanupLoopWorktree(
     ["worktree", "remove", ...(force ? ["--force"] : []), entry.path],
     { cwd: basePath, timeout: 60_000 },
   );
-  await execFileAsync("git", ["branch", "-D", entry.branch], { cwd: basePath, timeout: 60_000 })
-    .catch(() => undefined);
-  return { path: entry.path, branch: entry.branch };
+  const branchRemoved = await execFileAsync(
+    "git",
+    ["branch", "-D", entry.branch],
+    { cwd: basePath, timeout: 60_000 },
+  ).then(() => true, () => false);
+  return { path: entry.path, branch: entry.branch, branchRemoved };
 }

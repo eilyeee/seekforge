@@ -80,6 +80,10 @@ export type ChatTab = {
    * result. Reset when a new loop starts or the session is reset.
    */
   loop: LoopProgress;
+  /** True only while this tab owns an autonomous loop, not a normal chat run. */
+  loopRunning: boolean;
+  /** A resume was sent; retain the old result until the server accepts it. */
+  loopResetPending: boolean;
 };
 
 export type TabsState = {
@@ -118,6 +122,8 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     reasoningEffort: "high",
     outputStyle: "",
     loop: emptyLoopProgress(),
+    loopRunning: false,
+    loopResetPending: false,
   };
 }
 
@@ -215,7 +221,8 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
 
     case "loop.event":
       return updateTab(state, tabId, (tab) => ({
-        loop: reduceLoopEvent(tab.loop, frame.event),
+        loop: reduceLoopEvent(tab.loopResetPending ? emptyLoopProgress() : tab.loop, frame.event),
+        loopResetPending: false,
       }));
 
     case "error":
@@ -224,6 +231,8 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         // "busy" = a run is already active on this connection; any other
         // protocol error means our run request failed — stop the spinner.
         chat: frame.code === "busy" ? tab.chat : { ...tab.chat, running: false },
+        loopRunning: frame.code === "busy" ? tab.loopRunning : false,
+        loopResetPending: frame.code === "busy" ? tab.loopResetPending : false,
       }));
 
     case "idle":
@@ -231,10 +240,28 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         chat: { ...tab.chat, running: false },
         pendingPermission: null,
         pendingQuestion: null,
+        loopRunning: false,
+        loopResetPending: false,
       }));
 
     default:
       // Unknown frame types from a newer server are ignored.
       return state;
   }
+}
+
+/** Applies connection state and exposes interruption when a live run loses its socket. */
+export function routeConnectionState(state: TabsState, tabId: string, conn: ConnState): TabsState {
+  return updateTab(state, tabId, (tab) => {
+    if (conn !== "disconnected" || !tab.chat.running) return { conn };
+    return {
+      conn,
+      chat: { ...tab.chat, running: false, retry: null },
+      pendingPermission: null,
+      pendingQuestion: null,
+      loopRunning: false,
+      loopResetPending: false,
+      wsError: "connection_lost: running task was interrupted",
+    };
+  });
 }

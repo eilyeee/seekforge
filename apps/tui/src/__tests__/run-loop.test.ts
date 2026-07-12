@@ -6,6 +6,7 @@ const dispose = vi.fn();
 
 vi.mock("@seekforge/core", () => ({
   loadAgentDefinitions: vi.fn(() => []),
+  isValidLoopId: vi.fn((loopId: string) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(loopId)),
   runAutoLoop,
   resumeAutoLoop,
 }));
@@ -74,6 +75,11 @@ describe("runLoop", () => {
 });
 
 describe("resumeLoop", () => {
+  beforeEach(() => {
+    resumeAutoLoop.mockReset();
+    dispose.mockReset();
+  });
+
   it("routes additive limits, events, and cancellation to core", async () => {
     resumeAutoLoop.mockResolvedValue(result);
     const signal = new AbortController().signal;
@@ -87,5 +93,13 @@ describe("resumeLoop", () => {
       expect.objectContaining({ workspace: "/workspace", additionalIterations: 3, additionalCostBudgetUsd: 0.5, signal, onEvent }),
     );
     expect(dispose).toHaveBeenCalled();
+  });
+
+  it("rejects invalid loop IDs before constructing agent dependencies", async () => {
+    await expect(resumeLoop("../escape", new AbortController().signal, {
+      config: {}, model: "test-model", projectPath: "/workspace", mcpToolSpecs: [], onEvent: vi.fn(),
+    })).rejects.toThrow("Invalid loop id");
+    expect(resumeAutoLoop).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
   });
 });

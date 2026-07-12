@@ -5,10 +5,12 @@
 // LoopEvent/LoopResult values into the pure formatters.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LoopEvent, LoopResult } from "@seekforge/core";
+import { createLoopState, type LoopEvent, type LoopResult } from "@seekforge/core";
 import {
   coreResumeAutoLoop,
   formatLoopEvent,
@@ -17,12 +19,19 @@ import {
   outputTail,
   resumeExtensionOptions,
 } from "../commands/loop.js";
-import { formatLoopWorktree, isRetainedLoopWorktree } from "../loop-worktree.js";
+import {
+  cleanupLoopWorktree,
+  createLoopWorktree,
+  formatLoopWorktree,
+  isRetainedLoopWorktree,
+  resolveLoopRepository,
+} from "../loop-worktree.js";
 import { setLocale } from "../i18n.js";
 
 setLocale("en"); // deterministic strings
 
 let passed = 0;
+const asyncTests: Array<Promise<void>> = [];
 function test(name: string, fn: () => void): void {
   try {
     fn();
@@ -32,6 +41,14 @@ function test(name: string, fn: () => void): void {
     console.error(err instanceof Error ? err.stack : String(err));
     process.exit(1);
   }
+}
+
+function asyncTest(name: string, fn: () => Promise<void>): void {
+  asyncTests.push(fn().then(() => { passed++; }).catch((err) => {
+    console.error(`✗ ${name}`);
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exitCode = 1;
+  }));
 }
 
 // --- outputTail -------------------------------------------------------------
@@ -181,6 +198,52 @@ test("cleanup safety accepts only seekforge branches inside retained root", () =
   }), false);
 });
 
+asyncTest("worktree operations resolve the base checkout from a subdirectory", async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-test-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const subdir = resolve(repo, "nested", "dir");
+    mkdirSync(subdir, { recursive: true });
+
+    const created = await createLoopWorktree(subdir, "subdir");
+    const canonicalRepo = realpathSync(repo);
+    assert.equal(created.path, resolve(canonicalRepo, ".seekforge", "worktrees", "loop-subdir"));
+    assert.equal((await resolveLoopRepository(resolve(created.path))).basePath, canonicalRepo);
+    assert.deepEqual((await resolveLoopRepository(subdir)).workspaces.sort(), [canonicalRepo, created.path].sort());
+
+    const leaseRoot = resolve(created.path, ".seekforge", "loops");
+    const leaseFile = resolve(leaseRoot, ".active-cleanup.lock");
+    mkdirSync(leaseRoot, { recursive: true });
+    writeFileSync(leaseFile, JSON.stringify({ pid: process.pid, token: "test" }));
+    await assert.rejects(cleanupLoopWorktree(subdir, "loop-subdir", true), /active loop/);
+    rmSync(leaseFile);
+
+    const stateInput = { loopId: "duplicate-loop", task: "x", verifyCommand: "true", maxIterations: 1 };
+    createLoopState({ ...stateInput, workspace: canonicalRepo });
+    createLoopState({ ...stateInput, workspace: created.path });
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const tsxLoader = resolve(cliDir, "node_modules/tsx/dist/loader.mjs");
+    const duplicate = spawnSync(process.execPath, ["--import", tsxLoader, resolve(cliDir, "src/index.ts"), "loop-show", "duplicate-loop"], {
+      cwd: canonicalRepo,
+      encoding: "utf8",
+    });
+    assert.notEqual(duplicate.status, 0);
+    assert.match(`${duplicate.stdout}${duplicate.stderr}`, /ambiguous across workspaces/);
+
+    const removed = await cleanupLoopWorktree(subdir, "loop-subdir", true);
+    assert.equal(removed.branch, "seekforge/loop-subdir");
+    assert.equal(removed.branchRemoved, true);
+    assert.throws(
+      () => execFileSync("git", ["show-ref", "--verify", "refs/heads/seekforge/loop-subdir"], { cwd: repo }),
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("CLI numeric parsers reject trailing junk and non-finite values globally", () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const cli = resolve(cliDir, "src/index.ts");
@@ -199,4 +262,6 @@ test("CLI numeric parsers reject trailing junk and non-finite values globally", 
   }
 });
 
+await Promise.all(asyncTests);
+if (process.exitCode) process.exit(process.exitCode);
 console.log(`${passed} loop tests passed`);

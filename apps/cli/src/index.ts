@@ -444,13 +444,13 @@ program
     });
   });
 
-program.command("loop-list").description("list persisted loops in the current project").action(loopListCommand);
+program.command("loop-list").description("list persisted loops in the base checkout and retained loop worktrees").action(loopListCommand);
 program.command("loop-show").argument("<loop-id>").description("show a persisted loop").action(loopShowCommand);
 program.command("loop-delete").argument("<loop-id>").description("delete a persisted loop record").action(loopDeleteCommand);
 program
   .command("loop-cleanup")
   .argument("<name>", "retained loop worktree name, branch, or path")
-  .option("--force", "remove a dirty retained worktree and discard its changes")
+  .option("--force", "remove a dirty inactive worktree and discard its changes")
   .description("remove a retained loop worktree")
   .action((name: string, opts: { force?: boolean }) => loopCleanupCommand(name, opts));
 

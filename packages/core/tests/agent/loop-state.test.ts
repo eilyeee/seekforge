@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createLoopState, listLoopStates, loadLoopState, removeLoopState, saveLoopState,
+  acquireLoopLease, createLoopState, hasActiveLoopLease, isLoopLeaseActive, listLoopStates, loadLoopState,
+  removeLoopState, saveLoopState,
 } from "../../src/agent/loop-state.js";
 
 describe("loop state persistence", () => {
@@ -57,6 +58,54 @@ describe("loop state persistence", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("releases the process-local lease when lock path resolution fails", () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-loop-lease-outside-"));
+    try {
+      mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+      symlinkSync(outside, join(workspace, ".seekforge", "loops"));
+      expect(() => acquireLoopLease(workspace, "resolve-failure", true)).toThrow(/escapes the workspace/i);
+      const lease = acquireLoopLease(workspace, "resolve-failure", false);
+      lease.release();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the process-local lease when creating the lock directory fails", () => {
+    writeFileSync(join(workspace, ".seekforge"), "not a directory");
+    expect(() => acquireLoopLease(workspace, "mkdir-failure", true)).toThrow();
+    const lease = acquireLoopLease(workspace, "mkdir-failure", false);
+    lease.release();
+  });
+
+  it("reports active leases and refuses to remove their state", () => {
+    const state = createLoopState({ loopId: "active", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const lease = acquireLoopLease(workspace, state.loopId, true);
+    expect(isLoopLeaseActive(workspace, state.loopId)).toBe(true);
+    expect(hasActiveLoopLease(workspace)).toBe(true);
+    expect(() => removeLoopState(workspace, state.loopId)).toThrow(/running loop/);
+    expect(loadLoopState(workspace, state.loopId)).toEqual(state);
+    lease.release();
+    expect(isLoopLeaseActive(workspace, state.loopId)).toBe(false);
+    expect(hasActiveLoopLease(workspace)).toBe(false);
+    expect(removeLoopState(workspace, state.loopId)).toBe(true);
+  });
+
+  it("recovers a dead stale lock before removing state", () => {
+    const state = createLoopState({ loopId: "stale", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const lock = join(workspace, ".seekforge", "loops", `.${state.loopId}.lock`);
+    writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: "dead" }));
+    expect(isLoopLeaseActive(workspace, state.loopId)).toBe(false);
+    expect(removeLoopState(workspace, state.loopId)).toBe(true);
+  });
+
+  it("fails closed when an unrecognized lease filename exists", () => {
+    const root = join(workspace, ".seekforge", "loops");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, ".invalid.id.lock"), "{}");
+    expect(hasActiveLoopLease(workspace)).toBe(true);
   });
 
   it("returns null for malformed and non-object JSON", () => {

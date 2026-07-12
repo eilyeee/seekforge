@@ -61,6 +61,9 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     sock.onclose = () => {
       sock = null;
       if (closed) return;
+      // Requests queued for this failed connection were marked interrupted by
+      // the store. Never replay them silently on a later connection.
+      queue.length = 0;
       setState("disconnected");
       scheduleReconnect();
     };
@@ -83,6 +86,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     },
     close() {
       closed = true;
+      queue.length = 0;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       sock?.close();
       setState("disconnected");

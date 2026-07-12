@@ -55,6 +55,9 @@ function resetStore(): void {
               mode: "edit" as const,
               chat: { ...t.chat, sessionId: null, running: false },
               pendingPermission: null,
+              pendingQuestion: null,
+              loopRunning: false,
+              loopResetPending: false,
             }
           : t,
       ),
@@ -210,6 +213,7 @@ describe("store: loop mode", () => {
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);
+    expect(tab.loopRunning).toBe(true);
     expect(tab.loop.events).toEqual([]);
     expect(tab.loop.result).toBeNull();
   });
@@ -221,7 +225,15 @@ describe("store: loop mode", () => {
     expect(loop.budget).toBeUndefined();
   });
 
-  it("resumeLoop sends additive limits and resets progress", () => {
+  it("resumeLoop preserves completed progress until the server accepts it", () => {
+    lastHandlers!.onFrame({
+      type: "loop.event",
+      event: {
+        type: "loop.done",
+        result: { status: "exhausted", iterations: 1, costUsd: 0.1, sessionId: "s", finalVerify: { code: 1, output: "no" } },
+      },
+    });
+    const completed = activeTab(useStore.getState().tabs).loop;
     useStore.getState().resumeLoop({ loopId: "loop-abc", addedIterations: 3, addedBudget: 0.5 });
     expect(sent.find((f) => (f as { type: string }).type === "loop.resume")).toMatchObject({
       type: "loop.resume",
@@ -231,7 +243,56 @@ describe("store: loop mode", () => {
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);
-    expect(tab.loop).toMatchObject({ events: [], result: null });
+    expect(tab.loopRunning).toBe(true);
+    expect(tab.loop).toEqual(completed);
+    expect(tab.loopResetPending).toBe(true);
+
+    lastHandlers!.onFrame({ type: "loop.event", event: { type: "iteration.start", iteration: 2 } });
+    expect(activeTab(useStore.getState().tabs).loop).toMatchObject({
+      events: [{ type: "iteration.start", iteration: 2 }],
+      result: null,
+    });
+    expect(activeTab(useStore.getState().tabs).loopResetPending).toBe(false);
+  });
+
+  it("preserves completed loop controls when resume is rejected", () => {
+    lastHandlers!.onFrame({
+      type: "loop.event",
+      event: {
+        type: "loop.done",
+        result: { status: "exhausted", iterations: 1, costUsd: 0.1, sessionId: "s", finalVerify: { code: 1, output: "no" } },
+      },
+    });
+    const completed = activeTab(useStore.getState().tabs).loop;
+    useStore.getState().resumeLoop({ loopId: "loop-abc" });
+    lastHandlers!.onFrame({ type: "error", code: "loop_error", message: "cannot resume" });
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.loop).toEqual(completed);
+    expect(tab.chat.running).toBe(false);
+    expect(tab.loopRunning).toBe(false);
+    expect(tab.loopResetPending).toBe(false);
+  });
+
+  it("disconnect interrupts a run and clears pending prompts", () => {
+    useStore.getState().sendTask("work");
+    lastHandlers!.onFrame({
+      type: "permission.request",
+      requestId: "p-disconnect",
+      request: { toolName: "run_command", permission: "execute", description: "run", command: "pnpm test" },
+    });
+    lastHandlers!.onState("disconnected");
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(false);
+    expect(tab.pendingPermission).toBeNull();
+    expect(tab.pendingQuestion).toBeNull();
+    expect(tab.wsError).toContain("interrupted");
+  });
+
+  it("generic chat runs do not put LoopPanel into its running state", () => {
+    useStore.getState().sendTask("ordinary chat task");
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(true);
+    expect(tab.loopRunning).toBe(false);
   });
 
   it("ignores startLoop with empty task or verify command", () => {

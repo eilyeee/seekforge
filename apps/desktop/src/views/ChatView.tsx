@@ -344,7 +344,14 @@ export function ChatView() {
         </div>
       </header>
 
-      <LoopPanel progress={tab.loop} running={tab.chat.running} onRun={startLoop} onResume={resumeLoop} onStop={cancel} />
+      <LoopPanel
+        progress={tab.loop}
+        running={tab.chat.running}
+        loopRunning={tab.loopRunning}
+        onRun={startLoop}
+        onResume={resumeLoop}
+        onStop={cancel}
+      />
 
       <div
         ref={scrollRef}
