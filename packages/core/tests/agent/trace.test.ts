@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSessionTrace,
+  deleteSession,
   listSessions,
   loadSessionMessages,
   pruneSessions,
@@ -414,5 +415,26 @@ describe("createSessionTrace persistent-fd appends", () => {
       { role: "user", content: "digest" },
       { role: "user", content: "three" },
     ]);
+  });
+
+  it("closes cached append fds before deleting and recreating a session", () => {
+    const first = createSessionTrace(ws, "fd-recreated");
+    first.event({ type: "turn.started", turn: 1 } as never);
+    expect(deleteSession(ws, "fd-recreated")).toBe(true);
+
+    const second = createSessionTrace(ws, "fd-recreated");
+    second.event({ type: "turn.started", turn: 2 } as never);
+    const events = readFileSync(join(second.dir, "events.jsonl"), "utf8").trim().split("\n");
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0]!)).toMatchObject({ turn: 2 });
+  });
+
+  it("rejects session ids that could escape the sessions directory", () => {
+    const outside = join(ws, ".seekforge", "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "keep.txt"), "keep");
+    expect(() => createSessionTrace(ws, "../outside")).toThrow(/Invalid session id/);
+    expect(() => deleteSession(ws, "../outside")).toThrow(/Invalid session id/);
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("keep");
   });
 });

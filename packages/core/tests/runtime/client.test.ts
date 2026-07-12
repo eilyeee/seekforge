@@ -16,6 +16,11 @@ rl.on("line", (line) => {
   const req = JSON.parse(line);
   if (req.method === "die") process.exit(7);
   if (req.method === "slow") return; // never answers
+  if (req.method === "malformed") {
+    for (const value of [null, [], 42, { id: req.id, ok: "yes" }]) {
+      process.stdout.write(JSON.stringify(value) + "\\n");
+    }
+  }
   if (req.method === "fail") {
     process.stdout.write(JSON.stringify({ id: req.id, ok: false, error: { code: "sensitive_path", message: "nope" } }) + "\\n");
     return;
@@ -60,6 +65,16 @@ describe("runtime client", () => {
         name: "RuntimeError",
         code: "sensitive_path",
       });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("ignores valid JSON that is not a runtime response", async () => {
+    const client = createRuntimeClient({ binPath });
+    try {
+      const result = await client.call<{ got: unknown }>("malformed", { workspace: "/w" });
+      expect(result.got).toMatchObject({ workspace: "/w" });
     } finally {
       client.dispose();
     }

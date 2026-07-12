@@ -41,6 +41,9 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
 - **Also caught:** `apps/tui/src/app.tsx` (`/memory edit`) — a raw
   `target.startsWith(memoryDir)` let `../memory2/project.md` pass because
   `memory2` shares the same string prefix.
+- **Also caught:** `packages/core/src/agent/trace.ts` — session ids were joined
+  directly into read/write/delete paths, relying on each caller to reject path
+  traversal before reaching Core.
 
 ## 3. A cache / memo key must include every input that affects the output
 
@@ -81,6 +84,9 @@ leaks once per operation.
   callback (or use `AbortSignal.any`). Same for timers, streams, child processes.
 - **Caught:** `packages/core/src/subagents/manager.ts` — abort listener on the
   shared parent `AbortSignal`.
+- **Also caught:** `packages/core/src/agent/trace.ts` — cached append file
+  descriptors had to be closed before deleting a session, or recreating the same
+  id kept writing to the unlinked inode.
 
 ## 7. Enforce protocol invariants at the serialization / request boundary
 
@@ -113,6 +119,9 @@ path leaves every other path exposed.
   `apps/cli/src/commands/config.ts` (`config set`), and
   `apps/server/src/config.ts` (`setConfigValue`) — non-object JSON passed the
   parse step but later failed during MCP merge or config mutation.
+- **Also caught:** `packages/core/src/runtime/client.ts` — valid JSON such as
+  `null` or a forged response shape could crash the readline callback or settle
+  a pending runtime request with invalid data.
 
 ## 9. "Read-only vs mutating" classification: check each command's real effect
 
@@ -208,6 +217,10 @@ leaves the user waiting for timeout.
 - **Caught:** `packages/core/src/agent/auto-loop.ts` and
   `packages/core/src/tools/run-command.ts` — loop budget/cancellation previously
   took effect only after a full agent run or verification timeout.
+- **Also caught:** `packages/core/src/provider/http.ts` — caller cancellation was
+  treated as a retryable network error and retry backoff ignored the abort signal.
+- **Also caught:** `packages/core/src/agent/loop.ts` — finalize auto-verify and
+  auto-lint commands omitted the run signal and delayed cancellation until exit.
 
 ## 18. Exclude internal state from convergence inputs
 

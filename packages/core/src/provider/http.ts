@@ -60,8 +60,20 @@ export function isRetryableError(err: unknown): boolean {
   return status === undefined || status === 429 || status >= 500;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function backoffMs(attempt: number): number {
@@ -93,7 +105,7 @@ export async function fetchWithRetry(
       } catch {
         // A misbehaving frontend callback must never break the request path.
       }
-      await sleep(delayMs);
+      await sleep(delayMs, init.signal);
     }
     let res: Response;
     // Timeout guards time-to-headers only, then is cleared — so a long but
@@ -110,6 +122,7 @@ export async function fetchWithRetry(
       res = await fetch(url, { ...init, signal });
     } catch (err) {
       clearTimeout(timer);
+      if (init.signal?.aborted) throw err;
       const timedOut = err === timeoutErr;
       lastError = new DeepSeekApiError(
         timedOut

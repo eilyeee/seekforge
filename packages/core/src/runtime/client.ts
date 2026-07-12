@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { RuntimeResponse } from "@seekforge/shared";
 
 /** Error thrown for runtime-reported failures; code mirrors PROTOCOL.md. */
 export class RuntimeError extends Error {
@@ -33,6 +32,8 @@ type Pending = {
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Line-delimited JSON client for seekforge-runtime (crates/runtime/PROTOCOL.md).
@@ -55,21 +56,27 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
 
     const rl = createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
-      let res: RuntimeResponse;
+      let parsed: unknown;
       try {
-        res = JSON.parse(line) as RuntimeResponse;
+        parsed = JSON.parse(line) as unknown;
       } catch {
         return; // not protocol output; ignore
       }
-      if (res.id === null) return; // bad_request for an unparseable line we never sent
-      const p = pending.get(res.id);
+      if (!isRecord(parsed) || parsed["id"] === null) return;
+      const id = parsed["id"];
+      if (typeof id !== "string" || typeof parsed["ok"] !== "boolean") return;
+      const p = pending.get(id);
       if (!p) return;
-      pending.delete(res.id);
+      pending.delete(id);
       clearTimeout(p.timer);
-      if (res.ok) {
-        p.resolve(res.data);
+      if (parsed["ok"]) {
+        p.resolve(parsed["data"]);
       } else {
-        p.reject(new RuntimeError(res.error?.code ?? "runtime_error", res.error?.message ?? "runtime error"));
+        const error = isRecord(parsed["error"]) ? parsed["error"] : undefined;
+        p.reject(new RuntimeError(
+          typeof error?.["code"] === "string" ? error["code"] : "runtime_error",
+          typeof error?.["message"] === "string" ? error["message"] : "runtime error",
+        ));
       }
     });
 

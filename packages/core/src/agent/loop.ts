@@ -1186,6 +1186,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   const r = await runShellCommand(vc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
                     sandbox: deps.sandbox,
                     workspace: input.projectPath,
+                    signal: input.signal,
                   });
                   const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
                   if (r.exitCode === 0) {
@@ -1227,6 +1228,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   const r = await runShellCommand(lc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
                     sandbox: deps.sandbox,
                     workspace: input.projectPath,
+                    signal: input.signal,
                   });
                   const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
                   if (r.exitCode === 0) {

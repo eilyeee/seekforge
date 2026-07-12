@@ -798,6 +798,30 @@ describe("auto-verify on completion", () => {
     expect(injected).toContain("exit 1");
   });
 
+  it("cancels an in-flight auto-verify command", async () => {
+    const controller = new AbortController();
+    const provider = fakeProvider(editThenDone());
+    const agent = createAgentCore({
+      provider,
+      dispatcher: editDispatcher(),
+      confirm: async () => true,
+      verifyCommand: "sleep 10",
+    });
+    const started = Date.now();
+    const pending = collect(agent.runTask({
+      ...baseInput,
+      projectPath: workspace,
+      signal: controller.signal,
+    }));
+    setTimeout(() => controller.abort(), 100);
+    const events = await pending;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "session.failed",
+      error: expect.objectContaining({ code: "cancelled" }),
+    }));
+  });
+
   it("degrades to the nudge when autoVerify is disabled", async () => {
     const provider = fakeProvider(editThenDone());
     const agent = createAgentCore({

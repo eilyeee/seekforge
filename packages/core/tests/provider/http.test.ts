@@ -91,6 +91,20 @@ describe("fetchWithRetry onRetry", () => {
     ).rejects.toThrow(/HTTP 400/);
     expect(onRetry).not.toHaveBeenCalled();
   });
+
+  it("stops immediately when the caller aborts during retry backoff", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled by caller");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(res(503, "busy"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const request = fetchWithRetry(
+      "https://x/y",
+      { method: "POST", signal: controller.signal },
+      { onRetry: () => controller.abort(reason) },
+    );
+    await expect(request).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("fetchWithRetry timeout", () => {
