@@ -14,6 +14,12 @@ export type LoopProgress = {
   result: LoopResult | null;
 };
 
+export function loopWarnings(events: LoopEvent[]): string[] {
+  return events
+    .filter((event): event is Extract<LoopEvent, { type: "loop.warning" }> => event.type === "loop.warning")
+    .map((event) => event.message);
+}
+
 const MAX_LOOP_EVENTS = 500;
 const MAX_LIVE_OUTPUT = 12_000;
 
@@ -132,6 +138,9 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
         break;
       case "loop.done":
         // Summary is rendered separately from the per-iteration rows.
+        break;
+      case "loop.warning":
+        // Warnings are rendered separately from iteration rows.
         break;
     }
   }

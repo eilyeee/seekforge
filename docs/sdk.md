@@ -110,12 +110,15 @@ const result = await runAutoLoop(deps, {
 
 const resumed = await resumeAutoLoop(deps, result.loopId!, {
   workspace: process.cwd(),
+  additionalIterations: 4,
+  additionalCostBudgetUsd: 0.5,
 });
 ```
 
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are
-hard-capped at 100.
+hard-capped at 100. Persisted Loops hold an exclusive lease; write failures are
+reported through bounded `loop.warning` events without masking verification.
 
 ## Extension points
 

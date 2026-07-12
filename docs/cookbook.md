@@ -84,6 +84,11 @@ make the failing suite pass without weakening any assertions
   `seekforge loop-resume <loop-id>` to continue with its prior session, spend,
   and remaining iterations. A `--worktree` checkout is retained, and resume must
   run from that directory. See [Loop engineering](loop-engineering.md).
+- Add capacity without resetting history using `loop-resume --add-iters 4
+  --add-budget 0.50 <loop-id>`. Use `loop-list`, `loop-show`, and `loop-delete`
+  to manage records.
+- Remove retained Loop worktrees with `loop-cleanup <name>`. Dirty worktrees
+  require `--force`.
 
 ---
 

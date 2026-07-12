@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useT } from "../../lib/i18n";
-import { loopRows, loopStatusTone, formatCost, type LoopProgress } from "../../lib/loop";
+import { loopRows, loopStatusTone, loopWarnings, formatCost, type LoopProgress } from "../../lib/loop";
+import { MAX_LOOP_ITERATIONS, parseBudgetInput, parseIterationInput } from "../../lib/loop-input";
 import { Badge, Button, Card, IconChevron, Input, TextArea } from "../ui";
 
 type Props = {
@@ -10,41 +11,47 @@ type Props = {
   running: boolean;
   /** Starts a loop run (sends the `loop` frame via the store). */
   onRun: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
+  onResume: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
   /** Stops a running loop (sends `cancel` via the store). */
   onStop: () => void;
 };
 
 const DEFAULT_MAX_ITERATIONS = 8;
-const MAX_LOOP_ITERATIONS = 100;
 
 /**
  * Collapsible loop-mode panel pinned to the TOP of the chat window. Collapsed
  * by default so normal chat is unaffected. Drives an autonomous
  * run→verify→fix loop on the server and renders the streamed progress.
  */
-export function LoopPanel({ progress, running, onRun, onStop }: Props) {
+export function LoopPanel({ progress, running, onRun, onResume, onStop }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState("");
   const [verify, setVerify] = useState("");
   const [maxIterations, setMaxIterations] = useState(String(DEFAULT_MAX_ITERATIONS));
   const [budget, setBudget] = useState("");
+  const [addedIterations, setAddedIterations] = useState("");
+  const [addedBudget, setAddedBudget] = useState("");
 
-  const canRun = !running && task.trim() !== "" && verify.trim() !== "";
+  const max = parseIterationInput(maxIterations);
+  const bud = parseBudgetInput(budget);
+  const addedIters = parseIterationInput(addedIterations, true);
+  const addedBud = parseBudgetInput(addedBudget);
+
+  const canRun = !running && task.trim() !== "" && verify.trim() !== "" && !max.error && !bud.error;
 
   const run = () => {
     if (!canRun) return;
-    const max = Number.parseInt(maxIterations, 10);
-    const bud = Number.parseFloat(budget);
     onRun({
       task: task.trim(),
       verifyCommand: verify.trim(),
-      ...(Number.isInteger(max) && max > 0 && max <= MAX_LOOP_ITERATIONS ? { maxIterations: max } : {}),
-      ...(Number.isFinite(bud) && bud > 0 ? { budget: bud } : {}),
+      ...(max.value !== undefined ? { maxIterations: max.value } : {}),
+      ...(bud.value !== undefined ? { budget: bud.value } : {}),
     });
   };
 
   const rows = loopRows(progress.events);
+  const warnings = loopWarnings(progress.events);
   const result = progress.result;
 
   return (
@@ -116,7 +123,10 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                   value={maxIterations}
                   onChange={(e) => setMaxIterations(e.target.value)}
                   disabled={running}
+                  aria-invalid={max.error !== undefined}
+                  className={max.error ? "border-danger" : ""}
                 />
+                {max.error && <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>}
               </label>
 
               <label className="flex w-28 flex-col gap-1">
@@ -131,7 +141,10 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                   onChange={(e) => setBudget(e.target.value)}
                   placeholder={t("chat.loop.budgetPlaceholder")}
                   disabled={running}
+                  aria-invalid={bud.error !== undefined}
+                  className={bud.error ? "border-danger" : ""}
                 />
+                {bud.error && <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>}
               </label>
 
               {running ? (
@@ -146,8 +159,11 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
             </div>
           </div>
 
-          {(rows.length > 0 || result) && (
+          {(rows.length > 0 || warnings.length > 0 || result) && (
             <Card className="mt-3 flex flex-col gap-1.5 p-3">
+              {warnings.map((warning, index) => (
+                <div key={`warning-${index}`} className="text-xs text-danger">{warning}</div>
+              ))}
               {rows.map((row) => (
                   <div key={row.iteration} className="flex flex-wrap items-center gap-2 text-xs">
                     <Badge tone="neutral">{t("chat.loop.iteration", { n: row.iteration })}</Badge>
@@ -189,6 +205,53 @@ export function LoopPanel({ progress, running, onRun, onStop }: Props) {
                     </span>
                     {result.loopId && (
                       <span className="ml-2 font-mono text-2xs text-tertiary">{result.loopId}</span>
+                    )}
+                    {result.loopId && !running && (
+                      <div className="mt-3 flex flex-wrap items-end gap-2 text-primary">
+                        <label className="flex w-32 flex-col gap-1">
+                          <span className="text-2xs text-tertiary">{t("chat.loop.addedIterations")}</span>
+                          <Input
+                            value={addedIterations}
+                            onChange={(e) => setAddedIterations(e.target.value)}
+                            type="number"
+                            min={1}
+                            max={100}
+                            aria-invalid={addedIters.error !== undefined}
+                            className={addedIters.error ? "border-danger" : ""}
+                            placeholder={t("chat.loop.optional")}
+                          />
+                          {addedIters.error && (
+                            <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>
+                          )}
+                        </label>
+                        <label className="flex w-32 flex-col gap-1">
+                          <span className="text-2xs text-tertiary">{t("chat.loop.addedBudget")}</span>
+                          <Input
+                            value={addedBudget}
+                            onChange={(e) => setAddedBudget(e.target.value)}
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            aria-invalid={addedBud.error !== undefined}
+                            className={addedBud.error ? "border-danger" : ""}
+                            placeholder={t("chat.loop.optional")}
+                          />
+                          {addedBud.error && (
+                            <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>
+                          )}
+                        </label>
+                        <Button
+                          variant="primary"
+                          disabled={!!addedIters.error || !!addedBud.error}
+                          onClick={() => onResume({
+                            loopId: result.loopId!,
+                            ...(addedIters.value !== undefined ? { addedIterations: addedIters.value } : {}),
+                            ...(addedBud.value !== undefined ? { addedBudget: addedBud.value } : {}),
+                          })}
+                        >
+                          {t("chat.loop.resume")}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 )}

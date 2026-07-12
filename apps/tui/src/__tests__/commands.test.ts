@@ -137,6 +137,24 @@ describe("parseInput /loop", () => {
   });
 });
 
+describe("parseInput /loop-resume", () => {
+  it("parses a loop id and additive limits", () => {
+    expect(parseInput("/loop-resume --add-iterations 4 --add-budget=0.75 loop-abc")).toEqual({
+      kind: "slash",
+      command: { name: "loop-resume", loopId: "loop-abc", addedIterations: 4, addedCostBudgetUsd: 0.75 },
+    });
+  });
+
+  it("rejects invalid and duplicate limits", () => {
+    expect(parseInput("/loop-resume --add-iterations nope loop-abc")).toMatchObject({
+      command: { name: "loop-resume", error: "--add-iterations must be an integer from 1 to 100" },
+    });
+    expect(parseInput("/loop-resume --add-budget 1 --add-budget 2 loop-abc")).toMatchObject({
+      command: { name: "loop-resume", error: "--add-budget may only be specified once" },
+    });
+  });
+});
+
 describe("parseInput v3 additions", () => {
   it("parses the new management commands", () => {
     expect(parseInput("/backtrack")).toEqual({ kind: "slash", command: { name: "backtrack" } });

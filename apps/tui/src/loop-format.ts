@@ -78,6 +78,8 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
       const tail = loopOutputTail(event.output);
       return tail ? [head, { text: `    ${tail}`, tone: "dim" }] : [head];
     }
+    case "loop.warning":
+      return [{ text: `  ! loop persistence warning: ${event.message}`, tone: "error" }];
     case "loop.done":
       return formatLoopSummary(event.result);
     default:
@@ -98,7 +100,7 @@ export function formatLoopSummary(result: LoopResult): LoopNotice[] {
     },
   ];
   if (result.loopId) {
-    lines.push({ text: `  loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`, tone: "dim" });
+    lines.push({ text: `  loop: ${result.loopId} (/loop-resume ${result.loopId})`, tone: "dim" });
   }
   if (result.sessionId) {
     lines.push({

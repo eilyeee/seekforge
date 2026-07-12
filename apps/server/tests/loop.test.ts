@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import type { LoopOptions, LoopResult } from "@seekforge/core";
-import { startServer, type CreateAgentFn, type RunLoopFn, type RunningServer } from "../src/index.js";
+import { startServer, type CreateAgentFn, type ResumeLoopFn, type RunLoopFn, type RunningServer } from "../src/index.js";
 import {
   collectFrames,
   connectWs,
@@ -15,6 +15,7 @@ import {
   makeWorkspace,
   unusedAgentFactory,
   unusedLoopFactory,
+  unusedResumeLoopFactory,
   waitUntil,
   type FrameCollector,
 } from "./helpers.js";
@@ -24,13 +25,14 @@ const TOKEN = "test-token-loop";
 let server: RunningServer | undefined;
 let sockets: WebSocket[] = [];
 
-async function boot(opts: { createAgent?: CreateAgentFn; runLoop?: RunLoopFn }, workspace = makeWorkspace()) {
+async function boot(opts: { createAgent?: CreateAgentFn; runLoop?: RunLoopFn; resumeLoop?: ResumeLoopFn }, workspace = makeWorkspace()) {
   server = await startServer({
     workspace,
     port: 0,
     token: TOKEN,
     createAgent: opts.createAgent ?? unusedAgentFactory,
     runLoop: opts.runLoop ?? unusedLoopFactory,
+    resumeLoop: opts.resumeLoop ?? unusedResumeLoopFactory,
   });
   return { server, workspace };
 }
@@ -60,6 +62,44 @@ afterEach(async () => {
   for (const ws of sockets.splice(0)) ws.terminate();
   await server?.close();
   server = undefined;
+});
+
+describe("loop.resume", () => {
+  it("validates and routes additive limits while streaming events", async () => {
+    let seen: Parameters<ResumeLoopFn>[2] | undefined;
+    let seenId = "";
+    const { server, workspace } = await boot({
+      resumeLoop: async (_agentOpts, loopId, opts) => {
+        seenId = loopId;
+        seen = opts;
+        const result = loopResult({ loopId, iterations: 4 });
+        opts.onEvent?.({ type: "iteration.start", iteration: 4 });
+        opts.onEvent?.({ type: "loop.done", result });
+        return result;
+      },
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop.resume", loopId: "loop-abc", addedIterations: 3, addedBudget: 0.75 });
+    await rx.waitFor((f) => f.type === "loop.event");
+    await rx.waitFor((f) => f.type === "idle");
+    expect(seenId).toBe("loop-abc");
+    expect(seen).toMatchObject({ workspace, additionalIterations: 3, additionalCostBudgetUsd: 0.75, approvalMode: "acceptEdits" });
+  });
+
+  it("rejects unsafe ids and invalid additive limits", async () => {
+    const { server } = await boot({});
+    const { ws, rx } = await open(server.port);
+    for (const frame of [
+      { type: "loop.resume", loopId: "../loop" },
+      { type: "loop.resume", loopId: "loop with spaces" },
+      { type: "loop.resume", loopId: "loop-1", addedIterations: 0 },
+      { type: "loop.resume", loopId: "loop-1", addedIterations: 1.5 },
+      { type: "loop.resume", loopId: "loop-1", addedBudget: Number.POSITIVE_INFINITY },
+    ]) {
+      sendFrame(ws, frame);
+      expect((await rx.waitFor((f) => f.type === "error")).code).toBe("bad_frame");
+    }
+  });
 });
 
 describe("loop -> loop.event -> idle", () => {

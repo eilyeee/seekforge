@@ -10,14 +10,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
-import { createDefaultAgent, runDefaultLoop, type CreateAgentFn, type RunLoopFn } from "./agent.js";
+import { createDefaultAgent, resumeDefaultLoop, runDefaultLoop, type CreateAgentFn, type ResumeLoopFn, type RunLoopFn } from "./agent.js";
 import { handleApi, sendApiError } from "./rest.js";
 import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
 import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
 
-export type { AgentHandle, CreateAgentFn, CreateAgentOptions, RunLoopFn, RunOverrides } from "./agent.js";
+export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 export type { MergeResult, WorktreeStatus } from "./worktrees.js";
@@ -50,6 +50,8 @@ export type StartServerOptions = {
   createAgent?: CreateAgentFn;
   /** Test/embedding override for the auto-loop runner. Default: real DeepSeek loop. */
   runLoop?: RunLoopFn;
+  /** Test/embedding override for persisted auto-loop resume. */
+  resumeLoop?: ResumeLoopFn;
   /** Test/embedding override for the static UI root. Default: apps/desktop/dist. */
   staticDir?: string;
 };
@@ -70,6 +72,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const token = opts.token ?? randomBytes(24).toString("base64url");
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const runLoop = opts.runLoop ?? runDefaultLoop;
+  const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
 
   let port = 0; // the real port, known after listen()
@@ -112,7 +115,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, { registry, createAgent, runLoop }));
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, { registry, createAgent, runLoop, resumeLoop }));
   });
 
   await new Promise<void>((resolveListen, rejectListen) => {

@@ -4,6 +4,7 @@ import {
   formatCost,
   loopRows,
   loopStatusTone,
+  loopWarnings,
   outputTail,
   reduceLoopEvent,
   type LoopProgress,
@@ -14,6 +15,15 @@ const feed = (events: LoopEvent[]): LoopProgress =>
   events.reduce(reduceLoopEvent, emptyLoopProgress());
 
 describe("reduceLoopEvent", () => {
+  it("retains persistence warnings for separate rendering", () => {
+    const progress = reduceLoopEvent(emptyLoopProgress(), {
+      type: "loop.warning",
+      warning: "persistence",
+      message: "read-only filesystem",
+    });
+    expect(loopWarnings(progress.events)).toEqual(["read-only filesystem"]);
+  });
+
   it("appends every event in order", () => {
     const p = feed([
       { type: "iteration.start", iteration: 1 },

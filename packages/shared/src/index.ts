@@ -699,6 +699,7 @@ export type LoopEvent =
   | { type: "run.completed"; iteration: number; costUsd: number }
   | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
+  | { type: "loop.warning"; warning: "persistence"; message: string }
   | { type: "loop.done"; result: LoopResult };
 
 /**
@@ -800,6 +801,16 @@ export type ClientFrame =
       maxIterations?: number;
       /** Optional total USD budget; the loop stops once exceeded. */
       budget?: number;
+      ws?: string;
+    } & RunOverrides)
+  | ({
+      /** Resume persisted Loop orchestration in the selected workspace. */
+      type: "loop.resume";
+      loopId: string;
+      /** Additional iterations added to the persisted limit. */
+      addedIterations?: number;
+      /** Additional USD added on top of the persisted cumulative budget. */
+      addedBudget?: number;
       ws?: string;
     } & RunOverrides)
   | { type: "cancel" };

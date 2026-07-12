@@ -25,7 +25,7 @@ import {
   type StartMode,
   type TabsState,
 } from "./lib/tabs";
-import { createWsClient, type ServerFrame, type WsClient } from "./lib/ws";
+import { createWsClient, type ClientFrame, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
 import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
@@ -190,6 +190,8 @@ type AppStore = {
    * the task→verify→fix cycle autonomously and streams `loop.event` frames.
    */
   startLoop: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
+  /** Resumes the persisted loop represented by the active tab's completed result. */
+  resumeLoop: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
   executePlan: () => void;
   cancel: () => void;
   newSession: () => void;
@@ -512,6 +514,29 @@ export const useStore = create<AppStore>()((set, get) => {
         tabs: updateTab(s.tabs, tab.tabId, {
           // Mark running so every Run control (chat + loop) is disabled, and
           // clear any prior loop feed so the panel starts fresh.
+          chat: { ...tab.chat, running: true },
+          loop: emptyLoopProgress(),
+          wsError: null,
+        }),
+      }));
+    },
+
+    resumeLoop: ({ loopId, addedIterations, addedBudget }) => {
+      const tab = activeTab(get().tabs);
+      if (tab.chat.running || loopId.trim() === "") return;
+      const client = ensureWs(tab.tabId);
+      requestNotifyPermission();
+      const frame: ClientFrame = {
+        type: "loop.resume",
+        loopId,
+        ...(addedIterations !== undefined ? { addedIterations } : {}),
+        ...(addedBudget !== undefined ? { addedBudget } : {}),
+        ...(tab.ws ? { ws: tab.ws } : {}),
+        ...overridesOf(tab),
+      };
+      client.send(frame);
+      set((s) => ({
+        tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...tab.chat, running: true },
           loop: emptyLoopProgress(),
           wsError: null,

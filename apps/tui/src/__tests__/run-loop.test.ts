@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runAutoLoop = vi.fn();
+const resumeAutoLoop = vi.fn();
 const dispose = vi.fn();
 
 vi.mock("@seekforge/core", () => ({
   loadAgentDefinitions: vi.fn(() => []),
   runAutoLoop,
+  resumeAutoLoop,
 }));
 
 vi.mock("../agent/factory.js", () => ({
@@ -16,7 +18,7 @@ vi.mock("@seekforge/shared/file-refs", () => ({
   expandFileRefs: vi.fn((task: string) => task),
 }));
 
-const { runLoop } = await import("../agent/run-loop.js");
+const { resumeLoop, runLoop } = await import("../agent/run-loop.js");
 
 const result = {
   status: "passed" as const,
@@ -68,5 +70,22 @@ describe("runLoop", () => {
       { marker: "agent-deps" },
       expect.objectContaining({ maxIterations: 12, costBudgetUsd: 0.75 }),
     );
+  });
+});
+
+describe("resumeLoop", () => {
+  it("routes additive limits, events, and cancellation to core", async () => {
+    resumeAutoLoop.mockResolvedValue(result);
+    const signal = new AbortController().signal;
+    const onEvent = vi.fn();
+    await resumeLoop("loop-1", signal, {
+      config: {}, model: "test-model", projectPath: "/workspace", mcpToolSpecs: [],
+      addedIterations: 3, addedCostBudgetUsd: 0.5, onEvent,
+    });
+    expect(resumeAutoLoop).toHaveBeenCalledWith(
+      { marker: "agent-deps" }, "loop-1",
+      expect.objectContaining({ workspace: "/workspace", additionalIterations: 3, additionalCostBudgetUsd: 0.5, signal, onEvent }),
+    );
+    expect(dispose).toHaveBeenCalled();
   });
 });

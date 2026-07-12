@@ -34,7 +34,14 @@ import { auditCommand } from "./commands/audit.js";
 import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
-import { loopCommand, loopResumeCommand } from "./commands/loop.js";
+import {
+  loopCleanupCommand,
+  loopCommand,
+  loopDeleteCommand,
+  loopListCommand,
+  loopResumeCommand,
+  loopShowCommand,
+} from "./commands/loop.js";
 import { resolveCommand, resolveReviewCommand } from "./commands/resolve.js";
 import { runTaskCommand } from "./commands/run.js";
 import { sandboxRunCommand } from "./commands/sandbox.js";
@@ -139,15 +146,19 @@ const rootProfile = (): string | undefined => program.opts<{ profile?: string }>
 
 /** Parse a positive-integer option string; throws InvalidArgumentError on bad input. */
 function parsePositiveInt(val: string): number {
-  const n = Number.parseInt(val, 10);
-  if (Number.isNaN(n) || n <= 0) throw new InvalidArgumentError("must be a positive integer");
+  if (!/^[0-9]+$/.test(val)) throw new InvalidArgumentError("must be a positive integer");
+  const n = Number(val);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new InvalidArgumentError("must be a positive integer");
   return n;
 }
 
 /** Parse a positive-float option string (e.g. a USD budget); throws on bad input. */
 function parsePositiveFloat(val: string): number {
-  const n = Number.parseFloat(val);
-  if (Number.isNaN(n) || n <= 0) throw new InvalidArgumentError("must be a positive number");
+  if (!/^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(val)) {
+    throw new InvalidArgumentError("must be a positive number");
+  }
+  const n = Number(val);
+  if (!Number.isFinite(n) || n <= 0) throw new InvalidArgumentError("must be a positive number");
   return n;
 }
 
@@ -419,15 +430,29 @@ program
   .argument("<loop-id>", "persisted loop id to continue")
   .option("-y, --yes", "continue autonomously without the auto-approve note")
   .option("-m, --model <model>", "override model")
+  .option("--add-iters <n>", "add iterations to the persisted loop limit", parsePositiveInt)
+  .option("--add-budget <usd>", "add USD to the persisted cost budget", parsePositiveFloat)
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("resume a persisted autonomous loop with its remaining limits and verification state")
-  .action(async (loopId: string, opts: { yes?: boolean; model?: string; profile?: string }) => {
+  .action(async (loopId: string, opts: { yes?: boolean; model?: string; addIters?: number; addBudget?: number; profile?: string }) => {
     await loopResumeCommand(loopId, {
       yes: opts.yes,
       model: opts.model,
+      addIters: opts.addIters,
+      addBudget: opts.addBudget,
       profile: opts.profile ?? rootProfile(),
     });
   });
+
+program.command("loop-list").description("list persisted loops in the current project").action(loopListCommand);
+program.command("loop-show").argument("<loop-id>").description("show a persisted loop").action(loopShowCommand);
+program.command("loop-delete").argument("<loop-id>").description("delete a persisted loop record").action(loopDeleteCommand);
+program
+  .command("loop-cleanup")
+  .argument("<name>", "retained loop worktree name, branch, or path")
+  .option("--force", "remove a dirty retained worktree and discard its changes")
+  .description("remove a retained loop worktree")
+  .action((name: string, opts: { force?: boolean }) => loopCleanupCommand(name, opts));
 
 // Local scheduled jobs (Track E automation). Register a task to run on an
 // interval or cron; `schedule run` is the tick the OS scheduler invokes. Every

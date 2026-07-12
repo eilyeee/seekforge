@@ -149,7 +149,11 @@ cooperative cancellation.
 | `--profile <name>` | Apply a named configuration profile. |
 
 Every invocation persists orchestration state in `.seekforge/loops/`. Use
-`seekforge loop-resume <loop-id>` to continue with the saved session, cost, and
+`seekforge loop-resume <loop-id> [--add-iters N] [--add-budget USD]` to continue with the saved session, cost, and
 remaining iterations. For `--worktree` loops, run that command inside the
 retained worktree shown at startup. Verification output streams while checks run;
 the interactive TUI exposes the same workflow through `/loop`.
+
+`seekforge loop-list`, `loop-show`, and `loop-delete` manage persisted records.
+`seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;
+dirty worktrees require explicit `--force` because their changes are discarded.

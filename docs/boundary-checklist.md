@@ -219,6 +219,27 @@ like progress when that state is also included in the workspace fingerprint.
 - **Caught:** `packages/core/src/agent/auto-loop.ts` — persisted loop updates and
   unlimited verifier chunks could defeat no-progress detection or grow clients.
 
+## 19. Numeric option parsers must consume the full string
+
+`parseInt("2x")` and `parseFloat("1.5usd")` silently accept a valid prefix. They
+also permit non-finite values unless checked separately.
+
+- **Do:** validate the complete numeric grammar first, then convert and require a
+  safe integer or finite float as appropriate.
+- **Caught:** `apps/cli/src/index.ts` — global positive integer/float option parsers.
+
+## 20. Lifecycle cleanup must prove ownership before deleting shared state
+
+A stale worker can finish after its lease was replaced and accidentally remove
+the new owner's lock, allowing concurrent mutation of the same persisted state.
+
+- **Do:** identify leases with unguessable ownership tokens, recover only dead
+  owners, and compare the token again before cleanup removes a lock.
+- **Caught:** `packages/core/src/agent/loop-state.ts` — autonomous-loop leases.
+- **Also caught:** `apps/cli/src/loop-worktree.ts` — cleanup now requires both
+  the retained worktree root and the Loop-only `seekforge/loop-*` branch prefix,
+  so it cannot delete another SeekForge workflow's checkout.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

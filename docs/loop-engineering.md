@@ -29,6 +29,7 @@ flowchart LR
   Orchestrator --> Diagnostics["structured diagnostics parser"]
   Orchestrator --> Fingerprint["workspace fingerprint"]
   Orchestrator --> State[".seekforge/loops/<id>.json"]
+  Orchestrator --> Lease["exclusive per-loop lease"]
   Agent --> Trace[".seekforge/sessions/<id>/ JSONL"]
   Verify -->|"verify.output / verify"| Orchestrator
   Orchestrator -->|"LoopEvent stream"| Clients
@@ -83,6 +84,11 @@ State is written atomically after observable progress. Live output is bounded
 per verification; the final verification event still carries the normal output
 tail used for diagnostics and continuation prompts.
 
+Only one process may own a persisted Loop at a time. A token-protected lock next
+to the state file rejects concurrent runs and recovers locks whose owner process
+is gone. A persistence write failure is reported once as `loop.warning` and does
+not replace the verification result.
+
 ### Resume and worktree lifecycle
 
 ```mermaid
@@ -108,11 +114,18 @@ runs a fresh pre-check before spending another agent iteration. A terminal loop
 whose iteration or cost limit is already exhausted can only pass that pre-check;
 otherwise the same guardrail stops it without additional agent work.
 
+Resume may add `additionalIterations` and `additionalCostBudgetUsd`. Iterations
+are added to the saved maximum and capped at 100. Added budget extends the saved
+total; without a prior budget it starts from cost already incurred, so historical
+spend is never reset.
+
 `--worktree` is a CLI adapter concern: the CLI creates a branch and worktree,
 then passes that directory as the Loop workspace. State and session traces are
 therefore stored inside the worktree. Worktrees are retained for inspection and
 are never automatically removed; resume from that directory and clean it up
-explicitly with normal Git worktree commands when finished.
+with `seekforge loop-cleanup <name>` when finished. Loop-owned branches use the
+`seekforge/loop-*` prefix; cleanup refuses dirty worktrees unless `--force` is
+explicit.
 
 ## CLI
 
@@ -136,6 +149,14 @@ seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [--w
   `seekforge loop-resume <loop-id>`. Session-level `resume` and `rewind` remain
   available for manual intervention.
 - Exit code 0 only when the verify command passed.
+
+```bash
+seekforge loop-resume <loop-id> [--add-iters <n>] [--add-budget <usd>]
+seekforge loop-list
+seekforge loop-show <loop-id>
+seekforge loop-delete <loop-id>
+seekforge loop-cleanup <worktree-name> [--force]
+```
 
 The whole loop is **one session** (each iteration resumes it), so it is a single
 auditable trace.
@@ -169,8 +190,9 @@ type LoopResult = {
 };
 ```
 
-`resumeAutoLoop(deps, loopId, { workspace })` restores the iteration count,
-cost, session, command, and guardrail configuration from persisted state.
+`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?,
+additionalCostBudgetUsd? })` restores the iteration count, cost, session,
+command, and guardrails, then applies optional additive limits.
 
 ## Guardrails (all on by default)
 
@@ -196,7 +218,8 @@ stdout+stderr. Cancelling during verification stops the command and returns
 
 Vitest/Jest, Pytest, and Cargo failures are parsed into bounded test names and
 source locations. Timing and formatting noise is removed from the convergence
-fingerprint. Verification stdout/stderr is streamed through `verify.output`
+fingerprint. Parsing uses a larger bounded head-and-tail aggregate so early
+failures survive noisy suites. Verification stdout/stderr is streamed through `verify.output`
 events while the command runs; each verification caps event count and chunk
 size, while the final `verify` event retains the normal output tail.
 
@@ -214,6 +237,10 @@ overrides from the run-toolbar ride along, same as a normal run. The server runs
 with `idle`. `cancel` stops it. Permission/question prompts during the loop's
 runs use the existing modals.
 
+Resume uses `{type:"loop.resume", loopId, addedIterations?, addedBudget?, ws?,
+...overrides}` and returns the same event stream. Invalid numeric fields and Loop
+IDs are rejected at the protocol boundary.
+
 ## TUI
 
 `/loop` uses a multi-line command: the first line contains loop options and the
@@ -228,6 +255,9 @@ Both options are optional. `--max-iterations` accepts `1-100`; `--budget` must
 be a finite positive USD value and overrides `costBudgetUsd` from config. Without
 an explicit budget, the TUI inherits the configured value. The default iteration
 limit is 8.
+
+Resume from the TUI with `/loop-resume [--add-iterations N] [--add-budget USD]
+<loop-id>`. Desktop exposes the same additive controls beside a completed Loop.
 
 ## Relation to existing features
 

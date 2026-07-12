@@ -221,6 +221,19 @@ describe("store: loop mode", () => {
     expect(loop.budget).toBeUndefined();
   });
 
+  it("resumeLoop sends additive limits and resets progress", () => {
+    useStore.getState().resumeLoop({ loopId: "loop-abc", addedIterations: 3, addedBudget: 0.5 });
+    expect(sent.find((f) => (f as { type: string }).type === "loop.resume")).toMatchObject({
+      type: "loop.resume",
+      loopId: "loop-abc",
+      addedIterations: 3,
+      addedBudget: 0.5,
+    });
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(true);
+    expect(tab.loop).toMatchObject({ events: [], result: null });
+  });
+
   it("ignores startLoop with empty task or verify command", () => {
     useStore.getState().startLoop({ task: "   ", verifyCommand: "pnpm test" });
     useStore.getState().startLoop({ task: "fix", verifyCommand: "" });

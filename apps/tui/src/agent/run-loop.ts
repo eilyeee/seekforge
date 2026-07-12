@@ -1,6 +1,7 @@
 import {
   loadAgentDefinitions,
   runAutoLoop,
+  resumeAutoLoop,
   type LoopEvent,
   type LoopResult,
   type ToolSpec,
@@ -59,6 +60,37 @@ export async function runLoop(
       approvalMode: "acceptEdits",
       signal,
       onEvent: deps.onEvent,
+    });
+  } finally {
+    dispose();
+  }
+}
+
+export async function resumeLoop(
+  loopId: string,
+  signal: AbortSignal,
+  deps: Omit<RunLoopDeps, "maxIterations" | "costBudgetUsd"> & {
+    addedIterations?: number;
+    addedCostBudgetUsd?: number;
+  },
+): Promise<LoopResult> {
+  const { deps: agentDeps, dispose } = buildTuiDeps({
+    config: deps.config,
+    model: deps.model,
+    confirm: async () => false,
+    extractMemory: true,
+    subagents: loadAgentDefinitions(deps.projectPath),
+    mcpToolSpecs: deps.mcpToolSpecs,
+  });
+
+  try {
+    return await resumeAutoLoop(agentDeps, loopId, {
+      workspace: deps.projectPath,
+      approvalMode: "acceptEdits",
+      signal,
+      onEvent: deps.onEvent,
+      ...(deps.addedIterations !== undefined ? { additionalIterations: deps.addedIterations } : {}),
+      ...(deps.addedCostBudgetUsd !== undefined ? { additionalCostBudgetUsd: deps.addedCostBudgetUsd } : {}),
     });
   } finally {
     dispose();

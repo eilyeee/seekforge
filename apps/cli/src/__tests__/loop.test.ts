@@ -5,9 +5,19 @@
 // LoopEvent/LoopResult values into the pure formatters.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { LoopEvent, LoopResult } from "@seekforge/core";
-import { coreResumeAutoLoop, formatLoopEvent, formatSummary, outputTail } from "../commands/loop.js";
-import { formatLoopWorktree } from "../loop-worktree.js";
+import {
+  coreResumeAutoLoop,
+  formatLoopEvent,
+  formatLoopState,
+  formatSummary,
+  outputTail,
+  resumeExtensionOptions,
+} from "../commands/loop.js";
+import { formatLoopWorktree, isRetainedLoopWorktree } from "../loop-worktree.js";
 import { setLocale } from "../i18n.js";
 
 setLocale("en"); // deterministic strings
@@ -111,10 +121,10 @@ test("formatSummary exposes the persisted loop resume id", () => {
 });
 
 test("formatLoopWorktree exposes the retained path and branch", () => {
-  const text = formatLoopWorktree({ path: "/repo/.seekforge/worktrees/fix", branch: "seekforge/fix" });
+  const text = formatLoopWorktree({ path: "/repo/.seekforge/worktrees/loop-fix", branch: "seekforge/loop-fix" });
   assert.match(text, /retained for inspection/);
-  assert.match(text, /\/repo\/\.seekforge\/worktrees\/fix/);
-  assert.match(text, /seekforge\/fix/);
+  assert.match(text, /\/repo\/\.seekforge\/worktrees\/loop-fix/);
+  assert.match(text, /seekforge\/loop-fix/);
 });
 
 test("loop resume adapter exposes core support or fails clearly", () => {
@@ -122,6 +132,70 @@ test("loop resume adapter exposes core support or fails clearly", () => {
     assert.equal(typeof coreResumeAutoLoop(), "function");
   } catch (err) {
     assert.match(err instanceof Error ? err.message : String(err), /persisted loop resume state/);
+  }
+});
+
+test("loop resume extensions map to core options without adding absent limits", () => {
+  assert.deepEqual(resumeExtensionOptions({ addIters: 3, addBudget: 1.25 }), {
+    additionalIterations: 3,
+    additionalCostBudgetUsd: 1.25,
+  });
+  assert.deepEqual(resumeExtensionOptions({}), {});
+});
+
+test("formatLoopState includes management-relevant fields", () => {
+  const text = formatLoopState({
+    loopId: "loop-abc",
+    task: "fix tests",
+    workspace: "/repo",
+    verifyCommand: "pnpm test",
+    maxIterations: 8,
+    costBudgetUsd: 2,
+    iterations: 3,
+    costUsd: 0.25,
+    sessionId: "session-1",
+    lastVerify: null,
+    status: "exhausted",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  });
+  assert.match(text, /loop-abc/);
+  assert.match(text, /3\/8/);
+  assert.match(text, /\$0\.2500 \/ \$2\.0000/);
+  assert.match(text, /pnpm test/);
+});
+
+test("cleanup safety accepts only seekforge branches inside retained root", () => {
+  assert.equal(isRetainedLoopWorktree("/repo", {
+    path: "/repo/.seekforge/worktrees/loop-fix",
+    branch: "seekforge/loop-fix",
+  }), true);
+  assert.equal(isRetainedLoopWorktree("/repo", { path: "/repo", branch: "main" }), false);
+  assert.equal(isRetainedLoopWorktree("/repo", {
+    path: "/repo/.seekforge/worktrees/../outside",
+    branch: "seekforge/loop-outside",
+  }), false);
+  assert.equal(isRetainedLoopWorktree("/repo", {
+    path: "/repo/.seekforge/worktrees/loop-fix",
+    branch: "feature/fix",
+  }), false);
+});
+
+test("CLI numeric parsers reject trailing junk and non-finite values globally", () => {
+  const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const cli = resolve(cliDir, "src/index.ts");
+  for (const args of [
+    ["run", "task", "--max-turns", "2x"],
+    ["run", "task", "--max-cost", "1.5usd"],
+    ["loop", "task", "--verify", "true", "--max-iters", "3.0"],
+    ["loop-resume", "loop-abc", "--add-budget", "1e999"],
+  ]) {
+    const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args], {
+      cwd: cliDir,
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(`${result.stdout}${result.stderr}`, /positive (?:integer|number)/);
   }
 });
 

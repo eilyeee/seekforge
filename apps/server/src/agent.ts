@@ -13,6 +13,7 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   runAutoLoop,
+  resumeAutoLoop,
   type AgentCore,
   type AgentCoreDeps,
   type LoopOptions,
@@ -62,6 +63,11 @@ export type CreateAgentFn = (opts: CreateAgentOptions) => AgentHandle;
  * loop's inner runs emit permission.request/question.request/event frames.
  */
 export type RunLoopFn = (opts: CreateAgentOptions, loopOpts: LoopOptions) => Promise<LoopResult>;
+export type ResumeLoopFn = (
+  opts: CreateAgentOptions,
+  loopId: string,
+  loopOpts: Parameters<typeof resumeAutoLoop>[2],
+) => Promise<LoopResult>;
 
 /**
  * Assembles the connection-scoped AgentCoreDeps from a config + the WS-tied
@@ -135,4 +141,9 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
 export const runDefaultLoop: RunLoopFn = (opts, loopOpts) => {
   const deps = buildAgentDeps(opts);
   return runAutoLoop(deps, loopOpts).finally(() => deps.runtime?.dispose());
+};
+
+export const resumeDefaultLoop: ResumeLoopFn = (opts, loopId, loopOpts) => {
+  const deps = buildAgentDeps(opts);
+  return resumeAutoLoop(deps, loopId, loopOpts).finally(() => deps.runtime?.dispose());
 };

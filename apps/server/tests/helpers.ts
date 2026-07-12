@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import type { AgentEvent } from "@seekforge/shared";
 import type { RunAgentTaskInput } from "@seekforge/core";
 import type { LoopOptions, LoopResult } from "@seekforge/core";
-import type { CreateAgentFn, CreateAgentOptions, RunLoopFn } from "../src/index.js";
+import type { CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn } from "../src/index.js";
 
 /** Creates a throwaway workspace directory (vitest cleans tmpdir lazily). */
 export function makeWorkspace(): string {
@@ -47,6 +47,10 @@ export type FakeLoop = (opts: CreateAgentOptions, loopOpts: LoopOptions) => Prom
 export function fakeLoopFactory(loop: FakeLoop): RunLoopFn {
   return loop;
 }
+
+export const unusedResumeLoopFactory: ResumeLoopFn = () => {
+  throw new Error("resumeLoop must not be called in this test");
+};
 
 /**
  * Fake factory that records every runTask input into `inputs` and finishes

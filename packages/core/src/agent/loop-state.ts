@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
@@ -55,6 +55,65 @@ const loopsRoot = (workspace: string): string =>
 function loopFile(workspace: string, loopId: string): string {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
   return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.json`));
+}
+
+const activeLeases = new Set<string>();
+
+export type LoopLease = { release: () => void };
+
+/**
+ * Acquires a process- and filesystem-wide lease. A dead PID is stale; release
+ * verifies its random token so an old owner can never remove a successor lock.
+ */
+export function acquireLoopLease(workspace: string, loopId: string, persist: boolean): LoopLease {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  const key = `${requireWorkspace(workspace)}\0${loopId}`;
+  if (activeLeases.has(key)) throw new Error(`Loop is already running: ${loopId}`);
+  activeLeases.add(key);
+  if (!persist) return { release: () => { activeLeases.delete(key); } };
+
+  const target = resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `.${loopId}.lock`));
+  mkdirSync(dirname(target), { recursive: true });
+  const token = randomUUID();
+  const payload = JSON.stringify({ pid: process.pid, token });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const fd = openSync(target, "wx", 0o600);
+        try { writeFileSync(fd, payload, "utf8"); } finally { closeSync(fd); }
+        return {
+          release: () => {
+            activeLeases.delete(key);
+            try {
+              const owner = JSON.parse(readFileSync(target, "utf8")) as { token?: unknown };
+              if (owner.token === token) rmSync(target);
+            } catch { /* A missing/replaced lock no longer belongs to this lease. */ }
+          },
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        let stale = false;
+        try {
+          const owner = JSON.parse(readFileSync(target, "utf8")) as { pid?: unknown };
+          if (!Number.isInteger(owner.pid) || (owner.pid as number) <= 0) stale = true;
+          else {
+            try { process.kill(owner.pid as number, 0); }
+            catch (killError) { stale = (killError as NodeJS.ErrnoException).code === "ESRCH"; }
+          }
+        } catch {
+          throw new Error(`Loop is already running: ${loopId}`);
+        }
+        if (!stale) throw new Error(`Loop is already running: ${loopId}`);
+        try { rmSync(target); } catch (removeError) {
+          if ((removeError as NodeJS.ErrnoException).code !== "ENOENT") throw removeError;
+        }
+      }
+    }
+    throw new Error(`Could not acquire loop lease: ${loopId}`);
+  } catch (error) {
+    activeLeases.delete(key);
+    throw error;
+  }
 }
 
 function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState | null {

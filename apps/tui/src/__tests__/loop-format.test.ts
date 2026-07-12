@@ -18,6 +18,13 @@ function result(overrides: Partial<LoopResult> = {}): LoopResult {
   };
 }
 
+describe("formatLoopEvent warnings", () => {
+  it("surfaces persistence warnings", () => {
+    expect(formatLoopEvent({ type: "loop.warning", warning: "persistence", message: "disk full" }))
+      .toEqual([{ text: "  ! loop persistence warning: disk full", tone: "error" }]);
+  });
+});
+
 describe("loopOutputTail", () => {
   it("returns the last non-empty line, trimmed", () => {
     expect(loopOutputTail("first\nsecond\n\n  \n")).toBe("second");
@@ -128,7 +135,7 @@ describe("formatLoopSummary", () => {
 
   it("shows the persisted loop resume id", () => {
     const lines = formatLoopSummary(result({ loopId: "loop-abc" }));
-    expect(lines.some((line) => line.text.includes("seekforge loop-resume loop-abc"))).toBe(true);
+    expect(lines.some((line) => line.text.includes("/loop-resume loop-abc"))).toBe(true);
   });
 
   it("marks a budget-exhausted summary as an error", () => {

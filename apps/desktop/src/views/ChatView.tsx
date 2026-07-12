@@ -39,7 +39,7 @@ export function ChatView() {
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
-  const { setModel, setThinking, setReasoningEffort, setOutputStyle, truncateAtItem, startLoop } =
+  const { setModel, setThinking, setReasoningEffort, setOutputStyle, truncateAtItem, startLoop, resumeLoop } =
     useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
@@ -344,7 +344,7 @@ export function ChatView() {
         </div>
       </header>
 
-      <LoopPanel progress={tab.loop} running={tab.chat.running} onRun={startLoop} onStop={cancel} />
+      <LoopPanel progress={tab.loop} running={tab.chat.running} onRun={startLoop} onResume={resumeLoop} onStop={cancel} />
 
       <div
         ref={scrollRef}

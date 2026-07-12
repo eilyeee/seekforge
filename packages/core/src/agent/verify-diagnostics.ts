@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
 
 export type VerifyFramework = "vitest" | "jest" | "pytest" | "cargo" | "unknown";
 
@@ -25,7 +26,6 @@ export type VerifyDiagnosticsOptions = {
 const DEFAULT_MAX_FAILED_TESTS = 20;
 const DEFAULT_MAX_DIAGNOSTICS = 20;
 const DEFAULT_MAX_TEXT_LENGTH = 500;
-const MAX_INPUT_LENGTH = 256_000;
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 function limit(value: number | undefined, fallback: number, max: number): number {
@@ -125,8 +125,10 @@ export function parseVerifyDiagnostics(output: string, options: VerifyDiagnostic
   const maxText = limit(options.maxTextLength, DEFAULT_MAX_TEXT_LENGTH, 4_000);
   const maxTests = limit(options.maxFailedTests, DEFAULT_MAX_FAILED_TESTS, 100);
   const maxDiagnostics = limit(options.maxDiagnostics, DEFAULT_MAX_DIAGNOSTICS, 100);
-  const inputTail = output.length > MAX_INPUT_LENGTH ? output.slice(-MAX_INPUT_LENGTH) : output;
-  const boundedOutput = inputTail.replace(ANSI_PATTERN, "");
+  const boundedInput = output.length <= MAX_VERIFY_DIAGNOSTIC_INPUT
+    ? output
+    : `${output.slice(0, MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}\n... output omitted ...\n${output.slice(-MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}`;
+  const boundedOutput = boundedInput.replace(ANSI_PATTERN, "");
   const framework = detectFramework(boundedOutput);
   const failedTests = framework === "unknown"
     ? []

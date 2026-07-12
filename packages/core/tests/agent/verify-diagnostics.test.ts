@@ -46,4 +46,10 @@ describe("parseVerifyDiagnostics", () => {
     const many = parseVerifyDiagnostics(`Vitest\n${Array.from({ length: 20 }, (_, i) => `× test ${i}`).join("\n")}\nTest Files 1 failed`, { maxFailedTests: 3 });
     expect(many.failedTests).toHaveLength(3);
   });
+
+  it("retains early failures from a bounded head and tail aggregate", () => {
+    const output = `Vitest\n× tests/early.test.ts > fails first\n${"noise\n".repeat(60_000)}Test Files 1 failed`;
+    const result = parseVerifyDiagnostics(output);
+    expect(result.failedTests).toContain("tests/early.test.ts > fails first");
+  });
 });

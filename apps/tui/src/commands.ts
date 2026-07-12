@@ -38,6 +38,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
   { name: "loop", args: "[--max-iterations N] [--budget USD] <verify command>", summary: "auto-loop: run→verify until the command passes (task = composer lines below)" , group: "run" },
+  { name: "loop-resume", args: "[--add-iterations N] [--add-budget USD] <loop-id>", summary: "resume a persisted loop with optional added limits", group: "run" },
   { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" , group: "run" },
   { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
   { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
@@ -90,6 +91,13 @@ export type SlashCommand =
       task?: string;
       maxIterations?: number;
       costBudgetUsd?: number;
+      error?: string;
+    }
+  | {
+      name: "loop-resume";
+      loopId?: string;
+      addedIterations?: number;
+      addedCostBudgetUsd?: number;
       error?: string;
     }
   | { name: "approve"; arg?: string }
@@ -145,7 +153,7 @@ export type ParsedInput =
 
 const LOOP_MAX_ITERATIONS = 100;
 
-function parseLoopFirstLine(input: string): {
+function parseLoopFirstLine(input: string, resume = false): {
   verify?: string;
   maxIterations?: number;
   costBudgetUsd?: number;
@@ -155,24 +163,32 @@ function parseLoopFirstLine(input: string): {
   let maxIterations: number | undefined;
   let costBudgetUsd: number | undefined;
 
-  while (/^--(?:max-iterations|budget)(?:=|\s|$)/.test(rest)) {
-    const match = /^(--max-iterations|--budget)(?:=|\s+)(\S+)(?:\s+|$)/.exec(rest);
+  const iterationFlag = resume ? "--add-iterations" : "--max-iterations";
+  const budgetFlag = resume ? "--add-budget" : "--budget";
+  const optionPattern = resume
+    ? /^--(?:add-iterations|add-budget)(?:=|\s|$)/
+    : /^--(?:max-iterations|budget)(?:=|\s|$)/;
+  const valuePattern = resume
+    ? /^(--add-iterations|--add-budget)(?:=|\s+)(\S+)(?:\s+|$)/
+    : /^(--max-iterations|--budget)(?:=|\s+)(\S+)(?:\s+|$)/;
+  while (optionPattern.test(rest)) {
+    const match = valuePattern.exec(rest);
     if (!match) {
-      const option = rest.startsWith("--max-iterations") ? "--max-iterations" : "--budget";
+      const option = rest.startsWith(iterationFlag) ? iterationFlag : budgetFlag;
       return { error: `${option} requires a value` };
     }
-    const option = match[1] as "--max-iterations" | "--budget";
+    const option = match[1] ?? "";
     const raw = match[2] ?? "";
     const value = Number(raw);
-    if (option === "--max-iterations") {
-      if (maxIterations !== undefined) return { error: "--max-iterations may only be specified once" };
+    if (option === iterationFlag) {
+      if (maxIterations !== undefined) return { error: `${iterationFlag} may only be specified once` };
       if (!Number.isInteger(value) || value < 1 || value > LOOP_MAX_ITERATIONS) {
-        return { error: `--max-iterations must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
+        return { error: `${iterationFlag} must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
       }
       maxIterations = value;
     } else {
-      if (costBudgetUsd !== undefined) return { error: "--budget may only be specified once" };
-      if (!Number.isFinite(value) || value <= 0) return { error: "--budget must be a finite number greater than 0" };
+      if (costBudgetUsd !== undefined) return { error: `${budgetFlag} may only be specified once` };
+      if (!Number.isFinite(value) || value <= 0) return { error: `${budgetFlag} must be a finite number greater than 0` };
       costBudgetUsd = value;
     }
     rest = rest.slice(match[0].length).trimStart();
@@ -182,6 +198,16 @@ function parseLoopFirstLine(input: string): {
     ...(rest ? { verify: rest } : {}),
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+  };
+}
+
+function parseLoopResume(input: string): Omit<Extract<SlashCommand, { name: "loop-resume" }>, "name"> {
+  const parsed = parseLoopFirstLine(input, true);
+  return {
+    ...(parsed.verify ? { loopId: parsed.verify } : {}),
+    ...(parsed.maxIterations !== undefined ? { addedIterations: parsed.maxIterations } : {}),
+    ...(parsed.costBudgetUsd !== undefined ? { addedCostBudgetUsd: parsed.costBudgetUsd } : {}),
+    ...(parsed.error ? { error: parsed.error } : {}),
   };
 }
 
@@ -257,6 +283,10 @@ export function parseInput(line: string): ParsedInput {
       kind: "slash",
       command: { name: "loop", ...parsed, ...(task ? { task } : {}) },
     };
+  }
+  if (alias === "loop-resume") {
+    const parsed = parseLoopResume(rest.join(" "));
+    return { kind: "slash", command: { name: "loop-resume", ...parsed } };
   }
 
   if (NO_ARG.has(alias)) return { kind: "slash", command: { name: alias } as SlashCommand };

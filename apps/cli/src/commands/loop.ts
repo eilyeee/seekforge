@@ -1,6 +1,9 @@
 import {
   MAX_LOOP_ITERATIONS,
+  listLoopStates,
+  loadLoopState,
   loadAgentDefinitions,
+  removeLoopState,
   resumeAutoLoop,
   runAutoLoop,
   type LoopEvent,
@@ -11,7 +14,7 @@ import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import { createLoopWorktree, formatLoopWorktree, type LoopWorktree } from "../loop-worktree.js";
+import { cleanupLoopWorktree, createLoopWorktree, formatLoopWorktree, type LoopWorktree } from "../loop-worktree.js";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required. */
@@ -30,7 +33,10 @@ export type LoopOptions = {
   worktree?: boolean | string;
 };
 
-export type LoopResumeOptions = Omit<LoopOptions, "verify" | "worktree">;
+export type LoopResumeOptions = Omit<LoopOptions, "verify" | "worktree" | "maxIters" | "budget"> & {
+  addIters?: number;
+  addBudget?: number;
+};
 
 const TAIL_LINES = 6;
 
@@ -60,6 +66,8 @@ export function formatLoopEvent(event: LoopEvent): string {
       const tail = outputTail(event.output);
       return tail ? `${head}\n${tail}` : head;
     }
+    case "loop.warning":
+      return `Warning: ${event.message}`;
     case "loop.done":
       return formatSummary(event.result);
   }
@@ -117,6 +125,8 @@ type ResumeAutoLoop = (
     model?: string;
     planModel?: string;
     escalateOnFailure?: boolean;
+    additionalIterations?: number;
+    additionalCostBudgetUsd?: number;
   },
 ) => Promise<LoopResult>;
 
@@ -126,6 +136,77 @@ export function coreResumeAutoLoop(): ResumeAutoLoop {
 
 export async function loopResumeCommand(loopId: string, opts: LoopResumeOptions): Promise<void> {
   await executeLoop(loopId, opts, process.cwd(), coreResumeAutoLoop());
+}
+
+export function resumeExtensionOptions(opts: LoopResumeOptions): {
+  additionalIterations?: number;
+  additionalCostBudgetUsd?: number;
+} {
+  return {
+    ...(opts.addIters !== undefined ? { additionalIterations: opts.addIters } : {}),
+    ...(opts.addBudget !== undefined ? { additionalCostBudgetUsd: opts.addBudget } : {}),
+  };
+}
+
+export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]): string {
+  return [
+    `loop: ${state.loopId}`,
+    `status: ${state.status}`,
+    `task: ${state.task}`,
+    `iterations: ${state.iterations}/${state.maxIterations}`,
+    `cost: $${state.costUsd.toFixed(4)}${state.costBudgetUsd === null ? "" : ` / $${state.costBudgetUsd.toFixed(4)}`}`,
+    `updated: ${state.updatedAt}`,
+    `workspace: ${state.workspace}`,
+    `verify: ${state.verifyCommand}`,
+  ].join("\n");
+}
+
+export function loopListCommand(): void {
+  const states = listLoopStates(process.cwd());
+  if (states.length === 0) {
+    console.log("No persisted loops.");
+    return;
+  }
+  console.log(states.map((state) => formatLoopState(state)).join("\n\n"));
+}
+
+export function loopShowCommand(loopId: string): void {
+  try {
+    const state = loadLoopState(process.cwd(), loopId);
+    if (!state) {
+      fail(`Persisted loop not found or invalid: ${loopId}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatLoopState(state));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export function loopDeleteCommand(loopId: string): void {
+  try {
+    if (!removeLoopState(process.cwd(), loopId)) {
+      fail(`Persisted loop not found: ${loopId}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Deleted persisted loop: ${loopId}`);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopCleanupCommand(name: string, opts: { force?: boolean }): Promise<void> {
+  try {
+    const removed = await cleanupLoopWorktree(process.cwd(), name, opts.force === true);
+    console.log(`Removed loop worktree: ${removed.path}\nRemoved branch: ${removed.branch}`);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
 }
 
 async function executeLoop(
@@ -199,13 +280,19 @@ async function executeLoop(
       onEvent: (event: LoopEvent) => printEvent(event),
     };
     const result = resume
-      ? await resume(deps, taskOrLoopId, { workspace: projectPath, ...common })
+      ? await resume(deps, taskOrLoopId, {
+          workspace: projectPath,
+          ...resumeExtensionOptions(opts as LoopResumeOptions),
+          ...common,
+        })
       : await runAutoLoop(deps, {
           task: taskOrLoopId,
           workspace: projectPath,
           verifyCommand: (opts as LoopOptions).verify,
-          maxIterations: opts.maxIters ?? 8,
-          ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+          maxIterations: (opts as LoopOptions).maxIters ?? 8,
+          ...((opts as LoopOptions).budget !== undefined
+            ? { costBudgetUsd: (opts as LoopOptions).budget }
+            : {}),
           approvalMode: "acceptEdits",
           ...common,
         });

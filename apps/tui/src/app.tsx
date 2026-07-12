@@ -100,7 +100,7 @@ import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
 import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
-import { runLoop } from "./agent/run-loop.js";
+import { resumeLoop, runLoop } from "./agent/run-loop.js";
 import { formatLoopEvent } from "./loop-format.js";
 import {
   atTokenAt,
@@ -796,6 +796,42 @@ export function App({
     [projectPath, mcpToolSpecs, syncBg, ring],
   );
 
+  const resumeLoopTask = useCallback(
+    async (loopId: string, options: { addedIterations?: number; addedCostBudgetUsd?: number } = {}) => {
+      const controller = new AbortController();
+      const runId = ++runIdCounterRef.current;
+      const runTabId = activeIdRef.current;
+      const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
+      runsByTabRef.current.set(runTabId, { controller, runId });
+      sigintCountRef.current = 0;
+      dispatchTab({ type: "user", text: `/loop-resume ${loopId}` });
+      dispatchTab({ type: "run-start" });
+      try {
+        const result = await resumeLoop(loopId, controller.signal, {
+          config: runConfigRef.current,
+          model: modelRef.current,
+          projectPath,
+          mcpToolSpecs,
+          ...options,
+          onEvent: (event) => {
+            for (const line of formatLoopEvent(event)) dispatchTab({ type: "notice", text: line.text, tone: line.tone });
+          },
+        });
+        if (result.sessionId) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lastErrorRef.current = message;
+        if (!controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
+      } finally {
+        if (runsByTabRef.current.get(runTabId)?.runId === runId) runsByTabRef.current.delete(runTabId);
+        dispatchTab({ type: "run-end" });
+        syncBg();
+        ring(`Loop finished: ${loopId.slice(0, 60)}`);
+      }
+    },
+    [projectPath, mcpToolSpecs, syncBg, ring],
+  );
+
   /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
   const detachRun = useCallback(() => {
     const tabId = activeIdRef.current;
@@ -965,6 +1001,25 @@ export function App({
           void runLoopTask(task, verifyCommand, {
             ...(command.maxIterations !== undefined ? { maxIterations: command.maxIterations } : {}),
             ...(command.costBudgetUsd !== undefined ? { costBudgetUsd: command.costBudgetUsd } : {}),
+          });
+          break;
+        }
+        case "loop-resume": {
+          if (controllerRef.current) {
+            notice("a task is already running — Esc cancels it, or wait for it to finish", "error");
+            break;
+          }
+          if (command.error) {
+            notice(`invalid /loop-resume options: ${command.error}`, "error");
+            break;
+          }
+          if (!command.loopId || /\s/.test(command.loopId)) {
+            notice("usage: /loop-resume [--add-iterations N] [--add-budget USD] <loop-id>", "error");
+            break;
+          }
+          void resumeLoopTask(command.loopId, {
+            ...(command.addedIterations !== undefined ? { addedIterations: command.addedIterations } : {}),
+            ...(command.addedCostBudgetUsd !== undefined ? { addedCostBudgetUsd: command.addedCostBudgetUsd } : {}),
           });
           break;
         }
@@ -1706,7 +1761,7 @@ export function App({
         }
       }
     },
-    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, runLoopTask, openExternalEditor, quit, syncBg, setRawMode],
+    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, runLoopTask, resumeLoopTask, openExternalEditor, quit, syncBg, setRawMode],
   );
 
   // ---------------------------------------------------------------------

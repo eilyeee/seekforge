@@ -10,9 +10,9 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { MAX_LOOP_ITERATIONS, detectThinkingKeyword, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
+import { MAX_LOOP_ITERATIONS, detectThinkingKeyword, isValidLoopId, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
-import type { CreateAgentFn, RunLoopFn, RunOverrides } from "./agent.js";
+import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 
@@ -45,6 +45,7 @@ export type ConnectionDeps = {
   registry: WorkspaceRegistry;
   createAgent: CreateAgentFn;
   runLoop: RunLoopFn;
+  resumeLoop: ResumeLoopFn;
   permissionTimeoutMs?: number;
 };
 
@@ -315,6 +316,44 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
+  const resumeLoop = async (input: {
+    workspace: string;
+    loopId: string;
+    addedIterations?: number;
+    addedBudget?: number;
+    overrides?: RunOverrides;
+  }): Promise<void> => {
+    running = true;
+    controller = new AbortController();
+    try {
+      await deps.resumeLoop(
+        {
+          workspace: input.workspace,
+          confirm,
+          askUser,
+          ...(input.overrides ? { overrides: input.overrides } : {}),
+          extractMemory: true,
+        },
+        input.loopId,
+        {
+          workspace: input.workspace,
+          ...(input.addedIterations !== undefined ? { additionalIterations: input.addedIterations } : {}),
+          ...(input.addedBudget !== undefined ? { additionalCostBudgetUsd: input.addedBudget } : {}),
+          approvalMode: "acceptEdits",
+          signal: controller.signal,
+          onEvent: (event) => send({ type: "loop.event", event }),
+        },
+      );
+    } catch (err) {
+      fail("loop_error", err instanceof Error ? err.message : String(err));
+    } finally {
+      running = false;
+      controller = undefined;
+      denyAllPending();
+      if (!closed) send({ type: "idle" });
+    }
+  };
+
   ws.on("message", (data: RawData) => {
     let frame: Record<string, unknown>;
     try {
@@ -436,6 +475,40 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           verifyCommand,
           ...(maxIterations !== undefined ? { maxIterations } : {}),
           ...(budget !== undefined ? { budget } : {}),
+          ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
+        });
+        return;
+      }
+
+      case "loop.resume": {
+        if (running) return fail("busy", "a session is already running on this connection");
+        const { loopId, addedIterations, addedBudget, ws: wsId } = frame;
+        if (typeof loopId !== "string" || !isValidLoopId(loopId)) {
+          return fail("bad_frame", "loop.resume.loopId must be a safe non-empty id");
+        }
+        if (addedIterations !== undefined && (
+          typeof addedIterations !== "number" || !Number.isInteger(addedIterations) ||
+          addedIterations <= 0 || addedIterations > MAX_LOOP_ITERATIONS
+        )) {
+          return fail("bad_frame", `loop.resume.addedIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
+        }
+        if (addedBudget !== undefined && (
+          typeof addedBudget !== "number" || !Number.isFinite(addedBudget) || addedBudget <= 0
+        )) {
+          return fail("bad_frame", "loop.resume.addedBudget must be a finite positive number when present");
+        }
+        if (wsId !== undefined && typeof wsId !== "string") {
+          return fail("bad_frame", "loop.resume.ws must be a string when present");
+        }
+        const parsedOverrides = parseRunOverrides(frame);
+        if ("error" in parsedOverrides) return fail("bad_frame", `loop.resume.${parsedOverrides.error}`);
+        const workspace = deps.registry.resolve(wsId);
+        if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
+        void resumeLoop({
+          workspace: workspace.path,
+          loopId,
+          ...(addedIterations !== undefined ? { addedIterations } : {}),
+          ...(addedBudget !== undefined ? { addedBudget } : {}),
           ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
         });
         return;
