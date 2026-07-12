@@ -309,6 +309,26 @@ describe("runAutoLoop", () => {
     expect(result.iterations).toBe(1);
   });
 
+  it("detects same-size edits beyond the first megabyte", async () => {
+    const { deps } = mkDeps();
+    const target = join(workspace, "large.bin");
+    const prefix = "x".repeat(1_100_000);
+    writeFileSync(target, `${prefix}a`);
+    let checks = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        checks++;
+        writeFileSync(target, `${prefix}${String.fromCharCode(97 + checks)}`);
+        return checks < 3
+          ? { code: 1, output: "identical failure" }
+          : { code: 0, output: "green" };
+      }),
+      maxIterations: 3,
+    });
+    expect(result.status).toBe("passed");
+    expect(result.iterations).toBe(2);
+  });
+
   it("parses early diagnostics while exposing only the 4KB output tail", async () => {
     const { deps, provider } = mkDeps();
     let checks = 0;
@@ -415,6 +435,23 @@ describe("runAutoLoop", () => {
     expect(result.status).toBe("verify_error");
     expect(result.iterations).toBe(0);
     expect(provider.chats).toBe(0);
+  });
+
+  it("surfaces verifier timeouts as verify_error with captured output", async () => {
+    const { deps } = mkDeps();
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        throw new (await import("../../src/tools/errors.js")).ToolError(
+          "timeout", "Command timed out after 10ms", { stdout: "partial verifier output" },
+        );
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "verify_error",
+      finalVerify: { code: -1 },
+    });
+    expect(result.finalVerify.output).toContain("partial verifier output");
+    expect(result.finalVerify.output).toContain("timed out");
   });
 
   it("fails closed when a configured verification sandbox is unavailable", async () => {

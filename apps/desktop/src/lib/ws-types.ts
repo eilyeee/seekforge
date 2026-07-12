@@ -16,6 +16,7 @@ export type WsClientHandlers = {
 };
 
 export type WsClient = {
-  send: (frame: ClientFrame) => void;
+  /** True when sent now or accepted by the initial connection queue. */
+  send: (frame: ClientFrame) => boolean;
   close: () => void;
 };

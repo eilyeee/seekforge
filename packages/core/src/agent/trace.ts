@@ -7,6 +7,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmdirSync,
   rmSync,
   writeFileSync,
@@ -126,7 +127,14 @@ function sessionsRoot(workspace: string): string {
 export function writeSessionMeta(workspace: string, meta: SessionMeta): void {
   const dir = join(sessionsRoot(workspace), meta.id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "session.json"), `${JSON.stringify(meta, null, 2)}\n`);
+  const target = join(dir, "session.json");
+  const temp = join(dir, `.session.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+  try {
+    writeFileSync(temp, `${JSON.stringify(meta, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    renameSync(temp, target);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 export function readSessionMeta(workspace: string, sessionId: string): SessionMeta | undefined {
@@ -214,9 +222,9 @@ export function deleteSession(workspace: string, id: string): boolean {
 }
 
 /**
- * Replays messages.jsonl back into ChatMessage[] for session resume. A single
- * corrupt line is skipped (mirrors readCheckpoints) rather than throwing, so
- * one bad line can't make an otherwise-valid session unauditable/unresumable.
+ * Replays the longest valid JSONL prefix. A partial tail is expected after a
+ * crash; records after any malformed line may depend on the missing record and
+ * must not be replayed independently (especially tool calls/results).
  */
 export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
   const file = join(sessionsRoot(workspace), sessionId, "messages.jsonl");
@@ -227,7 +235,7 @@ export function loadSessionMessages(workspace: string, sessionId: string): ChatM
       const { ts: _ts, ...message } = JSON.parse(line) as ChatMessage & { ts?: string };
       messages.push(message);
     } catch {
-      // corrupt line: skip, keep the rest usable
+      break;
     }
   }
   return messages;

@@ -426,8 +426,6 @@ export function runShellCommand(
 
     let stdout = "";
     let stderr = "";
-    let timedOut = false;
-    let aborted = false;
     let settled = false;
 
     // Decode per stream through a StringDecoder so a multi-byte UTF-8 sequence
@@ -462,17 +460,6 @@ export function runShellCommand(
       observe("stderr", text);
     });
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          child.kill("SIGKILL");
-        }
-      }
-    }, timeoutMs);
-
     const killTree = (): void => {
       if (child.pid !== undefined) {
         try {
@@ -482,25 +469,47 @@ export function runShellCommand(
         }
       }
     };
+    let timer: ReturnType<typeof setTimeout>;
     const onAbort = (): void => {
-      aborted = true;
       killTree();
+      settleTerminalError("cancelled");
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    // Close the check→subscribe race: the signal may abort after the early
-    // guard but before the listener is attached.
-    if (signal?.aborted) onAbort();
 
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
+      child.removeAllListeners("error");
+      child.removeAllListeners("close");
+      child.stdout.removeAllListeners("data");
+      child.stderr.removeAllListeners("data");
       fn();
     };
 
+    const settleTerminalError = (kind: "cancelled" | "timeout"): void => settle(() => {
+      if (kind === "cancelled") {
+        reject(new ToolError("cancelled", "Command cancelled", { stdout, stderr }));
+      } else {
+        reject(new ToolError("timeout", `Command timed out after ${timeoutMs}ms`, {
+          timeoutMs,
+          stdout,
+          stderr,
+        }));
+      }
+    });
+
+    timer = setTimeout(() => {
+      killTree();
+      settleTerminalError("timeout");
+    }, timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the check→subscribe race: the signal may abort after the early
+    // guard but before the listener is attached.
+    if (signal?.aborted) onAbort();
+
     child.on("error", (err) => settle(() => reject(new ToolError("spawn_failed", err.message))));
-    child.on("close", (code) =>
+    child.on("close", (code) => {
       settle(() => {
         // Flush any bytes the decoders buffered mid-sequence at stream end.
         const outTail = outDecoder.end();
@@ -508,22 +517,8 @@ export function runShellCommand(
         if (outTail && stdout.length < MAX_CAPTURE_CHARS) stdout += outTail;
         if (errTail && stderr.length < MAX_CAPTURE_CHARS) stderr += errTail;
         const durationMs = Date.now() - started;
-        if (aborted) {
-          reject(new ToolError("cancelled", "Command cancelled", { stdout, stderr }));
-          return;
-        }
-        if (timedOut) {
-          reject(
-            new ToolError("timeout", `Command timed out after ${timeoutMs}ms`, {
-              timeoutMs,
-              stdout,
-              stderr,
-            }),
-          );
-          return;
-        }
         resolve({ exitCode: code ?? -1, stdout, stderr, durationMs });
-      }),
-    );
+      });
+    });
   });
 }

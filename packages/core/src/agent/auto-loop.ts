@@ -11,7 +11,7 @@
 import type { ApprovalMode } from "@seekforge/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
@@ -112,48 +112,103 @@ async function captureVerify(
     onOutput(stream, chunk);
   };
   const raw = await verify(workspace, command, signal, capture);
-  const aggregate = streamed || diagnosticAggregate(raw.output);
+  const aggregate = diagnosticAggregate(streamed ? `${raw.output}\n${streamed}` : raw.output);
   return { result: { code: raw.code, output: tail(streamed || raw.output) }, diagnostics: aggregate };
 }
 
 function workspaceFingerprint(workspace: string): string | null {
+  const hashFile = (hash: ReturnType<typeof createHash>, absolute: string, path: string): void => {
+    const stat = statSync(absolute);
+    hash.update(`\0${path}\0${stat.mode}\0${stat.size}\0`);
+    if (stat.isDirectory()) {
+      try {
+        hash.update(execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
+          cwd: absolute,
+          encoding: "utf8",
+          maxBuffer: 8 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "ignore"],
+        }));
+      } catch {
+        hash.update("<unreadable-directory>");
+      }
+      return;
+    }
+    if (!stat.isFile()) return;
+    const buffer = Buffer.allocUnsafe(Math.min(Math.max(stat.size, 1), 1_000_000));
+    const fd = openSync(absolute, "r");
+    try {
+      let position = 0;
+      for (;;) {
+        const bytes = readSync(fd, buffer, 0, buffer.length, position);
+        if (bytes === 0) break;
+        hash.update(buffer.subarray(0, bytes));
+        position += bytes;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  };
   try {
     const hash = createHash("sha256");
-    const internalExcludes = [
-      ":(exclude).seekforge/loops/**",
-      ":(exclude).seekforge/sessions/**",
-      ":(exclude).seekforge/uploads/**",
+    const status = execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
+      cwd: workspace,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const pathCommands = [
+      ["diff", "--name-only", "-z"],
+      ["diff", "--cached", "--name-only", "-z"],
+      ["ls-files", "--others", "--exclude-standard", "-z"],
     ];
-    hash.update(execFileSync("git", ["diff", "--no-ext-diff", "--binary", "HEAD", "--", ".", ...internalExcludes], {
-      cwd: workspace,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    }));
-    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: workspace,
-      encoding: "utf8",
-      maxBuffer: 2 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).split("\0").filter((path) =>
+    const paths = [...new Set(pathCommands.flatMap((args) =>
+      execFileSync("git", args, {
+        cwd: workspace,
+        encoding: "utf8",
+        maxBuffer: 32 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).split("\0"),
+    ).filter((path) =>
       Boolean(path) &&
       !path.startsWith(".seekforge/loops/") &&
       !path.startsWith(".seekforge/sessions/") &&
       !path.startsWith(".seekforge/uploads/"),
-    ).sort();
-    for (const path of untracked) {
-      hash.update(`\0${path}\0`);
+    ))].sort();
+    const relevantStatus = status.split("\0").filter((record) =>
+      !record.includes(" .seekforge/loops/") &&
+      !record.includes(" .seekforge/sessions/") &&
+      !record.includes(" .seekforge/uploads/"),
+    ).join("\0");
+    hash.update(relevantStatus);
+    for (const path of paths) {
       try {
-        const content = readFileSync(join(workspace, path));
-        hash.update(content.subarray(0, 1_000_000));
-        hash.update(String(content.length));
+        hashFile(hash, join(workspace, path), path);
       } catch {
         hash.update("<unreadable>");
       }
     }
     return hash.digest("hex");
   } catch {
-    return null;
+    try {
+      const hash = createHash("sha256");
+      const visit = (directory: string, relative = ""): void => {
+        for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          const path = relative ? `${relative}/${entry.name}` : entry.name;
+          if (path === ".git" || path.startsWith(".git/") ||
+              path.startsWith(".seekforge/loops/") || path.startsWith(".seekforge/sessions/") ||
+              path.startsWith(".seekforge/uploads/")) continue;
+          const absolute = join(workspace, path);
+          if (entry.isDirectory()) visit(absolute, path);
+          else if (entry.isFile()) {
+            hashFile(hash, absolute, path);
+          }
+        }
+      };
+      visit(workspace);
+      return hash.digest("hex");
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -167,6 +222,14 @@ function diagnosticPrompt(diagnostics: VerifyDiagnostics, fallback: string): str
         `- ${d.file ?? "unknown"}${d.line ? `:${d.line}` : ""}: ${d.message}`).join("\n")}\n\n`
     : "";
   return `${tests}${locations}Output tail:\n${fallback}`;
+}
+
+function verifyErrorOutput(error: unknown): string {
+  if (error instanceof ToolError) {
+    const detail = error.detail as { stdout?: string; stderr?: string } | undefined;
+    return tail([detail?.stdout, detail?.stderr, error.message].filter(Boolean).join("\n"));
+  }
+  return tail(error instanceof Error ? error.message : String(error));
 }
 
 /**
@@ -191,10 +254,6 @@ async function defaultVerify(
     });
     return { code: result.exitCode, output: `${result.stdout}${result.stderr}` };
   } catch (err) {
-    if (err instanceof ToolError && err.code === "timeout") {
-      const detail = err.detail as { stdout?: string; stderr?: string } | undefined;
-      return { code: 1, output: `${detail?.stdout ?? ""}${detail?.stderr ?? ""}` || err.message };
-    }
     throw err;
   }
 }
@@ -343,7 +402,7 @@ async function runAutoLoopWithLease(
     );
     preVerify = captured.result;
     preVerifyDiagnostics = captured.diagnostics;
-  } catch {
+  } catch (error) {
     if (opts.signal?.aborted) {
       return done({
         status: "cancelled",
@@ -359,7 +418,7 @@ async function runAutoLoopWithLease(
       iterations: initialIterations,
       costUsd: initialCostUsd,
       sessionId: initialSessionId,
-      finalVerify: { code: -1, output: "verify command could not be run" },
+      finalVerify: { code: -1, output: verifyErrorOutput(error) },
     };
     return done(result);
   }
@@ -390,16 +449,14 @@ async function runAutoLoopWithLease(
     if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
       return done({ status: "budget", iterations, costUsd, sessionId, finalVerify: lastVerify });
     }
-    iterations = i;
     emit({ type: "iteration.start", iteration: i });
 
     const continuation =
-      i === 1
+      i === 1 && !sessionId
         ? opts.task
         : `\`${opts.verifyCommand}\` still fails:\n\n${diagnosticPrompt(previousDiagnostics, lastVerify.output)}\n\nFix the root cause so it passes.`;
 
     let runCost = 0;
-    let filesChangedThisRun = false;
     const budgetController = new AbortController();
     const runSignal = opts.signal
       ? AbortSignal.any([opts.signal, budgetController.signal])
@@ -416,16 +473,14 @@ async function runAutoLoopWithLease(
       if (ev.type === "session.created") {
         if (!sessionId) {
           sessionId = ev.sessionId;
-          persist({ iterations: i, costUsd: costUsd + runCost, sessionId });
+          persist({ costUsd: costUsd + runCost, sessionId });
         }
-      } else if (ev.type === "file.changed") {
-        filesChangedThisRun = true;
       } else if (ev.type === "usage.updated") {
         // Cumulative spend within this run. Tracked here so a failed run — which
         // emits no FinalReport — still contributes its real cost to the budget
         // guard below; otherwise repeated expensive failures overshoot silently.
         runCost = ev.usage.costUsd;
-        persist({ iterations: i, costUsd: costUsd + runCost, sessionId });
+        persist({ costUsd: costUsd + runCost, sessionId });
         if (costBudgetUsd !== undefined && costUsd + runCost >= costBudgetUsd) {
           budgetController.abort();
         }
@@ -434,6 +489,7 @@ async function runAutoLoopWithLease(
       }
     }
     costUsd += runCost;
+    iterations = i;
     persist({ iterations: i, costUsd, sessionId });
     emit({ type: "run.completed", iteration: i, costUsd });
 
@@ -449,7 +505,7 @@ async function runAutoLoopWithLease(
       );
       v = captured.result;
       verifyDiagnostics = captured.diagnostics;
-    } catch {
+    } catch (error) {
       if (opts.signal?.aborted) {
         return done({
           status: "cancelled",
@@ -464,7 +520,7 @@ async function runAutoLoopWithLease(
         iterations: i,
         costUsd,
         sessionId,
-        finalVerify: { code: -1, output: "verify command could not be run" },
+        finalVerify: { code: -1, output: verifyErrorOutput(error) },
       };
       return done(result);
     }
@@ -488,9 +544,8 @@ async function runAutoLoopWithLease(
     // Structured diagnostics ignore incidental timing/format noise. Pair them
     // with repository content so repeated edits still count as progress.
     const sameFailure = diagnostics.fingerprint === previousDiagnostics.fingerprint;
-    const sameWorkspace = currentWorkspace !== null && previousWorkspace !== null
-      ? currentWorkspace === previousWorkspace
-      : !filesChangedThisRun;
+    const sameWorkspace = currentWorkspace !== null && previousWorkspace !== null &&
+      currentWorkspace === previousWorkspace;
     if (sameFailure && sameWorkspace) {
       return done({ status: "no_progress", iterations: i, costUsd, sessionId, finalVerify: v });
     }

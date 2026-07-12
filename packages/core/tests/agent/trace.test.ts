@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -33,6 +33,13 @@ describe("sessions list + prune", () => {
     writeSessionMeta(ws, meta("sub1", 1, { parentAgentId: "meta-prism" }));
     expect(listSessions(ws).map((s) => s.id)).toEqual(["s1"]);
     expect(listSessions(ws, { includeSubagents: true }).map((s) => s.id).sort()).toEqual(["s1", "sub1"]);
+  });
+
+  it("atomically replaces metadata without leaving temporary files", () => {
+    writeSessionMeta(ws, meta("atomic", 1));
+    writeSessionMeta(ws, meta("atomic", 0, { task: "updated" }));
+    expect(JSON.parse(readFileSync(join(dir("atomic"), "session.json"), "utf8")).task).toBe("updated");
+    expect(readdirSync(dir("atomic"))).toEqual(["session.json"]);
   });
 
   it("prunes by age, keeping running sessions", () => {
@@ -122,7 +129,7 @@ describe("loadSessionMessages robustness", () => {
     rmSync(ws, { recursive: true, force: true });
   });
 
-  it("skips a single corrupt line and keeps the valid messages", async () => {
+  it("loads only the valid prefix before a corrupt line", async () => {
     const { loadSessionMessages } = await import("../../src/agent/trace.js");
     const dir = join(ws, ".seekforge", "sessions", "s1");
     mkdirSync(dir, { recursive: true });
@@ -133,9 +140,8 @@ describe("loadSessionMessages robustness", () => {
     ];
     writeFileSync(join(dir, "messages.jsonl"), `${lines.join("\n")}\n`);
     const messages = loadSessionMessages(ws, "s1");
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("hello");
-    expect(messages[1]?.content).toBe("world");
   });
 });
 

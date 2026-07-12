@@ -226,14 +226,15 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
       }));
 
     case "error":
-      return updateTab(state, tabId, (tab) => ({
-        wsError: `${frame.code}: ${frame.message}`,
-        // "busy" = a run is already active on this connection; any other
-        // protocol error means our run request failed — stop the spinner.
-        chat: frame.code === "busy" ? tab.chat : { ...tab.chat, running: false },
-        loopRunning: frame.code === "busy" ? tab.loopRunning : false,
-        loopResetPending: frame.code === "busy" ? tab.loopResetPending : false,
-      }));
+      return updateTab(state, tabId, (tab) => {
+        const nonfatal = frame.code === "busy" || frame.code === "unknown_request" || frame.code === "not_running";
+        return {
+          wsError: `${frame.code}: ${frame.message}`,
+          chat: nonfatal ? tab.chat : { ...tab.chat, running: false },
+          loopRunning: nonfatal ? tab.loopRunning : false,
+          loopResetPending: nonfatal ? tab.loopResetPending : false,
+        };
+      });
 
     case "idle":
       return updateTab(state, tabId, (tab) => ({

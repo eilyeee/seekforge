@@ -3,6 +3,7 @@ import {
   hasActiveLoopLease,
   isWorktreeDirty,
   listGitWorktrees,
+  WorktreeGitError,
   worktreeBranchExists,
   worktreeSlug,
 } from "@seekforge/core";
@@ -28,6 +29,12 @@ export async function resolveLoopRepository(path: string): Promise<LoopRepositor
   const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
     cwd: path,
     timeout: 10_000,
+  }).catch((error: unknown) => {
+    const detail = `${(error as { stderr?: string }).stderr ?? ""} ${error instanceof Error ? error.message : String(error)}`;
+    if (/not a git repository/i.test(detail)) {
+      throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
+    }
+    throw error;
   });
   const currentRoot = stdout.trim();
   const entries = await listGitWorktrees(currentRoot);

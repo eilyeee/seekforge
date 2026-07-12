@@ -84,15 +84,17 @@ State is written atomically after observable progress. Live output is bounded
 per verification; the final verification event still carries the normal output
 tail used for diagnostics and continuation prompts.
 
-The active iteration, session id, and cumulative provider usage are checkpointed
-as their events arrive. After a process crash, resume therefore reuses the same
-session and includes already observed spend instead of replaying it outside the
-budget.
+The session id and cumulative provider usage are checkpointed as their events
+arrive. The iteration counter advances only after the agent run completes, so a
+crash resumes an interrupted iteration without consuming an iteration slot while
+still reusing the session and accounting for already observed spend.
 
 Only one process may own a persisted Loop at a time. A token-protected lock next
-to the state file rejects concurrent runs and recovers locks whose owner process
-is gone. A persistence write failure is reported once as `loop.warning` and does
-not replace the verification result.
+to the state file records the owner's process identity as well as its PID, rejects
+concurrent runs, and recovers locks after process exit or PID reuse. Fresh
+malformed locks fail closed for a short grace period so a partially written lock
+cannot be stolen. A persistence write failure is reported once as `loop.warning`
+and does not replace the verification result.
 
 ### Resume and worktree lifecycle
 
@@ -136,6 +138,10 @@ Loop management invoked from the base checkout discovers state in retained Loop
 worktrees. A duplicate Loop id across workspaces is rejected as ambiguous rather
 than selecting one implicitly. Cleanup is blocked while any live lease exists,
 including with `--force`.
+
+Loop management also works outside Git repositories. Existing workspace paths
+are canonicalized to their physical path so symlink aliases and platform path
+aliases resolve to the same persisted state.
 
 ## CLI
 
@@ -215,7 +221,9 @@ Checked before spending another iteration, in order:
    fingerprint unchanged → `no_progress` (stuck)
 4. reached `maxIterations` → `exhausted`
 
-A `verify_error` is returned when the verify command can't be run at all.
+A `verify_error` is returned when the verify command cannot start, times out, or
+otherwise fails at the executor boundary. Its final output includes bounded
+stdout/stderr diagnostics when available.
 
 ## Verification
 
@@ -228,10 +236,13 @@ stdout+stderr. Cancelling during verification stops the command and returns
 
 Vitest/Jest, Pytest, and Cargo failures are parsed into bounded test names and
 source locations. Timing and formatting noise is removed from the convergence
-fingerprint. Parsing uses a larger bounded head-and-tail aggregate so early
-failures survive noisy suites. Verification stdout/stderr is streamed through `verify.output`
-events while the command runs; each verification caps event count and chunk
-size, while the final `verify` event retains the normal output tail.
+fingerprint. Parsing scans a bounded aggregate while retaining all parsed failure
+identities within that bound. The workspace fingerprint hashes the full content
+of changed, staged, and untracked files in Git repositories, and all files in a
+non-Git workspace, while excluding SeekForge runtime state. Verification
+stdout/stderr is streamed through `verify.output` events while the command runs;
+each verification caps event count and chunk size, while the final `verify` event
+retains the normal output tail.
 
 ## Desktop
 

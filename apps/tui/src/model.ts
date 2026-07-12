@@ -128,8 +128,8 @@ export type ChatState = {
   queue: string[];
   /** Verbose rendering (Ctrl+O): full diffs, shell output, tool results. */
   verbose: boolean;
-  /** Tasks detached to the background with Ctrl+B (display labels). */
-  detached: string[];
+  /** Tasks detached to the background, keyed by run identity. */
+  detached: { runId: number; label: string }[];
   /** Epoch ms when the current run started (drives the elapsed counter). */
   turnStartedAt?: number;
   /** Live token count for the current turn (from usage.updated events). */
@@ -239,8 +239,8 @@ export type ChatAction =
   | { type: "backtrack-apply"; itemIndex: number }
   | { type: "toggle-verbose" }
   /** Ctrl+B: the current run detaches; chat continues in a fresh session. */
-  | { type: "run-detach"; label: string }
-  | { type: "run-detach-done"; label: string }
+  | { type: "run-detach"; runId: number; label: string }
+  | { type: "run-detach-done"; runId: number }
   | { type: "event"; event: AgentEvent };
 
 let counter = 0;
@@ -438,7 +438,7 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         running: false,
         sessionId: undefined,
-        detached: [...state.detached, action.label],
+        detached: [...state.detached, { runId: action.runId, label: action.label }],
         items: [
           ...state.items,
           {
@@ -451,7 +451,7 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
       };
 
     case "run-detach-done":
-      return { ...state, detached: state.detached.filter((t) => t !== action.label) };
+      return { ...state, detached: state.detached.filter((entry) => entry.runId !== action.runId) };
 
     case "event":
       return applyEvent(state, action.event);

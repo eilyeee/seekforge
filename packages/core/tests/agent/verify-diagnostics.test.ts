@@ -47,6 +47,15 @@ describe("parseVerifyDiagnostics", () => {
     expect(many.failedTests).toHaveLength(3);
   });
 
+  it("fingerprints failures beyond the displayed result limit", () => {
+    const prefix = Array.from({ length: 20 }, (_, i) => `× test ${i}`).join("\n");
+    const first = parseVerifyDiagnostics(`Vitest\n${prefix}\n× hidden failure a\nTest Files 1 failed`);
+    const second = parseVerifyDiagnostics(`Vitest\n${prefix}\n× hidden failure b\nTest Files 1 failed`);
+    expect(first.failedTests).toHaveLength(20);
+    expect(first.failedTests).toEqual(second.failedTests);
+    expect(first.fingerprint).not.toBe(second.fingerprint);
+  });
+
   it("retains early failures from a bounded head and tail aggregate", () => {
     const output = `Vitest\n× tests/early.test.ts > fails first\n${"noise\n".repeat(60_000)}Test Files 1 failed`;
     const result = parseVerifyDiagnostics(output);

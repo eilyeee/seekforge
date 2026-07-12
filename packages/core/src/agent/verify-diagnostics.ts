@@ -130,21 +130,22 @@ export function parseVerifyDiagnostics(output: string, options: VerifyDiagnostic
     : `${output.slice(0, MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}\n... output omitted ...\n${output.slice(-MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}`;
   const boundedOutput = boundedInput.replace(ANSI_PATTERN, "");
   const framework = detectFramework(boundedOutput);
-  const failedTests = framework === "unknown"
+  const allFailedTests = framework === "unknown"
     ? []
-    : uniqueBounded(extractFailedTests(boundedOutput, framework), maxTests, maxText);
-  const diagnostics = (framework === "unknown" ? [] : extractDiagnostics(boundedOutput, framework))
+    : uniqueBounded(extractFailedTests(boundedOutput, framework), 10_000, maxText);
+  const allDiagnostics = (framework === "unknown" ? [] : extractDiagnostics(boundedOutput, framework))
     .map((item) => ({ ...item, file: item.file ? clean(item.file, maxText) : undefined, message: clean(item.message, maxText) }))
     .filter((item) => item.message)
-    .filter((item, index, all) => all.findIndex((other) => other.file === item.file && other.line === item.line && other.message === item.message) === index)
-    .slice(0, maxDiagnostics);
+    .filter((item, index, all) => all.findIndex((other) => other.file === item.file && other.line === item.line && other.message === item.message) === index);
+  const failedTests = allFailedTests.slice(0, maxTests);
+  const diagnostics = allDiagnostics.slice(0, maxDiagnostics);
   const summary = framework === "unknown"
     ? clean(boundedOutput.split("\n").filter(Boolean).slice(-8).join("\n"), maxText)
     : clean(`${failedTests.length} failed test(s), ${diagnostics.length} location(s)`, maxText);
   const fingerprintInput = JSON.stringify({
     framework,
-    failedTests: [...failedTests].map(normalizeForFingerprint).sort(),
-    diagnostics: diagnostics.map((item) => ({
+    failedTests: [...allFailedTests].map(normalizeForFingerprint).sort(),
+    diagnostics: allDiagnostics.map((item) => ({
       file: normalizeForFingerprint(item.file ?? ""),
       line: item.line ?? 0,
       message: normalizeForFingerprint(item.message),

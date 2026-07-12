@@ -715,7 +715,7 @@ export function App({
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
-          dispatchTab({ type: "run-detach-done", label });
+          dispatchTab({ type: "run-detach-done", runId });
         } else {
           if (runsByTabRef.current.get(runTabId)?.runId === runId) {
             runsByTabRef.current.delete(runTabId);
@@ -763,7 +763,6 @@ export function App({
       runsByTabRef.current.set(runTabId, { controller, runId });
       const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
       const detached = (): boolean => detachedRunsRef.current.has(runId);
-      const label = task.replace(/\s+/g, " ").slice(0, 48);
       sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
       dispatchTab({ type: "notice", text: `loop task: ${task.replace(/\s+/g, " ").slice(0, 120)}` });
@@ -795,7 +794,7 @@ export function App({
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
-          dispatchTab({ type: "run-detach-done", label });
+          dispatchTab({ type: "run-detach-done", runId });
           syncBg();
           ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
         } else if (ownsRun()) {
@@ -818,7 +817,6 @@ export function App({
       runsByTabRef.current.set(runTabId, { controller, runId });
       const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
       const detached = (): boolean => detachedRunsRef.current.has(runId);
-      const label = `loop ${loopId}`.slice(0, 48);
       sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop-resume ${loopId}` });
       dispatchTab({ type: "run-start" });
@@ -843,7 +841,7 @@ export function App({
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
-          dispatchTab({ type: "run-detach-done", label });
+          dispatchTab({ type: "run-detach-done", runId });
           syncBg();
           ring(`Loop finished: ${loopId.slice(0, 60)}`);
         } else if (ownsRun()) {
@@ -881,7 +879,7 @@ export function App({
       pendingQuestionByTabRef.current.delete(tabId);
       dispatch({ type: "overlay", overlay: null });
     }
-    dispatch({ type: "run-detach", label: "task" });
+    dispatch({ type: "run-detach", runId: entry.runId, label: "task" });
   }, [notice, dispatch]);
 
   const submitTask = useCallback(

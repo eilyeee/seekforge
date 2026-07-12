@@ -44,9 +44,10 @@ describe("createWsClient reconnect queue", () => {
       onState: (state) => states.push(state),
       onFrame: vi.fn(),
     });
-    client.send({ type: "cancel" });
+    expect(client.send({ type: "cancel" })).toBe(true);
 
     FakeWebSocket.instances[0]!.onclose?.();
+    expect(client.send({ type: "cancel" })).toBe(false);
     vi.advanceTimersByTime(500);
     const replacement = FakeWebSocket.instances[1]!;
     replacement.readyState = FakeWebSocket.OPEN;

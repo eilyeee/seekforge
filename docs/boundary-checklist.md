@@ -260,6 +260,51 @@ request later starts invisible work and desynchronizes controls from the server.
 - **Caught:** `apps/desktop/src/lib/ws.ts` — a queued Loop could start after the
   store had already cleared its running state.
 
+## 23. A PID is not a durable process identity
+
+Operating systems reuse PIDs. A stale lock containing a live-but-reused PID can
+remain permanently active, while a partially written lock can be mistaken for a
+dead owner and stolen.
+
+- **Do:** persist a process start identity with the PID, compare both during
+  recovery, and treat fresh malformed locks as active for a bounded grace period.
+- **Caught:** `packages/core/src/agent/loop-state.ts` — persisted Loop leases.
+
+## 24. Count completed units, not merely started units
+
+Checkpointing an iteration number at `iteration.start` consumes the slot if the
+process crashes before that iteration produces a result.
+
+- **Do:** checkpoint recoverable session and cost events immediately, but advance
+  the unit counter only at the event that proves completion.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — interrupted Loop iterations.
+
+## 25. Append-only logs recover to the longest valid prefix
+
+Skipping a malformed JSONL record and accepting later records can combine events
+that were never adjacent, violating protocol ordering after a partial write.
+
+- **Do:** stop at the first malformed record and replay only the longest valid
+  prefix; keep metadata replacement atomic with temp-file + rename.
+- **Caught:** `packages/core/src/agent/trace.ts` — session resume traces.
+
+## 26. Logical path equality is not physical workspace equality
+
+Symlink aliases and platform aliases such as `/var` and `/private/var` can name
+the same directory while failing a string equality check.
+
+- **Do:** canonicalize existing workspace roots with `realpath` before persisting,
+  keying leases, or validating loaded state.
+- **Caught:** `packages/core/src/agent/loop-state.ts` — non-Git Loop management.
+
+## 27. A bounded file prefix is not a content fingerprint
+
+Hashing only the first chunk plus file size misses same-size edits later in a
+large file and can trigger a false no-progress stop.
+
+- **Do:** stream the complete file through the hash in bounded-memory chunks.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — Loop convergence detection.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

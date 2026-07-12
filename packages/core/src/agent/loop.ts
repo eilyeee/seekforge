@@ -376,8 +376,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       }
 
-      yield emit({ type: "session.created", sessionId });
-
       // Plan-model routing: a plan run thinks on deps.planModel (e.g. /plan
       // on v4-pro) while regular runs keep the default provider. Run-local —
       // resuming the session in execute mode goes back to deps.provider.
@@ -404,7 +402,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // Long-horizon persistence: restore a plan published in an earlier run so
       // the task's checklist survives across resume (re-injected into the system
       // prompt below, and carried through this run's meta writes).
-      const priorPlan = resuming ? readSessionMeta(input.projectPath, sessionId)?.plan : undefined;
+      const priorMeta = resuming ? readSessionMeta(input.projectPath, sessionId) : undefined;
+      const priorPlan = priorMeta?.plan;
+      const priorUsage = priorMeta?.usage ?? ZERO_USAGE;
       // Latest plan (seeded from a resumed session); declared out here so the
       // catch's failed-meta write can preserve it too. Updated on update_plan.
       let lastPlanItems: PlanItem[] | undefined = priorPlan;
@@ -438,7 +438,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         id: sessionId,
         task: input.task,
         mode: input.mode,
-        createdAt: startedAt,
+        createdAt: priorMeta?.createdAt ?? startedAt,
         ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}),
       };
       writeSessionMeta(input.projectPath, {
@@ -446,7 +446,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         status: "running",
         updatedAt: startedAt,
         ...(priorPlan ? { plan: priorPlan } : {}),
+        ...(priorMeta?.usage ? { usage: priorMeta.usage } : {}),
       });
+      yield emit({ type: "session.created", sessionId });
 
       // sessionStart/userPromptSubmit fire once for the TOP-LEVEL run only
       // (like sessionEnd); nested subagent runs (depth > 0) skip them. They
@@ -1427,7 +1429,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   ...meta,
                   status: "running",
                   updatedAt: new Date().toISOString(),
-                  usage,
+                  usage: addUsage(priorUsage, usage),
                   plan: items,
                 });
               }
@@ -1529,7 +1531,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ...meta,
           status: "completed",
           updatedAt: new Date().toISOString(),
-          usage,
+          usage: addUsage(priorUsage, usage),
           ...(lastPlanItems ? { plan: lastPlanItems } : {}),
         });
 
@@ -1571,7 +1573,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ...meta,
           status: code === "cancelled" ? "cancelled" : "failed",
           updatedAt: new Date().toISOString(),
-          usage,
+          usage: addUsage(priorUsage, usage),
           ...(lastPlanItems ? { plan: lastPlanItems } : {}),
         });
         for (const ev of queue.drainNow()) yield ev;

@@ -1,5 +1,6 @@
 import {
   MAX_LOOP_ITERATIONS,
+  WorktreeGitError,
   listLoopStates,
   loadLoopState,
   loadAgentDefinitions,
@@ -97,13 +98,15 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
     process.exitCode = 1;
     return;
   }
-  let basePath: string;
-  try {
-    basePath = (await resolveLoopRepository(process.cwd())).basePath;
-  } catch (err) {
-    fail(err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
-    return;
+  let basePath = process.cwd();
+  if (opts.worktree !== undefined && opts.worktree !== false) {
+    try {
+      basePath = (await resolveLoopRepository(basePath)).basePath;
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
   }
   const preflight = await preflightLoop(basePath, opts);
   if (!preflight) return;
@@ -348,7 +351,14 @@ async function runPreparedLoop(
 }
 
 async function loopWorkspaces(): Promise<string[]> {
-  return (await resolveLoopRepository(process.cwd())).workspaces;
+  try {
+    return (await resolveLoopRepository(process.cwd())).workspaces;
+  } catch (error) {
+    if (error instanceof WorktreeGitError && error.code === "not_a_git_repo") {
+      return [process.cwd()];
+    }
+    throw error;
+  }
 }
 
 async function findLoopWorkspace(loopId: string, reportMissing = true): Promise<string | undefined> {

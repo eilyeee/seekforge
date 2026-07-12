@@ -20,6 +20,17 @@ function base(): ChatState {
   return initialState("deepseek-chat");
 }
 
+describe("chatReducer detached run identity", () => {
+  it("removes only the completed run when labels match", () => {
+    let s = base();
+    s = chatReducer(s, { type: "run-detach", runId: 1, label: "task" });
+    s = chatReducer(s, { type: "run-detach", runId: 2, label: "task" });
+    s = chatReducer(s, { type: "run-detach-done", runId: 1 });
+
+    expect(s.detached).toEqual([{ runId: 2, label: "task" }]);
+  });
+});
+
 describe("chatReducer streaming deltas", () => {
   it("coalesces consecutive deltas into one streaming assistant item", () => {
     let s = base();

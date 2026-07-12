@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
@@ -47,7 +48,12 @@ export function isValidLoopId(loopId: string): boolean {
 
 function requireWorkspace(workspace: string): string {
   if (!isAbsolute(workspace)) throw new Error("Loop workspace must be an absolute path");
-  return resolve(workspace);
+  const absolute = resolve(workspace);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
 }
 
 const loopsRoot = (workspace: string): string =>
@@ -70,18 +76,50 @@ function leaseFile(workspace: string, loopId: string): string {
 }
 
 type LockSnapshot = { content: string; alive: boolean };
+const MALFORMED_LOCK_GRACE_MS = 30_000;
+
+function processIdentity(pid: number): string | undefined {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closeParen = stat.lastIndexOf(")");
+      const fields = stat.slice(closeParen + 2).split(" ");
+      return fields[19] ? `linux:${fields[19]}` : undefined;
+    }
+    if (process.platform === "darwin" || process.platform === "freebsd") {
+      const started = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
+      if (started) return `${process.platform}:${started}`;
+    }
+  } catch {
+    // Fall through to the current-process identity when OS inspection is unavailable.
+  }
+  if (pid === process.pid) return `portable:${Math.floor((Date.now() - process.uptime() * 1_000) / 1_000)}`;
+  return undefined;
+}
+
+const selfProcessIdentity = processIdentity(process.pid);
 
 function readLockSnapshot(target: string): LockSnapshot {
   const content = readFileSync(target, "utf8");
-  let owner: { pid?: unknown };
+  let owner: { pid?: unknown; token?: unknown; processIdentity?: unknown; createdAt?: unknown };
   try {
-    owner = JSON.parse(content) as { pid?: unknown };
+    owner = JSON.parse(content) as typeof owner;
   } catch {
-    return { content, alive: true };
+    return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
   }
-  if (!Number.isInteger(owner.pid) || (owner.pid as number) <= 0) return { content, alive: false };
+  if (
+    !Number.isInteger(owner.pid) || (owner.pid as number) <= 0 || typeof owner.token !== "string" ||
+    (owner.createdAt !== undefined &&
+      (typeof owner.createdAt !== "string" || !Number.isFinite(Date.parse(owner.createdAt))))
+  ) {
+    return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
+  }
   try {
     process.kill(owner.pid as number, 0);
+    if (typeof owner.processIdentity === "string") {
+      const currentIdentity = processIdentity(owner.pid as number);
+      if (currentIdentity !== undefined && currentIdentity !== owner.processIdentity) return { content, alive: false };
+    }
     return { content, alive: true };
   } catch (error) {
     return { content, alive: (error as NodeJS.ErrnoException).code !== "ESRCH" };
@@ -152,11 +190,20 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
     const target = leaseFile(workspace, loopId);
     mkdirSync(dirname(target), { recursive: true });
     const token = randomUUID();
-    const payload = JSON.stringify({ pid: process.pid, token });
+    const payload = JSON.stringify({
+      version: 1, pid: process.pid, token, createdAt: new Date().toISOString(),
+      ...(selfProcessIdentity ? { processIdentity: selfProcessIdentity } : {}),
+    });
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const fd = openSync(target, "wx", 0o600);
-        try { writeFileSync(fd, payload, "utf8"); } finally { closeSync(fd); }
+        try {
+          writeFileSync(fd, payload, "utf8");
+        } catch (error) {
+          try { closeSync(fd); } finally { rmSync(target, { force: true }); }
+          throw error;
+        }
+        closeSync(fd);
         return {
           release: () => {
             activeLeases.delete(key);
@@ -215,8 +262,12 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     throw new Error(`Invalid loop id: ${input.loopId}`);
   }
   const now = new Date().toISOString();
+  const id = input.loopId ?? `loop-${randomUUID()}`;
+  if (existsSync(loopFile(input.workspace, id))) {
+    throw new Error(`Loop state already exists: ${id}`);
+  }
   const state: LoopState = {
-    loopId: input.loopId ?? `loop-${randomUUID()}`, task: input.task,
+    loopId: id, task: input.task,
     workspace: requireWorkspace(input.workspace), verifyCommand: input.verifyCommand,
     maxIterations: input.maxIterations, costBudgetUsd: input.costBudgetUsd ?? null,
     iterations: 0, costUsd: 0, sessionId: input.sessionId ?? "",

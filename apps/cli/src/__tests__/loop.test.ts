@@ -244,6 +244,31 @@ asyncTest("worktree operations resolve the base checkout from a subdirectory", a
   }
 });
 
+asyncTest("loop state management still works outside a git repository", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-nongit-"));
+  try {
+    createLoopState({
+      loopId: "nongit-loop",
+      task: "local task",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const result = spawnSync(process.execPath, [
+      "--import",
+      resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+      resolve(cliDir, "src/index.ts"),
+      "loop-show",
+      "nongit-loop",
+    ], { cwd: workspace, encoding: "utf8" });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /loop: nongit-loop/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("CLI numeric parsers reject trailing junk and non-finite values globally", () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const cli = resolve(cliDir, "src/index.ts");

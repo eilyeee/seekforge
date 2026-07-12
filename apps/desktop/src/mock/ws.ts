@@ -295,17 +295,26 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
     send(frame: ClientFrame) {
       switch (frame.type) {
         case "loop":
-          if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
+          if (running) {
+            emit({ type: "error", code: "busy", message: "a session is already running" });
+            return true;
+          }
           void runLoop(frame.verifyCommand);
           break;
         case "start":
-          if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
+          if (running) {
+            emit({ type: "error", code: "busy", message: "a session is already running" });
+            return true;
+          }
           // plan: true scripts a plan-style completion (read-only, no edits).
           if (frame.plan) void runPlan();
           else void run(frame.task, false);
           break;
         case "send":
-          if (running) return emit({ type: "error", code: "busy", message: "a session is already running" });
+          if (running) {
+            emit({ type: "error", code: "busy", message: "a session is already running" });
+            return true;
+          }
           sessionId = frame.sessionId;
           // mode: "edit" overrides a plan session — the full edit script runs.
           void run(frame.task, true);
@@ -325,6 +334,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
           break;
         }
       }
+      return true;
     },
     close() {
       cancelled = true;

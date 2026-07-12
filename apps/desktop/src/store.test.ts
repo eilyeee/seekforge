@@ -4,13 +4,16 @@ import type { ClientFrame, WsClient, WsClientHandlers } from "./lib/ws-types";
 // Capture every frame the store sends, and let tests drive the onFrame handler.
 const sent: ClientFrame[] = [];
 let lastHandlers: (WsClientHandlers & { getToken: () => string }) | undefined;
+let acceptSend = true;
 
 vi.mock("./lib/ws", () => ({
   createWsClient: (handlers: WsClientHandlers & { getToken: () => string }): WsClient => {
     lastHandlers = handlers;
     return {
       send: (frame: ClientFrame) => {
+        if (!acceptSend) return false;
         sent.push(frame);
+        return true;
       },
       close: () => {},
     };
@@ -43,6 +46,7 @@ const { activeTab } = await import("./lib/tabs");
 
 function resetStore(): void {
   sent.length = 0;
+  acceptSend = true;
   // Fresh single-tab state for each test.
   useStore.setState((s) => ({
     tabs: {
@@ -64,6 +68,21 @@ function resetStore(): void {
     },
   }));
 }
+
+describe("store: rejected sends", () => {
+  beforeEach(resetStore);
+
+  it("does not mark a rejected task as running", () => {
+    useStore.getState().connect();
+    acceptSend = false;
+    useStore.getState().sendTask("offline task");
+
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(false);
+    expect(tab.chat.items).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+});
 
 describe("store: approval mode selector → start frame", () => {
   beforeEach(resetStore);

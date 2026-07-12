@@ -14,6 +14,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
   let sock: WebSocket | null = null;
   let attempts = 0;
   let closed = false;
+  let initialConnection = true;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const queue: ClientFrame[] = [];
 
@@ -47,6 +48,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     setState("connecting");
     sock = new WebSocket(wsUrl());
     sock.onopen = () => {
+      initialConnection = false;
       attempts = 0;
       setState("connected");
       flush();
@@ -60,6 +62,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     };
     sock.onclose = () => {
       sock = null;
+      initialConnection = false;
       if (closed) return;
       // Requests queued for this failed connection were marked interrupted by
       // the store. Never replay them silently on a later connection.
@@ -78,11 +81,13 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     send(frame: ClientFrame) {
       if (sock && sock.readyState === WebSocket.OPEN) {
         sock.send(JSON.stringify(frame));
-      } else {
-        // Queue until (re)connected; the server treats a dropped socket as
-        // cancel, so queued frames only matter for the next run.
-        queue.push(frame);
+        return true;
       }
+      if (initialConnection && sock) {
+        queue.push(frame);
+        return true;
+      }
+      return false;
     },
     close() {
       closed = true;

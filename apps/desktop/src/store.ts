@@ -486,12 +486,13 @@ export const useStore = create<AppStore>()((set, get) => {
         wsError: null,
         planReady: false,
       };
-      if (tab.chat.sessionId) {
-        client.send(buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides));
-      } else {
+      const accepted = tab.chat.sessionId
+        ? client.send(buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides))
+        : client.send(buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides));
+      if (!accepted) return;
+      if (!tab.chat.sessionId) {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
-        client.send(buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides));
       }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
     },
@@ -501,7 +502,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || task.trim() === "" || verifyCommand.trim() === "") return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      client.send({
+      const accepted = client.send({
         type: "loop",
         task,
         verifyCommand,
@@ -511,6 +512,7 @@ export const useStore = create<AppStore>()((set, get) => {
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
         ...overridesOf(tab),
       });
+      if (!accepted) return;
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           // Mark running so every Run control (chat + loop) is disabled, and
@@ -537,7 +539,7 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(tab.ws ? { ws: tab.ws } : {}),
         ...overridesOf(tab),
       };
-      client.send(frame);
+      if (!client.send(frame)) return;
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...tab.chat, running: true },
@@ -553,7 +555,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || !tab.chat.sessionId || !tab.planReady) return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws, overridesOf(tab)));
+      if (!client.send(buildExecutePlanFrame(tab.chat.sessionId, tab.ws, overridesOf(tab)))) return;
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           chat: { ...appendUser(tab.chat, EXECUTE_PLAN_TASK), running: true },

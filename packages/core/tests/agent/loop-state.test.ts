@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -27,6 +27,16 @@ describe("loop state persistence", () => {
     expect(listLoopStates(workspace)).toEqual([updated]);
     expect(removeLoopState(workspace, created.loopId)).toBe(true);
     expect(removeLoopState(workspace, created.loopId)).toBe(false);
+  });
+
+  it("does not overwrite an existing explicit loop id", () => {
+    const first = createLoopState({
+      loopId: "same-id", task: "first", workspace, verifyCommand: "test", maxIterations: 1,
+    });
+    expect(() => createLoopState({
+      loopId: "same-id", task: "second", workspace, verifyCommand: "other", maxIterations: 2,
+    })).toThrow(/already exists/);
+    expect(loadLoopState(workspace, "same-id")).toEqual(first);
   });
 
   it("writes atomically without leaving temporary files", () => {
@@ -96,9 +106,31 @@ describe("loop state persistence", () => {
   it("recovers a dead stale lock before removing state", () => {
     const state = createLoopState({ loopId: "stale", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
     const lock = join(workspace, ".seekforge", "loops", `.${state.loopId}.lock`);
-    writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: "dead" }));
+    writeFileSync(lock, JSON.stringify({
+      pid: 2_147_483_647, token: "dead", createdAt: new Date().toISOString(),
+    }));
     expect(isLoopLeaseActive(workspace, state.loopId)).toBe(false);
     expect(removeLoopState(workspace, state.loopId)).toBe(true);
+  });
+
+  it("fails closed for fresh malformed locks but recovers old malformed locks", () => {
+    const root = join(workspace, ".seekforge", "loops");
+    mkdirSync(root, { recursive: true });
+    const lock = join(root, ".malformed.lock");
+    writeFileSync(lock, "{");
+    expect(isLoopLeaseActive(workspace, "malformed")).toBe(true);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(isLoopLeaseActive(workspace, "malformed")).toBe(false);
+  });
+
+  it("recovers a lock when the live PID belongs to a different process identity", () => {
+    const lease = acquireLoopLease(workspace, "reused-pid", true);
+    const lock = join(workspace, ".seekforge", "loops", ".reused-pid.lock");
+    const payload = JSON.parse(readFileSync(lock, "utf8")) as Record<string, unknown>;
+    lease.release();
+    writeFileSync(lock, JSON.stringify({ ...payload, processIdentity: "definitely-not-this-process" }));
+    expect(isLoopLeaseActive(workspace, "reused-pid")).toBe(false);
   });
 
   it("fails closed when an unrecognized lease filename exists", () => {
