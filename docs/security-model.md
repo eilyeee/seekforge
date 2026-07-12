@@ -162,7 +162,9 @@ Every session is fully replayable and every file change is reversible, from
 
 - **JSONL session trace** under `<workspace>/.seekforge/sessions/<id>/`
   (`messages.jsonl`, `tool-calls.jsonl`, `events.jsonl`, `summary.md`):
-  `createSessionTrace` (`trace.ts:25`).
+  `createSessionTrace` (`trace.ts:25`). Session ids, metadata, and replayed
+  messages are validated at the Core boundary; malformed JSONL truncates replay
+  to its longest valid prefix.
 - **Pre-write checkpoints** — the full prior content (or "did not exist") of each
   file is snapshotted before the run's first write, per user turn:
   `appendCheckpoint` (`trace.ts:277`), `CheckpointEntry` (`trace.ts:258`).
@@ -170,7 +172,8 @@ Every session is fully replayable and every file change is reversible, from
   user turn: `rewindSession` (`trace.ts:382`) and `rewindSessionToTurn`
   (`trace.ts:403`). Checkpoint entries whose path resolves outside the workspace
   are refused, in case the checkpoint file was tampered with
-  (`applyCheckpoints`, `trace.ts:347`).
+  (`applyCheckpoints`, `trace.ts:347`). Containment is realpath-based, so a
+  symlinked parent cannot redirect restore/delete outside the workspace.
 - **Conversation rewind** pairs with file rewind:
   `truncateSessionAtUserTurn` (`trace.ts:224`) trims history to before a turn.
 

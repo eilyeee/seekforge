@@ -20,6 +20,11 @@ type JsonRpcResponse = {
   error?: { code?: number; message?: string };
 };
 
+function isJsonRpcResponse(value: unknown, id: number): value is JsonRpcResponse {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    (value as { id?: unknown }).id === id && ("result" in value || "error" in value);
+}
+
 /**
  * Extracts the JSON-RPC response with `id` from a `text/event-stream` body:
  * SSE events are parsed incrementally, the `data:` lines of each event are
@@ -52,7 +57,7 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
         } catch {
           continue; // not JSON — ignore (e.g. keep-alive payloads)
         }
-        if (msg !== null && typeof msg === "object" && msg.id === id && ("result" in msg || "error" in msg)) {
+        if (isJsonRpcResponse(msg, id)) {
           return msg;
         }
       }
@@ -68,7 +73,7 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
         if (data) {
           try {
             const msg = JSON.parse(data) as JsonRpcResponse;
-            if (msg !== null && typeof msg === "object" && msg.id === id && ("result" in msg || "error" in msg)) {
+            if (isJsonRpcResponse(msg, id)) {
               return msg;
             }
           } catch {
@@ -187,7 +192,11 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           return await readSseResponse(res.body, id);
         }
         const text = await res.text();
-        return JSON.parse(text) as JsonRpcResponse;
+        const parsed = JSON.parse(text) as unknown;
+        if (!isJsonRpcResponse(parsed, id)) {
+          throw new McpError("mcp_parse_error", `MCP server "${options.name}" sent a mismatched ${method} response`);
+        }
+        return parsed;
       } catch (err) {
         if (err instanceof McpError) throw err;
         if (controller.signal.aborted && !disposed) {

@@ -21,6 +21,7 @@ import {
 import { composePrompt } from "../stdin-prompt.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
+import { isCacheFresh } from "../version-check.js";
 
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
 // whole point of the color-gating tests, so the control char is intentional.
@@ -37,6 +38,14 @@ function test(name: string, fn: () => void): void {
     process.exit(1);
   }
 }
+
+test("version cache rejects non-finite timestamps and intervals", () => {
+  const entry = { checkedAt: 100, latest: "1.2.3" };
+  assert.equal(isCacheFresh(entry, 150, 100), true);
+  assert.equal(isCacheFresh({ ...entry, checkedAt: Infinity }, 150, 100), false);
+  assert.equal(isCacheFresh(entry, Infinity, 100), false);
+  assert.equal(isCacheFresh(entry, 150, Infinity), false);
+});
 
 // --- isCostBudgetExceeded (per-run cost budget) -----------------------------
 test("isCostBudgetExceeded: off when no budget set", () => {

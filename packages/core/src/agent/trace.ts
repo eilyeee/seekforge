@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
+import { resolveForWrite } from "../tools/sandbox.js";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
 
 export type SessionTrace = {
@@ -138,6 +139,12 @@ function sessionsRoot(workspace: string): string {
 }
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SESSION_STATUSES = new Set<SessionStatus>([
+  "idle", "running", "waiting_approval", "completed", "failed", "cancelled",
+]);
+const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function sessionDir(workspace: string, sessionId: string): string {
   if (!SESSION_ID_RE.test(sessionId) || sessionId.includes("..")) {
@@ -146,7 +153,50 @@ function sessionDir(workspace: string, sessionId: string): string {
   return join(sessionsRoot(workspace), sessionId);
 }
 
+function parseSessionMeta(value: unknown, expectedId: string): SessionMeta | undefined {
+  if (!isRecord(value) || value["id"] !== expectedId || !SESSION_ID_RE.test(expectedId) || expectedId.includes("..")) {
+    return undefined;
+  }
+  if (
+    typeof value["task"] !== "string" || (value["mode"] !== "ask" && value["mode"] !== "edit") ||
+    typeof value["status"] !== "string" || !SESSION_STATUSES.has(value["status"] as SessionStatus) ||
+    typeof value["createdAt"] !== "string" || !Number.isFinite(Date.parse(value["createdAt"])) ||
+    typeof value["updatedAt"] !== "string" || !Number.isFinite(Date.parse(value["updatedAt"])) ||
+    (value["parentAgentId"] !== undefined && typeof value["parentAgentId"] !== "string")
+  ) return undefined;
+  const usage = value["usage"];
+  if (usage !== undefined && (!isRecord(usage) ||
+      !["promptTokens", "completionTokens", "cacheHitTokens", "costUsd"].every((key) =>
+        typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0))) {
+    return undefined;
+  }
+  const plan = value["plan"];
+  if (plan !== undefined && (!Array.isArray(plan) || !plan.every((item) =>
+    isRecord(item) && typeof item["step"] === "string" && typeof item["status"] === "string" &&
+    PLAN_STATUSES.has(item["status"])))) {
+    return undefined;
+  }
+  return value as SessionMeta;
+}
+
+function parseChatMessage(value: unknown): ChatMessage | undefined {
+  if (!isRecord(value) || !["system", "user", "assistant", "tool"].includes(String(value["role"])) ||
+      typeof value["content"] !== "string" ||
+      (value["toolCallId"] !== undefined && typeof value["toolCallId"] !== "string")) {
+    return undefined;
+  }
+  const toolCalls = value["toolCalls"];
+  if (toolCalls !== undefined && (!Array.isArray(toolCalls) || !toolCalls.every((call) =>
+    isRecord(call) && typeof call["id"] === "string" && typeof call["name"] === "string" &&
+    typeof call["argumentsJson"] === "string"))) {
+    return undefined;
+  }
+  const { ts: _ts, ...message } = value;
+  return message as ChatMessage;
+}
+
 export function writeSessionMeta(workspace: string, meta: SessionMeta): void {
+  if (!parseSessionMeta(meta, meta.id)) throw new Error("Invalid session metadata");
   const dir = sessionDir(workspace, meta.id);
   mkdirSync(dir, { recursive: true });
   const target = join(dir, "session.json");
@@ -161,7 +211,10 @@ export function writeSessionMeta(workspace: string, meta: SessionMeta): void {
 
 export function readSessionMeta(workspace: string, sessionId: string): SessionMeta | undefined {
   try {
-    return JSON.parse(readFileSync(join(sessionDir(workspace, sessionId), "session.json"), "utf8")) as SessionMeta;
+    return parseSessionMeta(
+      JSON.parse(readFileSync(join(sessionDir(workspace, sessionId), "session.json"), "utf8")) as unknown,
+      sessionId,
+    );
   } catch {
     return undefined;
   }
@@ -258,7 +311,8 @@ export function loadSessionMessages(workspace: string, sessionId: string): ChatM
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
-      const { ts: _ts, ...message } = JSON.parse(line) as ChatMessage & { ts?: string };
+      const message = parseChatMessage(JSON.parse(line) as unknown);
+      if (!message) break;
       messages.push(message);
     } catch {
       break;
@@ -444,16 +498,15 @@ function applyCheckpoints(
   opts: { dryRun?: boolean },
 ): RewindResult {
   const result: RewindResult = { restored: [], deleted: [], skipped: [] };
-  const wsRoot = resolve(workspace);
+  const wsRoot = resolveForWrite(workspace, ".");
 
   for (const entry of entries) {
-    const target = resolve(wsRoot, entry.path);
-    if (target === wsRoot || !target.startsWith(wsRoot + sep)) {
-      result.skipped.push({ path: entry.path, reason: "path escapes the workspace" });
-      continue;
-    }
-
     try {
+      const target = resolveForWrite(workspace, entry.path);
+      if (target === wsRoot) {
+        result.skipped.push({ path: entry.path, reason: "path resolves to the workspace root" });
+        continue;
+      }
       if (entry.before === null) {
         if (!existsSync(target)) {
           result.skipped.push({ path: entry.path, reason: "already absent" });
@@ -472,7 +525,10 @@ function applyCheckpoints(
         result.restored.push(entry.path);
       }
     } catch (err) {
-      result.skipped.push({ path: entry.path, reason: err instanceof Error ? err.message : String(err) });
+      const reason = (err as { code?: unknown }).code === "outside_workspace"
+        ? "path escapes the workspace"
+        : err instanceof Error ? err.message : String(err);
+      result.skipped.push({ path: entry.path, reason });
     }
   }
   return result;

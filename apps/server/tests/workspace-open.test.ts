@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -58,6 +58,11 @@ describe("recents store", () => {
   it("isWorkspaceDir is true for a directory, false for a missing path", () => {
     expect(isWorkspaceDir(workspace)).toBe(true);
     expect(isWorkspaceDir(join(workspace, "does-not-exist"))).toBe(false);
+  });
+
+  it("normalizes non-finite recent timestamps", () => {
+    writeFileSync(recentsFilePath(), '{"recents":[{"path":"/tmp/poisoned","lastOpened":1e999}]}');
+    expect(loadRecents()).toEqual([{ path: "/tmp/poisoned", name: "poisoned", lastOpened: 0 }]);
   });
 });
 

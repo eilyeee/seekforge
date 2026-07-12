@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 /**
  * Real, case-canonical absolute path. Canonicalizing BOTH the stored dirs and
@@ -38,12 +38,16 @@ function readDirs(storePath: string): string[] {
   }
 }
 
+function containsPath(ancestor: string, target: string): boolean {
+  return target === ancestor || target.startsWith(ancestor.endsWith(sep) ? ancestor : `${ancestor}${sep}`);
+}
+
 /** Whether `dir` (or an authorized ancestor of it) has been granted access. */
 export function isAuthorizedDir(dir: string, storePath: string = authorizedStorePath()): boolean {
   const target = canonical(dir);
   return readDirs(storePath).some((d) => {
     const a = canonical(d);
-    return target === a || target.startsWith(`${a}/`);
+    return containsPath(a, target);
   });
 }
 
@@ -57,7 +61,7 @@ export function authorizeDir(dir: string, storePath: string = authorizedStorePat
   if (
     dirs.some((d) => {
       const a = canonical(d);
-      return target === a || target.startsWith(`${a}/`);
+      return containsPath(a, target);
     })
   ) {
     return;

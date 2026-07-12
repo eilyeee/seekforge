@@ -56,9 +56,26 @@ describe("setSkillEnabled — builtins via override marker", () => {
     const ws = makeTempDir();
     expect(() => setSkillEnabled(ws, "nope", true)).toThrow(/unknown skill/i);
   });
+
+  it.each(["null", "[]", '"broken"'])("repairs non-object skill metadata %s", (content) => {
+    const ws = makeTempDir();
+    const root = path.join(ws, ".seekforge", "skills");
+    writeSkillDir(root, "alpha", content, MD);
+    setSkillEnabled(ws, "alpha", false);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "alpha", "skill.json"), "utf8"))).toEqual({
+      id: "alpha",
+      enabled: false,
+    });
+  });
 });
 
 describe("removeSkill", () => {
+  it.each(["../outside", "a/b", ".", "UPPER"])("rejects unsafe id %s", (id) => {
+    const ws = makeTempDir();
+    expect(() => setSkillEnabled(ws, id, false)).toThrow(/invalid skill id/);
+    expect(() => removeSkill(ws, id)).toThrow(/invalid skill id/);
+  });
+
   it("deletes a project skill directory", () => {
     const ws = makeTempDir();
     const root = path.join(ws, ".seekforge", "skills");

@@ -142,8 +142,9 @@ Workspace paths (absolute directories passed at startup) are advertised to each
 server via the roots capability and answered on server-initiated `roots/list`
 requests. For the stdio transport, server-initiated `roots/list` is handled
 inline; for the HTTP transport, the capability is advertised but live
-`roots/list` answering is not supported (matching the one-POST-per-message
-scope).
+`roots/list` answering is not supported by the current one-POST-per-message
+transport. Streamable HTTP responses must be JSON-RPC objects whose id matches
+the pending request; scalar, array, null, and mismatched-id responses are rejected.
 
 Pagination (`nextCursor`) is currently ignored for `tools/list`,
 `resources/list`, and `prompts/list` — all results are fetched in a single

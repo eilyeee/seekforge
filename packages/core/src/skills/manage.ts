@@ -11,6 +11,13 @@ import { seekforgeHome } from "../memory/store.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 
 export type ManageSkillOptions = { global?: boolean };
+const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+function requireSkillId(id: string): void {
+  if (!SKILL_ID_RE.test(id)) {
+    throw new Error(`invalid skill id "${id}": must match ${SKILL_ID_RE}`);
+  }
+}
 
 function skillsRoot(workspace: string, global: boolean): string {
   return global
@@ -58,6 +65,7 @@ export function setSkillEnabled(
   enabled: boolean,
   opts: ManageSkillOptions = {},
 ): SetSkillEnabledResult {
+  requireSkillId(id);
   const root = skillsRoot(workspace, opts.global ?? false);
   const dir = path.join(root, id);
   const jsonPath = path.join(dir, "skill.json");
@@ -81,7 +89,10 @@ export function setSkillEnabled(
     // Flip enabled in place, preserving the rest of skill.json.
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
+      const value = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as unknown;
+      parsed = typeof value === "object" && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : { id };
     } catch {
       parsed = { id };
     }
@@ -120,6 +131,7 @@ export function removeSkill(
   id: string,
   opts: ManageSkillOptions = {},
 ): RemoveSkillResult {
+  requireSkillId(id);
   const root = skillsRoot(workspace, opts.global ?? false);
   const dir = path.join(root, id);
   if (!skillDirExists(root, id)) {

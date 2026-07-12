@@ -62,14 +62,16 @@ function parseSemver(v: string): { core: [number, number, number]; prerelease: b
  */
 export function isCacheFresh(entry: CacheEntry | null, now: number, intervalMs = CHECK_INTERVAL_MS): boolean {
   if (!entry) return false;
-  if (typeof entry.checkedAt !== "number") return false;
+  if (!Number.isFinite(entry.checkedAt) || !Number.isFinite(now) || !Number.isFinite(intervalMs) || intervalMs < 0) {
+    return false;
+  }
   return now - entry.checkedAt < intervalMs;
 }
 
 function readCache(): CacheEntry | null {
   try {
     const raw = JSON.parse(readFileSync(cachePath(), "utf8")) as Partial<CacheEntry>;
-    if (typeof raw.checkedAt === "number" && typeof raw.latest === "string") {
+    if (typeof raw.checkedAt === "number" && Number.isFinite(raw.checkedAt) && typeof raw.latest === "string") {
       return { checkedAt: raw.checkedAt, latest: raw.latest };
     }
   } catch {

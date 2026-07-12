@@ -44,6 +44,12 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
 - **Also caught:** `packages/core/src/agent/trace.ts` — session ids were joined
   directly into read/write/delete paths, relying on each caller to reject path
   traversal before reaching Core.
+- **Also caught:** `packages/core/src/agent/trace.ts` — rewind checkpoint paths
+  used lexical containment and could escape through a symlinked parent directory.
+- **Also caught:** `packages/core/src/skills/manage.ts` — enable/disable/remove
+  joined an unvalidated skill id and could mutate a directory outside the skill root.
+- **Also caught:** `apps/cli/src/authorized-dirs.ts` — ancestor matching used a
+  hard-coded separator and mishandled Windows paths and filesystem roots.
 
 ## 3. A cache / memo key must include every input that affects the output
 
@@ -122,6 +128,14 @@ path leaves every other path exposed.
 - **Also caught:** `packages/core/src/runtime/client.ts` — valid JSON such as
   `null` or a forged response shape could crash the readline callback or settle
   a pending runtime request with invalid data.
+- **Also caught:** `packages/core/src/agent/trace.ts` — unvalidated session
+  metadata could crash listing or forge an id used later by pruning.
+- **Also caught:** `packages/core/src/agent/trace.ts` — valid JSON scalars and
+  arrays in `messages.jsonl` were replayed as forged `ChatMessage` values.
+- **Also caught:** `packages/core/src/mcp/http.ts` — plain JSON transport accepted
+  `null` and responses for a different JSON-RPC request id.
+- **Also caught:** `packages/core/src/skills/manage.ts` — non-object `skill.json`
+  values crashed enable/disable instead of being repaired.
 
 ## 9. "Read-only vs mutating" classification: check each command's real effect
 
@@ -182,6 +196,10 @@ still `"number"`, but freshness checks and cursor/index arithmetic become wrong.
   other parsed numeric metadata before arithmetic.
 - **Caught:** `packages/core/src/provider/cache.ts` — a non-finite cache `ts`
   could make a poisoned entry look fresh.
+- **Also caught:** `apps/cli/src/version-check.ts` — an infinite `checkedAt`
+  timestamp made the update cache fresh forever.
+- **Also caught:** `apps/server/src/recents.ts` — an infinite `lastOpened`
+  timestamp permanently dominated recent-workspace sorting.
 
 ## 15. Shared security guards may need a narrower capability-specific exception
 

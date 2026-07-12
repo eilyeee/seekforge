@@ -49,7 +49,7 @@ export function loadRecents(): RecentWorkspace[] {
         out.push({
           path: r.path,
           name: typeof r.name === "string" && r.name ? r.name : basename(r.path) || r.path,
-          lastOpened: typeof r.lastOpened === "number" ? r.lastOpened : 0,
+          lastOpened: typeof r.lastOpened === "number" && Number.isFinite(r.lastOpened) ? r.lastOpened : 0,
         });
       }
     }

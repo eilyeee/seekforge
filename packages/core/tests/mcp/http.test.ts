@@ -104,6 +104,14 @@ function startFakeServer(): Promise<{
           res.writeHead(500, { "content-type": "text/plain" }).end("kaput");
           return;
         }
+        if (name === "null-response") {
+          json(null);
+          return;
+        }
+        if (name === "wrong-id") {
+          json({ jsonrpc: "2.0", id: Number(msg.id) + 1, result: {} });
+          return;
+        }
         // SSE response style: noise event first, then the matching response.
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n');
@@ -265,6 +273,15 @@ describe("mcp client over streamable HTTP", () => {
         name: "McpError",
         code: "mcp_error",
       });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it.each(["null-response", "wrong-id"])("rejects a malformed JSON-RPC response: %s", async (name) => {
+    const client = makeClient();
+    try {
+      await expect(client.callTool(name, {})).rejects.toMatchObject({ code: "mcp_parse_error" });
     } finally {
       client.dispose();
     }

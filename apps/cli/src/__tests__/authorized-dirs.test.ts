@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
 
 let passed = 0;
@@ -45,6 +45,13 @@ test("authorize is idempotent (no duplicates)", () => {
   authorizeDir("/some/project", store);
   authorizeDir("/some/project/", store);
   assert.equal(isAuthorizedDir("/some/project", store), true);
+});
+
+test("an authorized filesystem root covers descendants", () => {
+  const rootStore = join(dir, "root-authorized.json");
+  const root = parse(dir).root;
+  authorizeDir(root, rootStore);
+  assert.equal(isAuthorizedDir(join(root, "some", "project"), rootStore), true);
 });
 
 test("a missing/corrupt store reads as empty (not a crash)", () => {

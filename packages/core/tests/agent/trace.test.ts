@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -74,6 +74,23 @@ describe("sessions list + prune", () => {
     expect(res.removed).toEqual(["old"]);
     expect(existsSync(dir("old"))).toBe(true);
   });
+
+  it("skips malformed or identity-mismatched metadata without pruning outside sessions", () => {
+    const outside = join(ws, ".seekforge", "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "keep.txt"), "keep");
+    for (const [id, value] of [
+      ["null-meta", null],
+      ["wrong-shape", { id: "wrong-shape" }],
+      ["forged-id", { ...meta("forged-id", 40), id: "../outside" }],
+    ] as const) {
+      mkdirSync(dir(id), { recursive: true });
+      writeFileSync(join(dir(id), "session.json"), JSON.stringify(value));
+    }
+    expect(listSessions(ws)).toEqual([]);
+    expect(pruneSessions(ws, { olderThanDays: 0 }).removed).toEqual([]);
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("keep");
+  });
 });
 
 describe("compactSessionNow", () => {
@@ -144,6 +161,20 @@ describe("loadSessionMessages robustness", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("hello");
   });
+
+  it.each(["null", "42", '"text"', "[]", '{"role":"user"}', '{"role":"bogus","content":"x"}'])(
+    "stops before a valid-JSON non-message record %s",
+    (invalid) => {
+      const dir = join(ws, ".seekforge", "sessions", "s2");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "messages.jsonl"), [
+        JSON.stringify({ role: "user", content: "before" }),
+        invalid,
+        JSON.stringify({ role: "assistant", content: "after" }),
+      ].join("\n"));
+      expect(loadSessionMessages(ws, "s2")).toEqual([{ role: "user", content: "before" }]);
+    },
+  );
 });
 
 describe("truncateSessionAtUserTurn", () => {
@@ -257,6 +288,22 @@ describe("rewindSessionToTurn", () => {
     expect(res.deleted).toEqual(["b.txt"]);
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("a-final");
     expect(existsSync(join(ws, "b.txt"))).toBe(true);
+  });
+
+  it("refuses checkpoint paths that escape through a workspace symlink", async () => {
+    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-rewind-outside-"));
+    try {
+      writeFileSync(join(outside, "target.txt"), "outside-current");
+      symlinkSync(outside, join(ws, "escape"));
+      appendCheckpoint(ws, sid, { ts: "t", path: "escape/target.txt", before: "forged", turn: 0 });
+      const result = rewindSessionToTurn(ws, sid, 0);
+      expect(result.restored).toEqual([]);
+      expect(result.skipped[0]?.reason).toMatch(/escapes the workspace/);
+      expect(readFileSync(join(outside, "target.txt"), "utf8")).toBe("outside-current");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("legacy entries without turn behave as turn 0", async () => {
