@@ -3,15 +3,17 @@
 ## Project Overview
 
 SeekForge — a local-first coding agent powered by DeepSeek.
-Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
-`packages/shared` (cross-cutting plain types, zero runtime deps).
+Monorepo: `apps/cli` (published as `seekforge`), `apps/tui`, `apps/server`,
+`apps/desktop`, `packages/core` (agent core), `packages/shared` (cross-cutting
+plain types, zero runtime deps), `packages/eval-harness`, and the optional Rust
+backend in `crates/runtime`.
 
 ## Tech Stack
 
 - Language: TypeScript (strict, NodeNext modules — relative imports need `.js` extension)
 - Runtime: Node >= 20
 - Package manager: pnpm workspace
-- Test framework: vitest (in packages/core)
+- Test framework: vitest (core/server/tui/desktop/eval); CLI script tests; Rust `cargo test`
 - Validation: zod (in packages/core only; never add deps to packages/shared)
 
 ## Commands
@@ -19,6 +21,9 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
 - Install: `pnpm install`
 - Test: `pnpm test` (or `pnpm --filter @seekforge/core test`)
 - Typecheck: `pnpm typecheck`
+- Rust test: `cargo test --workspace`
+- Rust format check: `cargo fmt --check` (or `rustfmt --check <touched-file>` when
+  unrelated pre-existing workspace formatting prevents a clean full check)
 - CLI dev run: `pnpm --filter seekforge dev`
 
 ## Key Design Decisions (do not re-litigate)
@@ -31,6 +36,10 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
   Permission prompts must surface raw command/path, never just a model paraphrase.
 - JSONL is the source of truth for session traces; no SQLite in Phase 0/1.
 - Provider must report DeepSeek token usage incl. cache-hit tokens and cost.
+- Shell command allowlists authorize only a single invocation. Unquoted control
+  syntax, pipelines, redirects, or command substitution must never auto-approve.
+- Workspace mutations exposed through independent surfaces (Agent, REST, Git,
+  worktrees) must share the appropriate session/repository coordination guards.
 
 ## Coding Style
 
@@ -42,7 +51,8 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
 
 - Before writing or reviewing code that parses input, matches prefixes, does
   cursor/index math, caches by a key, serializes/deserializes, manages listener/
-  resource lifecycles, or classifies commands, consult
+  resource lifecycles, binds async results to mutable UI/workspace state, resolves
+  filesystem paths, merges config layers, or classifies commands, consult
   [docs/boundary-checklist.md](docs/boundary-checklist.md) — a running list of the
   boundary bug *classes* already found here. When you fix a new boundary defect,
   add its pattern there.
@@ -50,8 +60,19 @@ Monorepo: `apps/cli` (published as `seekforge`), `packages/core` (agent core),
 - Do not modify `packages/shared/src/index.ts` types without explicit instruction —
   other work streams build against them.
 - Run `pnpm typecheck` and `pnpm test` after changes.
+- When Rust code or tests change, also run the relevant Rust tests; prefer
+  `cargo test --workspace` before delivery.
+- When public behavior, configuration, commands, security guarantees, protocols,
+  or REST/WS contracts change, update the corresponding user/architecture docs.
 - Commit messages: English, conventional commits (feat/fix/chore/test/docs).
 - Report changed files and verification results at the end.
+
+### Delivery workflow
+
+- Unless the user explicitly asks otherwise, finish verified modifications with
+  a commit, merge them into `main` when working on another branch, and push when
+  a remote is configured.
+- Never add `Co-Authored-By` trailers to commit messages.
 
 ### Commit discipline
 
