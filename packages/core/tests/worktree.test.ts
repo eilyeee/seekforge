@@ -4,7 +4,17 @@
  * merge (clean, dirty checkpoint, conflict+abort), and remove.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -74,6 +84,30 @@ describe("createWorktree", () => {
       await expect(createWorktree(plain, "nope")).rejects.toBeInstanceOf(WorktreeGitError);
     } finally {
       rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked worktree roots without creating an external checkout", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-wt-outside-"));
+    try {
+      mkdirSync(join(repo, ".seekforge"));
+      symlinkSync(outside, join(repo, ".seekforge", "worktrees"));
+      await expect(createWorktree(repo, "escaped")).rejects.toThrow(/unsafe worktree directory/);
+      expect(existsSync(join(outside, "escaped"))).toBe(false);
+      expect(git(repo, "branch", "--list", "seekforge/escaped")).toBe("");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked .seekforge directory", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-wt-state-outside-"));
+    try {
+      symlinkSync(outside, join(repo, ".seekforge"));
+      await expect(createWorktree(repo, "escaped-state")).rejects.toThrow(/unsafe worktree directory/);
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 });

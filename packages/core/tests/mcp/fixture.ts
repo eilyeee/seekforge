@@ -33,6 +33,7 @@ let clientProtocolVersion = null;
 let clientCapabilities = null;
 let rootsAnswer = null;
 const slowCalls = new Map();
+const cancelledRequests = [];
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 rl.on("line", (line) => {
   let msg;
@@ -64,6 +65,7 @@ rl.on("line", (line) => {
   }
   if (msg.method === "notifications/cancelled") {
     const requestId = msg.params && msg.params.requestId;
+    cancelledRequests.push(requestId);
     const timer = slowCalls.get(requestId);
     if (timer) { clearTimeout(timer); slowCalls.delete(requestId); }
     return;
@@ -108,6 +110,12 @@ rl.on("line", (line) => {
     ] } });
     if (rootsAnswer !== null) { reply(); return; }
     const wait = setInterval(() => { if (rootsAnswer !== null) { clearInterval(wait); reply(); } }, 5);
+    return;
+  }
+  if (msg.method === "tools/call" && msg.params.name === "__getCancelled") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { content: [
+      { type: "text", text: JSON.stringify(cancelledRequests) },
+    ] } });
     return;
   }
   if (msg.method === "tools/list") {

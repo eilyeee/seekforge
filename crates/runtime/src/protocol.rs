@@ -17,6 +17,8 @@ pub mod codes {
     pub const TOO_LARGE: &str = "too_large";
     pub const BINARY_FILE: &str = "binary_file";
     pub const DENIED_DANGEROUS: &str = "denied_dangerous";
+    pub const CANCELLED: &str = "cancelled";
+    pub const RUNTIME_BUSY: &str = "runtime_busy";
     pub const IO_ERROR: &str = "io_error";
     pub const GIT_ERROR: &str = "git_error";
 }
@@ -115,6 +117,11 @@ pub struct RunCommandParams {
     pub cwd: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct CancelParams {
+    pub id: String,
 }
 
 #[derive(Deserialize)]

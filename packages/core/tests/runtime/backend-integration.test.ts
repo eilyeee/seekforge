@@ -22,12 +22,13 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
   let runtime: RuntimeClient;
 
   const policy: PermissionPolicy = { approvalMode: "auto", mode: "edit", commandAllowlist: [] };
-  const ctx = (): ToolContext => ({
+  const ctx = (signal?: AbortSignal): ToolContext => ({
     sessionId: "it",
     workspace,
     policy,
     confirm: async () => true,
     runtime,
+    signal,
   });
 
   beforeAll(() => {
@@ -79,6 +80,20 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
     // The TS permission layer refuses dangerous commands before the runtime
     // is even consulted (defense in depth: the runtime would also deny it).
     expect(denied.error?.code).toMatch(/denied_dangerous|forbidden/);
+  });
+
+  it("cancels a runtime command from the tool context signal", async () => {
+    const controller = new AbortController();
+    const running = dispatcher.execute(
+      { id: "cancel", name: "run_command", arguments: { command: "sleep 10" } },
+      ctx(controller.signal),
+    );
+    setTimeout(() => controller.abort(), 100);
+
+    await expect(running).resolves.toMatchObject({
+      ok: false,
+      error: { code: "cancelled" },
+    });
   });
 
   it("denies workspace escapes from the runtime side too", async () => {

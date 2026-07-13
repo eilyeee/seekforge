@@ -19,12 +19,14 @@
 
 import {
   createWorktree,
+  acquireWorkspaceSessionGuard,
   isWorktreeDirty,
   mergeWorktree,
   removeWorktree,
   worktreeAhead,
   worktreeBranchExists,
   WorktreeGitError,
+  SessionBusyError,
   worktreeSlug,
   type WorktreeMergeResult,
 } from "@seekforge/core";
@@ -87,11 +89,10 @@ export type WorktreeStatus = {
 
 export class WorktreeManager {
   private readonly byId = new Map<string, WorktreeRecord>();
-  // Per-base-path serialization: the slug check and `git worktree add` aren't
-  // atomic, so two concurrent creates on the same base (e.g. a double-click)
-  // could pick the same slug and the second `worktree add` would 500. Chain
-  // creates per base so each sees the previous one's worktree/branch.
-  private readonly createLocks = new Map<string, Promise<unknown>>();
+  // Every operation that mutates one repository's worktree/branch metadata
+  // shares this lock: create, merge, and remove must not race in the base repo.
+  private readonly baseLocks = new Map<string, Promise<unknown>>();
+  private readonly operationLocks = new Map<string, Promise<unknown>>();
   // Globally reserved slugs (the workspace id `wt-<slug>` is base-independent, so
   // per-base createLocks don't serialize two DIFFERENT bases creating the same
   // name). Held synchronously across the async git work so a concurrent create
@@ -109,14 +110,8 @@ export class WorktreeManager {
    * base workspace, then registers the checkout as workspace `wt-<slug>`.
    */
   create(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
-    const prev = this.createLocks.get(base.path) ?? Promise.resolve();
-    const result = prev.then(
-      () => this.createLocked(base, name),
-      () => this.createLocked(base, name),
-    );
-    // Keep the chain alive even if this create rejects (swallow only for the lock).
-    this.createLocks.set(base.path, result.catch(() => {}));
-    return result;
+    return this.withLock(this.baseLocks, base.path, () =>
+      this.withWorkspaceGuards([base.path], base.id, () => this.createLocked(base, name)));
   }
 
   private async createLocked(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
@@ -187,16 +182,68 @@ export class WorktreeManager {
    * reported.
    */
   async merge(id: string): Promise<MergeResult> {
-    const r = this.require(id);
-    return delegate(mergeWorktree(r.basePath, r.path, r.branch));
+    return this.withLock(this.operationLocks, id, async () => {
+      const r = this.require(id);
+      return this.withLock(this.baseLocks, r.basePath, async () => {
+        return this.withWorkspaceGuards(
+          [r.basePath, r.path],
+          r.id,
+          () => delegate(mergeWorktree(r.basePath, r.path, r.branch)),
+        );
+      });
+    });
   }
 
   /** `git worktree remove --force` + branch delete + workspace unregister. */
   async remove(id: string): Promise<void> {
-    const r = this.require(id);
-    await delegate(removeWorktree(r.basePath, r.path, r.branch));
-    this.registry.unregister(r.id);
-    this.byId.delete(r.id);
+    await this.withLock(this.operationLocks, id, async () => {
+      const r = this.require(id);
+      await this.withLock(this.baseLocks, r.basePath, () =>
+        this.withWorkspaceGuards([r.basePath, r.path], r.id, async () => {
+          await delegate(removeWorktree(r.basePath, r.path, r.branch));
+          this.registry.unregister(r.id);
+          this.byId.delete(r.id);
+        }),
+      );
+    });
+  }
+
+  private async withWorkspaceGuards<T>(
+    workspaces: string[],
+    operationId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const guards = [];
+    try {
+      for (const workspace of [...new Set(workspaces)].sort()) {
+        guards.push(acquireWorkspaceSessionGuard(workspace));
+      }
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof SessionBusyError)) throw error;
+      throw new WorktreeError(
+        "session_busy",
+        `cannot modify worktree ${operationId} while its worktree or base workspace has an active session`,
+        409,
+      );
+    } finally {
+      for (const guard of guards.reverse()) guard.release();
+    }
+  }
+
+  private withLock<T>(
+    locks: Map<string, Promise<unknown>>,
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = locks.get(key) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const tail = result.catch(() => {});
+    locks.set(key, tail);
+    void tail.finally(() => {
+      if (locks.get(key) === tail) locks.delete(key);
+    });
+    return result;
   }
 
   private require(id: string): WorktreeRecord {

@@ -63,6 +63,10 @@ describe("backspace / deleteForward", () => {
   it("deleteForward deletes a whole astral char", () => {
     expect(deleteForward(at("🔥x", 0))).toEqual({ text: "x", cursor: 0 });
   });
+  it.each(["e\u0301", "🇨🇳", "👍🏽", "👨‍👩‍👧‍👦"])("deletes the whole grapheme %s", (grapheme) => {
+    expect(backspace(at(`${grapheme}x`, grapheme.length))).toEqual({ text: "x", cursor: 0 });
+    expect(deleteForward(at(`${grapheme}x`, 0))).toEqual({ text: "x", cursor: 0 });
+  });
 });
 
 describe("horizontal movement", () => {
@@ -71,6 +75,11 @@ describe("horizontal movement", () => {
     expect(moveLeft(at("ab", 2)).cursor).toBe(1);
     expect(moveRight(at("ab", 2)).cursor).toBe(2);
     expect(moveRight(at("ab", 0)).cursor).toBe(1);
+  });
+
+  it.each(["e\u0301", "🇨🇳", "👍🏽", "👨‍👩‍👧‍👦"])("moves across the whole grapheme %s", (grapheme) => {
+    expect(moveRight(at(`${grapheme}x`, 0)).cursor).toBe(grapheme.length);
+    expect(moveLeft(at(`${grapheme}x`, grapheme.length)).cursor).toBe(0);
   });
 
   it("moveHome/moveEnd go to the current line's bounds", () => {

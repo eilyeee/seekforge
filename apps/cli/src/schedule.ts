@@ -14,8 +14,10 @@
  * stays denied) and enforces the per-job budget via the existing run path.
  */
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { projectStateDirectory, projectStateFilePath, readProjectStateFile, writeProjectStateFile } from "./project-state.js";
 
 /** ask = read-only Q&A; edit = may modify files (edits auto-approved headless). */
 export type ScheduleMode = "ask" | "edit";
@@ -41,14 +43,36 @@ export type Registry = { jobs: Job[] };
 
 /** Path to the project-scoped registry file (`.seekforge/schedules.json`). */
 export function scheduleFilePath(projectPath: string): string {
-  return join(projectPath, ".seekforge", "schedules.json");
+  return projectStateFilePath(projectPath, "schedules.json");
 }
 
 function scheduleLeasePath(projectPath: string): string {
-  return join(projectPath, ".seekforge", "schedules.lock");
+  return join(projectStateDirectory(projectPath), "schedules.lock");
 }
 
-type LeaseOwner = { pid: number; token: string; acquiredAt: string };
+type LeaseOwner = { pid: number; token: string; acquiredAt: string; processIdentity?: string };
+const MALFORMED_LOCK_GRACE_MS = 30_000;
+const portableSelfStart = `portable:${Math.floor((Date.now() - process.uptime() * 1_000) / 1_000)}`;
+
+function processIdentity(pid: number): string | undefined {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closeParen = stat.lastIndexOf(")");
+      const fields = stat.slice(closeParen + 2).split(" ");
+      return fields[19] ? `linux:${fields[19]}` : undefined;
+    }
+    if (process.platform === "darwin" || process.platform === "freebsd") {
+      const started = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
+      if (started) return `${process.platform}:${started}`;
+    }
+  } catch {
+    // Fall through to the portable identity for this process only.
+  }
+  return pid === process.pid ? portableSelfStart : undefined;
+}
+
+const selfProcessIdentity = processIdentity(process.pid);
 
 function readLeaseOwner(leasePath: string): LeaseOwner | null {
   try {
@@ -57,15 +81,20 @@ function readLeaseOwner(leasePath: string): LeaseOwner | null {
     const owner = parsed as Record<string, unknown>;
     if (!Number.isSafeInteger(owner["pid"]) || (owner["pid"] as number) <= 0) return null;
     if (typeof owner["token"] !== "string" || typeof owner["acquiredAt"] !== "string") return null;
+    if (owner["processIdentity"] !== undefined && typeof owner["processIdentity"] !== "string") return null;
     return owner as LeaseOwner;
   } catch {
     return null;
   }
 }
 
-function processIsAlive(pid: number): boolean {
+function processIsOwner(owner: LeaseOwner): boolean {
   try {
-    process.kill(pid, 0);
+    process.kill(owner.pid, 0);
+    if (owner.processIdentity !== undefined) {
+      const current = processIdentity(owner.pid);
+      if (current !== undefined && current !== owner.processIdentity) return false;
+    }
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "EPERM";
@@ -81,14 +110,18 @@ function processIsAlive(pid: number): boolean {
 export function acquireScheduleLease(projectPath: string): (() => void) | null {
   const leasePath = scheduleLeasePath(projectPath);
   const recoveryPath = `${leasePath}.recovery`;
-  mkdirSync(dirname(leasePath), { recursive: true });
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   const finishClaim = (): (() => void) => {
     try {
       writeFileSync(
         join(leasePath, "owner.json"),
-        `${JSON.stringify({ pid: process.pid, token, acquiredAt: new Date().toISOString() })}\n`,
+        `${JSON.stringify({
+          pid: process.pid,
+          token,
+          acquiredAt: new Date().toISOString(),
+          ...(selfProcessIdentity ? { processIdentity: selfProcessIdentity } : {}),
+        })}\n`,
         "utf8",
       );
       return () => {
@@ -113,21 +146,40 @@ export function acquireScheduleLease(projectPath: string): (() => void) | null {
   try {
     mkdirSync(recoveryPath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return null;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      let fresh = true;
+      try {
+        fresh = Date.now() - statSync(recoveryPath).mtimeMs < MALFORMED_LOCK_GRACE_MS;
+      } catch (statErr) {
+        if ((statErr as NodeJS.ErrnoException).code === "ENOENT") return acquireScheduleLease(projectPath);
+        throw statErr;
+      }
+      if (fresh) return null;
+      const staleRecovery = `${recoveryPath}.stale-${token}`;
+      try {
+        renameSync(recoveryPath, staleRecovery);
+        rmSync(staleRecovery, { recursive: true, force: true });
+        mkdirSync(recoveryPath);
+      } catch (recoverErr) {
+        if (["ENOENT", "EEXIST"].includes((recoverErr as NodeJS.ErrnoException).code ?? "")) return null;
+        throw recoverErr;
+      }
+    } else {
+      throw err;
+    }
   }
   try {
     const owner = readLeaseOwner(leasePath);
     let malformedLockIsFresh = false;
     if (!owner) {
       try {
-        malformedLockIsFresh = Date.now() - statSync(leasePath).mtimeMs < 30_000;
+        malformedLockIsFresh = Date.now() - statSync(leasePath).mtimeMs < MALFORMED_LOCK_GRACE_MS;
       } catch (statErr) {
         if ((statErr as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw statErr;
       }
     }
-    if (owner ? processIsAlive(owner.pid) : malformedLockIsFresh) return null;
+    if (owner ? processIsOwner(owner) : malformedLockIsFresh) return null;
 
     const stalePath = `${leasePath}.stale-${token}`;
     renameSync(leasePath, stalePath);
@@ -150,7 +202,7 @@ export function acquireScheduleLease(projectPath: string): (() => void) | null {
 export function loadRegistry(projectPath: string): Registry {
   let raw: string;
   try {
-    raw = readFileSync(scheduleFilePath(projectPath), "utf8");
+    raw = readProjectStateFile(projectPath, "schedules.json");
   } catch {
     return { jobs: [] };
   }
@@ -166,9 +218,7 @@ export function loadRegistry(projectPath: string): Registry {
 
 /** Persist the registry, creating `.seekforge/` if needed. */
 export function saveRegistry(projectPath: string, registry: Registry): void {
-  const file = scheduleFilePath(projectPath);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  writeProjectStateFile(projectPath, "schedules.json", `${JSON.stringify(registry, null, 2)}\n`);
 }
 
 /** Runtime shape guard for a stored job (tolerates hand-edited files). */
@@ -279,15 +329,17 @@ export function parseCron(spec: string): Cron | null {
   const hour = parseCronField(fields[1]!, CRON_RANGES.hour);
   const dom = parseCronField(fields[2]!, CRON_RANGES.dom);
   const month = parseCronField(fields[3]!, CRON_RANGES.month);
-  // Day-of-week: accept 7 as an alias for Sunday (0), then normalize.
-  const dowRaw = parseCronField(fields[4]!.replace(/7/g, "0"), CRON_RANGES.dow);
+  // Day-of-week: parse 0..7 first, then normalize the numeric Sunday alias.
+  // String replacement corrupts valid ranges/steps such as 5-7 and */7.
+  const dowRaw = parseCronField(fields[4]!, [0, 7]);
   if (!minute || !hour || !dom || !month || !dowRaw) return null;
+  const dow = [...new Set(dowRaw.map((value) => (value === 7 ? 0 : value)))].sort((a, b) => a - b);
   return {
     minute,
     hour,
     dom,
     month,
-    dow: dowRaw,
+    dow,
     domRestricted: fields[2] !== "*",
     dowRestricted: fields[4] !== "*",
   };

@@ -14,11 +14,11 @@ import {
 import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
+  acquireBrowserLease,
+  acquireLspServerLease,
   createBackgroundTasks,
   digestCommandOutput,
-  disposeBrowser,
   commandInvokes,
-  disposeLspServers,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
@@ -63,8 +63,7 @@ import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readSessionMeta, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 
 /**
  * Mutable handoff between a provider (built in the app factory) and a run's
@@ -80,29 +79,7 @@ export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => voi
   return Object.assign(bus, { onRetry: (info: RetryInfo) => bus.emit?.(info) });
 }
 
-const activeSessionRuns = new Set<string>();
-
-function sessionRunKey(workspace: string, sessionId: string): string {
-  let root: string;
-  try {
-    root = realpathSync.native(workspace);
-  } catch {
-    root = resolve(workspace);
-  }
-  return `${root}\0${sessionId}`;
-}
-
-/** True while this process is actively appending to the persisted session. */
-export function isSessionRunActive(workspace: string, sessionId: string): boolean {
-  return activeSessionRuns.has(sessionRunKey(workspace, sessionId));
-}
-
-/** True when any persisted session in this workspace is currently running. */
-export function hasActiveSessionRuns(workspace: string): boolean {
-  const prefix = `${sessionRunKey(workspace, "").slice(0, -1)}\0`;
-  for (const key of activeSessionRuns) if (key.startsWith(prefix)) return true;
-  return false;
-}
+export { hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 
 export type AgentCoreDeps = {
   provider: ChatProvider;
@@ -387,12 +364,22 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
       const resuming = input.resumeSessionId !== undefined;
       const sessionId = input.resumeSessionId ?? newSessionId();
-      const activeRunKey = sessionRunKey(input.projectPath, sessionId);
-      if (activeSessionRuns.has(activeRunKey)) {
-        throw new AgentLimitError("session_busy", `session ${sessionId} is already running`);
-      }
-      activeSessionRuns.add(activeRunKey);
+      let sessionLease;
       try {
+        sessionLease = acquireSessionLease(input.projectPath, sessionId);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "session_busy") {
+          throw new AgentLimitError("session_busy", `session ${sessionId} is already running`);
+        }
+        throw error;
+      }
+      let lspLease: ReturnType<typeof acquireLspServerLease> | undefined;
+      let browserLease: ReturnType<typeof acquireBrowserLease> | undefined;
+      try {
+      if (depth === 0) {
+        lspLease = acquireLspServerLease(input.projectPath);
+        browserLease = acquireBrowserLease();
+      }
       const trace = createSessionTrace(input.projectPath, sessionId);
       const emit = (e: AgentEvent): AgentEvent => {
         trace.event(e);
@@ -1609,7 +1596,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       } catch (err) {
         const e = err as Partial<AgentLimitError> & Error;
-        const code = e.code ?? "agent_error";
+        // DOMException.code is numeric (AbortError is commonly 20). The run's
+        // signal is authoritative; never persist a caller cancellation as a
+        // failed session or leak a non-string value into the event contract.
+        const code = input.signal?.aborted
+          ? "cancelled"
+          : typeof e.code === "string"
+            ? e.code
+            : "agent_error";
         sessionEndStatus = code === "cancelled" ? "cancelled" : "failed";
         writeSessionMeta(input.projectPath, {
           ...meta,
@@ -1642,13 +1636,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         dispatchManager?.disposeAll();
         // A caller-provided manager outlives the run (multi-turn sessions).
         if (!deps.background) ctx.background?.disposeAll();
-        // Tear down the shared headless browser (browser_* tools) so a
-        // Playwright process is not leaked past the session. No-op when the
-        // browser was never launched; runs only for the top-level session.
-        if (depth === 0) await disposeBrowser().catch(() => {});
-        // Tear down any language-server sessions (lsp_* tools) for the same
-        // reason — no spawned server process should outlive the session.
-        if (depth === 0) await disposeLspServers().catch(() => {});
         // sessionEnd hooks fire once per top-level session, after cleanup.
         // Advisory only; never affects the (already emitted) outcome. Nested
         // subagent sessions (depth > 0) do not fire it.
@@ -1661,7 +1648,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       }
       } finally {
-        activeSessionRuns.delete(activeRunKey);
+        await Promise.all([
+          lspLease?.release().catch(() => {}),
+          browserLease?.release().catch(() => {}),
+        ]);
+        sessionLease.release();
       }
     },
   };

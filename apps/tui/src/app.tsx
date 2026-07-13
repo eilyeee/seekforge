@@ -108,6 +108,7 @@ import {
   ownsRun,
   releaseRun,
   reserveRun,
+  takeRunOwned,
   type RunEntry,
   type RunReservation,
 } from "./run-identity.js";
@@ -192,8 +193,14 @@ export type AppProps = {
 };
 
 type PendingPermission = {
+  runId: number;
   request: PermissionRequest;
   resolve: (result: ConfirmResult) => void;
+};
+
+type PendingQuestion = {
+  runId: number;
+  resolve: (answer: string) => void;
 };
 
 /** Items scrolled per PageUp/PageDown press. */
@@ -279,7 +286,7 @@ export function App({
   // and prompt keys always act on the ACTIVE tab's entries only.
   const runsByTabRef = useRef<Map<number, RunEntry>>(new Map());
   const pendingPermissionByTabRef = useRef<Map<number, PendingPermission>>(new Map());
-  const pendingQuestionByTabRef = useRef<Map<number, (answer: string) => void>>(new Map());
+  const pendingQuestionByTabRef = useRef<Map<number, PendingQuestion>>(new Map());
   // Ctrl+B run detachment: ids of runs sent to the background, their
   // controllers (aborted on quit), and the per-run id counter.
   const runIdCounterRef = useRef(0);
@@ -298,7 +305,7 @@ export function App({
     },
   };
   const pendingQuestionRef = {
-    get current(): ((answer: string) => void) | null {
+    get current(): PendingQuestion | null {
       return pendingQuestionByTabRef.current.get(activeIdRef.current) ?? null;
     },
   };
@@ -654,14 +661,16 @@ export function App({
           const [, server, uri] = m;
           if (!server || !uri) continue;
           try {
-            const text = await readMcpResource(server, uri, mcpEntries);
+            const text = await readMcpResource(server, uri, mcpEntries, controller.signal);
             task += `\n\n--- MCP resource ${server}:${uri} ---\n${text}`;
           } catch (err) {
-            dispatchTab({
-              type: "notice",
-              tone: "error",
-              text: `mcp resource ${server}:${uri} failed: ${err instanceof Error ? err.message : String(err)}`,
-            });
+            if (!controller.signal.aborted) {
+              dispatchTab({
+                type: "notice",
+                tone: "error",
+                text: `mcp resource ${server}:${uri} failed: ${err instanceof Error ? err.message : String(err)}`,
+              });
+            }
           }
         }
         await runSession(task, controller.signal, {
@@ -689,7 +698,7 @@ export function App({
                 resolve(false);
                 return;
               }
-              pendingPermissionByTabRef.current.set(runTabId, { request: req, resolve });
+              pendingPermissionByTabRef.current.set(runTabId, { runId, request: req, resolve });
               dispatchTab({ type: "permission", request: req });
               ring(`Permission needed: ${req.toolName}${req.command ? ` — ${req.command.slice(0, 60)}` : ""}`);
             }),
@@ -699,7 +708,7 @@ export function App({
                 resolve("(no answer — the session was moved to the background)");
                 return;
               }
-              pendingQuestionByTabRef.current.set(runTabId, resolve);
+              pendingQuestionByTabRef.current.set(runTabId, { runId, resolve });
               dispatchTab({
                 type: "overlay",
                 overlay: { kind: "question", question: q.question, options: [...q.options], index: 0 },
@@ -719,10 +728,9 @@ export function App({
         }
       } finally {
         // If a permission prompt was still open when the run ended, deny it.
-        const stalePerm = pendingPermissionByTabRef.current.get(runTabId);
+        const stalePerm = takeRunOwned(pendingPermissionByTabRef.current, runTabId, runId);
         if (stalePerm) {
           stalePerm.resolve(false);
-          pendingPermissionByTabRef.current.delete(runTabId);
           dispatchTab({ type: "permission-resolved" });
         }
         if (detached()) {
@@ -884,7 +892,7 @@ export function App({
     }
     const q = pendingQuestionByTabRef.current.get(tabId);
     if (q) {
-      q("(no answer — the session was moved to the background)");
+      q.resolve("(no answer — the session was moved to the background)");
       pendingQuestionByTabRef.current.delete(tabId);
       dispatch({ type: "overlay", overlay: null });
     }
@@ -1777,6 +1785,7 @@ export function App({
                   prompt.name,
                   promptArgsFromText(prompt, argText),
                   mcpEntries,
+                  reservation.controller.signal,
                 );
                 if (!ownsRun(runsByTabRef.current, reservation) || reservation.controller.signal.aborted) return;
                 transferred = true;
@@ -1970,7 +1979,7 @@ export function App({
       }
       const question = pendingQuestionByTabRef.current.get(tabId);
       if (question) {
-        question("(no answer — the session was cancelled)");
+        question.resolve("(no answer — the session was cancelled)");
         pendingQuestionByTabRef.current.delete(tabId);
         dispatch({ type: "overlay", overlay: null });
       }
@@ -2185,7 +2194,7 @@ export function App({
           const resolve = pendingQuestionRef.current;
           pendingQuestionByTabRef.current.delete(activeIdRef.current);
           dispatch({ type: "overlay", overlay: null });
-          resolve?.(answer);
+          resolve?.resolve(answer);
         };
         if (stroke.name === "escape") {
           resolveAnswer("(the user declined to answer)");

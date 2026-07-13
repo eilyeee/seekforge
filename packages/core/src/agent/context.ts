@@ -1,5 +1,6 @@
 import type { ChatMessage, ProviderToolCall } from "@seekforge/shared";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
+import { acquireSessionLease } from "./session-lease.js";
 
 /**
  * CJK ranges where one character roughly equals one token under most
@@ -420,27 +421,32 @@ export async function llmCompactSessionNow(
   provider: SummaryProvider,
   focus?: string,
 ): Promise<LlmCompactSessionResult | null> {
-  let messages: ChatMessage[];
+  const lease = acquireSessionLease(workspace, sessionId);
   try {
-    messages = loadSessionMessages(workspace, sessionId);
-  } catch {
-    return null;
-  }
-  const beforeTokens = estimateMessagesTokens(messages);
-  // Budget 0 forces compaction whenever the message shape allows it; null on
-  // a too-short session OR any provider failure/empty summary.
-  const compacted = await llmCompactMessages(
-    provider,
-    messages,
-    0,
-    focus !== undefined ? { focus } : undefined,
-  );
-  if (!compacted) return null;
+    let messages: ChatMessage[];
+    try {
+      messages = loadSessionMessages(workspace, sessionId);
+    } catch {
+      return null;
+    }
+    const beforeTokens = estimateMessagesTokens(messages);
+    // Budget 0 forces compaction whenever the message shape allows it; null on
+    // a too-short session OR any provider failure/empty summary.
+    const compacted = await llmCompactMessages(
+      provider,
+      messages,
+      0,
+      focus !== undefined ? { focus } : undefined,
+    );
+    if (!compacted) return null;
 
-  rewriteSessionMessages(workspace, sessionId, compacted.messages);
-  return {
-    droppedTurns: compacted.droppedTurns,
-    beforeTokens,
-    afterTokens: estimateMessagesTokens(compacted.messages),
-  };
+    rewriteSessionMessages(workspace, sessionId, compacted.messages, lease);
+    return {
+      droppedTurns: compacted.droppedTurns,
+      beforeTokens,
+      afterTokens: estimateMessagesTokens(compacted.messages),
+    };
+  } finally {
+    lease.release();
+  }
 }

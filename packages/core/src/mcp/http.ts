@@ -2,6 +2,7 @@ import type { McpClientOptions } from "./client.js";
 import { McpError } from "./errors.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_SSE_EVENT_CHARS = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
@@ -43,6 +44,9 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
       for (;;) {
         const sep = buffer.search(/\n\n|\r\n\r\n/);
         if (sep === -1) break;
+        if (sep > MAX_SSE_EVENT_CHARS) {
+          throw new McpError("mcp_parse_error", `SSE event exceeded ${MAX_SSE_EVENT_CHARS} characters`);
+        }
         const rawEvent = buffer.slice(0, sep);
         buffer = buffer.slice(sep + (buffer[sep] === "\r" ? 4 : 2));
         const data = rawEvent
@@ -60,6 +64,9 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
         if (isJsonRpcResponse(msg, id)) {
           return msg;
         }
+      }
+      if (buffer.length > MAX_SSE_EVENT_CHARS) {
+        throw new McpError("mcp_parse_error", `SSE event exceeded ${MAX_SSE_EVENT_CHARS} characters`);
       }
       if (done) {
         // Some servers/proxies flush the final `data:` event and close the
@@ -231,8 +238,15 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     try {
       msg = await post(method, params, id, signal);
     } catch (err) {
-      if (err instanceof McpError && err.code === "mcp_cancelled") {
-        void post("notifications/cancelled", { requestId: id, reason: "caller aborted" }, undefined).catch(() => {});
+      if (err instanceof McpError && (err.code === "mcp_cancelled" || err.code === "mcp_timeout")) {
+        // Start the notification before rejecting, but do not wait for its
+        // response: a server that ignored the original request may also never
+        // answer this notification, which must not add a second timeout window.
+        void post(
+          "notifications/cancelled",
+          { requestId: id, reason: err.code === "mcp_timeout" ? "request timed out" : "caller aborted" },
+          undefined,
+        ).catch(() => {});
       }
       throw err;
     }

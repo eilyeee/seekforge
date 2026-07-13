@@ -11,11 +11,12 @@
  */
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const WORKTREE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** Structured git failure; `code` is stable, the caller maps it (e.g. to HTTP status). */
 export class WorktreeGitError extends Error {
@@ -79,6 +80,37 @@ async function ensureExcluded(basePath: string): Promise<void> {
   appendFileSync(excludeFile, `${current.endsWith("\n") || current === "" ? "" : "\n"}${line}\n`);
 }
 
+function requirePhysicalDirectory(path: string, create: boolean): void {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) throw error;
+    try {
+      mkdirSync(path, { mode: 0o700 });
+    } catch (mkdirError) {
+      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+    }
+    stat = lstatSync(path);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync.native(path) !== path) {
+    throw new WorktreeGitError("git_error", `unsafe worktree directory: ${path}`);
+  }
+}
+
+function physicalWorktreesRoot(basePath: string): string {
+  const base = realpathSync.native(resolve(basePath));
+  const state = join(base, ".seekforge");
+  const root = join(state, "worktrees");
+  requirePhysicalDirectory(state, true);
+  requirePhysicalDirectory(root, true);
+  const physical = realpathSync.native(root);
+  if (physical !== root || !physical.startsWith(base + sep)) {
+    throw new WorktreeGitError("git_error", `worktree directory escapes base repository: ${root}`);
+  }
+  return root;
+}
+
 /**
  * `git worktree add .seekforge/worktrees/<slug> -b seekforge/<slug>` in the
  * base repo. Verifies `basePath` is a work tree (throws `not_a_git_repo`
@@ -88,16 +120,28 @@ export async function createWorktree(
   basePath: string,
   slug: string,
 ): Promise<{ path: string; branch: string }> {
+  if (!WORKTREE_SLUG_RE.test(slug)) {
+    throw new WorktreeGitError("git_error", `invalid worktree slug: ${slug}`);
+  }
   try {
     await git(basePath, ["rev-parse", "--is-inside-work-tree"]);
   } catch {
     throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${basePath}`);
   }
+  const root = physicalWorktreesRoot(basePath);
+  const target = join(root, slug);
+  if (existsSync(target)) {
+    const stat = lstatSync(target);
+    if (stat.isSymbolicLink()) throw new WorktreeGitError("git_error", `unsafe worktree path: ${target}`);
+  }
   await ensureExcluded(basePath);
-  const relPath = join(".seekforge", "worktrees", slug);
   const branch = `seekforge/${slug}`;
-  await git(basePath, ["worktree", "add", relPath, "-b", branch]);
-  return { path: resolve(basePath, relPath), branch };
+  await git(basePath, ["worktree", "add", target, "-b", branch]);
+  const physicalTarget = realpathSync.native(target);
+  if (!physicalTarget.startsWith(root + sep)) {
+    throw new WorktreeGitError("git_error", `worktree path escapes base repository: ${target}`);
+  }
+  return { path: resolve(basePath, ".seekforge", "worktrees", slug), branch };
 }
 
 /** Whether `refs/heads/seekforge/<slug>` already exists in the base repo. */

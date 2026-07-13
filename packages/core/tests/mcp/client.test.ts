@@ -76,6 +76,17 @@ describe("mcp client", () => {
     }
   });
 
+  it("sends notifications/cancelled before rejecting a timed-out request", async () => {
+    const client = makeClient(100);
+    try {
+      await expect(client.callTool("slow", {})).rejects.toMatchObject({ code: "mcp_timeout" });
+      const cancelled = JSON.parse(await client.callTool("__getCancelled", {})) as number[];
+      expect(cancelled).toEqual([2]);
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("rejects isError results with the flattened text as the message", async () => {
     const client = makeClient();
     try {

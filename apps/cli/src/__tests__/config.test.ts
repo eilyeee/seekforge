@@ -2,7 +2,7 @@
 // helpers.test.ts: tsx runner, node:assert, first failure exits non-zero.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
@@ -237,6 +237,56 @@ test("configSetCommand rejects non-object config JSON without overwriting it", (
     console.error = oldError;
     console.log = oldLog;
     cleanup();
+  }
+});
+
+test("configSetCommand refuses a symlinked project config", () => {
+  const { projectPath, cleanup } = setupProject();
+  const externalDir = mkdtempSync(join(tmpdir(), "sf-config-external-"));
+  const external = join(externalDir, "config.json");
+  const seekDir = join(projectPath, ".seekforge");
+  mkdirSync(seekDir);
+  writeFileSync(external, '{"model":"keep"}\n');
+  symlinkSync(external, join(seekDir, "config.json"));
+  const oldCwd = process.cwd();
+  const oldExitCode = process.exitCode;
+  const oldError = console.error;
+  try {
+    process.chdir(projectPath);
+    process.exitCode = undefined;
+    console.error = () => {};
+    configSetCommand("model", "overwrite", {});
+    assert.equal(process.exitCode, 1);
+    assert.equal(readFileSync(external, "utf8"), '{"model":"keep"}\n');
+  } finally {
+    process.chdir(oldCwd);
+    process.exitCode = oldExitCode;
+    console.error = oldError;
+    cleanup();
+    rmSync(externalDir, { recursive: true, force: true });
+  }
+});
+
+test("configSetCommand refuses a symlinked project state directory", () => {
+  const { projectPath, cleanup } = setupProject();
+  const externalDir = mkdtempSync(join(tmpdir(), "sf-config-external-"));
+  symlinkSync(externalDir, join(projectPath, ".seekforge"));
+  const oldCwd = process.cwd();
+  const oldExitCode = process.exitCode;
+  const oldError = console.error;
+  try {
+    process.chdir(projectPath);
+    process.exitCode = undefined;
+    console.error = () => {};
+    configSetCommand("model", "overwrite", {});
+    assert.equal(process.exitCode, 1);
+    assert.equal(existsSync(join(externalDir, "config.json")), false, "external file must not be created");
+  } finally {
+    process.chdir(oldCwd);
+    process.exitCode = oldExitCode;
+    console.error = oldError;
+    cleanup();
+    rmSync(externalDir, { recursive: true, force: true });
   }
 });
 

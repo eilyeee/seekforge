@@ -10,7 +10,7 @@ export async function callRuntime<T>(
   method: string,
   workspace: string,
   params: Record<string, unknown>,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<T> {
   try {
     return await runtime.call<T>(method, { workspace, ...params }, opts);

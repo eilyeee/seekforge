@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
-import { createDefaultDispatcher, disposeBrowser } from "../../src/tools/index.js";
+import {
+  acquireBrowserLease,
+  acquireLspServerLease,
+  createDefaultDispatcher,
+  disposeBrowser,
+} from "../../src/tools/index.js";
 import { browserTools, checkBrowserUrl } from "../../src/tools/builtins/browser.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
@@ -22,6 +27,18 @@ describe("browser tools registration", () => {
 
   it("exposes exactly the four browser tools", () => {
     expect(browserTools.map((t) => t.name).sort()).toEqual([...NAMES].sort());
+  });
+
+  it("exports idempotent per-run browser and workspace LSP leases", async () => {
+    const firstBrowserRun = acquireBrowserLease();
+    const secondBrowserRun = acquireBrowserLease();
+    const lspRun = acquireLspServerLease(makeWorkspace());
+
+    await firstBrowserRun.release();
+    await firstBrowserRun.release();
+    await secondBrowserRun.release();
+    await lspRun.release();
+    await lspRun.release();
   });
 
   it("advertises all four through the default dispatcher", () => {

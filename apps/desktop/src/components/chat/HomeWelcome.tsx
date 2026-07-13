@@ -45,9 +45,9 @@ export function HomeWelcome({ onQuickAction, onNavigate, workspaceId }: Props) {
 
   useEffect(() => {
     let alive = true;
-    api.sessions().then((r) => alive && setSessions(r)).catch(() => {});
-    api.skills().then((r) => alive && setSkills(r)).catch(() => {});
-    api.agents().then((r) => alive && setAgents(r)).catch(() => {});
+    api.sessions(workspaceId).then((r) => alive && setSessions(r)).catch(() => {});
+    api.skills(workspaceId).then((r) => alive && setSkills(r)).catch(() => {});
+    api.agents(workspaceId).then((r) => alive && setAgents(r)).catch(() => {});
     return () => {
       alive = false;
     };

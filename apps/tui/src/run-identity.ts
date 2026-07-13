@@ -34,3 +34,14 @@ export function interruptRun(runs: Map<number, RunEntry>, tabId: number): number
   entry.controller.abort();
   return entry.sigintCount;
 }
+
+export function takeRunOwned<T extends { runId: number }>(
+  entries: Map<number, T>,
+  tabId: number,
+  runId: number,
+): T | null {
+  const entry = entries.get(tabId);
+  if (entry?.runId !== runId) return null;
+  entries.delete(tabId);
+  return entry;
+}

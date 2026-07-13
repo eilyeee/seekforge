@@ -31,62 +31,87 @@ export function insertText(s: EditorState, input: string): EditorState {
   };
 }
 
-// The cursor is a UTF-16 code-unit index, but an astral character (emoji,
-// CJK ext, …) is a surrogate PAIR — two code units. Moving/deleting by a fixed
-// 1 would split the pair, producing a lone surrogate that corrupts the string
-// (JSON.stringify emits U+FFFD, the API payload breaks). These helpers report
-// how many code units the previous/next whole code point occupies.
-function isHighSurrogate(cu: number): boolean {
-  return cu >= 0xd800 && cu <= 0xdbff;
+const segmenter =
+  typeof Intl.Segmenter === "function" ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+
+function fallbackBoundaries(text: string): number[] {
+  const boundaries = [0];
+  let regionalCount = 0;
+  let joinNext = false;
+  for (let i = 0; i < text.length;) {
+    const cp = text.codePointAt(i)!;
+    const width = cp > 0xffff ? 2 : 1;
+    const combining =
+      /\p{Mark}/u.test(String.fromCodePoint(cp)) ||
+      (cp >= 0xfe00 && cp <= 0xfe0f) ||
+      (cp >= 0x1f3fb && cp <= 0x1f3ff);
+    const regional = cp >= 0x1f1e6 && cp <= 0x1f1ff;
+    const joinsPrevious = combining || joinNext || cp === 0x200d || (regional && regionalCount % 2 === 1);
+    i += width;
+    if (!joinsPrevious) boundaries.push(i - width);
+    joinNext = cp === 0x200d;
+    regionalCount = regional ? regionalCount + 1 : 0;
+  }
+  boundaries.push(text.length);
+  return [...new Set(boundaries)].sort((a, b) => a - b);
 }
-function isLowSurrogate(cu: number): boolean {
-  return cu >= 0xdc00 && cu <= 0xdfff;
+
+export function graphemeBoundaries(text: string): number[] {
+  if (!segmenter) return fallbackBoundaries(text);
+  const boundaries = Array.from(segmenter.segment(text), (part) => part.index);
+  boundaries.push(text.length);
+  return boundaries;
 }
-function stepLeft(text: string, pos: number): number {
-  return pos >= 2 && isHighSurrogate(text.charCodeAt(pos - 2)) && isLowSurrogate(text.charCodeAt(pos - 1))
-    ? 2
-    : 1;
-}
-function stepRight(text: string, pos: number): number {
-  return pos + 1 < text.length && isHighSurrogate(text.charCodeAt(pos)) && isLowSurrogate(text.charCodeAt(pos + 1))
-    ? 2
-    : 1;
-}
-/**
- * Clamping a code-unit column onto another line can land between the halves of
- * a surrogate pair; back up onto the pair start so the cursor stays on a whole
- * code point (otherwise the next stepLeft/backspace desyncs).
- */
+
 export function snapToBoundary(text: string, pos: number): number {
-  return pos > 0 && isLowSurrogate(text.charCodeAt(pos)) && isHighSurrogate(text.charCodeAt(pos - 1))
-    ? pos - 1
-    : pos;
+  const clamped = Math.max(0, Math.min(pos, text.length));
+  let previous = 0;
+  for (const boundary of graphemeBoundaries(text)) {
+    if (boundary > clamped) break;
+    previous = boundary;
+  }
+  return previous;
+}
+
+function previousBoundary(text: string, pos: number): number {
+  const current = snapToBoundary(text, pos);
+  let previous = 0;
+  for (const boundary of graphemeBoundaries(text)) {
+    if (boundary >= current) break;
+    previous = boundary;
+  }
+  return previous;
+}
+
+function nextBoundary(text: string, pos: number): number {
+  const current = snapToBoundary(text, pos);
+  return graphemeBoundaries(text).find((boundary) => boundary > current) ?? text.length;
 }
 
 export function backspace(s: EditorState): EditorState {
   if (s.cursor === 0) return s;
-  const step = stepLeft(s.text, s.cursor);
+  const target = previousBoundary(s.text, s.cursor);
   return {
-    text: s.text.slice(0, s.cursor - step) + s.text.slice(s.cursor),
-    cursor: s.cursor - step,
+    text: s.text.slice(0, target) + s.text.slice(s.cursor),
+    cursor: target,
   };
 }
 
 export function deleteForward(s: EditorState): EditorState {
   if (s.cursor >= s.text.length) return s;
-  const step = stepRight(s.text, s.cursor);
+  const target = nextBoundary(s.text, s.cursor);
   return {
-    text: s.text.slice(0, s.cursor) + s.text.slice(s.cursor + step),
+    text: s.text.slice(0, s.cursor) + s.text.slice(target),
     cursor: s.cursor,
   };
 }
 
 export function moveLeft(s: EditorState): EditorState {
-  return { text: s.text, cursor: Math.max(0, s.cursor - stepLeft(s.text, s.cursor)) };
+  return { text: s.text, cursor: previousBoundary(s.text, s.cursor) };
 }
 
 export function moveRight(s: EditorState): EditorState {
-  return { text: s.text, cursor: Math.min(s.text.length, s.cursor + stepRight(s.text, s.cursor)) };
+  return { text: s.text, cursor: nextBoundary(s.text, s.cursor) };
 }
 
 /** Same column on the previous line, clamped to that line's length. */

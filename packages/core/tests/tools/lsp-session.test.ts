@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  acquireLspServerLease,
   disposeLspServers,
   lspDefinition,
   lspDiagnostics,
@@ -23,6 +24,11 @@ function send(message) {
 }
 
 function publish(params) {
+  if (process.env.LSP_TEST_HOLD_DIAGNOSTICS === "1") return;
+  if (process.env.LSP_TEST_EXIT_ON_DIAGNOSTICS === "1") {
+    setTimeout(() => process.exit(23), 10);
+    return;
+  }
   setTimeout(() => send({
     jsonrpc: "2.0",
     method: "textDocument/publishDiagnostics",
@@ -41,9 +47,13 @@ function publish(params) {
 function handle(message) {
   fs.appendFileSync(process.env.LSP_TEST_LOG, JSON.stringify(message) + "\n");
   if (message.method === "initialize") {
-    send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+    const respond = () => send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+    if (process.env.LSP_TEST_DELAY_INITIALIZE === "1") setTimeout(respond, 75);
+    else respond();
   } else if (message.method === "textDocument/definition" || message.method === "textDocument/references") {
-    send({ jsonrpc: "2.0", id: message.id, result: [] });
+    if (process.env.LSP_TEST_HOLD_REQUESTS !== "1") {
+      send({ jsonrpc: "2.0", id: message.id, result: [] });
+    }
   } else if (message.method === "textDocument/didOpen") {
     publish({ textDocument: message.params.textDocument });
   } else if (message.method === "textDocument/didChange") {
@@ -73,8 +83,10 @@ process.stdin.on("data", (chunk) => {
 `;
 
 type LspMessage = {
+  id?: number;
   method?: string;
   params?: {
+    id?: number;
     textDocument?: { version?: number; text?: string };
     contentChanges?: Array<{ text?: string }>;
   };
@@ -99,6 +111,10 @@ describe("lsp document synchronization", () => {
   let logPath: string;
   let savedPath: string | undefined;
   let savedLog: string | undefined;
+  let savedHoldRequests: string | undefined;
+  let savedHoldDiagnostics: string | undefined;
+  let savedExitOnDiagnostics: string | undefined;
+  let savedDelayInitialize: string | undefined;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-lsp-session-"));
@@ -114,6 +130,10 @@ describe("lsp document synchronization", () => {
 
     savedPath = process.env.PATH;
     savedLog = process.env.LSP_TEST_LOG;
+    savedHoldRequests = process.env.LSP_TEST_HOLD_REQUESTS;
+    savedHoldDiagnostics = process.env.LSP_TEST_HOLD_DIAGNOSTICS;
+    savedExitOnDiagnostics = process.env.LSP_TEST_EXIT_ON_DIAGNOSTICS;
+    savedDelayInitialize = process.env.LSP_TEST_DELAY_INITIALIZE;
     process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ""}`;
     process.env.LSP_TEST_LOG = logPath;
   });
@@ -123,6 +143,10 @@ describe("lsp document synchronization", () => {
     process.env.PATH = savedPath;
     if (savedLog === undefined) delete process.env.LSP_TEST_LOG;
     else process.env.LSP_TEST_LOG = savedLog;
+    restoreEnv("LSP_TEST_HOLD_REQUESTS", savedHoldRequests);
+    restoreEnv("LSP_TEST_HOLD_DIAGNOSTICS", savedHoldDiagnostics);
+    restoreEnv("LSP_TEST_EXIT_ON_DIAGNOSTICS", savedExitOnDiagnostics);
+    restoreEnv("LSP_TEST_DELAY_INITIALIZE", savedDelayInitialize);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -133,6 +157,18 @@ describe("lsp document synchronization", () => {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as LspMessage);
+  }
+
+  async function waitForMessage(method: string): Promise<LspMessage> {
+    // Full-suite workers contend for process startup and filesystem I/O; this
+    // helper is synchronization, not the behavior timeout under test.
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const found = fs.existsSync(logPath) ? messages().find((message) => message.method === method) : undefined;
+      if (found) return found;
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for ${method}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 
   it("sends didChange with current contents before definition and references", async () => {
@@ -168,7 +204,7 @@ describe("lsp document synchronization", () => {
 
     const results = await withTimeout(
       Promise.all([lspDiagnostics(workspace, source), lspDiagnostics(workspace, source)]),
-      500,
+      3_000,
     );
 
     expect(results).toEqual([
@@ -179,4 +215,75 @@ describe("lsp document synchronization", () => {
     expect(changes).toHaveLength(1);
     expect(changes[0]?.params?.textDocument?.version).toBe(2);
   });
+
+  it("cancels an in-flight request when its AbortSignal fires", async () => {
+    process.env.LSP_TEST_HOLD_REQUESTS = "1";
+    const controller = new AbortController();
+    const request = lspDefinition(workspace, source, { line: 0, character: 0 }, controller.signal);
+    const sent = await waitForMessage("textDocument/definition");
+
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ code: "cancelled" });
+    const cancellation = await waitForMessage("$/cancelRequest");
+    expect(cancellation.params?.id).toBe(sent.id);
+  });
+
+  it("does not let one caller abort shared session initialization", async () => {
+    process.env.LSP_TEST_DELAY_INITIALIZE = "1";
+    const controller = new AbortController();
+    const first = lspDefinition(workspace, source, { line: 0, character: 0 }, controller.signal);
+    await waitForMessage("initialize");
+    const second = lspReferences(workspace, source, { line: 0, character: 0 });
+
+    controller.abort();
+
+    await expect(first).rejects.toMatchObject({ code: "cancelled" });
+    await expect(second).resolves.toEqual([]);
+    expect(messages().filter((message) => message.method === "initialize")).toHaveLength(1);
+  });
+
+  it("rejects a diagnostics wait when the server exits", async () => {
+    process.env.LSP_TEST_EXIT_ON_DIAGNOSTICS = "1";
+
+    await expect(lspDiagnostics(workspace, source)).rejects.toMatchObject({ code: "lsp_exited" });
+  });
+
+  it("rejects a diagnostics wait when the session is disposed", async () => {
+    process.env.LSP_TEST_HOLD_DIAGNOSTICS = "1";
+    const diagnostics = lspDiagnostics(workspace, source);
+    await waitForMessage("textDocument/didOpen");
+
+    await disposeLspServers();
+
+    await expect(diagnostics).rejects.toMatchObject({ code: "lsp_exited" });
+  });
+
+  it("stops waiting for diagnostics when its AbortSignal fires", async () => {
+    process.env.LSP_TEST_HOLD_DIAGNOSTICS = "1";
+    const controller = new AbortController();
+    const diagnostics = lspDiagnostics(workspace, source, controller.signal);
+    await waitForMessage("textDocument/didOpen");
+
+    controller.abort();
+
+    await expect(diagnostics).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  it("keeps workspace sessions alive until the final run lease releases", async () => {
+    const first = acquireLspServerLease(workspace);
+    const second = acquireLspServerLease(workspace);
+    await lspDefinition(workspace, source, { line: 0, character: 0 });
+
+    await first.release();
+    await lspReferences(workspace, source, { line: 0, character: 0 });
+
+    expect(messages().filter((message) => message.method === "initialize")).toHaveLength(1);
+    await second.release();
+  });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}

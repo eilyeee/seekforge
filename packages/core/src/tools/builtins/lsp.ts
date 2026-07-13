@@ -90,7 +90,7 @@ const lspDefinitionTool = defineTool({
     const locations = await lspDefinition(ctx.workspace, abs, {
       line: args.line - 1,
       character: args.character ?? 0,
-    });
+    }, ctx.signal);
     const definitions = locations.map((l) => formatLocation(ctx.workspace, l));
     return { data: { definitions, count: definitions.length } };
   },
@@ -112,7 +112,7 @@ const lspReferencesTool = defineTool({
     const locations = await lspReferences(ctx.workspace, abs, {
       line: args.line - 1,
       character: args.character ?? 0,
-    });
+    }, ctx.signal);
     const references = locations.map((l) => formatLocation(ctx.workspace, l));
     return { data: { references, count: references.length } };
   },
@@ -131,7 +131,7 @@ const lspDiagnosticsTool = defineTool({
   }),
   async run(args, ctx) {
     const abs = resolveForRead(ctx.workspace, args.path);
-    const diags = await lspDiagnostics(ctx.workspace, abs);
+    const diags = await lspDiagnostics(ctx.workspace, abs, ctx.signal);
     const diagnostics = diags.map((d) => ({
       line: d.range.start.line + 1, // 1-based for display
       character: d.range.start.character,

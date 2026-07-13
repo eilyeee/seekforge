@@ -4,6 +4,8 @@
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -59,8 +61,14 @@ fn word_occurrences(s: &str, needle: &str) -> Vec<usize> {
     while let Some(pos) = s[from..].find(needle) {
         let i = from + pos;
         let end = i + needle.len();
-        let before_ok = i == 0 || !s[..i].chars().next_back().map(is_word_char).unwrap_or(false);
-        let after_ok = end >= s.len() || !s[end..].chars().next().map(is_word_char).unwrap_or(false);
+        let before_ok = i == 0
+            || !s[..i]
+                .chars()
+                .next_back()
+                .map(is_word_char)
+                .unwrap_or(false);
+        let after_ok =
+            end >= s.len() || !s[end..].chars().next().map(is_word_char).unwrap_or(false);
         if before_ok && after_ok {
             out.push(i);
         }
@@ -113,9 +121,9 @@ fn check_rm(s: &str) -> Option<&'static str> {
         // long flags only by exact match so "--force" (which contains 'r') is
         // not mistaken for recursive.
         let is_short = |f: &str| f.starts_with('-') && !f.starts_with("--");
-        let recursive = flags
-            .iter()
-            .any(|f| *f == "--recursive" || (is_short(f) && f.chars().any(|c| c == 'r' || c == 'R')));
+        let recursive = flags.iter().any(|f| {
+            *f == "--recursive" || (is_short(f) && f.chars().any(|c| c == 'r' || c == 'R'))
+        });
         let force = flags
             .iter()
             .any(|f| *f == "--force" || (is_short(f) && f.chars().any(|c| c == 'f' || c == 'F')));
@@ -149,7 +157,10 @@ fn check_pipe_to_shell(s: &str) -> bool {
                 continue;
             }
             for token in rest[special + 1..].split_whitespace() {
-                if ["sh", "bash", "zsh"].iter().any(|sh| flag_matches(token, sh)) {
+                if ["sh", "bash", "zsh"]
+                    .iter()
+                    .any(|sh| flag_matches(token, sh))
+                {
                     return true;
                 }
                 if token.contains(['|', ';', '&']) {
@@ -166,7 +177,9 @@ fn check_nested_shell_c(s: &str) -> bool {
         for i in word_occurrences(s, sh) {
             let rest = &s[i + sh.len()..];
             let trimmed = rest.trim_start();
-            if trimmed.len() < rest.len() && flag_matches(trimmed.split_whitespace().next().unwrap_or(""), "-c") {
+            if trimmed.len() < rest.len()
+                && flag_matches(trimmed.split_whitespace().next().unwrap_or(""), "-c")
+            {
                 return true;
             }
         }
@@ -218,16 +231,55 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
 // Execution
 // ---------------------------------------------------------------------------
 
-fn read_all(mut r: impl Read) -> String {
-    // Bound memory: read_to_end on a flooding child (`yes`, `cat /dev/zero`) would
-    // buffer gigabytes before the char cap is ever applied and OOM the process.
-    // Keep at most the leading and trailing CAP bytes — the middle is discarded,
-    // mirroring truncate_head_tail's head+tail retention — while still draining
-    // the pipe so the child isn't left blocked on a full buffer.
-    const CAP: usize = MAX_OUTPUT_CHARS * 4; // bytes; generous vs. the char cap
-    let mut head: Vec<u8> = Vec::new();
-    let mut tail: Vec<u8> = Vec::new();
-    let mut truncated = false;
+const OUTPUT_BYTE_CAP: usize = MAX_OUTPUT_CHARS * 4;
+
+#[derive(Default)]
+struct BoundedOutput {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    truncated: bool,
+}
+
+impl BoundedOutput {
+    fn push(&mut self, data: &[u8]) {
+        // Bound memory: read_to_end on a flooding child (`yes`, `cat /dev/zero`) would
+        // buffer gigabytes before the char cap is ever applied and OOM the process.
+        // Keep at most the leading and trailing CAP bytes — the middle is discarded,
+        // mirroring truncate_head_tail's head+tail retention — while still draining
+        // the pipe so the child isn't left blocked on a full buffer.
+        if self.head.len() < OUTPUT_BYTE_CAP {
+            let take = (OUTPUT_BYTE_CAP - self.head.len()).min(data.len());
+            self.head.extend_from_slice(&data[..take]);
+            if take < data.len() {
+                self.truncated = true;
+                self.tail.extend_from_slice(&data[take..]);
+            }
+        } else {
+            self.truncated = true;
+            self.tail.extend_from_slice(data);
+        }
+        if self.tail.len() > 2 * OUTPUT_BYTE_CAP {
+            let drop = self.tail.len() - OUTPUT_BYTE_CAP;
+            self.tail.drain(..drop);
+        }
+    }
+
+    fn finish(mut self) -> String {
+        if !self.truncated {
+            return String::from_utf8_lossy(&self.head).into_owned();
+        }
+        if self.tail.len() > OUTPUT_BYTE_CAP {
+            let drop = self.tail.len() - OUTPUT_BYTE_CAP;
+            self.tail.drain(..drop);
+        }
+        let mut out = String::from_utf8_lossy(&self.head).into_owned();
+        out.push_str("\n…[output truncated]…\n");
+        out.push_str(&String::from_utf8_lossy(&self.tail));
+        out
+    }
+}
+
+fn read_chunks(mut r: impl Read, tx: SyncSender<Vec<u8>>) {
     let mut chunk = [0u8; 16_384];
     loop {
         let n = match r.read(&mut chunk) {
@@ -235,37 +287,35 @@ fn read_all(mut r: impl Read) -> String {
             Ok(n) => n,
             Err(_) => break,
         };
-        let data = &chunk[..n];
-        if head.len() < CAP {
-            let take = (CAP - head.len()).min(n);
-            head.extend_from_slice(&data[..take]);
-            if take < n {
-                truncated = true;
-                tail.extend_from_slice(&data[take..]);
-            }
-        } else {
-            truncated = true;
-            tail.extend_from_slice(data);
-        }
-        if tail.len() > 2 * CAP {
-            let drop = tail.len() - CAP;
-            tail.drain(..drop);
+        if tx.send(chunk[..n].to_vec()).is_err() {
+            break;
         }
     }
-    if !truncated {
-        return String::from_utf8_lossy(&head).into_owned();
-    }
-    if tail.len() > CAP {
-        let drop = tail.len() - CAP;
-        tail.drain(..drop);
-    }
-    let mut out = String::from_utf8_lossy(&head).into_owned();
-    out.push_str("\n…[output truncated]…\n");
-    out.push_str(&String::from_utf8_lossy(&tail));
-    out
 }
 
+fn drain_output(rx: &Receiver<Vec<u8>>, output: &mut BoundedOutput) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(chunk) => output.push(&chunk),
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => return true,
+        }
+    }
+}
+
+#[cfg(test)]
 pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -> RtResult<Value> {
+    let cancelled = AtomicBool::new(false);
+    run_command_cancellable(workspace, command, cwd, timeout_ms, &cancelled)
+}
+
+pub fn run_command_cancellable(
+    workspace: &str,
+    command: &str,
+    cwd: &str,
+    timeout_ms: u64,
+    cancelled: &AtomicBool,
+) -> RtResult<Value> {
     // Denylist first: a denied command must never reach the shell, regardless
     // of cwd validity.
     if let Some(reason) = deny_reason(command) {
@@ -278,6 +328,9 @@ pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -
     let dir = resolve_inside_workspace(workspace, cwd)?;
     if !dir.is_dir() {
         return Err(RtError::io(format!("cwd is not a directory: {cwd}")));
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err(RtError::new(codes::CANCELLED, "command cancelled"));
     }
 
     let started = Instant::now();
@@ -303,13 +356,38 @@ pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -
     // Drain pipes on threads so a chatty child cannot deadlock on a full pipe.
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
-    let t_out = thread::spawn(move || stdout_pipe.map(read_all).unwrap_or_default());
-    let t_err = thread::spawn(move || stderr_pipe.map(read_all).unwrap_or_default());
+    // Bounded channels keep a flooding child from moving unbounded output into
+    // memory. Reader threads may outlive this request only when a descendant
+    // deliberately escapes the process group and retains a pipe forever.
+    const OUTPUT_CHANNEL_DEPTH: usize = 8;
+    let (out_tx, out_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
+    let (err_tx, err_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
+    thread::spawn(move || {
+        if let Some(pipe) = stdout_pipe {
+            read_chunks(pipe, out_tx);
+        }
+    });
+    thread::spawn(move || {
+        if let Some(pipe) = stderr_pipe {
+            read_chunks(pipe, err_tx);
+        }
+    });
+    let mut stdout_capture = BoundedOutput::default();
+    let mut stderr_capture = BoundedOutput::default();
 
     let deadline = started + Duration::from_millis(timeout_ms);
     let mut timed_out = false;
     let mut exit_code: i64 = -1;
     loop {
+        drain_output(&out_rx, &mut stdout_capture);
+        drain_output(&err_rx, &mut stderr_capture);
+        if cancelled.load(Ordering::Acquire) {
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            return Err(RtError::new(codes::CANCELLED, "command cancelled"));
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_code = status.code().map(i64::from).unwrap_or(-1);
@@ -343,8 +421,32 @@ pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -
         }
     }
 
-    let stdout = t_out.join().unwrap_or_default();
-    let stderr = t_err.join().unwrap_or_default();
+    // Normal descendants die with the process group and close both pipes. An
+    // escaped descendant must not make output drainage bypass the deadline.
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    while !(stdout_done && stderr_done) {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(RtError::new(codes::CANCELLED, "command cancelled"));
+        }
+        stdout_done |= drain_output(&out_rx, &mut stdout_capture);
+        stderr_done |= drain_output(&err_rx, &mut stderr_capture);
+        // Cancellation wins over the command deadline if both become visible
+        // while an escaped descendant is still holding an output pipe open.
+        if cancelled.load(Ordering::Acquire) {
+            return Err(RtError::new(codes::CANCELLED, "command cancelled"));
+        }
+        if stdout_done && stderr_done {
+            break;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    let stdout = stdout_capture.finish();
+    let stderr = stderr_capture.finish();
     let duration_ms = started.elapsed().as_millis() as u64;
 
     Ok(json!({
@@ -418,13 +520,13 @@ mod tests {
         let allowed = [
             "ls -la",
             "rm file.txt",
-            "rm -r build",          // recursive without force is not denylisted
-            "rm -f file.txt",       // force without recursive is not denylisted
-            "rm --force file.txt",  // long force-only, not recursive
-            "echo sudoku",          // word boundary: not "sudo"
-            "git pushy",            // not "git push"
+            "rm -r build",         // recursive without force is not denylisted
+            "rm -f file.txt",      // force without recursive is not denylisted
+            "rm --force file.txt", // long force-only, not recursive
+            "echo sudoku",         // word boundary: not "sudo"
+            "git pushy",           // not "git push"
             "git status",
-            "grep -R foo src",      // -R is only denied for chmod
+            "grep -R foo src", // -R is only denied for chmod
             "chmod 644 file",
             "curl https://example.com -o out.json",
             "curl https://x.com | jq .",
@@ -452,6 +554,33 @@ mod tests {
 
         assert_eq!(result["exitCode"], 0);
         assert_eq!(result["timedOut"], false);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn escaped_descendant_cannot_bypass_output_deadline() {
+        if Command::new("perl")
+            .arg("-e")
+            .arg("exit 0")
+            .status()
+            .is_err()
+        {
+            return;
+        }
+        let workspace =
+            std::env::temp_dir().join(format!("seekforge-runtime-escaped-{}", std::process::id()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let started = Instant::now();
+        let result = run_command(
+            workspace.to_str().unwrap(),
+            "perl -MPOSIX -e 'POSIX::setsid(); sleep 2'; true",
+            ".",
+            100,
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&workspace).unwrap();
+
+        assert_eq!(result["timedOut"], true);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

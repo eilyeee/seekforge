@@ -174,6 +174,33 @@ describe("createDeepSeekProvider fallbackModel", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
+  it("retries a failed successful-response body and then falls back", async () => {
+    const stalled = (): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new Error("body stalled")),
+      }) as Response;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(stalled())
+      .mockResolvedValueOnce(stalled())
+      .mockResolvedValueOnce(stalled())
+      .mockResolvedValueOnce(stalled())
+      .mockResolvedValueOnce(completion("deepseek-v4-pro"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = createDeepSeekProvider({
+      apiKey: "k",
+      model: "deepseek-v4-flash",
+      fallbackModel: "deepseek-v4-pro",
+    });
+    const out = await withTimers(provider.chat(REQ));
+
+    expect(out.content).toBe("hi from deepseek-v4-pro");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
   it("skips fallback entirely when fallbackModel equals the active model", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(res(503, "down"));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -264,5 +291,27 @@ describe("createDeepSeekProvider fallbackModel", () => {
     const out = await withTimers(provider.chatStream(REQ, () => {}));
 
     expect(out.usage.costUsd).toBeCloseTo((2 * 5 + 3 * 13) / 1_000_000, 12);
+  });
+
+  it("preserves caller cancellation during the fallback attempt", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during fallback");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockImplementationOnce(async (_url, init) => {
+        controller.abort(reason);
+        throw init?.signal?.reason;
+      });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const provider = createDeepSeekProvider({
+      apiKey: "k",
+      fallbackModel: "deepseek-v4-pro",
+    });
+
+    await expect(withTimers(provider.chat({ ...REQ, signal: controller.signal }))).rejects.toBe(reason);
   });
 });

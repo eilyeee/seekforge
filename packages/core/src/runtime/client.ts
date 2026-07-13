@@ -20,7 +20,11 @@ export type RuntimeClientOptions = {
 };
 
 export type RuntimeClient = {
-  call<T>(method: string, params: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<T>;
+  call<T>(
+    method: string,
+    params: Record<string, unknown>,
+    opts?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T>;
   ping(): Promise<{ version: string }>;
   dispose(): void;
 };
@@ -29,6 +33,8 @@ type Pending = {
   resolve: (data: unknown) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -46,6 +52,22 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let pending = new Map<string, Pending>();
   let nextId = 1;
   let disposed = false;
+
+  function takePending(id: string): Pending | undefined {
+    const request = pending.get(id);
+    if (!request) return undefined;
+    pending.delete(id);
+    clearTimeout(request.timer);
+    if (request.signal && request.onAbort) {
+      request.signal.removeEventListener("abort", request.onAbort);
+    }
+    return request;
+  }
+
+  function sendCancellation(proc: ChildProcessWithoutNullStreams, id: string): void {
+    if (!proc.stdin.writable || proc.stdin.destroyed) return;
+    proc.stdin.write(`${JSON.stringify({ method: "cancel", params: { id } })}\n`, () => {});
+  }
 
   function ensureChild(): ChildProcessWithoutNullStreams {
     if (child) return child;
@@ -67,8 +89,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       if (typeof id !== "string" || typeof parsed["ok"] !== "boolean") return;
       const p = pending.get(id);
       if (!p) return;
-      pending.delete(id);
-      clearTimeout(p.timer);
+      takePending(id);
       if (parsed["ok"]) {
         p.resolve(parsed["data"]);
       } else {
@@ -87,6 +108,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       pending = new Map();
       for (const p of stale.values()) {
         clearTimeout(p.timer);
+        if (p.signal && p.onAbort) p.signal.removeEventListener("abort", p.onAbort);
         p.reject(new RuntimeError("runtime_crashed", `seekforge-runtime exited unexpectedly (${detail})`));
       }
     };
@@ -97,22 +119,48 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   }
 
   return {
-    call<T>(method: string, params: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<T> {
+    call<T>(
+      method: string,
+      params: Record<string, unknown>,
+      opts?: { timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<T> {
+      if (opts?.signal?.aborted) {
+        return Promise.reject(new RuntimeError("cancelled", `runtime request ${method} cancelled`));
+      }
       const proc = ensureChild();
       const id = `r${nextId++}`;
       const timeoutMs = opts?.timeoutMs ?? defaultTimeout;
 
       return new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new RuntimeError("runtime_timeout", `runtime did not answer ${method} within ${timeoutMs}ms`));
+          const request = takePending(id);
+          if (!request) return;
+          sendCancellation(proc, id);
+          request.reject(
+            new RuntimeError("runtime_timeout", `runtime did not answer ${method} within ${timeoutMs}ms`),
+          );
         }, timeoutMs);
-        pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer });
+        const onAbort = () => {
+          const request = takePending(id);
+          if (!request) return;
+          sendCancellation(proc, id);
+          request.reject(new RuntimeError("cancelled", `runtime request ${method} cancelled`));
+        };
+        pending.set(id, {
+          resolve: resolve as (d: unknown) => void,
+          reject,
+          timer,
+          ...(opts?.signal ? { signal: opts.signal, onAbort } : {}),
+        });
+        opts?.signal?.addEventListener("abort", onAbort, { once: true });
+        if (opts?.signal?.aborted) {
+          onAbort();
+          return;
+        }
         proc.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (err) => {
           if (err) {
-            pending.delete(id);
-            clearTimeout(timer);
-            reject(new RuntimeError("runtime_write_failed", err.message));
+            const request = takePending(id);
+            request?.reject(new RuntimeError("runtime_write_failed", err.message));
           }
         });
       });
@@ -124,15 +172,20 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
 
     dispose() {
       disposed = true;
-      if (child) {
-        child.kill();
+      const proc = child;
+      if (proc) {
+        for (const id of pending.keys()) sendCancellation(proc, id);
+      }
+      for (const id of [...pending.keys()]) {
+        takePending(id)?.reject(new RuntimeError("disposed", "runtime client disposed"));
+      }
+      if (proc) {
         child = undefined;
+        proc.stdin.end();
+        const forceKill = setTimeout(() => proc.kill(), 1_000);
+        forceKill.unref();
+        proc.once("exit", () => clearTimeout(forceKill));
       }
-      for (const p of pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new RuntimeError("disposed", "runtime client disposed"));
-      }
-      pending.clear();
     },
   };
 }

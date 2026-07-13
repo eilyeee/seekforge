@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { interruptRun, ownsRun, releaseRun, reserveRun, type RunEntry } from "../run-identity.js";
+import { interruptRun, ownsRun, releaseRun, reserveRun, takeRunOwned, type RunEntry } from "../run-identity.js";
 
 describe("run identity", () => {
   it("reserves the originating tab across an async prompt and rejects another run there", () => {
@@ -30,5 +30,15 @@ describe("run identity", () => {
     expect(first.controller.signal.aborted).toBe(true);
     expect(second.controller.signal.aborted).toBe(true);
     expect(interruptRun(runs, 1)).toBe(2);
+  });
+
+  it("does not let an old detached run consume a replacement run's prompt", () => {
+    const prompts = new Map<number, { runId: number; value: string }>();
+    prompts.set(1, { runId: 11, value: "new prompt" });
+
+    expect(takeRunOwned(prompts, 1, 10)).toBeNull();
+    expect(prompts.get(1)?.value).toBe("new prompt");
+    expect(takeRunOwned(prompts, 1, 11)?.value).toBe("new prompt");
+    expect(prompts.has(1)).toBe(false);
   });
 });

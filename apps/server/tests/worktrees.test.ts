@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
+import { acquireSessionLease } from "@seekforge/core";
 import { worktreeSlug } from "../src/worktrees.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
 
@@ -136,6 +137,25 @@ describe("POST /api/worktrees", () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("not_a_git_repo");
   });
+
+  it("rejects creation while the base workspace has an active session", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const lease = acquireSessionLease(repo, "running-create");
+    try {
+      const res = await authed(base, "/api/worktrees", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "blocked-create" }),
+      });
+      expect(res.status).toBe(409);
+      expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+    } finally {
+      lease.release();
+    }
+    expect(existsSync(join(repo, ".seekforge", "worktrees", "blocked-create"))).toBe(false);
+    expect(gitIn(repo, "branch", "--list", "seekforge/blocked-create")).toBe("");
+  });
 });
 
 describe("GET /api/worktrees", () => {
@@ -240,5 +260,78 @@ describe("POST /api/worktrees/:id/merge", () => {
     const base = await boot(makeGitRepo());
     expect((await authed(base, "/api/worktrees/wt-nope/merge", { method: "POST" })).status).toBe(404);
     expect((await authed(base, "/api/worktrees/wt-nope", { method: "DELETE" })).status).toBe(404);
+  });
+
+  it("rejects merge and removal while the worktree has an active session", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const wt = await createWorktree(base, "busy-worktree");
+    const lease = acquireSessionLease(wt.path, "running");
+    try {
+      for (const [path, method] of [
+        [`/api/worktrees/${wt.id}/merge`, "POST"],
+        [`/api/worktrees/${wt.id}`, "DELETE"],
+      ] as const) {
+        const res = await authed(base, path, { method });
+        expect(res.status).toBe(409);
+        expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+      }
+    } finally {
+      lease.release();
+    }
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it("rejects merge and removal while the base workspace has an active session", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const wt = await createWorktree(base, "busy-base");
+    const lease = acquireSessionLease(repo, "running");
+    try {
+      expect((await authed(base, `/api/worktrees/${wt.id}/merge`, { method: "POST" })).status).toBe(409);
+      expect((await authed(base, `/api/worktrees/${wt.id}`, { method: "DELETE" })).status).toBe(409);
+    } finally {
+      lease.release();
+    }
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it("serializes merges targeting the same base repository", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const first = await createWorktree(base, "merge-one");
+    const second = await createWorktree(base, "merge-two");
+    writeFileSync(join(first.path, "one.txt"), "one\n");
+    writeFileSync(join(second.path, "two.txt"), "two\n");
+
+    const responses = await Promise.all([
+      authed(base, `/api/worktrees/${first.id}/merge`, { method: "POST" }),
+      authed(base, `/api/worktrees/${second.id}/merge`, { method: "POST" }),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(readFileSync(join(repo, "one.txt"), "utf8")).toBe("one\n");
+    expect(readFileSync(join(repo, "two.txt"), "utf8")).toBe("two\n");
+    expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+  });
+
+  it("serializes create with merge against the same base repository", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const existing = await createWorktree(base, "merge-during-create");
+    writeFileSync(join(existing.path, "merged.txt"), "merged\n");
+
+    const [merge, create] = await Promise.all([
+      authed(base, `/api/worktrees/${existing.id}/merge`, { method: "POST" }),
+      authed(base, "/api/worktrees", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "created-during-merge" }),
+      }),
+    ]);
+    expect([merge.status, create.status]).toEqual([200, 200]);
+    expect(readFileSync(join(repo, "merged.txt"), "utf8")).toBe("merged\n");
+    const created = await create.json() as { path: string };
+    expect(existsSync(created.path)).toBe(true);
+    expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
   });
 });

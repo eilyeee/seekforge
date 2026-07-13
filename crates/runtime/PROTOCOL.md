@@ -1,8 +1,25 @@
 # seekforge-runtime stdio protocol
 
-Line-delimited JSON over stdin/stdout. One request per line in, one response
-per line out. Responses may arrive out of order; `id` correlates them.
+Line-delimited JSON over stdin/stdout. Each request occupies one input line and
+gets one response line. Responses may arrive out of order; `id` correlates
+them. Cancellation notifications are the only input lines without responses.
 stderr is for human-readable logging only and is never parsed.
+
+Requests run on a fixed-size worker pool behind a bounded input queue. A request
+received while that queue is full gets a `runtime_busy` error. EOF cancels
+unfinished requests, waits for their responses, and then exits.
+
+Cancellation is an optional notification with no response of its own:
+
+```json
+{"method": "cancel", "params": {"id": "r1"}}
+```
+
+The target request still receives exactly one response, normally with error
+code `cancelled`. Request ids must be unique while in flight. Clients that do
+not send cancellation notifications remain compatible; runtimes predating
+this extension may ignore or reject the notification without affecting the
+original request/response framing.
 
 ## Request
 
@@ -56,4 +73,5 @@ Unparseable request lines get a response with `"id": null`, code
 ## Error codes
 
 `bad_request unknown_method outside_workspace sensitive_path exists no_match
-ambiguous too_large binary_file denied_dangerous timeout io_error git_error`
+ambiguous too_large binary_file denied_dangerous cancelled runtime_busy timeout
+io_error git_error`

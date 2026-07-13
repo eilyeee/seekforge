@@ -112,6 +112,15 @@ describe("normal mode motions", () => {
     expect(applyVimKey(normal(), at(text, 0), ch("e")).editor.cursor).toBe(1);
   });
 
+  it.each(["e\u0301", "🇨🇳", "👍🏽", "👨‍👩‍👧‍👦"])("motions and x keep the grapheme %s intact", (grapheme) => {
+    const text = `${grapheme} word`;
+    expect(applyVimKey(normal(), at(text, 0), ch("w")).editor.cursor).toBe(grapheme.length + 1);
+    expect(applyVimKey(normal(), at(text, 0), ch("e")).editor.cursor).toBe(grapheme.length + 4);
+    const deleted = applyVimKey(normal(), at(text, 0), ch("x"));
+    expect(deleted.editor).toEqual(at(" word", 0));
+    expect(deleted.vim.register).toBe(grapheme);
+  });
+
   it("gg jumps to buffer start via pending g; G jumps to buffer end", () => {
     const r = feed(normal(), at("one\ntwo", 6), [ch("g"), ch("g")]);
     expect(r.editor.cursor).toBe(0);

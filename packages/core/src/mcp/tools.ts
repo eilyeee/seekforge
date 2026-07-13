@@ -102,10 +102,15 @@ export async function listMcpResources(clients: McpClientEntry[]): Promise<McpRe
  * McpError("unknown_server") when no client of that name exists; server-side
  * failures propagate as McpError.
  */
-export async function readMcpResource(server: string, uri: string, clients: McpClientEntry[]): Promise<string> {
+export async function readMcpResource(
+  server: string,
+  uri: string,
+  clients: McpClientEntry[],
+  signal?: AbortSignal,
+): Promise<string> {
   const entry = clients.find((e) => e.serverName === server);
   if (!entry) throw new McpError("unknown_server", `no MCP server named "${server}" is connected`);
-  return entry.client.readResource(uri);
+  return entry.client.readResource(uri, signal);
 }
 
 /** One prompt as surfaced to callers, tagged with its server name. */
@@ -153,10 +158,11 @@ export async function getMcpPrompt(
   name: string,
   args: Record<string, unknown> | undefined,
   clients: McpClientEntry[],
+  signal?: AbortSignal,
 ): Promise<string> {
   const entry = clients.find((e) => e.serverName === server);
   if (!entry) throw new McpError("unknown_server", `no MCP server named "${server}" is connected`);
-  return entry.client.getPrompt(name, args);
+  return entry.client.getPrompt(name, args, signal);
 }
 
 /**

@@ -160,7 +160,7 @@ export const api = {
       "GET",
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
-  skills: () => request<Skill[]>("GET", withWorkspace("/api/skills")),
+  skills: (ws?: string) => request<Skill[]>("GET", withWorkspace("/api/skills", ws)),
   skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
   memory: () => request<MemoryResponse>("GET", withWorkspace("/api/memory")),
   memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user") =>
@@ -191,7 +191,7 @@ export const api = {
       value,
       ...(global ? { global: true } : {}),
     }),
-  agents: () => request<AgentInfo[]>("GET", withWorkspace("/api/agents")),
+  agents: (ws?: string) => request<AgentInfo[]>("GET", withWorkspace("/api/agents", ws)),
   agent: (id: string) => request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`)),
   evolution: () => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution")),
   evolutionAction: (id: string, action: "accept" | "reject") =>

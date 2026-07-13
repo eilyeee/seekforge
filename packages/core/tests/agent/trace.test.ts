@@ -484,4 +484,38 @@ describe("createSessionTrace persistent-fd appends", () => {
     expect(() => deleteSession(ws, "../outside")).toThrow(/Invalid session id/);
     expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("keep");
   });
+
+  it("rejects symlinked session state directories without touching their targets", () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-trace-outside-"));
+    try {
+      symlinkSync(outside, join(ws, ".seekforge"));
+      expect(() => createSessionTrace(ws, "escaped")).toThrow(/Unsafe session path/);
+      expect(readdirSync(outside)).toEqual([]);
+
+      rmSync(join(ws, ".seekforge"));
+      mkdirSync(join(ws, ".seekforge"));
+      symlinkSync(outside, join(ws, ".seekforge", "sessions"));
+      expect(() => writeSessionMeta(ws, meta("escaped", 0))).toThrow(/Unsafe session path/);
+      expect(readdirSync(outside)).toEqual([]);
+
+      rmSync(join(ws, ".seekforge", "sessions"));
+      mkdirSync(join(ws, ".seekforge", "sessions"));
+      writeFileSync(join(outside, "keep.txt"), "keep");
+      symlinkSync(outside, join(ws, ".seekforge", "sessions", "escaped"));
+      expect(() => createSessionTrace(ws, "escaped")).toThrow(/Unsafe session path/);
+      expect(() => deleteSession(ws, "escaped")).toThrow(/Unsafe session path/);
+      expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("keep");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked trace files", () => {
+    const outside = join(ws, "outside.jsonl");
+    writeFileSync(outside, "outside\n");
+    const trace = createSessionTrace(ws, "leaf-link");
+    symlinkSync(outside, join(trace.dir, "messages.jsonl"));
+    expect(() => trace.message({ role: "user", content: "escape" })).toThrow(/Unsafe session file/);
+    expect(readFileSync(outside, "utf8")).toBe("outside\n");
+  });
 });

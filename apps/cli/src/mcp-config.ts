@@ -2,10 +2,11 @@
 // .seekforge/config.json document without losing other keys. Kept separate
 // from disk I/O so the mutation logic is unit-testable.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { McpServerConfig } from "@seekforge/core";
+import { writeStatePath } from "./project-state.js";
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
 
@@ -72,6 +73,5 @@ export function extractMcpServersDoc(parsed: unknown): Record<string, unknown> |
 
 /** Write a config.json document, creating .seekforge/ as needed (2-space JSON). */
 export function writeConfigDoc(path: string, doc: ConfigDoc): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+  writeStatePath(path, `${JSON.stringify(doc, null, 2)}\n`);
 }

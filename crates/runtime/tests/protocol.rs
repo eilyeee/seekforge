@@ -1,9 +1,10 @@
 //! Integration tests: spawn the real binary and talk JSONL over stdio.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 use std::time::Instant;
 
 use serde_json::{json, Value};
@@ -24,7 +25,11 @@ impl Runtime {
             .expect("spawn seekforge-runtime");
         let stdin = child.stdin.take().unwrap();
         let reader = BufReader::new(child.stdout.take().unwrap());
-        Runtime { child, stdin, reader }
+        Runtime {
+            child,
+            stdin,
+            reader,
+        }
     }
 
     /// Send a raw line and read exactly one response line.
@@ -38,6 +43,22 @@ impl Runtime {
 
     fn call(&mut self, id: &str, method: &str, params: Value) -> Value {
         self.send_raw(&json!({ "id": id, "method": method, "params": params }).to_string())
+    }
+
+    fn send(&mut self, id: &str, method: &str, params: Value) {
+        writeln!(
+            self.stdin,
+            "{}",
+            json!({ "id": id, "method": method, "params": params })
+        )
+        .unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn read_response(&mut self) -> Value {
+        let mut response = String::new();
+        self.reader.read_line(&mut response).unwrap();
+        serde_json::from_str(&response).expect("response must be JSON")
     }
 }
 
@@ -55,10 +76,7 @@ struct TempWorkspace(PathBuf);
 impl TempWorkspace {
     fn new(tag: &str) -> Self {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let p = std::env::temp_dir().join(format!(
-            "sf-proto-{tag}-{}-{n}",
-            std::process::id()
-        ));
+        let p = std::env::temp_dir().join(format!("sf-proto-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         TempWorkspace(p)
     }
@@ -92,6 +110,152 @@ fn ping_reports_version() {
     let res = rt.call("r1", "ping", json!({}));
     let data = assert_ok(&res, "r1");
     assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn ping_can_complete_before_an_earlier_slow_command() {
+    let ws = TempWorkspace::new("concurrent");
+    let mut rt = Runtime::spawn();
+
+    rt.send(
+        "slow",
+        "run_command",
+        json!({ "workspace": ws.path(), "command": "sleep 1" }),
+    );
+    rt.send("ping", "ping", json!({}));
+
+    let first = rt.read_response();
+    assert_ok(&first, "ping");
+
+    let second = rt.read_response();
+    assert_ok(&second, "slow");
+}
+
+#[test]
+fn cancellation_kills_the_owned_command_group() {
+    let ws = TempWorkspace::new("cancel");
+    let mut rt = Runtime::spawn();
+    rt.send(
+        "slow",
+        "run_command",
+        json!({ "workspace": ws.path(), "command": "echo $$ > command.pid; sleep 10" }),
+    );
+
+    let pid_path = ws.0.join("command.pid");
+    for _ in 0..100 {
+        if pid_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pid: libc::pid_t = std::fs::read_to_string(&pid_path)
+        .expect("command must start before cancellation")
+        .trim()
+        .parse()
+        .unwrap();
+
+    writeln!(
+        rt.stdin,
+        "{}",
+        json!({ "method": "cancel", "params": { "id": "slow" } })
+    )
+    .unwrap();
+    rt.stdin.flush().unwrap();
+
+    let cancelled = rt.read_response();
+    assert_err(&cancelled, "slow", "cancelled");
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "shell process still exists"
+    );
+
+    rt.send("after", "ping", json!({}));
+    assert_ok(&rt.read_response(), "after");
+}
+
+#[test]
+fn cancellation_interrupts_output_drain_after_the_shell_exits() {
+    if Command::new("perl")
+        .arg("-e")
+        .arg("exit 0")
+        .status()
+        .is_err()
+    {
+        return;
+    }
+    let ws = TempWorkspace::new("cancel-drain");
+    let mut rt = Runtime::spawn();
+    rt.send(
+        "draining",
+        "run_command",
+        json!({
+            "workspace": ws.path(),
+            "command": "perl -MPOSIX -e 'if (fork() == 0) { POSIX::setsid(); open(F, \">escaped.pid\"); print F $$; close F; sleep 10; exit 0 }'",
+            "timeoutMs": 5000
+        }),
+    );
+
+    let pid_path = ws.0.join("escaped.pid");
+    for _ in 0..100 {
+        if pid_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let escaped_pid: libc::pid_t = std::fs::read_to_string(&pid_path)
+        .expect("escaped descendant must start")
+        .trim()
+        .parse()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+
+    let started = Instant::now();
+    writeln!(
+        rt.stdin,
+        "{}",
+        json!({ "method": "cancel", "params": { "id": "draining" } })
+    )
+    .unwrap();
+    rt.stdin.flush().unwrap();
+
+    let response = rt.read_response();
+    unsafe {
+        libc::kill(escaped_pid, libc::SIGKILL);
+    }
+    assert_err(&response, "draining", "cancelled");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "cancellation waited for the command deadline"
+    );
+}
+
+#[test]
+fn eof_settles_accepted_requests_before_exit() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_seekforge-runtime"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn seekforge-runtime");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+
+    writeln!(stdin, "{}", json!({ "id": "p1", "method": "ping" })).unwrap();
+    writeln!(stdin, "{}", json!({ "id": "p2", "method": "ping" })).unwrap();
+    drop(stdin);
+
+    let mut output = String::new();
+    stdout.read_to_string(&mut output).unwrap();
+    assert!(child.wait().unwrap().success());
+
+    let mut ids: Vec<String> = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .map(|response| response["id"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec!["p1", "p2"]);
 }
 
 #[test]
@@ -159,7 +323,10 @@ fn apply_patch_happy_and_no_match() {
     );
     assert_err(&res, "r2", "no_match");
     assert!(
-        res["error"]["message"].as_str().unwrap().contains("nearest line"),
+        res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nearest line"),
         "no_match must carry a nearest-line hint: {res}"
     );
 }

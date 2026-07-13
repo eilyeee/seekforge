@@ -76,6 +76,9 @@ any value containing `"` or `\` is corrupted on a render→reload round-trip.
 - **Also caught:** Git paths may contain newlines, so line-delimited worktree
   porcelain is not reversible; request `git worktree list --porcelain -z` and
   parse NUL-delimited fields end to end.
+- **Also caught:** aliases in a structured numeric grammar must be normalized
+  after parsing values, not by replacing characters in the source; cron DOW
+  replacement of `7` corrupted valid ranges and steps such as `5-7` and `*/7`.
 
 ## 5. Cursor / index math must be surrogate-pair & multibyte aware
 
@@ -276,6 +279,15 @@ leaves the user waiting for timeout.
 - **Also caught:** a successful non-streaming provider response cleared its
   timeout after headers, leaving a stalled JSON body uncancellable; retain the
   timeout and caller signal through body consumption.
+- **Also caught:** response-body consumption happened after the retry helper
+  returned, so a stalled, truncated, or malformed `200` body neither retried nor
+  reached model fallback; parsing must remain inside the attempt boundary.
+- **Also caught:** fallback error handling rethrew the primary model failure even
+  when the caller cancelled the fallback attempt; caller abort must take priority
+  over preserving an earlier retryable error.
+- **Also caught:** `DOMException.code` is numeric, so forwarding arbitrary error
+  codes classified an in-flight `AbortError` as a failed session; an aborted run
+  signal must force the stable string code `cancelled`.
 - **Also caught:** TUI async MCP prompts did not reserve a run until after the
   prompt resolved, and Ctrl+C counts were global; reserve before awaiting and
   bind interrupt state to the originating tab/run identity.
@@ -322,6 +334,11 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
   reference requests; track the last text and send `didChange` after disk edits.
 - **Also caught:** concurrent diagnostics for one URI overwrote a single waiter;
   coalesce the in-flight request or retain all waiters for that identity.
+- **Also caught:** top-level agent cleanup globally disposed shared LSP and
+  browser processes while concurrent runs still used them; retain a token per
+  run and tear down only after the final matching owner releases it.
+- **Also caught:** LSP server exit/disposal resolved pending diagnostics as an
+  empty successful result; lifecycle failure must reject every affected waiter.
 - **Also caught:** two connections could resume the same persisted session and
   interleave JSONL, metadata, and checkpoints; acquire a run-scoped session lease.
 - **Also caught:** server shutdown closed HTTP listeners without aborting active
@@ -331,6 +348,9 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
 - **Also caught:** a foreground shell could exit while a background descendant
   retained output pipes, making reader joins bypass the command timeout; clean
   up the owned process group before joining pipe readers.
+- **Also caught:** a descendant can call `setsid()` and escape that process group
+  while retaining stdout/stderr; output drainage itself needs a deadline and
+  must not unconditionally join a reader that may never see EOF.
 - **Also caught:** adding cancellation support at the provider boundary is not
   sufficient unless the agent loop passes its run signal into every active model
   request, including streaming reads and non-streaming body consumption.
@@ -343,6 +363,24 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
 - **Also caught:** cancellation must remove the matching pending request, timer,
   and listener on the client, send `notifications/cancelled`, and abort only the
   server-side tool context with the same request ID.
+- **Also caught:** a subprocess runtime cannot observe cancellation while its
+  stdin loop is blocked executing one request; dispatch through a bounded worker
+  pool, keep request IDs active through output drainage, and let cancel/EOF set
+  the matching command's termination flag.
+- **Also caught:** a client-side JSON-RPC timeout is cancellation too; send
+  `notifications/cancelled` with the original request ID before rejecting so
+  the server does not keep doing abandoned work.
+- **Also caught:** an HTTP cancellation notification must not be awaited to
+  completion; an unresponsive server could otherwise add a second full timeout
+  before the original cancellation or timeout reaches the caller.
+- **Also caught:** LSP request cancellation must remove the pending request,
+  timer, and abort listener, then send `$/cancelRequest` with the original ID.
+- **Also caught:** an SSE peer can stream one unterminated event forever; cap
+  both complete event size and the incomplete buffer, and cancel the reader on
+  overflow so memory use and transport lifetime stay bounded.
+- **Also caught:** marking a lease released before filesystem cleanup succeeds
+  turns a transient cleanup failure into a live orphan. Keep local ownership and
+  make `release()` retryable until the token-owned directory is actually gone.
 
 ## 21. Checkpoint at the event that makes cost or ownership observable
 
@@ -371,6 +409,9 @@ request later starts invisible work and desynchronizes controls from the server.
   workspace; remount views by workspace and invalidate chat-scoped callbacks.
 - **Also caught:** a delayed image upload read the next tab's draft from a shared
   component instance; key async composer state by tab identity.
+- **Also caught:** a tab-bound home view accepted a workspace prop but its recent
+  sessions/skills/agents calls still fell back to the global active workspace;
+  pass the captured tab workspace through every scoped request.
 
 ## 23. A PID is not a durable process identity
 
@@ -381,6 +422,10 @@ dead owner and stolen.
 - **Do:** persist a process start identity with the PID, compare both during
   recovery, and treat fresh malformed locks as active for a bounded grace period.
 - **Caught:** `packages/core/src/agent/loop-state.ts` — persisted Loop leases.
+- **Also caught:** `apps/cli/src/schedule.ts` repeated the PID-only check for
+  scheduler leases; persist and compare process start identity there as well.
+- **Also caught:** a recovery lock can itself be abandoned if its owner crashes;
+  give malformed recovery state a grace period and reclaim it after expiry.
 
 ## 24. Count completed units, not merely started units
 
@@ -440,6 +485,25 @@ also misses changes to the link itself.
 - **Also caught:** cached server search results and project config/trigger paths
   were re-opened without physical-path revalidation, allowing a later symlink
   swap to escape the workspace; reject symlinks and open with `O_NOFOLLOW`.
+- **Also caught:** internal state roots need stricter semantics than ordinary
+  workspace resolution. Session traces and Git worktree roots must reject every
+  symlinked directory component, revalidate physical containment, and use
+  no-follow leaf opens or atomic replacement before reading or writing.
+- **Also caught:** a predictable root under the shared temporary directory is a
+  security boundary. Create each component without following symlinks and
+  require the current OS owner plus private (`0700`) directory permissions.
+
+## 30. Related mutations must share one serialization domain
+
+Separate locks for operations that mutate the same underlying resource do not
+prevent races. A Git worktree create changes the same base repository metadata
+as merge and remove even though their API routes and target ids differ.
+
+- **Do:** identify the physical resource being mutated, key one lock by that
+  identity, and acquire the same workspace/session guard for every operation in
+  the family.
+- **Caught:** `apps/server/src/worktrees.ts` — create, merge, and remove now
+  share the base-repository lock; create also holds the base workspace guard.
 
 ---
 

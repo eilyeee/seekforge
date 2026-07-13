@@ -30,6 +30,13 @@ type WorktreeDialog =
   | { kind: "merged"; tabId: string }
   | { kind: "conflict"; files: string[] };
 
+type BacktrackTarget = {
+  tabId: string;
+  sessionId: string;
+  workspaceId: string;
+  itemId: number;
+};
+
 export function ChatView() {
   const t = useT();
   const tabsState = useStore((s) => s.tabs);
@@ -153,28 +160,30 @@ export function ChatView() {
   };
 
   /** Backtrack dialog state (user item pending the rewind confirmation). */
-  const [backtrackItem, setBacktrackItem] = useState<number | null>(null);
+  const [backtrackTarget, setBacktrackTarget] = useState<BacktrackTarget | null>(null);
   const [restoreFiles, setRestoreFiles] = useState(false);
   const [backtrackError, setBacktrackError] = useState<string | null>(null);
 
   const confirmBacktrack = async () => {
-    const itemId = backtrackItem;
-    const sessionId = tab.chat.sessionId;
-    const tabId = tab.tabId;
-    setBacktrackItem(null);
-    if (itemId === null || !sessionId) return;
-    const local = userTurnOf(tab.chat.items, itemId);
+    const target = backtrackTarget;
+    setBacktrackTarget(null);
+    if (!target) return;
+    const originatingTab = useStore.getState().tabs.tabs.find((candidate) => candidate.tabId === target.tabId);
+    if (originatingTab?.ws !== target.workspaceId || originatingTab.chat.sessionId !== target.sessionId) return;
+    const local = userTurnOf(originatingTab.chat.items, target.itemId);
     if (!local) return;
     try {
       // Server turns index ALL user messages of messages.jsonl; align the
       // local bubble ordinal to them from the end (see lib/backtrack.ts).
-      const turns = await api.sessionTurns(sessionId, tab.ws);
+      const turns = await api.sessionTurns(target.sessionId, target.workspaceId);
       const turn = mapToServerTurn(local.turn, local.count, turns.length);
       if (turn <= 0 || turn >= turns.length || !turns[turn]?.backtrackable) {
         throw new Error(`turn ${turn} is not backtrackable`);
       }
-      await api.backtrack(sessionId, turn, restoreFiles, tab.ws);
-      truncateAtItem(tabId, sessionId, itemId);
+      const currentTab = useStore.getState().tabs.tabs.find((candidate) => candidate.tabId === target.tabId);
+      if (currentTab?.ws !== target.workspaceId || currentTab.chat.sessionId !== target.sessionId) return;
+      await api.backtrack(target.sessionId, turn, restoreFiles, target.workspaceId);
+      truncateAtItem(target.tabId, target.sessionId, target.itemId);
       setBacktrackError(null);
     } catch (e) {
       setBacktrackError(String(e));
@@ -380,7 +389,12 @@ export function ChatView() {
                   ? (itemId) => {
                       setRestoreFiles(false);
                       setBacktrackError(null);
-                      setBacktrackItem(itemId);
+                      setBacktrackTarget({
+                        tabId: tab.tabId,
+                        sessionId: tab.chat.sessionId!,
+                        workspaceId: tab.ws,
+                        itemId,
+                      });
                     }
                   : undefined
               }
@@ -444,7 +458,11 @@ export function ChatView() {
           onSetMode={setMode}
           onSetApprovalMode={setApprovalMode}
           onSetSandbox={(value) => {
-            void api.setConfig("sandbox", value, undefined, tab.ws).then(setConfig).catch(() => {});
+            const origin = { tabId: tab.tabId, workspaceId: tab.ws };
+            void api.setConfig("sandbox", value, undefined, origin.workspaceId).then((next) => {
+              const current = activeTab(useStore.getState().tabs);
+              if (current.tabId === origin.tabId && current.ws === origin.workspaceId) setConfig(next);
+            }).catch(() => {});
           }}
         />
         </div>
@@ -464,13 +482,13 @@ export function ChatView() {
         />
       )}
 
-      {backtrackItem !== null && (
+      {backtrackTarget !== null && (
         <ConfirmDialog
           title={t("chat.backtrackTitle")}
           confirmLabel={t("chat.backtrackConfirm")}
           danger
           onConfirm={() => void confirmBacktrack()}
-          onCancel={() => setBacktrackItem(null)}
+          onCancel={() => setBacktrackTarget(null)}
         >
           <p>
             {t("chat.backtrackBody")}

@@ -102,7 +102,10 @@ const runCommand = defineTool({
         "run_command",
         ctx.workspace,
         { command: args.command, cwd: args.cwd ?? ".", timeoutMs },
-        { timeoutMs: timeoutMs + 30_000 }, // runtime enforces the command timeout itself
+        {
+          timeoutMs: timeoutMs + 30_000,
+          signal: ctx.signal,
+        }, // runtime enforces the command timeout itself
       );
       if (r.timedOut) {
         throw new ToolError("timeout", `command timed out after ${timeoutMs}ms`, {

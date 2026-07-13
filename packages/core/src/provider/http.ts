@@ -32,6 +32,8 @@ export type FetchWithRetryOptions = {
   timeoutBody?: boolean;
 };
 
+export type ResponseHandler<T> = (response: Response) => Promise<T>;
+
 const BODY_CONSUMERS = new Set<PropertyKey>([
   "arrayBuffer",
   "blob",
@@ -109,11 +111,23 @@ function backoffMs(attempt: number): number {
   return BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 250;
 }
 
-export async function fetchWithRetry(
+export function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  options?: FetchWithRetryOptions,
+): Promise<Response>;
+export function fetchWithRetry<T>(
+  url: string,
+  init: RequestInit,
+  options: FetchWithRetryOptions,
+  handleResponse: ResponseHandler<T>,
+): Promise<T>;
+export async function fetchWithRetry<T>(
   url: string,
   init: RequestInit,
   options: FetchWithRetryOptions = {},
-): Promise<Response> {
+  handleResponse?: ResponseHandler<T>,
+): Promise<Response | T> {
   let lastError: Error = new DeepSeekApiError("request never attempted");
   // Cause of the failure that scheduled the upcoming retry (status undefined =
   // network error). Carried across iterations so onRetry reports it precisely.
@@ -170,6 +184,27 @@ export async function fetchWithRetry(
       continue;
     }
     if (res.ok) {
+      if (handleResponse) {
+        // Parse non-streaming bodies inside the attempt so post-header failures
+        // participate in the same retry and fallback policy.
+        if (!options.timeoutBody) clearAttemptTimeout();
+        try {
+          const result = await handleResponse(res);
+          clearAttemptTimeout();
+          return result;
+        } catch (err) {
+          clearAttemptTimeout();
+          if (init.signal?.aborted) throw init.signal.reason;
+          const timedOut = err === timeoutErr;
+          lastError = new DeepSeekApiError(
+            timedOut
+              ? `DeepSeek API response body timed out after ${timeoutMs}ms`
+              : `network error reading DeepSeek API response: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          pendingStatus = undefined;
+          continue;
+        }
+      }
       if (options.timeoutBody) return withBodyTimeout(res, clearAttemptTimeout);
       clearAttemptTimeout(); // streaming bodies use their own idle timeout
       return res;

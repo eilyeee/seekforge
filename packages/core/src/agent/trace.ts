@@ -1,12 +1,13 @@
 import {
-  appendFileSync,
   closeSync,
-  copyFileSync,
+  constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -17,6 +18,13 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
 import { resolveForWrite } from "../tools/sandbox.js";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
+import {
+  acquireSessionLease,
+  assertSessionLease,
+  isSessionRunActive,
+  SessionBusyError,
+  type SessionLease,
+} from "./session-lease.js";
 
 export type SessionTrace = {
   dir: string;
@@ -65,12 +73,23 @@ function closeAppendFdsUnder(dir: string): void {
   }
 }
 
+function closeAppendFd(file: string): void {
+  const fd = appendFds.get(file);
+  if (fd === undefined) return;
+  appendFds.delete(file);
+  try {
+    closeSync(fd);
+  } catch {
+    // The atomic replacement below remains safe if an fd was already closed.
+  }
+}
+
 function appendLineSync(file: string, line: string): void {
   let fd = appendFds.get(file);
   if (fd !== undefined) {
     appendFds.delete(file); // re-set below: Map insertion order is the LRU order
   } else {
-    fd = openSync(file, "a");
+    fd = openSync(file, constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
     if (!appendFdsExitHookInstalled) {
       appendFdsExitHookInstalled = true;
       process.on("exit", () => {
@@ -100,11 +119,11 @@ function appendLineSync(file: string, line: string): void {
 
 /** JSONL session trace under <workspace>/.seekforge/sessions/<id>/. */
 export function createSessionTrace(workspace: string, sessionId: string): SessionTrace {
-  const dir = sessionDir(workspace, sessionId);
-  mkdirSync(dir, { recursive: true });
+  const dir = sessionDir(workspace, sessionId, true);
 
   const append = (file: string, value: unknown) => {
-    appendLineSync(join(dir, file), `${JSON.stringify({ ts: new Date().toISOString(), ...(value as object) })}\n`);
+    const target = sessionFile(workspace, sessionId, file, true);
+    appendLineSync(target, `${JSON.stringify({ ts: new Date().toISOString(), ...(value as object) })}\n`);
   };
 
   return {
@@ -112,7 +131,7 @@ export function createSessionTrace(workspace: string, sessionId: string): Sessio
     message: (m) => append("messages.jsonl", m),
     toolCall: (entry) => append("tool-calls.jsonl", entry),
     event: (e) => append("events.jsonl", e),
-    summary: (markdown) => writeFileSync(join(dir, "summary.md"), markdown),
+    summary: (markdown) => writeSessionText(workspace, sessionId, "summary.md", markdown),
   };
 }
 
@@ -134,10 +153,6 @@ export type SessionMeta = {
   plan?: { step: string; status: "pending" | "in_progress" | "done" }[];
 };
 
-function sessionsRoot(workspace: string): string {
-  return join(workspace, ".seekforge", "sessions");
-}
-
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_STATUSES = new Set<SessionStatus>([
   "idle", "running", "waiting_approval", "completed", "failed", "cancelled",
@@ -146,11 +161,101 @@ const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-function sessionDir(workspace: string, sessionId: string): string {
+function requirePhysicalDirectory(path: string, create: boolean): boolean {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !create) return false;
+    try {
+      mkdirSync(path, { mode: 0o700 });
+    } catch (mkdirError) {
+      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+    }
+    stat = lstatSync(path);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync.native(path) !== path) {
+    throw new Error(`Unsafe session path: ${path}`);
+  }
+  return true;
+}
+
+function sessionsRoot(workspace: string, create = false): string {
+  const root = realpathSync.native(resolve(workspace));
+  const state = join(root, ".seekforge");
+  const sessions = join(state, "sessions");
+  if (!requirePhysicalDirectory(state, create)) return sessions;
+  requirePhysicalDirectory(sessions, create);
+  return sessions;
+}
+
+function sessionDir(workspace: string, sessionId: string, create = false): string {
   if (!SESSION_ID_RE.test(sessionId) || sessionId.includes("..")) {
     throw new Error(`Invalid session id: ${sessionId}`);
   }
-  return join(sessionsRoot(workspace), sessionId);
+  const dir = join(sessionsRoot(workspace, create), sessionId);
+  requirePhysicalDirectory(dir, create);
+  return dir;
+}
+
+function sessionFile(
+  workspace: string,
+  sessionId: string,
+  name: string,
+  createDir = false,
+): string {
+  const dir = sessionDir(workspace, sessionId, createDir);
+  const file = join(dir, name);
+  try {
+    const stat = lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile() || realpathSync.native(file) !== file) {
+      throw new Error(`Unsafe session file: ${file}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return file;
+}
+
+function readSessionText(workspace: string, sessionId: string, name: string): string {
+  const file = sessionFile(workspace, sessionId, name);
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeSessionText(workspace: string, sessionId: string, name: string, content: string): void {
+  const target = sessionFile(workspace, sessionId, name, true);
+  const dir = sessionDir(workspace, sessionId, true);
+  const temp = join(dir, `.${name}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+  try {
+    writeFileSync(temp, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    closeAppendFd(target);
+    renameSync(temp, target);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+function withSessionMutation<T>(
+  workspace: string,
+  sessionId: string,
+  lease: SessionLease | undefined,
+  mutate: (lease: SessionLease) => T,
+): T {
+  if (lease) {
+    assertSessionLease(lease, workspace, sessionId);
+    return mutate(lease);
+  }
+  const acquired = acquireSessionLease(workspace, sessionId);
+  try {
+    return mutate(acquired);
+  } finally {
+    acquired.release();
+  }
 }
 
 function parseSessionMeta(value: unknown, expectedId: string): SessionMeta | undefined {
@@ -197,22 +302,13 @@ function parseChatMessage(value: unknown): ChatMessage | undefined {
 
 export function writeSessionMeta(workspace: string, meta: SessionMeta): void {
   if (!parseSessionMeta(meta, meta.id)) throw new Error("Invalid session metadata");
-  const dir = sessionDir(workspace, meta.id);
-  mkdirSync(dir, { recursive: true });
-  const target = join(dir, "session.json");
-  const temp = join(dir, `.session.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    writeFileSync(temp, `${JSON.stringify(meta, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    renameSync(temp, target);
-  } finally {
-    rmSync(temp, { force: true });
-  }
+  writeSessionText(workspace, meta.id, "session.json", `${JSON.stringify(meta, null, 2)}\n`);
 }
 
 export function readSessionMeta(workspace: string, sessionId: string): SessionMeta | undefined {
   try {
     return parseSessionMeta(
-      JSON.parse(readFileSync(join(sessionDir(workspace, sessionId), "session.json"), "utf8")) as unknown,
+      JSON.parse(readSessionText(workspace, sessionId, "session.json")) as unknown,
       sessionId,
     );
   } catch {
@@ -231,6 +327,7 @@ export function listSessions(workspace: string, opts: ListSessionsOptions = {}):
   if (!existsSync(root)) return [];
   const metas: SessionMeta[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) throw new Error(`Unsafe session path: ${join(root, entry.name)}`);
     if (!entry.isDirectory()) continue;
     const meta = readSessionMeta(workspace, entry.name);
     if (!meta) continue;
@@ -273,15 +370,23 @@ export function pruneSessions(workspace: string, opts: PruneSessionsOptions = {}
 
   const removed: string[] = [];
   for (const meta of all) {
-    if (meta.status === "running") continue;
+    if (meta.status === "running" || isSessionRunActive(workspace, meta.id)) continue;
     const tooOld = cutoff !== undefined && new Date(meta.createdAt).getTime() < cutoff;
     const overflow = !meta.parentAgentId && !keptByRecency.has(meta.id);
     if (!tooOld && !overflow) continue;
-    removed.push(meta.id);
-    if (!opts.dryRun) {
-      const dir = join(root, meta.id);
-      closeAppendFdsUnder(dir);
-      rmSync(dir, { recursive: true, force: true });
+    if (opts.dryRun) {
+      removed.push(meta.id);
+      continue;
+    }
+    try {
+      withSessionMutation(workspace, meta.id, undefined, () => {
+        const dir = sessionDir(workspace, meta.id);
+        closeAppendFdsUnder(dir);
+        rmSync(dir, { recursive: true, force: true });
+      });
+      removed.push(meta.id);
+    } catch (error) {
+      if (!(error instanceof SessionBusyError)) throw error;
     }
   }
   return { removed, kept: all.length - removed.length };
@@ -292,12 +397,14 @@ export function pruneSessions(workspace: string, opts: PruneSessionsOptions = {}
  * whether the session existed before deletion. Mirrors pruneSessions' per-id
  * removal; best-effort recursive delete.
  */
-export function deleteSession(workspace: string, id: string): boolean {
-  const dir = sessionDir(workspace, id);
-  if (!existsSync(dir)) return false;
-  closeAppendFdsUnder(dir);
-  rmSync(dir, { recursive: true, force: true });
-  return true;
+export function deleteSession(workspace: string, id: string, lease?: SessionLease): boolean {
+  return withSessionMutation(workspace, id, lease, () => {
+    const dir = sessionDir(workspace, id);
+    if (!existsSync(dir)) return false;
+    closeAppendFdsUnder(dir);
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  });
 }
 
 /**
@@ -306,9 +413,8 @@ export function deleteSession(workspace: string, id: string): boolean {
  * must not be replayed independently (especially tool calls/results).
  */
 export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
-  const file = join(sessionDir(workspace, sessionId), "messages.jsonl");
   const messages: ChatMessage[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of readSessionText(workspace, sessionId, "messages.jsonl").split("\n")) {
     if (!line.trim()) continue;
     try {
       const message = parseChatMessage(JSON.parse(line) as unknown);
@@ -334,35 +440,47 @@ export type ManualCompactionResult = {
  * compacted history. Returns null when the session is too short to compact
  * or has no messages file.
  */
-export function compactSessionNow(workspace: string, sessionId: string): ManualCompactionResult | null {
-  let messages: ChatMessage[];
-  try {
-    messages = loadSessionMessages(workspace, sessionId);
-  } catch {
-    return null;
-  }
-  const beforeTokens = estimateMessagesTokens(messages);
-  // Budget 0 forces compaction whenever the message shape allows it.
-  const compacted = compactMessages(messages, 0);
-  if (!compacted) return null;
+export function compactSessionNow(
+  workspace: string,
+  sessionId: string,
+  lease?: SessionLease,
+): ManualCompactionResult | null {
+  return withSessionMutation(workspace, sessionId, lease, (ownedLease) => {
+    let messages: ChatMessage[];
+    try {
+      messages = loadSessionMessages(workspace, sessionId);
+    } catch {
+      return null;
+    }
+    const beforeTokens = estimateMessagesTokens(messages);
+    // Budget 0 forces compaction whenever the message shape allows it.
+    const compacted = compactMessages(messages, 0);
+    if (!compacted) return null;
 
-  rewriteSessionMessages(workspace, sessionId, compacted.messages);
-  return {
-    droppedTurns: compacted.droppedTurns,
-    beforeTokens,
-    afterTokens: estimateMessagesTokens(compacted.messages),
-  };
+    rewriteSessionMessages(workspace, sessionId, compacted.messages, ownedLease);
+    return {
+      droppedTurns: compacted.droppedTurns,
+      beforeTokens,
+      afterTokens: estimateMessagesTokens(compacted.messages),
+    };
+  });
 }
 
 /**
  * Replaces a session's messages.jsonl wholesale (manual compaction flows
  * that build the new history elsewhere, e.g. LLM-summarized /compact).
  */
-export function rewriteSessionMessages(workspace: string, sessionId: string, messages: ChatMessage[]): void {
-  const file = join(sessionDir(workspace, sessionId), "messages.jsonl");
-  const ts = new Date().toISOString();
-  const lines = messages.map((m) => JSON.stringify({ ts, ...m }));
-  writeFileSync(file, `${lines.join("\n")}\n`);
+export function rewriteSessionMessages(
+  workspace: string,
+  sessionId: string,
+  messages: ChatMessage[],
+  lease?: SessionLease,
+): void {
+  withSessionMutation(workspace, sessionId, lease, () => {
+    const ts = new Date().toISOString();
+    const lines = messages.map((m) => JSON.stringify({ ts, ...m }));
+    writeSessionText(workspace, sessionId, "messages.jsonl", `${lines.join("\n")}\n`);
+  });
 }
 
 export type TruncateResult = { removedMessages: number; keptMessages: number };
@@ -383,34 +501,36 @@ export function truncateSessionAtUserTurn(
   workspace: string,
   sessionId: string,
   turnIndex: number,
+  lease?: SessionLease,
 ): TruncateResult | null {
-  if (turnIndex <= 0 || !Number.isInteger(turnIndex)) return null;
+  return withSessionMutation(workspace, sessionId, lease, () => {
+    if (turnIndex <= 0 || !Number.isInteger(turnIndex)) return null;
 
-  let messages: ChatMessage[];
-  try {
-    messages = loadSessionMessages(workspace, sessionId);
-  } catch {
-    return null;
-  }
-
-  let userTurn = -1;
-  let cutAt = -1;
-  for (let i = 0; i < messages.length; i += 1) {
-    if (messages[i]?.role !== "user") continue;
-    userTurn += 1;
-    if (userTurn === turnIndex) {
-      cutAt = i;
-      break;
+    let messages: ChatMessage[];
+    try {
+      messages = loadSessionMessages(workspace, sessionId);
+    } catch {
+      return null;
     }
-  }
-  if (cutAt < 0) return null; // turnIndex out of range
 
-  const kept = messages.slice(0, cutAt);
-  const file = join(sessionDir(workspace, sessionId), "messages.jsonl");
-  const ts = new Date().toISOString();
-  const lines = kept.map((m) => JSON.stringify({ ts, ...m }));
-  writeFileSync(file, `${lines.join("\n")}\n`);
-  return { removedMessages: messages.length - kept.length, keptMessages: kept.length };
+    let userTurn = -1;
+    let cutAt = -1;
+    for (let i = 0; i < messages.length; i += 1) {
+      if (messages[i]?.role !== "user") continue;
+      userTurn += 1;
+      if (userTurn === turnIndex) {
+        cutAt = i;
+        break;
+      }
+    }
+    if (cutAt < 0) return null; // turnIndex out of range
+
+    const kept = messages.slice(0, cutAt);
+    const ts = new Date().toISOString();
+    const lines = kept.map((m) => JSON.stringify({ ts, ...m }));
+    writeSessionText(workspace, sessionId, "messages.jsonl", `${lines.join("\n")}\n`);
+    return { removedMessages: messages.length - kept.length, keptMessages: kept.length };
+  });
 }
 
 export type CheckpointEntry = {
@@ -428,14 +548,13 @@ export type CheckpointEntry = {
 };
 
 function checkpointsFile(workspace: string, sessionId: string): string {
-  return join(sessionDir(workspace, sessionId), "checkpoints.jsonl");
+  return sessionFile(workspace, sessionId, "checkpoints.jsonl");
 }
 
 /** Appends one pre-write snapshot to <session>/checkpoints.jsonl. */
 export function appendCheckpoint(workspace: string, sessionId: string, entry: CheckpointEntry): void {
-  const dir = sessionDir(workspace, sessionId);
-  mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, "checkpoints.jsonl"), `${JSON.stringify(entry)}\n`);
+  const file = sessionFile(workspace, sessionId, "checkpoints.jsonl", true);
+  appendLineSync(file, `${JSON.stringify(entry)}\n`);
 }
 
 /** Reads checkpoints in recorded order. Corrupt/malformed lines are skipped. */
@@ -443,7 +562,7 @@ export function readCheckpoints(workspace: string, sessionId: string): Checkpoin
   const file = checkpointsFile(workspace, sessionId);
   if (!existsSync(file)) return [];
   const entries: CheckpointEntry[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of readSessionText(workspace, sessionId, "checkpoints.jsonl").split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as Partial<CheckpointEntry>;
@@ -543,12 +662,15 @@ export function rewindSession(
   workspace: string,
   sessionId: string,
   opts: { dryRun?: boolean } = {},
+  lease?: SessionLease,
 ): RewindResult {
-  const firstPerPath = new Map<string, CheckpointEntry>();
-  for (const entry of readCheckpoints(workspace, sessionId)) {
-    if (!firstPerPath.has(entry.path)) firstPerPath.set(entry.path, entry);
-  }
-  return applyCheckpoints(workspace, firstPerPath.values(), opts);
+  return withSessionMutation(workspace, sessionId, lease, () => {
+    const firstPerPath = new Map<string, CheckpointEntry>();
+    for (const entry of readCheckpoints(workspace, sessionId)) {
+      if (!firstPerPath.has(entry.path)) firstPerPath.set(entry.path, entry);
+    }
+    return applyCheckpoints(workspace, firstPerPath.values(), opts);
+  });
 }
 
 /**
@@ -565,13 +687,16 @@ export function rewindSessionToTurn(
   sessionId: string,
   turnIndex: number,
   opts: { dryRun?: boolean } = {},
+  lease?: SessionLease,
 ): RewindResult {
-  const earliestPerPath = new Map<string, CheckpointEntry>();
-  for (const entry of readCheckpoints(workspace, sessionId)) {
-    if ((entry.turn ?? 0) < turnIndex) continue;
-    if (!earliestPerPath.has(entry.path)) earliestPerPath.set(entry.path, entry);
-  }
-  return applyCheckpoints(workspace, earliestPerPath.values(), opts);
+  return withSessionMutation(workspace, sessionId, lease, () => {
+    const earliestPerPath = new Map<string, CheckpointEntry>();
+    for (const entry of readCheckpoints(workspace, sessionId)) {
+      if ((entry.turn ?? 0) < turnIndex) continue;
+      if (!earliestPerPath.has(entry.path)) earliestPerPath.set(entry.path, entry);
+    }
+    return applyCheckpoints(workspace, earliestPerPath.values(), opts);
+  });
 }
 
 /**
@@ -582,29 +707,30 @@ export function rewindSessionToTurn(
  * without touching the original. Returns the new session id, or null when
  * the source session (meta or messages) is missing.
  */
-export function forkSession(workspace: string, sessionId: string): string | null {
-  const srcDir = sessionDir(workspace, sessionId);
-  const srcMessages = join(srcDir, "messages.jsonl");
-  const meta = readSessionMeta(workspace, sessionId);
-  if (!meta || !existsSync(srcMessages)) return null;
+export function forkSession(workspace: string, sessionId: string, lease?: SessionLease): string | null {
+  return withSessionMutation(workspace, sessionId, lease, () => {
+    const srcMessages = sessionFile(workspace, sessionId, "messages.jsonl");
+    const meta = readSessionMeta(workspace, sessionId);
+    if (!meta || !existsSync(srcMessages)) return null;
 
-  const id = newSessionId();
-  const dstDir = sessionDir(workspace, id);
-  mkdirSync(dstDir, { recursive: true });
-  copyFileSync(srcMessages, join(dstDir, "messages.jsonl"));
-  const srcCheckpoints = join(srcDir, "checkpoints.jsonl");
-  if (existsSync(srcCheckpoints)) copyFileSync(srcCheckpoints, join(dstDir, "checkpoints.jsonl"));
+    const id = newSessionId();
+    writeSessionText(workspace, id, "messages.jsonl", readSessionText(workspace, sessionId, "messages.jsonl"));
+    const srcCheckpoints = sessionFile(workspace, sessionId, "checkpoints.jsonl");
+    if (existsSync(srcCheckpoints)) {
+      writeSessionText(workspace, id, "checkpoints.jsonl", readSessionText(workspace, sessionId, "checkpoints.jsonl"));
+    }
 
-  const now = new Date().toISOString();
-  writeSessionMeta(workspace, {
-    ...meta,
-    id,
-    task: `(fork) ${meta.task}`,
-    status: "completed",
-    createdAt: now,
-    updatedAt: now,
+    const now = new Date().toISOString();
+    writeSessionMeta(workspace, {
+      ...meta,
+      id,
+      task: `(fork) ${meta.task}`,
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return id;
   });
-  return id;
 }
 
 /**
@@ -614,7 +740,7 @@ export function forkSession(workspace: string, sessionId: string): string | null
  */
 export function sessionTitle(workspace: string, sessionId: string): string {
   try {
-    const summary = readFileSync(join(sessionDir(workspace, sessionId), "summary.md"), "utf8");
+    const summary = readSessionText(workspace, sessionId, "summary.md");
     for (const raw of summary.split("\n")) {
       const line = raw.replace(/^#+\s*/, "").trim();
       if (line) return line.slice(0, 80);

@@ -110,8 +110,9 @@ function classOf(ch: string): CharClass {
 }
 
 function charAt(text: string, pos: number): string {
-  const cp = text.codePointAt(pos);
-  return cp === undefined ? "" : String.fromCodePoint(cp);
+  const start = snapToBoundary(text, pos);
+  const end = moveRight({ text, cursor: start }).cursor;
+  return text.slice(start, end);
 }
 
 function nextIndex(text: string, pos: number): number {
@@ -236,12 +237,9 @@ function deleteToLineEnd(vim: VimState, editor: EditorState, insert: boolean): V
 
 /** Deletes the char under the cursor ("x"); `insert` makes it "s". */
 function deleteChar(vim: VimState, editor: EditorState, insert: boolean): VimResult {
-  // codePointAt (not text[cursor]) so an astral char (emoji) yields the whole
-  // character in the register, matching what deleteForward removes — otherwise
-  // `x` then `p` would re-insert a lone surrogate and corrupt the buffer.
-  const cp = editor.text.codePointAt(editor.cursor);
-  const ch = cp === undefined ? undefined : String.fromCodePoint(cp);
-  const removable = ch !== undefined && ch !== "\n";
+  const end = moveRight(editor).cursor;
+  const ch = editor.text.slice(editor.cursor, end);
+  const removable = ch !== "" && ch !== "\n";
   return mutate(vim, editor, removable ? deleteForward(editor) : editor, {
     ...(removable ? { register: ch } : {}),
     ...(insert ? { insert: true } : {}),

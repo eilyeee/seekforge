@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +18,7 @@ vi.mock("@seekforge/core", async (importOriginal) => {
 });
 
 import { startServer, type RunningServer } from "../src/index.js";
+import { acquireSessionLease } from "@seekforge/core";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
 const TOKEN = "test-token-active-session-guards";
@@ -112,14 +114,34 @@ describe("active-session REST guards", () => {
   });
 
   it("rejects backtrack without truncating the trace", async () => {
-    activeState.sessionIds.add("active");
     const messagesPath = join(workspace, ".seekforge/sessions/active/messages.jsonl");
     const before = readFileSync(messagesPath, "utf8");
-
-    await expectSessionBusy(authed("/api/sessions/active/backtrack", {
-      method: "POST",
-      body: JSON.stringify({ turn: 1, files: true }),
-    }));
+    let lease: ReturnType<typeof acquireSessionLease> | undefined;
+    const response = new Promise<{ status: number; body: string }>((resolveResponse, reject) => {
+      const req = request(`${base}/api/sessions/active/backtrack`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      });
+      req.on("response", (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => resolveResponse({ status: res.statusCode ?? 0, body }));
+      });
+      req.on("error", reject);
+      req.write('{"turn":');
+      setTimeout(() => {
+        lease = acquireSessionLease(workspace, "active");
+        req.end('1,"files":true}');
+      }, 50);
+    });
+    const result = await response;
+    try {
+      expect(result.status).toBe(409);
+      expect((JSON.parse(result.body) as { error: { code: string } }).error.code).toBe("session_busy");
+    } finally {
+      lease?.release();
+    }
 
     expect(readFileSync(messagesPath, "utf8")).toBe(before);
     expect(readFileSync(join(workspace, "src/active.txt"), "utf8")).toBe("during\n");

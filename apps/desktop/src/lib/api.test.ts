@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, setTokenProvider, setWorkspaceProvider, withWorkspace } from "./api";
 
 afterEach(() => {
   // Reset to the default (no active workspace) between tests.
   setWorkspaceProvider(() => "");
   setTokenProvider(() => "");
+  vi.restoreAllMocks();
 });
 
 describe("withWorkspace", () => {
@@ -36,6 +37,23 @@ describe("withWorkspace", () => {
   it("url-encodes the workspace id", () => {
     setWorkspaceProvider(() => "a b");
     expect(withWorkspace("/api/memory")).toBe("/api/memory?ws=a%20b");
+  });
+});
+
+describe("tab-scoped home requests", () => {
+  it("uses the explicit tab workspace for recents instead of the active workspace", async () => {
+    setWorkspaceProvider(() => "active-workspace");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    await Promise.all([api.sessions("tab-workspace"), api.skills("tab-workspace"), api.agents("tab-workspace")]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/sessions?ws=tab-workspace",
+      "/api/skills?ws=tab-workspace",
+      "/api/agents?ws=tab-workspace",
+    ]);
   });
 });
 

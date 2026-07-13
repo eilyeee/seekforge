@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { availableProfiles, loadConfig } from "../config.js";
 import { t } from "../i18n.js";
+import { writeStatePath } from "../project-state.js";
 
 const ALLOWED_KEYS = [
   "apiKey",
@@ -95,7 +96,12 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
   } else {
     current[key] = value;
   }
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+  try {
+    writeStatePath(path, `${JSON.stringify(current, null, 2)}\n`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
   console.log(t("cmd.config.setConfig", { key, path }));
 }

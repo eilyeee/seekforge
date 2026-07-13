@@ -158,6 +158,38 @@ describe("agent loop", () => {
     expect(listSessions(workspace)[0]!.status).toBe("cancelled");
   });
 
+  it("normalizes an in-flight provider AbortError to cancelled", async () => {
+    const controller = new AbortController();
+    const pendingChat = (req: ChatRequest): Promise<ChatResponse> =>
+      new Promise((_resolve, reject) => {
+        req.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("The operation was aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    const pendingProvider: ChatProvider = {
+      model: "pending",
+      chat: pendingChat,
+      chatStream: pendingChat,
+    };
+    const agent = createAgentCore({
+      provider: pendingProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+
+    const pending = collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }),
+    );
+    setTimeout(() => controller.abort(), 0);
+    const events = await pending;
+
+    const failed = events.find((event) => event.type === "session.failed");
+    expect(failed && failed.type === "session.failed" && failed.error.code).toBe("cancelled");
+    expect(listSessions(workspace)[0]!.status).toBe("cancelled");
+  });
+
   it("rebuilds the system prompt on resume (plan -> execute mode switch)", async () => {
     const planProvider = fakeProvider([response({ content: "## Plan\n1. edit a.ts" })]);
     const first = createAgentCore({

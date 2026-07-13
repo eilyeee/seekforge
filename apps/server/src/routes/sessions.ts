@@ -6,6 +6,7 @@
 
 import {
   buildSessionAudit,
+  acquireSessionLease,
   compactSessionNow,
   deleteSession,
   forkSession,
@@ -19,11 +20,26 @@ import {
   renderSessionAuditMarkdown,
   rewindSession,
   rewindSessionToTurn,
+  SessionBusyError,
   truncateSessionAtUserTurn,
 } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { isSafeId } from "../ids.js";
 import type { RouteCtx } from "./context.js";
+
+function sessionMutation<T>(
+  res: RouteCtx["res"],
+  sessionId: string,
+  mutate: () => T,
+): { value: T } | undefined {
+  try {
+    return { value: mutate() };
+  } catch (error) {
+    if (!(error instanceof SessionBusyError)) throw error;
+    sendApiError(res, 409, "session_busy", `session is running: ${sessionId}`);
+    return undefined;
+  }
+}
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   await routes(ctx);
@@ -86,7 +102,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (!readSessionMeta(workspace, id)) {
       return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     }
-    return sendJson(res, 200, compactSessionNow(workspace, id));
+    const result = sessionMutation(res, id, () => compactSessionNow(workspace, id));
+    if (!result) return;
+    return sendJson(res, 200, result.value);
   }
 
   // Fork a stored session into a NEW session id (the original is untouched).
@@ -96,7 +114,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (isSessionRunActive(workspace, id)) {
       return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
     }
-    const forked = forkSession(workspace, id);
+    const result = sessionMutation(res, id, () => forkSession(workspace, id));
+    if (!result) return;
+    const forked = result.value;
     if (forked === null) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     return sendJson(res, 200, { id: forked });
   }
@@ -108,7 +128,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (isSessionRunActive(workspace, id)) {
       return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
     }
-    const deleted = deleteSession(workspace, id);
+    const result = sessionMutation(res, id, () => deleteSession(workspace, id));
+    if (!result) return;
+    const deleted = result.value;
     if (!deleted) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     return sendJson(res, 200, { deleted });
   }
@@ -168,27 +190,39 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
       return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     }
-    if (isSessionRunActive(workspace, id)) {
-      return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
-    }
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     const { turn, files } = (body ?? {}) as { turn?: unknown; files?: unknown };
     if (typeof turn !== "number" || !Number.isInteger(turn)) {
       return sendApiError(res, 400, "bad_request", "body must be {turn: integer, files?: boolean}");
     }
-    // Truncating validates the turn index (null = turn 0 / out of range);
-    // file checkpoints are restored only after that validation passed.
-    const truncated = truncateSessionAtUserTurn(workspace, id, turn);
-    if (truncated === null) {
-      return sendApiError(res, 400, "bad_request", `turn ${turn} is not backtrackable (turn 0 or out of range)`);
+    let lease;
+    try {
+      // Acquire only after the request body is complete, immediately before
+      // mutation, and hold through both trace truncation and file rewind.
+      lease = acquireSessionLease(workspace, id);
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
+      }
+      throw error;
     }
-    let filesResult: { restored: number; deleted: number; skipped: number } | null = null;
-    if (files === true) {
-      const r = rewindSessionToTurn(workspace, id, turn);
-      filesResult = { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length };
+    try {
+      // Truncating validates the turn index (null = turn 0 / out of range);
+      // file checkpoints are restored only after that validation passed.
+      const truncated = truncateSessionAtUserTurn(workspace, id, turn, lease);
+      if (truncated === null) {
+        return sendApiError(res, 400, "bad_request", `turn ${turn} is not backtrackable (turn 0 or out of range)`);
+      }
+      let filesResult: { restored: number; deleted: number; skipped: number } | null = null;
+      if (files === true) {
+        const r = rewindSessionToTurn(workspace, id, turn, {}, lease);
+        filesResult = { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length };
+      }
+      return sendJson(res, 200, { ...truncated, files: filesResult });
+    } finally {
+      lease.release();
     }
-    return sendJson(res, 200, { ...truncated, files: filesResult });
   }
 
   if (method === "POST" && path === "/api/rewind") {
@@ -207,6 +241,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (readCheckpoints(workspace, sessionId).length === 0) {
       return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);
     }
-    return sendJson(res, 200, rewindSession(workspace, sessionId, { dryRun: dryRun === true }));
+    const result = sessionMutation(res, sessionId, () =>
+      rewindSession(workspace, sessionId, { dryRun: dryRun === true }));
+    if (!result) return;
+    return sendJson(res, 200, result.value);
   }
 }

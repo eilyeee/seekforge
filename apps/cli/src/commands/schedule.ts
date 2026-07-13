@@ -56,37 +56,44 @@ export function scheduleAddCommand(opts: ScheduleAddOptions, projectPath: string
     return;
   }
 
-  const registry = loadRegistry(projectPath);
-  const id = opts.id?.trim() || generateId(opts.task, registry.jobs);
-  const result = validateJobInput({
-    id,
-    task: opts.task,
-    schedule,
-    mode: opts.mode ?? "ask",
-    maxCostUsd: opts.maxCost,
-    enabled: true,
-  });
-  if (!result.ok) {
-    fail(`invalid job:\n  - ${result.errors.join("\n  - ")}`);
+  const releaseLease = acquireScheduleLease(projectPath);
+  if (!releaseLease) {
+    fail("another scheduler process is already running");
     return;
   }
 
-  let jobs: Job[];
   try {
-    jobs = addJob(registry.jobs, result.job);
-  } catch (err) {
-    fail(err instanceof Error ? err.message : String(err), { hint: "choose a different --id or remove the existing job" });
-    return;
-  }
-  saveRegistry(projectPath, { jobs });
-  // Registering a job for this project is explicit consent to operate here, so
-  // pre-authorize the workspace — otherwise the headless tick (no TTY) would
-  // fail the folder-access gate.
-  authorizeDir(projectPath);
+    const registry = loadRegistry(projectPath);
+    const id = opts.id?.trim() || generateId(opts.task, registry.jobs);
+    const result = validateJobInput({
+      id,
+      task: opts.task,
+      schedule,
+      mode: opts.mode ?? "ask",
+      maxCostUsd: opts.maxCost,
+      enabled: true,
+    });
+    if (!result.ok) {
+      fail(`invalid job:\n  - ${result.errors.join("\n  - ")}`);
+      return;
+    }
 
-  console.log(green(`added scheduled job "${result.job.id}"`));
-  console.log(dim(`  ${describeJob(result.job)}`));
-  console.log(dim("  run due jobs with: seekforge schedule run  (wire this into cron/launchd — see docs/scheduling.md)"));
+    let jobs: Job[];
+    try {
+      jobs = addJob(registry.jobs, result.job);
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err), { hint: "choose a different --id or remove the existing job" });
+      return;
+    }
+    saveRegistry(projectPath, { jobs });
+    authorizeDir(projectPath);
+
+    console.log(green(`added scheduled job "${result.job.id}"`));
+    console.log(dim(`  ${describeJob(result.job)}`));
+    console.log(dim("  run due jobs with: seekforge schedule run  (wire this into cron/launchd — see docs/scheduling.md)"));
+  } finally {
+    releaseLease();
+  }
 }
 
 /** `schedule list` — print all jobs (id, schedule, mode, budget, enabled, lastRun). */
@@ -107,26 +114,44 @@ export function scheduleListCommand(projectPath: string = process.cwd()): void {
 
 /** `schedule remove <id>`. */
 export function scheduleRemoveCommand(id: string, projectPath: string = process.cwd()): void {
-  const registry = loadRegistry(projectPath);
-  const { jobs, removed } = removeJob(registry.jobs, id);
-  if (!removed) {
-    fail(`no job with id "${id}"`, { hint: "list jobs with: seekforge schedule list" });
+  const releaseLease = acquireScheduleLease(projectPath);
+  if (!releaseLease) {
+    fail("another scheduler process is already running");
     return;
   }
-  saveRegistry(projectPath, { jobs });
-  console.log(green(`removed scheduled job "${id}"`));
+  try {
+    const registry = loadRegistry(projectPath);
+    const { jobs, removed } = removeJob(registry.jobs, id);
+    if (!removed) {
+      fail(`no job with id "${id}"`, { hint: "list jobs with: seekforge schedule list" });
+      return;
+    }
+    saveRegistry(projectPath, { jobs });
+    console.log(green(`removed scheduled job "${id}"`));
+  } finally {
+    releaseLease();
+  }
 }
 
 /** `schedule enable|disable <id>`. */
 export function scheduleSetEnabledCommand(id: string, enabled: boolean, projectPath: string = process.cwd()): void {
-  const registry = loadRegistry(projectPath);
-  const { jobs, job } = setEnabled(registry.jobs, id, enabled);
-  if (!job) {
-    fail(`no job with id "${id}"`, { hint: "list jobs with: seekforge schedule list" });
+  const releaseLease = acquireScheduleLease(projectPath);
+  if (!releaseLease) {
+    fail("another scheduler process is already running");
     return;
   }
-  saveRegistry(projectPath, { jobs });
-  console.log(green(`${enabled ? "enabled" : "disabled"} scheduled job "${id}"`));
+  try {
+    const registry = loadRegistry(projectPath);
+    const { jobs, job } = setEnabled(registry.jobs, id, enabled);
+    if (!job) {
+      fail(`no job with id "${id}"`, { hint: "list jobs with: seekforge schedule list" });
+      return;
+    }
+    saveRegistry(projectPath, { jobs });
+    console.log(green(`${enabled ? "enabled" : "disabled"} scheduled job "${id}"`));
+  } finally {
+    releaseLease();
+  }
 }
 
 export type ScheduleRunOptions = { id?: string };
@@ -201,7 +226,7 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
       // Stamp lastRunAt so interval/cron due-calculation advances. Reload under
       // the lease so another scheduler's stale snapshot cannot be persisted.
       const fresh = loadRegistry(projectPath);
-      saveRegistry(projectPath, { jobs: markRun(fresh.jobs, job.id, now) });
+      saveRegistry(projectPath, { jobs: markRun(fresh.jobs, job.id, new Date()) });
     }
   } finally {
     releaseLease();

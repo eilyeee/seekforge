@@ -37,7 +37,7 @@ export type McpClient = {
    * joined with "\n"; blob parts become "[binary content]"), capped at
    * RESOURCE_READ_MAX_CHARS.
    */
-  readResource(uri: string): Promise<string>;
+  readResource(uri: string, signal?: AbortSignal): Promise<string>;
   /** prompts/list — missing result.prompts is treated as an empty list. */
   listPrompts(): Promise<McpPrompt[]>;
   /**
@@ -45,7 +45,7 @@ export type McpClient = {
    * (each message rendered as "<role>: <text>", non-text parts become a
    * placeholder), capped at RESOURCE_READ_MAX_CHARS.
    */
-  getPrompt(name: string, args?: Record<string, unknown>): Promise<string>;
+  getPrompt(name: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
   dispose(): void;
 };
 
@@ -239,6 +239,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       const timer = setTimeout(() => {
         pending.delete(id);
         cleanup();
+        notify(proc, "notifications/cancelled", { requestId: id, reason: "request timed out" });
         reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`));
       }, timeoutMs);
       pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup });
@@ -367,8 +368,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
       return res?.resources ?? [];
     },
 
-    async readResource(uri: string): Promise<string> {
-      const res = await transport.request<ReadResourceResult>("resources/read", { uri });
+    async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+      const res = await transport.request<ReadResourceResult>("resources/read", { uri }, signal);
       const text = flattenResourceContents(res?.contents ?? []);
       return text.length > RESOURCE_READ_MAX_CHARS
         ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
@@ -381,11 +382,15 @@ export function createMcpClient(options: McpClientOptions): McpClient {
       return res?.prompts ?? [];
     },
 
-    async getPrompt(name: string, args?: Record<string, unknown>): Promise<string> {
-      const res = await transport.request<GetPromptResult>("prompts/get", {
-        name,
-        ...(args !== undefined ? { arguments: args } : {}),
-      });
+    async getPrompt(name: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+      const res = await transport.request<GetPromptResult>(
+        "prompts/get",
+        {
+          name,
+          ...(args !== undefined ? { arguments: args } : {}),
+        },
+        signal,
+      );
       const text = flattenPromptMessages(res?.messages ?? []);
       return text.length > RESOURCE_READ_MAX_CHARS
         ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`

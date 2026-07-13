@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { createMcpClient, type McpClient } from "../../src/mcp/client.js";
 import {
@@ -269,6 +269,15 @@ describe("loadMcpToolSpecs", () => {
 });
 
 describe("mcp resources", () => {
+  it("passes cancellation to resources/read", async () => {
+    const controller = new AbortController();
+    const readResource = vi.fn(async () => "ok");
+    const client = { readResource } as unknown as McpClient;
+
+    await expect(readMcpResource("fake", "mem://notes", [{ serverName: "fake", client, trusted: false }], controller.signal)).resolves.toBe("ok");
+    expect(readResource).toHaveBeenCalledWith("mem://notes", controller.signal);
+  });
+
   it("listMcpResources skips a failing server but keeps the others", async () => {
     const broken = {
       serverName: "broken",
@@ -293,6 +302,15 @@ describe("mcp resources", () => {
 });
 
 describe("mcp prompts", () => {
+  it("passes cancellation to prompts/get", async () => {
+    const controller = new AbortController();
+    const getPrompt = vi.fn(async () => "ok");
+    const client = { getPrompt } as unknown as McpClient;
+
+    await expect(getMcpPrompt("fake", "greet", {}, [{ serverName: "fake", client, trusted: false }], controller.signal)).resolves.toBe("ok");
+    expect(getPrompt).toHaveBeenCalledWith("greet", {}, controller.signal);
+  });
+
   it("listMcpPrompts aggregates prompts across servers, tagging each with its server", async () => {
     const refs = await listMcpPrompts([makeEntry("a", false), makeEntry("b", true)]);
     expect(refs).toEqual([

@@ -227,7 +227,19 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const DIAGNOSTICS_WAIT_MS = 4_000;
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+type Pending = {
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+  timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+type DiagnosticWaiter = {
+  resolve: (diagnostics: LspDiagnostic[]) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+};
+type DiagnosticRun = { promise: Promise<LspDiagnostic[]>; subscribers: number };
 
 class LspSession {
   readonly workspace: string;
@@ -239,8 +251,8 @@ class LspSession {
   private readonly pending = new Map<number, Pending>();
   private readonly opened = new Map<string, { version: number; text: string }>();
   private readonly diagnostics = new Map<string, LspDiagnostic[]>();
-  private readonly diagWaiters = new Map<string, () => void>();
-  private readonly diagnosticRuns = new Map<string, Promise<LspDiagnostic[]>>();
+  private readonly diagWaiters = new Map<string, DiagnosticWaiter>();
+  private readonly diagnosticRuns = new Map<string, DiagnosticRun>();
   // uri → the document version we last asked diagnostics for, so a stale
   // publishDiagnostics for an older version can be ignored.
   private readonly diagExpected = new Map<string, number>();
@@ -327,10 +339,8 @@ class LspSession {
   private dispatch(msg: Record<string, unknown>): void {
     // Response to one of our requests. Our ids are always numbers (nextId++).
     if (typeof msg.id === "number" && ("result" in msg || "error" in msg)) {
-      const p = this.pending.get(msg.id);
+      const p = this.takePending(msg.id);
       if (!p) return;
-      this.pending.delete(msg.id);
-      clearTimeout(p.timer);
       if (msg.error) {
         const e = msg.error as { message?: string };
         p.reject(new ToolError("lsp_error", e.message ?? "language server error"));
@@ -361,8 +371,7 @@ class LspSession {
         // about — it reflects pre-edit state and would answer the wrong question.
         if (expected != null && params.version != null && params.version < expected) return;
         this.diagnostics.set(params.uri, params.diagnostics ?? []);
-        const waiter = this.diagWaiters.get(params.uri);
-        if (waiter) waiter(); // `done` (below) clears itself and diagExpected
+        if (this.diagWaiters.has(params.uri)) this.finishDiagnostics(params.uri);
       }
     }
   }
@@ -383,23 +392,51 @@ class LspSession {
     this.send({ jsonrpc: "2.0", method, params });
   }
 
-  private request(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
+  private request(
+    method: string,
+    params: unknown,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.disposed || this.ended) return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
+    if (signal?.aborted) return Promise.reject(cancelledError());
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
+        if (!this.takePending(id)) return;
+        this.notify("$/cancelRequest", { id });
         reject(new ToolError("lsp_timeout", `${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const pending: Pending = { resolve, reject, timer, signal };
+      if (signal) {
+        pending.onAbort = () => {
+          if (!this.takePending(id)) return;
+          this.notify("$/cancelRequest", { id });
+          reject(cancelledError());
+        };
+      }
+      this.pending.set(id, pending);
+      if (signal?.aborted) {
+        pending.onAbort?.();
+        return;
+      }
+      if (signal && pending.onAbort) signal.addEventListener("abort", pending.onAbort, { once: true });
       // If the write can't go out (dead/closed pipe), fail NOW rather than
       // leaving the caller to wait out the full timeout.
       if (!this.send({ jsonrpc: "2.0", id, method, params })) {
-        this.pending.delete(id);
-        clearTimeout(timer);
+        this.takePending(id);
         reject(new ToolError("lsp_exited", "language server is not accepting requests"));
       }
     });
+  }
+
+  private takePending(id: number): Pending | undefined {
+    const pending = this.pending.get(id);
+    if (!pending) return undefined;
+    this.pending.delete(id);
+    clearTimeout(pending.timer);
+    if (pending.signal && pending.onAbort) pending.signal.removeEventListener("abort", pending.onAbort);
+    return pending;
   }
 
   /** Keep the server's document snapshot aligned with the file on disk. */
@@ -426,68 +463,85 @@ class LspSession {
     return { uri, version: current.version };
   }
 
-  async definition(absPath: string, position: LspPosition): Promise<LspLocation[]> {
+  async definition(absPath: string, position: LspPosition, signal?: AbortSignal): Promise<LspLocation[]> {
     const { uri } = this.syncDocument(absPath);
     const result = await this.request("textDocument/definition", {
       textDocument: { uri },
       position,
-    });
+    }, REQUEST_TIMEOUT_MS, signal);
     return normalizeLocations(result);
   }
 
-  async references(absPath: string, position: LspPosition): Promise<LspLocation[]> {
+  async references(absPath: string, position: LspPosition, signal?: AbortSignal): Promise<LspLocation[]> {
     const { uri } = this.syncDocument(absPath);
     const result = await this.request("textDocument/references", {
       textDocument: { uri },
       position,
       context: { includeDeclaration: true },
-    });
+    }, REQUEST_TIMEOUT_MS, signal);
     return normalizeLocations(result);
   }
 
-  async diagnosticsFor(absPath: string): Promise<LspDiagnostic[]> {
+  async diagnosticsFor(absPath: string, signal?: AbortSignal): Promise<LspDiagnostic[]> {
+    if (signal?.aborted) throw cancelledError();
     const uri = pathToFileURL(absPath).toString();
-    const running = this.diagnosticRuns.get(uri);
-    if (running) return running;
-    const run = this.collectDiagnostics(absPath, uri);
-    this.diagnosticRuns.set(uri, run);
+    let run = this.diagnosticRuns.get(uri);
+    if (!run) {
+      run = { promise: this.collectDiagnostics(absPath, uri), subscribers: 0 };
+      this.diagnosticRuns.set(uri, run);
+      const cleanup = (): void => {
+        if (this.diagnosticRuns.get(uri) === run) this.diagnosticRuns.delete(uri);
+      };
+      void run.promise.then(cleanup, cleanup);
+    }
+    run.subscribers++;
     try {
-      return await run;
+      return await abortable(run.promise, signal);
     } finally {
-      if (this.diagnosticRuns.get(uri) === run) this.diagnosticRuns.delete(uri);
+      run.subscribers--;
+      if (run.subscribers === 0 && this.diagnosticRuns.get(uri) === run && this.diagWaiters.has(uri)) {
+        this.finishDiagnostics(uri, cancelledError());
+      }
     }
   }
 
+  private finishDiagnostics(uri: string, err?: Error): void {
+    const waiter = this.diagWaiters.get(uri);
+    if (!waiter) return;
+    this.diagWaiters.delete(uri);
+    this.diagExpected.delete(uri);
+    clearTimeout(waiter.timer);
+    if (err) waiter.reject(err);
+    else waiter.resolve(this.diagnostics.get(uri) ?? []);
+  }
+
   private collectDiagnostics(absPath: string, uri: string): Promise<LspDiagnostic[]> {
+    if (this.disposed || this.ended) {
+      return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
+    }
     // Force a fresh diagnostics pass: clear any cached set, (re)open or bump the
     // document version, then wait for the next publishDiagnostics for THIS
     // version (older publishes are ignored in dispatch).
     this.diagnostics.delete(uri);
     const { version } = this.syncDocument(absPath, this.opened.has(uri));
     this.diagExpected.set(uri, version);
-    return new Promise<LspDiagnostic[]>((resolve) => {
-      const done = (): void => {
-        clearTimeout(timer);
-        this.diagWaiters.delete(uri);
-        this.diagExpected.delete(uri);
-        resolve(this.diagnostics.get(uri) ?? []);
-      };
-      const timer = setTimeout(done, DIAGNOSTICS_WAIT_MS);
-      this.diagWaiters.set(uri, done);
+    return new Promise<LspDiagnostic[]>((resolve, reject) => {
+      const timer = setTimeout(() => this.finishDiagnostics(uri), DIAGNOSTICS_WAIT_MS);
+      this.diagWaiters.set(uri, { resolve, reject, timer });
       // A matching-version publish may have landed between the delete above and
       // registering the waiter — settle immediately if so.
-      if (this.diagnostics.has(uri)) done();
+      if (this.diagnostics.has(uri)) this.finishDiagnostics(uri);
     });
   }
 
   private fail(err: Error): void {
-    for (const [, p] of this.pending) {
-      clearTimeout(p.timer);
-      p.reject(err);
+    for (const id of [...this.pending.keys()]) {
+      const pending = this.takePending(id);
+      pending?.reject(err);
     }
-    this.pending.clear();
-    for (const [, waiter] of this.diagWaiters) waiter();
-    this.diagWaiters.clear();
+    for (const uri of [...this.diagWaiters.keys()]) {
+      this.finishDiagnostics(uri, err);
+    }
   }
 
   async dispose(): Promise<void> {
@@ -542,20 +596,63 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function workspaceIdentity(workspace: string): string {
+  const resolved = path.resolve(workspace);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function cancelledError(): ToolError {
+  return new ToolError("cancelled", "LSP request cancelled");
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(cancelledError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup();
+      reject(cancelledError());
+    };
+    const cleanup = (): void => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (err: unknown) => {
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Shared session registry (one per workspace + languageId) + teardown.
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, LspSession>();
 const startingSessions = new Map<string, Promise<LspSession>>();
+const workspaceLeases = new Map<string, Set<symbol>>();
 let exitHookInstalled = false;
 
-async function getSession(workspace: string, absPath: string): Promise<{ session: LspSession }> {
+async function getSession(
+  workspace: string,
+  absPath: string,
+  signal?: AbortSignal,
+): Promise<{ session: LspSession }> {
+  if (signal?.aborted) throw cancelledError();
+  workspace = workspaceIdentity(workspace);
   const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable
   const key = `${workspace}\0${languageId}`;
   const starting = startingSessions.get(key);
   if (starting) {
-    const session = await starting;
+    const session = await abortable(starting, signal);
     if (session.usable) return { session };
   }
   let session = sessions.get(key);
@@ -570,31 +667,77 @@ async function getSession(workspace: string, absPath: string): Promise<{ session
     session = new LspSession(workspace, languageId, candidate);
     sessions.set(key, session);
     installExitHook();
-    const startup = session.start().then(() => session!);
+    const created = session;
+    const startup = created
+      .start()
+      .then(() => created)
+      .catch(async (err: unknown) => {
+        if (sessions.get(key) === created) sessions.delete(key);
+        await created.dispose();
+        throw err;
+      })
+      .finally(() => {
+        if (startingSessions.get(key) === startup) startingSessions.delete(key);
+      });
     startingSessions.set(key, startup);
-    try {
-      await startup;
-    } catch (err) {
-      if (sessions.get(key) === session) sessions.delete(key);
-      await session.dispose();
-      throw err;
-    } finally {
-      if (startingSessions.get(key) === startup) startingSessions.delete(key);
-    }
+    await abortable(startup, signal);
   }
   return { session };
 }
 
 /**
- * Tear down every language-server session and reset state. Idempotent and safe
- * when no server was ever started. Wired into the agent loop's session-end
- * cleanup (mirroring disposeBrowser) with a process-exit fallback below.
+ * Force-dispose every language-server session and invalidate all leases.
+ * Normal agent-run cleanup releases its LspServerLease instead.
  */
 export async function disposeLspServers(): Promise<void> {
   const all = [...sessions.values()];
   sessions.clear();
   startingSessions.clear();
+  workspaceLeases.clear();
   await Promise.all(all.map((s) => s.dispose().catch(() => {})));
+}
+
+export type LspServerLease = {
+  /** Release this run's ownership. The final release disposes only this workspace. */
+  release(): Promise<void>;
+};
+
+/**
+ * Retain shared LSP sessions for one agent run. Runs in the same workspace may
+ * share servers; a run's release cannot tear them down while another lease is
+ * still active.
+ */
+export function acquireLspServerLease(workspace: string): LspServerLease {
+  const workspaceKey = workspaceIdentity(workspace);
+  const token = Symbol("lsp-server-lease");
+  let leases = workspaceLeases.get(workspaceKey);
+  if (!leases) {
+    leases = new Set();
+    workspaceLeases.set(workspaceKey, leases);
+  }
+  leases.add(token);
+  let released = false;
+  return {
+    async release(): Promise<void> {
+      if (released) return;
+      released = true;
+      const current = workspaceLeases.get(workspaceKey);
+      if (!current?.delete(token) || current.size > 0) return;
+      workspaceLeases.delete(workspaceKey);
+      await disposeWorkspaceLspServers(workspaceKey);
+    },
+  };
+}
+
+async function disposeWorkspaceLspServers(workspace: string): Promise<void> {
+  const disposing: LspSession[] = [];
+  for (const [key, session] of sessions) {
+    if (session.workspace !== workspace) continue;
+    sessions.delete(key);
+    startingSessions.delete(key);
+    disposing.push(session);
+  }
+  await Promise.all(disposing.map((session) => session.dispose().catch(() => {})));
 }
 
 function installExitHook(): void {
@@ -622,23 +765,29 @@ export async function lspDefinition(
   workspace: string,
   absPath: string,
   position: LspPosition,
+  signal?: AbortSignal,
 ): Promise<LspLocation[]> {
-  const { session } = await getSession(workspace, absPath);
-  return session.definition(absPath, position);
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.definition(absPath, position, signal);
 }
 
 export async function lspReferences(
   workspace: string,
   absPath: string,
   position: LspPosition,
+  signal?: AbortSignal,
 ): Promise<LspLocation[]> {
-  const { session } = await getSession(workspace, absPath);
-  return session.references(absPath, position);
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.references(absPath, position, signal);
 }
 
-export async function lspDiagnostics(workspace: string, absPath: string): Promise<LspDiagnostic[]> {
-  const { session } = await getSession(workspace, absPath);
-  return session.diagnosticsFor(absPath);
+export async function lspDiagnostics(
+  workspace: string,
+  absPath: string,
+  signal?: AbortSignal,
+): Promise<LspDiagnostic[]> {
+  const { session } = await getSession(workspace, absPath, signal);
+  return session.diagnosticsFor(absPath, signal);
 }
 
 export type { LspLocation };

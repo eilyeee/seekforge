@@ -4,11 +4,11 @@
 // first failure is enough signal for `pnpm test`.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
-import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer } from "../mcp-config.js";
+import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
 import type { AgentEvent } from "@seekforge/shared";
 import {
   buildResultEnvelope,
@@ -310,6 +310,22 @@ test("readConfigDoc: non-object JSON falls back to empty doc", () => {
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("writeConfigDoc refuses symlinked project config targets", () => {
+  const project = mkdtempSync(join(tmpdir(), "seekforge-mcp-project-"));
+  const externalDir = mkdtempSync(join(tmpdir(), "seekforge-mcp-external-"));
+  try {
+    const stateDir = join(project, ".seekforge");
+    const external = join(externalDir, "config.json");
+    mkdirSync(stateDir);
+    writeFileSync(external, '{"keep":true}\n');
+    symlinkSync(external, join(stateDir, "config.json"));
+    assert.throws(() => writeConfigDoc(join(stateDir, "config.json"), { mcpServers: {} }), /regular file|symlink/);
+    assert.equal(readFileSync(external, "utf8"), '{"keep":true}\n');
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(externalDir, { recursive: true, force: true });
   }
 });
 test("extractMcpServersDoc: accepts wrapped and bare object maps only", () => {

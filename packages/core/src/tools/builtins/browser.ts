@@ -17,9 +17,9 @@ import { checkFetchUrl } from "./web.js";
  *
  * A single headless browser + page is shared across the four tools (navigate →
  * screenshot / snapshot / console) so the agent can run a "verify a frontend
- * change" loop against one live page. The instance is torn down by
- * `disposeBrowser()` (wired into the agent loop's session-end cleanup) with a
- * process-exit fallback so a headless browser process is never leaked.
+ * change" loop against one live page. Agent runs retain the instance through
+ * `acquireBrowserLease()`; the final release tears it down. A process-exit
+ * fallback ensures a headless browser process is never leaked.
  */
 
 const NAV_TIMEOUT_MS = 30_000;
@@ -65,6 +65,7 @@ type FailedRequest = { url: string; failure: string };
 let browser: PlaywrightBrowser | null = null;
 let context: any = null;
 let page: any = null;
+const browserLeases = new Set<symbol>();
 
 // Capture buffers, reset on every navigate so `browser_console` reports only
 // what happened since the current page loaded.
@@ -136,11 +137,15 @@ function requirePage(): any {
 }
 
 /**
- * Close the shared browser and reset all state. Idempotent and safe to call
- * when no browser was ever launched. Wired into the agent loop's session-end
- * cleanup; also invoked by the process-exit fallback below.
+ * Force-close the shared browser and invalidate all leases. Normal agent-run
+ * cleanup releases its BrowserLease instead.
  */
 export async function disposeBrowser(): Promise<void> {
+  browserLeases.clear();
+  await closeBrowser();
+}
+
+async function closeBrowser(): Promise<void> {
   const b = browser;
   browser = null;
   context = null;
@@ -157,12 +162,32 @@ export async function disposeBrowser(): Promise<void> {
   }
 }
 
+export type BrowserLease = {
+  /** Release this run's ownership. The final active release closes the browser. */
+  release(): Promise<void>;
+};
+
+/** Retain the shared browser for one top-level agent run. */
+export function acquireBrowserLease(): BrowserLease {
+  const token = Symbol("browser-lease");
+  browserLeases.add(token);
+  let released = false;
+  return {
+    async release(): Promise<void> {
+      if (released) return;
+      released = true;
+      if (!browserLeases.delete(token) || browserLeases.size > 0) return;
+      await closeBrowser();
+    },
+  };
+}
+
 let exitHookInstalled = false;
 /**
  * Best-effort fallback so a headless browser process is not leaked if the app
  * exits without calling disposeBrowser(). Registered lazily, only after a
  * browser is actually launched, so runs that never use these tools add no
- * listeners. The primary teardown path is disposeBrowser() at session end.
+ * listeners. The primary teardown path is the final BrowserLease release.
  */
 function installExitHook(): void {
   if (exitHookInstalled) return;

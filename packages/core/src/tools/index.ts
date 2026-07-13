@@ -123,5 +123,15 @@ export type {
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";
 export { zodToJsonSchema } from "./json-schema.js";
-export { builtinTools, configureVision, disposeBrowser, disposeLspServers, type VisionConfig } from "./builtins/index.js";
+export {
+  acquireBrowserLease,
+  acquireLspServerLease,
+  builtinTools,
+  configureVision,
+  disposeBrowser,
+  disposeLspServers,
+  type BrowserLease,
+  type LspServerLease,
+  type VisionConfig,
+} from "./builtins/index.js";
 export { truncateHeadTail, digestCommandOutput } from "./text.js";

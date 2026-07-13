@@ -20,11 +20,13 @@ type RecordedRequest = { method: string; id?: number; headers: IncomingHttpHeade
 function startFakeServer(): Promise<{
   url: string;
   requests: RecordedRequest[];
+  getOversizedSseDisconnects: () => number;
   close: () => Promise<void>;
 }> {
   const requests: RecordedRequest[] = [];
   const sockets = new Set<Socket>();
   const hanging: ServerResponse[] = [];
+  let oversizedSseDisconnects = 0;
 
   const server: Server = createServer((req, res) => {
     let body = "";
@@ -63,6 +65,13 @@ function startFakeServer(): Promise<{
         return;
       }
       if (msg.id === undefined) {
+        if (msg.method === "notifications/cancelled") {
+          // A cancellation notification is fire-and-forget. Deliberately never
+          // answer so the originating timeout/cancel test proves it does not
+          // wait through a second request timeout.
+          hanging.push(res);
+          return;
+        }
         res.writeHead(202).end(); // notification (notifications/initialized)
         return;
       }
@@ -112,6 +121,13 @@ function startFakeServer(): Promise<{
           json({ jsonrpc: "2.0", id: Number(msg.id) + 1, result: {} });
           return;
         }
+        if (name === "oversized-sse") {
+          res.on("close", () => oversizedSseDisconnects++);
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.write(`data: ${"x".repeat(1_100_000)}`);
+          hanging.push(res);
+          return;
+        }
         // SSE response style: noise event first, then the matching response.
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n');
@@ -139,6 +155,7 @@ function startFakeServer(): Promise<{
       resolve({
         url: `http://127.0.0.1:${address.port}/mcp`,
         requests,
+        getOversizedSseDisconnects: () => oversizedSseDisconnects,
         close: () =>
           new Promise<void>((done) => {
             for (const res of hanging) res.destroy();
@@ -153,9 +170,10 @@ function startFakeServer(): Promise<{
 let url: string;
 let requests: RecordedRequest[];
 let closeServer: () => Promise<void>;
+let getOversizedSseDisconnects: () => number;
 
 beforeAll(async () => {
-  ({ url, requests, close: closeServer } = await startFakeServer());
+  ({ url, requests, getOversizedSseDisconnects, close: closeServer } = await startFakeServer());
 });
 
 afterAll(async () => {
@@ -241,6 +259,7 @@ describe("mcp client over streamable HTTP", () => {
   });
 
   it("times out a request the server never answers", async () => {
+    requests.length = 0;
     const client = makeClient(200);
     try {
       const started = Date.now();
@@ -249,6 +268,24 @@ describe("mcp client over streamable HTTP", () => {
         code: "mcp_timeout",
       });
       expect(Date.now() - started).toBeLessThan(5_000);
+      const slow = requests.find((request) => request.method === "tools/call");
+      await vi.waitFor(() => {
+        expect(requests.some((request) => request.method === "notifications/cancelled")).toBe(true);
+      });
+      const cancellation = requests.find((request) => request.method === "notifications/cancelled");
+      expect(cancellation?.method).toBe("notifications/cancelled");
+      expect(cancellation?.params).toMatchObject({ requestId: slow?.id, reason: "request timed out" });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("caps incomplete SSE events and cancels the response reader", async () => {
+    const before = getOversizedSseDisconnects();
+    const client = makeClient(5_000);
+    try {
+      await expect(client.callTool("oversized-sse", {})).rejects.toMatchObject({ code: "mcp_parse_error" });
+      await vi.waitFor(() => expect(getOversizedSseDisconnects()).toBeGreaterThan(before));
     } finally {
       client.dispose();
     }
@@ -259,12 +296,14 @@ describe("mcp client over streamable HTTP", () => {
     const client = makeClient(5_000);
     const controller = new AbortController();
     try {
+      const started = Date.now();
       const pending = client.callTool("slow", {}, controller.signal);
       setTimeout(() => controller.abort(), 25);
       await expect(pending).rejects.toMatchObject({
         name: "McpError",
         code: "mcp_cancelled",
       });
+      expect(Date.now() - started).toBeLessThan(1_000);
       await vi.waitFor(() => {
         expect(requests.some((r) => r.method === "notifications/cancelled")).toBe(true);
       });

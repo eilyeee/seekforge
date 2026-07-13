@@ -33,11 +33,18 @@ export interface AgentCore {
 export {
   createAgentCore,
   createRetryBus,
-  hasActiveSessionRuns,
-  isSessionRunActive,
   type AgentCoreDeps,
   type RetryBus,
 } from "./loop.js";
+export {
+  acquireSessionLease,
+  acquireWorkspaceSessionGuard,
+  assertSessionLease,
+  hasActiveSessionRuns,
+  isSessionRunActive,
+  SessionBusyError,
+  type SessionLease,
+} from "./session-lease.js";
 export {
   buildAgentCoreDeps,
   buildProvider,

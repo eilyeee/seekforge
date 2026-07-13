@@ -15,8 +15,8 @@ import { browserTools } from "./browser.js";
 import { lspTools } from "./lsp.js";
 
 export { configureVision, type VisionConfig } from "./vision.js";
-export { disposeBrowser } from "./browser.js";
-export { disposeLspServers } from "../lsp/client.js";
+export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "./browser.js";
+export { acquireLspServerLease, disposeLspServers, type LspServerLease } from "../lsp/client.js";
 
 export function builtinTools(): ToolSpec[] {
   return [...fsTools, ...globTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools, ...visionTools, ...memoryTools, ...commandInvokeTools, ...repoMapTools, ...browserTools, ...lspTools];

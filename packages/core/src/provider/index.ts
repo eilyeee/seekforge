@@ -97,18 +97,20 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
    * fallback model, announcing it via onRetry. The fallback attempt does not
    * retry; if it fails (for any reason) the ORIGINAL error is rethrown.
    */
-  async function fetchWithFallback(
+  async function fetchWithFallback<T>(
     req: ChatRequest,
     stream: boolean,
-  ): Promise<{ response: Response; effectiveModel: string }> {
+    handleResponse: (response: Response) => Promise<T>,
+  ): Promise<{ result: T; effectiveModel: string }> {
     const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking, capabilities));
     try {
-      const response = await fetchWithRetry(
+      const result = await fetchWithRetry(
         url,
         { method: "POST", headers, body: primaryBody, signal: req.signal },
         { ...retryOpts, timeoutBody: !stream },
+        handleResponse,
       );
-      return { response, effectiveModel: model };
+      return { result, effectiveModel: model };
     } catch (err) {
       if (fallbackModel === undefined || !isRetryableError(err)) throw err;
       try {
@@ -127,21 +129,26 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       );
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
-        const response = await fetchWithRetry(
+        const result = await fetchWithRetry(
           url,
           { method: "POST", headers, body: fallbackBody, signal: req.signal },
           { maxRetries: 0, timeoutBody: !stream },
+          handleResponse,
         );
-        return { response, effectiveModel: fallbackModel };
+        return { result, effectiveModel: fallbackModel };
       } catch {
+        if (req.signal?.aborted) throw req.signal.reason;
         throw err; // Surface the original (pre-fallback) failure.
       }
     }
   }
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
-    const { response, effectiveModel } = await fetchWithFallback(req, false);
-    const json = (await response.json()) as WireChatCompletion;
+    const { result: json, effectiveModel } = await fetchWithFallback(
+      req,
+      false,
+      async (response) => (await response.json()) as WireChatCompletion,
+    );
     return mapChatResponse(json, effectiveModel, capabilities, config.modelPricing);
   }
 
@@ -150,7 +157,11 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     onDelta: (chunk: string) => void,
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    const { response: res, effectiveModel } = await fetchWithFallback(req, true);
+    const { result: res, effectiveModel } = await fetchWithFallback(
+      req,
+      true,
+      async (response) => response,
+    );
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
     }

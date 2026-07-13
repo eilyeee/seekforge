@@ -6,9 +6,10 @@
 // round-trip in a temp dir.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { scheduleAddCommand, scheduleRemoveCommand, scheduleSetEnabledCommand } from "../commands/schedule.js";
 import {
   addJob,
   acquireScheduleLease,
@@ -96,6 +97,14 @@ test("cronMatches supports */step and lists", () => {
   assert.equal(cronMatches("*/15 * * * *", new Date(2024, 0, 1, 12, 30)), true);
   assert.equal(cronMatches("*/15 * * * *", new Date(2024, 0, 1, 12, 31)), false);
   assert.equal(cronMatches("0,30 * * * *", new Date(2024, 0, 1, 12, 30)), true);
+});
+test("cron day-of-week accepts 7 as Sunday in ranges and steps", () => {
+  const sunday = new Date(2024, 0, 7, 0, 0);
+  const saturday = new Date(2024, 0, 6, 0, 0);
+  assert.equal(cronMatches("0 0 * * 5-7", sunday), true);
+  assert.equal(cronMatches("0 0 * * 5-7", saturday), true);
+  assert.equal(cronMatches("0 0 * * */7", sunday), true);
+  assert.equal(cronMatches("0 0 * * */7", saturday), false);
 });
 test("cron dom/dow use OR semantics when both are restricted", () => {
   // "0 0 13 * 5" → midnight on the 13th OR any Friday.
@@ -225,6 +234,7 @@ test("saveRegistry/loadRegistry round-trip through a temp .seekforge dir", () =>
     let reg = loadRegistry(dir);
     reg = { jobs: addJob(reg.jobs, baseJob({ id: "nightly", schedule: "1d", maxCostUsd: 0.5 })) };
     saveRegistry(dir, reg);
+    assert.equal(statSync(join(dir, ".seekforge", "schedules.json")).mode & 0o777, 0o600);
     assert.deepEqual(loadRegistry(dir).jobs.map((j) => j.id), ["nightly"]);
 
     // enable/disable persists
@@ -236,6 +246,34 @@ test("saveRegistry/loadRegistry round-trip through a temp .seekforge dir", () =>
     assert.deepEqual(loadRegistry(dir).jobs, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("schedule storage refuses symlinked state directories and files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  const externalDir = mkdtempSync(join(tmpdir(), "sf-sched-external-"));
+  try {
+    symlinkSync(externalDir, join(dir, ".seekforge"));
+    assert.throws(() => saveRegistry(dir, { jobs: [] }), /real directory/);
+    assert.equal(existsSync(join(externalDir, "schedules.json")), false, "external registry must not be created");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(externalDir, { recursive: true, force: true });
+  }
+
+  const leafDir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  const leafExternalDir = mkdtempSync(join(tmpdir(), "sf-sched-external-"));
+  try {
+    const stateDir = join(leafDir, ".seekforge");
+    const external = join(leafExternalDir, "schedules.json");
+    mkdirSync(stateDir);
+    writeFileSync(external, "keep\n");
+    symlinkSync(external, join(stateDir, "schedules.json"));
+    assert.throws(() => saveRegistry(leafDir, { jobs: [] }), /regular file|symlink/);
+    assert.equal(readFileSync(external, "utf8"), "keep\n");
+    assert.deepEqual(loadRegistry(leafDir), { jobs: [] });
+  } finally {
+    rmSync(leafDir, { recursive: true, force: true });
+    rmSync(leafExternalDir, { recursive: true, force: true });
   }
 });
 test("loadRegistry tolerates a corrupt/invalid file", () => {
@@ -279,6 +317,30 @@ test("schedule lease excludes overlap and can be reacquired after release", () =
   }
 });
 
+test("schedule mutation commands do not bypass an occupied scheduler lease", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  const oldExitCode = process.exitCode;
+  const oldWrite = process.stderr.write;
+  try {
+    saveRegistry(dir, { jobs: [baseJob({ id: "existing" })] });
+    const before = readFileSync(join(dir, ".seekforge", "schedules.json"), "utf8");
+    const release = acquireScheduleLease(dir);
+    assert.equal(typeof release, "function");
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    scheduleAddCommand({ task: "new job", every: "1h", maxCost: 1 }, dir);
+    scheduleRemoveCommand("existing", dir);
+    scheduleSetEnabledCommand("existing", false, dir);
+
+    assert.equal(readFileSync(join(dir, ".seekforge", "schedules.json"), "utf8"), before);
+    release!();
+  } finally {
+    process.stderr.write = oldWrite;
+    process.exitCode = oldExitCode;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("schedule lease recovers a lock owned by a dead process", () => {
   const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
   try {
@@ -288,6 +350,25 @@ test("schedule lease recovers a lock owned by a dead process", () => {
       pid: 2_147_483_647,
       token: "dead-owner",
       acquiredAt: new Date(0).toISOString(),
+    }));
+    const release = acquireScheduleLease(dir);
+    assert.equal(typeof release, "function");
+    release!();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schedule lease recovers when a PID was reused by another process identity", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const lock = join(dir, ".seekforge", "schedules.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      pid: process.pid,
+      token: "previous-process",
+      acquiredAt: new Date(0).toISOString(),
+      processIdentity: "not-the-current-process",
     }));
     const release = acquireScheduleLease(dir);
     assert.equal(typeof release, "function");
@@ -311,6 +392,29 @@ test("schedule lease does not race another stale-lock recovery", () => {
 
     assert.equal(acquireScheduleLease(dir), null);
     assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).token, "dead-owner");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schedule lease recovers an abandoned recovery directory after the grace period", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const lock = join(dir, ".seekforge", "schedules.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      pid: 2_147_483_647,
+      token: "dead-owner",
+      acquiredAt: new Date(0).toISOString(),
+    }));
+    const recovery = `${lock}.recovery`;
+    mkdirSync(recovery);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(recovery, old, old);
+
+    const release = acquireScheduleLease(dir);
+    assert.equal(typeof release, "function");
+    release!();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
