@@ -10,12 +10,17 @@
  * stay browser-safe for the desktop bundle).
  */
 
-import { readFileSync, statSync } from "node:fs";
-import { basename, resolve, sep } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { isSensitiveBasename } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
+
+function isInside(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 /**
  * Expands @path tokens in the task: each existing, readable, non-sensitive
@@ -26,20 +31,24 @@ export function expandFileRefs(task: string, workspace: string): string {
   const tokens = [...new Set(task.match(/@[A-Za-z0-9_\-./]+/g) ?? [])];
   if (tokens.length === 0) return task;
 
+  let root: string;
+  try {
+    root = realpathSync(workspace);
+  } catch {
+    return task;
+  }
+
   const sections: string[] = [];
   let total = 0;
   for (const token of tokens) {
     const rel = token.slice(1).replace(/[.,;:]+$/, ""); // strip trailing punctuation
-    const abs = resolve(workspace, rel);
-    const root = resolve(workspace);
-    // Stay inside the workspace. Require a path-separator boundary so a sibling
-    // dir sharing the name as a prefix (e.g. `@../proj-secrets/x` from `proj`)
-    // can't escape via a bare startsWith.
-    if (abs !== root && !abs.startsWith(root + sep)) continue;
+    const abs = resolve(root, rel);
     if (isSensitiveBasename(basename(abs))) continue;
     try {
-      if (!statSync(abs).isFile()) continue;
-      let content = readFileSync(abs, "utf8");
+      const physical = realpathSync(abs);
+      if (!isInside(physical, root)) continue;
+      if (isSensitiveBasename(basename(physical)) || !statSync(physical).isFile()) continue;
+      let content = readFileSync(physical, "utf8");
       if (content.includes("\0")) continue; // binary
       if (content.length > MAX_PER_FILE_CHARS) {
         content = `${content.slice(0, MAX_PER_FILE_CHARS)}\n…[truncated]`;

@@ -26,6 +26,11 @@ describe("commandInvokes (verify/lint gate matcher)", () => {
     expect(commandInvokes('echo "run pnpm test"', "pnpm test")).toBe(false);
     expect(commandInvokes("pnpm lint:fix", "pnpm lint")).toBe(false);
   });
+  it("rejects compound commands that begin with the configured command", () => {
+    for (const command of ["pnpm test; true", "pnpm test && true", "pnpm test | cat", "pnpm test\ntrue"]) {
+      expect(commandInvokes(command, "pnpm test"), command).toBe(false);
+    }
+  });
   it("never matches on an empty configured command", () => {
     expect(commandInvokes("anything", "")).toBe(false);
   });
@@ -91,6 +96,35 @@ describe("classifyCommand", () => {
 
   it("honors the user allowlist from the policy", () => {
     expect(classifyCommand("echo hi", ["echo"]).allowlisted).toBe(true);
+  });
+
+  it("does not allowlist unquoted shell control syntax", () => {
+    for (const command of [
+      "pnpm test; echo hidden",
+      "pnpm test && echo hidden",
+      "pnpm test || echo hidden",
+      "pnpm test | cat",
+      "pnpm test\necho hidden",
+      "pnpm test > out",
+      "pnpm test < input",
+      "pnpm test `echo hidden`",
+      "pnpm test $(echo hidden)",
+      "echo hi; hidden",
+    ]) {
+      expect(classifyCommand(command, ["echo"]).allowlisted, command).toBe(false);
+    }
+  });
+
+  it("does not mistake quoted or escaped shell characters for control syntax", () => {
+    for (const command of [
+      "pnpm test 'a;b && c | d > e < f `x` $(y)'",
+      'pnpm test "a;b && c | d > e < f"',
+      "pnpm test a\\;b a\\|b a\\>b",
+    ]) {
+      expect(classifyCommand(command).allowlisted, command).toBe(true);
+    }
+    expect(classifyCommand('pnpm test "$(echo active)"').allowlisted).toBe(false);
+    expect(classifyCommand('pnpm test "`echo active`"').allowlisted).toBe(false);
   });
 });
 

@@ -112,6 +112,13 @@ describe("expandExtraFileRefs", () => {
     expect(expandExtraFileRefs(task, [extra])).toBe(task);
   });
 
+  it("refuses symlinks escaping an extra dir", () => {
+    const outside = touch(base, "outside.txt", "secret outside");
+    fs.symlinkSync(outside, path.join(extra, "linked.txt"));
+    const task = "read @linked.txt";
+    expect(expandExtraFileRefs(task, [extra])).toBe(task);
+  });
+
   it("skips sensitive basenames", () => {
     touch(extra, ".env", "API_KEY=topsecret");
     const task = "read @.env";

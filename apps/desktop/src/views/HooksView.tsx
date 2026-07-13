@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { Button, Card, IconShield, Input } from "../components/ui";
 import { HOOK_STAGES, type HookEntry, type HookStage, type HooksConfig } from "../types";
+import { LatestRequest } from "./async-coordination";
 
 /** Stages where a non-zero exit (or JSON deny) blocks the tool/run. */
 const BLOCKING: ReadonlySet<HookStage> = new Set(["preToolUse", "userPromptSubmit"]);
@@ -55,15 +56,26 @@ export function HooksView() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const requests = useRef(new LatestRequest());
 
   useEffect(() => {
+    const request = requests.current.begin();
     setDraft(null);
     setError(null);
     setNote(null);
+    setSaving(false);
     api
       .hooks()
-      .then((r) => setDraft(toDraft(r.hooks)))
-      .catch((e: unknown) => setError(String(e)));
+      .then((r) => {
+        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === ws) {
+          setDraft(toDraft(r.hooks));
+        }
+      })
+      .catch((e: unknown) => {
+        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === ws) {
+          setError(String(e));
+        }
+      });
   }, [ws]);
 
   const update = (stage: HookStage, fn: (entries: DraftEntry[]) => DraftEntry[]) =>
@@ -77,17 +89,29 @@ export function HooksView() {
 
   const save = () => {
     if (!draft || saving) return;
+    const workspaceId = ws;
+    if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+    const request = requests.current.begin();
     setSaving(true);
     setError(null);
     setNote(null);
     api
       .saveHooks(toConfig(draft))
       .then((r) => {
+        if (!requests.current.isCurrent(request) || useStore.getState().activeWorkspaceId !== workspaceId) return;
         setDraft(toDraft(r.hooks));
         setNote(t("hooks.saved"));
       })
-      .catch((e: unknown) => setError(String(e)))
-      .finally(() => setSaving(false));
+      .catch((e: unknown) => {
+        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === workspaceId) {
+          setError(String(e));
+        }
+      })
+      .finally(() => {
+        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === workspaceId) {
+          setSaving(false);
+        }
+      });
   };
 
   return (

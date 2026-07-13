@@ -8,6 +8,7 @@
  * trailing catch.
  */
 
+import { acquireWorkspaceSessionGuard, SessionBusyError } from "@seekforge/core";
 import {
   listTree,
   listWorkspaceFiles,
@@ -65,8 +66,23 @@ async function routes({ req, res, url, method, workspace }: RouteCtx): Promise<v
     if (typeof rel !== "string" || rel.trim() === "" || typeof content !== "string") {
       return sendApiError(res, 400, "bad_request", "body must be {path: string, content: string}");
     }
-    writeTextFile(workspace, rel, content);
-    return sendJson(res, 200, { ok: true });
+    try {
+      const guard = acquireWorkspaceSessionGuard(workspace);
+      try {
+        writeTextFile(workspace, rel, content);
+        return sendJson(res, 200, { ok: true });
+      } finally {
+        guard.release();
+      }
+    } catch (error) {
+      if (!(error instanceof SessionBusyError)) throw error;
+      return sendApiError(
+        res,
+        409,
+        "session_busy",
+        "cannot modify files while the workspace has an active session",
+      );
+    }
   }
 
   // Raw bytes of an agent-uploaded image (so the UI renders real <img>

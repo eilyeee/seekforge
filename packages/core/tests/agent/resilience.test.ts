@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ChatResponse, ToolCall, ToolResult } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
@@ -85,6 +85,42 @@ describe("agent loop resilience UX", () => {
     await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
     // A stray retry after the run finished must be a no-op (emit cleared).
     expect(() => retryBus.onRetry({ attempt: 1, maxAttempts: 3, delayMs: 500, reason: "x" })).not.toThrow();
+  });
+
+  it("routes concurrent runs through the same AgentCore to their own event streams", async () => {
+    const retryBus = createRetryBus();
+    const releases = new Map<string, () => void>();
+    const provider: ChatProvider = {
+      model: "fake",
+      chat: async (req) => {
+        const task = req.messages.find((m) => m.role === "user")?.content ?? "";
+        const name = task.includes("run A") ? "A" : "B";
+        await new Promise<void>((resolve) => releases.set(name, resolve));
+        retryBus.onRetry({ attempt: 2, maxAttempts: 3, delayMs: 10, reason: `retry ${name}` });
+        return response({ content: `done ${name}` });
+      },
+      chatStream: async () => response({ content: "unused" }),
+    };
+    const agent = createAgentCore({
+      provider,
+      retryBus,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const runA = collect(agent.runTask({ ...baseInput, projectPath: workspace, task: "run A" }));
+    const workspaceB = mkdtempSync(join(tmpdir(), "seekforge-resilience-b-"));
+    const runB = collect(agent.runTask({ ...baseInput, projectPath: workspaceB, task: "run B" }));
+    try {
+      await vi.waitFor(() => expect(releases.size).toBe(2));
+      releases.get("B")!();
+      const eventsB = await runB;
+      releases.get("A")!();
+      const eventsA = await runA;
+      expect(eventsA.filter((e) => e.type === "provider.retry").map((e) => e.reason)).toEqual(["retry A"]);
+      expect(eventsB.filter((e) => e.type === "provider.retry").map((e) => e.reason)).toEqual(["retry B"]);
+    } finally {
+      rmSync(workspaceB, { recursive: true, force: true });
+    }
   });
 
   it("attaches recoverable + sessionId + hint to a genuine session.failed", async () => {

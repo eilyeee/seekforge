@@ -124,6 +124,9 @@ path leaves every other path exposed.
   tool_calls and orphan tool results are dropped before the request is built.
 - **Also caught:** streaming EOF was finalized without the required `[DONE]`
   terminator, turning a dropped connection into a successful partial response.
+- **Also caught:** tool-call ids are not guaranteed unique across a whole
+  session. Pair results within each assistant turn; a global responded-id set
+  can make an interrupted call look complete when an earlier turn reused its id.
 
 ## 8. `JSON.parse` succeeding does not mean you got an object
 
@@ -166,6 +169,16 @@ path leaves every other path exposed.
   could poison cost accounting. Filter scalar fields and validate every price.
 - **Also caught:** `packages/core/src/skills/manage.ts` — non-object `skill.json`
   values crashed enable/disable instead of being repaired.
+- **Also caught:** `apps/tui/src/config.ts` — unlike the CLI and server, a valid
+  JSON scalar or array was passed into layered merging and `null` crashed TUI
+  startup on the first property access.
+- **Also caught:** `packages/shared/src/config-layers.ts` — an object-shaped
+  config could still supply non-array permission rules, non-object MCP maps, or
+  malformed hooks and crash merging or downstream consumers. Validate every
+  structured field and retain lower-precedence valid values.
+- **Also caught:** safely ignoring a non-object config is not enough if doctor
+  still reports it as valid merely because `JSON.parse` succeeded. Configuration
+  diagnostics must validate the expected top-level shape too.
 
 ## 9. "Read-only vs mutating" classification: check each command's real effect
 
@@ -182,6 +195,9 @@ tree; treating "no args = read-only" auto-ran it with no confirmation.
   first let a later POST override an auto-approved GET classification.
 - **Also caught:** `apps/server/src/routes/git.ts` — client filenames were passed
   as Git pathspecs, so names beginning with pathspec magic changed command scope.
+- **Also caught:** an allowlisted prefix does not authorize a shell program with
+  unquoted control operators. Reject compound syntax and redirection before
+  builtin, user, session, or rule-based auto-approval.
 
 ## 10. Clamp externally-supplied numbers that feed ranking / sizing / budgets
 
@@ -390,6 +406,12 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
   make `release()` retryable until the token-owned directory is actually gone.
 - **Also caught:** server shutdown aborted sockets but did not await detached
   WebSocket/REST operations; track every launched operation and drain the set.
+- **Also caught:** a shared mutable retry callback routed concurrent AgentCore
+  runs into whichever queue registered last. Bind retry delivery to the
+  originating asynchronous run context.
+- **Also caught:** runtime disposal forced down a newly spawned child before it
+  could consume queued cancellation under parallel load. Keep shutdown bounded,
+  but allow a realistic grace window for ordered stdin messages to drain.
 
 ## 21. Checkpoint at the event that makes cost or ownership observable
 
@@ -423,6 +445,9 @@ request later starts invisible work and desynchronizes controls from the server.
   pass the captured tab workspace through every scoped request.
 - **Also caught:** detail requests for sessions, agents, and skills committed
   after selection changed; bind each response to a generation and selected id.
+- **Also caught:** Git status and hooks loads committed after workspace changes,
+  then destructive actions or saves targeted the newly active workspace. Capture
+  workspace identity and guard both response commits and mutations.
 - **Also caught:** TUI drafts and run settings crossed tab boundaries because
   editor state was global and model/approval were read after an awaited MCP load;
   key drafts by tab and snapshot all run inputs before the first await.
@@ -509,6 +534,13 @@ also misses changes to the link itself.
 - **Also caught:** validating a path and reopening it later leaves a swap window.
   Open leaves and parents with no-follow flags, compare descriptor/path identity,
   and delay truncation until the opened file passes physical revalidation.
+- **Also caught:** task `@path` expansion used lexical containment before `stat`
+  and `readFile`, so a symlink inside an allowed workspace or extra read-only
+  directory could inject a file from outside that root. Resolve both roots and
+  referenced files physically, then re-check containment before reading.
+- **Also caught:** unauthenticated static serving followed symlinks inside its
+  root. Canonicalize the static root and use no-follow descriptor reads with
+  path/descriptor identity checks for every requested asset.
 
 ## 30. Related mutations must share one serialization domain
 
@@ -524,6 +556,9 @@ as merge and remove even though their API routes and target ids differ.
 - **Also caught:** REST stage/unstage/discard/commit mutated the same index and
   refs outside that lock; Git routes and worktree operations must use one
   coordinator keyed by the physical common Git directory.
+- **Also caught:** `PUT /api/file` wrote workspace files without the active
+  session guard, allowing the editor to overwrite concurrent Agent changes.
+  Every independent workspace mutation surface must acquire the same guard.
 
 ## 31. Derived syntax semantics belong to parsed values
 
@@ -579,6 +614,27 @@ non-finite or impossible counters can crash consumers or poison budgets.
 - **Do:** validate the complete response shape and numeric invariants; treat any
   mismatch as a cache miss.
 - **Caught:** `packages/core/src/provider/cache.ts` — cached `ChatResponse` data.
+
+## 37. A successful transport is not a successful verification
+
+A valid tool-result envelope can describe a failed or still-running process.
+
+- **Do:** require operation-specific success, including foreground completion
+  and exit code zero, before recording verification or lint success.
+- **Caught:** `packages/core/src/agent/loop.ts` — nonzero and background commands
+  satisfied verify/lint completion gates.
+- **Also caught:** numeric option parsers must throw on invalid input rather than
+  return `undefined`, which Commander treats as an omitted option.
+
+## 38. Environment command strings need an argv parser
+
+`EDITOR="code --wait"` is a command plus arguments, not one executable filename.
+Whitespace splitting also corrupts quoted paths and arguments.
+
+- **Do:** parse quoting and escaping into argv without invoking a shell; reject
+  malformed quoting and launch the executable with the resulting arguments.
+- **Caught:** `apps/tui/src/app.tsx` — `/memory edit` and `/config edit` passed the
+  complete `$EDITOR` value as the executable.
 
 ---
 

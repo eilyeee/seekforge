@@ -9,10 +9,66 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type EditorResult = { ok: true; text: string } | { ok: false; error: string };
+export type EditorLaunchResult = { ok: true } | { ok: false; error: string };
 
-/** Split an editor env value into argv parts ("code --wait" → ["code", "--wait"]). */
+/** Split an editor env value without invoking a shell. */
 export function parseEditorCommand(value: string): string[] {
-  return value.trim().split(/\s+/).filter(Boolean);
+  const args: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | '"' | null = null;
+
+  const push = () => {
+    if (started) args.push(current);
+    current = "";
+    started = false;
+  };
+
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i]!;
+    if (quote !== null) {
+      if (char === quote) {
+        quote = null;
+      } else if (char === "\\" && quote === '"') {
+        i += 1;
+        if (i >= value.length) throw new Error("editor command ends with an escape");
+        current += value[i]!;
+      } else {
+        current += char;
+      }
+      started = true;
+    } else if (/\s/.test(char)) {
+      push();
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+    } else if (char === "\\") {
+      i += 1;
+      if (i >= value.length) throw new Error("editor command ends with an escape");
+      current += value[i]!;
+      started = true;
+    } else {
+      current += char;
+      started = true;
+    }
+  }
+  if (quote !== null) throw new Error("editor command has an unterminated quote");
+  push();
+  return args;
+}
+
+/** Open an existing file with $VISUAL || $EDITOR || vi. */
+export function openFileInExternalEditor(file: string): EditorLaunchResult {
+  try {
+    const [cmd, ...args] = parseEditorCommand(process.env.VISUAL || process.env.EDITOR || "vi");
+    if (!cmd) return { ok: false, error: "no editor configured" };
+    const result = spawnSync(cmd, [...args, file], { stdio: "inherit" });
+    if (result.error) return { ok: false, error: result.error.message };
+    if (result.status !== 0) return { ok: false, error: `${cmd} exited with status ${result.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Open `text` in the user's editor and return the edited content. */
@@ -23,13 +79,8 @@ export function openInExternalEditor(text: string): EditorResult {
   );
   try {
     writeFileSync(file, text, "utf8");
-    const [cmd, ...args] = parseEditorCommand(
-      process.env.VISUAL || process.env.EDITOR || "vi",
-    );
-    if (!cmd) return { ok: false, error: "no editor configured" };
-    const r = spawnSync(cmd, [...args, file], { stdio: "inherit" });
-    if (r.error) return { ok: false, error: r.error.message };
-    if (r.status !== 0) return { ok: false, error: `${cmd} exited with status ${r.status}` };
+    const launched = openFileInExternalEditor(file);
+    if (!launched.ok) return launched;
     return { ok: true, text: readFileSync(file, "utf8") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

@@ -138,16 +138,14 @@ function isPlainObject(v: unknown): boolean {
 
 function readJson(path: string): CliConfig {
   // requireObject: JSON.parse succeeds for null/true/42/"x"; spreading those
-  // downstream throws. (The TUI/server layers historically skip this guard.)
+  // downstream throws.
   return readJsonConfigLayer<CliConfig>(path, { requireObject: true });
 }
 
 /**
- * Config-layer paths that EXIST on disk but fail JSON.parse — `readJson`
- * silently drops these to `{}`, so a single typo in config.json otherwise
- * discards every setting AND `seekforge doctor` reports clean. Returns the
- * unparseable file paths (empty when all layers parse or are absent). Surfaced
- * by `seekforge doctor`.
+ * Config-layer paths that exist but fail JSON parsing or are not JSON objects.
+ * `readJson` silently drops these to `{}`, so without this diagnostic an invalid
+ * layer discards every setting while `seekforge doctor` reports clean.
  */
 export function configParseErrors(projectPath: string): string[] {
   const broken: string[] = [];
@@ -163,7 +161,7 @@ export function configParseErrors(projectPath: string): string[] {
       continue; // absent/unreadable — not a parse error
     }
     try {
-      JSON.parse(raw);
+      if (!isPlainObject(JSON.parse(raw))) broken.push(path);
     } catch {
       broken.push(path);
     }

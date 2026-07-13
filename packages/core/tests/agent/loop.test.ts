@@ -901,6 +901,43 @@ describe("auto-verify on completion", () => {
     expect(injected).toContain("exit 1");
   });
 
+  it.each([
+    ["failed foreground", { ok: true, data: { exitCode: 1 }, meta: { command: "true" } }],
+    ["background", { ok: true, data: { taskId: "task-1" }, meta: { command: "true" } }],
+    ["compound", { ok: true, data: { exitCode: 0 }, meta: { command: "true; true" } }],
+  ] satisfies Array<[string, ToolResult]>)
+  ("does not accept a %s run_command as verification", async (_label, commandResult) => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({
+        toolCalls: [{ id: "r1", name: "run_command", argumentsJson: '{"command":"true"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone" }),
+      response({ content: "## Summary\nverified" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [
+        { name: "apply_patch", description: "d", parameters: {} },
+        { name: "run_command", description: "d", parameters: {} },
+      ],
+      execute: async (call) => call.name === "apply_patch"
+        ? { ok: true, meta: { path: "a.ts" } }
+        : commandResult,
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      verifyCommand: "true",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying"))).toBe(true);
+  });
+
   it("cancels an in-flight auto-verify command", async () => {
     const controller = new AbortController();
     const provider = fakeProvider(editThenDone());
@@ -1057,7 +1094,7 @@ describe("auto-lint on completion", () => {
       ],
       execute: async (call: ToolCall): Promise<ToolResult> => {
         if (call.name === "apply_patch") return { ok: true, meta: { path: "a.ts" } };
-        if (call.name === "run_command") return { ok: true, meta: { command: "pnpm lint" } };
+        if (call.name === "run_command") return { ok: true, data: { exitCode: 0 }, meta: { command: "pnpm lint" } };
         return { ok: true };
       },
     };
@@ -1072,5 +1109,37 @@ describe("auto-lint on completion", () => {
     expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting"))).toBe(false);
     expect(provider.requests).toHaveLength(3);
     expect(events.find((e) => e.type === "session.completed")).toBeDefined();
+  });
+
+  it("does not count a background run_command as a lint pass", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({
+        toolCalls: [{ id: "r1", name: "run_command", argumentsJson: '{"command":"true","background":true}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone" }),
+      response({ content: "## Summary\nfixed" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [
+        { name: "apply_patch", description: "d", parameters: {} },
+        { name: "run_command", description: "d", parameters: {} },
+      ],
+      execute: async (call) => call.name === "apply_patch"
+        ? { ok: true, meta: { path: "a.ts" } }
+        : { ok: true, data: { taskId: "task-1" }, meta: { command: "true" } },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      lintCommand: "true",
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-linting"))).toBe(true);
   });
 });

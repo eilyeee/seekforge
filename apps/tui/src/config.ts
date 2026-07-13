@@ -77,9 +77,11 @@ export type TuiConfig = {
 };
 
 function readJson(path: string): TuiConfig {
-  // NOTE: no requireObject guard — the TUI historically passes non-object JSON
-  // through as-parsed (only the CLI collapses those layers to {}).
-  return readJsonConfigLayer<TuiConfig>(path);
+  return readJsonConfigLayer<TuiConfig>(path, { requireObject: true });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Every recognized top-level config key — the source of truth for typo detection. */
@@ -124,14 +126,12 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
  */
 export function unknownConfigKeys(projectPath: string): string[] {
   const unknown = new Set<string>();
-  const isRecord = (v: unknown): v is Record<string, unknown> =>
-    typeof v === "object" && v !== null && !Array.isArray(v);
   for (const path of [
     join(homedir(), ".seekforge", "config.json"),
     join(projectPath, ".seekforge", "config.json"),
   ]) {
     const cfg = readJson(path) as unknown;
-    if (!isRecord(cfg)) continue;
+    if (!isPlainObject(cfg)) continue;
     for (const key of Object.keys(cfg)) {
       if (!KNOWN_CONFIG_KEYS.has(key)) unknown.add(key);
     }
@@ -140,10 +140,9 @@ export function unknownConfigKeys(projectPath: string): string[] {
 }
 
 /**
- * Config-layer paths that EXIST on disk but fail JSON.parse — `readJson`
- * silently drops these to `{}`, so a single typo in config.json otherwise
- * discards every setting AND /doctor reports clean. Returns the unparseable
- * file paths (empty when all layers parse or are absent). Surfaced by /doctor.
+ * Config-layer paths that exist but fail JSON parsing or are not JSON objects.
+ * `readJson` silently drops these to `{}`, so without this diagnostic an invalid
+ * layer discards every setting while /doctor reports clean.
  */
 export function configParseErrors(projectPath: string): string[] {
   const broken: string[] = [];
@@ -158,7 +157,7 @@ export function configParseErrors(projectPath: string): string[] {
       continue; // absent/unreadable — not a parse error
     }
     try {
-      JSON.parse(raw);
+      if (!isPlainObject(JSON.parse(raw))) broken.push(path);
     } catch {
       broken.push(path);
     }

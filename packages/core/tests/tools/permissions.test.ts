@@ -241,6 +241,21 @@ describe("permission rules", () => {
     expect(sibling.decision).toBe("user_denied");
   });
 
+  it("allow rules cannot auto-approve compound run_command syntax", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [{ action: "allow", tool: "run_command", match: "echo hi" }];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    const result = await enforcePermission(
+      "run_command",
+      { permission: "execute", description: "compound", command: "echo hi; echo hidden" },
+      ctx,
+    );
+    expect(result).toMatchObject({ allowed: false, decision: "user_denied" });
+    expect(requests[0]?.command).toBe("echo hi; echo hidden");
+  });
+
   it("allow path rule matches on a path boundary, not a sibling prefix", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "a.txt"), "x");
@@ -520,6 +535,22 @@ describe("allow-for-session confirm channel", () => {
     });
     const res = await dispatcher.execute(call("run_command", { command: "echo bye" }), ctx);
     expect(res.ok).toBe(false);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("a session command rule cannot auto-approve a compound extension", async () => {
+    const ws = makeWorkspace();
+    const { confirm, requests } = scriptedConfirm(false);
+    const ctx = makeCtx(ws, {
+      policy: { approvalMode: "confirm", sessionAllowlist: ["echo hi"] },
+      confirm,
+    });
+    const result = await enforcePermission(
+      "run_command",
+      { permission: "execute", description: "compound", command: "echo hi && echo hidden" },
+      ctx,
+    );
+    expect(result).toMatchObject({ allowed: false, decision: "user_denied" });
     expect(requests).toHaveLength(1);
   });
 

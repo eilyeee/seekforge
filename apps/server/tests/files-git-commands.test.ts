@@ -159,6 +159,23 @@ describe("GET /api/file", () => {
 });
 
 describe("PUT /api/file", () => {
+  it("does not overwrite files while the workspace has an active session", async () => {
+    writeFileIn(workspace, "active-session.txt", "before\n");
+    const lease = acquireSessionLease(workspace, "file-route-busy");
+    try {
+      const res = await authed("/api/file", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "active-session.txt", content: "after\n" }),
+      });
+      expect(res.status).toBe(409);
+      expect((await jsonOf(res)).error.code).toBe("session_busy");
+      expect(readFileSync(join(workspace, "active-session.txt"), "utf8")).toBe("before\n");
+    } finally {
+      lease.release();
+    }
+  });
+
   it("writes a file and creates parent dirs", async () => {
     const res = await authed("/api/file", {
       method: "PUT",

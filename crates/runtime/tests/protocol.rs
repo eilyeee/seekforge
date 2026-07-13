@@ -211,17 +211,7 @@ fn cancellation_interrupts_output_drain_after_the_shell_exits() {
     );
 
     let pid_path = ws.0.join("escaped.pid");
-    for _ in 0..100 {
-        if pid_path.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let escaped_pid: libc::pid_t = std::fs::read_to_string(&pid_path)
-        .expect("escaped descendant must start")
-        .trim()
-        .parse()
-        .unwrap();
+    let escaped_pid = wait_for_pid(&pid_path, "escaped descendant");
     std::thread::sleep(Duration::from_millis(50));
 
     let started = Instant::now();

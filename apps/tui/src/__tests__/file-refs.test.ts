@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +37,12 @@ describe("expandFileRefs", () => {
 
   it("does not escape via absolute-looking traversal", () => {
     const task = "grab @../../etc/hosts";
+    expect(expandFileRefs(task, workspace)).toBe(task);
+  });
+
+  it("does not follow an in-workspace symlink outside the workspace", () => {
+    symlinkSync(join(root, "proj-secrets", "config.ts"), join(workspace, "linked.ts"));
+    const task = "leak @linked.ts";
     expect(expandFileRefs(task, workspace)).toBe(task);
   });
 });

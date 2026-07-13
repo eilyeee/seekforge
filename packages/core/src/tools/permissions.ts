@@ -2,6 +2,7 @@ import { sep } from "node:path";
 import { PERMISSION_LEVEL, type PermissionRule } from "@seekforge/shared";
 import type { ToolContext } from "./index.js";
 import type { ClassifiedCall } from "./registry.js";
+import { hasShellControlSyntax } from "./run-command.js";
 
 export type PermissionDecision =
   | "auto_readonly" // L0, always allowed
@@ -38,6 +39,7 @@ function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext)
   if (!list || list.length === 0) return false;
   const token = sessionToken(toolName, cls);
   if (token === "") return false;
+  if (toolName === "run_command" && hasShellControlSyntax(token)) return false;
   if (toolName === "run_command" || toolName === "task_kill") {
     // Prefix-match on a command boundary — exact match or the entry followed by
     // a space. A bare `startsWith` would let `npm run build` auto-approve
@@ -182,7 +184,11 @@ export async function enforcePermission(
 
   // Allow rules: a matching allow skips the prompt — including for "env"
   // (that's the point: e.g. allow web_fetch for a specific docs domain).
-  const allow = rules.find((r) => r.action === "allow" && ruleMatches(r, toolName, cls));
+  const compoundRunCommand =
+    toolName === "run_command" && cls.command !== undefined && hasShellControlSyntax(cls.command);
+  const allow = compoundRunCommand
+    ? undefined
+    : rules.find((r) => r.action === "allow" && ruleMatches(r, toolName, cls));
   if (allow) {
     return { allowed: true, decision: "allow_rule" };
   }

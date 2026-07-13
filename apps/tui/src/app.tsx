@@ -165,7 +165,7 @@ import {
   mcpPromptCommandSpecs,
   promptArgsFromText,
 } from "./mcp-prompt-commands.js";
-import { openInExternalEditor } from "./external-editor.js";
+import { openFileInExternalEditor, openInExternalEditor } from "./external-editor.js";
 import { copyToClipboard } from "./clipboard.js";
 import { Header, ACCENT, setAccent } from "./components/Header.js";
 import { Transcript } from "./components/Transcript.js";
@@ -1196,11 +1196,9 @@ export function App({
               break;
             }
             setRawMode(false);
-            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [target], {
-              stdio: "inherit",
-            });
+            const result = openFileInExternalEditor(target);
             setRawMode(true);
-            if (r.error) notice(`editor failed: ${r.error.message}`, "error");
+            if (!result.ok) notice(`editor failed: ${result.error}`, "error");
             else notice("memory file saved");
             break;
           }
@@ -1637,11 +1635,12 @@ export function App({
         case "config": {
           if (command.arg === "edit") {
             setRawMode(false);
-            const r = spawnSync(process.env["VISUAL"] ?? process.env["EDITOR"] ?? "vi", [join(homedir(), ".seekforge", "config.json")], {
-              stdio: "inherit",
-            });
+            const result = openFileInExternalEditor(join(homedir(), ".seekforge", "config.json"));
             setRawMode(true);
-            notice(r.error ? `editor failed: ${r.error.message}` : "config saved — restart the TUI to apply", r.error ? "error" : "dim");
+            notice(
+              result.ok ? "config saved — restart the TUI to apply" : `editor failed: ${result.error}`,
+              result.ok ? "dim" : "error",
+            );
             break;
           }
           for (const line of formatConfigLines(config, {

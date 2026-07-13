@@ -4,9 +4,11 @@
 // first failure is enough signal for `pnpm test`.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
 import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
 import type { AgentEvent } from "@seekforge/shared";
@@ -45,6 +47,25 @@ test("version cache rejects non-finite timestamps and intervals", () => {
   assert.equal(isCacheFresh({ ...entry, checkedAt: Infinity }, 150, 100), false);
   assert.equal(isCacheFresh(entry, Infinity, 100), false);
   assert.equal(isCacheFresh(entry, 150, Infinity), false);
+});
+
+test("memory compact rejects an invalid --prune-unused value before executing", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "seekforge-cli-prune-"));
+  try {
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const cli = resolve(cliDir, "src/index.ts");
+    const tsxLoader = resolve(cliDir, "node_modules/tsx/dist/loader.mjs");
+    const result = spawnSync(
+      process.execPath,
+      ["--import", tsxLoader, cli, "memory", "compact", "--prune-unused", "12days"],
+      { cwd: workspace, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /must be a non-negative integer/);
+    assert.equal(result.stdout, "");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });
 
 // --- isCostBudgetExceeded (per-run cost budget) -----------------------------

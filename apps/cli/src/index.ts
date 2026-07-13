@@ -152,6 +152,14 @@ function parsePositiveInt(val: string): number {
   return n;
 }
 
+/** Parse a non-negative-integer option string; throws InvalidArgumentError on bad input. */
+function parseNonNegativeInt(val: string): number {
+  if (!/^[0-9]+$/.test(val)) throw new InvalidArgumentError("must be a non-negative integer");
+  const n = Number(val);
+  if (!Number.isSafeInteger(n)) throw new InvalidArgumentError("must be a non-negative integer");
+  return n;
+}
+
 /** Parse a positive-float option string (e.g. a USD budget); throws on bad input. */
 function parsePositiveFloat(val: string): number {
   if (!/^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(val)) {
@@ -856,10 +864,7 @@ memory
   .option(
     "--prune-unused <days>",
     "archive facts never used and older than <days> to project-archive.md",
-    (value: string) => {
-      const n = Number.parseInt(value, 10);
-      return Number.isInteger(n) && n >= 0 && String(n) === value.trim() ? n : undefined;
-    },
+    parseNonNegativeInt,
   )
   .description("collapse duplicate and near-duplicate facts in project.md (deterministic)")
   .action((opts: { dryRun?: boolean; pruneUnused?: number }) => {

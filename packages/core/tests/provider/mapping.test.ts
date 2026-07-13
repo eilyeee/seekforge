@@ -94,6 +94,28 @@ describe("toWireMessages", () => {
     ]);
     expect(wire).toEqual([{ role: "user", content: "hi" }]);
   });
+
+  it("pairs duplicate tool-call IDs within their assistant turn", () => {
+    const wire = toWireMessages([
+      {
+        role: "assistant",
+        content: "first",
+        toolCalls: [{ id: "duplicate", name: "first_call", argumentsJson: "{}" }],
+      },
+      { role: "user", content: "interrupted" },
+      {
+        role: "assistant",
+        content: "second",
+        toolCalls: [{ id: "duplicate", name: "second_call", argumentsJson: "{}" }],
+      },
+      { role: "tool", content: "second result", toolCallId: "duplicate" },
+    ]);
+
+    expect(wire[0]).toEqual({ role: "assistant", content: "first" });
+    expect(wire[0]).not.toHaveProperty("tool_calls");
+    expect(wire[2]?.tool_calls?.[0]?.function.name).toBe("second_call");
+    expect(wire[3]).toEqual({ role: "tool", content: "second result", tool_call_id: "duplicate" });
+  });
 });
 
 describe("toWireTools", () => {

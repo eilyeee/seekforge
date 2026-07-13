@@ -22,7 +22,9 @@ const MAX_TOTAL_CHARS = 60_000;
 /** True when `child` is `parent` or nested anywhere below it. */
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return (
+    rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+  );
 }
 
 /**
@@ -40,12 +42,14 @@ export function normalizeExtraDir(input: string, projectPath: string): string | 
   else if (expanded.startsWith("~/")) expanded = path.join(os.homedir(), expanded.slice(2));
   const abs = path.resolve(projectPath, expanded);
   try {
-    if (!fs.statSync(abs).isDirectory()) return null;
+    const physical = fs.realpathSync(abs);
+    const physicalProject = fs.realpathSync(projectPath);
+    if (!fs.statSync(physical).isDirectory()) return null;
+    if (isInside(physical, physicalProject)) return null;
+    return abs;
   } catch {
     return null;
   }
-  if (isInside(abs, path.resolve(projectPath))) return null;
-  return abs;
 }
 
 /**
@@ -61,7 +65,13 @@ export function expandExtraFileRefs(task: string, dirs: readonly string[]): stri
   const tokens = [...new Set(task.match(/@[A-Za-z0-9_\-./~]+/g) ?? [])];
   if (tokens.length === 0) return task;
 
-  const roots = dirs.map((d) => path.resolve(d));
+  const roots = dirs.flatMap((dir) => {
+    try {
+      return [{ logical: path.resolve(dir), physical: fs.realpathSync(dir) }];
+    } catch {
+      return [];
+    }
+  });
   const sections: string[] = [];
   let total = 0;
   for (const token of tokens) {
@@ -69,12 +79,16 @@ export function expandExtraFileRefs(task: string, dirs: readonly string[]): stri
     if (ref === "~") ref = os.homedir();
     else if (ref.startsWith("~/")) ref = path.join(os.homedir(), ref.slice(2));
     for (const root of roots) {
-      const abs = path.isAbsolute(ref) ? path.resolve(ref) : path.resolve(root, ref);
-      if (!isInside(abs, root)) continue; // never read outside the extra dirs
+      const abs = path.isAbsolute(ref) ? path.resolve(ref) : path.resolve(root.logical, ref);
+      if (!isInside(abs, root.logical)) continue;
       if (isSensitiveBasename(path.basename(abs))) break;
       try {
-        if (!fs.statSync(abs).isFile()) continue;
-        let content = fs.readFileSync(abs, "utf8");
+        const physical = fs.realpathSync(abs);
+        if (!isInside(physical, root.physical)) continue;
+        if (isSensitiveBasename(path.basename(physical)) || !fs.statSync(physical).isFile()) {
+          continue;
+        }
+        let content = fs.readFileSync(physical, "utf8");
         if (content.includes("\0")) break; // binary
         if (content.length > MAX_PER_FILE_CHARS) {
           content = `${content.slice(0, MAX_PER_FILE_CHARS)}\n…[truncated]`;

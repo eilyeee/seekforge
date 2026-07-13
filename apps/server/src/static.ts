@@ -4,9 +4,18 @@
  * All resolved paths are confined to the static root (no path traversal).
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  type Stats,
+} from "node:fs";
 import type { ServerResponse } from "node:http";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -45,7 +54,17 @@ export function resolveStaticRoot(override?: string): string | undefined {
         fileURLToPath(new URL("./web", import.meta.url)),
       ];
   for (const root of candidates) {
-    if (existsSync(join(root, "index.html"))) return resolve(root);
+    try {
+      const canonicalRoot = realpathSync(resolve(root));
+      if (
+        statSync(canonicalRoot).isDirectory() &&
+        openStaticFile(canonicalRoot, join(canonicalRoot, "index.html"))
+      ) {
+        return canonicalRoot;
+      }
+    } catch {
+      // Missing or unsafe candidates are treated as an unbuilt UI.
+    }
   }
   return undefined;
 }
@@ -61,15 +80,45 @@ function safeJoin(root: string, urlPath: string): string | undefined {
   if (decoded.includes("\0")) return undefined;
   const resolved = resolve(root, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
   const rel = relative(root, resolved);
-  if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
   return resolved;
 }
 
-function isFile(path: string): boolean {
+function sameFile(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/** Opens and reads a regular file without following static-root-local symlinks. */
+function openStaticFile(root: string, path: string): Buffer | undefined {
+  const rel = relative(root, path);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+
+  let parentFd: number | undefined;
+  let fileFd: number | undefined;
   try {
-    return statSync(path).isFile();
+    const parent = dirname(path);
+    parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    fileFd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+
+    // Canonical equality rejects symlinks in every path component. Descriptor
+    // identity checks ensure neither path was swapped between resolution/open.
+    if (realpathSync(parent) !== parent || realpathSync(path) !== path) return undefined;
+    const parentPathStat = statSync(parent);
+    const filePathStat = statSync(path);
+    const fileStat = fstatSync(fileFd);
+    if (
+      !sameFile(fstatSync(parentFd), parentPathStat) ||
+      !sameFile(fileStat, filePathStat) ||
+      !fileStat.isFile()
+    ) {
+      return undefined;
+    }
+    return readFileSync(fileFd);
   } catch {
-    return false;
+    return undefined;
+  } finally {
+    if (fileFd !== undefined) closeSync(fileFd);
+    if (parentFd !== undefined) closeSync(parentFd);
   }
 }
 
@@ -111,14 +160,16 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
   if (!target) return notFound();
 
   let file = target;
-  if (!isFile(file)) {
+  let data = openStaticFile(opts.root, file);
+  if (!data) {
     // SPA fallback: extension-less client-side routes get index.html.
     if (extname(file) !== "") return notFound();
     file = join(opts.root, "index.html");
-    if (!isFile(file)) return notFound();
+    data = openStaticFile(opts.root, file);
+    if (!data) return notFound();
   }
 
   const type = CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
   res.writeHead(200, { "content-type": type });
-  res.end(readFileSync(file));
+  res.end(data);
 }

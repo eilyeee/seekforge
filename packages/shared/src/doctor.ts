@@ -183,17 +183,17 @@ export function configKeysCheck(
 }
 
 /**
- * Fails when any existing config.json layer is syntactically broken. `readJson`
- * swallows the parse error → `{}`, so without this check a malformed config
- * silently drops every setting AND doctor reports clean. Empty list → ok.
+ * Fails when an existing config.json layer is syntactically broken or is not a
+ * JSON object. `readJson` collapses either case to `{}`, so without this check a
+ * malformed config silently drops every setting AND doctor reports clean.
  */
 export function configParseCheck(errors: string[]): DoctorCheck {
-  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files parse" };
+  if (errors.length === 0) return { name: "config parse", ok: true, detail: "all config files are valid" };
   return {
     name: "config parse",
     ok: false,
-    detail: `unparseable: ${errors.join(", ")}`,
-    fixHint: "fix the JSON syntax",
+    detail: `invalid: ${errors.join(", ")}`,
+    fixHint: "use a valid JSON object",
   };
 }
 

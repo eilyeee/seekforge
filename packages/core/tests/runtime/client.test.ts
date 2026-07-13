@@ -157,7 +157,7 @@ describe("runtime client", () => {
     client.dispose();
     await expect(call).rejects.toMatchObject({ code: "disposed" });
 
-    for (let i = 0; i < 100 && !existsSync(marker); i++) {
+    for (let i = 0; i < 500 && !existsSync(marker); i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(existsSync(marker)).toBe(true);

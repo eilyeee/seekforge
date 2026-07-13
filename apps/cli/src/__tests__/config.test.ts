@@ -515,4 +515,14 @@ test("configParseErrors reports a syntactically broken project config", () => {
   cleanup();
 });
 
+test("configParseErrors reports a non-object project config", () => {
+  const { projectPath, cleanup } = setupProject();
+  const seekDir = join(projectPath, ".seekforge");
+  mkdirSync(seekDir, { recursive: true });
+  const broken = join(seekDir, "config.json");
+  writeFileSync(broken, "null");
+  assert.ok(configParseErrors(projectPath).includes(broken));
+  cleanup();
+});
+
 console.log(`${passed} config tests passed`);

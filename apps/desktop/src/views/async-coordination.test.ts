@@ -11,6 +11,23 @@ describe("LatestRequest", () => {
     requests.invalidate();
     expect(requests.isCurrent(second)).toBe(false);
   });
+
+  it("rejects an older workspace load after a newer load begins", () => {
+    const requests = new LatestRequest();
+    const oldWorkspaceLoad = requests.begin();
+    const newWorkspaceLoad = requests.begin();
+
+    expect(requests.isCurrent(oldWorkspaceLoad)).toBe(false);
+    expect(requests.isCurrent(newWorkspaceLoad)).toBe(true);
+  });
+
+  it("invalidates an in-flight save when the workspace changes", () => {
+    const requests = new LatestRequest();
+    const save = requests.begin();
+    requests.begin();
+
+    expect(requests.isCurrent(save)).toBe(false);
+  });
 });
 
 describe("createSerialQueue", () => {

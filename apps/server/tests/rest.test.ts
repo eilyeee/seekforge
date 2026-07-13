@@ -808,6 +808,33 @@ describe("static serving", () => {
       await ui.close();
     }
   });
+
+  it("does not serve files through symlinks inside the static root", async () => {
+    const distParent = makeWorkspace();
+    const outside = makeWorkspace();
+    writeFileIn(distParent, "dist/index.html", "<html>ui-home</html>");
+    writeFileIn(outside, "secret.txt", "outside secret");
+    symlinkSync(join(outside, "secret.txt"), join(distParent, "dist/secret.txt"), "file");
+    symlinkSync(outside, join(distParent, "dist/linked-assets"), "dir");
+
+    const ui = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      staticDir: join(distParent, "dist"),
+    });
+    const uiBase = `http://127.0.0.1:${ui.port}`;
+    try {
+      for (const path of ["/secret.txt", "/linked-assets/secret.txt"]) {
+        const res = await fetch(`${uiBase}${path}`);
+        expect(res.status).toBe(404);
+        expect(await res.text()).not.toContain("outside secret");
+      }
+    } finally {
+      await ui.close();
+    }
+  });
 });
 
 describe("ephemeral port", () => {

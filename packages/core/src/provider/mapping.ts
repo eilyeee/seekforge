@@ -74,29 +74,38 @@ export function toWireMessages(messages: ChatMessage[]): WireMessage[] {
   // it verbatim 400s the request on /resume. Drop unanswered assistant
   // tool_calls and orphan tool results so the request is always well-formed;
   // for a well-paired live history this is a no-op.
-  const respondedIds = new Set<string>();
-  for (const m of messages) {
-    if (m.role === "tool" && m.toolCallId !== undefined) respondedIds.add(m.toolCallId);
-  }
-  const keptCallIds = new Set<string>();
+  const keptToolMessages = new Set<number>();
   const out: WireMessage[] = [];
-  for (const m of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
     if (m.role === "tool") {
-      // Orphan tool result: no preceding (kept) assistant tool_call — drop it.
-      if (m.toolCallId === undefined || !keptCallIds.has(m.toolCallId)) continue;
+      if (!keptToolMessages.has(i) || m.toolCallId === undefined) continue;
       out.push({ role: m.role, content: m.content, tool_call_id: m.toolCallId });
       continue;
     }
     const wire: WireMessage = { role: m.role, content: m.content };
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-      const kept = m.toolCalls.filter((c) => respondedIds.has(c.id));
+      const resultIndexes = new Map<string, number[]>();
+      for (let j = i + 1; j < messages.length && messages[j]!.role === "tool"; j++) {
+        const id = messages[j]!.toolCallId;
+        if (id === undefined) continue;
+        const indexes = resultIndexes.get(id) ?? [];
+        indexes.push(j);
+        resultIndexes.set(id, indexes);
+      }
+      const kept = m.toolCalls.filter((c) => {
+        const indexes = resultIndexes.get(c.id);
+        const resultIndex = indexes?.shift();
+        if (resultIndex === undefined) return false;
+        keptToolMessages.add(resultIndex);
+        return true;
+      });
       if (kept.length > 0) {
         wire.tool_calls = kept.map((c) => ({
           id: c.id,
           type: "function",
           function: { name: c.name, arguments: c.argumentsJson },
         }));
-        for (const c of kept) keptCallIds.add(c.id);
       }
     }
     out.push(wire);

@@ -20,6 +20,37 @@ export function normalizeCommand(command: string): string {
 }
 
 /**
+ * Detect shell control syntax that can execute more than the apparent command
+ * or redirect its I/O. Quoted/escaped operators are ordinary arguments, except
+ * command substitution remains active inside double quotes.
+ */
+export function hasShellControlSyntax(command: string): boolean {
+  let quote: "single" | "double" | undefined;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!;
+    if (quote === "single") {
+      if (char === "'") quote = undefined;
+      continue;
+    }
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    if (char === "'") {
+      if (quote === undefined) quote = "single";
+      continue;
+    }
+    if (char === '"') {
+      quote = quote === "double" ? undefined : "double";
+      continue;
+    }
+    if (char === "`" || (char === "$" && command[i + 1] === "(")) return true;
+    if (quote === undefined && (";&|<>\n\r".includes(char))) return true;
+  }
+  return false;
+}
+
+/**
  * True if the shell command `ran` is an invocation of the configured command
  * `configured` — i.e. it equals it, or extends it with extra args at a word
  * boundary (`pnpm test` matches `pnpm test --watch` but NOT `pnpm test:watch`).
@@ -28,6 +59,7 @@ export function normalizeCommand(command: string): string {
  * positives (`echo "pnpm test"`) and false negatives (extra whitespace).
  */
 export function commandInvokes(ran: string, configured: string): boolean {
+  if (hasShellControlSyntax(ran)) return false;
   const a = normalizeCommand(ran);
   const b = normalizeCommand(configured);
   if (!b) return false;
@@ -312,7 +344,7 @@ export function classifyCommand(
   // Redirects (`>`, `>>`, `<`) never inject a command but let a "read-only"
   // form clobber/read an arbitrary file (`git log > ~/.zshrc`), so they also
   // disqualify the fast-path.
-  const injectsCommands = /[|&;<>\n\r`]/.test(command) || command.includes("$(");
+  const injectsCommands = hasShellControlSyntax(command);
   if (!injectsCommands) {
     if (tokens[0] === "gh" && classifyGh(tokens) === "readonly") {
       return {
@@ -333,8 +365,9 @@ export function classifyCommand(
   }
 
   const allowlisted =
-    BUILTIN_COMMAND_ALLOWLIST.some((p) => matchesPrefix(normalized, p)) ||
-    extraAllowlist.some((p) => matchesPrefix(normalized, normalizeCommand(p)));
+    !injectsCommands &&
+    (BUILTIN_COMMAND_ALLOWLIST.some((p) => matchesPrefix(normalized, p)) ||
+      extraAllowlist.some((p) => matchesPrefix(normalized, normalizeCommand(p))));
 
   let defaultTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS;
   if (TEST_RUNNER_PREFIXES.some((p) => matchesPrefix(normalized, p))) {

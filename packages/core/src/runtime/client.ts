@@ -38,6 +38,7 @@ type Pending = {
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const DISPOSE_GRACE_MS = 5_000;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -182,7 +183,9 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       if (proc) {
         child = undefined;
         proc.stdin.end();
-        const forceKill = setTimeout(() => proc.kill(), 1_000);
+        // Give a freshly spawned runtime enough time to consume the queued
+        // request and cancellation before forcing it down under heavy load.
+        const forceKill = setTimeout(() => proc.kill(), DISPOSE_GRACE_MS);
         forceKill.unref();
         proc.once("exit", () => clearTimeout(forceKill));
       }

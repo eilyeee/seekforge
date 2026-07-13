@@ -65,6 +65,28 @@ export type MergeConfigLayersOptions = {
   envOverrides?: boolean;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPermissionRule(value: unknown): value is PermissionRule {
+  if (!isRecord(value)) return false;
+  return (
+    (value.action === "allow" || value.action === "deny") &&
+    typeof value.tool === "string" &&
+    (value.match === undefined || typeof value.match === "string")
+  );
+}
+
+function isHookEntry(value: unknown): value is HookEntry {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.command === "string" &&
+    (value.match === undefined || typeof value.match === "string") &&
+    (value.pattern === undefined || typeof value.pattern === "string")
+  );
+}
+
 /**
  * Merges config layers (LOW → HIGH precedence) with the semantics documented
  * in the module header. Pure over its inputs except for reading process.env
@@ -77,34 +99,63 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   const hookStages = opts.hookStages ?? HOOK_STAGES;
 
   // mcpServers merges per server name (later layer wins).
-  const mcpServers: Record<string, unknown> = {};
-  for (const layer of layers) Object.assign(mcpServers, layer.mcpServers);
+  const mcpServers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  let hasMcpServers = false;
+  for (const layer of layers) {
+    if (!isRecord(layer.mcpServers)) continue;
+    Object.assign(mcpServers, layer.mcpServers);
+    hasMcpServers = true;
+  }
 
   // permissionRules concatenate higher-precedence layers first: evaluation is
   // first-match-wins, so a higher layer's rule beats a lower one's.
   const permissionRules: PermissionRule[] = [];
-  for (const layer of layers) permissionRules.unshift(...(layer.permissionRules ?? []));
+  let hasPermissionRules = false;
+  for (const layer of layers) {
+    if (!Array.isArray(layer.permissionRules)) continue;
+    permissionRules.unshift(...layer.permissionRules.filter(isPermissionRule));
+    hasPermissionRules = true;
+  }
 
   // hooks concatenate per stage, lower-precedence layers first: every hook
   // runs. (Without this, the scalar spread below would let a higher layer's
   // hooks object REPLACE a lower one's wholesale.)
   const hooks: Partial<Record<HookStage, HookEntry[]>> = {};
+  let hasHooks = false;
   for (const stage of hookStages) {
-    const merged = layers.flatMap((layer) => layer.hooks?.[stage] ?? []);
+    const merged = layers.flatMap((layer) => {
+      if (!isRecord(layer.hooks)) return [];
+      hasHooks = true;
+      const entries = layer.hooks[stage];
+      return Array.isArray(entries) ? entries.filter(isHookEntry) : [];
+    });
     if (merged.length > 0) hooks[stage] = merged;
   }
 
   // Scalars: plain spread in layer order (later layer wins per key).
   let scalars: Record<string, unknown> = {};
   for (const layer of layers) scalars = { ...scalars, ...(layer as Record<string, unknown>) };
+  delete scalars.apiKey;
+  delete scalars.provider;
+  delete scalars.runtimeBin;
+  delete scalars.permissionRules;
+  delete scalars.mcpServers;
+  delete scalars.hooks;
+
+  let apiKey: string | undefined;
+  let provider: string | undefined;
+  let runtimeBin: string | undefined;
+  for (const layer of layers) {
+    if (typeof layer.apiKey === "string") apiKey = layer.apiKey;
+    if (typeof layer.provider === "string") provider = layer.provider;
+    if (typeof layer.runtimeBin === "string") runtimeBin = layer.runtimeBin;
+  }
 
   // Env overrides (final step). The provider is resolved with ??-semantics
   // from the highest layer down (a JSON `null` falls through to lower layers,
   // exactly like the historical per-app `a ?? b ?? … ?? "deepseek"` chains).
   let envOverrides: Record<string, unknown> = {};
   if (opts.envOverrides !== false) {
-    let provider: string | undefined;
-    for (const layer of layers) provider = layer.provider ?? provider;
     const mergedProvider = (provider ?? "deepseek").toLowerCase();
     const envKey =
       mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
@@ -118,12 +169,14 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
 
   return {
     ...scalars,
-    // Empty merges intentionally add no key: a `permissionRules: []` (etc.)
-    // present in some layer survives via the scalar spread, and absent-in-all
-    // stays absent — tests assert `undefined` in that case.
-    ...(permissionRules.length > 0 ? { permissionRules } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
+    ...(apiKey !== undefined ? { apiKey } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(runtimeBin !== undefined ? { runtimeBin } : {}),
+    // Preserve explicit empty structured values while leaving keys absent when
+    // no layer supplied a valid value.
+    ...(hasPermissionRules ? { permissionRules } : {}),
+    ...(hasMcpServers ? { mcpServers: { ...mcpServers } } : {}),
+    ...(hasHooks ? { hooks } : {}),
     ...envOverrides,
   } as T;
 }
@@ -135,9 +188,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
  *
  * `requireObject` also collapses parseable-but-non-object JSON (null / 42 /
  * "x" / [...]) to {} — JSON.parse accepts those and spreading them downstream
- * misbehaves. The CLI turned this guard on long ago; the TUI and server
- * historically did NOT (their layers pass through as-parsed), so it is opt-in
- * to keep each app byte-identical.
+ * misbehaves. All application config loaders enable this guard.
  */
 export function readJsonConfigLayer<T extends object>(
   path: string,

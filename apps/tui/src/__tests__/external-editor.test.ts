@@ -8,7 +8,18 @@ describe("parseEditorCommand", () => {
 
   it("splits flags out of the env value", () => {
     expect(parseEditorCommand("code --wait")).toEqual(["code", "--wait"]);
-    expect(parseEditorCommand("emacsclient -t -a ''")).toEqual(["emacsclient", "-t", "-a", "''"]);
+    expect(parseEditorCommand("emacsclient -t -a ''")).toEqual(["emacsclient", "-t", "-a", ""]);
+  });
+
+  it("preserves quoted and escaped arguments without a shell", () => {
+    expect(parseEditorCommand("'/Applications/Visual Studio Code.app/Contents/MacOS/Electron' --wait"))
+      .toEqual(["/Applications/Visual Studio Code.app/Contents/MacOS/Electron", "--wait"]);
+    expect(parseEditorCommand('code --profile "Work Profile" path\\ with\\ spaces')).toEqual([
+      "code",
+      "--profile",
+      "Work Profile",
+      "path with spaces",
+    ]);
   });
 
   it("trims surrounding and collapses inner whitespace", () => {
@@ -17,5 +28,10 @@ describe("parseEditorCommand", () => {
 
   it("returns an empty array for a blank value", () => {
     expect(parseEditorCommand("   ")).toEqual([]);
+  });
+
+  it("rejects malformed quoting and escaping", () => {
+    expect(() => parseEditorCommand('code "unfinished')).toThrow("unterminated quote");
+    expect(() => parseEditorCommand("code \\")).toThrow("ends with an escape");
   });
 });

@@ -11,6 +11,7 @@ import {
   type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChatProvider, RetryInfo } from "../provider/index.js";
 import type { RuntimeClient } from "../runtime/index.js";
 import {
@@ -66,17 +67,21 @@ import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 
 /**
- * Mutable handoff between a provider (built in the app factory) and a run's
- * event stream. One bus is created per factory and shared by every provider
- * it builds (main + per-model); the active run owns `emit` for its lifetime.
- * Calls outside a run (or after one ends) are no-ops.
+ * Run-local handoff between providers and agent event streams. One bus is
+ * shared by every provider a factory builds; async context routes retries to
+ * the run that initiated that provider request. Calls outside a run are no-ops.
  */
-export type RetryBus = { emit?: (info: RetryInfo) => void };
+export type RetryBus = {
+  run<T>(emit: (info: RetryInfo) => void, operation: () => Promise<T>): Promise<T>;
+};
 
 /** Convenience: a fresh bus plus the onRetry callback to hand the provider. */
 export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => void } {
-  const bus: RetryBus = {};
-  return Object.assign(bus, { onRetry: (info: RetryInfo) => bus.emit?.(info) });
+  const routes = new AsyncLocalStorage<(info: RetryInfo) => void>();
+  return {
+    run: (emit, operation) => routes.run(emit, operation),
+    onRetry: (info) => routes.getStore()?.(info),
+  };
 }
 
 export { hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
@@ -245,9 +250,9 @@ export type AgentCoreDeps = {
   /**
    * Retry-progress bridge. The provider is built outside the loop (in the app
    * factory), so its onRetry callback cannot reach this run's event stream
-   * directly. The factory wires the provider's onRetry to `retryBus.emit` and
-   * passes the SAME bus here; the loop installs `emit` for the duration of the
-   * run, turning each retry into a `provider.retry` event, and clears it after.
+   * directly. The factory wires the provider's onRetry to this bus and passes
+   * the same bus here; async context routes each retry to the run that issued
+   * the provider request and turns it into a `provider.retry` event.
    * Unset = retry progress is not surfaced (the provider still retries).
    */
   retryBus?: RetryBus;
@@ -716,20 +721,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
       }
 
-      // Surface provider retries as provider.retry events for the duration of
-      // this run. The provider (built in the app factory) calls retryBus.emit;
-      // we route it onto this run's queue, and clear the hook in finally so a
-      // retry from a later run never leaks into a stale queue.
-      if (deps.retryBus) {
-        deps.retryBus.emit = (info: RetryInfo) =>
-          pushEvent({
-            type: "provider.retry",
-            attempt: info.attempt,
-            maxAttempts: info.maxAttempts,
-            delayMs: info.delayMs,
-            reason: info.reason,
-          });
-      }
+      const routeRetry = (info: RetryInfo): void =>
+        pushEvent({
+          type: "provider.retry",
+          attempt: info.attempt,
+          maxAttempts: info.maxAttempts,
+          delayMs: info.delayMs,
+          reason: info.reason,
+        });
       const dispatchManager: DispatchManager | undefined =
         roster.length > 0 ? (deps._dispatchManager ?? createDispatchManager()) : undefined;
 
@@ -1151,13 +1150,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
           }
 
-          const res = deps.onModelDelta
-            ? await provider.chatStream(
+          const requestProvider = () => deps.onModelDelta
+            ? provider.chatStream(
                 { messages, tools: toolDefs, signal: input.signal },
                 deps.onModelDelta,
                 deps.onReasoningDelta,
               )
-            : await provider.chat({ messages, tools: toolDefs, signal: input.signal });
+            : provider.chat({ messages, tools: toolDefs, signal: input.signal });
+          const res = deps.retryBus
+            ? await deps.retryBus.run(routeRetry, requestProvider)
+            : await requestProvider();
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
 
@@ -1451,11 +1453,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
             if (tc.name === "run_command" && result.meta?.command) {
               commandsRun.push(result.meta.command);
-              // A verify/lint run counts only when the command actually ran it.
+              const exitCode = (result.data as { exitCode?: unknown } | undefined)?.exitCode;
+              const foregroundPass = result.ok && exitCode === 0;
+              // Only a successful foreground invocation satisfies either gate.
               const vc = deps.verifyCommand?.trim();
-              if (result.ok && vc && commandInvokes(result.meta.command, vc)) verifyRanSinceEdit = true;
+              if (foregroundPass && vc && commandInvokes(result.meta.command, vc)) verifyRanSinceEdit = true;
               const lc = deps.lintCommand?.trim();
-              if (result.ok && lc && commandInvokes(result.meta.command, lc)) lintRanSinceEdit = true;
+              if (foregroundPass && lc && commandInvokes(result.meta.command, lc)) lintRanSinceEdit = true;
             }
             // Track the latest published plan for the finalize completeness check
             // AND persist it to the session so it survives across resume (#2).
@@ -1639,8 +1643,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           },
         });
       } finally {
-        // Stop routing provider retries onto this (now-ending) run's queue.
-        if (deps.retryBus) deps.retryBus.emit = undefined;
         queue.end();
         dispatchManager?.disposeAll();
         // A caller-provided manager outlives the run (multi-turn sessions).
