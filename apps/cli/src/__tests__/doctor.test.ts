@@ -132,4 +132,14 @@ test("configParseCheck fails and lists the unparseable files", () => {
   assert.ok(check.fixHint);
 });
 
+test("doctor warns instead of crashing when tauri config is null", () => {
+  const probes = healthyProbes({
+    findRepoRoot: () => "/repo",
+    readText: (path) => path.endsWith("tauri.conf.json") ? "null" : null,
+  });
+  const check = byName(runDoctor("/proj", { apiKey: "sk" }, probes), "updater");
+  assert.equal(check.warn, true);
+  assert.ok(check.detail.includes("must contain an object"));
+});
+
 console.log(`${passed} doctor tests passed`);

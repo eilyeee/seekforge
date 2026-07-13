@@ -184,6 +184,7 @@ const IMPORT_LINE = /^\s*@(\S+)\s*$/;
 function expandImports(
   text: string,
   dir: string,
+  rootReal: string,
   depth: number,
   visited: Set<string>,
   budget: { remaining: number },
@@ -203,34 +204,46 @@ function expandImports(
     const rel = path.relative(dir, resolved);
     if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
     if (depth >= MAX_IMPORT_DEPTH) continue;
-    if (visited.has(resolved)) continue; // cycle guard
-    const included = readFileIfExists(resolved);
+    let physical: string;
+    try {
+      physical = fs.realpathSync(resolved);
+    } catch {
+      continue;
+    }
+    if (physical !== rootReal && !physical.startsWith(`${rootReal}${path.sep}`)) continue;
+    if (visited.has(physical)) continue; // cycle guard
+    const included = readFileIfExists(physical);
     if (included === undefined) continue; // missing → skip silently
     if (budget.remaining <= 0) continue; // size cap reached
-    visited.add(resolved);
-    const expanded = expandImports(included, path.dirname(resolved), depth + 1, visited, budget);
+    visited.add(physical);
+    const expanded = expandImports(included, path.dirname(physical), rootReal, depth + 1, visited, budget);
     out.push(expanded);
   }
   return out.join("\n");
 }
 
 /** Reads a memory file (if present) and expands any `@import` lines in it. */
-function readMemoryFileExpanded(filePath: string): string | undefined {
-  const raw = readFileIfExists(filePath);
-  if (raw === undefined) return undefined;
+function readMemoryFileExpanded(filePath: string, allowedRoot: string): string | undefined {
   try {
-    const visited = new Set<string>([path.resolve(filePath)]);
-    return expandImports(raw, path.dirname(filePath), 0, visited, {
+    const allowedReal = fs.realpathSync(allowedRoot);
+    const memoryRoot = fs.realpathSync(path.dirname(filePath));
+    const physicalFile = fs.realpathSync(filePath);
+    const inside = (root: string, target: string): boolean =>
+      target === root || target.startsWith(`${root}${path.sep}`);
+    if (!inside(allowedReal, memoryRoot) || !inside(memoryRoot, physicalFile)) return undefined;
+    const raw = readFileIfExists(physicalFile);
+    if (raw === undefined) return undefined;
+    const visited = new Set<string>([physicalFile]);
+    return expandImports(raw, path.dirname(physicalFile), memoryRoot, 0, visited, {
       remaining: MAX_IMPORT_SIZE,
     });
   } catch {
-    // Best-effort: fall back to the raw (unexpanded) content on any failure.
-    return raw;
+    return undefined;
   }
 }
 
 export function readProjectMemory(workspace: string): string | undefined {
-  return readMemoryFileExpanded(projectMemoryPath(workspace));
+  return readMemoryFileExpanded(projectMemoryPath(workspace), workspace);
 }
 
 /**
@@ -304,7 +317,7 @@ export function readSubdirMemories(workspace: string): SubdirMemory[] {
       }
       // Collect this package's own memory file, if present.
       const memFile = projectMemoryPath(childDir);
-      const content = readMemoryFileExpanded(memFile);
+      const content = readMemoryFileExpanded(memFile, childDir);
       if (content !== undefined && content.trim().length > 0) {
         results.push({ relDir: path.relative(workspace, childDir), content });
         if (results.length >= SUBDIR_SCAN_MAX_FILES) return;
@@ -325,7 +338,7 @@ export function readSubdirMemories(workspace: string): SubdirMemory[] {
  * `@import` lines expanded. Returns undefined when the file is absent.
  */
 export function readGlobalMemory(): string | undefined {
-  return readMemoryFileExpanded(globalMemoryPath());
+  return readMemoryFileExpanded(globalMemoryPath(), seekforgeHome());
 }
 
 function isCandidateRecord(value: unknown): value is MemoryCandidate {

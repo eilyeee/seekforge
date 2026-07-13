@@ -271,6 +271,30 @@ describe("agent loop", () => {
     expect(second).toEqual({ type: "command.output", stream: "stderr", chunk: "line two\n" });
   });
 
+  it("forwards the run AbortSignal to foreground tools", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "run_command", argumentsJson: '{"command":"pwd"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "final" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "run_command", description: "d", parameters: {} }],
+      execute: async (_call, ctx) => {
+        receivedSignal = ctx.signal;
+        return { ok: true, data: { exitCode: 0 } };
+      },
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
+
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
+
   it("caps streamed command.output at 200 chunks per tool call", async () => {
     const provider = fakeProvider([
       response({

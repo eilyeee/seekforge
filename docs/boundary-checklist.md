@@ -46,6 +46,10 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
   traversal before reaching Core.
 - **Also caught:** `packages/core/src/agent/trace.ts` — rewind checkpoint paths
   used lexical containment and could escape through a symlinked parent directory.
+- **Also caught:** `packages/core/src/memory/store.ts` — `@import` and the root
+  memory file used lexical containment but reads followed symlinks outside the workspace.
+- **Also caught:** `apps/server/src/files.ts` — the upload directory could be a
+  symlink outside the workspace even though the returned relative path looked safe.
 - **Also caught:** `packages/core/src/skills/manage.ts` — enable/disable/remove
   joined an unvalidated skill id and could mutate a directory outside the skill root.
 - **Also caught:** `apps/cli/src/authorized-dirs.ts` — ancestor matching used a
@@ -79,6 +83,8 @@ lands *between* the halves and corrupts the text on the next edit.
   and `snapToBoundary` any clamped position. Test with `"😀"`.
 - **Caught:** `apps/tui/src/vim.ts` (insert-mode Escape, charwise `p`) — the
   helpers already existed in `editor.ts`; vim just bypassed them.
+- **Also caught:** `apps/tui/src/components/MultilineComposer.tsx` — cursor
+  rendering indexed a single UTF-16 unit and split emoji surrogate pairs.
 
 ## 6. Every `addEventListener` needs a matching `removeEventListener`
 
@@ -134,6 +140,15 @@ path leaves every other path exposed.
   arrays in `messages.jsonl` were replayed as forged `ChatMessage` values.
 - **Also caught:** `packages/core/src/mcp/http.ts` — plain JSON transport accepted
   `null` and responses for a different JSON-RPC request id.
+- **Also caught:** `packages/core/src/provider/sse.ts` and `mapping.ts` — valid
+  JSON non-objects crashed streaming, while non-finite token counts poisoned cost
+  and budget accounting.
+- **Also caught:** `packages/core/src/tools/lsp/client.ts` — framed JSON `null`
+  reached the stdout event dispatcher and could throw outside the request promise.
+- **Also caught:** `packages/core/src/mcp/tools.ts` — malformed `tools/list`
+  data escaped a per-server failure boundary during the later mapping loop.
+- **Also caught:** `apps/server/src/config.ts` and CLI doctor — JSON `null`
+  reached object spread/property access even though parsing itself succeeded.
 - **Also caught:** `packages/core/src/skills/manage.ts` — non-object `skill.json`
   values crashed enable/disable instead of being repaired.
 
@@ -148,6 +163,10 @@ tree; treating "no args = read-only" auto-ran it with no confirmation.
 - **Also caught:** `packages/core/src/tools/run-command.ts` (`classifyGh`) —
   `gh api --method=POST` / `-XPOST` and `--field=...` forms were not parsed as
   mutating, so they could be misclassified as read-only GET requests.
+- **Also caught:** repeated `gh api -X/--method` flags — inspecting only the
+  first let a later POST override an auto-approved GET classification.
+- **Also caught:** `apps/server/src/routes/git.ts` — client filenames were passed
+  as Git pathspecs, so names beginning with pathspec magic changed command scope.
 
 ## 10. Clamp externally-supplied numbers that feed ranking / sizing / budgets
 
@@ -169,6 +188,8 @@ trials — these produce output shapes the happy path never sees.
 - **Caught:** `apps/server/src/rest.ts` (`gitStatus`) — `## No commits yet on main`
   parsed the branch as `"No"`. (See also empty-set guards across
   `packages/eval-harness`.)
+- **Also caught:** line-delimited Git porcelain parsing treated ` -> ` inside an
+  ordinary filename as rename syntax; use the NUL-delimited machine format.
 
 ## 12. Decide the sign of a formatted number *after* rounding
 
@@ -200,6 +221,10 @@ still `"number"`, but freshness checks and cursor/index arithmetic become wrong.
   timestamp made the update cache fresh forever.
 - **Also caught:** `apps/server/src/recents.ts` — an infinite `lastOpened`
   timestamp permanently dominated recent-workspace sorting.
+- **Also caught:** `apps/cli/src/schedule.ts` — an infinite persisted job budget
+  disabled the cost stop because no finite spend can reach `Infinity`.
+- **Also caught:** `apps/server/src/ws.ts` — `selectedHunks` validated only the
+  outer array, allowing negative, non-integer, and unbounded indices into Core.
 
 ## 15. Shared security guards may need a narrower capability-specific exception
 
@@ -239,6 +264,10 @@ leaves the user waiting for timeout.
   treated as a retryable network error and retry backoff ignored the abort signal.
 - **Also caught:** `packages/core/src/agent/loop.ts` — finalize auto-verify and
   auto-lint commands omitted the run signal and delayed cancellation until exit.
+- **Also caught:** `apps/tui/src/app.tsx` — Ctrl+C aborted the run controller but
+  left the frontend `ask_user` promise unresolved, so the run never observed it.
+- **Also caught:** the agent loop did not put its signal on `ToolContext`, so an
+  in-flight foreground command outlived cancellation despite executor support.
 
 ## 18. Exclude internal state from convergence inputs
 
@@ -258,6 +287,10 @@ also permit non-finite values unless checked separately.
 - **Do:** validate the complete numeric grammar first, then convert and require a
   safe integer or finite float as appropriate.
 - **Caught:** `apps/cli/src/index.ts` — global positive integer/float option parsers.
+- **Also caught:** `apps/cli/src/schedule.ts` — cron fragments used `parseInt`,
+  accepting values such as `1x`, `1-2x`, and `*/2x`.
+- **Also caught:** CLI `serve --port` and `sessions prune` accepted junk suffixes
+  because `parseInt("12junk")` returns `12`.
 
 ## 20. Lifecycle cleanup must prove ownership before deleting shared state
 
@@ -270,6 +303,8 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
 - **Also caught:** `apps/cli/src/loop-worktree.ts` — cleanup now requires both
   the retained worktree root and the Loop-only `seekforge/loop-*` branch prefix,
   so it cannot delete another SeekForge workflow's checkout.
+- **Also caught:** concurrent first LSP calls reused a session inserted into the
+  registry before its initialize handshake completed; share the startup promise.
 
 ## 21. Checkpoint at the event that makes cost or ownership observable
 
@@ -290,6 +325,8 @@ request later starts invisible work and desynchronizes controls from the server.
   requests intentionally submitted while disconnected belong to the next attempt.
 - **Caught:** `apps/desktop/src/lib/ws.ts` — a queued Loop could start after the
   store had already cleared its running state.
+- **Also caught:** `apps/desktop/src/store.ts` — resetting a session while its
+  socket run was active let late events populate the newly cleared transcript.
 
 ## 23. A PID is not a durable process identity
 

@@ -85,6 +85,17 @@ describe("buildMcpToolSpecs", () => {
     const specs = await buildMcpToolSpecs([broken, makeEntry("fake", false)]);
     expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
   });
+
+  it("ignores malformed tools/list data without breaking healthy servers", async () => {
+    const malformed = {
+      serverName: "malformed",
+      client: { listTools: async () => null } as unknown as McpClient,
+      trusted: false,
+    };
+    const specs = await buildMcpToolSpecs([malformed, makeEntry("fake", false)]);
+
+    expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
+  });
 });
 
 describe("dispatch through createDefaultDispatcher", () => {

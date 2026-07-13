@@ -6,7 +6,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import type { EditorState } from "../editor.js";
+import { snapToBoundary, type EditorState } from "../editor.js";
 import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";
 
@@ -19,11 +19,21 @@ type MultilineComposerProps = {
 };
 
 /** A buffer line with the cursor rendered as an inverse character. */
+export function splitLineAtCursor(line: string, column: number): { before: string; at: string; after: string } {
+  const safeColumn = snapToBoundary(line, Math.max(0, Math.min(column, line.length)));
+  if (safeColumn >= line.length) return { before: line, at: " ", after: "" };
+  const codePoint = line.codePointAt(safeColumn)!;
+  const at = String.fromCodePoint(codePoint);
+  return {
+    before: line.slice(0, safeColumn),
+    at,
+    after: line.slice(safeColumn + at.length),
+  };
+}
+
 function LineWithCursor({ line, column, ghost }: { line: string; column: number; ghost?: string }): React.ReactElement {
-  const before = line.slice(0, column);
-  const atEnd = column >= line.length;
-  const at = atEnd ? " " : line[column];
-  const after = atEnd ? "" : line.slice(column + 1);
+  const { before, at, after } = splitLineAtCursor(line, column);
+  const atEnd = after === "" && before === line;
   return (
     <Text>
       {before}

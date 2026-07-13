@@ -26,14 +26,21 @@ export function sessionsCommand(): void {
 export type PruneOptions = { olderThan?: string; keepLast?: string; dryRun?: boolean };
 
 export function sessionsPruneCommand(opts: PruneOptions): void {
-  const olderThanDays = opts.olderThan !== undefined ? Number.parseInt(opts.olderThan, 10) : undefined;
-  const keepLast = opts.keepLast !== undefined ? Number.parseInt(opts.keepLast, 10) : undefined;
+  const parseInteger = (value: string | undefined): number | undefined => {
+    if (value === undefined) return undefined;
+    return /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  };
+  const olderThanDays = parseInteger(opts.olderThan);
+  const keepLast = parseInteger(opts.keepLast);
   if (olderThanDays === undefined && keepLast === undefined) {
     console.error(t("cmd.sessions.pruneSpecify"));
     process.exitCode = 1;
     return;
   }
-  if ((olderThanDays !== undefined && Number.isNaN(olderThanDays)) || (keepLast !== undefined && Number.isNaN(keepLast))) {
+  if (
+    (olderThanDays !== undefined && !Number.isSafeInteger(olderThanDays)) ||
+    (keepLast !== undefined && !Number.isSafeInteger(keepLast))
+  ) {
     console.error(t("cmd.sessions.pruneNumbers"));
     process.exitCode = 1;
     return;

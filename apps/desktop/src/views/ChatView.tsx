@@ -338,7 +338,7 @@ export function ChatView() {
               {t("chat.compact")}
             </Button>
           )}
-          <Button size="sm" onClick={newSession}>
+          <Button size="sm" onClick={newSession} disabled={tab.chat.running}>
             {t("chat.newSession")}
           </Button>
         </div>

@@ -644,6 +644,35 @@ describe("permission bridge", () => {
     expect(resultSeen).toBe(false);
   });
 
+  it("ignores malformed selectedHunks instead of forwarding untrusted indices", async () => {
+    let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
+    const { server } = await boot(
+      fakeAgentFactory(async function* (opts) {
+        yield { type: "session.created", sessionId: "perm-sel-invalid" };
+        resultSeen = await opts.confirm({
+          toolName: "apply_patch",
+          permission: "write",
+          description: "Apply edits",
+          path: "src/a.ts",
+        });
+        yield { type: "session.completed", report: emptyReport() };
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
+    const req = await rx.waitFor((f) => f.type === "permission.request");
+    sendFrame(ws, {
+      type: "permission.response",
+      requestId: req.requestId,
+      approved: true,
+      selectedHunks: [0, -1, "2"],
+    });
+
+    await rx.waitFor((f) => f.type === "idle");
+    expect(resultSeen).toBe(true);
+  });
+
   it("selectedHunks takes precedence over remember:session", async () => {
     let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
     const { server } = await boot(

@@ -520,7 +520,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
         const allow = approved === true;
         // selectedHunks: per-hunk selection for multi-hunk apply_patch calls.
-        if (allow && Array.isArray(selectedHunks) && selectedHunks.length > 0) {
+        const validSelectedHunks =
+          Array.isArray(selectedHunks) &&
+          selectedHunks.length > 0 &&
+          selectedHunks.length <= 10_000 &&
+          selectedHunks.every((index) => Number.isSafeInteger(index) && index >= 0);
+        if (allow && validSelectedHunks) {
           settle({ allow: true, selectedHunks });
         } else if (allow && remember === "session") {
           // remember:"session" forwards the richer ConfirmResult so core grows

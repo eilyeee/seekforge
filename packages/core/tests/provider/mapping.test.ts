@@ -176,6 +176,19 @@ describe("mapUsage", () => {
       costUsd: 0,
     });
   });
+
+  it("normalizes invalid wire token counts before cost accounting", () => {
+    expect(mapUsage({
+      prompt_tokens: Number.POSITIVE_INFINITY,
+      completion_tokens: -5,
+      prompt_cache_hit_tokens: 2.9,
+    }, "deepseek-chat")).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheHitTokens: 2,
+      costUsd: 0,
+    });
+  });
 });
 
 describe("mapChatResponse", () => {
@@ -227,6 +240,19 @@ describe("mapChatResponse", () => {
     expect(response.content).toBe("");
     expect(response.finishReason).toBe("other");
     expect(response.usage.costUsd).toBe(0);
+  });
+
+  it("tolerates valid JSON non-objects and malformed tool calls", () => {
+    expect(mapChatResponse(null as never, "deepseek-chat")).toMatchObject({
+      content: "",
+      toolCalls: [],
+      finishReason: "other",
+    });
+    const response = mapChatResponse({
+      choices: [{ message: { content: "ok", tool_calls: [null, 42] as never } }],
+    }, "deepseek-chat");
+    expect(response.content).toBe("ok");
+    expect(response.toolCalls).toEqual([]);
   });
 });
 

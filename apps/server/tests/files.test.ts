@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clearFilesCacheForTests, listWorkspaceFiles } from "../src/files.js";
+import { clearFilesCacheForTests, listWorkspaceFiles, saveUpload, UploadError } from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
@@ -106,6 +106,16 @@ describe("POST /api/upload", () => {
     expect(body.path).toMatch(/\.jpeg$/);
     expect(body.path).not.toContain("weird");
     expect(existsSync(join(workspace, body.path))).toBe(true);
+  });
+
+  it("rejects an uploads-directory symlink that escapes the workspace", () => {
+    const symlinkWorkspace = makeWorkspace();
+    const outside = makeWorkspace();
+    mkdirSync(join(symlinkWorkspace, ".seekforge"), { recursive: true });
+    symlinkSync(outside, join(symlinkWorkspace, ".seekforge", "uploads"), "dir");
+
+    expect(() => saveUpload(symlinkWorkspace, "shot.png", PNG_BASE64)).toThrowError(UploadError);
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("rejects non-image extensions with 400", async () => {

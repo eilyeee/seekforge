@@ -65,6 +65,8 @@ type GitStatusResult = {
   files: GitFileStatus[];
 };
 
+const LITERAL_PATHSPECS = "--literal-pathspecs";
+
 /** Maps a single porcelain status code letter to our coarse status enum. */
 function mapStatusCode(code: string): GitFileStatus["status"] {
   switch (code) {
@@ -82,7 +84,7 @@ function mapStatusCode(code: string): GitFileStatus["status"] {
 }
 
 /**
- * Working-tree status of the workspace via `git status --porcelain=v1 -b`.
+ * Working-tree status of the workspace via `git status --porcelain=v1 -z -b`.
  * A non-repo (or git missing) is reported as {notGit:true, branch:"", files:[]}
  * — never thrown — mirroring gitDiff's notGit handling.
  */
@@ -94,7 +96,7 @@ async function gitStatus(workspace: string): Promise<GitStatusResult> {
     // default octal-escapes them, breaking those mutations for e.g. CJK names).
     ({ stdout } = await execFileAsync(
       "git",
-      ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b"],
+      ["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "-b"],
       GIT_EXEC(workspace),
     ));
   } catch (err) {
@@ -107,21 +109,24 @@ async function gitStatus(workspace: string): Promise<GitStatusResult> {
   }
   let branch = "";
   const files: GitFileStatus[] = [];
-  for (const line of stdout.split("\n")) {
-    if (line === "") continue;
-    if (line.startsWith("## ")) {
+  const records = stdout.split("\0");
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i] as string;
+    if (record === "") continue;
+    if (record.startsWith("## ")) {
       // "## main...origin/main [ahead 1]", "## HEAD (no branch)", or (on a repo
       // with no commits yet) "## No commits yet on main".
-      const rest = line.slice(3);
+      const rest = record.slice(3);
       const unborn = /^No commits yet on (.+)$/.exec(rest);
       branch = unborn ? (unborn[1] as string) : (rest.split(/\.\.\.| /)[0] ?? "");
       continue;
     }
-    const x = line[0] ?? " ";
-    const y = line[1] ?? " ";
-    let pathPart = line.slice(3);
-    // Renames are "R  old -> new"; report the new path.
-    if (pathPart.includes(" -> ")) pathPart = pathPart.split(" -> ")[1] ?? pathPart;
+    const x = record[0] ?? " ";
+    const y = record[1] ?? " ";
+    const pathPart = record.slice(3);
+    // In -z mode rename/copy records contain destination first, then a second
+    // NUL-terminated source path. The source is not a status record.
+    if (x === "R" || x === "C" || y === "R" || y === "C") i++;
     if (x === "?" && y === "?") {
       files.push({ path: pathPart, status: "untracked", staged: false });
       continue;
@@ -172,9 +177,13 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     const relPaths = paths as string[];
     try {
       if (action === "stage") {
-        await execFileAsync("git", ["add", "--", ...relPaths], GIT_EXEC(workspace));
+        await execFileAsync("git", [LITERAL_PATHSPECS, "add", "--", ...relPaths], GIT_EXEC(workspace));
       } else if (action === "unstage") {
-        await execFileAsync("git", ["restore", "--staged", "--", ...relPaths], GIT_EXEC(workspace));
+        await execFileAsync(
+          "git",
+          [LITERAL_PATHSPECS, "restore", "--staged", "--", ...relPaths],
+          GIT_EXEC(workspace),
+        );
       } else {
         // discard: tracked changes via `git restore`; untracked files removed.
         // Determine which of the given paths are untracked, then handle both.
@@ -182,16 +191,29 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
           "git",
           // core.quotepath=false: don't octal-escape non-ASCII filenames, so
           // the untracked-path match below works for e.g. Chinese names.
-          ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--", ...relPaths],
+          [
+            LITERAL_PATHSPECS,
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--",
+            ...relPaths,
+          ],
           GIT_EXEC(workspace),
         );
         const untracked = new Set<string>();
-        for (const line of stdout.split("\n")) {
-          if (line.startsWith("?? ")) untracked.add(line.slice(3));
+        for (const record of stdout.split("\0")) {
+          if (record.startsWith("?? ")) untracked.add(record.slice(3));
         }
         const tracked = relPaths.filter((p) => !untracked.has(p));
         if (tracked.length > 0) {
-          await execFileAsync("git", ["restore", "--", ...tracked], GIT_EXEC(workspace));
+          await execFileAsync(
+            "git",
+            [LITERAL_PATHSPECS, "restore", "--", ...tracked],
+            GIT_EXEC(workspace),
+          );
         }
         for (const p of relPaths) {
           if (!untracked.has(p)) continue;

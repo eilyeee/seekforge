@@ -84,6 +84,28 @@ describe("store: rejected sends", () => {
   });
 });
 
+describe("store: session reset lifecycle", () => {
+  beforeEach(resetStore);
+
+  it("does not reset a session while its run is active", () => {
+    useStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        tabs: s.tabs.tabs.map((tab) => ({
+          ...tab,
+          title: "active task",
+          chat: { ...tab.chat, running: true, sessionId: "session-a" },
+        })),
+      },
+    }));
+    useStore.getState().newSession();
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.title).toBe("active task");
+    expect(tab.chat.running).toBe(true);
+    expect(tab.chat.sessionId).toBe("session-a");
+  });
+});
+
 describe("store: approval mode selector → start frame", () => {
   beforeEach(resetStore);
 

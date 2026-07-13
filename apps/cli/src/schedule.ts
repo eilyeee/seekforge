@@ -82,7 +82,7 @@ function isJob(v: unknown): v is Job {
     typeof j["task"] === "string" &&
     typeof j["schedule"] === "string" &&
     (j["mode"] === "ask" || j["mode"] === "edit") &&
-    typeof j["maxCostUsd"] === "number" &&
+    typeof j["maxCostUsd"] === "number" && Number.isFinite(j["maxCostUsd"]) && j["maxCostUsd"] > 0 &&
     typeof j["enabled"] === "boolean"
   );
 }
@@ -135,12 +135,17 @@ const CRON_RANGES = {
 
 /** Parse one cron field: `*`, `a`, `a-b`, ranges/wildcards with a `/step`, and `,` lists. */
 function parseCronField(raw: string, [lo, hi]: readonly [number, number]): CronField | null {
+  const decimal = (value: string): number | null => {
+    if (!/^\d+$/.test(value)) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  };
   const out = new Set<number>();
   for (const part of raw.split(",")) {
     const stepSplit = part.split("/");
     if (stepSplit.length > 2) return null;
-    const step = stepSplit.length === 2 ? Number.parseInt(stepSplit[1]!, 10) : 1;
-    if (!Number.isInteger(step) || step <= 0) return null;
+    const step = stepSplit.length === 2 ? decimal(stepSplit[1]!) : 1;
+    if (step === null || step <= 0) return null;
     const rangeRaw = stepSplit[0]!;
     let start: number;
     let end: number;
@@ -149,10 +154,15 @@ function parseCronField(raw: string, [lo, hi]: readonly [number, number]): CronF
       end = hi;
     } else if (rangeRaw.includes("-")) {
       const [a, b] = rangeRaw.split("-");
-      start = Number.parseInt(a!, 10);
-      end = Number.parseInt(b!, 10);
+      const parsedStart = decimal(a!);
+      const parsedEnd = decimal(b!);
+      if (parsedStart === null || parsedEnd === null) return null;
+      start = parsedStart;
+      end = parsedEnd;
     } else {
-      start = Number.parseInt(rangeRaw, 10);
+      const parsed = decimal(rangeRaw);
+      if (parsed === null) return null;
+      start = parsed;
       end = start;
     }
     if (!Number.isInteger(start) || !Number.isInteger(end)) return null;

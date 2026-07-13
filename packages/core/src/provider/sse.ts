@@ -46,6 +46,9 @@ export function createSseAccumulator(): SseAccumulator {
   };
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 /**
  * Feed a decoded text chunk. Chunks may split SSE lines anywhere; complete
  * lines are processed, the remainder is buffered. Calls onDelta for each
@@ -80,36 +83,43 @@ function processLine(
     acc.done = true;
     return;
   }
-  let parsed: WireStreamChunk;
+  let value: unknown;
   try {
-    parsed = JSON.parse(payload) as WireStreamChunk;
+    value = JSON.parse(payload) as unknown;
   } catch {
     return; // tolerate garbage lines
   }
-  if (parsed.usage) acc.usage = parsed.usage;
-  const choice = parsed.choices?.[0];
+  if (!isRecord(value)) return;
+  if (isRecord(value["usage"])) acc.usage = value["usage"] as WireUsage;
+  const choices = value["choices"];
+  const choice = Array.isArray(choices) && isRecord(choices[0]) ? choices[0] : undefined;
   if (!choice) return;
-  if (choice.finish_reason != null) acc.rawFinishReason = choice.finish_reason;
-  const delta = choice.delta;
+  if (typeof choice["finish_reason"] === "string") acc.rawFinishReason = choice["finish_reason"];
+  const delta = isRecord(choice["delta"]) ? choice["delta"] : undefined;
   if (!delta) return;
-  if (typeof delta.content === "string" && delta.content.length > 0) {
-    acc.content += delta.content;
-    onDelta?.(delta.content);
+  if (typeof delta["content"] === "string" && delta["content"].length > 0) {
+    acc.content += delta["content"];
+    onDelta?.(delta["content"]);
   }
-  if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
-    acc.reasoningContent += delta.reasoning_content;
-    onReasoningDelta?.(delta.reasoning_content);
+  if (typeof delta["reasoning_content"] === "string" && delta["reasoning_content"].length > 0) {
+    acc.reasoningContent += delta["reasoning_content"];
+    onReasoningDelta?.(delta["reasoning_content"]);
   }
-  for (const tc of delta.tool_calls ?? []) {
-    const index = tc.index ?? 0;
+  const toolCalls = Array.isArray(delta["tool_calls"]) ? delta["tool_calls"] : [];
+  for (const tc of toolCalls) {
+    if (!isRecord(tc)) continue;
+    const index = Number.isSafeInteger(tc["index"]) && (tc["index"] as number) >= 0
+      ? tc["index"] as number
+      : 0;
     let entry = acc.toolCallsByIndex.get(index);
     if (!entry) {
       entry = { id: "", name: "", argumentsJson: "" };
       acc.toolCallsByIndex.set(index, entry);
     }
-    if (tc.id) entry.id = tc.id;
-    if (tc.function?.name) entry.name = tc.function.name;
-    if (tc.function?.arguments) entry.argumentsJson += tc.function.arguments;
+    if (typeof tc["id"] === "string" && tc["id"]) entry.id = tc["id"];
+    const fn = isRecord(tc["function"]) ? tc["function"] : undefined;
+    if (typeof fn?.["name"] === "string" && fn["name"]) entry.name = fn["name"];
+    if (typeof fn?.["arguments"] === "string" && fn["arguments"]) entry.argumentsJson += fn["arguments"];
   }
 }
 

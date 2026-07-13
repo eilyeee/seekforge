@@ -261,6 +261,9 @@ function updaterCheck(projectPath: string, probes: DoctorProbes): DoctorCheck | 
   } catch {
     return { name: "updater", ok: true, warn: true, detail: "tauri.conf.json unparseable" };
   }
+  if (typeof conf !== "object" || conf === null || Array.isArray(conf)) {
+    return { name: "updater", ok: true, warn: true, detail: "tauri.conf.json must contain an object" };
+  }
   const artifacts = conf.bundle?.createUpdaterArtifacts === true;
   const pubkey = conf.plugins?.updater?.pubkey ?? "";
   const disabled = pubkey === DISABLED_UPDATER_PUBKEY;

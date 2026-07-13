@@ -56,15 +56,19 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
 export async function buildMcpToolSpecs(clients: McpClientEntry[]): Promise<ToolSpec[]> {
   const specs: ToolSpec[] = [];
   for (const entry of clients) {
-    let tools: McpTool[];
     try {
-      tools = await entry.client.listTools();
+      const tools: unknown = await entry.client.listTools();
+      if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
+      for (const value of tools) {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+        const tool = value as Partial<McpTool>;
+        if (typeof tool.name !== "string" || tool.name.length === 0) continue;
+        specs.push(toToolSpec(entry, tool as McpTool));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`warning: MCP server "${entry.serverName}" unavailable: ${message}\n`);
-      continue;
     }
-    for (const tool of tools) specs.push(toToolSpec(entry, tool));
   }
   return specs;
 }

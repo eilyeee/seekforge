@@ -672,8 +672,8 @@ program
   )
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
   .action(async (paths: string[], opts: { port: string; workspace: string[] }) => {
-    const port = Number.parseInt(opts.port, 10);
-    if (Number.isNaN(port) || port < 0 || port > 65535) {
+    const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
+    if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
       fail(`invalid --port "${opts.port}" (expected 0-65535)`);
       return;
     }

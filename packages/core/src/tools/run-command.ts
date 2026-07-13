@@ -174,9 +174,6 @@ const GH_READONLY: ReadonlySet<string> = new Set([
   "gist list",
 ]);
 
-/** Mutating-API method flags on `gh api`. */
-const GH_API_WRITE_METHOD = /\b(post|put|patch|delete)\b/;
-
 /**
  * Classify a `gh` command line (already normalized, tokens[0] === "gh").
  * Returns "readonly" for safe reads, "execute" for everything else
@@ -201,17 +198,21 @@ function classifyGh(tokens: string[]): CommandPermission {
         t.startsWith("--input="),
     );
     if (hasWriteField) return "execute";
-    const methodToken = tokens.find((t) => t === "-X" || t.startsWith("-X") || t === "--method" || t.startsWith("--method="));
-    if (methodToken !== undefined) {
-      const method = (
-        methodToken === "-X" || methodToken === "--method"
-          ? (tokens[tokens.indexOf(methodToken) + 1] ?? "")
-          : methodToken.startsWith("--method=")
-            ? methodToken.slice("--method=".length)
-            : methodToken.slice("-X".length)
-      ).toLowerCase();
-      return GH_API_WRITE_METHOD.test(method) ? "execute" : "readonly";
+    const methods: string[] = [];
+    for (let i = 2; i < tokens.length; i++) {
+      const token = tokens[i]!;
+      if (token === "-X" || token === "--method") {
+        const method = tokens[i + 1];
+        if (!method) return "execute";
+        methods.push(method.toLowerCase());
+        i++;
+      } else if (token.startsWith("--method=")) {
+        methods.push(token.slice("--method=".length).toLowerCase());
+      } else if (token.startsWith("-X") && token.length > 2) {
+        methods.push(token.slice(2).toLowerCase());
+      }
     }
+    if (methods.length > 0) return methods.every((method) => method === "get") ? "readonly" : "execute";
     return "readonly"; // no method flag → GET
   }
 

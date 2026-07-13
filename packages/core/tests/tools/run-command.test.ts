@@ -153,6 +153,10 @@ describe("classifyCommand: gh", () => {
       "gh api repos/owner/repo/issues --field=title=bug",
       "gh api repos/owner/repo/issues --raw-field=body=hi",
       "gh api repos/owner/repo/issues --input=payload.json",
+      "gh api -X GET -X POST repos/owner/repo/issues",
+      "gh api --method GET --method=DELETE repos/owner/repo/issues/1",
+      "gh api -X",
+      "gh api --method=TRACE repos/owner/repo",
     ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("execute");
     }

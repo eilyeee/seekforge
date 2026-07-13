@@ -47,6 +47,29 @@ describe("@import composition in memory files", () => {
     expect(text).not.toContain("@does-not-exist.md");
   });
 
+  it("does not follow imported symlinks outside the memory directory", () => {
+    const ws = makeWorkspace();
+    const outside = path.join(ws, "secret.txt");
+    fs.writeFileSync(outside, "outside secret", "utf8");
+    fs.mkdirSync(memDir(ws), { recursive: true });
+    fs.symlinkSync(outside, path.join(memDir(ws), "linked.md"));
+    writeProjectMemory(ws, "# Project Memory\n@linked.md\n");
+    expect(readProjectMemory(ws)).toBe("# Project Memory\n");
+  });
+
+  it("rejects a root memory file symlinked outside the workspace", () => {
+    const ws = makeWorkspace();
+    const outside = path.join(ws, "..", `outside-memory-${path.basename(ws)}.md`);
+    fs.writeFileSync(outside, "outside root secret", "utf8");
+    fs.mkdirSync(memDir(ws), { recursive: true });
+    fs.symlinkSync(outside, path.join(memDir(ws), "project.md"));
+    try {
+      expect(readProjectMemory(ws)).toBeUndefined();
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
   it("refuses path traversal that escapes the memory directory", () => {
     const ws = makeWorkspace();
     // A secret outside the memory dir that must NOT be inlined.

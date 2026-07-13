@@ -49,6 +49,15 @@ describe("lsp wire framing (pure)", () => {
     expect(rest.length).toBe(0);
   });
 
+  it("ignores valid JSON non-object frames and continues parsing", () => {
+    const good = { jsonrpc: "2.0", id: 3, result: "ok" };
+    const buf = Buffer.concat([
+      ...[null, 42, "text", []].map(encodeLspMessage),
+      encodeLspMessage(good),
+    ]);
+    expect(parseLspMessages(buf)).toEqual({ messages: [good], rest: Buffer.alloc(0) });
+  });
+
   it("waits for more bytes on a partial body (leaves it in rest)", () => {
     const full = encodeLspMessage({ jsonrpc: "2.0", id: 7, result: { some: "payload" } });
     const partial = full.subarray(0, full.length - 5); // truncate the body

@@ -15,6 +15,9 @@ import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 // --- wire types (only the fields we read/write) -----------------------------
 
 export type WireToolCall = {
@@ -163,10 +166,12 @@ export function mapUsage(
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
+  const tokenCount = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
   const tokens = {
-    promptTokens: raw?.prompt_tokens ?? 0,
-    completionTokens: raw?.completion_tokens ?? 0,
-    cacheHitTokens: (capabilities?.cacheHitTokens ?? true) ? (raw?.prompt_cache_hit_tokens ?? 0) : 0,
+    promptTokens: tokenCount(raw?.prompt_tokens),
+    completionTokens: tokenCount(raw?.completion_tokens),
+    cacheHitTokens: (capabilities?.cacheHitTokens ?? true) ? tokenCount(raw?.prompt_cache_hit_tokens) : 0,
   };
   // A user-supplied price for this model always wins — it enables cost/budget
   // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
@@ -181,11 +186,15 @@ export function mapUsage(
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {
-  return (raw ?? []).map((c, i) => ({
-    id: c.id ?? `call-${i + 1}`,
-    name: c.function?.name ?? "",
-    argumentsJson: c.function?.arguments ?? "",
-  }));
+  return (Array.isArray(raw) ? raw : []).flatMap((value, i) => {
+    if (!isRecord(value)) return [];
+    const fn = isRecord(value["function"]) ? value["function"] : undefined;
+    return [{
+      id: typeof value["id"] === "string" ? value["id"] : `call-${i + 1}`,
+      name: typeof fn?.["name"] === "string" ? fn["name"] : "",
+      argumentsJson: typeof fn?.["arguments"] === "string" ? fn["arguments"] : "",
+    }];
+  });
 }
 
 export function mapChatResponse(
@@ -194,13 +203,16 @@ export function mapChatResponse(
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): ChatResponse {
-  const choice = json.choices?.[0];
-  const reasoning = choice?.message?.reasoning_content;
+  const root = isRecord(json) ? json : {};
+  const choices = root["choices"];
+  const choice = Array.isArray(choices) && isRecord(choices[0]) ? choices[0] : undefined;
+  const message = isRecord(choice?.["message"]) ? choice["message"] : undefined;
+  const reasoning = message?.["reasoning_content"];
   return {
-    content: choice?.message?.content ?? "",
-    toolCalls: mapWireToolCalls(choice?.message?.tool_calls),
-    finishReason: mapFinishReason(choice?.finish_reason),
-    usage: mapUsage(json.usage, model, capabilities, modelPricing),
+    content: typeof message?.["content"] === "string" ? message["content"] : "",
+    toolCalls: mapWireToolCalls(message?.["tool_calls"] as WireToolCall[] | undefined),
+    finishReason: mapFinishReason(typeof choice?.["finish_reason"] === "string" ? choice["finish_reason"] : undefined),
+    usage: mapUsage(isRecord(root["usage"]) ? root["usage"] as WireUsage : undefined, model, capabilities, modelPricing),
     ...(typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
   };
 }

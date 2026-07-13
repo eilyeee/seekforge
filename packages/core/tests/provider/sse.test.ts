@@ -94,6 +94,22 @@ describe("SSE accumulation", () => {
     expect(finalizeSse(acc).content).toBe("ok");
   });
 
+  it.each(["null", "[]", '"text"', "42"])("ignores valid JSON non-object payload %s", (payload) => {
+    const acc = createSseAccumulator();
+    feedSseChunk(acc, `data: ${payload}\n` + 'data: {"choices":[{"delta":{"content":"ok"}}]}\n');
+    expect(finalizeSse(acc).content).toBe("ok");
+  });
+
+  it("ignores malformed nested choices and tool calls", () => {
+    const acc = createSseAccumulator();
+    feedSseChunk(acc, [
+      'data: {"choices":"bad"}',
+      'data: {"choices":[{"delta":{"tool_calls":[null,42,{"index":-1,"function":"bad"}]}}]}',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}',
+    ].join("\n") + "\n");
+    expect(finalizeSse(acc).content).toBe("ok");
+  });
+
   it("maps an unknown finish_reason to other", () => {
     const acc = createSseAccumulator();
     feedSseChunk(acc, 'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n');

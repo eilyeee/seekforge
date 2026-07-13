@@ -55,6 +55,8 @@ export type ParseResult = {
  * otherwise grow the receive buffer without bound and OOM the process.
  */
 export const MAX_CONTENT_LENGTH = 64 * 1024 * 1024;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function parseLspMessages(buffer: Buffer): ParseResult {
   const messages: unknown[] = [];
@@ -80,7 +82,8 @@ export function parseLspMessages(buffer: Buffer): ParseResult {
     if (buf.length < bodyStart + length) break; // body still arriving — wait.
     const body = buf.subarray(bodyStart, bodyStart + length).toString("utf8");
     try {
-      messages.push(JSON.parse(body));
+      const parsed = JSON.parse(body) as unknown;
+      if (isRecord(parsed)) messages.push(parsed);
     } catch {
       // Advance past an unparseable body rather than loop forever on it.
     }
@@ -532,10 +535,16 @@ function errMsg(err: unknown): string {
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, LspSession>();
+const startingSessions = new Map<string, Promise<LspSession>>();
 let exitHookInstalled = false;
 
 async function getSession(workspace: string, absPath: string): Promise<{ session: LspSession }> {
   const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable
+  const starting = startingSessions.get(languageId);
+  if (starting) {
+    const session = await starting;
+    if (session.workspace === workspace && session.usable) return { session };
+  }
   let session = sessions.get(languageId);
   if (session && (session.workspace !== workspace || !session.usable)) {
     // Workspace changed under us, OR the cached server has exited/errored —
@@ -549,12 +558,16 @@ async function getSession(workspace: string, absPath: string): Promise<{ session
     session = new LspSession(workspace, languageId, candidate);
     sessions.set(languageId, session);
     installExitHook();
+    const startup = session.start().then(() => session!);
+    startingSessions.set(languageId, startup);
     try {
-      await session.start();
+      await startup;
     } catch (err) {
-      sessions.delete(languageId);
+      if (sessions.get(languageId) === session) sessions.delete(languageId);
       await session.dispose();
       throw err;
+    } finally {
+      if (startingSessions.get(languageId) === startup) startingSessions.delete(languageId);
     }
   }
   return { session };
@@ -568,6 +581,7 @@ async function getSession(workspace: string, absPath: string): Promise<{ session
 export async function disposeLspServers(): Promise<void> {
   const all = [...sessions.values()];
   sessions.clear();
+  startingSessions.clear();
   await Promise.all(all.map((s) => s.dispose().catch(() => {})));
 }
 

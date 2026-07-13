@@ -570,6 +570,7 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     newSession: () => {
+      if (activeTab(get().tabs).chat.running) return;
       set((s) => ({
         tabs: updateTab(s.tabs, s.tabs.activeTabId, {
           title: DEFAULT_TAB_TITLE,

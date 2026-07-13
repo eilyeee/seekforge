@@ -73,6 +73,9 @@ test("parseCron accepts a 5-field expression, rejects others", () => {
   assert.equal(parseCron("0 9 * * * *"), null); // 6 fields
   assert.equal(parseCron("60 9 * * *"), null); // minute out of range
   assert.equal(parseCron("*/0 * * * *"), null); // zero step
+  for (const invalid of ["1x * * * *", "1-2x * * * *", "*/2x * * * *"]) {
+    assert.equal(parseCron(invalid), null, invalid);
+  }
 });
 test("cronMatches fires only at the scheduled minute", () => {
   // 09:00 on a Monday (2024-01-01 is a Monday).
@@ -237,6 +240,19 @@ test("loadRegistry tolerates a corrupt/invalid file", () => {
     const file = join(dir, ".seekforge", "schedules.json");
     writeFileSync(file, "{ not json", "utf8");
     assert.deepEqual(loadRegistry(dir), { jobs: [] });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("loadRegistry rejects persisted non-finite or non-positive budgets", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const file = join(dir, ".seekforge", "schedules.json");
+    saveRegistry(dir, { jobs: [] });
+    for (const budget of ["1e999", "0", "-1"]) {
+      writeFileSync(file, `{"jobs":[{"id":"x","task":"t","schedule":"1h","mode":"ask","maxCostUsd":${budget},"enabled":true}]}`);
+      assert.deepEqual(loadRegistry(dir), { jobs: [] });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -70,6 +70,13 @@ describe("loadConfig permissionRules merge", () => {
 
     expect(loadConfig(workspace).permissionRules).toBeUndefined();
   });
+
+  it("treats a non-object JSON root as an empty config layer", () => {
+    const workspace = makeWorkspace();
+    writeFileIn(workspace, ".seekforge/config.json", "null");
+
+    expect(loadConfig(workspace)).toEqual({});
+  });
 });
 
 describe("createDefaultAgent permissionRules pass-through", () => {

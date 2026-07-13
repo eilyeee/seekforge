@@ -1382,6 +1382,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               let streamedChunks = 0;
               const callCtx: ToolContext = {
                 ...ctx,
+                signal: input.signal,
                 emitOutput: (stream, chunk) => {
                   if (streamedChunks >= MAX_STREAMED_CHUNKS_PER_CALL) return;
                   streamedChunks++;

@@ -252,8 +252,20 @@ export function saveUpload(root: string, name: string, dataBase64: string): { pa
   }
   const stamp = `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
   const rel = `.seekforge/uploads/img-${stamp}.${ext}`;
-  mkdirSync(join(root, ".seekforge", "uploads"), { recursive: true });
-  writeFileSync(join(root, rel), data);
+  let uploadDir: string;
+  let target: string;
+  try {
+    uploadDir = resolveInsideWorkspace(root, ".seekforge/uploads");
+  } catch {
+    throw new UploadError(400, "bad_request", "upload path escapes the workspace");
+  }
+  mkdirSync(uploadDir, { recursive: true });
+  try {
+    target = resolveInsideWorkspace(root, rel);
+  } catch {
+    throw new UploadError(400, "bad_request", "upload path escapes the workspace");
+  }
+  writeFileSync(target, data);
   return { path: rel };
 }
 

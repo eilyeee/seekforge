@@ -130,6 +130,7 @@ const runCommand = defineTool({
           sandbox,
           workspace: ctx.workspace,
           onOutput: ctx.emitOutput,
+          signal: ctx.signal,
         });
       } catch (err) {
         if (err instanceof ToolError && err.code === "timeout") {

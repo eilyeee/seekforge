@@ -32,6 +32,8 @@ export type ToolContext = {
    * enforcePermission treats `true`/`false` exactly as before.
    */
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
+  /** Cancels foreground work when the current agent run is aborted. */
+  signal?: AbortSignal;
   /** Interactive question channel (TUI). Absent in non-interactive runs. */
   askUser?: (q: { question: string; options: string[] }) => Promise<string>;
   /**

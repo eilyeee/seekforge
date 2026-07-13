@@ -43,14 +43,16 @@ beforeAll(async () => {
   git(workspace, "config", "user.name", "Tester");
   writeFileIn(workspace, "src/app.ts", "export const x = 1;\n");
   writeFileIn(workspace, "README.md", "hello\n");
+  writeFileIn(workspace, "draft -> final.txt", "first\n");
   // A binary file and a sensitive file to test rejection.
   writeFileSync(join(workspace, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
   writeFileSync(join(workspace, ".env"), "SECRET=abc\n");
-  git(workspace, "add", "src/app.ts", "README.md");
+  git(workspace, "add", "src/app.ts", "README.md", "draft -> final.txt");
   git(workspace, "commit", "-q", "-m", "init");
 
   // Now create the working-tree states.
   writeFileIn(workspace, "src/app.ts", "export const x = 2;\n"); // unstaged modify
+  writeFileIn(workspace, "draft -> final.txt", "second\n"); // ordinary filename containing rename marker
   writeFileIn(workspace, "src/new.ts", "export const y = 3;\n"); // untracked
   git(workspace, "add", "src/new.ts"); // staged add
 
@@ -195,6 +197,7 @@ describe("GET /api/git/status", () => {
     }
     expect(byPath.get("src/app.ts")).toContainEqual({ status: "modified", staged: false });
     expect(byPath.get("src/new.ts")).toContainEqual({ status: "added", staged: true });
+    expect(byPath.get("draft -> final.txt")).toContainEqual({ status: "modified", staged: false });
   });
 });
 
@@ -257,6 +260,45 @@ describe("git stage / unstage / commit", () => {
       (f: { path: string; staged: boolean }) => f.path === "src/app.ts" && f.staged,
     );
     expect(entry).toBeUndefined();
+  });
+
+  it("treats client paths as literals instead of Git pathspec magic", async () => {
+    const magicName = ":(glob)pathspec-*.txt";
+    const decoy = "pathspec-decoy.txt";
+    writeFileIn(workspace, magicName, "literal\n");
+    writeFileIn(workspace, decoy, "must stay untracked\n");
+
+    const stage = await authed("/api/git/stage", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paths: [magicName] }),
+    });
+    expect(stage.status).toBe(200);
+    expect(
+      execFileSync("git", ["--literal-pathspecs", "diff", "--cached", "--name-only", "--", magicName], {
+        cwd: workspace,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(magicName);
+    expect(
+      execFileSync("git", ["--literal-pathspecs", "diff", "--cached", "--name-only", "--", decoy], {
+        cwd: workspace,
+        encoding: "utf8",
+      }),
+    ).toBe("");
+
+    const unstage = await authed("/api/git/unstage", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paths: [magicName] }),
+    });
+    expect(unstage.status).toBe(200);
+    expect(
+      execFileSync("git", ["--literal-pathspecs", "diff", "--cached", "--name-only", "--", magicName], {
+        cwd: workspace,
+        encoding: "utf8",
+      }),
+    ).toBe("");
   });
 });
 

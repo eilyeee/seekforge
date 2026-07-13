@@ -129,9 +129,7 @@ function parseConfigDoc(raw: string): Record<string, unknown> {
 }
 
 function readJson(path: string): ServerConfig {
-  // NOTE: no requireObject guard — the server historically passes non-object
-  // JSON through as-parsed (only the CLI collapses those layers to {}).
-  return readJsonConfigLayer<ServerConfig>(path);
+  return readJsonConfigLayer<ServerConfig>(path, { requireObject: true });
 }
 
 /**

@@ -1929,6 +1929,19 @@ export function App({
 
   const handleCtrlC = useCallback(() => {
     if (controllerRef.current) {
+      const tabId = activeIdRef.current;
+      const permission = pendingPermissionByTabRef.current.get(tabId);
+      if (permission) {
+        permission.resolve(false);
+        pendingPermissionByTabRef.current.delete(tabId);
+        dispatch({ type: "permission-resolved" });
+      }
+      const question = pendingQuestionByTabRef.current.get(tabId);
+      if (question) {
+        question("(no answer — the session was cancelled)");
+        pendingQuestionByTabRef.current.delete(tabId);
+        dispatch({ type: "overlay", overlay: null });
+      }
       sigintCountRef.current += 1;
       controllerRef.current.abort();
       if (sigintCountRef.current >= 2) {
@@ -1939,7 +1952,7 @@ export function App({
     } else {
       quit();
     }
-  }, [quit, notice]);
+  }, [quit, notice, dispatch]);
 
   useInput((rawInput, key) => {
     const stroke: KeyStroke = toStroke(rawInput, key as unknown as InkKey);
