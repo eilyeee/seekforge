@@ -5,9 +5,24 @@
  * not depend on apps/cli, so the small logic is replicated here.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   DEPRECATED_MODELS,
   MODEL_PRICING,
@@ -119,6 +134,99 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
 
 export class ConfigValueError extends Error {}
 
+export class ProjectPathError extends ConfigValueError {}
+
+function projectPath(workspace: string, rel: string, createParent: boolean): string {
+  const root = realpathSync(resolve(workspace));
+  const target = resolve(root, rel);
+  const fromRoot = relative(root, target);
+  if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw new ProjectPathError(`project path escapes the workspace: ${rel}`);
+  }
+
+  if (createParent) mkdirSync(dirname(target), { recursive: true });
+  const parts = fromRoot.split(sep);
+  let current = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = join(current, parts[i]!);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(current);
+    } catch (err) {
+      if (!createParent && (err as NodeJS.ErrnoException).code === "ENOENT") return target;
+      throw new ProjectPathError(`project path is not available: ${rel}`);
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync(current) !== current) {
+      throw new ProjectPathError(`project path contains a symlink: ${rel}`);
+    }
+  }
+  return target;
+}
+
+/** Reads a workspace-owned file without following project-local symlinks. */
+export function readProjectFile(workspace: string, rel: string): string | undefined {
+  const target = projectPath(workspace, rel, false);
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(target) !== target) {
+    throw new ProjectPathError(`project file is a symlink or not a regular file: ${rel}`);
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!fstatSync(fd).isFile()) {
+      throw new ProjectPathError(`project file is not a regular file: ${rel}`);
+    }
+    return readFileSync(fd, "utf8");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** Atomically replaces a workspace-owned file after revalidating its physical path. */
+export function writeProjectFileAtomic(workspace: string, rel: string, content: string): void {
+  const target = projectPath(workspace, rel, true);
+  try {
+    const stat = lstatSync(target);
+    if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(target) !== target) {
+      throw new ProjectPathError(`project file is a symlink or not a regular file: ${rel}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  const temp = join(dirname(target), `.${randomBytes(12).toString("hex")}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, "wx", 0o600);
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+
+    projectPath(workspace, rel, false);
+    if (existsSync(target)) {
+      const stat = lstatSync(target);
+      if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(target) !== target) {
+        throw new ProjectPathError(`project file is a symlink or not a regular file: ${rel}`);
+      }
+    }
+    renameSync(temp, target);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(temp);
+    } catch {
+      // The rename consumed the temporary file, or creation failed.
+    }
+  }
+}
+
 function isObjectRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -153,7 +261,13 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
 /** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
 export function loadConfig(workspace: string): ServerConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
-  const project = readJson(join(workspace, ".seekforge", "config.json"));
+  let project: ServerConfig = {};
+  try {
+    const raw = readProjectFile(workspace, ".seekforge/config.json");
+    if (raw !== undefined) project = parseConfigDoc(raw) as ServerConfig;
+  } catch {
+    // A missing, malformed, or physically unsafe project layer is ignored.
+  }
   // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
   // project-over-global; mcpServers merge per server name (project wins);
   // permissionRules concatenate project-then-global (first match wins); hooks
@@ -237,15 +351,28 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
 
   const path = join(global ? homedir() : workspace, ".seekforge", "config.json");
   let current: Record<string, unknown> = {};
-  if (existsSync(path)) {
+  if (global && existsSync(path)) {
     try {
       current = parseConfigDoc(readFileSync(path, "utf8"));
     } catch {
       // invalid JSON: rewrite from scratch (same behaviour as the CLI)
     }
+  } else if (!global) {
+    try {
+      const raw = readProjectFile(workspace, ".seekforge/config.json");
+      if (raw !== undefined) current = parseConfigDoc(raw);
+    } catch (err) {
+      if (err instanceof ProjectPathError) throw err;
+      // invalid JSON: rewrite from scratch (same behaviour as the CLI)
+    }
   }
   if (stored === undefined) delete current[key];
   else current[key] = stored;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+  const serialized = `${JSON.stringify(current, null, 2)}\n`;
+  if (global) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, serialized, { mode: 0o600 });
+  } else {
+    writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
+  }
 }

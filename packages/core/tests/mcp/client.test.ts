@@ -60,6 +60,22 @@ describe("mcp client", () => {
     }
   });
 
+  it("cancels a pending tool call without poisoning the connection", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    try {
+      const pending = client.callTool("slow", {}, controller.signal);
+      setTimeout(() => controller.abort(), 25);
+      await expect(pending).rejects.toMatchObject({
+        name: "McpError",
+        code: "mcp_cancelled",
+      });
+      await expect(client.callTool("echo", { text: "after" })).resolves.toContain("after");
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("rejects isError results with the flattened text as the message", async () => {
     const client = makeClient();
     try {

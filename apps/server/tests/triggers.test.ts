@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import {
@@ -8,10 +10,11 @@ import {
   loadTriggers,
   maskTrigger,
   payloadToTaskSuffix,
+  saveTriggers,
   validateTrigger,
   type Trigger,
 } from "../src/triggers.js";
-import { fakeAgentFactory, makeWorkspace, writeFileIn } from "./helpers.js";
+import { fakeAgentFactory, makeWorkspace, waitUntil, writeFileIn } from "./helpers.js";
 
 // --- Pure module: validation ------------------------------------------------
 
@@ -97,6 +100,28 @@ describe("checkTriggerSecret", () => {
 
   it("rejects a secret that is a prefix of the real one (hashed compare)", () => {
     expect(checkTriggerSecret("correct-horse", "correct")).toBe(false);
+  });
+});
+
+describe("trigger registry paths", () => {
+  it("rejects a symlinked project registry for reads and writes", () => {
+    const ws = makeWorkspace();
+    const outside = join(makeWorkspace(), "triggers.json");
+    const external = JSON.stringify([{
+      id: "outside",
+      task: "external task",
+      mode: "ask",
+      maxCostUsd: 1,
+      secret: "external-secret",
+      enabled: true,
+    }]);
+    writeFileSync(outside, external);
+    mkdirSync(join(ws, ".seekforge"));
+    symlinkSync(outside, join(ws, ".seekforge", "triggers.json"), "file");
+
+    expect(loadTriggers(ws)).toEqual([]);
+    expect(() => saveTriggers(ws, [])).toThrow(/symlink/);
+    expect(readFileSync(outside, "utf8")).toBe(external);
   });
 });
 
@@ -331,6 +356,96 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
       body: payload,
     });
     expect(unsupported.status).toBe(400);
+  });
+
+  it("does not consume a GitHub delivery id when the signed payload is malformed", async () => {
+    const delivery = "delivery-malformed-retry";
+    const badPayload = "{";
+    const badSignature = `sha256=${createHmac("sha256", "trigger-secret-1").update(badPayload).digest("hex")}`;
+    const common = { "x-github-delivery": delivery, "x-github-event": "pull_request" };
+    const bad = await fetch(`${base}/api/triggers/ci`, {
+      method: "POST",
+      headers: { ...common, "x-hub-signature-256": badSignature },
+      body: badPayload,
+    });
+    expect(bad.status).toBe(400);
+
+    const goodPayload = JSON.stringify({ action: "opened" });
+    const goodSignature = `sha256=${createHmac("sha256", "trigger-secret-1").update(goodPayload).digest("hex")}`;
+    const retry = await fetch(`${base}/api/triggers/ci`, {
+      method: "POST",
+      headers: { ...common, "x-hub-signature-256": goodSignature },
+      body: goodPayload,
+    });
+    expect(retry.status).toBe(202);
+  });
+});
+
+describe("server shutdown", () => {
+  it("aborts and disposes background trigger runs before close resolves", async () => {
+    const ws = makeWorkspace();
+    writeFileIn(ws, ".seekforge/triggers.json", JSON.stringify([{
+      id: "slow",
+      task: "wait",
+      mode: "ask",
+      maxCostUsd: 1,
+      secret: "slow-trigger-secret",
+      enabled: true,
+    }]));
+    let aborted = false;
+    let disposed = false;
+    let cleanupStarted = false;
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const createAgent = () => ({
+      agent: {
+        runTask: async function* (input: import("@seekforge/core").RunAgentTaskInput) {
+          try {
+            yield { type: "session.created" as const, sessionId: "slow-session" };
+            await new Promise<void>((resolve) => {
+              const done = () => {
+                aborted = true;
+                resolve();
+              };
+              input.signal?.addEventListener("abort", done, { once: true });
+              if (input.signal?.aborted) done();
+            });
+          } finally {
+            cleanupStarted = true;
+            await cleanupGate;
+          }
+        },
+      },
+      dispose: () => { disposed = true; },
+    });
+    const local = await startServer({ workspace: ws, port: 0, token: TOKEN, createAgent });
+    const response = await fetch(`http://127.0.0.1:${local.port}/api/triggers/slow`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "x-seekforge-trigger-secret": "slow-trigger-secret",
+      },
+    });
+    expect(response.status).toBe(202);
+
+    let closeResolved = false;
+    const closePromise = local.close().then(() => {
+      closeResolved = true;
+    });
+    try {
+      await waitUntil(() => aborted && cleanupStarted);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(closeResolved).toBe(false);
+      expect(disposed).toBe(false);
+    } finally {
+      releaseCleanup();
+    }
+    await closePromise;
+
+    expect(aborted).toBe(true);
+    expect(disposed).toBe(true);
   });
 });
 

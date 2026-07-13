@@ -57,4 +57,30 @@ describe("chatStream mid-stream idle timeout", () => {
     expect(deltas.join("")).toBe("hello");
     expect(out.content).toBe("hello");
   });
+
+  it("cancels an in-flight stream read with the caller signal", async () => {
+    let cancelled = false;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: () => new Promise<never>(() => {}),
+          cancel: async () => {
+            cancelled = true;
+          },
+          releaseLock: () => {},
+        }),
+      },
+    })) as unknown as typeof fetch;
+    const controller = new AbortController();
+    const reason = new Error("cancelled by caller");
+    const provider = createDeepSeekProvider({ apiKey: "k", streamIdleTimeoutMs: 10_000 });
+
+    const response = provider.chatStream({ ...req, signal: controller.signal }, () => {});
+    controller.abort(reason);
+
+    await expect(response).rejects.toBe(reason);
+    expect(cancelled).toBe(true);
+  });
 });

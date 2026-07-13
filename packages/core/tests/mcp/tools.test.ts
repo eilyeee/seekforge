@@ -99,6 +99,28 @@ describe("buildMcpToolSpecs", () => {
 });
 
 describe("dispatch through createDefaultDispatcher", () => {
+  it("passes the tool context AbortSignal to the MCP call", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const client = {
+      listTools: async () => [{ name: "slow" }],
+      callTool: async (_name: string, _args: Record<string, unknown>, signal?: AbortSignal) => {
+        seenSignal = signal;
+        return "done";
+      },
+    } as unknown as McpClient;
+    const specs = await buildMcpToolSpecs([{ serverName: "fake", client, trusted: true }]);
+    const dispatcher = createDefaultDispatcher(specs);
+
+    const result = await dispatcher.execute(
+      call("mcp__fake__slow", {}),
+      makeCtx(workspace, { policy: { approvalMode: "auto" }, signal: controller.signal }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(seenSignal).toBe(controller.signal);
+  });
+
   it("asks for confirmation on untrusted tools even in auto approval mode", async () => {
     const specs = await buildMcpToolSpecs([makeEntry("fake", false)]);
     const dispatcher = createDefaultDispatcher(specs);

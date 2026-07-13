@@ -154,11 +154,11 @@ export const api = {
   },
 
   // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
-  sessions: () => request<SessionMeta[]>("GET", withWorkspace("/api/sessions")),
-  session: (id: string) =>
+  sessions: (ws?: string) => request<SessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
+  session: (id: string, ws?: string) =>
     request<{ meta: SessionMeta; messages: ChatMessage[] }>(
       "GET",
-      withWorkspace(`/api/sessions/${encodeURIComponent(id)}`),
+      withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
   skills: () => request<Skill[]>("GET", withWorkspace("/api/skills")),
   skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
@@ -170,8 +170,8 @@ export const api = {
         `/api/memory/${encodeURIComponent(id)}/${action}${scope === "user" ? "?scope=user" : ""}`,
       ),
     ),
-  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean, scope?: "project" | "user") =>
-    request<MemoryCandidate>("POST", withWorkspace("/api/memory/fact"), {
+  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean, scope?: "project" | "user", ws?: string) =>
+    request<MemoryCandidate>("POST", withWorkspace("/api/memory/fact", ws), {
       content,
       type,
       ...(pending ? { pending: true } : {}),
@@ -184,9 +184,9 @@ export const api = {
       "GET",
       withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`),
     ),
-  config: () => request<ServerConfig>("GET", withWorkspace("/api/config")),
-  setConfig: (key: ConfigKey, value: string, global?: boolean) =>
-    request<ServerConfig>("PUT", withWorkspace("/api/config"), {
+  config: (ws?: string) => request<ServerConfig>("GET", withWorkspace("/api/config", ws)),
+  setConfig: (key: ConfigKey, value: string, global?: boolean, ws?: string) =>
+    request<ServerConfig>("PUT", withWorkspace("/api/config", ws), {
       key,
       value,
       ...(global ? { global: true } : {}),
@@ -251,7 +251,7 @@ export const api = {
   /** Every mutation returns the updated todo list. */
   todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }) =>
     request<Todo[]>("POST", withWorkspace("/api/todos"), op),
-  balance: () => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance")),
+  balance: (ws?: string) => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance", ws)),
   mcpResources: () => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources")),
   models: () => request<ModelInfo[]>("GET", "/api/models"),
 
@@ -318,15 +318,15 @@ export const api = {
     request<{ ok: boolean; commit: string }>("POST", withWorkspace("/api/git/commit"), { message }),
 
   // Custom slash commands surfaced in the composer (workspace-scoped).
-  commands: () => request<CommandsResponse>("GET", withWorkspace("/api/commands")),
+  commands: (ws?: string) => request<CommandsResponse>("GET", withWorkspace("/api/commands", ws)),
   /** Server-side expand: interpolates args and runs !`shell` injections in the workspace. */
-  expandCommand: (name: string, args: string) =>
-    request<{ text: string }>("POST", withWorkspace("/api/commands/expand"), { name, args }),
+  expandCommand: (name: string, args: string, ws?: string) =>
+    request<{ text: string }>("POST", withWorkspace("/api/commands/expand", ws), { name, args }),
   /** Available output styles (built-ins + custom .seekforge/output-styles/*.md). */
-  outputStyles: () =>
+  outputStyles: (ws?: string) =>
     request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>(
       "GET",
-      withWorkspace("/api/output-styles"),
+      withWorkspace("/api/output-styles", ws),
     ),
   /** Project hooks config (the editable .seekforge/config.json layer). */
   hooks: () => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks")),
@@ -334,13 +334,13 @@ export const api = {
     request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks"), { hooks }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
-  sessionCompact: (id: string) =>
-    request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`)),
+  sessionCompact: (id: string, ws?: string) =>
+    request<unknown>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/compact`, ws)),
 
   // Fork a session into a NEW session id (the original is untouched); returns
   // the new id so the caller can open the forked copy (workspace-scoped).
-  forkSession: (id: string) =>
-    request<{ id: string }>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/fork`)),
+  forkSession: (id: string, ws?: string) =>
+    request<{ id: string }>("POST", withWorkspace(`/api/sessions/${encodeURIComponent(id)}/fork`, ws)),
 
   // Reviewable session audit (workspace-scoped): a rendered markdown timeline plus
   // the structured audit payload (treated as opaque). 404 for an unknown id.

@@ -46,8 +46,8 @@ function connect(workspace: string, readOnly?: boolean) {
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     return p;
   };
-  const notify = (method: string): void => {
-    input.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
+  const notify = (method: string, params?: Record<string, unknown>): void => {
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}) })}\n`);
   };
   return { server, request, notify, unsolicited };
 }
@@ -156,5 +156,38 @@ describe("mcp server", () => {
     const result = res.result as { content: Array<{ text: string }>; isError: boolean };
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text.length).toBeGreaterThan(0);
+  });
+
+  it("does not let a long tool call block unrelated requests", async () => {
+    const c = client(false);
+    const slow = c.request("tools/call", {
+      name: "run_command",
+      arguments: { command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 5000)"` },
+    });
+    const ping = await Promise.race([
+      c.request("ping"),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("ping was serialized behind tool call")), 500)),
+    ]);
+    expect(ping.result).toEqual({});
+
+    c.notify("notifications/cancelled", { requestId: 1, reason: "test complete" });
+    await expect(slow).resolves.toMatchObject({
+      result: { isError: true },
+    });
+  });
+
+  it("aborts the matching tool call on notifications/cancelled", async () => {
+    const c = client(false);
+    const started = Date.now();
+    const slow = c.request("tools/call", {
+      name: "run_command",
+      arguments: { command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 5000)"` },
+    });
+    c.notify("notifications/cancelled", { requestId: 1, reason: "caller aborted" });
+
+    await expect(slow).resolves.toMatchObject({
+      result: { isError: true },
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

@@ -104,6 +104,14 @@ import { runSession } from "./agent/run-session.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
 import { formatLoopEvent } from "./loop-format.js";
 import {
+  interruptRun,
+  ownsRun,
+  releaseRun,
+  reserveRun,
+  type RunEntry,
+  type RunReservation,
+} from "./run-identity.js";
+import {
   atTokenAt,
   backspace,
   clearAll,
@@ -269,11 +277,9 @@ export function App({
 
   // Per-tab foreground run state: each tab can run its own task; Esc/Ctrl+C
   // and prompt keys always act on the ACTIVE tab's entries only.
-  const runsByTabRef = useRef<Map<number, { controller: AbortController; runId: number }>>(new Map());
+  const runsByTabRef = useRef<Map<number, RunEntry>>(new Map());
   const pendingPermissionByTabRef = useRef<Map<number, PendingPermission>>(new Map());
   const pendingQuestionByTabRef = useRef<Map<number, (answer: string) => void>>(new Map());
-  const sigintCountRef = useRef(0);
-
   // Ctrl+B run detachment: ids of runs sent to the background, their
   // controllers (aborted on quit), and the per-run id counter.
   const runIdCounterRef = useRef(0);
@@ -601,12 +607,21 @@ export function App({
   // ---------------------------------------------------------------------
 
   const runTask = useCallback(
-    async (task: string, opts?: { mode?: "ask" | "edit"; plan?: boolean; echoUser?: boolean }) => {
-      const controller = new AbortController();
-      const runId = ++runIdCounterRef.current;
+    async (
+      task: string,
+      opts?: { mode?: "ask" | "edit"; plan?: boolean; echoUser?: boolean; reservation?: RunReservation },
+    ) => {
       // The run belongs to the tab it started in: every dispatch below
       // routes there by ID, surviving tab switches.
-      const runTabId = activeIdRef.current;
+      const runTabId = opts?.reservation?.tabId ?? activeIdRef.current;
+      const reservation =
+        opts?.reservation ?? reserveRun(runsByTabRef.current, runTabId, ++runIdCounterRef.current);
+      if (!reservation || !ownsRun(runsByTabRef.current, reservation)) return;
+      if (reservation.controller.signal.aborted) {
+        releaseRun(runsByTabRef.current, reservation);
+        return;
+      }
+      const { controller, runId } = reservation;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
       const tabChat = (): ChatState =>
         tabsStateRef.current.tabs.find((t) => t.id === runTabId)?.chat ?? stateRef.current;
@@ -625,8 +640,6 @@ export function App({
           dispatchTab({ type: "notice", tone: "error", text: `⚒ background task failed: ${a.event.error.message}` });
         }
       };
-      runsByTabRef.current.set(runTabId, { controller, runId });
-      sigintCountRef.current = 0;
       // The session this run owns: detaching frees the UI's sessionId for a
       // fresh session, so the run must keep resolving its own.
       const ownSessionId = { current: tabChat().sessionId };
@@ -717,9 +730,7 @@ export function App({
           detachedControllersRef.current.delete(runId);
           dispatchTab({ type: "run-detach-done", runId });
         } else {
-          if (runsByTabRef.current.get(runTabId)?.runId === runId) {
-            runsByTabRef.current.delete(runTabId);
-          }
+          releaseRun(runsByTabRef.current, reservation);
           dispatchTab({ type: "run-end" });
           // Turn summary + budget + custom statusline (foreground runs only).
           if (!controller.signal.aborted) {
@@ -756,14 +767,14 @@ export function App({
       verifyCommand: string,
       options: { maxIterations?: number; costBudgetUsd?: number } = {},
     ) => {
-      const controller = new AbortController();
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
-      runsByTabRef.current.set(runTabId, { controller, runId });
-      const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
+      const reservation = reserveRun(runsByTabRef.current, runTabId, runId);
+      if (!reservation) return;
+      const { controller } = reservation;
+      const ownsThisRun = (): boolean => ownsRun(runsByTabRef.current, reservation);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
-      sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
       dispatchTab({ type: "notice", text: `loop task: ${task.replace(/\s+/g, " ").slice(0, 120)}` });
       dispatchTab({ type: "run-start" });
@@ -776,18 +787,18 @@ export function App({
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
           onEvent: (event) => {
-            if (!ownsRun()) return;
+            if (!ownsThisRun()) return;
             for (const line of formatLoopEvent(event)) {
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
             }
           },
         });
         // Adopt the loop's session so a follow-up message resumes it.
-        if (result.sessionId && ownsRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsThisRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (ownsRun()) lastErrorRef.current = message;
-        if (ownsRun() && !controller.signal.aborted) {
+        if (ownsThisRun()) lastErrorRef.current = message;
+        if (ownsThisRun() && !controller.signal.aborted) {
           dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
         }
       } finally {
@@ -797,8 +808,7 @@ export function App({
           dispatchTab({ type: "run-detach-done", runId });
           syncBg();
           ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
-        } else if (ownsRun()) {
-          runsByTabRef.current.delete(runTabId);
+        } else if (releaseRun(runsByTabRef.current, reservation)) {
           dispatchTab({ type: "run-end" });
           syncBg();
           ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
@@ -810,14 +820,14 @@ export function App({
 
   const resumeLoopTask = useCallback(
     async (loopId: string, options: { addedIterations?: number; addedCostBudgetUsd?: number } = {}) => {
-      const controller = new AbortController();
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
-      runsByTabRef.current.set(runTabId, { controller, runId });
-      const ownsRun = (): boolean => runsByTabRef.current.get(runTabId)?.runId === runId;
+      const reservation = reserveRun(runsByTabRef.current, runTabId, runId);
+      if (!reservation) return;
+      const { controller } = reservation;
+      const ownsThisRun = (): boolean => ownsRun(runsByTabRef.current, reservation);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
-      sigintCountRef.current = 0;
       dispatchTab({ type: "user", text: `/loop-resume ${loopId}` });
       dispatchTab({ type: "run-start" });
       try {
@@ -828,15 +838,15 @@ export function App({
           mcpToolSpecs,
           ...options,
           onEvent: (event) => {
-            if (!ownsRun()) return;
+            if (!ownsThisRun()) return;
             for (const line of formatLoopEvent(event)) dispatchTab({ type: "notice", text: line.text, tone: line.tone });
           },
         });
-        if (result.sessionId && ownsRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
+        if (result.sessionId && ownsThisRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (ownsRun()) lastErrorRef.current = message;
-        if (ownsRun() && !controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
+        if (ownsThisRun()) lastErrorRef.current = message;
+        if (ownsThisRun() && !controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
       } finally {
         if (detached()) {
           detachedRunsRef.current.delete(runId);
@@ -844,8 +854,7 @@ export function App({
           dispatchTab({ type: "run-detach-done", runId });
           syncBg();
           ring(`Loop finished: ${loopId.slice(0, 60)}`);
-        } else if (ownsRun()) {
-          runsByTabRef.current.delete(runTabId);
+        } else if (releaseRun(runsByTabRef.current, reservation)) {
           dispatchTab({ type: "run-end" });
           syncBg();
           ring(`Loop finished: ${loopId.slice(0, 60)}`);
@@ -1752,21 +1761,44 @@ export function App({
               break;
             }
             const argText = rest.join(" ").trim();
-            dispatch({ type: "user", text: command.raw });
+            const tabId = activeIdRef.current;
+            const reservation = reserveRun(runsByTabRef.current, tabId, ++runIdCounterRef.current);
+            if (!reservation) {
+              notice("a task is already running — wait for it to finish", "error");
+              break;
+            }
+            const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId, action });
+            dispatchTab({ type: "user", text: command.raw });
             void (async () => {
-              let task: string;
+              let transferred = false;
               try {
-                task = await getMcpPrompt(
+                const task = await getMcpPrompt(
                   prompt.server,
                   prompt.name,
                   promptArgsFromText(prompt, argText),
                   mcpEntries,
                 );
+                if (!ownsRun(runsByTabRef.current, reservation) || reservation.controller.signal.aborted) return;
+                transferred = true;
+                void runTask(task, { echoUser: false, reservation });
               } catch (err) {
-                notice(`mcp prompt ${prompt.server}:${prompt.name} failed: ${err instanceof Error ? err.message : String(err)}`, "error");
-                return;
+                if (ownsRun(runsByTabRef.current, reservation) && !reservation.controller.signal.aborted) {
+                  dispatchTab({
+                    type: "notice",
+                    tone: "error",
+                    text: `mcp prompt ${prompt.server}:${prompt.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+                  });
+                }
+              } finally {
+                if (!transferred) {
+                  if (detachedRunsRef.current.delete(reservation.runId)) {
+                    detachedControllersRef.current.delete(reservation.runId);
+                    dispatchTab({ type: "run-detach-done", runId: reservation.runId });
+                  } else {
+                    releaseRun(runsByTabRef.current, reservation);
+                  }
+                }
               }
-              void runTask(task, { echoUser: false });
             })();
             break;
           }
@@ -1942,9 +1974,8 @@ export function App({
         pendingQuestionByTabRef.current.delete(tabId);
         dispatch({ type: "overlay", overlay: null });
       }
-      sigintCountRef.current += 1;
-      controllerRef.current.abort();
-      if (sigintCountRef.current >= 2) {
+      const sigintCount = interruptRun(runsByTabRef.current, tabId);
+      if (sigintCount !== null && sigintCount >= 2) {
         quit();
         return;
       }

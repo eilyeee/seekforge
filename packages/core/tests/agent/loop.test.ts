@@ -235,6 +235,53 @@ describe("agent loop", () => {
     expect(readSessionMeta(workspace, sessionId)!.status).toBe("completed");
   });
 
+  it("rejects concurrent resumes of the same persisted session", async () => {
+    const seed = createAgentCore({
+      provider: fakeProvider([response({ content: "seed" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const seeded = await collect(seed.runTask({ ...baseInput, projectPath: workspace }));
+    const created = seeded.find((event) => event.type === "session.created");
+    const sessionId = created?.type === "session.created" ? created.sessionId : "";
+
+    let release!: (value: ChatResponse) => void;
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const blockedResponse = new Promise<ChatResponse>((resolve) => {
+      release = resolve;
+    });
+    const provider: ChatProvider = {
+      model: "blocked",
+      chat: async () => {
+        markEntered();
+        return blockedResponse;
+      },
+      chatStream: async () => {
+        markEntered();
+        return blockedResponse;
+      },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const first = collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, task: "first", resumeSessionId: sessionId }),
+    );
+    await entered;
+
+    await expect(
+      collect(agent.runTask({ ...baseInput, projectPath: workspace, task: "second", resumeSessionId: sessionId })),
+    ).rejects.toMatchObject({ code: "session_busy" });
+
+    release(response({ content: "done" }));
+    await expect(first).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.completed" })]));
+  });
+
   it("yields command.output events emitted via ctx.emitOutput BEFORE the tool.completed", async () => {
     const provider = fakeProvider([
       response({

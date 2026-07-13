@@ -6,6 +6,9 @@
 import type { ChatFinishReason, ProviderToolCall } from "@seekforge/shared";
 import { mapFinishReason, type WireUsage } from "./mapping.js";
 
+/** Maximum decoded characters accepted for one SSE line, including fragments. */
+export const MAX_SSE_LINE_CHARS = 1024 * 1024;
+
 type WireStreamChunk = {
   choices?: Array<{
     delta?: {
@@ -60,12 +63,21 @@ export function feedSseChunk(
   onDelta?: (delta: string) => void,
   onReasoningDelta?: (delta: string) => void,
 ): void {
-  acc.buffer += chunk;
-  let newlineIdx: number;
-  while ((newlineIdx = acc.buffer.indexOf("\n")) !== -1) {
-    const line = acc.buffer.slice(0, newlineIdx);
-    acc.buffer = acc.buffer.slice(newlineIdx + 1);
+  let offset = 0;
+  while (offset < chunk.length) {
+    const newlineIdx = chunk.indexOf("\n", offset);
+    const end = newlineIdx === -1 ? chunk.length : newlineIdx;
+    const fragmentLength = end - offset;
+    if (acc.buffer.length + fragmentLength > MAX_SSE_LINE_CHARS) {
+      throw new Error(`SSE line exceeds ${MAX_SSE_LINE_CHARS} characters`);
+    }
+    acc.buffer += chunk.slice(offset, end);
+    if (newlineIdx === -1) return;
+
+    const line = acc.buffer;
+    acc.buffer = "";
     processLine(acc, line, onDelta, onReasoningDelta);
+    offset = newlineIdx + 1;
   }
 }
 

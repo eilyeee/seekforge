@@ -362,3 +362,58 @@ describe("store: loop mode", () => {
     expect(tab.loop.result?.status).toBe("passed");
   });
 });
+
+describe("store: async session actions preserve their target identity", () => {
+  beforeEach(resetStore);
+
+  it("backtrack truncates the captured tab instead of the active tab", () => {
+    const firstId = activeTab(useStore.getState().tabs).tabId;
+    useStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        tabs: s.tabs.tabs.map((tab) => ({
+          ...tab,
+          chat: {
+            ...tab.chat,
+            sessionId: "session-a",
+            items: [
+              { kind: "user" as const, id: 1, text: "keep" },
+              { kind: "user" as const, id: 2, text: "drop" },
+            ],
+          },
+        })),
+      },
+    }));
+    useStore.getState().openTab();
+    const secondId = activeTab(useStore.getState().tabs).tabId;
+    useStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        tabs: s.tabs.tabs.map((tab) =>
+          tab.tabId === secondId
+            ? { ...tab, chat: { ...tab.chat, items: [{ kind: "user" as const, id: 2, text: "other" }] } }
+            : tab,
+        ),
+      },
+    }));
+
+    useStore.getState().truncateAtItem(firstId, "session-a", 2);
+
+    const state = useStore.getState().tabs;
+    expect(state.tabs.find((tab) => tab.tabId === firstId)?.chat.items).toHaveLength(1);
+    expect(state.tabs.find((tab) => tab.tabId === secondId)?.chat.items).toHaveLength(1);
+  });
+
+  it("continued sessions bind to the workspace that produced the response", () => {
+    useStore.setState({ activeWorkspaceId: "workspace-b" });
+
+    useStore.getState().continueSession(
+      { id: "session-a", task: "continue me", mode: "edit", status: "completed", createdAt: "now", updatedAt: "now" },
+      [],
+      "workspace-a",
+    );
+
+    expect(activeTab(useStore.getState().tabs).ws).toBe("workspace-a");
+    expect(activeTab(useStore.getState().tabs).chat.sessionId).toBe("session-a");
+  });
+});

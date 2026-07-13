@@ -14,7 +14,7 @@
  * stays denied) and enforces the per-job budget via the existing run path.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /** ask = read-only Q&A; edit = may modify files (edits auto-approved headless). */
@@ -42,6 +42,104 @@ export type Registry = { jobs: Job[] };
 /** Path to the project-scoped registry file (`.seekforge/schedules.json`). */
 export function scheduleFilePath(projectPath: string): string {
   return join(projectPath, ".seekforge", "schedules.json");
+}
+
+function scheduleLeasePath(projectPath: string): string {
+  return join(projectPath, ".seekforge", "schedules.lock");
+}
+
+type LeaseOwner = { pid: number; token: string; acquiredAt: string };
+
+function readLeaseOwner(leasePath: string): LeaseOwner | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(leasePath, "owner.json"), "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const owner = parsed as Record<string, unknown>;
+    if (!Number.isSafeInteger(owner["pid"]) || (owner["pid"] as number) <= 0) return null;
+    if (typeof owner["token"] !== "string" || typeof owner["acquiredAt"] !== "string") return null;
+    return owner as LeaseOwner;
+  } catch {
+    return null;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Acquire the project scheduler lease. Atomic directory creation excludes
+ * overlapping ticks; a lock owned by a dead process is renamed away and
+ * recovered. The short malformed-lock grace covers a process between mkdir
+ * and writing its owner metadata.
+ */
+export function acquireScheduleLease(projectPath: string): (() => void) | null {
+  const leasePath = scheduleLeasePath(projectPath);
+  const recoveryPath = `${leasePath}.recovery`;
+  mkdirSync(dirname(leasePath), { recursive: true });
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const finishClaim = (): (() => void) => {
+    try {
+      writeFileSync(
+        join(leasePath, "owner.json"),
+        `${JSON.stringify({ pid: process.pid, token, acquiredAt: new Date().toISOString() })}\n`,
+        "utf8",
+      );
+      return () => {
+        if (readLeaseOwner(leasePath)?.token === token) rmSync(leasePath, { recursive: true, force: true });
+      };
+    } catch (err) {
+      rmSync(leasePath, { recursive: true, force: true });
+      throw err;
+    }
+  };
+
+  try {
+    mkdirSync(leasePath);
+    return finishClaim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+
+  // Only one contender may inspect and replace a stale lease. Holding this
+  // recovery directory through the replacement prevents another recovery
+  // process from renaming the newly acquired lease.
+  try {
+    mkdirSync(recoveryPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return null;
+    throw err;
+  }
+  try {
+    const owner = readLeaseOwner(leasePath);
+    let malformedLockIsFresh = false;
+    if (!owner) {
+      try {
+        malformedLockIsFresh = Date.now() - statSync(leasePath).mtimeMs < 30_000;
+      } catch (statErr) {
+        if ((statErr as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw statErr;
+      }
+    }
+    if (owner ? processIsAlive(owner.pid) : malformedLockIsFresh) return null;
+
+    const stalePath = `${leasePath}.stale-${token}`;
+    renameSync(leasePath, stalePath);
+    rmSync(stalePath, { recursive: true, force: true });
+    mkdirSync(leasePath);
+    return finishClaim();
+  } catch (err) {
+    if (["ENOENT", "EEXIST"].includes((err as NodeJS.ErrnoException).code ?? "")) return null;
+    throw err;
+  } finally {
+    rmSync(recoveryPath, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -105,9 +203,10 @@ const UNIT_MS: Record<string, number> = {
 export function parseInterval(spec: string): number | null {
   const m = /^\s*(\d+)\s*([smhdw])\s*$/i.exec(spec);
   if (!m) return null;
-  const n = Number.parseInt(m[1]!, 10);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n * UNIT_MS[m[2]!.toLowerCase()]!;
+  const n = Number(m[1]);
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  const milliseconds = n * UNIT_MS[m[2]!.toLowerCase()]!;
+  return Number.isSafeInteger(milliseconds) && Number.isFinite(milliseconds) ? milliseconds : null;
 }
 
 // --- cron parsing/matching --------------------------------------------------

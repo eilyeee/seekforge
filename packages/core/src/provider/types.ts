@@ -98,6 +98,8 @@ export type ChatRequest = {
   tools?: ToolDefinitionForModel[];
   temperature?: number;
   maxTokens?: number;
+  /** Cancels the active request, response-body read, retry wait, or stream read. */
+  signal?: AbortSignal;
 };
 
 export interface ChatProvider {

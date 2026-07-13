@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
@@ -491,6 +491,28 @@ describe("REST endpoints", () => {
       const file = JSON.parse(readFileSync(configPath, "utf8"));
       expect(file).toEqual({ model: "deepseek-chat" });
     } finally {
+      writeFileSync(configPath, previous);
+    }
+  });
+
+  it("PUT /api/config rejects a symlinked project config without changing its target", async () => {
+    const configPath = join(workspace, ".seekforge", "config.json");
+    const previous = readFileSync(configPath, "utf8");
+    const outsidePath = join(makeWorkspace(), "config.json");
+    const external = '{"model":"outside-model"}\n';
+    writeFileSync(outsidePath, external);
+    unlinkSync(configPath);
+    symlinkSync(outsidePath, configPath, "file");
+    try {
+      const res = await authed("/api/config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: "model", value: "deepseek-chat" }),
+      });
+      expect(res.status).toBe(400);
+      expect(readFileSync(outsidePath, "utf8")).toBe(external);
+    } finally {
+      unlinkSync(configPath);
       writeFileSync(configPath, previous);
     }
   });

@@ -87,6 +87,30 @@ describe("createDeepSeekProvider fallbackModel", () => {
     expect(bodyModel(fetchMock.mock.calls[4]!)).toBe("deepseek-v4-pro");
   });
 
+  it("prices a non-streaming fallback response using the fallback model", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(completion("fallback-priced"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = createDeepSeekProvider({
+      apiKey: "k",
+      model: "primary-priced",
+      fallbackModel: "fallback-priced",
+      modelPricing: {
+        "primary-priced": { inputCacheMissPer1M: 1, inputCacheHitPer1M: 1, outputPer1M: 1 },
+        "fallback-priced": { inputCacheMissPer1M: 7, inputCacheHitPer1M: 7, outputPer1M: 11 },
+      },
+    });
+    const out = await withTimers(provider.chat(REQ));
+
+    expect(out.usage.costUsd).toBeCloseTo((7 + 11) / 1_000_000, 12);
+  });
+
   it("(c) onRetry fires with the fallback model name when falling back", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -205,5 +229,40 @@ describe("createDeepSeekProvider fallbackModel", () => {
     expect(out.content).toBe("hi from deepseek-v4-pro");
     expect(deltas.join("")).toBe("hi from deepseek-v4-pro");
     expect(bodyModel(fetchMock.mock.calls[4]!)).toBe("deepseek-v4-pro");
+  });
+
+  it("prices a streaming fallback response using the fallback model", async () => {
+    const payload = [
+      'data: {"choices":[{"delta":{"content":"fallback"},"finish_reason":"stop"}]}',
+      'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3}}',
+      "data: [DONE]",
+      "",
+    ].join("\n\n");
+    const stream = {
+      ok: true,
+      status: 200,
+      body: new Response(payload).body,
+    } as Response;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(res(503, "down"))
+      .mockResolvedValueOnce(stream);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = createDeepSeekProvider({
+      apiKey: "k",
+      model: "primary-priced",
+      fallbackModel: "fallback-priced",
+      modelPricing: {
+        "primary-priced": { inputCacheMissPer1M: 1, inputCacheHitPer1M: 1, outputPer1M: 1 },
+        "fallback-priced": { inputCacheMissPer1M: 5, inputCacheHitPer1M: 5, outputPer1M: 13 },
+      },
+    });
+    const out = await withTimers(provider.chatStream(REQ, () => {}));
+
+    expect(out.usage.costUsd).toBeCloseTo((2 * 5 + 3 * 13) / 1_000_000, 12);
   });
 });

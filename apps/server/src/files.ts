@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  constants,
   mkdirSync,
   openSync,
   readdirSync,
@@ -16,8 +17,8 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { open, readdir, realpath } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_IGNORE_DIRS, isSensitiveBasename, resolveInsideWorkspace } from "@seekforge/core";
 
 /** Hard cap on the number of paths GET /api/files returns. */
@@ -181,22 +182,40 @@ export async function searchWorkspaceContent(
   const { files, truncated: listTruncated } = await listWorkspaceFiles(root, "", SEARCH_MAX_FILES);
   const hits: SearchHit[] = [];
   const deadline = Date.now() + SEARCH_BUDGET_MS;
+  let rootReal: string;
+  try {
+    rootReal = await realpath(resolve(root));
+  } catch {
+    return { hits, truncated: listTruncated };
+  }
   let scanned = 0;
   for (const rel of files) {
     if (Date.now() > deadline) return { hits, truncated: true };
     if (++scanned % SEARCH_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
-    let st: Awaited<ReturnType<typeof stat>>;
+    const target = resolve(rootReal, rel);
+    const fromRoot = relative(rootReal, target);
+    if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) continue;
+    let physical: string;
     try {
-      st = await stat(join(root, rel));
+      physical = await realpath(target);
     } catch {
       continue;
     }
-    if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES) continue; // size-gate BEFORE reading
+    // Cached paths are untrusted at use time: a listed directory may have been
+    // replaced by a symlink since the walk. Requiring the canonical path to
+    // equal the expected physical path rejects both symlinks and escapes.
+    if (physical !== target) continue;
     let buf: Buffer;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      buf = await readFile(join(root, rel));
+      handle = await open(physical, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const st = await handle.stat();
+      if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES) continue; // size-gate BEFORE reading
+      buf = await handle.readFile();
     } catch {
       continue;
+    } finally {
+      await handle?.close();
     }
     if (looksBinary(buf)) continue;
     const lines = buf.toString("utf8").split("\n");

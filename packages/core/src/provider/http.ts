@@ -28,7 +28,35 @@ export type FetchWithRetryOptions = {
   maxRetries?: number;
   /** Per-request timeout in ms (default REQUEST_TIMEOUT_MS); a hung request aborts and retries. */
   timeoutMs?: number;
+  /** Keep the request timeout armed until a successful response body is consumed. */
+  timeoutBody?: boolean;
 };
+
+const BODY_CONSUMERS = new Set<PropertyKey>([
+  "arrayBuffer",
+  "blob",
+  "bytes",
+  "formData",
+  "json",
+  "text",
+]);
+
+function withBodyTimeout(response: Response, cleanup: () => void): Response {
+  return new Proxy(response, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== "function") return value;
+      if (!BODY_CONSUMERS.has(property)) return value.bind(target) as unknown;
+      return async (...args: unknown[]) => {
+        try {
+          return await Reflect.apply(value, target, args);
+        } finally {
+          cleanup();
+        }
+      };
+    },
+  });
+}
 
 /** Short human-readable cause for a retry, used in the onRetry report. */
 function retryReason(status: number | undefined): string {
@@ -116,13 +144,22 @@ export async function fetchWithRetry(
     const timeoutErr = Object.assign(new Error(`request timed out after ${timeoutMs}ms`), {
       name: "TimeoutError",
     });
-    const timer = setTimeout(() => controller.abort(timeoutErr), timeoutMs);
+    const onCallerAbort = (): void => clearTimeout(timer);
+    init.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timer = setTimeout(() => {
+      init.signal?.removeEventListener("abort", onCallerAbort);
+      controller.abort(timeoutErr);
+    }, timeoutMs);
+    const clearAttemptTimeout = (): void => {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", onCallerAbort);
+    };
     try {
       const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
       res = await fetch(url, { ...init, signal });
     } catch (err) {
-      clearTimeout(timer);
-      if (init.signal?.aborted) throw err;
+      clearAttemptTimeout();
+      if (init.signal?.aborted) throw init.signal.reason;
       const timedOut = err === timeoutErr;
       lastError = new DeepSeekApiError(
         timedOut
@@ -133,14 +170,16 @@ export async function fetchWithRetry(
       continue;
     }
     if (res.ok) {
-      clearTimeout(timer); // success: let the body stream without the TTFB cap
+      if (options.timeoutBody) return withBodyTimeout(res, clearAttemptTimeout);
+      clearAttemptTimeout(); // streaming bodies use their own idle timeout
       return res;
     }
     // Error response: keep the timer armed while reading the (bounded) error
     // body. clearing it first would leave the read with no abort path, so a
     // server that sends error headers but stalls the body would hang forever.
     const snippet = (await res.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
-    clearTimeout(timer);
+    clearAttemptTimeout();
+    if (init.signal?.aborted) throw init.signal.reason;
     const message = `DeepSeek API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;
     const retryable = res.status === 429 || res.status >= 500;
     if (!retryable) throw new DeepSeekApiError(message, res.status);

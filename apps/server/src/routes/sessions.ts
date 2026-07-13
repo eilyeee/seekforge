@@ -9,6 +9,8 @@ import {
   compactSessionNow,
   deleteSession,
   forkSession,
+  hasActiveSessionRuns,
+  isSessionRunActive,
   listSessions,
   loadSessionMessages,
   pruneSessions,
@@ -60,6 +62,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (dryRun !== undefined && typeof dryRun !== "boolean") {
       return sendApiError(res, 400, "bad_request", "dryRun must be a boolean");
     }
+    if (dryRun !== true && hasActiveSessionRuns(workspace)) {
+      return sendApiError(res, 409, "session_busy", "cannot prune while a session is running");
+    }
     return sendJson(
       res,
       200,
@@ -75,6 +80,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "compact") {
     const id = segs[2]!;
     if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+    if (isSessionRunActive(workspace, id)) {
+      return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
+    }
     if (!readSessionMeta(workspace, id)) {
       return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     }
@@ -85,6 +93,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "POST" && segs.length === 4 && segs[1] === "sessions" && segs[3] === "fork") {
     const id = segs[2]!;
     if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+    if (isSessionRunActive(workspace, id)) {
+      return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
+    }
     const forked = forkSession(workspace, id);
     if (forked === null) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     return sendJson(res, 200, { id: forked });
@@ -94,6 +105,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "DELETE" && segs.length === 3 && segs[1] === "sessions") {
     const id = segs[2]!;
     if (!isSafeId(id)) return sendApiError(res, 400, "bad_request", `invalid session id: ${id}`);
+    if (isSessionRunActive(workspace, id)) {
+      return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
+    }
     const deleted = deleteSession(workspace, id);
     if (!deleted) return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     return sendJson(res, 200, { deleted });
@@ -154,6 +168,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (!isSafeId(id) || !readSessionMeta(workspace, id)) {
       return sendApiError(res, 404, "not_found", `session not found: ${id}`);
     }
+    if (isSessionRunActive(workspace, id)) {
+      return sendApiError(res, 409, "session_busy", `session is running: ${id}`);
+    }
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     const { turn, files } = (body ?? {}) as { turn?: unknown; files?: unknown };
@@ -183,6 +200,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     }
     if (!isSafeId(sessionId) || !readSessionMeta(workspace, sessionId)) {
       return sendApiError(res, 404, "not_found", `session not found: ${sessionId}`);
+    }
+    if (isSessionRunActive(workspace, sessionId)) {
+      return sendApiError(res, 409, "session_busy", `session is running: ${sessionId}`);
     }
     if (readCheckpoints(workspace, sessionId).length === 0) {
       return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);

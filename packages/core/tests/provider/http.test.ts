@@ -140,4 +140,46 @@ describe("fetchWithRetry timeout", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(captured?.aborted).toBe(false);
   });
+
+  it("retains the timeout while a successful non-streaming body is stalled", async () => {
+    globalThis.fetch = ((_url: string, init: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+          }),
+      } as Response)) as unknown as typeof fetch;
+
+    const response = await fetchWithRetry(
+      "https://x/y",
+      { method: "POST" },
+      { maxRetries: 0, timeoutMs: 20, timeoutBody: true },
+    );
+    await expect(response.json()).rejects.toThrow(/timed out/);
+  });
+
+  it("honors caller cancellation while consuming a successful response body", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during body read");
+    globalThis.fetch = ((_url: string, init: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+          }),
+      } as Response)) as unknown as typeof fetch;
+
+    const response = await fetchWithRetry(
+      "https://x/y",
+      { method: "POST", signal: controller.signal },
+      { maxRetries: 0, timeoutMs: 10_000, timeoutBody: true },
+    );
+    const body = response.json();
+    controller.abort(reason);
+    await expect(body).rejects.toBe(reason);
+  });
 });

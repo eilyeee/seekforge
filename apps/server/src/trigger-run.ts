@@ -32,17 +32,28 @@ export type StartTriggerRunInput = {
   maxCostUsd: number;
 };
 
+export type TriggerRunHandle = {
+  started: Promise<{ sessionId: string }>;
+  completion: Promise<void>;
+  abort(): void;
+};
+
 /**
  * Starts the headless run and resolves with the new session id once it is
  * known. The run keeps going in the background after this resolves; a failure
  * *before* the session id is known rejects (so the webhook can answer 500).
  */
-export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionId: string }> {
-  return new Promise((resolve, reject) => {
-    const controller = new AbortController();
-    let handle: ReturnType<CreateAgentFn>;
-    try {
-      handle = input.createAgent({
+export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunHandle {
+  const controller = new AbortController();
+  let resolveStarted!: (value: { sessionId: string }) => void;
+  let rejectStarted!: (error: Error) => void;
+  const started = new Promise<{ sessionId: string }>((resolve, reject) => {
+    resolveStarted = resolve;
+    rejectStarted = reject;
+  });
+  let handle: ReturnType<CreateAgentFn>;
+  try {
+    handle = input.createAgent({
         workspace: input.workspace,
         // Headless: auto-deny every confirmation. Combined with approvalMode
         // "acceptEdits", in-workspace edits still apply autonomously, but
@@ -50,14 +61,14 @@ export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionI
         confirm: async () => false,
         askUser: async () => HEADLESS_DECLINE,
         extractMemory: input.mode === "edit",
-      });
-    } catch (err) {
-      reject(err instanceof Error ? err : new Error(String(err)));
-      return;
-    }
+    });
+  } catch (err) {
+    rejectStarted(err instanceof Error ? err : new Error(String(err)));
+    return { started, completion: Promise.resolve(), abort: () => controller.abort() };
+  }
 
-    let settled = false;
-    void (async () => {
+  let settled = false;
+  const completion = (async () => {
       try {
         for await (const event of handle.agent.runTask({
           projectPath: input.workspace,
@@ -69,7 +80,7 @@ export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionI
           if (event.type === "session.created") {
             if (!settled) {
               settled = true;
-              resolve({ sessionId: event.sessionId });
+              resolveStarted({ sessionId: event.sessionId });
             }
           } else if (event.type === "usage.updated") {
             // Cumulative spend guard — a SOFT, reactive cap: we abort on the
@@ -87,15 +98,19 @@ export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionI
         // it doesn't surface as an unhandled rejection.
         if (!settled) {
           settled = true;
-          reject(err instanceof Error ? err : new Error(String(err)));
+          rejectStarted(err instanceof Error ? err : new Error(String(err)));
         }
       } finally {
         handle.dispose();
         if (!settled) {
           settled = true;
-          reject(new Error("triggered run produced no session"));
+          rejectStarted(new Error("triggered run produced no session"));
         }
       }
     })();
-  });
+  return { started, completion, abort: () => controller.abort() };
+}
+
+export function startTriggerRun(input: StartTriggerRunInput): Promise<{ sessionId: string }> {
+  return startManagedTriggerRun(input).started;
 }

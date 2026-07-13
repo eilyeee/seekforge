@@ -237,9 +237,10 @@ class LspSession {
   private buffer: Buffer = Buffer.alloc(0);
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
-  private readonly opened = new Map<string, number>(); // uri → document version
+  private readonly opened = new Map<string, { version: number; text: string }>();
   private readonly diagnostics = new Map<string, LspDiagnostic[]>();
   private readonly diagWaiters = new Map<string, () => void>();
+  private readonly diagnosticRuns = new Map<string, Promise<LspDiagnostic[]>>();
   // uri → the document version we last asked diagnostics for, so a stale
   // publishDiagnostics for an older version can be ignored.
   private readonly diagExpected = new Map<string, number>();
@@ -401,21 +402,32 @@ class LspSession {
     });
   }
 
-  /** textDocument/didOpen once per file; returns the file's URI. */
-  private open(absPath: string): string {
+  /** Keep the server's document snapshot aligned with the file on disk. */
+  private syncDocument(absPath: string, forceChange = false): { uri: string; version: number } {
     const uri = pathToFileURL(absPath).toString();
-    if (!this.opened.has(uri)) {
-      const text = fs.readFileSync(absPath, "utf8");
-      this.opened.set(uri, 1);
+    const text = fs.readFileSync(absPath, "utf8");
+    const current = this.opened.get(uri);
+    if (!current) {
+      this.opened.set(uri, { version: 1, text });
       this.notify("textDocument/didOpen", {
         textDocument: { uri, languageId: this.languageId, version: 1, text },
       });
+      return { uri, version: 1 };
     }
-    return uri;
+    if (forceChange || current.text !== text) {
+      const version = current.version + 1;
+      this.opened.set(uri, { version, text });
+      this.notify("textDocument/didChange", {
+        textDocument: { uri, version },
+        contentChanges: [{ text }],
+      });
+      return { uri, version };
+    }
+    return { uri, version: current.version };
   }
 
   async definition(absPath: string, position: LspPosition): Promise<LspLocation[]> {
-    const uri = this.open(absPath);
+    const { uri } = this.syncDocument(absPath);
     const result = await this.request("textDocument/definition", {
       textDocument: { uri },
       position,
@@ -424,7 +436,7 @@ class LspSession {
   }
 
   async references(absPath: string, position: LspPosition): Promise<LspLocation[]> {
-    const uri = this.open(absPath);
+    const { uri } = this.syncDocument(absPath);
     const result = await this.request("textDocument/references", {
       textDocument: { uri },
       position,
@@ -435,23 +447,23 @@ class LspSession {
 
   async diagnosticsFor(absPath: string): Promise<LspDiagnostic[]> {
     const uri = pathToFileURL(absPath).toString();
+    const running = this.diagnosticRuns.get(uri);
+    if (running) return running;
+    const run = this.collectDiagnostics(absPath, uri);
+    this.diagnosticRuns.set(uri, run);
+    try {
+      return await run;
+    } finally {
+      if (this.diagnosticRuns.get(uri) === run) this.diagnosticRuns.delete(uri);
+    }
+  }
+
+  private collectDiagnostics(absPath: string, uri: string): Promise<LspDiagnostic[]> {
     // Force a fresh diagnostics pass: clear any cached set, (re)open or bump the
     // document version, then wait for the next publishDiagnostics for THIS
     // version (older publishes are ignored in dispatch).
     this.diagnostics.delete(uri);
-    let version: number;
-    if (this.opened.has(uri)) {
-      version = (this.opened.get(uri) ?? 1) + 1;
-      this.opened.set(uri, version);
-      const text = fs.readFileSync(absPath, "utf8");
-      this.notify("textDocument/didChange", {
-        textDocument: { uri, version },
-        contentChanges: [{ text }],
-      });
-    } else {
-      this.open(absPath); // opens at version 1
-      version = 1;
-    }
+    const { version } = this.syncDocument(absPath, this.opened.has(uri));
     this.diagExpected.set(uri, version);
     return new Promise<LspDiagnostic[]>((resolve) => {
       const done = (): void => {
@@ -531,7 +543,7 @@ function errMsg(err: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Shared session registry (one per languageId) + teardown, mirroring browser.ts.
+// Shared session registry (one per workspace + languageId) + teardown.
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, LspSession>();
@@ -540,34 +552,34 @@ let exitHookInstalled = false;
 
 async function getSession(workspace: string, absPath: string): Promise<{ session: LspSession }> {
   const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable
-  const starting = startingSessions.get(languageId);
+  const key = `${workspace}\0${languageId}`;
+  const starting = startingSessions.get(key);
   if (starting) {
     const session = await starting;
-    if (session.workspace === workspace && session.usable) return { session };
+    if (session.usable) return { session };
   }
-  let session = sessions.get(languageId);
-  if (session && (session.workspace !== workspace || !session.usable)) {
-    // Workspace changed under us, OR the cached server has exited/errored —
-    // either way discard the stale session so we don't reuse a dead process
-    // (which would hang every request until it times out).
+  let session = sessions.get(key);
+  if (session && !session.usable) {
+    // Discard a cached server that exited/errored so future requests do not
+    // reuse a dead process and wait for the request timeout.
     await session.dispose();
-    sessions.delete(languageId);
+    sessions.delete(key);
     session = undefined;
   }
   if (!session) {
     session = new LspSession(workspace, languageId, candidate);
-    sessions.set(languageId, session);
+    sessions.set(key, session);
     installExitHook();
     const startup = session.start().then(() => session!);
-    startingSessions.set(languageId, startup);
+    startingSessions.set(key, startup);
     try {
       await startup;
     } catch (err) {
-      if (sessions.get(languageId) === session) sessions.delete(languageId);
+      if (sessions.get(key) === session) sessions.delete(key);
       await session.dispose();
       throw err;
     } finally {
-      if (startingSessions.get(languageId) === startup) startingSessions.delete(languageId);
+      if (startingSessions.get(key) === startup) startingSessions.delete(key);
     }
   }
   return { session };

@@ -32,7 +32,7 @@ const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
   cancelled: "neutral",
 };
 
-type Detail = { meta: SessionMeta; messages: ChatMessage[] };
+type Detail = { meta: SessionMeta; messages: ChatMessage[]; workspaceId: string };
 
 export function SessionsView() {
   const t = useT();
@@ -59,7 +59,7 @@ export function SessionsView() {
 
   const refresh = () =>
     api
-      .sessions()
+      .sessions(ws)
       .then(setSessions)
       .catch((e: unknown) => setError(String(e)));
 
@@ -87,10 +87,11 @@ export function SessionsView() {
 
   /** Read-only preview of the transcript (the "View details" action). */
   const openSession = (id: string) => {
+    const workspaceId = ws;
     setError(null);
     api
-      .session(id)
-      .then(setDetail)
+      .session(id, workspaceId)
+      .then(({ meta, messages }) => setDetail({ meta, messages, workspaceId }))
       .catch((e: unknown) => setError(String(e)));
   };
 
@@ -99,10 +100,15 @@ export function SessionsView() {
    * to this session, so the user can keep asking questions (not a dead preview).
    */
   const doContinue = (id: string) => {
+    const workspaceId = ws;
     setError(null);
     api
-      .session(id)
-      .then(({ meta, messages }) => continueSession(meta, messages))
+      .session(id, workspaceId)
+      .then(({ meta, messages }) => {
+        if (useStore.getState().activeWorkspaceId === workspaceId) {
+          continueSession(meta, messages, workspaceId);
+        }
+      })
       .catch((e: unknown) => setError(String(e)));
   };
 
@@ -112,11 +118,16 @@ export function SessionsView() {
    * TUI's `/fork`.
    */
   const doFork = (id: string) => {
+    const workspaceId = ws;
     setError(null);
     api
-      .forkSession(id)
-      .then(({ id: newId }) => api.session(newId))
-      .then(({ meta, messages }) => continueSession(meta, messages))
+      .forkSession(id, workspaceId)
+      .then(({ id: newId }) => api.session(newId, workspaceId))
+      .then(({ meta, messages }) => {
+        if (useStore.getState().activeWorkspaceId === workspaceId) {
+          continueSession(meta, messages, workspaceId);
+        }
+      })
       .catch((e: unknown) => setError(t("sessions.forkError", { error: String(e) })));
   };
 
@@ -176,7 +187,7 @@ export function SessionsView() {
             variant="primary"
             size="sm"
             className="ml-auto"
-            onClick={() => continueSession(detail.meta, detail.messages)}
+            onClick={() => continueSession(detail.meta, detail.messages, detail.workspaceId)}
           >
             {t("sessions.continueBtn")}
           </Button>

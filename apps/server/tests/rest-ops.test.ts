@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
@@ -148,6 +148,27 @@ describe("mcp add + delete", () => {
       ".seekforge/config.json",
       JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }),
     );
+  });
+
+  it("POST /api/mcp rejects a symlinked project config without changing its target", async () => {
+    const cfgPath = join(workspace, ".seekforge", "config.json");
+    const previous = readFileSync(cfgPath, "utf8");
+    const outsidePath = join(makeWorkspace(), "config.json");
+    const external = '{"mcpServers":{"outside":{"command":"node"}}}\n';
+    writeFileSync(outsidePath, external);
+    unlinkSync(cfgPath);
+    symlinkSync(outsidePath, cfgPath, "file");
+    try {
+      const res = await authed("/api/mcp", {
+        method: "POST",
+        body: JSON.stringify({ name: "demo", command: "node" }),
+      });
+      expect(res.status).toBe(400);
+      expect(readFileSync(outsidePath, "utf8")).toBe(external);
+    } finally {
+      unlinkSync(cfgPath);
+      writeFileSync(cfgPath, previous);
+    }
   });
 });
 

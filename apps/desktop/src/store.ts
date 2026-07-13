@@ -183,7 +183,7 @@ type AppStore = {
    * Drops the given user item and everything after it from the active tab's
    * transcript (after a successful POST backtrack on the server).
    */
-  truncateAtItem: (itemId: number) => void;
+  truncateAtItem: (tabId: string, sessionId: string, itemId: number) => void;
   sendTask: (task: string) => void;
   /**
    * Starts loop mode on the active tab: sends a `loop` frame on the tab's WS,
@@ -199,7 +199,7 @@ type AppStore = {
   respondPermission: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
-  continueSession: (meta: SessionMeta, messages: ChatMessage[]) => void;
+  continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string) => void;
 };
 
 /**
@@ -464,14 +464,18 @@ export const useStore = create<AppStore>()((set, get) => {
       set({ view: "files", filesTarget: { path, ...(loc ?? {}), nonce: Date.now() } }),
     clearFilesTarget: () => set({ filesTarget: null }),
 
-    truncateAtItem: (itemId) =>
+    truncateAtItem: (tabId, sessionId, itemId) =>
       set((s) => ({
-        tabs: updateTab(s.tabs, s.tabs.activeTabId, (tab) => ({
-          chat: truncateChatAtItem(tab.chat, itemId),
-          planPending: false,
-          planReady: false,
-          wsError: null,
-        })),
+        tabs: updateTab(s.tabs, tabId, (tab) =>
+          tab.chat.sessionId !== sessionId
+            ? tab
+            : {
+                chat: truncateChatAtItem(tab.chat, itemId),
+                planPending: false,
+                planReady: false,
+                wsError: null,
+              },
+        ),
       })),
 
     sendTask: (task) => {
@@ -611,12 +615,12 @@ export const useStore = create<AppStore>()((set, get) => {
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingQuestion: null }) }));
     },
 
-    continueSession: (meta, messages) => {
+    continueSession: (meta, messages, workspaceId) => {
       const items = messagesToItems(messages);
       set((s) => {
         // "Continue this session" always opens a NEW tab bound to the session,
-        // in the workspace it was viewed in (the active one).
-        let tabs = openTabPure(s.tabs, s.activeWorkspaceId);
+        // in the workspace where the request originated.
+        let tabs = openTabPure(s.tabs, workspaceId);
         tabs = updateTab(tabs, tabs.activeTabId, {
           title: titleFromTask(meta.task),
           chat: {

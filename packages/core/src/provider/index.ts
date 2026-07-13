@@ -33,6 +33,7 @@ export {
   createSseAccumulator,
   feedSseChunk,
   finalizeSse,
+  MAX_SSE_LINE_CHARS,
   type SseAccumulator,
   type SseResult,
 } from "./sse.js";
@@ -41,7 +42,12 @@ export {
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /** Read one chunk, rejecting if the stream sends nothing for `idleMs` (a stall). */
-async function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, idleMs: number) {
+async function readWithIdleTimeout<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  idleMs: number,
+  signal?: AbortSignal,
+) {
+  if (signal?.aborted) throw signal.reason;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
@@ -49,10 +55,17 @@ async function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, id
       idleMs,
     );
   });
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    if (!signal) return;
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
   try {
-    return await Promise.race([reader.read(), timeout]);
+    return await Promise.race([reader.read(), timeout, aborted]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -84,10 +97,18 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
    * fallback model, announcing it via onRetry. The fallback attempt does not
    * retry; if it fails (for any reason) the ORIGINAL error is rethrown.
    */
-  async function fetchWithFallback(req: ChatRequest, stream: boolean): Promise<Response> {
+  async function fetchWithFallback(
+    req: ChatRequest,
+    stream: boolean,
+  ): Promise<{ response: Response; effectiveModel: string }> {
     const primaryBody = JSON.stringify(buildRequestBody(model, req, stream, thinking, capabilities));
     try {
-      return await fetchWithRetry(url, { method: "POST", headers, body: primaryBody }, retryOpts);
+      const response = await fetchWithRetry(
+        url,
+        { method: "POST", headers, body: primaryBody, signal: req.signal },
+        { ...retryOpts, timeoutBody: !stream },
+      );
+      return { response, effectiveModel: model };
     } catch (err) {
       if (fallbackModel === undefined || !isRetryableError(err)) throw err;
       try {
@@ -106,11 +127,12 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       );
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
-        return await fetchWithRetry(
+        const response = await fetchWithRetry(
           url,
-          { method: "POST", headers, body: fallbackBody },
-          { maxRetries: 0 },
+          { method: "POST", headers, body: fallbackBody, signal: req.signal },
+          { maxRetries: 0, timeoutBody: !stream },
         );
+        return { response, effectiveModel: fallbackModel };
       } catch {
         throw err; // Surface the original (pre-fallback) failure.
       }
@@ -118,9 +140,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   }
 
   async function chat(req: ChatRequest): Promise<ChatResponse> {
-    const res = await fetchWithFallback(req, false);
-    const json = (await res.json()) as WireChatCompletion;
-    return mapChatResponse(json, model, capabilities, config.modelPricing);
+    const { response, effectiveModel } = await fetchWithFallback(req, false);
+    const json = (await response.json()) as WireChatCompletion;
+    return mapChatResponse(json, effectiveModel, capabilities, config.modelPricing);
   }
 
   async function chatStream(
@@ -128,7 +150,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     onDelta: (chunk: string) => void,
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    const res = await fetchWithFallback(req, true);
+    const { response: res, effectiveModel } = await fetchWithFallback(req, true);
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
     }
@@ -143,6 +165,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
         const { done, value } = await readWithIdleTimeout(
           reader,
           config.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+          req.signal,
         );
         if (done) break;
         feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
@@ -160,7 +183,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       content: result.content,
       toolCalls: result.toolCalls,
       finishReason: result.finishReason,
-      usage: mapUsage(result.usage, model, capabilities, config.modelPricing),
+      usage: mapUsage(result.usage, effectiveModel, capabilities, config.modelPricing),
       ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
     };
   }

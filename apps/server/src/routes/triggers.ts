@@ -6,7 +6,7 @@
  */
 
 import { isBodyTooLarge, readBody, readJsonBody, sendApiError, sendJson } from "../http.js";
-import { startTriggerRun } from "../trigger-run.js";
+import { startManagedTriggerRun } from "../trigger-run.js";
 import {
   addTrigger,
   buildTriggerTask,
@@ -85,6 +85,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (!githubSigned && !checkTriggerSecret(trigger.secret, presented)) {
       return sendApiError(res, 403, "forbidden", "invalid trigger secret or GitHub signature");
     }
+    let deliveryKey: string | undefined;
     if (githubSigned) {
       if (typeof githubDelivery !== "string" || githubDelivery.length === 0) {
         return sendApiError(res, 400, "bad_request", "missing x-github-delivery");
@@ -94,15 +95,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       }
       const now = Date.now();
       for (const [key, ts] of seenDeliveries) if (now - ts > DELIVERY_TTL_MS) seenDeliveries.delete(key);
-      const deliveryKey = `${workspace}\0${id}\0${githubDelivery}`;
+      deliveryKey = `${workspace}\0${id}\0${githubDelivery}`;
       if (seenDeliveries.has(deliveryKey)) {
         return sendApiError(res, 409, "conflict", "duplicate GitHub delivery");
-      }
-      seenDeliveries.set(deliveryKey, now);
-      while (seenDeliveries.size > MAX_SEEN_DELIVERIES) {
-        const oldest = seenDeliveries.keys().next().value as string | undefined;
-        if (oldest === undefined) break;
-        seenDeliveries.delete(oldest);
       }
     }
     let payload: unknown;
@@ -112,16 +107,28 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", "body must be valid JSON when present");
     }
     const task = buildTriggerTask(trigger.task, payload);
+    if (deliveryKey !== undefined) {
+      seenDeliveries.set(deliveryKey, Date.now());
+      while (seenDeliveries.size > MAX_SEEN_DELIVERIES) {
+        const oldest = seenDeliveries.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        seenDeliveries.delete(oldest);
+      }
+    }
     try {
-      const { sessionId } = await startTriggerRun({
+      const run = startManagedTriggerRun({
         createAgent: rest.createAgent,
         workspace,
         task,
         mode: trigger.mode,
         maxCostUsd: trigger.maxCostUsd,
       });
+      rest.triggerRuns?.add(run);
+      void run.completion.finally(() => rest.triggerRuns?.delete(run));
+      const { sessionId } = await run.started;
       return sendJson(res, 202, { sessionId, triggerId: id });
     } catch (err) {
+      if (deliveryKey !== undefined) seenDeliveries.delete(deliveryKey);
       return sendApiError(res, 500, "internal", err instanceof Error ? err.message : String(err));
     }
   }

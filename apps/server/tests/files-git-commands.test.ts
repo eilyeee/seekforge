@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -398,6 +406,28 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
     const res = await authed("/api/hooks");
     expect(res.status).toBe(200);
     expect(await jsonOf(res)).toEqual({ hooks: {} });
+  });
+
+  it("PUT /api/hooks rejects a symlinked project config without changing its target", async () => {
+    const configPath = join(workspace, ".seekforge", "config.json");
+    const previous = readFileSync(configPath, "utf8");
+    const outsidePath = join(makeWorkspace(), "config.json");
+    const external = '{"hooks":{"preToolUse":[]}}\n';
+    writeFileSync(outsidePath, external);
+    unlinkSync(configPath);
+    symlinkSync(outsidePath, configPath, "file");
+    try {
+      const res = await authed("/api/hooks", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hooks: { preToolUse: [{ command: "echo safe" }] } }),
+      });
+      expect(res.status).toBe(400);
+      expect(readFileSync(outsidePath, "utf8")).toBe(external);
+    } finally {
+      unlinkSync(configPath);
+      writeFileSync(configPath, previous);
+    }
   });
 });
 

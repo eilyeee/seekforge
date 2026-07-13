@@ -35,10 +35,10 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
       description: `Call MCP tool ${serverName}/${tool.name}`,
       command: `mcp:${serverName}/${tool.name}`,
     }),
-    async run(args) {
+    async run(args, ctx) {
       let text: string;
       try {
-        text = await client.callTool(tool.name, args as Record<string, unknown>);
+        text = await client.callTool(tool.name, args as Record<string, unknown>, ctx.signal);
       } catch (err) {
         throw new ToolError("mcp_error", err instanceof Error ? err.message : String(err));
       }

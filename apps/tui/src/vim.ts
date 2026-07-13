@@ -109,46 +109,63 @@ function classOf(ch: string): CharClass {
   return "punct";
 }
 
+function charAt(text: string, pos: number): string {
+  const cp = text.codePointAt(pos);
+  return cp === undefined ? "" : String.fromCodePoint(cp);
+}
+
+function nextIndex(text: string, pos: number): number {
+  return moveRight({ text, cursor: snapToBoundary(text, pos) }).cursor;
+}
+
+function prevIndex(text: string, pos: number): number {
+  return moveLeft({ text, cursor: snapToBoundary(text, pos) }).cursor;
+}
+
 /** Start of the next vim word ("w"): skip the current run, then whitespace. */
 function nextWordStart(text: string, pos: number): number {
   const len = text.length;
-  let i = pos;
+  let i = snapToBoundary(text, pos);
   if (i >= len) return len;
-  const cls = classOf(text[i] ?? "");
+  const cls = classOf(charAt(text, i));
   if (cls !== "space") {
-    while (i < len && classOf(text[i] ?? "") === cls) i += 1;
+    while (i < len && classOf(charAt(text, i)) === cls) i = nextIndex(text, i);
   }
-  while (i < len && classOf(text[i] ?? "") === "space") i += 1;
+  while (i < len && classOf(charAt(text, i)) === "space") i = nextIndex(text, i);
   return i;
 }
 
 /** Start of the previous vim word ("b"). */
 function prevWordStart(text: string, pos: number): number {
-  let i = pos;
-  while (i > 0 && classOf(text[i - 1] ?? "") === "space") i -= 1;
+  let i = snapToBoundary(text, pos);
+  while (i > 0 && classOf(charAt(text, prevIndex(text, i))) === "space") i = prevIndex(text, i);
   if (i === 0) return 0;
-  const cls = classOf(text[i - 1] ?? "");
-  while (i > 0 && classOf(text[i - 1] ?? "") === cls) i -= 1;
+  const cls = classOf(charAt(text, prevIndex(text, i)));
+  while (i > 0 && classOf(charAt(text, prevIndex(text, i))) === cls) i = prevIndex(text, i);
   return i;
 }
 
 /** Index of the last char of the current/next word ("e"). */
 function wordEnd(text: string, pos: number): number {
   const len = text.length;
-  let i = pos + 1;
-  while (i < len && classOf(text[i] ?? "") === "space") i += 1;
+  let i = nextIndex(text, pos);
+  while (i < len && classOf(charAt(text, i)) === "space") i = nextIndex(text, i);
   if (i >= len) return pos;
-  const cls = classOf(text[i] ?? "");
-  while (i + 1 < len && classOf(text[i + 1] ?? "") === cls) i += 1;
+  const cls = classOf(charAt(text, i));
+  let next = nextIndex(text, i);
+  while (next < len && classOf(charAt(text, next)) === cls) {
+    i = next;
+    next = nextIndex(text, i);
+  }
   return i;
 }
 
 /** End index (exclusive) of the run of same-class chars starting at `pos`. */
 function runEnd(text: string, pos: number): number {
   const len = text.length;
-  const cls = classOf(text[pos] ?? "");
-  let i = pos;
-  while (i < len && classOf(text[i] ?? "") === cls) i += 1;
+  const cls = classOf(charAt(text, pos));
+  let i = snapToBoundary(text, pos);
+  while (i < len && classOf(charAt(text, i)) === cls) i = nextIndex(text, i);
   return i;
 }
 
@@ -192,7 +209,7 @@ function deleteWord(vim: VimState, editor: EditorState): VimResult {
 /** Changes to the end of the current word (vim's cw ≈ ce) → insert. */
 function changeWord(vim: VimState, editor: EditorState): VimResult {
   const { text, cursor } = editor;
-  const onWord = cursor < text.length && classOf(text[cursor] ?? "") !== "space";
+  const onWord = cursor < text.length && classOf(charAt(text, cursor)) !== "space";
   const le = moveEnd(editor).cursor;
   const target = onWord ? runEnd(text, cursor) : Math.min(nextWordStart(text, cursor), le);
   const removed = text.slice(cursor, target);

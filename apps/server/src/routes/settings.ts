@@ -5,8 +5,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import {
   createMcpClient,
@@ -24,7 +23,13 @@ import {
   type McpClientEntry,
   type McpServerConfig,
 } from "@seekforge/core";
-import { loadConfig, maskedConfig, setConfigValue } from "../config.js";
+import {
+  loadConfig,
+  maskedConfig,
+  readProjectFile,
+  setConfigValue,
+  writeProjectFileAtomic,
+} from "../config.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
 import type { RouteCtx } from "./context.js";
@@ -48,29 +53,19 @@ function mutateMcpServers(
   workspace: string,
   mutate: (servers: Record<string, McpServerConfig>) => void,
 ): void {
-  const path = join(workspace, ".seekforge", "config.json");
-  let doc: ConfigDoc = {};
-  if (existsSync(path)) {
-    try {
-      doc = parseConfigDoc(readFileSync(path, "utf8"));
-    } catch {
-      doc = {};
-    }
-  }
+  const doc = readConfigDoc(workspace);
   const servers = { ...(doc.mcpServers ?? {}) };
   mutate(servers);
   if (Object.keys(servers).length === 0) delete doc.mcpServers;
   else doc.mcpServers = servers;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+  writeProjectFileAtomic(workspace, ".seekforge/config.json", `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 /** Reads the project config.json (raw); returns {} on missing/invalid. */
 function readConfigDoc(workspace: string): ConfigDoc {
-  const path = join(workspace, ".seekforge", "config.json");
-  if (!existsSync(path)) return {};
   try {
-    return parseConfigDoc(readFileSync(path, "utf8"));
+    const raw = readProjectFile(workspace, ".seekforge/config.json");
+    return raw === undefined ? {} : parseConfigDoc(raw);
   } catch {
     return {};
   }
@@ -119,12 +114,10 @@ function validateHooks(input: unknown): { hooks: HookConfig } | { error: string 
 
 /** Writes the hooks block into the project config.json, preserving other keys. */
 function writeHooks(workspace: string, hooks: HookConfig): void {
-  const path = join(workspace, ".seekforge", "config.json");
   const doc = readConfigDoc(workspace);
   if (Object.keys(hooks).length === 0) delete doc.hooks;
   else doc.hooks = hooks;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+  writeProjectFileAtomic(workspace, ".seekforge/config.json", `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {

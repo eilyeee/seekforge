@@ -1,7 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clearFilesCacheForTests, listWorkspaceFiles, saveUpload, UploadError } from "../src/files.js";
+import {
+  clearFilesCacheForTests,
+  listWorkspaceFiles,
+  saveUpload,
+  searchWorkspaceContent,
+  UploadError,
+} from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
@@ -173,5 +179,20 @@ describe("files TTL cache", () => {
     const all = (await (await authed("/api/files")).json()) as { files: string[] };
     const filtered = (await (await authed("/api/files?q=UTIL")).json()) as { files: string[] };
     expect(filtered.files).toEqual(all.files.filter((f) => f.toLowerCase().includes("util")));
+  });
+
+  it("does not follow a cached directory after it is swapped for an escaping symlink", async () => {
+    const ws = makeWorkspace();
+    const outside = makeWorkspace();
+    writeFileIn(ws, "cached/secret.txt", "workspace text\n");
+    writeFileIn(outside, "secret.txt", "outside needle\n");
+    clearFilesCacheForTests();
+    expect((await listWorkspaceFiles(ws)).files).toContain("cached/secret.txt");
+
+    renameSync(join(ws, "cached"), join(ws, "cached-original"));
+    symlinkSync(outside, join(ws, "cached"), "dir");
+
+    const result = await searchWorkspaceContent(ws, "outside needle");
+    expect(result.hits).toEqual([]);
   });
 });

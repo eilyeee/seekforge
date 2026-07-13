@@ -20,6 +20,7 @@ import { authorizeDir } from "../authorized-dirs.js";
 import { dim, fail, green, red } from "../colors.js";
 import {
   addJob,
+  acquireScheduleLease,
   dueJobs,
   generateId,
   isDue,
@@ -136,61 +137,74 @@ export type ScheduleRunOptions = { id?: string };
  * headless run path, enforcing each job's cost budget, then stamps lastRunAt.
  */
 export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: string = process.cwd()): Promise<void> {
-  const registry = loadRegistry(projectPath);
-  const now = new Date();
-
-  let toRun: Job[];
-  if (opts.id) {
-    const job = registry.jobs.find((j) => j.id === opts.id);
-    if (!job) {
-      fail(`no job with id "${opts.id}"`, { hint: "list jobs with: seekforge schedule list" });
-      return;
-    }
-    if (!job.enabled) {
-      console.log(dim(`job "${job.id}" is disabled — enable it first with: seekforge schedule enable ${job.id}`));
-      return;
-    }
-    toRun = [job];
-  } else {
-    toRun = dueJobs(registry.jobs, now);
-  }
-
-  if (toRun.length === 0) {
-    console.log(dim("no jobs due."));
+  const releaseLease = acquireScheduleLease(projectPath);
+  if (!releaseLease) {
+    console.log(dim("another scheduler process is already running."));
     return;
   }
 
-  for (const job of toRun) {
-    console.log(`\n▶ running scheduled job "${job.id}" (budget $${job.maxCostUsd.toFixed(2)}, mode ${job.mode})`);
-    const before = new Set(listSessions(projectPath).map((s) => s.id));
+  try {
+    // Selection must happen after lease acquisition so overlapping ticks cannot
+    // both act on the same pre-run registry state.
+    const registry = loadRegistry(projectPath);
+    const now = new Date();
 
-    try {
-      await runTaskCommand(job.task, {
-        mode: job.mode,
-        maxCostUsd: job.maxCostUsd,
-        // Machine format → confirm auto-denies: no interactive prompt can hang a
-        // headless tick, dangerous stays denied, execute/env auto-deny.
-        outputFormat: "json",
-        // Edit jobs must apply edits without a human; acceptEdits auto-approves
-        // ONLY file edits (writes still refuse dangerous, execute/env still deny).
-        ...(job.mode === "edit" ? { permissionMode: "acceptEdits" } : {}),
-      });
-    } catch (err) {
-      console.error(red(`  job "${job.id}" errored: ${err instanceof Error ? err.message : String(err)}`));
+    let toRun: Job[];
+    if (opts.id) {
+      const job = registry.jobs.find((j) => j.id === opts.id);
+      if (!job) {
+        fail(`no job with id "${opts.id}"`, { hint: "list jobs with: seekforge schedule list" });
+        return;
+      }
+      if (!job.enabled) {
+        console.log(dim(`job "${job.id}" is disabled — enable it first with: seekforge schedule enable ${job.id}`));
+        return;
+      }
+      toRun = [job];
+    } else {
+      toRun = dueJobs(registry.jobs, now);
     }
 
-    // Identify the session this run created (sessions are sequential here).
-    const sessionId = listSessions(projectPath).map((s) => s.id).find((id) => !before.has(id));
-    console.log(
-      sessionId
-        ? green(`  ✓ job "${job.id}" → session ${sessionId}  (seekforge audit ${sessionId})`)
-        : dim(`  job "${job.id}" produced no session`),
-    );
+    if (toRun.length === 0) {
+      console.log(dim("no jobs due."));
+      return;
+    }
 
-    // Stamp lastRunAt so interval/cron due-calculation advances. Reload before
-    // saving so a concurrent edit to the registry isn't clobbered.
-    const fresh = loadRegistry(projectPath);
-    saveRegistry(projectPath, { jobs: markRun(fresh.jobs, job.id, now) });
+    for (const job of toRun) {
+      console.log(`\n▶ running scheduled job "${job.id}" (budget $${job.maxCostUsd.toFixed(2)}, mode ${job.mode})`);
+      const before = new Set(listSessions(projectPath).map((s) => s.id));
+
+      try {
+        await runTaskCommand(job.task, {
+          mode: job.mode,
+          maxCostUsd: job.maxCostUsd,
+          // Machine format → confirm auto-denies: no interactive prompt can hang a
+          // headless tick, dangerous stays denied, execute/env auto-deny.
+          outputFormat: "json",
+          // Edit jobs must apply edits without a human; acceptEdits auto-approves
+          // ONLY file edits (writes still refuse dangerous, execute/env still deny).
+          ...(job.mode === "edit" ? { permissionMode: "acceptEdits" } : {}),
+        });
+      } catch (err) {
+        console.error(red(`  job "${job.id}" errored: ${err instanceof Error ? err.message : String(err)}`));
+      }
+
+      const newSessionIds = listSessions(projectPath).map((s) => s.id).filter((id) => !before.has(id));
+      console.log(
+        newSessionIds.length === 1
+          ? green(`  ✓ job "${job.id}" → session ${newSessionIds[0]}  (seekforge audit ${newSessionIds[0]})`)
+          : newSessionIds.length === 0
+            ? dim(`  job "${job.id}" produced no session`)
+            : dim(`  job "${job.id}" session attribution is ambiguous (${newSessionIds.length} new sessions)`),
+      );
+
+      // Stamp lastRunAt so interval/cron due-calculation advances. Reload under
+      // the lease so another scheduler's stale snapshot cannot be persisted.
+      const fresh = loadRegistry(projectPath);
+      saveRegistry(projectPath, { jobs: markRun(fresh.jobs, job.id, now) });
+    }
+  } finally {
+    releaseLease();
   }
 }
 

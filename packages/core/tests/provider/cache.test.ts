@@ -144,6 +144,20 @@ describe("wrapProviderWithCache", () => {
     expect(entries).toHaveLength(0);
   });
 
+  it("does not serve or pass through an already-cancelled request", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+    const cancelled = { ...req("hello"), signal: controller.signal };
+
+    await expect(cached.chat(cancelled)).rejects.toBe(reason);
+    await expect(cached.chatStream(cancelled, () => {})).rejects.toBe(reason);
+    expect(inner.chats).toBe(0);
+    expect(inner.streams).toBe(0);
+  });
+
   it("keeps the wrapped provider's model id", () => {
     expect(wrapProviderWithCache(countingProvider(), dir).model).toBe("fake-model");
   });

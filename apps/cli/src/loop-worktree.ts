@@ -26,20 +26,16 @@ export type LoopRepository = {
 
 /** Resolve a subdirectory or retained worktree back to the repository's base checkout. */
 export async function resolveLoopRepository(path: string): Promise<LoopRepository> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
-    cwd: path,
-    timeout: 10_000,
-  }).catch((error: unknown) => {
-    const detail = `${(error as { stderr?: string }).stderr ?? ""} ${error instanceof Error ? error.message : String(error)}`;
+  const entries = await listGitWorktrees(path).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
     if (/not a git repository/i.test(detail)) {
       throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
     }
     throw error;
   });
-  const currentRoot = stdout.trim();
-  const entries = await listGitWorktrees(currentRoot);
   // Git documents the main worktree as the first porcelain entry.
-  const base = entries[0]?.path ?? currentRoot;
+  const base = entries[0]?.path;
+  if (!base) throw new WorktreeGitError("git_error", `git returned no worktrees for: ${path}`);
   const workspaces = [
     base,
     ...entries

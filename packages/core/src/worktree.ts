@@ -170,24 +170,24 @@ export async function removeWorktree(basePath: string, worktreePath: string, bra
 }
 
 /**
- * Parses `git worktree list --porcelain` into every worktree of `basePath`
+ * Parses `git worktree list --porcelain -z` into every worktree of `basePath`
  * (including the main checkout). Callers filter as needed (e.g. to
  * `seekforge/` branches). Branch refs are returned with `refs/heads/` stripped.
  */
 export async function listGitWorktrees(basePath: string): Promise<GitWorktreeEntry[]> {
-  const out = await git(basePath, ["worktree", "list", "--porcelain"]);
+  const out = await git(basePath, ["worktree", "list", "--porcelain", "-z"]);
   const entries: GitWorktreeEntry[] = [];
   let current: GitWorktreeEntry | undefined;
-  for (const line of out.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      current = { path: line.slice("worktree ".length), branch: "", head: "" };
+  for (const field of out.split("\0")) {
+    if (field.startsWith("worktree ")) {
+      current = { path: field.slice("worktree ".length), branch: "", head: "" };
       entries.push(current);
     } else if (!current) {
       continue;
-    } else if (line.startsWith("HEAD ")) {
-      current.head = line.slice("HEAD ".length);
-    } else if (line.startsWith("branch ")) {
-      current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
+    } else if (field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
+    } else if (field.startsWith("branch ")) {
+      current.branch = field.slice("branch ".length).replace(/^refs\/heads\//, "");
     }
     // `detached`/`bare`/`locked`/`prunable` lines leave branch/head as-is.
   }

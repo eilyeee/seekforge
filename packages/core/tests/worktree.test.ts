@@ -4,7 +4,7 @@
  * merge (clean, dirty checkpoint, conflict+abort), and remove.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -120,6 +120,20 @@ describe("listGitWorktrees", () => {
     expect(basename(wt!.path)).toBe(basename(path));
     expect(wt!.head).toMatch(/^[0-9a-f]{40}$/);
     expect(branch).toBe("seekforge/listed");
+  });
+
+  it("preserves newline-containing worktree paths", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "seekforge-wt-newline-"));
+    const newlineRepo = join(parent, "repo\ncheckout");
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", newlineRepo]);
+      const entries = await listGitWorktrees(newlineRepo);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.path).toBe(realpathSync(newlineRepo));
+      expect(entries[0]?.branch).toBe("main");
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
 

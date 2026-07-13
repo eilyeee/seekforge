@@ -30,7 +30,14 @@ export interface AgentCore {
   runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent>;
 }
 
-export { createAgentCore, createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
+export {
+  createAgentCore,
+  createRetryBus,
+  hasActiveSessionRuns,
+  isSessionRunActive,
+  type AgentCoreDeps,
+  type RetryBus,
+} from "./loop.js";
 export {
   buildAgentCoreDeps,
   buildProvider,

@@ -244,6 +244,30 @@ asyncTest("worktree operations resolve the base checkout from a subdirectory", a
   }
 });
 
+asyncTest("repository resolution preserves a newline-containing checkout path", async () => {
+  const parent = mkdtempSync(resolve(tmpdir(), "seekforge-loop-newline-"));
+  const repo = resolve(parent, "repo\ncheckout");
+  try {
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const resolved = await resolveLoopRepository(repo);
+    assert.equal(resolved.basePath, realpathSync(repo));
+    assert.deepEqual(resolved.workspaces, [realpathSync(repo)]);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
 asyncTest("loop state management still works outside a git repository", async () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-nongit-"));
   try {

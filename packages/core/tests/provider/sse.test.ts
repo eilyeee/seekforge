@@ -3,6 +3,7 @@ import {
   createSseAccumulator,
   feedSseChunk,
   finalizeSse,
+  MAX_SSE_LINE_CHARS,
 } from "../../src/provider/sse.js";
 
 const TRANSCRIPT = [
@@ -120,6 +121,28 @@ describe("SSE accumulation", () => {
     const acc = createSseAccumulator();
     feedSseChunk(acc, 'data: {"choices":[{"delta":{"content":"tail"}}]}');
     expect(finalizeSse(acc).content).toBe("tail");
+  });
+
+  it("rejects a newline-free line before the carry-over buffer can grow unbounded", () => {
+    const acc = createSseAccumulator();
+    feedSseChunk(acc, "x".repeat(MAX_SSE_LINE_CHARS));
+
+    expect(() => feedSseChunk(acc, "x")).toThrow(/SSE line exceeds/);
+    expect(acc.buffer).toHaveLength(MAX_SSE_LINE_CHARS);
+  });
+
+  it("preserves a valid event fragmented at the maximum line size", () => {
+    const acc = createSseAccumulator();
+    const prefix = 'data: {"choices":[{"delta":{"content":"bounded"}}]}';
+    const line = prefix + " ".repeat(MAX_SSE_LINE_CHARS - prefix.length);
+
+    for (let offset = 0; offset < line.length; offset += 8191) {
+      feedSseChunk(acc, line.slice(offset, offset + 8191));
+    }
+    feedSseChunk(acc, "\n");
+
+    expect(finalizeSse(acc).content).toBe("bounded");
+    expect(acc.buffer).toBe("");
   });
 });
 

@@ -15,8 +15,7 @@
  */
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readProjectFile, writeProjectFileAtomic } from "./config.js";
 
 export type TriggerMode = "ask" | "edit";
 
@@ -84,22 +83,17 @@ export function validateTrigger(input: unknown): { trigger: Trigger } | { error:
   };
 }
 
-/** Path of the workspace-scoped trigger registry. */
-function triggersPath(workspace: string): string {
-  return join(workspace, ".seekforge", "triggers.json");
-}
-
 /**
  * Loads the workspace trigger registry. A missing or malformed file yields an
  * empty list; individual invalid entries are dropped (validated on read) so a
  * hand-edited file with one bad entry can't poison every trigger.
  */
 export function loadTriggers(workspace: string): Trigger[] {
-  const path = triggersPath(workspace);
-  if (!existsSync(path)) return [];
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    const text = readProjectFile(workspace, ".seekforge/triggers.json");
+    if (text === undefined) return [];
+    raw = JSON.parse(text);
   } catch {
     return [];
   }
@@ -114,9 +108,11 @@ export function loadTriggers(workspace: string): Trigger[] {
 
 /** Writes the registry back, owner-only (0o600) — the file holds shared secrets. */
 export function saveTriggers(workspace: string, triggers: Trigger[]): void {
-  const path = triggersPath(workspace);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(triggers, null, 2)}\n`, { mode: 0o600 });
+  writeProjectFileAtomic(
+    workspace,
+    ".seekforge/triggers.json",
+    `${JSON.stringify(triggers, null, 2)}\n`,
+  );
 }
 
 export function getTrigger(workspace: string, id: string): Trigger | undefined {

@@ -73,6 +73,9 @@ any value containing `"` or `\` is corrupted on a render→reload round-trip.
 - **Do:** pair the encoder and decoder deliberately; when the writer JSON-encodes,
   the reader must `JSON.parse`. Add a round-trip test with a quote/backslash value.
 - **Caught:** `packages/core/src/subagents/frontmatter.ts` vs `import.ts`.
+- **Also caught:** Git paths may contain newlines, so line-delimited worktree
+  porcelain is not reversible; request `git worktree list --porcelain -z` and
+  parse NUL-delimited fields end to end.
 
 ## 5. Cursor / index math must be surrogate-pair & multibyte aware
 
@@ -85,6 +88,8 @@ lands *between* the halves and corrupts the text on the next edit.
   helpers already existed in `editor.ts`; vim just bypassed them.
 - **Also caught:** `apps/tui/src/components/MultilineComposer.tsx` — cursor
   rendering indexed a single UTF-16 unit and split emoji surrogate pairs.
+- **Also caught:** Vim word/end motions used direct string indexing and could
+  stop inside a surrogate pair; classify and advance by editor code-point helpers.
 
 ## 6. Every `addEventListener` needs a matching `removeEventListener`
 
@@ -268,6 +273,12 @@ leaves the user waiting for timeout.
   left the frontend `ask_user` promise unresolved, so the run never observed it.
 - **Also caught:** the agent loop did not put its signal on `ToolContext`, so an
   in-flight foreground command outlived cancellation despite executor support.
+- **Also caught:** a successful non-streaming provider response cleared its
+  timeout after headers, leaving a stalled JSON body uncancellable; retain the
+  timeout and caller signal through body consumption.
+- **Also caught:** TUI async MCP prompts did not reserve a run until after the
+  prompt resolved, and Ctrl+C counts were global; reserve before awaiting and
+  bind interrupt state to the originating tab/run identity.
 
 ## 18. Exclude internal state from convergence inputs
 
@@ -305,6 +316,33 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
   so it cannot delete another SeekForge workflow's checkout.
 - **Also caught:** concurrent first LSP calls reused a session inserted into the
   registry before its initialize handshake completed; share the startup promise.
+- **Also caught:** the LSP registry was keyed only by language, so concurrent
+  workspaces disposed each other's server; include workspace identity in the key.
+- **Also caught:** cached LSP documents were not refreshed before definition or
+  reference requests; track the last text and send `didChange` after disk edits.
+- **Also caught:** concurrent diagnostics for one URI overwrote a single waiter;
+  coalesce the in-flight request or retain all waiters for that identity.
+- **Also caught:** two connections could resume the same persisted session and
+  interleave JSONL, metadata, and checkpoints; acquire a run-scoped session lease.
+- **Also caught:** server shutdown closed HTTP listeners without aborting active
+  trigger runs; track managed run handles and await their cleanup before close.
+- **Also caught:** webhook delivery IDs were reserved before payload validation,
+  so one malformed request permanently consumed a valid retry identifier.
+- **Also caught:** a foreground shell could exit while a background descendant
+  retained output pipes, making reader joins bypass the command timeout; clean
+  up the owned process group before joining pipe readers.
+- **Also caught:** adding cancellation support at the provider boundary is not
+  sufficient unless the agent loop passes its run signal into every active model
+  request, including streaming reads and non-streaming body consumption.
+- **Also caught:** stale-lock recovery itself needs an exclusive recovery lease;
+  otherwise two recoverers can race and the second can rename the first one's
+  newly acquired lock after validating the old owner.
+- **Also caught:** JSON-RPC request order is not response order. Serializing all
+  MCP requests lets one long tool call block ping/list/cancellation even though
+  request IDs permit independent in-flight handlers.
+- **Also caught:** cancellation must remove the matching pending request, timer,
+  and listener on the client, send `notifications/cancelled`, and abort only the
+  server-side tool context with the same request ID.
 
 ## 21. Checkpoint at the event that makes cost or ownership observable
 
@@ -327,6 +365,12 @@ request later starts invisible work and desynchronizes controls from the server.
   store had already cleared its running state.
 - **Also caught:** `apps/desktop/src/store.ts` — resetting a session while its
   socket run was active let late events populate the newly cleared transcript.
+- **Also caught:** Desktop backtrack and continue callbacks resolved against the
+  then-active tab/workspace instead of the identity captured before the await.
+- **Also caught:** workspace-scoped view requests could repaint a newly selected
+  workspace; remount views by workspace and invalidate chat-scoped callbacks.
+- **Also caught:** a delayed image upload read the next tab's draft from a shared
+  component instance; key async composer state by tab identity.
 
 ## 23. A PID is not a durable process identity
 
@@ -381,6 +425,8 @@ non-finite values as "unset", an overflow can silently remove a guardrail.
 - **Do:** validate the result after additions and multiplications that produce
   budgets, limits, timestamps, or sizes.
 - **Caught:** `packages/core/src/agent/auto-loop.ts` — additive resume budget.
+- **Also caught:** schedule interval counts were finite but their conversion to
+  milliseconds could exceed the safe-integer range; validate the product too.
 
 ## 29. Metadata calls may follow symlinks across a sandbox boundary
 
@@ -391,6 +437,9 @@ also misses changes to the link itself.
 - **Do:** use `lstat` to classify entries and hash `readlink` output for symlinks;
   never open the target as workspace content.
 - **Caught:** `packages/core/src/agent/auto-loop.ts` — convergence fingerprinting.
+- **Also caught:** cached server search results and project config/trigger paths
+  were re-opened without physical-path revalidation, allowing a later symlink
+  swap to escape the workspace; reject symlinks and open with `O_NOFOLLOW`.
 
 ---
 

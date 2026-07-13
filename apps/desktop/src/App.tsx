@@ -37,6 +37,7 @@ export function App() {
   const finishOnboarding = useStore((s) => s.finishOnboarding);
   const bootError = useStore((s) => s.bootError);
   const retryBoot = useStore((s) => s.retryBoot);
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
 
   // First-run welcome ahead of the workbench when no API key is configured.
   if (onboarding === "needed") {
@@ -65,17 +66,17 @@ export function App() {
             }
           >
             {view === "chat" && <ChatView />}
-            {view === "sessions" && <SessionsView />}
-            {view === "diff" && <DiffView />}
-            {view === "files" && <FilesView />}
-            {view === "git" && <GitView />}
-            {view === "skills" && <SkillsView />}
-            {view === "agents" && <AgentsView />}
-            {view === "memory" && <MemoryView />}
-            {view === "evolution" && <EvolutionView />}
-            {view === "hooks" && <HooksView />}
-            {view === "settings" && <SettingsView />}
-            {view === "diagnostics" && <DiagnosticsView />}
+            {view === "sessions" && <SessionsView key={activeWorkspaceId} />}
+            {view === "diff" && <DiffView key={activeWorkspaceId} />}
+            {view === "files" && <FilesView key={activeWorkspaceId} />}
+            {view === "git" && <GitView key={activeWorkspaceId} />}
+            {view === "skills" && <SkillsView key={activeWorkspaceId} />}
+            {view === "agents" && <AgentsView key={activeWorkspaceId} />}
+            {view === "memory" && <MemoryView key={activeWorkspaceId} />}
+            {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
+            {view === "hooks" && <HooksView key={activeWorkspaceId} />}
+            {view === "settings" && <SettingsView key={activeWorkspaceId} />}
+            {view === "diagnostics" && <DiagnosticsView key={activeWorkspaceId} />}
           </Suspense>
         </div>
       </main>

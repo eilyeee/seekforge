@@ -104,6 +104,14 @@ describe("normal mode motions", () => {
     expect(applyVimKey(normal(), at("foo.bar", 2), ch("e")).editor.cursor).toBe(3); // punct run
   });
 
+  it("w, b, and e stay on code-point boundaries around emoji", () => {
+    const text = "a😀b";
+    expect(applyVimKey(normal(), at(text, 0), ch("w")).editor.cursor).toBe(1);
+    expect(applyVimKey(normal(), at(text, 1), ch("w")).editor.cursor).toBe(3);
+    expect(applyVimKey(normal(), at(text, 3), ch("b")).editor.cursor).toBe(1);
+    expect(applyVimKey(normal(), at(text, 0), ch("e")).editor.cursor).toBe(1);
+  });
+
   it("gg jumps to buffer start via pending g; G jumps to buffer end", () => {
     const r = feed(normal(), at("one\ntwo", 6), [ch("g"), ch("g")]);
     expect(r.editor.cursor).toBe(0);
@@ -217,6 +225,17 @@ describe("edits and register", () => {
     expect(r.editor).toEqual(at(" bar", 0));
     expect(r.vim.register).toBe("foo");
     expect(r.vim.mode).toBe("insert");
+  });
+
+  it("dw and cw remove whole emoji without leaving lone surrogates", () => {
+    const dw = feed(normal(), at("😀 foo", 0), [ch("d"), ch("w")]);
+    expect(dw.editor).toEqual(at("foo", 0));
+    expect(dw.vim.register).toBe("😀 ");
+
+    const cw = feed(normal(), at("😀 foo", 0), [ch("c"), ch("w")]);
+    expect(cw.editor).toEqual(at(" foo", 0));
+    expect(cw.vim.register).toBe("😀");
+    expect(cw.vim.mode).toBe("insert");
   });
 
   it("cc and S clear the line content, keep the line, and enter insert", () => {

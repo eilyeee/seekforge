@@ -16,6 +16,7 @@ import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
 import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
+import type { TriggerRunHandle } from "./trigger-run.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
@@ -74,6 +75,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const runLoop = opts.runLoop ?? runDefaultLoop;
   const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
+  const triggerRuns = new Set<TriggerRunHandle>();
 
   let port = 0; // the real port, known after listen()
 
@@ -87,7 +89,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (!isAuthorized(req, token) && !isGitHubTriggerRequest(req, url)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
-      handleApi(req, res, url, { registry, worktrees, version, createAgent }).catch((e: unknown) => {
+      handleApi(req, res, url, { registry, worktrees, version, createAgent, triggerRuns }).catch((e: unknown) => {
         // Defense-in-depth: handleApi answers its own errors, but never leave a
         // request hanging on an unexpected rejection.
         if (!res.headersSent) {
@@ -131,14 +133,18 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   }
   port = address.port;
 
-  const close = (): Promise<void> =>
-    new Promise<void>((resolveClose, rejectClose) => {
+  const close = async (): Promise<void> => {
+    for (const run of triggerRuns) run.abort();
+    const closing = new Promise<void>((resolveClose, rejectClose) => {
       // Terminating sockets triggers their close handlers -> running sessions abort.
       for (const client of wss.clients) client.terminate();
       wss.close();
       server.close((err) => (err ? rejectClose(err) : resolveClose()));
       server.closeAllConnections();
     });
+    await Promise.allSettled([...triggerRuns].map((run) => run.completion));
+    await closing;
+  };
 
   return { port, token, close };
 }

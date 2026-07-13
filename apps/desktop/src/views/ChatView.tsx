@@ -34,7 +34,6 @@ export function ChatView() {
   const t = useT();
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
-  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const tab = activeTab(tabsState);
   const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
@@ -90,11 +89,13 @@ export function ChatView() {
   /** Server config (sandbox badge + thinking default); refreshed per workspace. */
   const [config, setConfig] = useState<ServerConfig | null>(null);
   useEffect(() => {
+    let alive = true;
     api
-      .config()
-      .then(setConfig)
-      .catch(() => setConfig(null));
-  }, [activeWorkspaceId]);
+      .config(tab.ws)
+      .then((value) => { if (alive) setConfig(value); })
+      .catch(() => { if (alive) setConfig(null); });
+    return () => { alive = false; };
+  }, [tab.ws]);
 
   /** Account balance chip: fetched on mount and again after each run ends. */
   const [balance, setBalance] = useState<AccountBalance | null>(null);
@@ -103,7 +104,7 @@ export function ChatView() {
     if (running) return;
     let alive = true;
     api
-      .balance()
+      .balance(tab.ws)
       .then((r) => {
         // null = unknown; keep showing the previous value (fetchBalance contract).
         if (alive && r.balance) setBalance(r.balance);
@@ -112,27 +113,31 @@ export function ChatView() {
     return () => {
       alive = false;
     };
-  }, [running, activeWorkspaceId]);
+  }, [running, tab.ws]);
 
   /** Custom slash commands (GET /api/commands), merged into the composer palette. */
   const [customCommands, setCustomCommands] = useState<SlashCommand[]>([]);
   /** A parameterized custom command awaiting its arguments (the popup). */
   const [argsCommand, setArgsCommand] = useState<SlashCommand | null>(null);
   useEffect(() => {
+    let alive = true;
     api
-      .commands()
-      .then((r) => setCustomCommands(r.commands))
-      .catch(() => setCustomCommands([]));
-  }, [activeWorkspaceId]);
+      .commands(tab.ws)
+      .then((r) => { if (alive) setCustomCommands(r.commands); })
+      .catch(() => { if (alive) setCustomCommands([]); });
+    return () => { alive = false; };
+  }, [tab.ws]);
 
   /** Available output styles (GET /api/output-styles) for the ModelBar picker. */
   const [outputStyles, setOutputStyles] = useState<{ name: string; kind: "builtin" | "custom" }[]>([]);
   useEffect(() => {
+    let alive = true;
     api
-      .outputStyles()
-      .then((r) => setOutputStyles(r.styles))
-      .catch(() => setOutputStyles([]));
-  }, [activeWorkspaceId]);
+      .outputStyles(tab.ws)
+      .then((r) => { if (alive) setOutputStyles(r.styles); })
+      .catch(() => { if (alive) setOutputStyles([]); });
+    return () => { alive = false; };
+  }, [tab.ws]);
 
   /** Manual /compact: POST the active tab's session, then refresh on success. */
   const compactSession = () => {
@@ -142,7 +147,7 @@ export function ChatView() {
       return;
     }
     api
-      .sessionCompact(sessionId)
+      .sessionCompact(sessionId, tab.ws)
       .then(() => showToast(t("chat.compactDone")))
       .catch((e: unknown) => showToast(t("chat.compactError", { error: e instanceof Error ? e.message : String(e) })));
   };
@@ -155,6 +160,7 @@ export function ChatView() {
   const confirmBacktrack = async () => {
     const itemId = backtrackItem;
     const sessionId = tab.chat.sessionId;
+    const tabId = tab.tabId;
     setBacktrackItem(null);
     if (itemId === null || !sessionId) return;
     const local = userTurnOf(tab.chat.items, itemId);
@@ -168,7 +174,7 @@ export function ChatView() {
         throw new Error(`turn ${turn} is not backtrackable`);
       }
       await api.backtrack(sessionId, turn, restoreFiles, tab.ws);
-      truncateAtItem(itemId);
+      truncateAtItem(tabId, sessionId, itemId);
       setBacktrackError(null);
     } catch (e) {
       setBacktrackError(String(e));
@@ -218,7 +224,7 @@ export function ChatView() {
       if (!fact) return;
       setDraft("");
       api
-        .memoryAddFact(fact, "convention")
+        .memoryAddFact(fact, "convention", undefined, undefined, tab.ws)
         .then(() => showToast(t("chat.memorySaved")))
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
       return;
@@ -233,7 +239,7 @@ export function ChatView() {
   const insertCommand = (c: SlashCommand, args: string): void => {
     if (commandHasShell(c.body)) {
       api
-        .expandCommand(c.name, args)
+        .expandCommand(c.name, args, tab.ws)
         .then((r) => setDraft(r.text))
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
     } else {
@@ -364,7 +370,7 @@ export function ChatView() {
             <HomeWelcome
               onQuickAction={setDraft}
               onNavigate={setView}
-              workspaceId={activeWorkspaceId}
+              workspaceId={tab.ws}
             />
           ) : (
             <ChatItems
@@ -422,6 +428,7 @@ export function ChatView() {
         />
 
         <Composer
+          key={tab.tabId}
           value={draft}
           onChange={setDraft}
           onSend={submit}
@@ -437,7 +444,7 @@ export function ChatView() {
           onSetMode={setMode}
           onSetApprovalMode={setApprovalMode}
           onSetSandbox={(value) => {
-            void api.setConfig("sandbox", value).then(setConfig).catch(() => {});
+            void api.setConfig("sandbox", value, undefined, tab.ws).then(setConfig).catch(() => {});
           }}
         />
         </div>

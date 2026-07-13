@@ -1,6 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpClient, McpError } from "../../src/mcp/client.js";
 
 const SESSION_ID = "sess-42";
@@ -249,6 +249,25 @@ describe("mcp client over streamable HTTP", () => {
         code: "mcp_timeout",
       });
       expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("cancels a pending request and sends notifications/cancelled", async () => {
+    requests.length = 0;
+    const client = makeClient(5_000);
+    const controller = new AbortController();
+    try {
+      const pending = client.callTool("slow", {}, controller.signal);
+      setTimeout(() => controller.abort(), 25);
+      await expect(pending).rejects.toMatchObject({
+        name: "McpError",
+        code: "mcp_cancelled",
+      });
+      await vi.waitFor(() => {
+        expect(requests.some((r) => r.method === "notifications/cancelled")).toBe(true);
+      });
     } finally {
       client.dispose();
     }

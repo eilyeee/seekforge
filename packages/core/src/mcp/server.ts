@@ -47,7 +47,7 @@ export type ServeMcpOptions = {
 };
 
 export type McpServerHandle = {
-  /** Stops reading input. In-flight tool calls finish but stop responding. */
+  /** Stops reading input and aborts in-flight tool calls. */
   close(): void;
 };
 
@@ -90,6 +90,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
 
   let closed = false;
   let nextCallId = 1;
+  const inflight = new Map<number | string, AbortController>();
 
   const write = (msg: Record<string, unknown>): void => {
     if (closed) return;
@@ -111,7 +112,11 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
       .map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })),
   });
 
-  async function callTool(id: JsonRpcMessage["id"], params: Record<string, unknown>): Promise<void> {
+  async function callTool(
+    id: JsonRpcMessage["id"],
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const name = typeof params["name"] === "string" ? params["name"] : "";
     if (!name) {
       respondError(id, -32602, "Missing tool name");
@@ -128,7 +133,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     const args = params["arguments"] ?? {};
     const result = await dispatcher.execute(
       { id: `mcp-call-${nextCallId++}`, name, arguments: args },
-      ctx,
+      { ...ctx, ...(signal ? { signal } : {}) },
     );
     const text = result.ok
       ? JSON.stringify(result.data ?? null)
@@ -161,12 +166,29 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
         // dispatcher.execute normally reports tool failures as ok:false, but an
         // unexpected throw must still yield a JSON-RPC error — otherwise the
         // client gets no response and blocks until its per-request timeout.
-        try {
+        if (id === undefined || id === null) {
           await callTool(id, params);
-        } catch (err) {
-          respondError(id, -32603, `Internal error: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+        {
+          const controller = new AbortController();
+          inflight.set(id, controller);
+          try {
+            await callTool(id, params, controller.signal);
+          } catch (err) {
+            respondError(id, -32603, `Internal error: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            if (inflight.get(id) === controller) inflight.delete(id);
+          }
         }
         return;
+      case "notifications/cancelled": {
+        const requestId = params["requestId"];
+        if (typeof requestId === "number" || typeof requestId === "string") {
+          inflight.get(requestId)?.abort();
+        }
+        return;
+      }
       case "resources/list":
         respond(id, { resources: [] });
         return;
@@ -176,8 +198,6 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
   }
 
   const rl: Interface = createInterface({ input });
-  // Process lines strictly in order so responses never interleave mid-call.
-  let chain: Promise<void> = Promise.resolve();
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (trimmed === "") return;
@@ -188,15 +208,18 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
       return; // not protocol traffic; tolerate (mirrors the client)
     }
     if (msg === null || typeof msg !== "object") return;
-    chain = chain.then(
-      () => handle(msg),
-      () => handle(msg),
-    );
+    // JSON-RPC request ids make out-of-order responses unambiguous. Dispatch
+    // independently so a long tool call cannot block ping/tools/list/cancel.
+    void handle(msg).catch(() => {
+      // Request handlers report their own errors when an id is present.
+    });
   });
 
   return {
     close(): void {
       closed = true;
+      for (const controller of inflight.values()) controller.abort();
+      inflight.clear();
       rl.close();
     },
   };

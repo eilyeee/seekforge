@@ -313,6 +313,12 @@ pub fn run_command(workspace: &str, command: &str, cwd: &str, timeout_ms: u64) -
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_code = status.code().map(i64::from).unwrap_or(-1);
+                // The shell may exit while a background descendant still owns
+                // the output pipes (`sleep 10 &`). Synchronous commands must
+                // not outlive their foreground shell or block the joins below.
+                unsafe {
+                    libc::killpg(pid, libc::SIGKILL);
+                }
                 break;
             }
             Ok(None) => {
@@ -430,5 +436,22 @@ mod tests {
         for cmd in allowed {
             assert_eq!(deny_reason(cmd), None, "expected allow: {cmd}");
         }
+    }
+
+    #[test]
+    fn background_descendant_cannot_hold_output_pipes_open() {
+        let workspace = std::env::temp_dir().join(format!(
+            "seekforge-runtime-command-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let started = Instant::now();
+        let result = run_command(workspace.to_str().unwrap(), "sleep 2 &", ".", 100).unwrap();
+        std::fs::remove_dir_all(&workspace).unwrap();
+
+        assert_eq!(result["exitCode"], 0);
+        assert_eq!(result["timedOut"], false);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

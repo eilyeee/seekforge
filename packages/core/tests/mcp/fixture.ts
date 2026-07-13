@@ -32,6 +32,7 @@ let initialized = false;
 let clientProtocolVersion = null;
 let clientCapabilities = null;
 let rootsAnswer = null;
+const slowCalls = new Map();
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 rl.on("line", (line) => {
   let msg;
@@ -59,6 +60,12 @@ rl.on("line", (line) => {
     initialized = true;
     // Server-initiated request: ask the client for its roots.
     send({ jsonrpc: "2.0", id: "srv-1", method: "roots/list", params: {} });
+    return;
+  }
+  if (msg.method === "notifications/cancelled") {
+    const requestId = msg.params && msg.params.requestId;
+    const timer = slowCalls.get(requestId);
+    if (timer) { clearTimeout(timer); slowCalls.delete(requestId); }
     return;
   }
   if (msg.id === undefined) return;
@@ -144,6 +151,14 @@ rl.on("line", (line) => {
   if (msg.method === "tools/call") {
     const name = msg.params.name;
     if (name === "die") process.exit(7);
+    if (name === "slow") {
+      const timer = setTimeout(() => {
+        slowCalls.delete(msg.id);
+        send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "too late" }] } });
+      }, 5000);
+      slowCalls.set(msg.id, timer);
+      return;
+    }
     if (name === "boom") {
       send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "kaboom" }], isError: true } });
       return;

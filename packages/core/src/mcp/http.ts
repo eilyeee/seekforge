@@ -117,7 +117,7 @@ function expandEnvRefs(value: string): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? "");
 }
 export function createMcpHttpTransport(options: McpClientOptions): {
-  request<T>(method: string, params: unknown): Promise<T>;
+  request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T>;
   dispose(): void;
 } {
   const url = options.config.url;
@@ -144,9 +144,18 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   }
 
   /** POSTs one JSON-RPC message; `id === undefined` marks a notification (response body ignored). */
-  async function post(method: string, params: unknown, id: number | undefined): Promise<JsonRpcResponse> {
+  async function post(
+    method: string,
+    params: unknown,
+    id: number | undefined,
+    signal?: AbortSignal,
+  ): Promise<JsonRpcResponse> {
     if (disposed) throw new McpError("disposed", `MCP client "${options.name}" is disposed`);
+    if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
     const controller = new AbortController();
+    const onAbort = (): void => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) controller.abort();
     inflight.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -162,6 +171,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         if (controller.signal.aborted) {
           throw disposed
             ? new McpError("disposed", `MCP client "${options.name}" disposed`)
+            : signal?.aborted
+              ? new McpError("mcp_cancelled", `MCP ${method} request was cancelled`)
             : new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`);
         }
         throw new McpError("mcp_http_error", `MCP server "${options.name}" unreachable: ${err instanceof Error ? err.message : String(err)}`);
@@ -199,6 +210,9 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         return parsed;
       } catch (err) {
         if (err instanceof McpError) throw err;
+        if (controller.signal.aborted && signal?.aborted) {
+          throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
+        }
         if (controller.signal.aborted && !disposed) {
           throw new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`);
         }
@@ -206,13 +220,22 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       }
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       inflight.delete(controller);
     }
   }
 
-  async function rawRequest<T>(method: string, params: unknown): Promise<T> {
+  async function rawRequest<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
     const id = nextId++;
-    const msg = await post(method, params, id);
+    let msg: JsonRpcResponse;
+    try {
+      msg = await post(method, params, id, signal);
+    } catch (err) {
+      if (err instanceof McpError && err.code === "mcp_cancelled") {
+        void post("notifications/cancelled", { requestId: id, reason: "caller aborted" }, undefined).catch(() => {});
+      }
+      throw err;
+    }
     if (msg.error) {
       throw new McpError("mcp_error", msg.error.message ?? `MCP error ${msg.error.code ?? ""}`.trim());
     }
@@ -240,10 +263,32 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     return handshake;
   }
 
+  async function waitUntilReady(method: string, signal?: AbortSignal): Promise<void> {
+    const ready = ensureReady();
+    if (!signal) {
+      await ready;
+      return;
+    }
+    let onAbort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        ready,
+        new Promise<never>((_, reject) => {
+          onAbort = () => reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }),
+      ]);
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
   return {
-    async request<T>(method: string, params: unknown): Promise<T> {
-      await ensureReady();
-      return rawRequest<T>(method, params);
+    async request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
+      if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
+      await waitUntilReady(method, signal);
+      return rawRequest<T>(method, params, signal);
     },
     dispose(): void {
       disposed = true;

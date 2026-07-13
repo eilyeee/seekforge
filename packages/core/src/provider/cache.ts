@@ -91,6 +91,7 @@ export function wrapProviderWithCache(
   return {
     model: provider.model,
     async chat(req) {
+      if (req.signal?.aborted) throw req.signal.reason;
       const key = cacheKey(provider.model, req);
       const cached = read(key);
       if (cached) return zeroedUsage(cached);
@@ -99,6 +100,7 @@ export function wrapProviderWithCache(
       return res;
     },
     chatStream(req, onDelta, onReasoningDelta) {
+      if (req.signal?.aborted) return Promise.reject(req.signal.reason);
       return provider.chatStream(req, onDelta, onReasoningDelta);
     },
   };

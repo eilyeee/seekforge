@@ -63,6 +63,8 @@ import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
 import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readSessionMeta, writeSessionMeta } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * Mutable handoff between a provider (built in the app factory) and a run's
@@ -76,6 +78,30 @@ export type RetryBus = { emit?: (info: RetryInfo) => void };
 export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => void } {
   const bus: RetryBus = {};
   return Object.assign(bus, { onRetry: (info: RetryInfo) => bus.emit?.(info) });
+}
+
+const activeSessionRuns = new Set<string>();
+
+function sessionRunKey(workspace: string, sessionId: string): string {
+  let root: string;
+  try {
+    root = realpathSync.native(workspace);
+  } catch {
+    root = resolve(workspace);
+  }
+  return `${root}\0${sessionId}`;
+}
+
+/** True while this process is actively appending to the persisted session. */
+export function isSessionRunActive(workspace: string, sessionId: string): boolean {
+  return activeSessionRuns.has(sessionRunKey(workspace, sessionId));
+}
+
+/** True when any persisted session in this workspace is currently running. */
+export function hasActiveSessionRuns(workspace: string): boolean {
+  const prefix = `${sessionRunKey(workspace, "").slice(0, -1)}\0`;
+  for (const key of activeSessionRuns) if (key.startsWith(prefix)) return true;
+  return false;
 }
 
 export type AgentCoreDeps = {
@@ -361,6 +387,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
       const resuming = input.resumeSessionId !== undefined;
       const sessionId = input.resumeSessionId ?? newSessionId();
+      const activeRunKey = sessionRunKey(input.projectPath, sessionId);
+      if (activeSessionRuns.has(activeRunKey)) {
+        throw new AgentLimitError("session_busy", `session ${sessionId} is already running`);
+      }
+      activeSessionRuns.add(activeRunKey);
+      try {
       const trace = createSessionTrace(input.projectPath, sessionId);
       const emit = (e: AgentEvent): AgentEvent => {
         trace.event(e);
@@ -1080,7 +1112,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     provider,
                     messages,
                     budgetTokens,
-                    deps.compactFocus !== undefined ? { focus: deps.compactFocus } : undefined,
+                    {
+                      ...(deps.compactFocus !== undefined ? { focus: deps.compactFocus } : {}),
+                      signal: input.signal,
+                    },
                   )
                 : null) ?? compactMessages(messages, budgetTokens);
             // Last resort: when the whole history is one assistant turn plus its
@@ -1121,8 +1156,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
 
           const res = deps.onModelDelta
-            ? await provider.chatStream({ messages, tools: toolDefs }, deps.onModelDelta, deps.onReasoningDelta)
-            : await provider.chat({ messages, tools: toolDefs });
+            ? await provider.chatStream(
+                { messages, tools: toolDefs, signal: input.signal },
+                deps.onModelDelta,
+                deps.onReasoningDelta,
+              )
+            : await provider.chat({ messages, tools: toolDefs, signal: input.signal });
           usage = addUsage(usage, res.usage);
           yield emit({ type: "usage.updated", usage });
 
@@ -1620,6 +1659,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             status: sessionEndStatus ?? "cancelled",
           });
         }
+      }
+      } finally {
+        activeSessionRuns.delete(activeRunKey);
       }
     },
   };

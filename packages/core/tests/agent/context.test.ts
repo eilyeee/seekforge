@@ -241,6 +241,20 @@ describe("llmCompactMessages", () => {
     expect(sent[0]!.content).toContain("Focus especially on: the auth refactor.");
   });
 
+  it("passes the run cancellation signal to the summarizer", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider: SummaryProvider = {
+      chat: async (req) => {
+        received = req.signal;
+        return { content: "summary" };
+      },
+    };
+
+    await llmCompactMessages(provider, conversation(30), 2000, { signal: controller.signal });
+    expect(received).toBe(controller.signal);
+  });
+
   it("omits the focus phrase when focus is empty/absent", async () => {
     const provider = summaryProvider("summary");
     await llmCompactMessages(provider, conversation(30), 2000, { focus: "   " });

@@ -6,11 +6,12 @@
 // round-trip in a temp dir.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   addJob,
+  acquireScheduleLease,
   cronMatches,
   dueJobs,
   generateId,
@@ -64,6 +65,11 @@ test("parseInterval rejects invalid input", () => {
   for (const bad of ["", "0m", "-5m", "30", "m", "30x", "1.5h", "abc", "10 m 20s"]) {
     assert.equal(parseInterval(bad), null, `expected null for ${JSON.stringify(bad)}`);
   }
+});
+test("parseInterval rejects unsafe counts and millisecond overflow", () => {
+  assert.equal(parseInterval("9007199254740992s"), null);
+  assert.equal(parseInterval("9007199254741s"), null);
+  assert.equal(parseInterval("9007199254s"), 9_007_199_254_000);
 });
 
 // --- cron parsing/matching --------------------------------------------------
@@ -253,6 +259,58 @@ test("loadRegistry rejects persisted non-finite or non-positive budgets", () => 
       writeFileSync(file, `{"jobs":[{"id":"x","task":"t","schedule":"1h","mode":"ask","maxCostUsd":${budget},"enabled":true}]}`);
       assert.deepEqual(loadRegistry(dir), { jobs: [] });
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schedule lease excludes overlap and can be reacquired after release", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const release = acquireScheduleLease(dir);
+    assert.equal(typeof release, "function");
+    assert.equal(acquireScheduleLease(dir), null);
+    release!();
+    const reacquired = acquireScheduleLease(dir);
+    assert.equal(typeof reacquired, "function");
+    reacquired!();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schedule lease recovers a lock owned by a dead process", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const lock = join(dir, ".seekforge", "schedules.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      pid: 2_147_483_647,
+      token: "dead-owner",
+      acquiredAt: new Date(0).toISOString(),
+    }));
+    const release = acquireScheduleLease(dir);
+    assert.equal(typeof release, "function");
+    release!();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schedule lease does not race another stale-lock recovery", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sf-sched-"));
+  try {
+    const lock = join(dir, ".seekforge", "schedules.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      pid: 2_147_483_647,
+      token: "dead-owner",
+      acquiredAt: new Date(0).toISOString(),
+    }));
+    mkdirSync(`${lock}.recovery`);
+
+    assert.equal(acquireScheduleLease(dir), null);
+    assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).token, "dead-owner");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

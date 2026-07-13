@@ -321,7 +321,7 @@ const LLM_SUMMARY_INSTRUCTION =
 
 /** Minimal provider surface needed for summarization (ChatProvider satisfies it). */
 export type SummaryProvider = {
-  chat(req: { messages: ChatMessage[] }): Promise<{ content: string }>;
+  chat(req: { messages: ChatMessage[]; signal?: AbortSignal }): Promise<{ content: string }>;
 };
 
 /** Role-prefixed, size-capped plain-text rendering of the dropped segment. */
@@ -361,7 +361,7 @@ export async function llmCompactMessages(
   provider: SummaryProvider,
   messages: ChatMessage[],
   budgetTokens: number,
-  opts?: { focus?: string },
+  opts?: { focus?: string; signal?: AbortSignal },
 ): Promise<CompactionResult | null> {
   const split = splitForCompaction(messages, budgetTokens);
   if (!split) return null;
@@ -378,6 +378,7 @@ export async function llmCompactMessages(
   try {
     const res = await provider.chat({
       messages: [{ role: "user", content: `${instruction}\n\n${segment}` }],
+      signal: opts?.signal,
     });
     summary = res.content.trim();
   } catch {

@@ -29,7 +29,7 @@ export type McpClient = {
    * joined with "\n"; non-text parts become "[<type> content]").
    * A result with isError:true rejects with code "mcp_tool_error".
    */
-  callTool(name: string, args: Record<string, unknown>): Promise<string>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
   /** resources/list — missing result.resources is treated as an empty list. */
   listResources(): Promise<McpResource[]>;
   /**
@@ -53,6 +53,7 @@ type Pending = {
   resolve: (data: unknown) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  cleanup: () => void;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -114,7 +115,7 @@ function buildRootsResult(workspaceRoots: string[] | undefined): { roots: Array<
 /** Minimal transport contract shared by the stdio and Streamable HTTP backends. */
 type McpTransport = {
   /** Sends one JSON-RPC request (handshaking first when needed) and returns its result. */
-  request<T>(method: string, params: unknown): Promise<T>;
+  request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T>;
   dispose(): void;
 };
 
@@ -162,6 +163,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         if (!p) return;
         pending.delete(id);
         clearTimeout(p.timer);
+        p.cleanup();
         const error = msg["error"] as { code?: number; message?: string } | undefined;
         if (error) {
           p.reject(new McpError("mcp_error", error.message ?? `MCP error ${error.code ?? ""}`.trim()));
@@ -201,6 +203,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       pending = new Map();
       for (const p of stale.values()) {
         clearTimeout(p.timer);
+        p.cleanup();
         p.reject(new McpError("mcp_crashed", `MCP server "${options.name}" exited unexpectedly (${detail})`));
       }
     };
@@ -215,26 +218,48 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
     method: string,
     params: unknown,
     timeoutMs = defaultTimeout,
+    signal?: AbortSignal,
   ): Promise<T> {
     const id = nextId++;
     return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
+        return;
+      }
+      const onAbort = (): void => {
+        const p = pending.get(id);
+        if (!p) return;
+        pending.delete(id);
+        clearTimeout(p.timer);
+        p.cleanup();
+        notify(proc, "notifications/cancelled", { requestId: id, reason: "caller aborted" });
+        reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
+      };
+      const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
       const timer = setTimeout(() => {
         pending.delete(id);
+        cleanup();
         reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`));
       }, timeoutMs);
-      pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer });
+      pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup });
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
         if (err) {
           pending.delete(id);
           clearTimeout(timer);
+          cleanup();
           reject(new McpError("mcp_write_failed", err.message));
         }
       });
     });
   }
 
-  function notify(proc: ChildProcessWithoutNullStreams, method: string): void {
-    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`, () => {
+  function notify(proc: ChildProcessWithoutNullStreams, method: string, params?: unknown): void {
+    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) })}\n`, () => {
       /* a failed notification surfaces via the next request */
     });
   }
@@ -269,10 +294,27 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
   }
 
   return {
-    async request<T>(method: string, params: unknown): Promise<T> {
+    async request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
       const { proc, ready } = ensureReady();
-      await ready;
-      return rawRequest<T>(proc, method, params);
+      if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
+      if (!signal) {
+        await ready;
+      } else {
+        let onAbort: (() => void) | undefined;
+        try {
+          await Promise.race([
+            ready,
+            new Promise<never>((_, reject) => {
+              onAbort = () => reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
+              signal.addEventListener("abort", onAbort, { once: true });
+              if (signal.aborted) onAbort();
+            }),
+          ]);
+        } finally {
+          if (onAbort) signal.removeEventListener("abort", onAbort);
+        }
+      }
+      return rawRequest<T>(proc, method, params, defaultTimeout, signal);
     },
 
     dispose(): void {
@@ -284,6 +326,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       }
       for (const p of pending.values()) {
         clearTimeout(p.timer);
+        p.cleanup();
         p.reject(new McpError("disposed", `MCP client "${options.name}" disposed`));
       }
       pending.clear();
@@ -309,8 +352,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
       return res?.tools ?? [];
     },
 
-    async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-      const res = await transport.request<CallToolResult>("tools/call", { name, arguments: args });
+    async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+      const res = await transport.request<CallToolResult>("tools/call", { name, arguments: args }, signal);
       const text = flattenContent(res?.content ?? []);
       if (res?.isError) {
         throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
