@@ -322,7 +322,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     const name = segs[2]!;
     const config = (loadConfig(workspace).mcpServers ?? {})[name];
     if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
-    const client = createMcpClient({ name, config });
+    const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
     try {
       const tools = await client.listTools();
       return sendJson(res, 200, {

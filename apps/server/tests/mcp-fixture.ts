@@ -14,16 +14,19 @@ import { join } from "node:path";
 const FAKE_MCP_SERVER = `#!/usr/bin/env node
 const rl = require("node:readline").createInterface({ input: process.stdin });
 let initialized = false;
+let rootsAnswer = null;
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 rl.on("line", (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { return; }
+  if (msg.id === "server-roots") { rootsAnswer = msg.result; return; }
   if (msg.method === "initialize") {
     send({ jsonrpc: "2.0", id: msg.id, result: {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
       serverInfo: { name: "fake-mcp", version: "0.0.1" },
     } });
+    send({ jsonrpc: "2.0", id: "server-roots", method: "roots/list", params: {} });
     return;
   }
   if (msg.method === "notifications/initialized") { initialized = true; return; }
@@ -33,10 +36,16 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "tools/list") {
-    send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
+    const reply = () => send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
       { name: "echo", description: "Echoes arguments back." },
-      { name: "boom", description: "Always fails." },
+      { name: "boom", description: JSON.stringify(rootsAnswer) },
     ] } });
+    if (rootsAnswer !== null) reply();
+    else {
+      const timer = setInterval(() => {
+        if (rootsAnswer !== null) { clearInterval(timer); reply(); }
+      }, 5);
+    }
     return;
   }
   if (msg.method === "resources/list") {

@@ -334,7 +334,10 @@ export function listSessions(workspace: string, opts: ListSessionsOptions = {}):
     if (meta.parentAgentId && !opts.includeSubagents) continue;
     metas.push(meta);
   }
-  return metas.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return metas.sort((a, b) => {
+    const chronological = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    return chronological || a.id.localeCompare(b.id);
+  });
 }
 
 export type PruneSessionsOptions = {

@@ -331,6 +331,15 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
+function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    promptTokens: a.promptTokens - b.promptTokens,
+    completionTokens: a.completionTokens - b.completionTokens,
+    cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
+    costUsd: a.costUsd - b.costUsd,
+  };
+}
+
 function toolResultForModel(result: ToolResult, maxChars: number): string {
   const payload = result.ok
     ? { ok: true, data: result.data }
@@ -755,7 +764,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         });
 
         let subSessionId: string | undefined;
-        let nestedUsage: TokenUsage | undefined;
+        let nestedUsage = ZERO_USAGE;
         let report: FinalReport | undefined;
         let failure: { code: string; message: string } | undefined;
 
@@ -807,7 +816,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 pushEvent({ type: "file.changed", path: ev.path });
                 break;
               case "usage.updated":
-                nestedUsage = ev.usage; // cumulative within the nested run
+                // Account each cumulative update immediately. Background runs
+                // may be aborted when the parent exits, so waiting for child
+                // completion can otherwise lose already-billed usage.
+                usage = addUsage(usage, subtractUsage(ev.usage, nestedUsage));
+                nestedUsage = ev.usage;
+                pushEvent({ type: "usage.updated", usage });
                 break;
               case "session.completed":
                 report = ev.report;
@@ -834,11 +848,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           agentId: def.id,
           ok: failure === undefined && report !== undefined,
         });
-
-        if (nestedUsage) {
-          usage = addUsage(usage, nestedUsage);
-          pushEvent({ type: "usage.updated", usage });
-        }
 
         if (failure || !report) {
           return {

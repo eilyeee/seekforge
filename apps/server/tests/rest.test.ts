@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
@@ -657,7 +658,10 @@ describe("mcp endpoints", () => {
     const body = await jsonOf(res);
     expect(body.tools).toEqual([
       { name: "echo", description: "Echoes arguments back." },
-      { name: "boom", description: "Always fails." },
+      {
+        name: "boom",
+        description: JSON.stringify({ roots: [{ uri: pathToFileURL(workspace).href, name: "workspace" }] }),
+      },
     ]);
   });
 

@@ -23,6 +23,8 @@ written as "recent → keep" silently takes the *else* branch on unparseable inp
   what an unparseable value means and handle it explicitly.
 - **Caught:** `packages/core/src/memory/compact.ts` — a corrupt `addedAt` made
   `NaN >= cutoff` false, so an unknown-age memory fact was silently archived.
+- **Also caught:** session metadata accepted offset timestamps but sorted their
+  source strings; parse epochs before `keepLast` chooses what pruning retains.
 
 ## 2. Prefix matching needs a separator boundary
 
@@ -120,6 +122,8 @@ path leaves every other path exposed.
   assistant `tool_calls` with no matching `tool` results (turn cancelled/capped
   mid-flight) 400'd the OpenAI-compatible API on `/resume`. Now unanswered
   tool_calls and orphan tool results are dropped before the request is built.
+- **Also caught:** streaming EOF was finalized without the required `[DONE]`
+  terminator, turning a dropped connection into a successful partial response.
 
 ## 8. `JSON.parse` succeeding does not mean you got an object
 
@@ -157,6 +161,9 @@ path leaves every other path exposed.
   data escaped a per-server failure boundary during the later mapping loop.
 - **Also caught:** `apps/server/src/config.ts` and CLI doctor — JSON `null`
   reached object spread/property access even though parsing itself succeeded.
+- **Also caught:** `packages/eval-harness/src/config.ts` cast arbitrary JSON to
+  `EvalConfig`; scalars crashed provider selection and malformed nested pricing
+  could poison cost accounting. Filter scalar fields and validate every price.
 - **Also caught:** `packages/core/src/skills/manage.ts` — non-object `skill.json`
   values crashed enable/disable instead of being repaired.
 
@@ -381,6 +388,8 @@ the new owner's lock, allowing concurrent mutation of the same persisted state.
 - **Also caught:** marking a lease released before filesystem cleanup succeeds
   turns a transient cleanup failure into a live orphan. Keep local ownership and
   make `release()` retryable until the token-owned directory is actually gone.
+- **Also caught:** server shutdown aborted sockets but did not await detached
+  WebSocket/REST operations; track every launched operation and drain the set.
 
 ## 21. Checkpoint at the event that makes cost or ownership observable
 
@@ -412,6 +421,11 @@ request later starts invisible work and desynchronizes controls from the server.
 - **Also caught:** a tab-bound home view accepted a workspace prop but its recent
   sessions/skills/agents calls still fell back to the global active workspace;
   pass the captured tab workspace through every scoped request.
+- **Also caught:** detail requests for sessions, agents, and skills committed
+  after selection changed; bind each response to a generation and selected id.
+- **Also caught:** TUI drafts and run settings crossed tab boundaries because
+  editor state was global and model/approval were read after an awaited MCP load;
+  key drafts by tab and snapshot all run inputs before the first await.
 
 ## 23. A PID is not a durable process identity
 
@@ -492,6 +506,9 @@ also misses changes to the link itself.
 - **Also caught:** a predictable root under the shared temporary directory is a
   security boundary. Create each component without following symlinks and
   require the current OS owner plus private (`0700`) directory permissions.
+- **Also caught:** validating a path and reopening it later leaves a swap window.
+  Open leaves and parents with no-follow flags, compare descriptor/path identity,
+  and delay truncation until the opened file passes physical revalidation.
 
 ## 30. Related mutations must share one serialization domain
 
@@ -504,6 +521,64 @@ as merge and remove even though their API routes and target ids differ.
   the family.
 - **Caught:** `apps/server/src/worktrees.ts` — create, merge, and remove now
   share the base-repository lock; create also holds the base workspace guard.
+- **Also caught:** REST stage/unstage/discard/commit mutated the same index and
+  refs outside that lock; Git routes and worktree operations must use one
+  coordinator keyed by the physical common Git directory.
+
+## 31. Derived syntax semantics belong to parsed values
+
+Textual spelling is not semantic restriction. `*` and `*/1` cover the same cron
+domain even though their source strings differ.
+
+- **Do:** derive unrestricted/restricted flags from the normalized value set.
+- **Caught:** `apps/cli/src/schedule.ts` — DOM/DOW OR semantics made `*/1` run a
+  day-specific autonomous job every day.
+
+## 32. Mutable ordinals are not persistent identities
+
+An index changes after insertion/deletion. Queuing two mutations by displayed
+index can apply the second action to a different item after renumbering.
+
+- **Do:** use a stable id/content fingerprint, serialize mutations, and fail
+  closed when identity is ambiguous.
+- **Caught:** `apps/desktop/src/views/MemoryView.tsx` — concurrent fact deletes.
+
+## 33. Untrusted data must not contain its own fence delimiter
+
+Labeling a prompt section as untrusted does nothing if payload text can close
+the section and resume instruction-like text outside it.
+
+- **Do:** encode every interpolated key and value for the delimiter grammar.
+- **Caught:** `apps/server/src/triggers.ts` — webhook titles could inject
+  `</untrusted-event-data>` into a headless edit task.
+
+## 34. Aggregate cost at every observable usage update
+
+Completion-only accounting loses already-billed work when a background child is
+aborted or outlives the parent.
+
+- **Do:** merge monotonic cumulative deltas immediately and never add the same
+  child total again at completion.
+- **Caught:** `packages/core/src/agent/loop.ts` — background subagent usage.
+
+## 35. A synchronous call cannot enforce an external wall-clock budget
+
+Checking `Date.now()` around a potentially catastrophic regex or blocking child
+wait cannot interrupt the call while it owns the thread.
+
+- **Do:** reject unsafe regex grammars before execution; run subprocess methods
+  in owned process groups with bounded output drainage, cancellation polling,
+  and an internal deadline.
+- **Caught:** `apps/server/src/files.ts` regex search and Rust runtime Git calls.
+
+## 36. Persisted cache hits need full contract validation
+
+A valid timestamp does not make the cached payload valid. Partial objects and
+non-finite or impossible counters can crash consumers or poison budgets.
+
+- **Do:** validate the complete response shape and numeric invariants; treat any
+  mismatch as a cache miss.
+- **Caught:** `packages/core/src/provider/cache.ts` — cached `ChatResponse` data.
 
 ---
 

@@ -190,6 +190,9 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       throw err;
     }
     const result = finalizeSse(acc);
+    if (!acc.done) {
+      throw new DeepSeekApiError("streaming response ended before [DONE]");
+    }
     return {
       content: result.content,
       toolCalls: result.toolCalls,

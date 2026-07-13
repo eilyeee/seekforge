@@ -137,6 +137,49 @@ describe("start -> events -> idle", () => {
   });
 });
 
+describe("server shutdown", () => {
+  it("aborts and awaits active WebSocket run cleanup before close resolves", async () => {
+    let cleanupStarted = false;
+    let disposed = false;
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    const { server } = await boot(() => ({
+      agent: {
+        runTask: async function* (input) {
+          try {
+            yield { type: "session.created" as const, sessionId: "shutdown-ws" };
+            await new Promise<void>((resolve) => {
+              const done = () => resolve();
+              input.signal?.addEventListener("abort", done, { once: true });
+              if (input.signal?.aborted) done();
+            });
+          } finally {
+            cleanupStarted = true;
+            await cleanupGate;
+          }
+        },
+      },
+      dispose: () => { disposed = true; },
+    }));
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "wait", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "event");
+
+    let resolved = false;
+    const closing = server.close().then(() => { resolved = true; });
+    try {
+      await waitUntil(() => cleanupStarted);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resolved).toBe(false);
+      expect(disposed).toBe(false);
+    } finally {
+      releaseCleanup();
+    }
+    await closing;
+    expect(disposed).toBe(true);
+  });
+});
+
 describe("reasoning + new event forwarding", () => {
   it("streams reasoning.delta frames and forwards command.output / context.microcompacted unchanged", async () => {
     const { server } = await boot(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { interruptRun, ownsRun, releaseRun, reserveRun, takeRunOwned, type RunEntry } from "../run-identity.js";
+import { cancelRun, interruptRun, ownsRun, releaseRun, reserveRun, takeRunOwned, type RunEntry } from "../run-identity.js";
 
 describe("run identity", () => {
   it("reserves the originating tab across an async prompt and rejects another run there", () => {
@@ -40,5 +40,31 @@ describe("run identity", () => {
     expect(prompts.get(1)?.value).toBe("new prompt");
     expect(takeRunOwned(prompts, 1, 11)?.value).toBe("new prompt");
     expect(prompts.has(1)).toBe(false);
+  });
+
+  it("cancels the matching run while its permission prompt is open", () => {
+    const runs = new Map<number, RunEntry>();
+    const run = reserveRun(runs, 1, 10)!;
+    let permissionResult: boolean | undefined;
+    const permissions = new Map([[1, { runId: 10, resolve: (result: false) => { permissionResult = result; } }]]);
+
+    const result = cancelRun(runs, permissions, new Map(), 1);
+
+    expect(result).toEqual({ sigintCount: 1, permissionCancelled: true, questionCancelled: false });
+    expect(permissionResult).toBe(false);
+    expect(run.controller.signal.aborted).toBe(true);
+    expect(permissions.has(1)).toBe(false);
+  });
+
+  it("does not resolve a stale prompt belonging to another run", () => {
+    const runs = new Map<number, RunEntry>();
+    reserveRun(runs, 1, 11);
+    let resolved = false;
+    const permissions = new Map([[1, { runId: 10, resolve: () => { resolved = true; } }]]);
+
+    cancelRun(runs, permissions, new Map(), 1);
+
+    expect(resolved).toBe(false);
+    expect(permissions.has(1)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, SessionStatus } from "@seekforge/shared";
 import { ApiError, api } from "../lib/api";
 import { messagesToItems } from "../lib/messages";
@@ -11,6 +11,7 @@ import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, Modal, type BadgeTone } from "../components/ui";
 import type { PruneResult, RewindResult, SessionMeta } from "../types";
+import { LatestRequest } from "./async-coordination";
 
 /** Short, human time for a card corner: today → "10:24", else a compact date. */
 function formatWhen(iso: string): string {
@@ -56,6 +57,7 @@ export function SessionsView() {
    * holds a formatted failure message (404 → a short "no audit" note).
    */
   const [audit, setAudit] = useState<{ sessionId: string; markdown: string | null; error: string | null } | null>(null);
+  const detailRequests = useRef(new LatestRequest());
 
   const refresh = () =>
     api
@@ -64,6 +66,7 @@ export function SessionsView() {
       .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
+    detailRequests.current.invalidate();
     setSessions(null);
     setDetail(null);
     setError(null);
@@ -88,11 +91,21 @@ export function SessionsView() {
   /** Read-only preview of the transcript (the "View details" action). */
   const openSession = (id: string) => {
     const workspaceId = ws;
+    const request = detailRequests.current.begin();
     setError(null);
     api
       .session(id, workspaceId)
-      .then(({ meta, messages }) => setDetail({ meta, messages, workspaceId }))
-      .catch((e: unknown) => setError(String(e)));
+      .then(({ meta, messages }) => {
+        if (detailRequests.current.isCurrent(request)) setDetail({ meta, messages, workspaceId });
+      })
+      .catch((e: unknown) => {
+        if (detailRequests.current.isCurrent(request)) setError(String(e));
+      });
+  };
+
+  const closeDetail = () => {
+    detailRequests.current.invalidate();
+    setDetail(null);
   };
 
   /**
@@ -178,7 +191,7 @@ export function SessionsView() {
     return (
       <div className="flex h-full flex-col bg-surface">
         <header className="flex items-center gap-3 border-b border-subtle px-6 py-3">
-          <Button variant="ghost" size="sm" onClick={() => setDetail(null)}>
+          <Button variant="ghost" size="sm" onClick={closeDetail}>
             {t("sessions.backBtn")}
           </Button>
           <span className="font-mono text-xs text-tertiary">{detail.meta.id}</span>

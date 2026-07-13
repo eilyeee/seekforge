@@ -47,6 +47,7 @@ export type ConnectionDeps = {
   runLoop: RunLoopFn;
   resumeLoop: ResumeLoopFn;
   permissionTimeoutMs?: number;
+  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
 };
 
 type RunInput = {
@@ -117,6 +118,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame), () => {});
   };
   const fail = (code: string, message: string): void => send({ type: "error", code, message });
+  const launch = (operation: Promise<void>): void => {
+    const tracked = deps.trackOperation?.(operation) ?? operation;
+    void tracked.catch(() => {});
+  };
 
   // --- delta coalescing (see DELTA_FLUSH_MS) -------------------------------
   // At most one delta kind is buffered at a time; a coalesced frame is just a
@@ -392,7 +397,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
-        void run({ task, mode, approvalMode, plan, workspace: workspace.path, ...parsed });
+        launch(run({ task, mode, approvalMode, plan, workspace: workspace.path, ...parsed }));
         return;
       }
 
@@ -427,14 +432,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute). Approvals default to interactive
         // ("confirm") but the client may change them per follow-up message.
-        void run({
+        launch(run({
           task,
           mode: mode ?? meta.mode,
           approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
           resumeSessionId: sessionId,
           workspace: workspace.path,
           ...parsed,
-        });
+        }));
         return;
       }
 
@@ -469,14 +474,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if ("error" in parsedOverrides) return fail("bad_frame", `loop.${parsedOverrides.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
-        void loop({
+        launch(loop({
           workspace: workspace.path,
           task,
           verifyCommand,
           ...(maxIterations !== undefined ? { maxIterations } : {}),
           ...(budget !== undefined ? { budget } : {}),
           ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
-        });
+        }));
         return;
       }
 
@@ -504,13 +509,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if ("error" in parsedOverrides) return fail("bad_frame", `loop.resume.${parsedOverrides.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
-        void resumeLoop({
+        launch(resumeLoop({
           workspace: workspace.path,
           loopId,
           ...(addedIterations !== undefined ? { addedIterations } : {}),
           ...(addedBudget !== undefined ? { addedBudget } : {}),
           ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
-        });
+        }));
         return;
       }
 

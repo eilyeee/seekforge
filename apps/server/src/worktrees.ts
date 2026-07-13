@@ -31,6 +31,7 @@ import {
   type WorktreeMergeResult,
 } from "@seekforge/core";
 import type { Workspace, WorkspaceRegistry } from "./workspaces.js";
+import type { ServerCoordinator } from "./coordinator.js";
 
 // `worktreeSlug` now lives in core; re-export so existing importers keep working.
 export { worktreeSlug };
@@ -89,9 +90,6 @@ export type WorktreeStatus = {
 
 export class WorktreeManager {
   private readonly byId = new Map<string, WorktreeRecord>();
-  // Every operation that mutates one repository's worktree/branch metadata
-  // shares this lock: create, merge, and remove must not race in the base repo.
-  private readonly baseLocks = new Map<string, Promise<unknown>>();
   private readonly operationLocks = new Map<string, Promise<unknown>>();
   // Globally reserved slugs (the workspace id `wt-<slug>` is base-independent, so
   // per-base createLocks don't serialize two DIFFERENT bases creating the same
@@ -99,7 +97,10 @@ export class WorktreeManager {
   // can't pick the same id and orphan a worktree on the second register().
   private readonly reservedSlugs = new Set<string>();
 
-  constructor(private readonly registry: WorkspaceRegistry) {}
+  constructor(
+    private readonly registry: WorkspaceRegistry,
+    private readonly coordinator: ServerCoordinator,
+  ) {}
 
   get(id: string): WorktreeRecord | undefined {
     return this.byId.get(id);
@@ -110,7 +111,7 @@ export class WorktreeManager {
    * base workspace, then registers the checkout as workspace `wt-<slug>`.
    */
   create(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
-    return this.withLock(this.baseLocks, base.path, () =>
+    return this.coordinator.withRepository(base.path, () =>
       this.withWorkspaceGuards([base.path], base.id, () => this.createLocked(base, name)));
   }
 
@@ -162,16 +163,18 @@ export class WorktreeManager {
 
   /** Worktrees created from `base`, with live dirty/ahead git status. */
   async list(base: Workspace): Promise<WorktreeStatus[]> {
-    const records = [...this.byId.values()].filter((r) => r.baseId === base.id);
-    return Promise.all(
-      records.map(async (r) => ({
-        id: r.id,
-        branch: r.branch,
-        path: r.path,
-        dirty: await delegate(isWorktreeDirty(r.path)),
-        ahead: await delegate(worktreeAhead(r.basePath, r.branch)),
-      })),
-    );
+    return this.coordinator.withRepository(base.path, async () => {
+      const records = [...this.byId.values()].filter((r) => r.baseId === base.id);
+      return Promise.all(
+        records.map(async (r) => ({
+          id: r.id,
+          branch: r.branch,
+          path: r.path,
+          dirty: await delegate(isWorktreeDirty(r.path)),
+          ahead: await delegate(worktreeAhead(r.basePath, r.branch)),
+        })),
+      );
+    });
   }
 
   /**
@@ -184,7 +187,7 @@ export class WorktreeManager {
   async merge(id: string): Promise<MergeResult> {
     return this.withLock(this.operationLocks, id, async () => {
       const r = this.require(id);
-      return this.withLock(this.baseLocks, r.basePath, async () => {
+      return this.coordinator.withRepository(r.basePath, async () => {
         return this.withWorkspaceGuards(
           [r.basePath, r.path],
           r.id,
@@ -198,7 +201,7 @@ export class WorktreeManager {
   async remove(id: string): Promise<void> {
     await this.withLock(this.operationLocks, id, async () => {
       const r = this.require(id);
-      await this.withLock(this.baseLocks, r.basePath, () =>
+      await this.coordinator.withRepository(r.basePath, () =>
         this.withWorkspaceGuards([r.basePath, r.path], r.id, async () => {
           await delegate(removeWorktree(r.basePath, r.path, r.branch));
           this.registry.unregister(r.id);

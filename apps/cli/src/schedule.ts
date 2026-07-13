@@ -334,14 +334,16 @@ export function parseCron(spec: string): Cron | null {
   const dowRaw = parseCronField(fields[4]!, [0, 7]);
   if (!minute || !hour || !dom || !month || !dowRaw) return null;
   const dow = [...new Set(dowRaw.map((value) => (value === 7 ? 0 : value)))].sort((a, b) => a - b);
+  const coversRange = (values: CronField, [lo, hi]: readonly [number, number]): boolean =>
+    values.length === hi - lo + 1 && values.every((value, index) => value === lo + index);
   return {
     minute,
     hour,
     dom,
     month,
     dow,
-    domRestricted: fields[2] !== "*",
-    dowRestricted: fields[4] !== "*",
+    domRestricted: !coversRange(dom, CRON_RANGES.dom),
+    dowRestricted: !coversRange(dow, CRON_RANGES.dow),
   };
 }
 

@@ -232,9 +232,10 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 
 const OUTPUT_BYTE_CAP: usize = MAX_OUTPUT_CHARS * 4;
+pub(crate) const OUTPUT_CHANNEL_DEPTH: usize = 8;
 
 #[derive(Default)]
-struct BoundedOutput {
+pub(crate) struct BoundedOutput {
     head: Vec<u8>,
     tail: Vec<u8>,
     truncated: bool,
@@ -264,7 +265,7 @@ impl BoundedOutput {
         }
     }
 
-    fn finish(mut self) -> String {
+    pub(crate) fn finish(mut self) -> String {
         if !self.truncated {
             return String::from_utf8_lossy(&self.head).into_owned();
         }
@@ -279,7 +280,7 @@ impl BoundedOutput {
     }
 }
 
-fn read_chunks(mut r: impl Read, tx: SyncSender<Vec<u8>>) {
+pub(crate) fn read_chunks(mut r: impl Read, tx: SyncSender<Vec<u8>>) {
     let mut chunk = [0u8; 16_384];
     loop {
         let n = match r.read(&mut chunk) {
@@ -293,7 +294,7 @@ fn read_chunks(mut r: impl Read, tx: SyncSender<Vec<u8>>) {
     }
 }
 
-fn drain_output(rx: &Receiver<Vec<u8>>, output: &mut BoundedOutput) -> bool {
+pub(crate) fn drain_output(rx: &Receiver<Vec<u8>>, output: &mut BoundedOutput) -> bool {
     loop {
         match rx.try_recv() {
             Ok(chunk) => output.push(&chunk),
@@ -359,7 +360,6 @@ pub fn run_command_cancellable(
     // Bounded channels keep a flooding child from moving unbounded output into
     // memory. Reader threads may outlive this request only when a descendant
     // deliberately escapes the process group and retains a pipe forever.
-    const OUTPUT_CHANNEL_DEPTH: usize = 8;
     let (out_tx, out_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
     let (err_tx, err_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
     thread::spawn(move || {

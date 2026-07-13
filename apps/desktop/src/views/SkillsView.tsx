@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
@@ -15,6 +15,7 @@ import {
   type BadgeTone,
 } from "../components/ui";
 import type { Skill, SkillScope } from "../types";
+import { LatestRequest } from "./async-coordination";
 
 const SCOPE_TONE: Record<SkillScope, BadgeTone> = {
   builtin: "neutral",
@@ -58,6 +59,7 @@ export function SkillsView() {
   /** "new" / "import" form dialogs, and a pending delete confirmation. */
   const [dialog, setDialog] = useState<null | "new" | "import">(null);
   const [pendingDelete, setPendingDelete] = useState<Skill | null>(null);
+  const detailRequests = useRef(new LatestRequest());
   const ws = useStore((s) => s.activeWorkspaceId);
 
   const refresh = () =>
@@ -67,6 +69,7 @@ export function SkillsView() {
       .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
+    detailRequests.current.invalidate();
     setSkills(null);
     setDetail(null);
     setError(null);
@@ -79,11 +82,21 @@ export function SkillsView() {
   }, [ws]);
 
   const openSkill = (id: string) => {
+    const request = detailRequests.current.begin();
     setError(null);
     api
       .skill(id)
-      .then(setDetail)
-      .catch((e: unknown) => setError(String(e)));
+      .then((skill) => {
+        if (detailRequests.current.isCurrent(request)) setDetail(skill);
+      })
+      .catch((e: unknown) => {
+        if (detailRequests.current.isCurrent(request)) setError(String(e));
+      });
+  };
+
+  const closeDetail = () => {
+    detailRequests.current.invalidate();
+    setDetail(null);
   };
 
   const toggleEnabled = (skill: Skill) => {
@@ -130,7 +143,7 @@ export function SkillsView() {
     return (
       <div className="flex h-full flex-col">
         <header className="flex items-center gap-3 border-b border-subtle px-6 py-3">
-          <Button size="sm" onClick={() => setDetail(null)}>
+          <Button size="sm" onClick={closeDetail}>
             {t("skills.backBtn")}
           </Button>
           <span className="font-mono text-sm font-medium text-primary">{detail.id}</span>

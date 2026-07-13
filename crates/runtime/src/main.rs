@@ -74,11 +74,11 @@ fn dispatch(method: &str, params: Value, cancelled: &AtomicBool) -> RtResult<Val
         }
         "git_status" => {
             let p: protocol::GitStatusParams = parse_params(params)?;
-            git::git_status(&p.workspace)
+            git::git_status(&p.workspace, cancelled)
         }
         "git_diff" => {
             let p: protocol::GitDiffParams = parse_params(params)?;
-            git::git_diff(&p.workspace, p.staged)
+            git::git_diff(&p.workspace, p.staged, cancelled)
         }
         _ => Err(RtError::new(
             codes::UNKNOWN_METHOD,

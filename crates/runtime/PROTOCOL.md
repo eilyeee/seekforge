@@ -51,8 +51,8 @@ Unparseable request lines get a response with `"id": null`, code
 | write_file | path, content, overwrite? | `{path}` (exists && !overwrite → error `exists`) |
 | apply_patch | path, edits: [{oldString,newString}] | `{path, editsApplied}` (atomic; 0 matches → `no_match` with nearest-line hint in message; >1 → `ambiguous` with count) |
 | run_command | command, cwd?, timeoutMs? | `{exitCode, stdout, stderr, durationMs, timedOut}` (denylist re-check → `denied_dangerous`; stdout/stderr capped 20000 chars head+tail) |
-| git_status | – | `{output}` |
-| git_diff | staged? | `{output}` |
+| git_status | – | `{output}` (cancellable; 30-second internal deadline; output capped at 20000 chars head+tail) |
+| git_diff | staged? | `{output}` (cancellable; 30-second internal deadline; output capped at 20000 chars head+tail) |
 
 ## Sandbox rules (must match docs/06)
 

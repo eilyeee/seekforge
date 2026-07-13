@@ -6,6 +6,8 @@
  * composer; accepting the match is just setText(currentMatch(...)).
  */
 
+import { previousGraphemeBoundary } from "./editor.js";
+
 export type HistorySearch = {
   query: string;
   /** Indices into the entries array (newest-first order of matching), or empty. */
@@ -42,7 +44,7 @@ export function searchInput(s: HistorySearch, entries: readonly string[], char: 
 
 /** Drops the last query character and recomputes (widening); the cursor resets to the newest hit. */
 export function searchBackspace(s: HistorySearch, entries: readonly string[]): HistorySearch {
-  const query = s.query.slice(0, -1);
+  const query = s.query.slice(0, previousGraphemeBoundary(s.query, s.query.length));
   return { query, matches: computeMatches(query, entries), cursor: 0 };
 }
 

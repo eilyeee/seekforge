@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -11,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acquireSessionLease } from "@seekforge/core";
 import { clearFilesCacheForTests } from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
@@ -149,6 +151,11 @@ describe("GET /api/file", () => {
     const res = await authed("/api/file?path=.seekforge/config.json");
     expect(res.status).toBe(400);
   });
+
+  it("rejects a symlink leaf", async () => {
+    symlinkSync(join(workspace, "README.md"), join(workspace, "linked-readme.md"), "file");
+    expect((await authed("/api/file?path=linked-readme.md")).status).toBe(400);
+  });
 });
 
 describe("PUT /api/file", () => {
@@ -190,6 +197,34 @@ describe("PUT /api/file", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("rejects a symlink leaf without changing its target", async () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "seekforge-file-target-")), "target.txt");
+    writeFileSync(outside, "outside\n");
+    symlinkSync(outside, join(workspace, "write-link.txt"), "file");
+    const res = await authed("/api/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "write-link.txt", content: "changed\n" }),
+    });
+    expect(res.status).toBe(400);
+    expect(readFileSync(outside, "utf8")).toBe("outside\n");
+  });
+
+  it("rejects a replaced parent without writing through it", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-file-parent-"));
+    writeFileIn(workspace, "replace-parent/file.txt", "inside\n");
+    writeFileSync(join(outside, "file.txt"), "outside\n");
+    renameSync(join(workspace, "replace-parent"), join(workspace, "replace-parent-old"));
+    symlinkSync(outside, join(workspace, "replace-parent"), "dir");
+    const res = await authed("/api/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "replace-parent/file.txt", content: "changed\n" }),
+    });
+    expect(res.status).toBe(400);
+    expect(readFileSync(join(outside, "file.txt"), "utf8")).toBe("outside\n");
+  });
 });
 
 describe("GET /api/git/status", () => {
@@ -210,6 +245,29 @@ describe("GET /api/git/status", () => {
 });
 
 describe("git stage / unstage / commit", () => {
+  it("rejects every Git mutation while the workspace has an active session", async () => {
+    const lease = acquireSessionLease(workspace, "git-route-busy");
+    try {
+      const requests = [
+        ["/api/git/stage", { paths: ["src/app.ts"] }],
+        ["/api/git/unstage", { paths: ["src/new.ts"] }],
+        ["/api/git/discard", { paths: ["src/app.ts"] }],
+        ["/api/git/commit", { message: "blocked" }],
+      ] as const;
+      for (const [path, body] of requests) {
+        const res = await authed(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        expect(res.status).toBe(409);
+        expect((await jsonOf(res)).error.code).toBe("session_busy");
+      }
+    } finally {
+      lease.release();
+    }
+  });
+
   it("stages, then commits the staged changes", async () => {
     const stage = await authed("/api/git/stage", {
       method: "POST",
@@ -459,8 +517,17 @@ describe("GET /api/search", () => {
     const rx = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("f.o")}&regex=1`));
     expect(rx.hits.some((h: { path: string }) => h.path === "cs.txt")).toBe(true);
 
+    const ordinaryGroup = await jsonOf(
+      await authed(`/api/search?q=${encodeURIComponent("(?:f.o)+")}&regex=1`),
+    );
+    expect(ordinaryGroup.error).toBeUndefined();
+    expect(ordinaryGroup.hits.some((h: { path: string }) => h.path === "cs.txt")).toBe(true);
+
     const bad = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("(")}&regex=1`));
     expect(bad.error).toBe("invalid regex");
+
+    const unsafe = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("(a+)+$")}&regex=1`));
+    expect(unsafe.error).toBe("unsafe regex");
   });
 });
 

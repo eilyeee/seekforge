@@ -10,7 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { acquireSessionLease } from "@seekforge/core";
 import { worktreeSlug } from "../src/worktrees.js";
-import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
+import { ServerCoordinator } from "../src/coordinator.js";
+import { makeWorkspace, unusedAgentFactory, waitUntil } from "./helpers.js";
 
 // These tests drive real `git worktree` operations against tmp repos. Under the
 // full parallel `pnpm -r test` run, filesystem/git I/O contention can push a
@@ -181,6 +182,47 @@ describe("GET /api/worktrees", () => {
     gitIn(wt.path, "commit", "-m", "work");
     list = (await (await authed(base, "/api/worktrees")).json()) as typeof list;
     expect(list[0]).toMatchObject({ dirty: false, ahead: 1 });
+  });
+
+  it("serializes list with concurrent worktree removal", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const wt = await createWorktree(base, "list-remove-race");
+    const [list, removal] = await Promise.all([
+      authed(base, "/api/worktrees"),
+      authed(base, `/api/worktrees/${wt.id}`, { method: "DELETE" }),
+    ]);
+    expect(list.status).toBe(200);
+    expect(removal.status).toBe(200);
+    const body = await list.json() as Array<{ id: string }>;
+    expect(body.length === 0 || body.some((entry) => entry.id === wt.id)).toBe(true);
+  });
+});
+
+describe("repository coordination", () => {
+  it("uses one serialization domain for a base repo and its worktree", async () => {
+    const repo = makeGitRepo();
+    const base = await boot(repo);
+    const wt = await createWorktree(base, "coordinator-key");
+    const coordinator = new ServerCoordinator();
+    let firstStarted = false;
+    let secondStarted = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    const first = coordinator.withRepository(repo, async () => {
+      firstStarted = true;
+      await gate;
+    });
+    await waitUntil(() => firstStarted);
+    const second = coordinator.withRepository(wt.path, async () => {
+      secondStarted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(secondStarted).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(secondStarted).toBe(true);
   });
 });
 

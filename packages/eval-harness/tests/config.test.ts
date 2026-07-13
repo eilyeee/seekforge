@@ -32,6 +32,13 @@ describe("loadEvalConfig", () => {
     return dir;
   }
 
+  function projectWithRawConfig(config: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "eval-config-"));
+    mkdirSync(join(dir, ".seekforge"), { recursive: true });
+    writeFileSync(join(dir, ".seekforge", "config.json"), JSON.stringify(config));
+    return dir;
+  }
+
   it("a default (DeepSeek) config with both env keys set uses DEEPSEEK_API_KEY", () => {
     // No provider => default deepseek: the Ark key exported for another tool
     // must NOT be sent to the DeepSeek endpoint.
@@ -57,5 +64,24 @@ describe("loadEvalConfig", () => {
 
   it("reads the provider preset from config.json", () => {
     expect(loadEvalConfig(projectWithConfig({ provider: "ark" })).provider).toBe("ark");
+  });
+
+  it("ignores non-object and wrongly typed config values", () => {
+    const inherited = loadEvalConfig(projectWithConfig({}));
+    expect(loadEvalConfig(projectWithRawConfig(null))).toEqual(inherited);
+    expect(loadEvalConfig(projectWithConfig({ provider: 42, apiKey: ["not-a-key"] }))).toEqual(inherited);
+  });
+
+  it("keeps only finite non-negative model pricing entries", () => {
+    const config = loadEvalConfig(projectWithConfig({
+      modelPricing: {
+        valid: { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0, outputPer1M: 2 },
+        negative: { inputCacheMissPer1M: -1, inputCacheHitPer1M: 0, outputPer1M: 2 },
+        missing: { inputCacheMissPer1M: 1, outputPer1M: 2 },
+      },
+    }));
+    expect(config.modelPricing).toEqual({
+      valid: { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0, outputPer1M: 2 },
+    });
   });
 });

@@ -168,6 +168,41 @@ describe("background dispatch + agent_result", () => {
     expect(snap.result!.error!.message).toBe("dispatch aborted");
   });
 
+  it("keeps usage billed before a background dispatch is aborted", async () => {
+    const nestedBilled = deferred<void>();
+    let parentRequests = 0;
+    let nestedRequests = 0;
+    const provider = routedProvider(async (req) => {
+      if (isParentRequest(req)) {
+        parentRequests++;
+        if (parentRequests === 1) {
+          return toolCallsResponse(
+            toolCall("d1", "dispatch_agent", { agentId: "worker", task: "bill then hang", background: true }),
+          );
+        }
+        await nestedBilled.promise;
+        return response({ content: "done" });
+      }
+      nestedRequests++;
+      if (nestedRequests === 1) {
+        nestedBilled.resolve();
+        return toolCallsResponse(toolCall("n1", "read_file", { path: "a.ts" }));
+      }
+      return new Promise(() => {});
+    });
+
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher(),
+      confirm: async () => true,
+      subagents: [worker],
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const completed = events.find((event) => event.type === "session.completed");
+
+    expect(completed && completed.type === "session.completed" && completed.report.usage.promptTokens).toBe(30);
+  });
+
   it("read-only parent guard applies to background dispatches too", async () => {
     let parentRequests = 0;
     const provider = routedProvider(async () => {

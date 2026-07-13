@@ -104,7 +104,7 @@ import { runSession } from "./agent/run-session.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
 import { formatLoopEvent } from "./loop-format.js";
 import {
-  interruptRun,
+  cancelRun,
   ownsRun,
   releaseRun,
   reserveRun,
@@ -112,6 +112,7 @@ import {
   type RunEntry,
   type RunReservation,
 } from "./run-identity.js";
+import { composerDraftFor, saveComposerDraft, type ComposerDrafts } from "./composer-drafts.js";
 import {
   atTokenAt,
   backspace,
@@ -227,13 +228,16 @@ export function App({
   // so runs keep writing to their own tab after you switch away.
   const [tabsState, tabsDispatch] = useReducer(tabsReducer, undefined, () => initialTabs(initialModel));
   const state = activeChat(tabsState);
-  const activeIdRef = useRef(activeTabId(tabsState));
-  activeIdRef.current = activeTabId(tabsState);
+  const currentTabId = activeTabId(tabsState);
+  const activeIdRef = useRef(currentTabId);
+  activeIdRef.current = currentTabId;
   const dispatch = useCallback(
     (action: ChatAction) => tabsDispatch({ type: "chat", tabId: activeIdRef.current, action }),
     [],
   );
   const [editor, setEditor] = useState<EditorState>(emptyEditor());
+  const draftsRef = useRef<ComposerDrafts>(new Map());
+  const editorTabIdRef = useRef(activeTabId(tabsState));
   /** Hunk indices selected by the user for multi-hunk permission requests. */
   const [hunkSelection, setHunkSelection] = useState<number[]>([]);
 
@@ -586,11 +590,20 @@ export function App({
   const applyEditor = useCallback(
     (next: EditorState) => {
       completionRef.current = null; // any edit invalidates Tab-cycling
+      saveComposerDraft(draftsRef.current, activeIdRef.current, next);
       setEditor(next);
       syncOverlay(next);
     },
     [syncOverlay],
   );
+
+  useEffect(() => {
+    if (editorTabIdRef.current === currentTabId) return;
+    editorTabIdRef.current = currentTabId;
+    const next = composerDraftFor(draftsRef.current, currentTabId);
+    setEditor(next);
+    syncOverlay(next);
+  }, [currentTabId, syncOverlay]);
 
   // Derived overlay candidate lists (recomputed per render; lists are small).
   const paletteCommands = useMemo(() => {
@@ -616,7 +629,14 @@ export function App({
   const runTask = useCallback(
     async (
       task: string,
-      opts?: { mode?: "ask" | "edit"; plan?: boolean; echoUser?: boolean; reservation?: RunReservation },
+      opts?: {
+        mode?: "ask" | "edit";
+        plan?: boolean;
+        echoUser?: boolean;
+        reservation?: RunReservation;
+        model?: string;
+        approval?: ChatState["approval"];
+      },
     ) => {
       // The run belongs to the tab it started in: every dispatch below
       // routes there by ID, surviving tab switches.
@@ -650,6 +670,8 @@ export function App({
       // The session this run owns: detaching frees the UI's sessionId for a
       // fresh session, so the run must keep resolving its own.
       const ownSessionId = { current: tabChat().sessionId };
+      const runModel = opts?.model ?? tabChat().model;
+      const runApproval = opts?.approval ?? tabChat().approval;
       const startedAt = Date.now();
       const costBefore = tabChat().totalUsage.costUsd;
       if (opts?.echoUser !== false) dispatchTab({ type: "user", text: task });
@@ -675,12 +697,12 @@ export function App({
         }
         await runSession(task, controller.signal, {
           config: runConfigRef.current,
-          model: modelRef.current,
+          model: runModel,
           projectPath,
           mcpToolSpecs,
           mode: opts?.mode ?? "edit",
           plan: opts?.plan ?? false,
-          approvalMode: approvalModeFor(approvalRef.current),
+          approvalMode: approvalModeFor(runApproval),
           background: bgRef.current as BackgroundTasks,
           dispatch: (a: ChatAction) => {
             if (a.type === "event" && a.event.type === "session.created") ownSessionId.current = a.event.sessionId;
@@ -1776,6 +1798,9 @@ export function App({
               break;
             }
             const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId, action });
+            const sourceChat = tabsStateRef.current.tabs.find((tab) => tab.id === tabId)?.chat ?? stateRef.current;
+            const runModel = sourceChat.model;
+            const runApproval = sourceChat.approval;
             dispatchTab({ type: "user", text: command.raw });
             void (async () => {
               let transferred = false;
@@ -1789,7 +1814,12 @@ export function App({
                 );
                 if (!ownsRun(runsByTabRef.current, reservation) || reservation.controller.signal.aborted) return;
                 transferred = true;
-                void runTask(task, { echoUser: false, reservation });
+                void runTask(task, {
+                  echoUser: false,
+                  reservation,
+                  model: runModel,
+                  approval: runApproval,
+                });
               } catch (err) {
                 if (ownsRun(runsByTabRef.current, reservation) && !reservation.controller.signal.aborted) {
                   dispatchTab({
@@ -1971,20 +2001,19 @@ export function App({
   const handleCtrlC = useCallback(() => {
     if (controllerRef.current) {
       const tabId = activeIdRef.current;
-      const permission = pendingPermissionByTabRef.current.get(tabId);
-      if (permission) {
-        permission.resolve(false);
-        pendingPermissionByTabRef.current.delete(tabId);
+      const result = cancelRun(
+        runsByTabRef.current,
+        pendingPermissionByTabRef.current,
+        pendingQuestionByTabRef.current,
+        tabId,
+      );
+      if (result.permissionCancelled) {
         dispatch({ type: "permission-resolved" });
       }
-      const question = pendingQuestionByTabRef.current.get(tabId);
-      if (question) {
-        question.resolve("(no answer — the session was cancelled)");
-        pendingQuestionByTabRef.current.delete(tabId);
+      if (result.questionCancelled) {
         dispatch({ type: "overlay", overlay: null });
       }
-      const sigintCount = interruptRun(runsByTabRef.current, tabId);
-      if (sigintCount !== null && sigintCount >= 2) {
+      if (result.sigintCount !== null && result.sigintCount >= 2) {
         quit();
         return;
       }
@@ -2010,6 +2039,12 @@ export function App({
           max: Math.max(0, stateRef.current.items.length - VIEW_ITEMS),
         });
       }
+      return;
+    }
+
+    // This precedes modal prompt routing so cancellation also aborts the run.
+    if (stroke.ctrl && stroke.input === "c") {
+      handleCtrlC();
       return;
     }
 
@@ -2139,12 +2174,6 @@ export function App({
       } else {
         notice("plan kept; the session continues — refine it or /new");
       }
-      return;
-    }
-
-    // 3. Ctrl+C everywhere.
-    if (stroke.ctrl && stroke.input === "c") {
-      handleCtrlC();
       return;
     }
 

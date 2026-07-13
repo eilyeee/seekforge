@@ -7,6 +7,8 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   constants,
+  fstatSync,
+  ftruncateSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -14,8 +16,10 @@ import {
   readSync,
   realpathSync,
   statSync,
+  writeSync,
   writeFileSync,
   type Dirent,
+  type Stats,
 } from "node:fs";
 import { open, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -154,6 +158,69 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type RegexGroup = { quantified: boolean; alternation: boolean };
+
+/** Reject regex shapes whose backtracking can grow exponentially. */
+function isConservativeRegex(pattern: string): boolean {
+  const groups: RegexGroup[] = [{ quantified: false, alternation: false }];
+  let escaped = false;
+  let inClass = false;
+  let previousGroup: RegexGroup | undefined;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (escaped) {
+      if (/[1-9]/.test(ch)) return false;
+      escaped = false;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "(") {
+      groups.push({ quantified: false, alternation: false });
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === ")") {
+      if (groups.length > 1) {
+        previousGroup = groups.pop();
+        const parent = groups[groups.length - 1]!;
+        parent.quantified ||= previousGroup!.quantified;
+        parent.alternation ||= previousGroup!.alternation;
+      }
+      continue;
+    }
+    if (ch === "|") {
+      groups[groups.length - 1]!.alternation = true;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "?" && pattern[i - 1] === "(") continue; // Group prefix: (?:...), (?=...), etc.
+    const brace = ch === "{" ? /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(i))?.[0] : undefined;
+    const quantified = ch === "*" || ch === "+" || ch === "?" || brace !== undefined;
+    if (quantified) {
+      if (previousGroup?.quantified || previousGroup?.alternation) return false;
+      groups[groups.length - 1]!.quantified = true;
+      previousGroup = undefined;
+      if (brace !== undefined) i += brace.length - 1;
+      continue;
+    }
+    previousGroup = undefined;
+  }
+  return true;
+}
+
 /**
  * Content search across the workspace (the @-picker's ignore-aware file set):
  * literal or regex, case-insensitive by default. Records the first non-empty
@@ -161,7 +228,8 @@ function escapeRegExp(s: string): string {
  * file size (checked via stat before reading), total hits, and a wall-clock
  * budget — and reads asynchronously, yielding to the event loop so a big search
  * never blocks other requests. Regex mode skips very long lines and is
- * time-boxed as a pragmatic ReDoS guard. An invalid regex returns `error`.
+ * conservatively validated before execution to reject backtracking-heavy
+ * constructs. An invalid or unsafe regex returns `error`.
  */
 export async function searchWorkspaceContent(
   root: string,
@@ -171,6 +239,9 @@ export async function searchWorkspaceContent(
   if (q === "") return { hits: [], truncated: false };
   const limit = opts.limit ?? SEARCH_MAX_HITS;
   const flags = opts.caseSensitive ? "" : "i";
+  if (opts.regex && !isConservativeRegex(q)) {
+    return { hits: [], truncated: false, error: "unsafe regex" };
+  }
   let re: RegExp;
   try {
     re = new RegExp(opts.regex ? q : escapeRegExp(q), flags);
@@ -396,13 +467,17 @@ function resolveBrowsePath(workspace: string, rel: string): string {
   if (typeof rel !== "string" || rel.includes("\0")) {
     throw new FileBrowseError(400, "bad_request", "invalid path");
   }
-  let resolved: string;
+  let physical: string;
   try {
-    resolved = resolveInsideWorkspace(workspace, rel);
+    physical = resolveInsideWorkspace(workspace, rel);
   } catch {
     throw new FileBrowseError(400, "bad_request", "path escapes the workspace");
   }
   const wsReal = realpathSync(resolve(workspace));
+  const resolved = resolve(wsReal, rel);
+  if (physical !== resolved) {
+    throw new FileBrowseError(400, "bad_request", "path contains a symbolic link");
+  }
   const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
   // Reject .git anywhere in the path, denylisted directory names, and
   // sensitive basenames (.env, *.key, *.pem, ...).
@@ -469,18 +544,6 @@ export function listTree(workspace: string, rel: string): Tree {
   return { path: relRoot, entries: [...dirs, ...files] };
 }
 
-/** Reads at most `max` leading bytes of a file without loading the rest. */
-function readPrefix(filePath: string, max: number): Buffer {
-  const fd = openSync(filePath, "r");
-  try {
-    const buf = Buffer.allocUnsafe(max);
-    const bytesRead = readSync(fd, buf, 0, max, 0);
-    return buf.subarray(0, bytesRead);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 /** Heuristic: a NUL byte in the leading bytes marks the file as binary. */
 function looksBinary(buf: Buffer): boolean {
   const sample = buf.subarray(0, Math.min(buf.length, 8000));
@@ -489,32 +552,87 @@ function looksBinary(buf: Buffer): boolean {
 
 export type FileView = { path: string; content: string; truncated: boolean };
 
+function sameFile(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function verifyOpenedPath(
+  path: string,
+  parentFd: number,
+  fileFd: number,
+): Stats {
+  const parent = dirname(path);
+  let parentPathStat: Stats;
+  let filePathStat: Stats;
+  try {
+    if (realpathSync(parent) !== parent || realpathSync(path) !== path) throw new Error("swapped path");
+    parentPathStat = statSync(parent);
+    filePathStat = statSync(path);
+  } catch {
+    throw new FileBrowseError(400, "bad_request", "file path changed while opening");
+  }
+  const fileStat = fstatSync(fileFd);
+  if (!sameFile(fstatSync(parentFd), parentPathStat) || !sameFile(fileStat, filePathStat)) {
+    throw new FileBrowseError(400, "bad_request", "file path changed while opening");
+  }
+  return fileStat;
+}
+
+function openVerifiedFile(
+  path: string,
+  flags: number,
+): { parentFd: number; fileFd: number; stat: Stats } {
+  let parentFd: number | undefined;
+  let fileFd: number | undefined;
+  try {
+    parentFd = openSync(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    fileFd = openSync(path, flags | constants.O_NOFOLLOW);
+    const stat = verifyOpenedPath(path, parentFd, fileFd);
+    return { parentFd, fileFd, stat };
+  } catch (err) {
+    if (fileFd !== undefined) closeSync(fileFd);
+    if (parentFd !== undefined) closeSync(parentFd);
+    throw err;
+  }
+}
+
 /**
  * Reads a text file for the viewer/editor. Rejects denylisted/binary files
  * with a 400. Content is capped at ~1 MB (truncated:true past the cap).
  */
 export function readTextFile(workspace: string, rel: string): FileView {
   const resolved = resolveBrowsePath(workspace, rel);
-  let stat: ReturnType<typeof statSync>;
+  let opened: ReturnType<typeof openVerifiedFile>;
   try {
-    stat = statSync(resolved);
-  } catch {
+    opened = openVerifiedFile(resolved, constants.O_RDONLY);
+  } catch (err) {
+    if (err instanceof FileBrowseError) throw err;
     throw new FileBrowseError(404, "not_found", "file not found");
   }
-  if (!stat.isFile()) {
-    throw new FileBrowseError(400, "bad_request", "path is not a file");
+  try {
+    if (!opened.stat.isFile()) {
+      throw new FileBrowseError(400, "bad_request", "path is not a file");
+    }
+    const truncated = opened.stat.size > MAX_FILE_BYTES;
+    const length = Math.min(opened.stat.size, MAX_FILE_BYTES);
+    const buf = Buffer.allocUnsafe(length);
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const read = readSync(opened.fileFd, buf, bytesRead, length - bytesRead, bytesRead);
+      if (read === 0) break;
+      bytesRead += read;
+    }
+    const content = buf.subarray(0, bytesRead);
+    if (looksBinary(content)) {
+      throw new FileBrowseError(400, "bad_request", "file is binary, not text");
+    }
+    const wsReal = realpathSync(resolve(workspace));
+    const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
+    return { path: relPosix, content: content.toString("utf8"), truncated };
+  } finally {
+    closeSync(opened.fileFd);
+    closeSync(opened.parentFd);
   }
-  // Size-gate BEFORE reading so a multi-hundred-MB file can't be slurped whole
-  // into memory (per request) only to be truncated afterward — read at most the
-  // cap. The binary probe only needs the leading bytes, so a prefix suffices.
-  const truncated = stat.size > MAX_FILE_BYTES;
-  const buf = truncated ? readPrefix(resolved, MAX_FILE_BYTES) : readFileSync(resolved);
-  if (looksBinary(buf)) {
-    throw new FileBrowseError(400, "bad_request", "file is binary, not text");
-  }
-  const wsReal = realpathSync(resolve(workspace));
-  const relPosix = relative(wsReal, resolved).split(/[/\\]/).join("/");
-  return { path: relPosix, content: buf.toString("utf8"), truncated };
 }
 
 /**
@@ -529,5 +647,27 @@ export function writeTextFile(workspace: string, rel: string, content: string): 
     throw new FileBrowseError(400, "bad_request", "invalid file path");
   }
   mkdirSync(dirname(resolved), { recursive: true });
-  writeFileSync(resolved, content, "utf8");
+  let opened: ReturnType<typeof openVerifiedFile>;
+  try {
+    opened = openVerifiedFile(resolved, constants.O_WRONLY | constants.O_CREAT);
+  } catch (err) {
+    if (err instanceof FileBrowseError) throw err;
+    throw new FileBrowseError(400, "bad_request", "file not writable");
+  }
+  try {
+    if (!opened.stat.isFile()) {
+      throw new FileBrowseError(400, "bad_request", "path is not a file");
+    }
+    const data = Buffer.from(content, "utf8");
+    ftruncateSync(opened.fileFd, 0);
+    let offset = 0;
+    while (offset < data.length) {
+      const written = writeSync(opened.fileFd, data, offset, data.length - offset, offset);
+      if (written === 0) throw new FileBrowseError(500, "write_failed", "file write made no progress");
+      offset += written;
+    }
+  } finally {
+    closeSync(opened.fileFd);
+    closeSync(opened.parentFd);
+  }
 }

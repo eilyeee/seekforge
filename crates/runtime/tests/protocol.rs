@@ -1,6 +1,8 @@
 //! Integration tests: spawn the real binary and talk JSONL over stdio.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -59,6 +61,18 @@ impl Runtime {
         let mut response = String::new();
         self.reader.read_line(&mut response).unwrap();
         serde_json::from_str(&response).expect("response must be JSON")
+    }
+
+    fn read_response_timeout(&mut self, timeout: Duration) -> Value {
+        let mut pollfd = libc::pollfd {
+            fd: self.reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        assert_eq!(ready, 1, "runtime response timed out after {timeout:?}");
+        self.read_response()
     }
 }
 
@@ -228,6 +242,102 @@ fn cancellation_interrupts_output_drain_after_the_shell_exits() {
         started.elapsed() < Duration::from_secs(3),
         "cancellation waited for the command deadline"
     );
+}
+
+fn git_ok(workspace: &TempWorkspace, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(&workspace.0)
+        .status()
+        .expect("run git fixture command");
+    assert!(status.success(), "git fixture command failed: {args:?}");
+}
+
+fn wait_for_pid(path: &std::path::Path, description: &str) -> libc::pid_t {
+    for _ in 0..300 {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            if let Ok(pid) = contents.trim().parse() {
+                return pid;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{description} did not report a pid at {}", path.display());
+}
+
+#[test]
+fn cancellation_interrupts_slow_git_diff_and_escaped_pipe_holder() {
+    if Command::new("perl")
+        .arg("-e")
+        .arg("exit 0")
+        .status()
+        .is_err()
+    {
+        return;
+    }
+
+    let ws = TempWorkspace::new("git-cancel");
+    git_ok(&ws, &["init", "-q"]);
+    std::fs::write(ws.0.join(".gitattributes"), "*.slow diff=slow\n").unwrap();
+    std::fs::write(ws.0.join("tracked.slow"), "before\n").unwrap();
+    git_ok(&ws, &["add", ".gitattributes", "tracked.slow"]);
+    git_ok(
+        &ws,
+        &[
+            "-c",
+            "user.name=SeekForge Test",
+            "-c",
+            "user.email=seekforge@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    );
+
+    let textconv = ws.0.join("slow-textconv.sh");
+    std::fs::write(
+        &textconv,
+        r#"#!/bin/sh
+echo $$ > textconv.pid
+perl -MPOSIX -e 'if (fork() == 0) { POSIX::setsid(); open(F, ">escaped.pid") or die $!; print F $$; close F; sleep 10; exit 0 }'
+sleep 10
+cat "$1"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&textconv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git_ok(&ws, &["config", "diff.slow.textconv", "./slow-textconv.sh"]);
+    std::fs::write(ws.0.join("tracked.slow"), "after\n").unwrap();
+
+    let mut rt = Runtime::spawn();
+    rt.send("slow-git", "git_diff", json!({ "workspace": ws.path() }));
+
+    let textconv_pid_path = ws.0.join("textconv.pid");
+    let escaped_pid_path = ws.0.join("escaped.pid");
+    let _textconv_pid = wait_for_pid(&textconv_pid_path, "textconv");
+    let escaped_pid = wait_for_pid(&escaped_pid_path, "escaped pipe holder");
+
+    let started = Instant::now();
+    writeln!(
+        rt.stdin,
+        "{}",
+        json!({ "method": "cancel", "params": { "id": "slow-git" } })
+    )
+    .unwrap();
+    rt.stdin.flush().unwrap();
+
+    let response = rt.read_response_timeout(Duration::from_secs(3));
+    unsafe {
+        libc::kill(escaped_pid, libc::SIGKILL);
+    }
+    assert_err(&response, "slow-git", "cancelled");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "Git cancellation waited for an escaped pipe holder"
+    );
+
+    rt.send("after-git-cancel", "ping", json!({}));
+    assert_ok(&rt.read_response(), "after-git-cancel");
 }
 
 #[test]

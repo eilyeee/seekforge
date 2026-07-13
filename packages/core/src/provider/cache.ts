@@ -17,6 +17,37 @@ type CacheEntry = {
   response: ChatResponse;
 };
 
+const FINISH_REASONS = new Set(["stop", "tool_calls", "length", "other"]);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isTokenCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const isFiniteNonnegative = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+function parseChatResponse(value: unknown): ChatResponse | null {
+  if (!isRecord(value) || typeof value["content"] !== "string") return null;
+  const toolCalls = value["toolCalls"];
+  if (!Array.isArray(toolCalls) || !toolCalls.every((call) =>
+    isRecord(call) && typeof call["id"] === "string" && call["id"].length > 0 &&
+    typeof call["name"] === "string" && call["name"].length > 0 &&
+    typeof call["argumentsJson"] === "string")) {
+    return null;
+  }
+  const usage = value["usage"];
+  if (!isRecord(usage) ||
+      !["promptTokens", "completionTokens", "cacheHitTokens"].every((key) => isTokenCount(usage[key])) ||
+      !isFiniteNonnegative(usage["costUsd"]) ||
+      (usage["cacheHitTokens"] as number) > (usage["promptTokens"] as number)) {
+    return null;
+  }
+  if (typeof value["finishReason"] !== "string" || !FINISH_REASONS.has(value["finishReason"]) ||
+      (value["reasoningContent"] !== undefined && typeof value["reasoningContent"] !== "string")) {
+    return null;
+  }
+  return value as ChatResponse;
+}
+
 /** Cache key: content hash over everything that determines the reply. */
 function cacheKey(model: string, req: ChatRequest): string {
   return crypto
@@ -69,10 +100,10 @@ export function wrapProviderWithCache(
   function read(key: string): ChatResponse | null {
     try {
       const raw = fs.readFileSync(path.join(dir, `${key}.json`), "utf8");
-      const entry = JSON.parse(raw) as Partial<CacheEntry>;
-      if (typeof entry.ts !== "number" || !Number.isFinite(entry.ts) || entry.response === undefined) return null;
-      if (Date.now() - entry.ts > ttlMs) return null;
-      return entry.response;
+      const entry = JSON.parse(raw) as unknown;
+      if (!isRecord(entry) || typeof entry["ts"] !== "number" || !Number.isFinite(entry["ts"])) return null;
+      if (Date.now() - entry["ts"] > ttlMs) return null;
+      return parseChatResponse(entry["response"]);
     } catch {
       return null; // missing or corrupt entry = miss
     }

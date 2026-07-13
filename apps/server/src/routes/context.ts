@@ -11,6 +11,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CreateAgentFn } from "../agent.js";
+import type { ServerCoordinator } from "../coordinator.js";
 import type { Workspace, WorkspaceRegistry } from "../workspaces.js";
 import type { WorktreeManager } from "../worktrees.js";
 import type { TriggerRunHandle } from "../trigger-run.js";
@@ -18,6 +19,7 @@ import type { TriggerRunHandle } from "../trigger-run.js";
 export type RestContext = {
   registry: WorkspaceRegistry;
   worktrees: WorktreeManager;
+  coordinator: ServerCoordinator;
   version: string;
   /**
    * Agent factory used by the webhook trigger endpoint to start a headless,

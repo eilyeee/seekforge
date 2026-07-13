@@ -26,9 +26,41 @@ export type EvalConfig = {
   modelPricing?: Record<string, ModelPricing>;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readModelPricing(value: unknown): Record<string, ModelPricing> | undefined {
+  if (!isRecord(value)) return undefined;
+  const pricing: Record<string, ModelPricing> = {};
+  for (const [model, candidate] of Object.entries(value)) {
+    if (!isRecord(candidate)) continue;
+    const inputCacheMissPer1M = candidate["inputCacheMissPer1M"];
+    const inputCacheHitPer1M = candidate["inputCacheHitPer1M"];
+    const outputPer1M = candidate["outputPer1M"];
+    if (
+      typeof inputCacheMissPer1M !== "number" || !Number.isFinite(inputCacheMissPer1M) || inputCacheMissPer1M < 0 ||
+      typeof inputCacheHitPer1M !== "number" || !Number.isFinite(inputCacheHitPer1M) || inputCacheHitPer1M < 0 ||
+      typeof outputPer1M !== "number" || !Number.isFinite(outputPer1M) || outputPer1M < 0
+    ) {
+      continue;
+    }
+    pricing[model] = { inputCacheMissPer1M, inputCacheHitPer1M, outputPer1M };
+  }
+  return Object.keys(pricing).length > 0 ? pricing : undefined;
+}
+
 function readJson(path: string): EvalConfig {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as EvalConfig;
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(parsed)) return {};
+    const result: EvalConfig = {};
+    for (const key of ["apiKey", "model", "baseUrl", "provider"] as const) {
+      if (typeof parsed[key] === "string") result[key] = parsed[key];
+    }
+    const modelPricing = readModelPricing(parsed["modelPricing"]);
+    if (modelPricing) result.modelPricing = modelPricing;
+    return result;
   } catch {
     return {};
   }

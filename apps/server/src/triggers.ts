@@ -201,6 +201,20 @@ function sanitizeField(s: string): string {
   return cleaned.length <= FIELD_CAP ? cleaned : `${cleaned.slice(0, FIELD_CAP)}…`;
 }
 
+/** Encode attacker-controlled text for the XML-like untrusted-data fence. */
+function encodeFenceText(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function encodedField(s: string): string {
+  return encodeFenceText(sanitizeField(s));
+}
+
 /**
  * Distils an incoming webhook JSON body into a short, bounded text summary to
  * append to the trigger's task. Recognises a few common GitHub webhook fields
@@ -213,7 +227,7 @@ export function payloadToTaskSuffix(payload: unknown): string {
   const root = asObject(payload);
   if (!root) {
     // A primitive or array body: include a short stringification.
-    return cap(`Triggering event payload: ${JSON.stringify(payload)}`);
+    return cap(`Triggering event payload: ${encodeFenceText(JSON.stringify(payload) ?? String(payload))}`);
   }
   // Every recognized string field is attacker-controlled (it comes straight from
   // the webhook body), so each is sanitized to a single inert line before it
@@ -221,35 +235,35 @@ export function payloadToTaskSuffix(payload: unknown): string {
   // buildTriggerTask so the model treats it as data, not instructions.
   const parts: string[] = [];
   const action = str(root, "action");
-  if (action) parts.push(`action=${sanitizeField(action)}`);
+  if (action) parts.push(`action=${encodedField(action)}`);
   const repo = asObject(root["repository"]);
   const repoName = repo ? str(repo, "full_name") : undefined;
-  if (repoName) parts.push(`repo=${sanitizeField(repoName)}`);
+  if (repoName) parts.push(`repo=${encodedField(repoName)}`);
   const ref = str(root, "ref");
-  if (ref) parts.push(`ref=${sanitizeField(ref)}`);
+  if (ref) parts.push(`ref=${encodedField(ref)}`);
   const pr = asObject(root["pull_request"]);
   if (pr) {
-    if (typeof pr["number"] === "number") parts.push(`pr=#${pr["number"] as number}`);
+    if (typeof pr["number"] === "number") parts.push(`pr=#${encodeFenceText(String(pr["number"]))}`);
     const title = str(pr, "title");
-    if (title) parts.push(`title=${JSON.stringify(sanitizeField(title))}`);
+    if (title) parts.push(`title=&quot;${encodedField(title)}&quot;`);
   }
   const issue = asObject(root["issue"]);
   if (issue) {
-    if (typeof issue["number"] === "number") parts.push(`issue=#${issue["number"] as number}`);
+    if (typeof issue["number"] === "number") parts.push(`issue=#${encodeFenceText(String(issue["number"]))}`);
     const title = str(issue, "title");
-    if (title) parts.push(`title=${JSON.stringify(sanitizeField(title))}`);
+    if (title) parts.push(`title=&quot;${encodedField(title)}&quot;`);
   }
   const sender = asObject(root["sender"]);
   const login = sender ? str(sender, "login") : undefined;
-  if (login) parts.push(`sender=${sanitizeField(login)}`);
+  if (login) parts.push(`sender=${encodedField(login)}`);
   const commit = asObject(root["head_commit"]);
   const commitMsg = commit ? str(commit, "message") : undefined;
-  if (commitMsg) parts.push(`commit=${JSON.stringify(sanitizeField(commitMsg))}`);
+  if (commitMsg) parts.push(`commit=&quot;${encodedField(commitMsg)}&quot;`);
 
   if (parts.length > 0) return cap(`Triggering event: ${parts.join(", ")}`);
   const keys = Object.keys(root).slice(0, 20);
   if (keys.length === 0) return "";
-  return cap(`Triggering event payload keys: ${keys.join(", ")}`);
+  return cap(`Triggering event payload keys: ${keys.map(encodedField).join(", ")}`);
 }
 
 /** Composes the final task: the trigger prompt plus any payload summary. */

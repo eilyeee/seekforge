@@ -115,6 +115,14 @@ test("cron dom/dow use OR semantics when both are restricted", () => {
   assert.equal(cronMatches("0 0 13 * 5", aFriday), true);
   assert.equal(cronMatches("0 0 13 * 5", neither), false);
 });
+test("cron treats wildcard-equivalent day steps as unrestricted", () => {
+  const mondayNot13th = new Date(2024, 0, 1, 0, 0);
+  const saturday13th = new Date(2024, 3, 13, 0, 0);
+  assert.equal(cronMatches("0 0 */1 * 5", mondayNot13th), false);
+  assert.equal(cronMatches("0 0 */1 * 5", new Date(2024, 0, 5, 0, 0)), true);
+  assert.equal(cronMatches("0 0 13 * */1", mondayNot13th), false);
+  assert.equal(cronMatches("0 0 13 * */1", saturday13th), true);
+});
 
 // --- isValidSchedule --------------------------------------------------------
 test("isValidSchedule accepts intervals and cron, rejects junk", () => {

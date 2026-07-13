@@ -114,6 +114,15 @@ describe("searchBackspace", () => {
   });
 });
 
+it("removes one complete grapheme from the reverse-search query", () => {
+  const entries = ["prefix e\u0301", "prefix 👨‍👩‍👧‍👦"];
+  const family = type(startSearch(), entries, "👨‍👩‍👧‍👦");
+  expect(searchBackspace(family, entries).query).toBe("");
+
+  const combining = type(startSearch(), entries, "e\u0301");
+  expect(searchBackspace(combining, entries).query).toBe("");
+});
+
 describe("multiline entries", () => {
   const multi = ["first line\nsecond line", "plain"] as const;
 

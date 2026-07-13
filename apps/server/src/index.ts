@@ -17,6 +17,7 @@ import { createWorkspaceRegistry } from "./workspaces.js";
 import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
 import type { TriggerRunHandle } from "./trigger-run.js";
+import { ServerCoordinator } from "./coordinator.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
@@ -69,7 +70,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw new Error("startServer requires `workspaces` or `workspace`");
   }
   const registry = createWorkspaceRegistry(paths);
-  const worktrees = new WorktreeManager(registry);
+  const coordinator = new ServerCoordinator();
+  const worktrees = new WorktreeManager(registry, coordinator);
   const token = opts.token ?? randomBytes(24).toString("base64url");
   const createAgent = opts.createAgent ?? createDefaultAgent;
   const runLoop = opts.runLoop ?? runDefaultLoop;
@@ -89,13 +91,21 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       if (!isAuthorized(req, token) && !isGitHubTriggerRequest(req, url)) {
         return sendApiError(res, 401, "unauthorized", "missing or invalid token");
       }
-      handleApi(req, res, url, { registry, worktrees, version, createAgent, triggerRuns }).catch((e: unknown) => {
+      const operation = handleApi(req, res, url, {
+        registry,
+        worktrees,
+        coordinator,
+        version,
+        createAgent,
+        triggerRuns,
+      }).catch((e: unknown) => {
         // Defense-in-depth: handleApi answers its own errors, but never leave a
         // request hanging on an unexpected rejection.
         if (!res.headersSent) {
           sendApiError(res, 500, "internal_error", e instanceof Error ? e.message : String(e));
         }
       });
+      void coordinator.track(operation);
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -117,7 +127,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, { registry, createAgent, runLoop, resumeLoop }));
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, {
+      registry,
+      createAgent,
+      runLoop,
+      resumeLoop,
+      trackOperation: (operation) => coordinator.track(operation),
+    }));
   });
 
   await new Promise<void>((resolveListen, rejectListen) => {
@@ -133,17 +149,23 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   }
   port = address.port;
 
-  const close = async (): Promise<void> => {
-    for (const run of triggerRuns) run.abort();
-    const closing = new Promise<void>((resolveClose, rejectClose) => {
-      // Terminating sockets triggers their close handlers -> running sessions abort.
-      for (const client of wss.clients) client.terminate();
-      wss.close();
-      server.close((err) => (err ? rejectClose(err) : resolveClose()));
-      server.closeAllConnections();
-    });
-    await Promise.allSettled([...triggerRuns].map((run) => run.completion));
-    await closing;
+  let closePromise: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closePromise ??= (async () => {
+      for (const run of triggerRuns) run.abort();
+      const closing = new Promise<void>((resolveClose, rejectClose) => {
+        // Terminating sockets triggers their close handlers, which abort active
+        // runs. Those run promises are tracked by the coordinator and drained.
+        for (const client of wss.clients) client.terminate();
+        wss.close();
+        server.close((err) => (err ? rejectClose(err) : resolveClose()));
+        server.closeAllConnections();
+      });
+      await Promise.allSettled([...triggerRuns].map((run) => run.completion));
+      await coordinator.drain();
+      await closing;
+    })();
+    return closePromise;
   };
 
   return { port, token, close };

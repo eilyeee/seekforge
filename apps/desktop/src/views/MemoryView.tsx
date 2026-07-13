@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
@@ -23,6 +23,7 @@ import type {
   MemoryResponse,
   MemoryStats,
 } from "../types";
+import { createSerialQueue, LatestRequest } from "./async-coordination";
 
 const TYPE_TONE: Record<MemoryCandidate["type"], BadgeTone> = {
   command: "warn",
@@ -49,6 +50,16 @@ function relativeAge(t: T, iso: string): string {
   return t("memory.factAgeMonths", { count: Math.floor(days / 30) });
 }
 
+function sameFact(left: MemoryFact, right: MemoryFact): boolean {
+  return (
+    left.content === right.content &&
+    left.type === right.type &&
+    left.addedAt === right.addedAt &&
+    left.uses === right.uses &&
+    left.lastUsedAt === right.lastUsedAt
+  );
+}
+
 export function MemoryView() {
   const t = useT();
   const [memory, setMemory] = useState<MemoryResponse | null>(null);
@@ -59,6 +70,9 @@ export function MemoryView() {
   const [scope, setScope] = useState<"project" | "user">("project");
   const [filter, setFilter] = useState("");
   const ws = useStore((s) => s.activeWorkspaceId);
+  const memoryRequests = useRef(new LatestRequest());
+  const serverMemoryRef = useRef<{ workspaceId: string; value: MemoryResponse } | null>(null);
+  const enqueueDelete = useRef(createSerialQueue()).current;
 
   const loadStats = () =>
     api
@@ -67,22 +81,38 @@ export function MemoryView() {
       .catch(() => setStats(null));
 
   useEffect(() => {
+    const request = memoryRequests.current.begin();
+    serverMemoryRef.current = null;
     setMemory(null);
     setStats(null);
     setError(null);
     api
       .memory()
-      .then(setMemory)
-      .catch((e: unknown) => setError(String(e)));
+      .then((value) => {
+        if (!memoryRequests.current.isCurrent(request)) return;
+        serverMemoryRef.current = { workspaceId: ws, value };
+        setMemory(value);
+      })
+      .catch((e: unknown) => {
+        if (memoryRequests.current.isCurrent(request)) setError(String(e));
+      });
     void loadStats();
   }, [ws]);
 
   const refresh = () => {
+    const workspaceId = ws;
+    const request = memoryRequests.current.begin();
     void loadStats();
     return api
       .memory()
-      .then(setMemory)
-      .catch((e: unknown) => setError(String(e)));
+      .then((value) => {
+        if (!memoryRequests.current.isCurrent(request)) return;
+        serverMemoryRef.current = { workspaceId, value };
+        setMemory(value);
+      })
+      .catch((e: unknown) => {
+        if (memoryRequests.current.isCurrent(request)) setError(String(e));
+      });
   };
 
   const act = (id: string, action: "approve" | "reject") => {
@@ -102,17 +132,25 @@ export function MemoryView() {
   };
 
   const deleteFact = (fact: MemoryFact) => {
-    if (!memory) return;
-    const previous = memory;
-    // Optimistic removal; reload (re-numbers indexes) on success, roll back on failure.
-    setMemory({ ...memory, facts: memory.facts.filter((f) => f.index !== fact.index) });
-    api
-      .memoryDeleteFact({ index: fact.index })
-      .then(refresh)
-      .catch((e: unknown) => {
-        setError(String(e));
-        setMemory(previous);
-      });
+    const workspaceId = ws;
+    setMemory((current) =>
+      current ? { ...current, facts: current.facts.filter((item) => !sameFact(item, fact)) } : current,
+    );
+    void enqueueDelete(async () => {
+      if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+      const snapshot = serverMemoryRef.current;
+      if (!snapshot || snapshot.workspaceId !== workspaceId) return;
+      const currentFact = snapshot.value.facts.find((item) => sameFact(item, fact));
+      if (!currentFact) return;
+      try {
+        // Content matching is stable across index renumbering, including
+        // changes made by another client. Ambiguous duplicates fail closed.
+        await api.memoryDeleteFact({ match: currentFact.content });
+      } catch (e) {
+        if (useStore.getState().activeWorkspaceId === workspaceId) setError(String(e));
+      }
+      if (useStore.getState().activeWorkspaceId === workspaceId) await refresh();
+    });
   };
 
   const addFact = (content: string, type: MemoryCandidateType): Promise<void> =>

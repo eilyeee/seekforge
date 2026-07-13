@@ -73,7 +73,7 @@ export function snapToBoundary(text: string, pos: number): number {
   return previous;
 }
 
-function previousBoundary(text: string, pos: number): number {
+export function previousGraphemeBoundary(text: string, pos: number): number {
   const current = snapToBoundary(text, pos);
   let previous = 0;
   for (const boundary of graphemeBoundaries(text)) {
@@ -90,7 +90,7 @@ function nextBoundary(text: string, pos: number): number {
 
 export function backspace(s: EditorState): EditorState {
   if (s.cursor === 0) return s;
-  const target = previousBoundary(s.text, s.cursor);
+  const target = previousGraphemeBoundary(s.text, s.cursor);
   return {
     text: s.text.slice(0, target) + s.text.slice(s.cursor),
     cursor: target,
@@ -107,7 +107,7 @@ export function deleteForward(s: EditorState): EditorState {
 }
 
 export function moveLeft(s: EditorState): EditorState {
-  return { text: s.text, cursor: previousBoundary(s.text, s.cursor) };
+  return { text: s.text, cursor: previousGraphemeBoundary(s.text, s.cursor) };
 }
 
 export function moveRight(s: EditorState): EditorState {

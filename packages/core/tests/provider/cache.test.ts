@@ -124,6 +124,27 @@ describe("wrapProviderWithCache", () => {
     expect(inner.chats).toBe(2);
   });
 
+  it.each([
+    ["scalar response", null],
+    ["missing response fields", { content: "poisoned" }],
+    ["malformed tool call", { ...response("poisoned"), toolCalls: [{}] }],
+    ["empty tool name", { ...response("poisoned"), toolCalls: [{ id: "c1", name: "", argumentsJson: "{}" }] }],
+    ["invalid finish reason", { ...response("poisoned"), finishReason: "bogus" }],
+    ["negative usage", { ...response("poisoned"), usage: { ...USAGE, costUsd: -1 } }],
+    ["fractional token usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1.5 } }],
+    ["impossible cache usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1, cacheHitTokens: 2 } }],
+    ["non-finite usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1e999 } }],
+  ])("ignores cached %s", async (_label, poisoned) => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    await cached.chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    writeFileSync(file, JSON.stringify({ ts: Date.now(), response: poisoned }));
+
+    expect((await cached.chat(req("hello"))).content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+  });
+
   it("never caches chatStream — always passes through with live deltas", async () => {
     const inner = countingProvider();
     const cached = wrapProviderWithCache(inner, dir);

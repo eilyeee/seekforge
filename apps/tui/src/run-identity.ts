@@ -35,6 +35,28 @@ export function interruptRun(runs: Map<number, RunEntry>, tabId: number): number
   return entry.sigintCount;
 }
 
+type CancellablePermission = { runId: number; resolve: (result: false) => void };
+type CancellableQuestion = { runId: number; resolve: (answer: string) => void };
+
+export function cancelRun(
+  runs: Map<number, RunEntry>,
+  permissions: Map<number, CancellablePermission>,
+  questions: Map<number, CancellableQuestion>,
+  tabId: number,
+): { sigintCount: number | null; permissionCancelled: boolean; questionCancelled: boolean } {
+  const run = runs.get(tabId);
+  if (!run) return { sigintCount: null, permissionCancelled: false, questionCancelled: false };
+  const permission = takeRunOwned(permissions, tabId, run.runId);
+  const question = takeRunOwned(questions, tabId, run.runId);
+  permission?.resolve(false);
+  question?.resolve("(no answer — the session was cancelled)");
+  return {
+    sigintCount: interruptRun(runs, tabId),
+    permissionCancelled: permission !== null,
+    questionCancelled: question !== null,
+  };
+}
+
 export function takeRunOwned<T extends { runId: number }>(
   entries: Map<number, T>,
   tabId: number,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
@@ -17,6 +17,7 @@ import {
   type BadgeTone,
 } from "../components/ui";
 import type { AgentInfo, AgentScope } from "../types";
+import { LatestRequest } from "./async-coordination";
 
 const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
   builtin: "neutral",
@@ -51,6 +52,7 @@ export function AgentsView() {
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const detailRequests = useRef(new LatestRequest());
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
   const composeInChat = useStore((s) => s.composeInChat);
@@ -62,6 +64,7 @@ export function AgentsView() {
       .catch((e: unknown) => setError(String(e)));
 
   useEffect(() => {
+    detailRequests.current.invalidate();
     setAgents(null);
     setDetail(null);
     setError(null);
@@ -73,11 +76,21 @@ export function AgentsView() {
   }, [ws]);
 
   const openAgent = (id: string) => {
+    const request = detailRequests.current.begin();
     setError(null);
     api
       .agent(id)
-      .then(setDetail)
-      .catch((e: unknown) => setError(String(e)));
+      .then((agent) => {
+        if (detailRequests.current.isCurrent(request)) setDetail(agent);
+      })
+      .catch((e: unknown) => {
+        if (detailRequests.current.isCurrent(request)) setError(String(e));
+      });
+  };
+
+  const closeDetail = () => {
+    detailRequests.current.invalidate();
+    setDetail(null);
   };
 
   // "Ask": seed the chat composer with a delegation prompt for this subagent
@@ -101,7 +114,7 @@ export function AgentsView() {
     return (
       <div className="flex h-full flex-col bg-surface">
         <header className="flex items-center gap-3 border-b border-subtle px-6 py-3">
-          <Button size="sm" onClick={() => setDetail(null)}>
+          <Button size="sm" onClick={closeDetail}>
             {t("agents.backBtn")}
           </Button>
           <h1 className="text-sm font-semibold text-primary">{detail.name}</h1>
@@ -140,7 +153,7 @@ export function AgentsView() {
                 <IconSparkle size={14} />
                 {t("agents.askBtn")}
               </Button>
-              <Button size="sm" onClick={() => setDetail(null)}>
+              <Button size="sm" onClick={closeDetail}>
                 {t("agents.backBtn")}
               </Button>
             </div>

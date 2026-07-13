@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve as resolvePath, sep } from "node:path";
 import { promisify } from "node:util";
+import { acquireWorkspaceSessionGuard, SessionBusyError } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
 
@@ -148,7 +149,32 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   return ctx.res.headersSent;
 }
 
-async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Promise<void> {
+async function runGitMutation(
+  ctx: RouteCtx,
+  operation: () => Promise<void>,
+): Promise<void> {
+  try {
+    await ctx.rest.coordinator.withRepository(ctx.workspace, async () => {
+      const guard = acquireWorkspaceSessionGuard(ctx.workspace);
+      try {
+        await operation();
+      } finally {
+        guard.release();
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof SessionBusyError)) throw error;
+    sendApiError(
+      ctx.res,
+      409,
+      "session_busy",
+      "cannot modify Git state while the workspace has an active session",
+    );
+  }
+}
+
+async function routes(ctx: RouteCtx): Promise<void> {
+  const { req, res, url, method, segs, workspace } = ctx;
   const path = url.pathname;
 
   if (method === "GET" && path === "/api/diff") {
@@ -175,63 +201,63 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 400, "bad_request", "body must be {paths: non-empty string[]}");
     }
     const relPaths = paths as string[];
-    try {
-      if (action === "stage") {
-        await execFileAsync("git", [LITERAL_PATHSPECS, "add", "--", ...relPaths], GIT_EXEC(workspace));
-      } else if (action === "unstage") {
-        await execFileAsync(
-          "git",
-          [LITERAL_PATHSPECS, "restore", "--staged", "--", ...relPaths],
-          GIT_EXEC(workspace),
-        );
-      } else {
-        // discard: tracked changes via `git restore`; untracked files removed.
-        // Determine which of the given paths are untracked, then handle both.
-        const { stdout } = await execFileAsync(
-          "git",
-          // core.quotepath=false: don't octal-escape non-ASCII filenames, so
-          // the untracked-path match below works for e.g. Chinese names.
-          [
-            LITERAL_PATHSPECS,
-            "-c",
-            "core.quotepath=false",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--",
-            ...relPaths,
-          ],
-          GIT_EXEC(workspace),
-        );
-        const untracked = new Set<string>();
-        for (const record of stdout.split("\0")) {
-          if (record.startsWith("?? ")) untracked.add(record.slice(3));
-        }
-        const tracked = relPaths.filter((p) => !untracked.has(p));
-        if (tracked.length > 0) {
+    return runGitMutation(ctx, async () => {
+      try {
+        if (action === "stage") {
+          await execFileAsync("git", [LITERAL_PATHSPECS, "add", "--", ...relPaths], GIT_EXEC(workspace));
+        } else if (action === "unstage") {
           await execFileAsync(
             "git",
-            [LITERAL_PATHSPECS, "restore", "--", ...tracked],
+            [LITERAL_PATHSPECS, "restore", "--staged", "--", ...relPaths],
             GIT_EXEC(workspace),
           );
-        }
-        for (const p of relPaths) {
-          if (!untracked.has(p)) continue;
-          // Only remove a file that resolves inside the workspace (no traversal).
-          const resolved = resolvePath(workspace, p);
-          const wsResolved = resolvePath(workspace);
-          if (resolved === wsResolved || !resolved.startsWith(wsResolved + sep)) {
-            return sendApiError(res, 400, "bad_request", `path escapes the workspace: ${p}`);
+        } else {
+          // discard: tracked changes via `git restore`; untracked files removed.
+          // Determine which of the given paths are untracked, then handle both.
+          const { stdout } = await execFileAsync(
+            "git",
+            [
+              LITERAL_PATHSPECS,
+              "-c",
+              "core.quotepath=false",
+              "status",
+              "--porcelain=v1",
+              "-z",
+              "--",
+              ...relPaths,
+            ],
+            GIT_EXEC(workspace),
+          );
+          const untracked = new Set<string>();
+          for (const record of stdout.split("\0")) {
+            if (record.startsWith("?? ")) untracked.add(record.slice(3));
           }
-          rmSync(resolved, { force: true, recursive: true });
+          const tracked = relPaths.filter((p) => !untracked.has(p));
+          if (tracked.length > 0) {
+            await execFileAsync(
+              "git",
+              [LITERAL_PATHSPECS, "restore", "--", ...tracked],
+              GIT_EXEC(workspace),
+            );
+          }
+          for (const p of relPaths) {
+            if (!untracked.has(p)) continue;
+            const resolved = resolvePath(workspace, p);
+            const wsResolved = resolvePath(workspace);
+            if (resolved === wsResolved || !resolved.startsWith(wsResolved + sep)) {
+              sendApiError(res, 400, "bad_request", `path escapes the workspace: ${p}`);
+              return;
+            }
+            rmSync(resolved, { force: true, recursive: true });
+          }
         }
+        sendJson(res, 200, { ok: true });
+      } catch (err) {
+        const e = err as { stderr?: string; message?: string };
+        const stderr = e.stderr ?? e.message ?? "";
+        sendApiError(res, 400, "bad_request", `git ${action} failed: ${stderr.slice(0, 500)}`);
       }
-      return sendJson(res, 200, { ok: true });
-    } catch (err) {
-      const e = err as { stderr?: string; message?: string };
-      const stderr = e.stderr ?? e.message ?? "";
-      return sendApiError(res, 400, "bad_request", `git ${action} failed: ${stderr.slice(0, 500)}`);
-    }
+    });
   }
 
   if (method === "POST" && path === "/api/git/commit") {
@@ -241,23 +267,25 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (typeof msg !== "string" || msg.trim() === "") {
       return sendApiError(res, 400, "bad_request", "commit message must be a non-empty string");
     }
-    // Refuse to commit when nothing is staged (git would error anyway, but a
-    // clear 400 is friendlier than a raw git failure).
-    const status = await gitStatus(workspace);
-    if (status.notGit) {
-      return sendApiError(res, 400, "bad_request", "not a git repository");
-    }
-    if (!status.files.some((f) => f.staged)) {
-      return sendApiError(res, 400, "bad_request", "nothing staged to commit");
-    }
-    try {
-      await execFileAsync("git", ["commit", "-m", msg], GIT_EXEC(workspace));
-      const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], GIT_EXEC(workspace));
-      return sendJson(res, 200, { ok: true, commit: stdout.trim() });
-    } catch (err) {
-      const e = err as { stderr?: string; message?: string };
-      const stderr = e.stderr ?? e.message ?? "";
-      return sendApiError(res, 400, "bad_request", `git commit failed: ${stderr.slice(0, 500)}`);
-    }
+    return runGitMutation(ctx, async () => {
+      const status = await gitStatus(workspace);
+      if (status.notGit) {
+        sendApiError(res, 400, "bad_request", "not a git repository");
+        return;
+      }
+      if (!status.files.some((f) => f.staged)) {
+        sendApiError(res, 400, "bad_request", "nothing staged to commit");
+        return;
+      }
+      try {
+        await execFileAsync("git", ["commit", "-m", msg], GIT_EXEC(workspace));
+        const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], GIT_EXEC(workspace));
+        sendJson(res, 200, { ok: true, commit: stdout.trim() });
+      } catch (err) {
+        const e = err as { stderr?: string; message?: string };
+        const stderr = e.stderr ?? e.message ?? "";
+        sendApiError(res, 400, "bad_request", `git commit failed: ${stderr.slice(0, 500)}`);
+      }
+    });
   }
 }
