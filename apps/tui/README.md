@@ -29,7 +29,11 @@ CLI).
   PageUp/PageDown scroll the managed viewport; Esc jumps back to latest.
 - **Composer**: multiline (trailing `\` or Ctrl+J inserts a newline), ↑/↓
   history persisted across sessions, Ctrl+U clears, Ctrl+G (or `/editor`)
-  edits the draft in `$EDITOR`. Typing `/` opens the command palette; typing
+  edits the draft in `$VISUAL`, then `$EDITOR`, falling back to `vi`. Editor
+  values may include quoted paths and arguments (for example
+  `EDITOR='code --wait'`); they are parsed into argv without invoking a shell.
+  The same editor resolution is used by `/memory edit` and `/config edit`.
+  Typing `/` opens the command palette; typing
   `@` opens a fuzzy, frecency-ranked file picker (the picked file's contents
   are inlined on send); `# <fact>` saves to project memory; `!cmd` runs a
   local shell command directly (no agent, output inline).
@@ -75,7 +79,8 @@ CLI).
 `/help` `/new` `/clear` `/sessions` (picker; `f` forks) `/resume <id>` `/fork`
 `/plan <task>` `/approve [auto|confirm|plan]` `/rewind [yes]` `/backtrack`
 `/diff` `/review` `/model` (picker) `/think [on|off|high|max]`
-`/remember <fact>` `/memory [edit]` `/todo [add|done|rm]` `/add-dir [path]`
+`/remember <fact>` `/memory [edit]` `/config [edit]`
+`/todo [add|done|rm]` `/add-dir [path]`
 `/tasks [kill <id>]` `/agents` `/skills` `/mcp` (incl. resources) `/init`
 `/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
 `/export [path]` `/copy` `/editor` `/quit` — plus custom commands from

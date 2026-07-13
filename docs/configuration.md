@@ -16,6 +16,13 @@ Both are plain JSON. `seekforge config set` writes with `0o600` permissions
 alongside the session traces, memory, and skills that SeekForge manages under
 `.seekforge/`.
 
+Each config file must contain a JSON object. Valid JSON scalars and arrays such
+as `null`, `42`, or `[]` are invalid config layers: SeekForge ignores that layer
+instead of crashing, and `seekforge doctor` / TUI `/doctor` reports its path.
+Wrong container shapes for `permissionRules`, `mcpServers`, and `hooks` are also
+ignored; malformed permission-rule and hook entries are filtered, while valid
+values from lower-precedence layers remain effective.
+
 ---
 
 ## Config keys
@@ -127,6 +134,12 @@ Settable via `config set`? **Yes**.
 Array of command prefixes that are allowed to auto-run without confirmation
 (beyond the built-in safe commands). A common use is allowing `pnpm test` or
 `cargo build` so the agent runs them without prompting.
+
+The prefix applies to one shell invocation only. Unquoted shell control syntax
+(`;`, `&&`, `||`, pipes, redirects, newlines, backticks, or `$()`) disables
+automatic approval for the entire command, even when its first command matches
+this list. SeekForge then uses the normal confirmation flow and displays the raw
+command.
 
 ```json
 { "commandAllowlist": ["pnpm test", "cargo build", "npm run"] }
@@ -321,6 +334,10 @@ turn** and feeds the real result back: a passing run is accepted, a failing run
 continues with the captured output so the agent fixes the actual cause. The
 check fires at most once per run.
 
+Only a foreground invocation that exits with code `0` satisfies this gate. A
+background command or a completed command with a non-zero exit code does not
+count as verification.
+
 ```json
 { "verifyCommand": "pnpm test" }
 ```
@@ -354,6 +371,9 @@ but not run it since the last edit**. By default (`autoLint`, below) the loop
 passing run is accepted, a failing run continues with the captured lint output so
 the agent fixes the reported issues. Fires at most once per run, and re-fires only
 after a *new* edit (same gating as verify).
+
+As with verification, only a foreground command that exits `0` satisfies the
+lint gate.
 
 ```json
 { "lintCommand": "pnpm lint" }
@@ -719,6 +739,9 @@ Three fields merge across layers rather than replace:
 | `mcpServers` | Per-server key merge: `{ ...global, ...project, ...settings }`. Later layers override individual server entries but keep servers from earlier layers that aren't redefined. |
 | `permissionRules` | Concatenated: `[...settings, ...project, ...global]`. First match wins per action category, so settings-layer rules take highest file-layer precedence. |
 | `hooks` | Per-stage concatenation for every stage: global → project → settings. No stage is dropped when only some stages are configured in a given layer. |
+
+If a higher layer supplies the wrong runtime shape for one of these fields, that
+value is ignored rather than replacing a valid lower-layer value.
 
 ---
 

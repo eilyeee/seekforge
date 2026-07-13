@@ -61,6 +61,12 @@ Commands are whitespace-normalized on both sides before matching, so extra
 spaces cannot slip a command past a rule (`permissions.ts::normalizeWhitespace`,
 `permissions.ts:92`; classifier normalizes identically, see §3).
 
+For `run_command`, matching a prefix is still insufficient when the submitted
+string contains unquoted shell control syntax. Compound commands, pipelines,
+redirects, command substitutions, and multiline shell programs never use an
+allow rule, configured allowlist, or remembered session approval; they return to
+the normal raw-command confirmation path.
+
 ---
 
 ## 2. The user sees the raw command / path — never a model paraphrase
@@ -100,8 +106,8 @@ Shell commands are classified deterministically before they can run, in
   (`run-command.ts:279`, `classifyGit` `:216`, `classifyGh` `:164`).
 - **Allowlist (L2 auto-run)** — a small built-in set (`pwd`, `ls`, `rg`, test /
   build runners) plus any user-added prefixes, prefix-matched on a token
-  boundary (`run-command.ts::BUILTIN_COMMAND_ALLOWLIST` `:52`, `matchesPrefix`
-  `:90`).
+  boundary. This path is available only when the quote-aware shell scanner finds
+  no active control operator or redirection (`run-command.ts::hasShellControlSyntax`).
 - **Everything else defaults to `execute`** — confirm and surface the raw
   command (`run-command.ts:310`). Unknown `git`/`gh` subcommands default to the
   safe side, not auto-run.
