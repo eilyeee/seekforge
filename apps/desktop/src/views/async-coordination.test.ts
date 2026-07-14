@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSerialQueue, LatestRequest } from "./async-coordination";
+import { createSerialQueue, LatestRequest, WorkspaceAsyncCoordinator } from "./async-coordination";
 
 describe("LatestRequest", () => {
   it("rejects stale selections and closed details", () => {
@@ -27,6 +27,44 @@ describe("LatestRequest", () => {
     requests.begin();
 
     expect(requests.isCurrent(save)).toBe(false);
+  });
+});
+
+describe("WorkspaceAsyncCoordinator", () => {
+  it("rejects an old workspace response after the active workspace changes", () => {
+    let activeWorkspace = "workspace-a";
+    const coordinator = new WorkspaceAsyncCoordinator("workspace-a", () => activeWorkspace);
+    const load = coordinator.beginLatest();
+    expect(load).not.toBeNull();
+
+    activeWorkspace = "workspace-b";
+
+    expect(coordinator.isCurrent(load!)).toBe(false);
+    expect(coordinator.beginLatest("workspace-a")).toBeNull();
+  });
+
+  it("invalidates captured mutations when the bound workspace changes", () => {
+    let activeWorkspace = "workspace-a";
+    const coordinator = new WorkspaceAsyncCoordinator("workspace-a", () => activeWorkspace);
+    const mutation = coordinator.capture();
+    expect(mutation).not.toBeNull();
+
+    activeWorkspace = "workspace-b";
+    coordinator.setWorkspace("workspace-b");
+
+    expect(coordinator.isCurrent(mutation!)).toBe(false);
+    expect(coordinator.capture()).not.toBeNull();
+  });
+
+  it("keeps mutations current across newer requests in the same workspace", () => {
+    const coordinator = new WorkspaceAsyncCoordinator("workspace-a", () => "workspace-a");
+    const mutation = coordinator.capture();
+    const firstLoad = coordinator.beginLatest();
+    const secondLoad = coordinator.beginLatest();
+
+    expect(coordinator.isCurrent(mutation!)).toBe(true);
+    expect(coordinator.isCurrent(firstLoad!)).toBe(false);
+    expect(coordinator.isCurrent(secondLoad!)).toBe(true);
   });
 });
 

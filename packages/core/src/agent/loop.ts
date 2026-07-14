@@ -19,7 +19,6 @@ import {
   acquireLspServerLease,
   createBackgroundTasks,
   digestCommandOutput,
-  commandInvokes,
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
   truncateHeadTail,
@@ -55,6 +54,15 @@ import {
   shrinkToolResultsToFit,
 } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
+import {
+  ZERO_USAGE,
+  addUsage,
+  canonicalArgs,
+  classifyAutoGateResult,
+  commandResultSatisfiesGate,
+  selectAutoGate,
+  subtractUsage,
+} from "./loop-logic.js";
 import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepo } from "./repo-map.js";
 import type { PlanItem } from "../tools/builtins/plan.js";
 import { buildHookContext, runHooks, type HookConfig, type HookOutcome } from "../hooks/index.js";
@@ -294,29 +302,6 @@ function buildReflectionNudge(): string {
   );
 }
 
-/** Recursively sorts object keys so equal args produce an equal signature. */
-function sortKeys(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortKeys);
-  if (v && typeof v === "object") {
-    return Object.fromEntries(
-      Object.keys(v as Record<string, unknown>)
-        .sort()
-        .map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]),
-    );
-  }
-  return v;
-}
-
-/** Order-independent canonical form of a tool call's arguments JSON. */
-function canonicalArgs(argumentsJson: string | undefined): string {
-  if (!argumentsJson) return "";
-  try {
-    return JSON.stringify(sortKeys(JSON.parse(argumentsJson)));
-  } catch {
-    return argumentsJson;
-  }
-}
-
 /**
  * Max command.output events forwarded per tool call. A chatty command keeps
  * running and its full (truncated) output still lands in the tool result;
@@ -324,26 +309,6 @@ function canonicalArgs(argumentsJson: string | undefined): string {
  * one noisy server cannot flood the transcript.
  */
 const MAX_STREAMED_CHUNKS_PER_CALL = 200;
-
-const ZERO_USAGE: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
-
-function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    promptTokens: a.promptTokens + b.promptTokens,
-    completionTokens: a.completionTokens + b.completionTokens,
-    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
-    costUsd: a.costUsd + b.costUsd,
-  };
-}
-
-function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    promptTokens: a.promptTokens - b.promptTokens,
-    completionTokens: a.completionTokens - b.completionTokens,
-    cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
-    costUsd: a.costUsd - b.costUsd,
-  };
-}
 
 function toolResultForModel(result: ToolResult, maxChars: number): string {
   const payload = result.ok
@@ -1210,86 +1175,35 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               // nudges — the stored session keeps one user message per run.
               if (res.content) messages.push({ role: "assistant", content: res.content });
 
-              // #2 Auto-verify: rather than only asking the model to run the
-              // verify command, run it HERE and feed the real result back —
-              // a pass is acknowledged, a failure continues with the captured
-              // output so the model fixes the actual cause. Degrades to the
-              // nudge if the command cannot be run.
-              const vc = deps.verifyCommand?.trim();
-              if (nudge.kind === "verify" && deps.autoVerify !== false && vc) {
-                yield emit({ type: "notice", level: "info", message: `Auto-verifying changes: ${vc}` });
-                let followup: string;
+              // Auto verify/lint executes at the same orchestration point as
+              // the nudge and feeds the classified result back transiently.
+              const autoGate = selectAutoGate(nudge.kind, {
+                verifyCommand: deps.verifyCommand,
+                lintCommand: deps.lintCommand,
+                autoVerify: deps.autoVerify !== false,
+                autoLint: deps.autoLint !== false,
+              });
+              if (autoGate) {
+                yield emit({ type: "notice", level: "info", message: autoGate.notice });
+                let gateResult;
                 try {
-                  const r = await runShellCommand(vc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
+                  const r = await runShellCommand(autoGate.command, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
                     sandbox: deps.sandbox,
                     workspace: input.projectPath,
                     signal: input.signal,
                   });
-                  const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
-                  if (r.exitCode === 0) {
-                    verifyRanSinceEdit = true;
-                    followup =
-                      `[harness] Auto-verify \`${vc}\` PASSED (exit 0). If the task is fully complete, ` +
-                      "finish now; otherwise keep working.";
-                  } else {
-                    // Verify ran (and failed) since the last edit — record that
-                    // so the gate stays quiet until the model edits again, but
-                    // lift the once-guard so any FIX it makes is re-verified
-                    // rather than shipped unchecked. A finish with no new edit
-                    // is accepted (verifyRanSinceEdit stays true → no re-fire),
-                    // so this can't spin on an unfixable failure.
-                    verifyRanSinceEdit = true;
-                    finalizeFired.delete("verify");
-                    followup =
-                      `[harness] Auto-verify \`${vc}\` FAILED (exit ${r.exitCode}). Output:\n${output}\n` +
-                      "Diagnose and fix the cause, then finish — do not claim success until it passes.";
-                  }
-                } catch (err) {
-                  followup =
-                    `[harness] Auto-verify \`${vc}\` could not run (${err instanceof Error ? err.message : String(err)}). ` +
-                    "Run it yourself with run_command, fix any failures, then finish.";
-                }
-                messages.push({ role: "user", content: followup });
-                continue;
-              }
-
-              // #2b Auto-lint: parallel to auto-verify. Run the lint command
-              // here and feed the real result back — a pass is acknowledged, a
-              // failure continues with the captured output so the model fixes
-              // it. Degrades to the nudge if it cannot run.
-              const lc = deps.lintCommand?.trim();
-              if (nudge.kind === "lint" && deps.autoLint !== false && lc) {
-                yield emit({ type: "notice", level: "info", message: `Auto-linting changes: ${lc}` });
-                let followup: string;
-                try {
-                  const r = await runShellCommand(lc, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
-                    sandbox: deps.sandbox,
-                    workspace: input.projectPath,
-                    signal: input.signal,
+                  gateResult = classifyAutoGateResult(autoGate, {
+                    exitCode: r.exitCode,
+                    output: digestCommandOutput(`${r.stdout}${r.stderr}`, 4000),
                   });
-                  const output = digestCommandOutput(`${r.stdout}${r.stderr}`, 4000);
-                  if (r.exitCode === 0) {
-                    lintRanSinceEdit = true;
-                    followup =
-                      `[harness] Auto-lint \`${lc}\` PASSED (exit 0). If the task is fully complete, ` +
-                      "finish now; otherwise keep working.";
-                  } else {
-                    // Same as verify: record it ran (stay quiet until the next
-                    // edit) but lift the once-guard so a FIX is re-linted; a
-                    // finish with no new edit is accepted (no re-fire), so this
-                    // cannot spin on an unfixable lint failure.
-                    lintRanSinceEdit = true;
-                    finalizeFired.delete("lint");
-                    followup =
-                      `[harness] Auto-lint \`${lc}\` FAILED (exit ${r.exitCode}). Output:\n${output}\n` +
-                      "Fix the reported lint issues, then finish — do not claim success until it passes.";
-                  }
-                } catch (err) {
-                  followup =
-                    `[harness] Auto-lint \`${lc}\` could not run (${err instanceof Error ? err.message : String(err)}). ` +
-                    "Run it yourself with run_command, fix any failures, then finish.";
+                } catch (error) {
+                  gateResult = classifyAutoGateResult(autoGate, { error });
                 }
-                messages.push({ role: "user", content: followup });
+                if (autoGate.kind === "verify") verifyRanSinceEdit = gateResult.ranSinceEdit;
+                else lintRanSinceEdit = gateResult.ranSinceEdit;
+                // A failed check may run again only after a subsequent edit.
+                if (gateResult.retryAfterEdit) finalizeFired.delete(autoGate.kind);
+                messages.push({ role: "user", content: gateResult.followup });
                 continue;
               }
 
@@ -1453,13 +1367,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
             if (tc.name === "run_command" && result.meta?.command) {
               commandsRun.push(result.meta.command);
-              const exitCode = (result.data as { exitCode?: unknown } | undefined)?.exitCode;
-              const foregroundPass = result.ok && exitCode === 0;
               // Only a successful foreground invocation satisfies either gate.
-              const vc = deps.verifyCommand?.trim();
-              if (foregroundPass && vc && commandInvokes(result.meta.command, vc)) verifyRanSinceEdit = true;
-              const lc = deps.lintCommand?.trim();
-              if (foregroundPass && lc && commandInvokes(result.meta.command, lc)) lintRanSinceEdit = true;
+              if (commandResultSatisfiesGate(result, deps.verifyCommand)) verifyRanSinceEdit = true;
+              if (commandResultSatisfiesGate(result, deps.lintCommand)) lintRanSinceEdit = true;
             }
             // Track the latest published plan for the finalize completeness check
             // AND persist it to the session so it survives across resume (#2).

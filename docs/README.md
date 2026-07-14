@@ -51,6 +51,8 @@ and quick start; this folder holds the reference docs.
   [TUI README](../apps/tui/README.md#custom-commands).
 
 ## Maintaining quality
+- [Architecture](architecture.md) — package responsibilities, dependency
+  direction, state ownership, internal module boundaries, and change placement.
 - [Evals & the regression gate](EVALS.md) — the deterministic CI gate, running
   evals, the baseline convention, and `--fail-on-regression`.
 - [Releasing](RELEASING.md) — the DMG checklist, clean-machine verification

@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, EmptyState, IconGit, TextArea, type BadgeTone } from "../components/ui";
 import type { GitFile, GitFileStatus, GitStatus } from "../types";
-import { LatestRequest } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const STATUS_TONE: Record<GitFileStatus, BadgeTone> = {
   modified: "warn",
@@ -26,27 +26,24 @@ export function GitView() {
   const [committing, setCommitting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
-  const requests = useRef(new LatestRequest());
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const refresh = (workspaceId = ws) => {
-    if (useStore.getState().activeWorkspaceId !== workspaceId) return Promise.resolve();
-    const request = requests.current.begin();
+    const request = requests.beginLatest(workspaceId);
+    if (!request) return Promise.resolve();
     return api
       .gitStatus()
       .then((s) => {
-        if (!requests.current.isCurrent(request) || useStore.getState().activeWorkspaceId !== workspaceId) return;
+        if (!requests.isCurrent(request)) return;
         setStatus(s);
         setError(null);
       })
       .catch((e: unknown) => {
-        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === workspaceId) {
-          setError(String(e));
-        }
+        if (requests.isCurrent(request)) setError(String(e));
       });
   };
 
   useEffect(() => {
-    requests.current.invalidate();
     setStatus(null);
     setError(null);
     setNote(null);
@@ -59,16 +56,17 @@ export function GitView() {
 
   const mutate = (fn: () => Promise<unknown>) => {
     const workspaceId = ws;
-    if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+    const mutation = requests.capture(workspaceId);
+    if (!mutation) return;
     setBusy(true);
     setNote(null);
     fn()
       .then(() => refresh(workspaceId))
       .catch((e: unknown) => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setError(String(e));
+        if (requests.isCurrent(mutation)) setError(String(e));
       })
       .finally(() => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setBusy(false);
+        if (requests.isCurrent(mutation)) setBusy(false);
       });
   };
 
@@ -84,24 +82,25 @@ export function GitView() {
     const msg = message.trim();
     if (msg === "") return;
     const workspaceId = ws;
-    if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+    const mutation = requests.capture(workspaceId);
+    if (!mutation) return;
     setCommitting(true);
     setNote(null);
     api
       .gitCommit(msg)
       .then((r) => {
-        if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+        if (!requests.isCurrent(mutation)) return;
         setMessage("");
         setNote(t("git.committed", { commit: r.commit }));
         return refresh(workspaceId);
       })
       .catch((e: unknown) => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) {
+        if (requests.isCurrent(mutation)) {
           setError(t("git.commitError", { error: String(e) }));
         }
       })
       .finally(() => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setCommitting(false);
+        if (requests.isCurrent(mutation)) setCommitting(false);
       });
   };
 

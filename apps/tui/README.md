@@ -153,6 +153,8 @@ pnpm --filter @seekforge/tui typecheck  # tsc --noEmit
 
 Architecture: `model.ts` is the single reducer/state hub (overlays, scroll,
 approval, bg tasks all live there); `keymap.ts` is a declarative key table;
-components are presentation-only — all input routing happens in `app.tsx`.
+components are presentation-only; `app.tsx` owns input and command routing,
+while `use-terminal-lifecycle.ts` and `use-statusline.ts` isolate process-level
+terminal effects and scheduled status-line execution.
 Theme: set `accent` in config or `SEEKFORGE_TUI_ACCENT` (any Ink color name);
 `NO_COLOR` is respected.

@@ -5,31 +5,10 @@ import { fail, setColorEnabled, useColor } from "./colors.js";
 import { loadConfig } from "./config.js";
 import { detectLocale, setLocale } from "./i18n.js";
 import { checkForUpdate, formatUpdateNotice } from "./version-check.js";
-import { agentImportCommand, agentListCommand, agentShowCommand } from "./commands/agent.js";
 import { completionCommand } from "./commands/completion.js";
-import { configSetCommand, configShowCommand } from "./commands/config.js";
-import {
-  evolveAcceptCommand,
-  evolveAnalyzeCommand,
-  evolveApplyCommand,
-  evolveListCommand,
-  evolveRejectCommand,
-  evolveShowCommand,
-} from "./commands/evolve.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { initCommand } from "./commands/init.js";
-import { mcpAddCommand, mcpListCommand, mcpRemoveCommand } from "./commands/mcp.js";
-import { mcpServeCommand } from "./commands/mcp-serve.js";
 import { printCommand } from "./commands/print.js";
-import {
-  memoryAddCommand,
-  memoryApproveCommand,
-  memoryCompactCommand,
-  memoryListCommand,
-  memoryRejectCommand,
-  memoryRemoveCommand,
-  memoryStatsCommand,
-} from "./commands/memory.js";
 import { auditCommand } from "./commands/audit.js";
 import { replayCommand } from "./commands/replay.js";
 import { replCommand } from "./commands/repl.js";
@@ -53,19 +32,16 @@ import {
   scheduleSetEnabledCommand,
 } from "./commands/schedule.js";
 import { resolveOutputFormat } from "./output-format.js";
+import { registerAgentCommands } from "./commands/register-agent.js";
+import { registerConfigCommands } from "./commands/register-config.js";
+import { registerEvolutionCommands } from "./commands/register-evolution.js";
+import { registerMcpCommands } from "./commands/register-mcp.js";
+import { registerMemoryCommands } from "./commands/register-memory.js";
+import { registerSkillCommands } from "./commands/register-skill.js";
 import { serveCommand } from "./commands/serve.js";
 import { updateCommand } from "./commands/update.js";
 import { modelsCommand } from "./commands/models.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
-import {
-  skillCreateCommand,
-  skillDisableCommand,
-  skillEnableCommand,
-  skillImportCommand,
-  skillListCommand,
-  skillRemoveCommand,
-  skillShowCommand,
-} from "./commands/skill.js";
 
 const program = new Command();
 
@@ -149,14 +125,6 @@ function parsePositiveInt(val: string): number {
   if (!/^[0-9]+$/.test(val)) throw new InvalidArgumentError("must be a positive integer");
   const n = Number(val);
   if (!Number.isSafeInteger(n) || n <= 0) throw new InvalidArgumentError("must be a positive integer");
-  return n;
-}
-
-/** Parse a non-negative-integer option string; throws InvalidArgumentError on bad input. */
-function parseNonNegativeInt(val: string): number {
-  if (!/^[0-9]+$/.test(val)) throw new InvalidArgumentError("must be a non-negative integer");
-  const n = Number(val);
-  if (!Number.isSafeInteger(n)) throw new InvalidArgumentError("must be a non-negative integer");
   return n;
 }
 
@@ -688,254 +656,12 @@ program
     await serveCommand({ port, workspaces: [...paths, ...opts.workspace] });
   });
 
-const skill = program.command("skill").description("manage skills (procedure libraries)");
-skill
-  .command("list", { isDefault: true })
-  .description("list available skills (project > global > builtin)")
-  .action(() => {
-    skillListCommand();
-  });
-skill
-  .command("show")
-  .argument("<skill-id>")
-  .description("print a skill's metadata and SKILL.md")
-  .action((id: string) => {
-    skillShowCommand(id);
-  });
-skill
-  .command("create")
-  .argument("<skill-id>", "lowercase letters, digits, dashes")
-  .description("scaffold a project skill in .seekforge/skills/<id>/")
-  .action((id: string) => {
-    skillCreateCommand(id);
-  });
-skill
-  .command("import")
-  .argument("<path>", "SKILL.md file (or its directory) with YAML frontmatter (Claude-style)")
-  .option("-g, --global", "import into ~/.seekforge/skills (all projects) instead of this project")
-  .option("-f, --force", "replace an existing skill with the same id")
-  .description("import an external skill (e.g. Claude Code / Meta_Kim format)")
-  .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
-    skillImportCommand(sourcePath, opts);
-  });
-skill
-  .command("enable")
-  .argument("<skill-id>")
-  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
-  .description("enable a skill (removes a disable marker for a builtin)")
-  .action((id: string, opts: { global?: boolean }) => {
-    skillEnableCommand(id, opts);
-  });
-skill
-  .command("disable")
-  .argument("<skill-id>")
-  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
-  .description("disable a skill (writes a disable marker for a builtin)")
-  .action((id: string, opts: { global?: boolean }) => {
-    skillDisableCommand(id, opts);
-  });
-skill
-  .command("remove")
-  .argument("<skill-id>")
-  .option("-g, --global", "act on ~/.seekforge/skills instead of this project")
-  .description("delete a project/global skill dir (builtins must be disabled, not removed)")
-  .action((id: string, opts: { global?: boolean }) => {
-    skillRemoveCommand(id, opts);
-  });
-
-const agentCmd = program.command("agent").description("manage specialist subagents (dispatch_agent roster)");
-agentCmd
-  .command("list", { isDefault: true })
-  .description("list available agents (project > global)")
-  .action(() => {
-    agentListCommand();
-  });
-agentCmd
-  .command("show")
-  .argument("<agent-id>")
-  .description("print an agent's frontmatter fields and body")
-  .action((id: string) => {
-    agentShowCommand(id);
-  });
-agentCmd
-  .command("import")
-  .argument("<path>", "agent .md file with YAML frontmatter (Claude Code / Meta_Kim format)")
-  .option("-g, --global", "import into ~/.seekforge/agents (all projects) instead of this project")
-  .option("-f, --force", "replace an existing agent with the same id")
-  .description("import an external agent definition")
-  .action((sourcePath: string, opts: { global?: boolean; force?: boolean }) => {
-    agentImportCommand(sourcePath, opts);
-  });
-
-const mcp = program.command("mcp").description("Model Context Protocol servers (mcpServers in config)");
-mcp
-  .command("list", { isDefault: true })
-  .option("--tools", "also print each tool's description")
-  .description("list configured MCP servers and the tools they expose")
-  .action(async (opts: { tools?: boolean }) => {
-    await mcpListCommand(opts);
-  });
-mcp
-  .command("add")
-  .argument("<name>", "server name (key under mcpServers)")
-  .argument("<command...>", "command to spawn, then its args (e.g. npx -y @scope/server .)")
-  .option("-g, --global", "write to ~/.seekforge/config.json instead of the project")
-  // Treat everything after <name> literally so flags like `-y` belong to the
-  // spawned command, not to seekforge. Put -g before the command, e.g.
-  //   seekforge mcp add -g fs npx -y @scope/server .
-  .passThroughOptions()
-  .description("add a stdio MCP server to config")
-  .action((name: string, command: string[], opts: { global?: boolean }) => {
-    mcpAddCommand(name, command, opts);
-  });
-mcp
-  .command("remove")
-  .alias("rm")
-  .argument("<name>", "server name to remove")
-  .option("-g, --global", "edit ~/.seekforge/config.json instead of the project")
-  .description("remove an MCP server from config")
-  .action((name: string, opts: { global?: boolean }) => {
-    mcpRemoveCommand(name, opts);
-  });
-
-program
-  .command("mcp-serve")
-  .option("--allow-write", "expose write/execute tools too and auto-approve them (TRUSTED callers only)")
-  .description("run SeekForge as an MCP server on stdio (read-only tool set by default)")
-  .addHelpText(
-    "after",
-    `
-Add to another agent's mcpServers config:
-  { "mcpServers": { "seekforge": { "command": "seekforge", "args": ["mcp-serve"] } } }
-`,
-  )
-  .action(async (opts: { allowWrite?: boolean }) => {
-    await mcpServeCommand(opts);
-  });
-
-const memory = program.command("memory").description("inspect and curate project memory");
-memory
-  .command("list", { isDefault: true })
-  .description("show project.md and pending memory candidates")
-  .action(() => {
-    memoryListCommand();
-  });
-memory
-  .command("add")
-  .argument("<content...>", "fact text (words are joined with spaces)")
-  .option("--type <type>", "command | path | convention | tech | task_pattern", "convention")
-  .option("--pending", "queue as a pending candidate instead of writing to project.md")
-  .option("--user", "write to user memory (~/.seekforge, all projects) instead of this project")
-  .description("add a fact directly to memory (user statement = approval)")
-  .action((content: string[], opts: { type?: string; pending?: boolean; user?: boolean }) => {
-    memoryAddCommand(content, opts);
-  });
-memory
-  .command("remove")
-  .argument("<selector>", "fact number, unique substring, or mc- candidate id")
-  .description("remove a fact from project.md, or delete a candidate entirely (mc- id)")
-  .action((selector: string) => {
-    memoryRemoveCommand(selector);
-  });
-memory
-  .command("approve")
-  .argument("<candidate-id>")
-  .option("--user", "approve into user memory (~/.seekforge, all projects)")
-  .description("approve a candidate into project (or user) memory")
-  .action((id: string, opts: { user?: boolean }) => {
-    memoryApproveCommand(id, opts);
-  });
-memory
-  .command("reject")
-  .argument("<candidate-id>")
-  .description("reject a candidate")
-  .action((id: string) => {
-    memoryRejectCommand(id);
-  });
-memory
-  .command("stats")
-  .description("print memory extraction-quality stats (read-only)")
-  .action(() => {
-    memoryStatsCommand();
-  });
-memory
-  .command("compact")
-  .option("--dry-run", "show what would be merged/removed without rewriting project.md")
-  .option(
-    "--prune-unused <days>",
-    "archive facts never used and older than <days> to project-archive.md",
-    parseNonNegativeInt,
-  )
-  .description("collapse duplicate and near-duplicate facts in project.md (deterministic)")
-  .action((opts: { dryRun?: boolean; pruneUnused?: number }) => {
-    memoryCompactCommand({ dryRun: opts.dryRun, pruneUnusedDays: opts.pruneUnused });
-  });
-
-const evolve = program
-  .command("evolve")
-  .description("score sessions and review self-evolution proposals (human-gated)");
-evolve
-  .command("analyze")
-  .argument("[session-id]", "session to analyze (default: most recent completed/failed)")
-  .description("score a session, write its reflection, and generate proposals")
-  .action(async (sessionId?: string) => {
-    await evolveAnalyzeCommand(sessionId);
-  });
-evolve
-  .command("list", { isDefault: true })
-  .description("list evolution proposals (pending first)")
-  .action(() => {
-    evolveListCommand();
-  });
-evolve
-  .command("show")
-  .argument("<proposal-id>")
-  .description("print a proposal including the exact content to be applied")
-  .action((id: string) => {
-    evolveShowCommand(id);
-  });
-evolve
-  .command("accept")
-  .argument("<proposal-id>")
-  .description("accept a pending proposal (apply it separately)")
-  .action((id: string) => {
-    evolveAcceptCommand(id);
-  });
-evolve
-  .command("reject")
-  .argument("<proposal-id>")
-  .description("reject a pending proposal")
-  .action((id: string) => {
-    evolveRejectCommand(id);
-  });
-evolve
-  .command("apply")
-  .argument("<proposal-id>")
-  .description("apply an accepted proposal to AGENTS.md / project.md / skills")
-  .action((id: string) => {
-    evolveApplyCommand(id);
-  });
-
-const config = program.command("config").description("show or change configuration");
-config
-  .command("show", { isDefault: true })
-  .description("print merged config (api key masked)")
-  .action(() => {
-    configShowCommand();
-  });
-config
-  .command("set")
-  .argument(
-    "<key>",
-    "apiKey | model | baseUrl | runtimeBin | commandAllowlist | models | sandbox | compaction | thinking | reasoningEffort",
-  )
-  .argument("<value>")
-  .option("-g, --global", "write to your user config (~/.seekforge/config.json) instead of the project")
-  .option("-u, --user", "alias for --global: write to your user config (~/.seekforge/config.json)")
-  .description("set a config value (default: this project; --user/--global for all projects)")
-  .action((key: string, value: string, opts: { global?: boolean; user?: boolean }) => {
-    configSetCommand(key, value, { global: opts.global || opts.user });
-  });
+registerSkillCommands(program);
+registerAgentCommands(program);
+registerMcpCommands(program);
+registerMemoryCommands(program);
+registerEvolutionCommands(program);
+registerConfigCommands(program);
 
 program
   .command("completion")

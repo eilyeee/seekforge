@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { Button, Card, IconShield, Input } from "../components/ui";
 import { HOOK_STAGES, type HookEntry, type HookStage, type HooksConfig } from "../types";
-import { LatestRequest } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 /** Stages where a non-zero exit (or JSON deny) blocks the tool/run. */
 const BLOCKING: ReadonlySet<HookStage> = new Set(["preToolUse", "userPromptSubmit"]);
@@ -56,10 +56,11 @@ export function HooksView() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const requests = useRef(new LatestRequest());
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   useEffect(() => {
-    const request = requests.current.begin();
+    const request = requests.beginLatest();
+    if (!request) return;
     setDraft(null);
     setError(null);
     setNote(null);
@@ -67,14 +68,10 @@ export function HooksView() {
     api
       .hooks()
       .then((r) => {
-        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === ws) {
-          setDraft(toDraft(r.hooks));
-        }
+        if (requests.isCurrent(request)) setDraft(toDraft(r.hooks));
       })
       .catch((e: unknown) => {
-        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === ws) {
-          setError(String(e));
-        }
+        if (requests.isCurrent(request)) setError(String(e));
       });
   }, [ws]);
 
@@ -90,27 +87,23 @@ export function HooksView() {
   const save = () => {
     if (!draft || saving) return;
     const workspaceId = ws;
-    if (useStore.getState().activeWorkspaceId !== workspaceId) return;
-    const request = requests.current.begin();
+    const request = requests.beginLatest(workspaceId);
+    if (!request) return;
     setSaving(true);
     setError(null);
     setNote(null);
     api
       .saveHooks(toConfig(draft))
       .then((r) => {
-        if (!requests.current.isCurrent(request) || useStore.getState().activeWorkspaceId !== workspaceId) return;
+        if (!requests.isCurrent(request)) return;
         setDraft(toDraft(r.hooks));
         setNote(t("hooks.saved"));
       })
       .catch((e: unknown) => {
-        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === workspaceId) {
-          setError(String(e));
-        }
+        if (requests.isCurrent(request)) setError(String(e));
       })
       .finally(() => {
-        if (requests.current.isCurrent(request) && useStore.getState().activeWorkspaceId === workspaceId) {
-          setSaving(false);
-        }
+        if (requests.isCurrent(request)) setSaving(false);
       });
   };
 

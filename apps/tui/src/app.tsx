@@ -83,19 +83,11 @@ import { KEYMAP, resolveAction, toStroke, type Binding, type InkKey, type KeyStr
 import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "./custom-commands.js";
 import { captureClipboardImage, imagePlaceholder } from "./clipboard-image.js";
 import { createPasteRegistry, expandPastes, registerPaste, shouldPlaceholder } from "./paste.js";
-import {
-  clearTerminalTitle,
-  isMouseEvent,
-  MOUSE_DISABLE,
-  MOUSE_ENABLE,
-  parseMouseWheel,
-  setTerminalTitle,
-} from "./terminal.js";
+import { clearTerminalTitle, isMouseEvent, MOUSE_DISABLE, parseMouseWheel } from "./terminal.js";
 import { loadKeybindings, mergeKeymap } from "./keybindings.js";
 import { modelPickerLines, modelsForProvider } from "./model-list.js";
 import { addTodo, formatTodoLines, loadTodos, removeTodo, toggleTodo } from "./todos.js";
 import { expandExtraFileRefs, formatExtraDirLines, normalizeExtraDir } from "./workspace-dirs.js";
-import { initialSchedulerState, tick, type SchedulerState } from "./statusline-scheduler.js";
 import { checkBudget, type BudgetState } from "./budget.js";
 import { detectTerminal, terminalSetupInstructions } from "./terminal-setup.js";
 import { keyHints, turnSummaryLine } from "./render-helpers.js";
@@ -177,6 +169,8 @@ import { FilePicker } from "./components/FilePicker.js";
 import { ContextInspector } from "./components/ContextInspector.js";
 import { ListOverlay } from "./components/ListOverlay.js";
 import { QuestionPanel } from "./components/QuestionPanel.js";
+import { useStatusLine } from "./use-statusline.js";
+import { useTerminalLifecycle } from "./use-terminal-lifecycle.js";
 
 export type AppProps = {
   config: TuiConfig;
@@ -369,12 +363,6 @@ export function App({
   const lastErrorRef = useRef<string | null>(null);
   // Cost-budget warning state (80% / 100%, warned once each).
   const budgetRef = useRef<BudgetState>({ warned80: false, warnedOver: false });
-  // Custom statusline output (config.statusLine command). Throttled + cached
-  // by a scheduler so we never spawn the process on every render; recomputed
-  // on state change and on a light interval, off the render path.
-  const [statusLineText, setStatusLineText] = useState<string | null>(null);
-  const statusLineSchedRef = useRef<SchedulerState>(initialSchedulerState);
-
   // "Allow for the session" pushes prefixes into this array IN PLACE: the
   // same reference flows into the dispatcher policy, so additions apply to
   // the currently running task too.
@@ -402,82 +390,14 @@ export function App({
     exit();
   }, [exit]);
 
-  // Mouse capture is OFF by default so native text selection keeps working
-  // (Claude Code behaves the same); "/mouse" or `"mouse": true` enables
-  // wheel-scrolling of the transcript instead.
-  const [mouseOn, setMouseOn] = useState(config.mouse === true);
-  useEffect(() => {
-    process.stdout.write(mouseOn ? MOUSE_ENABLE : MOUSE_DISABLE);
-    return () => {
-      process.stdout.write(MOUSE_DISABLE);
-      clearTerminalTitle();
-    };
-  }, [mouseOn]);
-  useEffect(() => {
-    const name = projectPath.split("/").filter(Boolean).pop() ?? "seekforge";
-    setTerminalTitle(`seekforge — ${name}${state.running ? " ⚙" : ""}`);
-  }, [projectPath, state.running]);
-
-  // Custom statusline driver: when config.statusLine is set, recompute via the
-  // throttled scheduler on relevant state changes and on a light interval. The
-  // spawnSync runs inside setImmediate (off the render path) and is guarded so
-  // at most one is in flight; the scheduler caps the spawn rate independently.
-  const statusLineBusyRef = useRef(false);
-  useEffect(() => {
-    if (!config.statusLine) return;
-    const command = config.statusLine;
-    const compute = (): void => {
-      if (statusLineBusyRef.current) return;
-      statusLineBusyRef.current = true;
-      setImmediate(() => {
-        try {
-          const s = stateRef.current;
-          const result = tick(statusLineSchedRef.current, command, {
-            model: modelRef.current,
-            cwd: projectPath,
-            ...(s.sessionId ? { sessionId: s.sessionId } : {}),
-            costUsd: s.totalUsage.costUsd,
-            approval: s.approval,
-            totalTokens: s.totalUsage.promptTokens + s.totalUsage.completionTokens,
-            ...(s.context ? { contextPercent: s.context.percent } : {}),
-          });
-          statusLineSchedRef.current = result.state;
-          if (result.recomputed) setStatusLineText(result.state.lastOutput);
-        } finally {
-          statusLineBusyRef.current = false;
-        }
-      });
-    };
-    compute();
-    const id = setInterval(compute, 5000);
-    return () => clearInterval(id);
-  }, [
-    config.statusLine,
+  // Mouse capture is opt-in so native selection remains available by default.
+  const { mouseOn, setMouseOn, suspend } = useTerminalLifecycle(
+    config.mouse === true,
     projectPath,
-    state.model,
-    state.approval,
-    state.sessionId,
-    state.totalUsage,
-    state.context,
-  ]);
-
-  // Ctrl+Z suspend: restore the terminal, stop, and re-enter raw mode on fg.
-  useEffect(() => {
-    const onCont = (): void => {
-      setRawMode(true);
-      if (mouseOn) process.stdout.write(MOUSE_ENABLE);
-    };
-    process.on("SIGCONT", onCont);
-    return () => {
-      process.removeListener("SIGCONT", onCont);
-    };
-  }, [setRawMode, mouseOn]);
-
-  const suspend = useCallback(() => {
-    setRawMode(false);
-    process.stdout.write(MOUSE_DISABLE);
-    process.kill(process.pid, "SIGTSTP");
-  }, [setRawMode]);
+    state.running,
+    setRawMode,
+  );
+  const statusLineText = useStatusLine(config.statusLine, projectPath, state);
 
   const notice = useCallback((text: string, tone?: "dim" | "error") => {
     dispatch(tone ? { type: "notice", text, tone } : { type: "notice", text });

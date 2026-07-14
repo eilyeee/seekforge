@@ -636,6 +636,18 @@ Whitespace splitting also corrupts quoted paths and arguments.
 - **Caught:** `apps/tui/src/app.tsx` — `/memory edit` and `/config edit` passed the
   complete `$EDITOR` value as the executable.
 
+## 39. Internal errors must be translated at a public boundary
+
+Refactoring a facade can preserve return values while accidentally exposing a
+new exception type. Callers that map domain errors to HTTP status or CLI output
+then turn a handled client error into an unknown server failure.
+
+- **Do:** catch lower-level policy, filesystem, and transport errors at the
+  owning service boundary and translate them to the established domain error;
+  keep status, code, and message semantics covered by contract tests.
+- **Caught:** `apps/server/src/file-upload-raw.ts` — the shared path guard's
+  `ToolError` escaped `saveUpload` instead of the documented `UploadError(400)`.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the
