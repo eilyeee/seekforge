@@ -49,11 +49,12 @@ function parseChatResponse(value: unknown): ChatResponse | null {
 }
 
 /** Cache key: content hash over everything that determines the reply. */
-function cacheKey(model: string, req: ChatRequest): string {
+function cacheKey(providerIdentity: string, model: string, req: ChatRequest): string {
   return crypto
     .createHash("sha256")
     .update(
       JSON.stringify({
+        providerIdentity,
         model,
         messages: req.messages,
         tools: req.tools ?? null,
@@ -78,7 +79,7 @@ function zeroedUsage(res: ChatResponse): ChatResponse {
 /**
  * Wraps a ChatProvider with a file-based response cache under `dir`.
  *
- * chat(): the request (model + messages + tools) is hashed to
+ * chat(): the provider identity and request (model + messages + tools) are hashed to
  * `<dir>/<sha256>.json`; a fresh entry (within ttlMs, default 24h) is
  * returned directly with zeroed usage (replaying a cached reply costs
  * nothing). On a miss the call goes through and the response is written
@@ -121,9 +122,10 @@ export function wrapProviderWithCache(
 
   return {
     model: provider.model,
+    ...(provider.cacheIdentity !== undefined ? { cacheIdentity: provider.cacheIdentity } : {}),
     async chat(req) {
       if (req.signal?.aborted) throw req.signal.reason;
-      const key = cacheKey(provider.model, req);
+      const key = cacheKey(provider.cacheIdentity ?? provider.model, provider.model, req);
       const cached = read(key);
       if (cached) return zeroedUsage(cached);
       const res = await provider.chat(req);

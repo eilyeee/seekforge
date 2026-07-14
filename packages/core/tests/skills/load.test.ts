@@ -1,3 +1,5 @@
+import { symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_SKILLS, loadSkillsFromDirs } from "../../src/skills/index.js";
 import { makeTempDir, skillJson, writeSkillDir } from "./helpers.js";
@@ -77,6 +79,18 @@ describe("loadSkillsFromDirs", () => {
     expect(ids).not.toContain("bad-json");
     expect(ids).not.toContain("no-md");
     expect(ids).not.toContain("bad-shape");
+  });
+
+  it("rejects a SKILL.md symlink whose target escapes the skills root", () => {
+    const project = makeTempDir();
+    const outside = makeTempDir();
+    const dir = writeSkillDir(project, "linked", skillJson("linked"), undefined);
+    const target = join(outside, "outside.md");
+    writeFileSync(target, "# Outside\n\nsecret instructions\n");
+    symlinkSync(target, join(dir, "SKILL.md"));
+
+    const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);
+    expect(skills.find((s) => s.id === "linked")).toBeUndefined();
   });
 
   it("ignores missing skills roots", () => {

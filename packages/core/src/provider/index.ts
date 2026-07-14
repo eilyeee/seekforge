@@ -8,6 +8,7 @@
  */
 
 import type { ChatResponse } from "@seekforge/shared";
+import * as crypto from "node:crypto";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
 import { buildRequestBody, mapChatResponse, mapUsage, type WireChatCompletion } from "./mapping.js";
 import { createSseAccumulator, feedSseChunk, finalizeSse } from "./sse.js";
@@ -29,6 +30,7 @@ export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
 export { DeepSeekApiError } from "./http.js";
 export { fetchBalance, type AccountBalance } from "./balance.js";
 export { wrapProviderWithCache, type ProviderCacheOptions } from "./cache.js";
+export { ProviderProtocolError } from "./mapping.js";
 export {
   createSseAccumulator,
   feedSseChunk,
@@ -89,6 +91,19 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   // the active primary; otherwise the request path is byte-for-byte unchanged.
   const fallbackModel =
     config.fallbackModel && config.fallbackModel !== model ? config.fallbackModel : undefined;
+  const cacheIdentity = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({
+      baseUrl,
+      apiKey: config.apiKey,
+      model,
+      capabilities,
+      thinking: config.thinking ?? null,
+      reasoningEffort: config.reasoningEffort ?? null,
+      fallbackModel: fallbackModel ?? null,
+      modelPricing: config.modelPricing ?? null,
+    }))
+    .digest("hex");
 
   /**
    * Run the request against the primary model with the normal retry loop. If
@@ -202,5 +217,5 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     };
   }
 
-  return { model, chat, chatStream };
+  return { model, cacheIdentity, chat, chatStream };
 }

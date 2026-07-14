@@ -58,6 +58,13 @@ export type ThinkingOptions = {
   reasoningEffort?: "high" | "max";
 };
 
+export class ProviderProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderProtocolError";
+  }
+}
+
 /** thinking.{type,reasoning_effort} is only valid on deepseek-v4-* models. */
 export function supportsThinking(model: string): boolean {
   return model.startsWith("deepseek-v4");
@@ -180,8 +187,11 @@ export function mapUsage(
   const tokens = {
     promptTokens: tokenCount(raw?.prompt_tokens),
     completionTokens: tokenCount(raw?.completion_tokens),
-    cacheHitTokens: (capabilities?.cacheHitTokens ?? true) ? tokenCount(raw?.prompt_cache_hit_tokens) : 0,
+    cacheHitTokens: 0,
   };
+  tokens.cacheHitTokens = (capabilities?.cacheHitTokens ?? true)
+    ? Math.min(tokenCount(raw?.prompt_cache_hit_tokens), tokens.promptTokens)
+    : 0;
   // A user-supplied price for this model always wins — it enables cost/budget
   // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
   // Otherwise keep the built-in behavior: priced when costAccounting, else 0.
@@ -207,15 +217,31 @@ export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolC
 }
 
 export function mapChatResponse(
-  json: WireChatCompletion,
+  json: unknown,
   model: string,
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): ChatResponse {
-  const root = isRecord(json) ? json : {};
+  if (!isRecord(json)) {
+    throw new ProviderProtocolError("Provider protocol error: response body must be an object");
+  }
+  const root = json;
+  const error = root["error"];
+  if (error !== undefined) {
+    const message = isRecord(error) && typeof error["message"] === "string"
+      ? `: ${error["message"]}`
+      : "";
+    throw new ProviderProtocolError(`Provider protocol error: successful response contained an error${message}`);
+  }
   const choices = root["choices"];
   const choice = Array.isArray(choices) && isRecord(choices[0]) ? choices[0] : undefined;
+  if (!choice) {
+    throw new ProviderProtocolError("Provider protocol error: successful response has no choices");
+  }
   const message = isRecord(choice?.["message"]) ? choice["message"] : undefined;
+  if (!message) {
+    throw new ProviderProtocolError("Provider protocol error: first choice has no message");
+  }
   const reasoning = message?.["reasoning_content"];
   return {
     content: typeof message?.["content"] === "string" ? message["content"] : "",

@@ -147,6 +147,14 @@ export function buildAgentCoreDeps(
   input: BuildAgentCoreDepsInput,
   extras: BuildAgentCoreDepsExtras = {},
 ): AgentCoreDepsCommon {
+  if (
+    input.memoryAutoApproveConfidence !== undefined &&
+    (!Number.isFinite(input.memoryAutoApproveConfidence) ||
+      input.memoryAutoApproveConfidence < 0 ||
+      input.memoryAutoApproveConfidence > 1)
+  ) {
+    throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
+  }
   // One retry bus shared by every provider this factory builds; the active
   // run routes its retries into the agent event stream (provider.retry).
   const retryBus = createRetryBus();

@@ -268,6 +268,23 @@ describe("extractMemoryFromSession (auto-approval, opt-in)", () => {
     expect(meta["[tech] high conf fact"]).toBeDefined();
     expect(meta["[tech] high conf fact"].uses).toBe(0);
   });
+
+  it.each([-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "fails safe for an invalid auto-approval threshold %s",
+    async (threshold) => {
+      const ws = makeWorkspace();
+      const provider = makeFakeProvider([
+        fencedResponse([{ content: "must remain pending", type: "tech", confidence: 0.95 }]),
+      ]);
+      const result = await extractMemoryFromSession(provider, {
+        ...makeInput(ws),
+        autoApproveConfidence: threshold,
+      });
+
+      expect(result.candidates[0]?.status).toBe("pending");
+      expect(fs.existsSync(path.join(ws, ".seekforge", "memory", "project.md"))).toBe(false);
+    },
+  );
 });
 
 describe("extractMemoryFromSession (degraded path)", () => {

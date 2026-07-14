@@ -560,7 +560,7 @@ export function appendCheckpoint(workspace: string, sessionId: string, entry: Ch
   appendLineSync(file, `${JSON.stringify(entry)}\n`);
 }
 
-/** Reads checkpoints in recorded order. Corrupt/malformed lines are skipped. */
+/** Reads the longest valid checkpoint prefix in recorded order. */
 export function readCheckpoints(workspace: string, sessionId: string): CheckpointEntry[] {
   const file = checkpointsFile(workspace, sessionId);
   if (!existsSync(file)) return [];
@@ -569,8 +569,8 @@ export function readCheckpoints(workspace: string, sessionId: string): Checkpoin
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as Partial<CheckpointEntry>;
-      if (typeof parsed.path !== "string" || parsed.path === "") continue;
-      if (parsed.before !== null && typeof parsed.before !== "string") continue;
+      if (typeof parsed.path !== "string" || parsed.path === "") break;
+      if (parsed.before !== null && typeof parsed.before !== "string") break;
       entries.push({
         ts: typeof parsed.ts === "string" ? parsed.ts : "",
         path: parsed.path,
@@ -581,7 +581,8 @@ export function readCheckpoints(workspace: string, sessionId: string): Checkpoin
           : {}),
       });
     } catch {
-      // corrupt line: skip, keep the rest usable
+      // Append-only logs recover only through the first damaged record.
+      break;
     }
   }
   return entries;

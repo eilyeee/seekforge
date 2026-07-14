@@ -44,7 +44,9 @@ export function loadSkillsFromDirs(dirs: SkillsDir[]): Skill[] {
 
 function readSkillsRoot({ scope, path: root }: SkillsDir): Skill[] {
   let entries: fs.Dirent[];
+  let rootReal: string;
   try {
+    rootReal = fs.realpathSync(root);
     entries = fs.readdirSync(root, { withFileTypes: true });
   } catch {
     return [];
@@ -52,7 +54,7 @@ function readSkillsRoot({ scope, path: root }: SkillsDir): Skill[] {
   const skills: Skill[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const skill = readSkillDir(scope, path.join(root, entry.name));
+    const skill = readSkillDir(scope, path.join(root, entry.name), rootReal);
     if (skill) skills.push(skill);
   }
   return skills;
@@ -62,16 +64,17 @@ function readSkillsRoot({ scope, path: root }: SkillsDir): Skill[] {
 // needs an id, so accept a minimal stub here even if the full schema would fail.
 const disableMarkerSchema = z.object({ id: z.string().min(1), enabled: z.literal(false) });
 
-function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
+function readSkillDir(scope: SkillScope, dir: string, allowedRootReal: string): Skill | undefined {
   let raw: unknown;
-  let content: string;
   try {
     raw = JSON.parse(fs.readFileSync(path.join(dir, "skill.json"), "utf8"));
   } catch {
     return undefined;
   }
+
+  const skillFile = path.join(dir, "SKILL.md");
   try {
-    content = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
+    fs.lstatSync(skillFile);
   } catch {
     // No SKILL.md: only valid as a pure disable marker (enabled:false stub),
     // which overrides a lower-layer skill of the same id and is then filtered
@@ -90,6 +93,18 @@ function readSkillDir(scope: SkillScope, dir: string): Skill | undefined {
       risk: "medium",
       content: "",
     };
+  }
+
+  let content: string;
+  try {
+    const physical = fs.realpathSync(skillFile);
+    const inside =
+      physical === allowedRootReal || physical.startsWith(`${allowedRootReal}${path.sep}`);
+    if (!inside) return undefined;
+    content = fs.readFileSync(physical, "utf8");
+  } catch {
+    // Broken links and unreadable files are malformed skills, not disable markers.
+    return undefined;
   }
   const parsed = skillJsonSchema.safeParse(raw);
   if (!parsed.success) return undefined;

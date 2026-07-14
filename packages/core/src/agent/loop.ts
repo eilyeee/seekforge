@@ -327,6 +327,22 @@ function appendUserPrompt(base: string, append?: string): string {
 }
 
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
+  if (
+    deps.memoryAutoApproveConfidence !== undefined &&
+    (!Number.isFinite(deps.memoryAutoApproveConfidence) ||
+      deps.memoryAutoApproveConfidence < 0 ||
+      deps.memoryAutoApproveConfidence > 1)
+  ) {
+    throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
+  }
+  for (const def of deps.subagents ?? []) {
+    if (def.mode !== "ask" && def.mode !== "edit") {
+      throw new Error(`invalid subagent mode for ${def.id}: ${String(def.mode)}`);
+    }
+    if (def.maxTurns !== undefined && (!Number.isSafeInteger(def.maxTurns) || def.maxTurns <= 0)) {
+      throw new Error(`invalid subagent maxTurns for ${def.id}: ${String(def.maxTurns)}`);
+    }
+  }
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
   const windowTokens = deps.contextWindowTokens ?? 131_072;
   // Floor at 1 so a pathologically small contextWindowTokens (where the output

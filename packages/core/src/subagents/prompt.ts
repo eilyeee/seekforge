@@ -27,11 +27,13 @@ export function buildSubagentPrompt(def: AgentDefinition, workspace: string): st
       "Mode: ASK (read-only). Investigate and answer within your specialty. " +
         "Write and command tools are disabled; never attempt writes or commands.",
     );
-  } else {
+  } else if (def.mode === "edit") {
     parts.push(
       "Mode: EDIT. Complete the delegated sub-task end to end: explore the relevant files first, " +
         "keep changes minimal and inside your boundary, and verify your work when possible.",
     );
+  } else {
+    throw new Error(`invalid subagent mode for ${def.id}: ${String(def.mode)}`);
   }
 
   const maxTurns = def.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS;

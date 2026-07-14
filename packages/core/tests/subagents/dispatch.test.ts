@@ -96,6 +96,25 @@ describe("dispatch_agent (loop-level)", () => {
 
   const baseInput = { task: "do the thing", mode: "edit" as const, approvalMode: "confirm" as const };
 
+  it("rejects forged subagent modes and invalid turn budgets at construction", () => {
+    expect(() =>
+      createAgentCore({
+        provider: fakeProvider([]),
+        dispatcher: fakeDispatcher(),
+        confirm: async () => true,
+        subagents: [{ ...fixer, mode: "execute" as never }],
+      }),
+    ).toThrow(/invalid subagent mode/);
+    expect(() =>
+      createAgentCore({
+        provider: fakeProvider([]),
+        dispatcher: fakeDispatcher(),
+        confirm: async () => true,
+        subagents: [{ ...fixer, maxTurns: 1.5 }],
+      }),
+    ).toThrow(/invalid subagent maxTurns/);
+  });
+
   it("advertises dispatch_agent and the roster only when subagents exist", async () => {
     const provider = fakeProvider([response({ content: "done" })]);
     const agent = createAgentCore({

@@ -334,7 +334,7 @@ const readFile = defineTool({
 const searchTextSchema = z.object({
   pattern: z
     .string()
-    .describe("JavaScript regular expression, e.g. \"function\\\\s+createUser\" (an invalid regex is retried as literal text)."),
+    .describe("JavaScript regular expression, e.g. \"function\\\\s+createUser\" (invalid regex is retried as literal text; unsafe backtracking shapes are rejected)."),
   path: z.string().optional().describe("File or directory to search, relative to the workspace root (default '.')."),
   caseSensitive: z.boolean().optional().describe("Case-sensitive matching (default false)."),
   glob: z
@@ -363,6 +363,69 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type RegexGroup = { quantified: boolean; alternation: boolean };
+
+/** Reject regex shapes whose backtracking can grow exponentially. */
+function isConservativeRegex(pattern: string): boolean {
+  const groups: RegexGroup[] = [{ quantified: false, alternation: false }];
+  let escaped = false;
+  let inClass = false;
+  let previousGroup: RegexGroup | undefined;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (escaped) {
+      if (/[1-9]/.test(ch)) return false;
+      escaped = false;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "(") {
+      groups.push({ quantified: false, alternation: false });
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === ")") {
+      if (groups.length > 1) {
+        previousGroup = groups.pop();
+        const parent = groups[groups.length - 1]!;
+        parent.quantified ||= previousGroup!.quantified;
+        parent.alternation ||= previousGroup!.alternation;
+      }
+      continue;
+    }
+    if (ch === "|") {
+      groups[groups.length - 1]!.alternation = true;
+      previousGroup = undefined;
+      continue;
+    }
+    if (ch === "?" && pattern[i - 1] === "(") continue;
+    const brace = ch === "{" ? /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(i))?.[0] : undefined;
+    const quantified = ch === "*" || ch === "+" || ch === "?" || brace !== undefined;
+    if (quantified) {
+      if (previousGroup?.quantified || previousGroup?.alternation) return false;
+      groups[groups.length - 1]!.quantified = true;
+      previousGroup = undefined;
+      if (brace !== undefined) i += brace.length - 1;
+      continue;
+    }
+    previousGroup = undefined;
+  }
+  return true;
+}
+
 type SearchMatch = {
   file: string;
   line: number;
@@ -374,7 +437,7 @@ type SearchMatch = {
 const searchText = defineTool({
   name: "search_text",
   description:
-    "Your FIRST tool for locating code by CONTENT: search file contents for a regex pattern (e.g. \"function\\s+createUser\"); an invalid regex falls back to literal text. Per-line, case-insensitive by default, returns {file, line, text} up to 1000 matches (raise with maxMatches, max 5000). Options: glob restricts to matching file paths (e.g. \"*.ts\"); contextLines adds N surrounding lines (grep -C); filesWithMatches returns only file paths (grep -l); multiline lets the pattern span newlines. Skips binaries, files over 1MB, ignored dirs. To find files by NAME, use the glob tool.",
+    "Search file contents by regex pattern (e.g. \"function\\s+createUser\"). Invalid regex falls back to literal text; unsafe backtracking shapes are rejected. Case-insensitive per line by default; returns {file, line, text} up to 1000 matches (max 5000). Options: glob filters paths; contextLines adds surrounding lines; filesWithMatches returns paths only; multiline spans newlines. Skips binaries, files over 1MB, and ignored dirs. Use glob to find files by name.",
   schema: searchTextSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -388,6 +451,9 @@ const searchText = defineTool({
     }
     let flags = args.caseSensitive ? "" : "i";
     if (args.multiline) flags += "s";
+    if (!isConservativeRegex(args.pattern)) {
+      throw new ToolError("unsafe_regex", "Pattern is rejected because it may cause excessive backtracking");
+    }
     let re: RegExp;
     try {
       re = new RegExp(args.pattern, flags);

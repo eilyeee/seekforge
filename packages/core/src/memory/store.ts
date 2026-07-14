@@ -236,7 +236,7 @@ function readMemoryFileExpanded(filePath: string, allowedRoot: string): string |
     const visited = new Set<string>([physicalFile]);
     return expandImports(raw, path.dirname(physicalFile), memoryRoot, 0, visited, {
       remaining: MAX_IMPORT_SIZE,
-    });
+    }).slice(0, MAX_IMPORT_SIZE);
   } catch {
     return undefined;
   }

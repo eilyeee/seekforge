@@ -79,6 +79,22 @@ describe("memory fact lifecycle (P2)", () => {
     expect(archive).toContain("ancient unused rule");
   });
 
+  it("keeps stale facts in project.md when the archive write fails", () => {
+    const ws = makeWorkspace();
+    const fact = "[convention] ancient fact must not be lost";
+    writeProjectMemory(ws, `# Project Memory\n- ${fact}\n`);
+    fs.writeFileSync(
+      factMetaPath(ws),
+      JSON.stringify({ [fact]: { addedAt: "2000-01-01T00:00:00.000Z", uses: 0 } }),
+      "utf8",
+    );
+    fs.mkdirSync(join(ws, ".seekforge", "memory", "project-archive.md"));
+
+    const res = compactProjectMemory(ws, { pruneUnusedDays: 1 });
+    expect(res.archived).toEqual([]);
+    expect(readProjectMemory(ws)).toContain(fact);
+  });
+
   it("pruneUnusedDays leaves facts without metadata untouched (unknown age)", () => {
     const ws = makeWorkspace();
     writeProjectMemory(ws, "# Project Memory\n- [convention] rule with no metadata at all\n");

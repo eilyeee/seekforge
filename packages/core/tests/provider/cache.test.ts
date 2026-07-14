@@ -13,7 +13,7 @@ function response(content: string): ChatResponse {
   return { content, toolCalls: [], usage: USAGE, finishReason: "stop" };
 }
 
-function countingProvider(): ChatProvider & { chats: number; streams: number } {
+function countingProvider(cacheIdentity?: string): ChatProvider & { chats: number; streams: number } {
   const p = {
     model: "fake-model",
     chats: 0,
@@ -27,6 +27,7 @@ function countingProvider(): ChatProvider & { chats: number; streams: number } {
       onDelta("streamed");
       return response("streamed");
     },
+    ...(cacheIdentity !== undefined ? { cacheIdentity } : {}),
   };
   return p;
 }
@@ -81,6 +82,17 @@ describe("wrapProviderWithCache", () => {
     expect(hot.content).toBe("reply-3");
     expect(inner.chats).toBe(3);
     expect(readdirSync(dir)).toHaveLength(3);
+  });
+
+  it("does not share entries across provider endpoint or tenant identities", async () => {
+    const first = countingProvider("endpoint-a/tenant-1");
+    const second = countingProvider("endpoint-b/tenant-2");
+    await wrapProviderWithCache(first, dir).chat(req("hello"));
+
+    const response = await wrapProviderWithCache(second, dir).chat(req("hello"));
+    expect(response.content).toBe("reply-1");
+    expect(second.chats).toBe(1);
+    expect(readdirSync(dir)).toHaveLength(2);
   });
 
   it("expired entries (past ttl) are re-fetched", async () => {

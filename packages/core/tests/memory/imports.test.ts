@@ -105,6 +105,16 @@ describe("@import composition in memory files", () => {
     expect(text.match(/from a/g)).toHaveLength(1);
   });
 
+  it("strictly caps an imported single line at 64 KiB", () => {
+    const ws = makeWorkspace();
+    writeMemFile(ws, "huge.md", "x".repeat(128 * 1024));
+    writeProjectMemory(ws, "# Project Memory\n@huge.md\n");
+
+    const text = readProjectMemory(ws)!;
+    expect(text.length).toBeLessThanOrEqual(64 * 1024);
+    expect(text.startsWith("# Project Memory\n")).toBe(true);
+  });
+
   it("expands imports in the global memory file too", () => {
     clearGlobalMemory();
     const file = path.join(globalHome(), ".seekforge", "memory", "shared.md");

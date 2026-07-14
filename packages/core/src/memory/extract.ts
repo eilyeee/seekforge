@@ -294,7 +294,10 @@ export async function extractMemoryFromSession(
     // Opt-in auto-approval (default off): a finite, in-range threshold enables it.
     const threshold = input.autoApproveConfidence;
     const autoApproveEnabled =
-      typeof threshold === "number" && Number.isFinite(threshold);
+      typeof threshold === "number" &&
+      Number.isFinite(threshold) &&
+      threshold >= 0 &&
+      threshold <= 1;
 
     const candidates: MemoryCandidate[] = [];
     for (const fact of parsed.facts) {

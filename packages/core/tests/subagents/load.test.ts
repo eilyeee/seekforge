@@ -55,6 +55,19 @@ describe("parseAgentMarkdown", () => {
     expect(def.triggers).toEqual([]);
     expect(def.own).toBeUndefined();
   });
+
+  it.each([
+    ["unknown mode", "mode: execute"],
+    ["empty mode", "mode:"],
+    ["trailing max-turns junk", "max-turns: 8turns"],
+    ["fractional max-turns", "max-turns: 1.5"],
+    ["zero max-turns", "max-turns: 0"],
+    ["unsafe max-turns", "max-turns: 999999999999999999999"],
+  ])("rejects %s instead of coercing it", (_label, field) => {
+    expect(() =>
+      parseAgentMarkdown("project", "unsafe", `---\nname: unsafe\n${field}\n---\nbody`),
+    ).toThrow(/invalid subagent/);
+  });
 });
 
 describe("loadAgentDefinitionsFromDirs", () => {
@@ -90,6 +103,8 @@ describe("loadAgentDefinitionsFromDirs", () => {
     writeAgent(globalRoot, "good", "---\nname: good\ndescription: ok\n---\n");
     mkdirSync(join(globalRoot, "no-agent-md"), { recursive: true });
     writeAgent(globalRoot, "bad-frontmatter", "# not frontmatter at all");
+    writeAgent(globalRoot, "bad-mode", "---\nname: bad-mode\nmode: execute\n---\n");
+    writeAgent(globalRoot, "bad-turns", "---\nname: bad-turns\nmax-turns: 2x\n---\n");
     writeAgent(globalRoot, "Bad_Dir_Name", "---\nname: x\n---\n");
     writeFileSync(join(globalRoot, "stray-file.md"), "not a dir");
 

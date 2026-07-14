@@ -203,20 +203,23 @@ export function compactProjectMemory(workspace: string, opts: CompactOptions = {
     result.after -= pruned.archived.length;
   }
 
+  if (!opts.dryRun && result.archived.length > 0) {
+    const archiveFile = path.join(path.dirname(projectMemoryPath(workspace)), "project-archive.md");
+    const block = `${result.archived.join("\n")}\n`;
+    try {
+      fs.appendFileSync(archiveFile, block, "utf8");
+    } catch {
+      // Preserve facts in project.md unless their archive write succeeded.
+      finalContent = content;
+      result.after += result.archived.length;
+      result.archived = [];
+    }
+  }
   const changed = result.removed.length > 0 || result.merged.length > 0 || result.archived.length > 0;
   if (!opts.dryRun && changed) {
     fs.writeFileSync(projectMemoryPath(workspace), finalContent, "utf8");
     // Drop fact-meta entries orphaned by the rewrite (dropped dup/merge/prune).
     reconcileFactMeta(workspace, finalContent);
-    if (result.archived.length > 0) {
-      const archiveFile = path.join(path.dirname(projectMemoryPath(workspace)), "project-archive.md");
-      const block = `${result.archived.join("\n")}\n`;
-      try {
-        fs.appendFileSync(archiveFile, block, "utf8");
-      } catch {
-        /* archiving is best-effort; the prune from project.md already happened */
-      }
-    }
   }
   return result;
 }

@@ -207,9 +207,14 @@ describe("mapUsage", () => {
     }, "deepseek-chat")).toEqual({
       promptTokens: 0,
       completionTokens: 0,
-      cacheHitTokens: 2,
+      cacheHitTokens: 0,
       costUsd: 0,
     });
+  });
+
+  it("clamps cache-hit tokens to prompt tokens", () => {
+    expect(mapUsage({ prompt_tokens: 10, prompt_cache_hit_tokens: 30 }, "deepseek-chat").cacheHitTokens)
+      .toBe(10);
   });
 });
 
@@ -257,19 +262,15 @@ describe("mapChatResponse", () => {
     expect(response.finishReason).toBe("stop");
   });
 
-  it("tolerates an empty choices array", () => {
-    const response = mapChatResponse({ choices: [] }, "deepseek-chat");
-    expect(response.content).toBe("");
-    expect(response.finishReason).toBe("other");
-    expect(response.usage.costUsd).toBe(0);
+  it("rejects a successful response with an error or no choices", () => {
+    expect(() => mapChatResponse({ error: { message: "tenant denied" } }, "deepseek-chat"))
+      .toThrow(/protocol error.*tenant denied/i);
+    expect(() => mapChatResponse({}, "deepseek-chat")).toThrow(/no choices/i);
+    expect(() => mapChatResponse({ choices: [] }, "deepseek-chat")).toThrow(/no choices/i);
   });
 
-  it("tolerates valid JSON non-objects and malformed tool calls", () => {
-    expect(mapChatResponse(null as never, "deepseek-chat")).toMatchObject({
-      content: "",
-      toolCalls: [],
-      finishReason: "other",
-    });
+  it("rejects valid JSON non-objects but tolerates malformed tool calls", () => {
+    expect(() => mapChatResponse(null, "deepseek-chat")).toThrow(/must be an object/i);
     const response = mapChatResponse({
       choices: [{ message: { content: "ok", tool_calls: [null, 42] as never } }],
     }, "deepseek-chat");

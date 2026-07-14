@@ -52,17 +52,22 @@ describe("checkpoint + rewind (trace)", () => {
   const sid = "s1";
   const ckptFile = () => join(ws, ".seekforge", "sessions", sid, "checkpoints.jsonl");
 
-  it("appendCheckpoint/readCheckpoints round-trip, corrupt lines skipped", () => {
+  it("appendCheckpoint/readCheckpoints returns only the valid prefix before corruption", () => {
     appendCheckpoint(ws, sid, { ts: "t1", path: "a.txt", before: "original" });
     appendFileSync(ckptFile(), "{not json…\n");
     appendFileSync(ckptFile(), `${JSON.stringify({ ts: "t2", path: 42, before: "bad path type" })}\n`);
     appendCheckpoint(ws, sid, { ts: "t3", path: "b.txt", before: null });
 
     const entries = readCheckpoints(ws, sid);
-    expect(entries).toEqual([
-      { ts: "t1", path: "a.txt", before: "original" },
-      { ts: "t3", path: "b.txt", before: null },
-    ]);
+    expect(entries).toEqual([{ ts: "t1", path: "a.txt", before: "original" }]);
+  });
+
+  it("stops at a well-formed JSON record with an invalid checkpoint shape", () => {
+    appendCheckpoint(ws, sid, { ts: "t1", path: "a.txt", before: "original" });
+    appendFileSync(ckptFile(), `${JSON.stringify({ ts: "t2", path: 42, before: null })}\n`);
+    appendCheckpoint(ws, sid, { ts: "t3", path: "b.txt", before: null });
+
+    expect(readCheckpoints(ws, sid)).toEqual([{ ts: "t1", path: "a.txt", before: "original" }]);
   });
 
   it("readCheckpoints returns [] when the session has no checkpoint file", () => {

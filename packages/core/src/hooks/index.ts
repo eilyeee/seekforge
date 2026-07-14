@@ -415,6 +415,11 @@ function hookContextText(stdout: string): string {
   return stdout;
 }
 
+/** Encode payload text so it cannot emit the framing grammar's delimiters. */
+function encodeHookContext(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 /** Total stdout budget for userPromptSubmit <hook-context> injection. */
 export const HOOK_CONTEXT_MAX_CHARS = 8000;
 
@@ -422,15 +427,15 @@ export const HOOK_CONTEXT_MAX_CHARS = 8000;
  * Builds the task suffix injected from userPromptSubmit hooks: each
  * successful hook's trimmed, non-empty stdout becomes one
  * `\n\n<hook-context>\n…\n</hook-context>` block, in hook order. The combined
- * stdout is capped at HOOK_CONTEXT_MAX_CHARS. Returns "" when no hook
- * contributed anything.
+ * encoded stdout is capped at HOOK_CONTEXT_MAX_CHARS; encoding prevents hook
+ * text from closing its own framing block. Returns "" when no hook contributed.
  */
 export function buildHookContext(outcomes: HookOutcome[]): string {
   let budget = HOOK_CONTEXT_MAX_CHARS;
   let suffix = "";
   for (const o of outcomes) {
     if (!o.ok || budget <= 0) continue;
-    const text = hookContextText(o.stdout).trim();
+    const text = encodeHookContext(hookContextText(o.stdout).trim());
     if (!text) continue;
     let clipped = text.slice(0, budget);
     // Don't end on a lone high surrogate (a split surrogate pair, e.g. an emoji

@@ -93,8 +93,22 @@ export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: stri
     .map((s) => s.trim())
     .filter(Boolean);
 
+  const modeRaw = fields.get("mode")?.trim();
+  if (modeRaw !== undefined && modeRaw !== "ask" && modeRaw !== "edit") {
+    throw new Error(`invalid subagent mode: ${modeRaw || "(empty)"}`);
+  }
   const maxTurnsRaw = fields.get("max-turns");
-  const maxTurns = maxTurnsRaw !== undefined ? Number.parseInt(maxTurnsRaw, 10) : Number.NaN;
+  let maxTurns: number | undefined;
+  if (maxTurnsRaw !== undefined) {
+    const normalized = maxTurnsRaw.trim();
+    if (!/^[1-9]\d*$/.test(normalized)) {
+      throw new Error(`invalid subagent max-turns: ${maxTurnsRaw}`);
+    }
+    maxTurns = Number(normalized);
+    if (!Number.isSafeInteger(maxTurns)) {
+      throw new Error(`invalid subagent max-turns: ${maxTurnsRaw}`);
+    }
+  }
 
   return {
     id,
@@ -103,11 +117,11 @@ export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: stri
     description: (fields.get("description") ?? "").replace(/\s+/g, " ").trim(),
     triggers,
     tools: tools.length > 0 ? tools : undefined,
-    mode: fields.get("mode") === "ask" ? "ask" : "edit",
+    mode: modeRaw ?? "edit",
     own: fields.get("own") || undefined,
     doNotTouch: fields.get("do_not_touch") || undefined,
     boundary: fields.get("boundary") || undefined,
-    maxTurns: Number.isFinite(maxTurns) && maxTurns > 0 ? maxTurns : undefined,
+    maxTurns,
     model: fields.get("model")?.trim() || undefined,
     body: body || undefined,
   };

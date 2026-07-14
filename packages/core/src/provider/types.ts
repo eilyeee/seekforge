@@ -111,4 +111,6 @@ export interface ChatProvider {
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse>;
   readonly model: string;
+  /** Opaque identity for response-affecting endpoint/provider/tenant config. */
+  readonly cacheIdentity?: string;
 }

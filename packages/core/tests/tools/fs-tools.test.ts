@@ -76,6 +76,14 @@ describe("search_text", () => {
     const data = res.data as { matches: unknown[] };
     expect(data.matches).toEqual([]);
   });
+
+  it("rejects regexes with catastrophic backtracking shapes", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "long.txt"), `${"a".repeat(100_000)}!\n`);
+    const res = await dispatcher.execute(call("search_text", { pattern: "(a+)+$" }), makeCtx(ws));
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("unsafe_regex");
+  });
 });
 
 describe("search_text (grep parity)", () => {
