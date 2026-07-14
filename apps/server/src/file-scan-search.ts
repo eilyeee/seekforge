@@ -1,10 +1,10 @@
 import { constants, type Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
 import { DEFAULT_IGNORE_DIRS } from "@seekforge/core";
 import {
   closeVerifiedFileAsync,
   openVerifiedFileAsync,
+  revalidateOpenedFileAsync,
   resolveWorkspacePath,
 } from "./file-security.js";
 
@@ -23,10 +23,16 @@ async function walkWorkspaceFiles(root: string, limit: number): Promise<FileList
     const rel = queue.shift() as string;
     if (++processed % LIST_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
     let entries: Dirent[];
+    let opened: Awaited<ReturnType<typeof openVerifiedFileAsync>> | undefined;
     try {
-      entries = await readdir(join(root, rel), { withFileTypes: true });
+      const directory = resolveWorkspacePath(root, rel, true).path;
+      opened = await openVerifiedFileAsync(directory, constants.O_RDONLY | constants.O_DIRECTORY);
+      entries = await readdir(directory, { withFileTypes: true });
+      await revalidateOpenedFileAsync(directory, opened);
     } catch {
       continue;
+    } finally {
+      if (opened) await closeVerifiedFileAsync(opened);
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
@@ -65,7 +71,13 @@ export async function listWorkspaceFiles(
     filesCache.set(root, entry);
   }
   if (limit > FILE_LIST_LIMIT && entry.truncated) {
-    return walkWorkspaceFiles(root, limit);
+    const expanded = await walkWorkspaceFiles(root, limit);
+    const needle = q.toLowerCase();
+    const matched =
+      needle === "" ? expanded.files : expanded.files.filter((f) => f.toLowerCase().includes(needle));
+    return matched.length > limit
+      ? { files: matched.slice(0, limit), truncated: true }
+      : { files: matched, truncated: expanded.truncated };
   }
   const needle = q.toLowerCase();
   const matched =

@@ -1,20 +1,20 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { WorkspaceAsyncCoordinator } from "./async-coordination";
 
 export function useWorkspaceAsyncCoordinator<WorkspaceId>(
   workspaceId: WorkspaceId,
   getActiveWorkspaceId: () => WorkspaceId,
 ): WorkspaceAsyncCoordinator<WorkspaceId> {
-  const coordinator = useRef<WorkspaceAsyncCoordinator<WorkspaceId> | null>(null);
-  if (coordinator.current === null) {
-    coordinator.current = new WorkspaceAsyncCoordinator(workspaceId, getActiveWorkspaceId);
-  }
-  coordinator.current.setWorkspace(workspaceId);
+  const activeWorkspaceRef = useRef(getActiveWorkspaceId);
+  activeWorkspaceRef.current = getActiveWorkspaceId;
+  const coordinator = useMemo(
+    () => new WorkspaceAsyncCoordinator(workspaceId, () => activeWorkspaceRef.current()),
+    [workspaceId],
+  );
 
   useEffect(() => {
-    const current = coordinator.current;
-    return () => current?.invalidate();
-  }, []);
+    return () => coordinator.invalidate();
+  }, [coordinator]);
 
-  return coordinator.current;
+  return coordinator;
 }

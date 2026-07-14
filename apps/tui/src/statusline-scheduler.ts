@@ -28,9 +28,10 @@ export const initialSchedulerState: SchedulerState = {
   lastComputedAt: 0,
 };
 
-/** Stable key for change-detection across the fields a script can read. */
-export function inputKey(input: StatusLineInput): string {
+/** Stable key for every value that can affect status-line output. */
+export function inputKey(command: string, input: StatusLineInput): string {
   return JSON.stringify([
+    command,
     input.model,
     input.cwd,
     input.sessionId ?? null,
@@ -47,12 +48,13 @@ export function inputKey(input: StatusLineInput): string {
  */
 export function shouldRecompute(
   state: SchedulerState,
+  command: string,
   input: StatusLineInput,
   now: number,
   minIntervalMs: number,
 ): boolean {
   if (state.lastInputKey === null) return true;
-  const changed = inputKey(input) !== state.lastInputKey;
+  const changed = inputKey(command, input) !== state.lastInputKey;
   const elapsed = now - state.lastComputedAt >= minIntervalMs;
   return changed && elapsed;
 }
@@ -82,7 +84,7 @@ export function tick(
 ): TickResult {
   const now = opts?.now ?? Date.now();
   const minIntervalMs = opts?.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
-  if (!shouldRecompute(state, input, now, minIntervalMs)) {
+  if (!shouldRecompute(state, command, input, now, minIntervalMs)) {
     return { state, recomputed: false };
   }
   const run = opts?.run ?? runStatusLine;
@@ -90,7 +92,7 @@ export function tick(
   return {
     state: {
       lastOutput: out ?? state.lastOutput,
-      lastInputKey: inputKey(input),
+      lastInputKey: inputKey(command, input),
       lastComputedAt: now,
     },
     recomputed: true,

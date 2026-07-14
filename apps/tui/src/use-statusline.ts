@@ -26,6 +26,7 @@ export function useStatusLine(command: string | undefined, projectPath: string, 
 
   useEffect(() => {
     if (!command) {
+      schedulerRef.current = initialSchedulerState;
       setText(null);
       return;
     }

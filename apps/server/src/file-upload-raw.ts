@@ -40,6 +40,23 @@ export class UploadError extends Error {
   }
 }
 
+function decodeBase64(value: string): Buffer | null {
+  let encoded = value;
+  if (/^data:/i.test(value)) {
+    const match = /^data:[^,]*;base64,(.*)$/is.exec(value);
+    if (!match) return null;
+    encoded = match[1] ?? "";
+  }
+  if (encoded === "" || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 === 1) {
+    return null;
+  }
+  const firstPadding = encoded.indexOf("=");
+  if (firstPadding !== -1 && encoded.length % 4 !== 0) return null;
+  const data = Buffer.from(encoded, "base64");
+  const canonical = data.toString("base64").replace(/=+$/, "");
+  return canonical === encoded.replace(/=+$/, "") ? data : null;
+}
+
 function resolveUploadPath(root: string, rel: string): string {
   try {
     return resolveWorkspacePath(root, rel, true).path;
@@ -57,9 +74,8 @@ export function saveUpload(root: string, name: string, dataBase64: string): { pa
       `unsupported image extension ".${ext}" — supported: ${[...IMAGE_EXTENSIONS].join(", ")}`,
     );
   }
-  const b64 = dataBase64.replace(/^data:[^,]*,/, "");
-  const data = Buffer.from(b64, "base64");
-  if (data.length === 0) {
+  const data = decodeBase64(dataBase64);
+  if (!data || data.length === 0) {
     throw new UploadError(400, "bad_request", "dataBase64 is empty or not valid base64");
   }
   if (data.length > MAX_UPLOAD_BYTES) {
@@ -110,8 +126,8 @@ export function readRawUpload(root: string, path: string): { data: Buffer; conte
   let resolved: ReturnType<typeof resolveWorkspacePath>;
   let uploadDir: ReturnType<typeof resolveWorkspacePath>;
   try {
-    resolved = resolveWorkspacePath(root, path, false);
-    uploadDir = resolveWorkspacePath(root, UPLOADS_DIR, false);
+    resolved = resolveWorkspacePath(root, path, true);
+    uploadDir = resolveWorkspacePath(root, UPLOADS_DIR, true);
   } catch {
     throw new RawFileError(400, "bad_request", "path escapes the workspace");
   }

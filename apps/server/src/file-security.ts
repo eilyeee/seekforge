@@ -119,6 +119,19 @@ export function closeVerifiedFile(opened: OpenedVerifiedFile): void {
   closeSync(opened.parentFd);
 }
 
+/** Re-checks that an opened file is still named by the same verified path. */
+export function revalidateOpenedFile(path: string, opened: OpenedVerifiedFile): void {
+  verifyPathIdentity(
+    path,
+    statSync(dirname(path)),
+    statSync(path),
+    fstatSync(opened.parentFd),
+    fstatSync(opened.fileFd),
+    realpathSync(dirname(path)),
+    realpathSync(path),
+  );
+}
+
 export type OpenedVerifiedFileAsync = {
   parentHandle: FileHandle;
   fileHandle: FileHandle;
@@ -167,4 +180,29 @@ export async function openVerifiedFileAsync(
 export async function closeVerifiedFileAsync(opened: OpenedVerifiedFileAsync): Promise<void> {
   await opened.fileHandle.close();
   await opened.parentHandle.close();
+}
+
+/** Async revalidation for operations that must reopen an already checked path. */
+export async function revalidateOpenedFileAsync(
+  path: string,
+  opened: OpenedVerifiedFileAsync,
+): Promise<void> {
+  const [parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal] =
+    await Promise.all([
+      stat(dirname(path)),
+      stat(path),
+      opened.parentHandle.stat(),
+      opened.fileHandle.stat(),
+      realpath(dirname(path)),
+      realpath(path),
+    ]);
+  verifyPathIdentity(
+    path,
+    parentPathStat,
+    filePathStat,
+    parentFdStat,
+    fileFdStat,
+    parentReal,
+    fileReal,
+  );
 }

@@ -64,6 +64,26 @@ export class WorkspaceAsyncCoordinator<WorkspaceId> {
   }
 }
 
+export class ExclusiveOperation {
+  private current: symbol | null = null;
+
+  begin(): symbol | null {
+    if (this.current !== null) return null;
+    this.current = Symbol("exclusive-operation");
+    return this.current;
+  }
+
+  end(operation: symbol): boolean {
+    if (this.current !== operation) return false;
+    this.current = null;
+    return true;
+  }
+
+  invalidate(): void {
+    this.current = null;
+  }
+}
+
 export function createSerialQueue(): <T>(task: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(task: () => Promise<T>): Promise<T> => {

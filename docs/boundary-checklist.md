@@ -66,6 +66,8 @@ first one's answer.
 - **Caught:** `packages/core/src/provider/cache.ts` — the key omitted
   `temperature` and `maxTokens`, so a follow-up call with a larger `maxTokens`
   replayed the earlier truncated reply.
+- **Also caught:** `apps/tui/src/statusline-scheduler.ts` — the cache key omitted
+  the status-line command, so replacing or re-enabling it reused stale output.
 
 ## 4. Serialize and deserialize must be exact inverses
 
@@ -541,6 +543,9 @@ also misses changes to the link itself.
 - **Also caught:** unauthenticated static serving followed symlinks inside its
   root. Canonicalize the static root and use no-follow descriptor reads with
   path/descriptor identity checks for every requested asset.
+- **Also caught:** the server raw-upload boundary treated the physical target of
+  a symlinked uploads directory as trusted, and directory listings reopened a
+  verified path without rechecking identity after enumeration.
 
 ## 30. Related mutations must share one serialization domain
 
@@ -559,6 +564,8 @@ as merge and remove even though their API routes and target ids differ.
 - **Also caught:** `PUT /api/file` wrote workspace files without the active
   session guard, allowing the editor to overwrite concurrent Agent changes.
   Every independent workspace mutation surface must acquire the same guard.
+- **Also caught:** Desktop Git stage/unstage/discard and commit used independent
+  pending flags, allowing conflicting writes to be issued concurrently.
 
 ## 31. Derived syntax semantics belong to parsed values
 
@@ -647,6 +654,47 @@ then turn a handled client error into an unknown server failure.
   keep status, code, and message semantics covered by contract tests.
 - **Caught:** `apps/server/src/file-upload-raw.ts` — the shared path guard's
   `ToolError` escaped `saveUpload` instead of the documented `UploadError(400)`.
+
+## 40. Convenience decoders may accept malformed encodings
+
+Many standard-library decoders are intentionally forgiving. Successful decode
+does not prove that untrusted input obeyed the advertised wire format.
+
+- **Do:** validate the grammar and compare against a canonical round trip before
+  accepting encoded input.
+- **Caught:** `apps/server/src/file-upload-raw.ts` — `Buffer.from(..., "base64")`
+  ignored invalid characters and accepted malformed image uploads.
+
+## 41. Effect cleanup runs on dependency changes, not only unmount
+
+Putting process-wide teardown in an effect that depends on mutable state also
+runs that teardown before every rerun. A sibling effect may not rerun to restore
+what was cleared.
+
+- **Do:** keep dependency-change cleanup scoped to that effect's resource and
+  put component-wide teardown in a separate unmount effect.
+- **Caught:** `apps/tui/src/use-terminal-lifecycle.ts` — toggling mouse capture
+  cleared the terminal title until another title dependency changed.
+
+## 42. Render must not mutate an existing async coordinator
+
+Concurrent React renders can be abandoned. Mutating a long-lived coordinator
+during render lets an uncommitted render invalidate the state still on screen.
+
+- **Do:** create identity-bound coordinators with `useMemo`, update callback refs
+  without changing ownership, and invalidate the old instance in effect cleanup.
+- **Caught:** `apps/desktop/src/views/use-workspace-async.ts` — workspace changes
+  mutated the previous coordinator before the render committed.
+
+## 43. Fallback branches must preserve request predicates
+
+A slow path or cache bypass still implements the same request. Returning its raw
+intermediate result can silently drop filters, sorting, or pagination.
+
+- **Do:** share post-processing across cached and uncached branches, or repeat
+  every predicate explicitly with a boundary test.
+- **Caught:** `apps/server/src/file-scan-search.ts` — an expanded uncached walk
+  ignored the caller's `q` filter.
 
 ---
 

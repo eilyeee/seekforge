@@ -125,6 +125,12 @@ describe("GET /api/tree", () => {
     const res = await authed("/api/tree?path=../etc");
     expect(res.status).toBe(400);
   });
+
+  it("returns 400 when the tree path names a regular file", async () => {
+    const res = await authed("/api/tree?path=README.md");
+    expect(res.status).toBe(400);
+    expect((await jsonOf(res)).error.code).toBe("bad_request");
+  });
 });
 
 describe("GET /api/file", () => {

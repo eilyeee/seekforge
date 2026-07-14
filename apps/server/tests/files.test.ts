@@ -153,6 +153,18 @@ describe("POST /api/upload", () => {
     expect(notJson.status).toBe(400);
   });
 
+  it("rejects non-canonical and malformed base64 without creating an upload", async () => {
+    const uploadDir = join(workspace, ".seekforge", "uploads");
+    const before = readdirSync(uploadDir).sort();
+    for (const dataBase64 of ["not-base64!!", "AAAA=", "data:image/png,AAAA"]) {
+      const res = await upload({ name: "bad.png", dataBase64 });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("bad_request");
+    }
+    expect(readdirSync(uploadDir).sort()).toEqual(before);
+  });
+
   it("is 404 for an unknown workspace id", async () => {
     const res = await authed("/api/files?ws=nope");
     expect(res.status).toBe(404);
@@ -194,5 +206,18 @@ describe("files TTL cache", () => {
 
     const result = await searchWorkspaceContent(ws, "outside needle");
     expect(result.hits).toEqual([]);
+  });
+
+  it("preserves the query when a larger limit requires an uncached walk", async () => {
+    const ws = makeWorkspace();
+    for (let i = 0; i < 2001; i++) {
+      writeFileIn(ws, `many/file-${String(i).padStart(4, "0")}.txt`, "x\n");
+    }
+    writeFileIn(ws, "many/needle.txt", "x\n");
+    clearFilesCacheForTests();
+    await listWorkspaceFiles(ws);
+
+    const result = await listWorkspaceFiles(ws, "needle", 3000);
+    expect(result.files).toEqual(["many/needle.txt"]);
   });
 });

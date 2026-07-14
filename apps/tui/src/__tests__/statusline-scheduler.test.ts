@@ -12,25 +12,27 @@ const base: StatusLineInput = { model: "deepseek-chat", cwd: "/tmp", costUsd: 0.
 
 describe("inputKey", () => {
   it("is stable for equal inputs and distinct for changed fields", () => {
-    expect(inputKey(base)).toBe(inputKey({ ...base }));
-    expect(inputKey(base)).not.toBe(inputKey({ ...base, costUsd: 0.2 }));
-    expect(inputKey(base)).not.toBe(inputKey({ ...base, approval: "auto" }));
+    expect(inputKey("cmd", base)).toBe(inputKey("cmd", { ...base }));
+    expect(inputKey("cmd", base)).not.toBe(inputKey("other", base));
+    expect(inputKey("cmd", base)).not.toBe(inputKey("cmd", { ...base, costUsd: 0.2 }));
+    expect(inputKey("cmd", base)).not.toBe(inputKey("cmd", { ...base, approval: "auto" }));
   });
 });
 
 describe("shouldRecompute", () => {
   it("always recomputes the very first time", () => {
-    expect(shouldRecompute(initialSchedulerState, base, 0, 1000)).toBe(true);
+    expect(shouldRecompute(initialSchedulerState, "cmd", base, 0, 1000)).toBe(true);
   });
 
   it("requires both a changed input and elapsed interval", () => {
-    const state: SchedulerState = { lastOutput: "x", lastInputKey: inputKey(base), lastComputedAt: 1000 };
+    const state: SchedulerState = { lastOutput: "x", lastInputKey: inputKey("cmd", base), lastComputedAt: 1000 };
     // Same input → never recompute, even far in the future.
-    expect(shouldRecompute(state, base, 99999, 1000)).toBe(false);
+    expect(shouldRecompute(state, "cmd", base, 99999, 1000)).toBe(false);
     // Changed input but within the interval → wait.
-    expect(shouldRecompute(state, { ...base, costUsd: 0.2 }, 1500, 1000)).toBe(false);
+    expect(shouldRecompute(state, "cmd", { ...base, costUsd: 0.2 }, 1500, 1000)).toBe(false);
     // Changed input and interval elapsed → recompute.
-    expect(shouldRecompute(state, { ...base, costUsd: 0.2 }, 2000, 1000)).toBe(true);
+    expect(shouldRecompute(state, "cmd", { ...base, costUsd: 0.2 }, 2000, 1000)).toBe(true);
+    expect(shouldRecompute(state, "other", base, 2000, 1000)).toBe(true);
   });
 });
 
@@ -52,6 +54,19 @@ describe("tick", () => {
     r = tick(r.state, "cmd", base, { now: 10000, run });
     expect(r.recomputed).toBe(false);
     expect(calls).toBe(1);
+  });
+
+  it("recomputes when the command changes and the input does not", () => {
+    const commands: string[] = [];
+    const run = (command: string): string => {
+      commands.push(command);
+      return command;
+    };
+    let result = tick(initialSchedulerState, "first", base, { now: 0, run });
+    result = tick(result.state, "second", base, { now: 2000, run });
+    expect(result.recomputed).toBe(true);
+    expect(result.state.lastOutput).toBe("second");
+    expect(commands).toEqual(["first", "second"]);
   });
 
   it("keeps the previous cached output when a recompute fails", () => {

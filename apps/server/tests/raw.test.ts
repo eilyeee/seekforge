@@ -1,7 +1,8 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
+import { RawFileError, readRawUpload } from "../src/files.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 
 const TOKEN = "test-token-raw";
@@ -58,6 +59,21 @@ describe("GET /api/raw", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("bad_request");
+  });
+
+  it("rejects an uploads symlink even when its target stays inside the workspace", () => {
+    const ws = makeWorkspace();
+    mkdirSync(join(ws, ".seekforge"), { recursive: true });
+    writeFileIn(ws, ".env", "SECRET=outside-upload-boundary\n");
+    symlinkSync("..", join(ws, ".seekforge", "uploads"), "dir");
+    symlinkSync(".env", join(ws, "secret.png"), "file");
+
+    expect(() => readRawUpload(ws, ".seekforge/uploads/secret.png")).toThrowError(RawFileError);
+    try {
+      readRawUpload(ws, ".seekforge/uploads/secret.png");
+    } catch (error) {
+      expect(error).toMatchObject({ status: 400, code: "bad_request" });
+    }
   });
 
   it("404s a missing file inside uploads", async () => {

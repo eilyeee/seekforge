@@ -13,6 +13,7 @@ import {
   closeVerifiedFile,
   FilePathChangedError,
   openVerifiedFile,
+  revalidateOpenedFile,
   resolveWorkspacePath,
   type ResolvedWorkspacePath,
 } from "./file-security.js";
@@ -69,7 +70,7 @@ export function listTree(workspace: string, rel: string): Tree {
   const resolved = resolveBrowsePath(workspace, rel);
   let opened: ReturnType<typeof openVerifiedFile>;
   try {
-    opened = openVerifiedFile(resolved.path, constants.O_RDONLY | constants.O_DIRECTORY);
+    opened = openVerifiedFile(resolved.path, constants.O_RDONLY);
   } catch (error) {
     if (error instanceof FilePathChangedError) {
       throw new FileBrowseError(400, "bad_request", "file path changed while opening");
@@ -83,7 +84,11 @@ export function listTree(workspace: string, rel: string): Tree {
     let dirents: Dirent[];
     try {
       dirents = readdirSync(resolved.path, { withFileTypes: true });
-    } catch {
+      revalidateOpenedFile(resolved.path, opened);
+    } catch (error) {
+      if (error instanceof FilePathChangedError) {
+        throw new FileBrowseError(400, "bad_request", "file path changed while reading directory");
+      }
       throw new FileBrowseError(404, "not_found", "directory not readable");
     }
     const dirs: TreeEntry[] = [];

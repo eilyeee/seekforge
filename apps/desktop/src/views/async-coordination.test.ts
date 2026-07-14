@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createSerialQueue, LatestRequest, WorkspaceAsyncCoordinator } from "./async-coordination";
+import {
+  createSerialQueue,
+  ExclusiveOperation,
+  LatestRequest,
+  WorkspaceAsyncCoordinator,
+} from "./async-coordination";
 
 describe("LatestRequest", () => {
   it("rejects stale selections and closed details", () => {
@@ -65,6 +70,29 @@ describe("WorkspaceAsyncCoordinator", () => {
     expect(coordinator.isCurrent(mutation!)).toBe(true);
     expect(coordinator.isCurrent(firstLoad!)).toBe(false);
     expect(coordinator.isCurrent(secondLoad!)).toBe(true);
+  });
+});
+
+describe("ExclusiveOperation", () => {
+  it("allows only one operation until its owner releases the token", () => {
+    const operations = new ExclusiveOperation();
+    const first = operations.begin();
+    expect(first).not.toBeNull();
+    expect(operations.begin()).toBeNull();
+    expect(operations.end(Symbol("stale"))).toBe(false);
+    expect(operations.begin()).toBeNull();
+    expect(operations.end(first!)).toBe(true);
+    expect(operations.begin()).not.toBeNull();
+  });
+
+  it("does not let an invalidated owner release a newer operation", () => {
+    const operations = new ExclusiveOperation();
+    const old = operations.begin()!;
+    operations.invalidate();
+    const current = operations.begin()!;
+    expect(operations.end(old)).toBe(false);
+    expect(operations.begin()).toBeNull();
+    expect(operations.end(current)).toBe(true);
   });
 });
 

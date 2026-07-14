@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { useT } from "../lib/i18n";
@@ -6,6 +6,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, EmptyState, IconGit, TextArea, type BadgeTone } from "../components/ui";
 import type { GitFile, GitFileStatus, GitStatus } from "../types";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
+import { ExclusiveOperation } from "./async-coordination";
 
 const STATUS_TONE: Record<GitFileStatus, BadgeTone> = {
   modified: "warn",
@@ -27,6 +28,7 @@ export function GitView() {
   const [note, setNote] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
+  const writes = useRef(new ExclusiveOperation());
 
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
@@ -44,6 +46,7 @@ export function GitView() {
   };
 
   useEffect(() => {
+    writes.current.invalidate();
     setStatus(null);
     setError(null);
     setNote(null);
@@ -58,15 +61,18 @@ export function GitView() {
     const workspaceId = ws;
     const mutation = requests.capture(workspaceId);
     if (!mutation) return;
+    const write = writes.current.begin();
+    if (!write) return;
     setBusy(true);
     setNote(null);
-    fn()
+    Promise.resolve()
+      .then(fn)
       .then(() => refresh(workspaceId))
       .catch((e: unknown) => {
         if (requests.isCurrent(mutation)) setError(String(e));
       })
       .finally(() => {
-        if (requests.isCurrent(mutation)) setBusy(false);
+        if (writes.current.end(write) && requests.isCurrent(mutation)) setBusy(false);
       });
   };
 
@@ -84,6 +90,8 @@ export function GitView() {
     const workspaceId = ws;
     const mutation = requests.capture(workspaceId);
     if (!mutation) return;
+    const write = writes.current.begin();
+    if (!write) return;
     setCommitting(true);
     setNote(null);
     api
@@ -100,13 +108,14 @@ export function GitView() {
         }
       })
       .finally(() => {
-        if (requests.isCurrent(mutation)) setCommitting(false);
+        if (writes.current.end(write) && requests.isCurrent(mutation)) setCommitting(false);
       });
   };
 
   const staged = status?.files.filter((f) => f.staged) ?? [];
   const unstaged = status?.files.filter((f) => !f.staged) ?? [];
-  const canCommit = staged.length > 0 && message.trim() !== "" && !committing;
+  const writePending = busy || committing;
+  const canCommit = staged.length > 0 && message.trim() !== "" && !writePending;
 
   return (
     <div className="flex h-full flex-col">
@@ -150,7 +159,7 @@ export function GitView() {
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder={t("git.commitPlaceholder")}
                 rows={3}
-                disabled={committing}
+                disabled={writePending}
               />
               <div className="mt-2 flex items-center gap-2">
                 {note && <span className="text-2xs text-ok">{note}</span>}
@@ -167,7 +176,7 @@ export function GitView() {
               onAction={(p) => unstage([p])}
               bulkLabel={t("git.unstageAll")}
               onBulk={staged.length > 0 ? () => unstage(staged.map((f) => f.path)) : undefined}
-              busy={busy}
+              busy={writePending}
             />
 
             <Section
@@ -177,7 +186,7 @@ export function GitView() {
               onAction={(p) => stage([p])}
               bulkLabel={t("git.stageAll")}
               onBulk={unstaged.length > 0 ? () => stage(unstaged.map((f) => f.path)) : undefined}
-              busy={busy}
+              busy={writePending}
               onDiscard={setDiscardTarget}
             />
           </div>
