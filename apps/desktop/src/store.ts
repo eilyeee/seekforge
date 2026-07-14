@@ -220,7 +220,24 @@ function isUnreachable(e: unknown): boolean {
   return true;
 }
 
+function bindBlankInitialTab(tabs: TabsState, workspaceId: string): TabsState {
+  const first = tabs.tabs[0];
+  if (
+    !first ||
+    first.worktree ||
+    first.chat.sessionId !== null ||
+    first.chat.running ||
+    first.chat.items.length > 0 ||
+    first.title !== DEFAULT_TAB_TITLE
+  ) {
+    return tabs;
+  }
+  return updateTab(tabs, first.tabId, { ws: workspaceId });
+}
+
 export const useStore = create<AppStore>()((set, get) => {
+  let openWorkspaceGeneration = 0;
+
   const handleFrame = (tabId: string, frame: ServerFrame): void => {
     // Title is read before routing; it does not change mid-run.
     const tab = get().tabs.tabs.find((t) => t.tabId === tabId);
@@ -277,7 +294,7 @@ export const useStore = create<AppStore>()((set, get) => {
               tabs:
                 !next || workspaces.length === 0
                   ? s.tabs
-                  : updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: next }),
+                  : bindBlankInitialTab(s.tabs, next),
             };
           });
           // Auto-reopen the last project on a fresh relaunch: the server only
@@ -298,19 +315,22 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     setActiveWorkspace: (id) => {
+      openWorkspaceGeneration += 1;
       const ws = get().workspaces.find((w) => w.id === id);
       if (ws) storeActivePath(ws.path);
       set({ activeWorkspaceId: id });
     },
 
     openWorkspace: async (path) => {
+      const generation = ++openWorkspaceGeneration;
       const { workspace, workspaces, recents } = await api.openWorkspace(path);
+      if (generation !== openWorkspaceGeneration) return;
       storeActivePath(workspace.path);
       set((s) => ({
         workspaces,
         recents,
         activeWorkspaceId: workspace.id,
-        tabs: updateTab(s.tabs, s.tabs.tabs[0]!.tabId, { ws: workspace.id }),
+        tabs: bindBlankInitialTab(s.tabs, workspace.id),
       }));
     },
 

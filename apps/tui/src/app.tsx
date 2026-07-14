@@ -65,7 +65,7 @@ import { stashList, stashPop, stashPush } from "./stash.js";
 import { THEME_PRESETS, loadTheme, themePickerLines } from "./theme.js";
 import { buildHandoff, handoffPath, latestHandoff, listHandoffs } from "./handoff.js";
 import { formatUsageDetail, kfmt } from "./format.js";
-import { COMMANDS, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
+import { COMMANDS, commandRequiresIdle, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
 import { parseWorktreeCommand, pickFreeSlug, resolveWorktreeTarget, seekforgeWorktrees } from "./worktree-cmd.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
@@ -146,7 +146,13 @@ import {
 } from "./history-search.js";
 import { INIT_PROMPT } from "./init-prompt.js";
 import { notify } from "./notify.js";
-import { applyCompletion, cycleCompletion, startCompletion, type PathCompletion } from "./path-complete.js";
+import {
+  applyCompletion,
+  completionForTab,
+  cycleCompletion,
+  startCompletion,
+  type TabPathCompletion,
+} from "./path-complete.js";
 import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
 import { attachSkillContent, expandSkillCommand, findSkillByCommand, skillCommandSpecs } from "./skill-commands.js";
 import { applyVimKey, initialVim, type VimState } from "./vim.js";
@@ -265,7 +271,7 @@ export function App({
   const searchEntriesRef = useRef<string[]>([]);
 
   // Tab path-completion cycling state (reset on any other edit).
-  const completionRef = useRef<PathCompletion | null>(null);
+  const completionRef = useRef<TabPathCompletion | null>(null);
   const lastEscRef = useRef(0);
 
   // Mutable refs hold values the async run loop reads after renders.
@@ -519,6 +525,7 @@ export function App({
 
   useEffect(() => {
     if (editorTabIdRef.current === currentTabId) return;
+    completionRef.current = null;
     editorTabIdRef.current = currentTabId;
     const next = composerDraftFor(draftsRef.current, currentTabId);
     setEditor(next);
@@ -873,6 +880,10 @@ export function App({
   const handleSlash = useCallback(
     (command: SlashCommand) => {
       if (command.name !== "unknown") usageRef.current = bumpUsage(usageRef.current, command.name);
+      if (controllerRef.current && commandRequiresIdle(command)) {
+        notice("wait for the running task to finish before rewinding files", "error");
+        return;
+      }
       switch (command.name) {
         case "help": {
           const specs: CommandSpec[] = [
@@ -2481,17 +2492,17 @@ export function App({
         return;
       }
       case "path-complete": {
-        const existing = completionRef.current;
+        const existing = completionForTab(completionRef.current, currentTabId);
         if (existing && existing.candidates.length > 0) {
           const cycled = cycleCompletion(existing);
           applyEditor(applyCompletion(editor, cycled));
-          completionRef.current = cycled;
+          completionRef.current = { tabId: currentTabId, completion: cycled };
           return;
         }
         const completion = startCompletion(editor, ensureFiles());
         if (!completion) return;
         applyEditor(applyCompletion(editor, completion));
-        completionRef.current = completion;
+        completionRef.current = { tabId: currentTabId, completion };
         return;
       }
       default:

@@ -6,6 +6,7 @@
  */
 
 import { chatReducer, initialState, type ChatAction, type ChatState } from "./model.js";
+import { graphemeBoundaries } from "./editor.js";
 
 export type Tab = { id: number; name: string; chat: ChatState };
 
@@ -26,6 +27,11 @@ export type TabsAction =
 
 const DEFAULT_NAME = "·";
 const NAME_MAX = 16;
+
+function truncateName(text: string): string {
+  const boundaries = graphemeBoundaries(text);
+  return boundaries.length - 1 <= NAME_MAX ? text : text.slice(0, boundaries[NAME_MAX]);
+}
 
 export function initialTabs(model: string): TabsState {
   return { tabs: [{ id: 1, name: DEFAULT_NAME, chat: initialState(model) }], active: 0, nextId: 2 };
@@ -55,7 +61,7 @@ export function tabsReducer(s: TabsState, a: TabsAction): TabsState {
       // First user message names the tab.
       let name = tab.name;
       if (name === DEFAULT_NAME && a.action.type === "user") {
-        name = a.action.text.replace(/\s+/g, " ").slice(0, NAME_MAX) || DEFAULT_NAME;
+        name = truncateName(a.action.text.replace(/\s+/g, " ")) || DEFAULT_NAME;
       }
       const tabs = s.tabs.slice();
       tabs[idx] = { ...tab, chat, name };

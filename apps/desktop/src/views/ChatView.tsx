@@ -23,6 +23,7 @@ import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button } from "../components/ui";
 import type { AccountBalance, ServerConfig, SlashCommand } from "../types";
+import { valueForWorkspace } from "./async-coordination";
 
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
 type WorktreeDialog =
@@ -105,7 +106,11 @@ export function ChatView() {
   }, [tab.ws]);
 
   /** Account balance chip: fetched on mount and again after each run ends. */
-  const [balance, setBalance] = useState<AccountBalance | null>(null);
+  const [balanceState, setBalanceState] = useState<{ workspaceId: string; value: AccountBalance | null }>({
+    workspaceId: tab.ws,
+    value: null,
+  });
+  const balance = valueForWorkspace(balanceState, tab.ws);
   const running = tab.chat.running;
   useEffect(() => {
     if (running) return;
@@ -113,8 +118,7 @@ export function ChatView() {
     api
       .balance(tab.ws)
       .then((r) => {
-        // null = unknown; keep showing the previous value (fetchBalance contract).
-        if (alive && r.balance) setBalance(r.balance);
+        if (alive && r.balance) setBalanceState({ workspaceId: tab.ws, value: r.balance });
       })
       .catch(() => {});
     return () => {

@@ -39,6 +39,15 @@ export type PathCompletion = {
   index: number;
 };
 
+export type TabPathCompletion = {
+  tabId: number;
+  completion: PathCompletion;
+};
+
+export function completionForTab(state: TabPathCompletion | null, tabId: number): PathCompletion | null {
+  return state?.tabId === tabId ? state.completion : null;
+}
+
 /** True when `file` starts with `token` at index 0 or right after any "/" (case-insensitive). */
 function prefixMatchAt(token: string, file: string): "path" | "segment" | null {
   const t = token.toLowerCase();

@@ -3,6 +3,7 @@ import {
   createSerialQueue,
   ExclusiveOperation,
   LatestRequest,
+  valueForWorkspace,
   WorkspaceAsyncCoordinator,
 } from "./async-coordination";
 
@@ -70,6 +71,14 @@ describe("WorkspaceAsyncCoordinator", () => {
     expect(coordinator.isCurrent(mutation!)).toBe(true);
     expect(coordinator.isCurrent(firstLoad!)).toBe(false);
     expect(coordinator.isCurrent(secondLoad!)).toBe(true);
+  });
+});
+
+describe("valueForWorkspace", () => {
+  it("hides a value captured for the previous workspace", () => {
+    const balance = { workspaceId: "workspace-a", value: { totalBalance: "12.00" } };
+    expect(valueForWorkspace(balance, "workspace-a")).toEqual({ totalBalance: "12.00" });
+    expect(valueForWorkspace(balance, "workspace-b")).toBeNull();
   });
 });
 

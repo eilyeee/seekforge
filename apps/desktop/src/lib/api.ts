@@ -162,12 +162,13 @@ export const api = {
     ),
   skills: (ws?: string) => request<Skill[]>("GET", withWorkspace("/api/skills", ws)),
   skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
-  memory: () => request<MemoryResponse>("GET", withWorkspace("/api/memory")),
-  memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user") =>
+  memory: (ws?: string) => request<MemoryResponse>("GET", withWorkspace("/api/memory", ws)),
+  memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user", ws?: string) =>
     request<MemoryCandidate>(
       "POST",
       withWorkspace(
         `/api/memory/${encodeURIComponent(id)}/${action}${scope === "user" ? "?scope=user" : ""}`,
+        ws,
       ),
     ),
   memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean, scope?: "project" | "user", ws?: string) =>
@@ -177,8 +178,8 @@ export const api = {
       ...(pending ? { pending: true } : {}),
       ...(scope === "user" ? { scope: "user" } : {}),
     }),
-  memoryDeleteFact: (selector: { index: number } | { match: string }) =>
-    request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact"), selector),
+  memoryDeleteFact: (selector: { index: number } | { match: string }, ws?: string) =>
+    request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact", ws), selector),
   diff: (staged?: boolean) =>
     request<{ diff: string; truncated: boolean; notGit?: boolean }>(
       "GET",
@@ -256,9 +257,9 @@ export const api = {
   models: () => request<ModelInfo[]>("GET", "/api/models"),
 
   // Memory stats + compaction (workspace-scoped).
-  memoryStats: () => request<MemoryStats>("GET", withWorkspace("/api/memory/stats")),
-  memoryCompact: (opts?: { dryRun?: boolean; pruneUnusedDays?: number }) =>
-    request<CompactResult>("POST", withWorkspace("/api/memory/compact"), opts ?? {}),
+  memoryStats: (ws?: string) => request<MemoryStats>("GET", withWorkspace("/api/memory/stats", ws)),
+  memoryCompact: (opts?: { dryRun?: boolean; pruneUnusedDays?: number }, ws?: string) =>
+    request<CompactResult>("POST", withWorkspace("/api/memory/compact", ws), opts ?? {}),
 
   // Skills lifecycle (workspace-scoped). Builtin skills are read-only.
   skillSetEnabled: (id: string, enabled: boolean, scope?: SkillScope) =>

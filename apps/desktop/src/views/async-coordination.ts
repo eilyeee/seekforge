@@ -21,6 +21,18 @@ export interface WorkspaceOperation<WorkspaceId> {
   readonly request?: number;
 }
 
+export interface WorkspaceValue<WorkspaceId, Value> {
+  readonly workspaceId: WorkspaceId;
+  readonly value: Value;
+}
+
+export function valueForWorkspace<WorkspaceId, Value>(
+  state: WorkspaceValue<WorkspaceId, Value>,
+  workspaceId: WorkspaceId,
+): Value | null {
+  return Object.is(state.workspaceId, workspaceId) ? state.value : null;
+}
+
 export class WorkspaceAsyncCoordinator<WorkspaceId> {
   private workspaceGeneration = 0;
   private readonly requests = new LatestRequest();

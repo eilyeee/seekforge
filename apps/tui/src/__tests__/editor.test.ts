@@ -112,6 +112,19 @@ describe("vertical movement", () => {
   it("moveDown on the last line is a no-op", () => {
     expect(moveDown(at("abc\ndef", 5)).cursor).toBe(5);
   });
+
+  it("keeps terminal display columns across CJK wide characters", () => {
+    expect(moveDown(at("你a\n1234", 1)).cursor).toBe(5); // display column 2 -> after "12"
+    expect(moveDown(at("ab\n你x", 2)).cursor).toBe(4); // display column 2 -> after "你"
+    expect(moveUp(at("1234\n你a", 6)).cursor).toBe(2); // after "你" -> display column 2
+  });
+
+  it("treats combining sequences as one display cell and one cursor stop", () => {
+    const combined = "e\u0301";
+    expect(moveDown(at(`${combined}x\nabc`, combined.length)).cursor).toBe(combined.length + 3);
+    expect(moveDown(at(`a\n${combined}x`, 1)).cursor).toBe(1 + 1 + combined.length);
+    expect(moveUp(at(`a\n${combined}x`, 1 + 1 + combined.length)).cursor).toBe(1);
+  });
 });
 
 describe("buffer ops & line predicates", () => {

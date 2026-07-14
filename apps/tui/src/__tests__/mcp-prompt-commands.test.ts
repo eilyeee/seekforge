@@ -33,6 +33,22 @@ describe("mcpPromptCommandSpecs", () => {
     expect(mcpPromptCommandSpecs([{ server: "!!!", name: "x" }])).toEqual([]);
     expect(mcpPromptCommandSpecs([{ server: "ok", name: "###" }])).toEqual([]);
   });
+
+  it("assigns unique command names when normalization collides", () => {
+    const colliding: McpPromptRef[] = [
+      { server: "Build Server", name: "Run Check" },
+      { server: "build-server", name: "run-check" },
+      { server: "build server", name: "run-check-2" },
+    ];
+    expect(mcpPromptCommandSpecs(colliding).map((spec) => spec.name)).toEqual([
+      "mcp:build-server:run-check",
+      "mcp:build-server:run-check-2",
+      "mcp:build-server:run-check-2-2",
+    ]);
+    expect(findPromptByCommand(colliding, "mcp:build-server:run-check")).toBe(colliding[0]);
+    expect(findPromptByCommand(colliding, "mcp:build-server:run-check-2")).toBe(colliding[1]);
+    expect(findPromptByCommand(colliding, "mcp:build-server:run-check-2-2")).toBe(colliding[2]);
+  });
 });
 
 describe("parseMcpPromptCommand", () => {

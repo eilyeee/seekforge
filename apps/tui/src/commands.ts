@@ -151,6 +151,10 @@ export type ParsedInput =
   | { kind: "bash"; command: string }
   | { kind: "task"; text: string };
 
+export function commandRequiresIdle(command: SlashCommand): boolean {
+  return command.name === "rewind";
+}
+
 const LOOP_MAX_ITERATIONS = 100;
 
 function parseLoopFirstLine(input: string, resume = false): {

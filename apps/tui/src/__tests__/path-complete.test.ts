@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EditorState } from "../editor.js";
 import {
   applyCompletion,
+  completionForTab,
   cycleCompletion,
   startCompletion,
   type PathCompletion,
@@ -153,5 +154,12 @@ describe("cycleCompletion", () => {
     expect(cycleCompletion(c).index).toBe(1);
     expect(cycleCompletion(cycleCompletion(c)).index).toBe(2);
     expect(cycleCompletion(cycleCompletion(cycleCompletion(c))).index).toBe(0);
+  });
+
+  it("does not reuse completion state in another tab", () => {
+    const completion = must(startCompletion(end("src/edi"), FILES));
+    const state = { tabId: 1, completion };
+    expect(completionForTab(state, 1)).toBe(completion);
+    expect(completionForTab(state, 2)).toBeNull();
   });
 });

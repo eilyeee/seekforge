@@ -31,6 +31,18 @@ describe("tabsReducer", () => {
     expect(s.tabs[0]!.name).toBe("fix the flaky re"); // name sticks
   });
 
+  it("caps tab names without splitting a grapheme", () => {
+    let s = initialTabs("m");
+    const id = activeTabId(s);
+    const family = "👨‍👩‍👧‍👦";
+    s = tabsReducer(s, {
+      type: "chat",
+      tabId: id,
+      action: { type: "user", text: `${"a".repeat(15)}${family}z` },
+    });
+    expect(s.tabs[0]!.name).toBe(`${"a".repeat(15)}${family}`);
+  });
+
   it("new/next/switch/close manage the active index; the last tab cannot close", () => {
     let s = initialTabs("m");
     s = tabsReducer(s, { type: "tab-new", model: "m" });

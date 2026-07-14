@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseInput } from "../commands.js";
+import { commandRequiresIdle, parseInput } from "../commands.js";
 
 describe("parseInput", () => {
   it("treats blank lines as empty", () => {
@@ -199,5 +199,13 @@ describe("parseInput MCP-prompt additions", () => {
 
   it("keeps /mcp itself a distinct no-arg command", () => {
     expect(parseInput("/mcp")).toEqual({ kind: "slash", command: { name: "mcp" } });
+  });
+});
+
+describe("commandRequiresIdle", () => {
+  it("blocks file rewind while a run owns the tab", () => {
+    expect(commandRequiresIdle({ name: "rewind" })).toBe(true);
+    expect(commandRequiresIdle({ name: "rewind", arg: "yes" })).toBe(true);
+    expect(commandRequiresIdle({ name: "help" })).toBe(false);
   });
 });

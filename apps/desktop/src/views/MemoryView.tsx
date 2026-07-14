@@ -23,7 +23,8 @@ import type {
   MemoryResponse,
   MemoryStats,
 } from "../types";
-import { createSerialQueue, LatestRequest } from "./async-coordination";
+import { createSerialQueue } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const TYPE_TONE: Record<MemoryCandidate["type"], BadgeTone> = {
   command: "warn",
@@ -70,74 +71,96 @@ export function MemoryView() {
   const [scope, setScope] = useState<"project" | "user">("project");
   const [filter, setFilter] = useState("");
   const ws = useStore((s) => s.activeWorkspaceId);
-  const memoryRequests = useRef(new LatestRequest());
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const serverMemoryRef = useRef<{ workspaceId: string; value: MemoryResponse } | null>(null);
   const enqueueDelete = useRef(createSerialQueue()).current;
 
-  const loadStats = () =>
-    api
-      .memoryStats()
-      .then(setStats)
-      .catch(() => setStats(null));
+  const loadStats = (workspaceId: string) => {
+    const operation = coordinator.capture(workspaceId);
+    if (!operation) return Promise.resolve();
+    return api
+      .memoryStats(workspaceId)
+      .then((value) => {
+        if (coordinator.isCurrent(operation)) setStats(value);
+      })
+      .catch(() => {
+        if (coordinator.isCurrent(operation)) setStats(null);
+      });
+  };
 
   useEffect(() => {
-    const request = memoryRequests.current.begin();
+    const operation = coordinator.beginLatest(ws);
+    if (!operation) return;
     serverMemoryRef.current = null;
     setMemory(null);
     setStats(null);
     setError(null);
     api
-      .memory()
+      .memory(ws)
       .then((value) => {
-        if (!memoryRequests.current.isCurrent(request)) return;
+        if (!coordinator.isCurrent(operation)) return;
         serverMemoryRef.current = { workspaceId: ws, value };
         setMemory(value);
       })
       .catch((e: unknown) => {
-        if (memoryRequests.current.isCurrent(request)) setError(String(e));
+        if (coordinator.isCurrent(operation)) setError(String(e));
       });
-    void loadStats();
-  }, [ws]);
+    void loadStats(ws);
+  }, [coordinator, ws]);
 
-  const refresh = () => {
-    const workspaceId = ws;
-    const request = memoryRequests.current.begin();
-    void loadStats();
+  const refresh = (workspaceId = ws) => {
+    const operation = coordinator.beginLatest(workspaceId);
+    if (!operation) return Promise.resolve();
+    void loadStats(workspaceId);
     return api
-      .memory()
+      .memory(workspaceId)
       .then((value) => {
-        if (!memoryRequests.current.isCurrent(request)) return;
+        if (!coordinator.isCurrent(operation)) return;
         serverMemoryRef.current = { workspaceId, value };
         setMemory(value);
       })
       .catch((e: unknown) => {
-        if (memoryRequests.current.isCurrent(request)) setError(String(e));
+        if (coordinator.isCurrent(operation)) setError(String(e));
       });
   };
 
   const act = (id: string, action: "approve" | "reject") => {
-    if (!memory) return;
-    const previous = memory;
+    const operation = coordinator.capture(ws);
+    const previous = memory?.candidates.find((candidate) => candidate.id === id);
+    if (!memory || !operation || !previous) return;
+    const optimisticStatus = action === "approve" ? "approved" : "rejected";
     // Optimistic update; roll back on failure.
     setMemory({
       ...memory,
-      candidates: memory.candidates.map((c) =>
-        c.id === id ? { ...c, status: action === "approve" ? "approved" : "rejected" } : c,
+      candidates: memory.candidates.map((candidate) =>
+        candidate.id === id ? { ...candidate, status: optimisticStatus } : candidate,
       ),
     });
-    api.memoryAction(id, action, action === "approve" ? scope : undefined).catch((e: unknown) => {
+    api.memoryAction(id, action, action === "approve" ? scope : undefined, operation.workspaceId).catch((e: unknown) => {
+      if (!coordinator.isCurrent(operation)) return;
       setError(String(e));
-      setMemory(previous);
+      setMemory((current) =>
+        current
+          ? {
+              ...current,
+              candidates: current.candidates.map((candidate) =>
+                candidate.id === id && candidate.status === optimisticStatus ? previous : candidate,
+              ),
+            }
+          : current,
+      );
     });
   };
 
   const deleteFact = (fact: MemoryFact) => {
-    const workspaceId = ws;
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
+    const workspaceId = operation.workspaceId;
     setMemory((current) =>
       current ? { ...current, facts: current.facts.filter((item) => !sameFact(item, fact)) } : current,
     );
     void enqueueDelete(async () => {
-      if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+      if (!coordinator.isCurrent(operation)) return;
       const snapshot = serverMemoryRef.current;
       if (!snapshot || snapshot.workspaceId !== workspaceId) return;
       const currentFact = snapshot.value.facts.find((item) => sameFact(item, fact));
@@ -145,16 +168,21 @@ export function MemoryView() {
       try {
         // Content matching is stable across index renumbering, including
         // changes made by another client. Ambiguous duplicates fail closed.
-        await api.memoryDeleteFact({ match: currentFact.content });
+        await api.memoryDeleteFact({ match: currentFact.content }, workspaceId);
       } catch (e) {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setError(String(e));
+        if (coordinator.isCurrent(operation)) setError(String(e));
       }
-      if (useStore.getState().activeWorkspaceId === workspaceId) await refresh();
+      if (coordinator.isCurrent(operation)) await refresh(workspaceId);
     });
   };
 
-  const addFact = (content: string, type: MemoryCandidateType): Promise<void> =>
-    api.memoryAddFact(content, type, undefined, scope).then(refresh);
+  const addFact = (content: string, type: MemoryCandidateType): Promise<void> => {
+    const operation = coordinator.capture(ws);
+    if (!operation) return Promise.resolve();
+    return api.memoryAddFact(content, type, undefined, scope, operation.workspaceId).then(() => {
+      if (coordinator.isCurrent(operation)) return refresh(operation.workspaceId);
+    });
+  };
 
   const fq = filter.trim().toLowerCase();
   const hit = (s: string) => fq === "" || s.toLowerCase().includes(fq);
@@ -259,7 +287,7 @@ export function MemoryView() {
             <aside className="space-y-6 lg:col-span-1">
               <StatsPanel stats={stats} />
 
-              <CompactControl onApplied={refresh} />
+              <CompactControl workspaceId={ws} onApplied={() => refresh(ws)} />
 
               <section>
                 <div className="mb-3 flex items-center gap-2">
@@ -449,7 +477,7 @@ function StatRow({ label, value }: { label: string; value: string }) {
 }
 
 /** Dry-run preview → apply compaction, with an optional prune-unused-days input. */
-function CompactControl({ onApplied }: { onApplied: () => void }) {
+function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApplied: () => void }) {
   const t = useT();
   const [pruneDays, setPruneDays] = useState("");
   const [preview, setPreview] = useState<CompactResult | null>(null);
@@ -470,7 +498,7 @@ function CompactControl({ onApplied }: { onApplied: () => void }) {
     setError(null);
     setNote(null);
     api
-      .memoryCompact(optsOf(true))
+      .memoryCompact(optsOf(true), workspaceId)
       .then(setPreview)
       .catch((e: unknown) => setError(t("memory.compact.error", { error: String(e) })))
       .finally(() => setBusy(null));
@@ -480,7 +508,7 @@ function CompactControl({ onApplied }: { onApplied: () => void }) {
     setBusy("apply");
     setError(null);
     api
-      .memoryCompact(optsOf(false))
+      .memoryCompact(optsOf(false), workspaceId)
       .then((r) => {
         setPreview(null);
         setNote(t("memory.compact.done", { before: r.before, after: r.after }));

@@ -143,6 +143,13 @@ describe("titleFromTask", () => {
     expect(long.length).toBeLessThanOrEqual(28);
     expect(titleFromTask("   ")).toBe("new tab");
   });
+
+  it("does not split surrogate pairs or grapheme clusters", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const title = titleFromTask(`${"a".repeat(26)}${family}bc`);
+    expect(title).toBe(`${"a".repeat(26)}${family}…`);
+    expect(title).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
 });
 
 describe("routeFrame", () => {

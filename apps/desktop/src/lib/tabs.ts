@@ -95,12 +95,19 @@ export type TabsState = {
 
 export const DEFAULT_TAB_TITLE = "new tab";
 
+function graphemes(text: string): string[] {
+  if (typeof Intl.Segmenter !== "function") return Array.from(text);
+  return Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text), ({ segment }) => segment);
+}
+
 /** Tab title = first words of the task, truncated. */
 export function titleFromTask(task: string): string {
   const words = task.trim().split(/\s+/).slice(0, 6).join(" ");
   const max = 28;
-  if (words.length <= max) return words || DEFAULT_TAB_TITLE;
-  return `${words.slice(0, max - 1)}…`;
+  if (!words) return DEFAULT_TAB_TITLE;
+  const parts = graphemes(words);
+  if (parts.length <= max) return words;
+  return `${parts.slice(0, max - 1).join("")}…`;
 }
 
 function makeTab(tabId: string, ws = ""): ChatTab {

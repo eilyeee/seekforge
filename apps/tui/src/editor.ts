@@ -88,6 +88,55 @@ function nextBoundary(text: string, pos: number): number {
   return graphemeBoundaries(text).find((boundary) => boundary > current) ?? text.length;
 }
 
+function codePointWidth(cp: number): number {
+  const ch = String.fromCodePoint(cp);
+  if (/\p{Mark}/u.test(ch) || cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1faff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function graphemeWidth(grapheme: string): number {
+  let width = 0;
+  for (const ch of grapheme) width = Math.max(width, codePointWidth(ch.codePointAt(0) ?? 0));
+  return width;
+}
+
+function displayColumn(line: string, cursor: number): number {
+  const end = snapToBoundary(line, cursor);
+  const boundaries = graphemeBoundaries(line);
+  let width = 0;
+  for (let i = 0; i + 1 < boundaries.length && boundaries[i]! < end; i += 1) {
+    width += graphemeWidth(line.slice(boundaries[i], boundaries[i + 1]));
+  }
+  return width;
+}
+
+function indexAtDisplayColumn(line: string, column: number): number {
+  const boundaries = graphemeBoundaries(line);
+  let width = 0;
+  for (let i = 0; i + 1 < boundaries.length; i += 1) {
+    const start = boundaries[i]!;
+    const end = boundaries[i + 1]!;
+    const nextWidth = width + graphemeWidth(line.slice(start, end));
+    if (nextWidth > column) return start;
+    width = nextWidth;
+    if (width === column) return end;
+  }
+  return line.length;
+}
+
 export function backspace(s: EditorState): EditorState {
   if (s.cursor === 0) return s;
   const target = previousGraphemeBoundary(s.text, s.cursor);
@@ -114,24 +163,25 @@ export function moveRight(s: EditorState): EditorState {
   return { text: s.text, cursor: nextBoundary(s.text, s.cursor) };
 }
 
-/** Same column on the previous line, clamped to that line's length. */
+/** Same terminal display column on the previous line, clamped to its width. */
 export function moveUp(s: EditorState): EditorState {
   const start = lineStart(s.text, s.cursor);
   if (start === 0) return s; // already on the first line
-  const column = s.cursor - start;
+  const column = displayColumn(s.text.slice(start, lineEnd(s.text, s.cursor)), s.cursor - start);
   const prevStart = lineStart(s.text, start - 1);
-  const prevLength = start - 1 - prevStart;
-  return { text: s.text, cursor: snapToBoundary(s.text, prevStart + Math.min(column, prevLength)) };
+  const previousLine = s.text.slice(prevStart, start - 1);
+  return { text: s.text, cursor: prevStart + indexAtDisplayColumn(previousLine, column) };
 }
 
-/** Same column on the next line, clamped to that line's length. */
+/** Same terminal display column on the next line, clamped to its width. */
 export function moveDown(s: EditorState): EditorState {
   const end = lineEnd(s.text, s.cursor);
   if (end === s.text.length) return s; // already on the last line
-  const column = s.cursor - lineStart(s.text, s.cursor);
+  const start = lineStart(s.text, s.cursor);
+  const column = displayColumn(s.text.slice(start, end), s.cursor - start);
   const nextStart = end + 1;
-  const nextLength = lineEnd(s.text, nextStart) - nextStart;
-  return { text: s.text, cursor: snapToBoundary(s.text, nextStart + Math.min(column, nextLength)) };
+  const nextLine = s.text.slice(nextStart, lineEnd(s.text, nextStart));
+  return { text: s.text, cursor: nextStart + indexAtDisplayColumn(nextLine, column) };
 }
 
 export function moveHome(s: EditorState): EditorState {

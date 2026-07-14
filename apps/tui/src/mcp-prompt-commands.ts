@@ -7,9 +7,8 @@
  * Naming mirrors the dispatcher's `mcp__<server>__<tool>` convention but uses
  * colons so the command surface reads `/mcp:<server>:<prompt>`, distinct from
  * the `/mcp` listing command. Server and prompt names are sanitized into
- * command-safe tokens; parseMcpPromptCommand reverses the prefix to recover
- * the (sanitized) server/prompt pair, which findPromptByCommand then matches
- * against the live McpPromptRef list.
+ * command-safe tokens. Normalization collisions receive deterministic numeric
+ * suffixes, and lookup rebuilds the same command-to-prompt mapping.
  *
  * Argument handling (simplification): MCP prompts may declare typed
  * `arguments`, but the slash surface has no structured form for them. The
@@ -52,25 +51,37 @@ export function mcpPromptCommandName(server: string, prompt: string): string {
   return `${MCP_COMMAND_PREFIX}${sanitize(server)}:${sanitize(prompt)}`;
 }
 
+function namedPrompts(prompts: readonly McpPromptRef[]): Array<{ prompt: McpPromptRef; command: string }> {
+  const used = new Set<string>();
+  const out: Array<{ prompt: McpPromptRef; command: string }> = [];
+  for (const prompt of prompts) {
+    if (sanitize(prompt.server) === "" || sanitize(prompt.name) === "") continue;
+    const base = mcpPromptCommandName(prompt.server, prompt.name);
+    let command = base;
+    for (let suffix = 2; used.has(command); suffix += 1) command = `${base}-${suffix}`;
+    used.add(command);
+    out.push({ prompt, command });
+  }
+  return out;
+}
+
 /**
  * One CommandSpec-compatible row per MCP prompt: name
  * "mcp:<server>:<prompt>", args hint "[args]" when the prompt declares any
  * arguments, summary "(mcp <server>) " + description capped at 60 chars.
- * Prompts whose server or name sanitize to nothing are skipped.
+ * Prompts whose server or name sanitize to nothing are skipped. Colliding
+ * normalized names receive a numeric suffix so every row remains invocable.
  */
 export function mcpPromptCommandSpecs(prompts: readonly McpPromptRef[]): McpPromptCommandSpec[] {
-  const out: McpPromptCommandSpec[] = [];
-  for (const p of prompts) {
-    if (sanitize(p.server) === "" || sanitize(p.name) === "") continue;
+  return namedPrompts(prompts).map(({ prompt: p, command }) => {
     const hasArgs = (p.arguments?.length ?? 0) > 0;
-    out.push({
-      name: mcpPromptCommandName(p.server, p.name),
+    return {
+      name: command,
       ...(hasArgs ? { args: "[args]" } : {}),
       summary: `(mcp ${sanitize(p.server)}) ${collapse(p.description ?? p.name, SUMMARY_CAP)}`,
-      group: "tools",
-    });
-  }
-  return out;
+      group: "tools" as const,
+    };
+  });
 }
 
 /**
@@ -87,10 +98,8 @@ export function parseMcpPromptCommand(name: string): { server: string; prompt: s
 }
 
 /**
- * Resolves a typed command name back to its live McpPromptRef by matching the
- * sanitized server/prompt pair — the same form mcpPromptCommandSpecs
- * advertises. Null when the name is not an mcp-prompt command or no prompt
- * matches.
+ * Resolves a typed command name back to its live McpPromptRef using the same
+ * collision-safe mapping advertised by mcpPromptCommandSpecs.
  */
 export function findPromptByCommand(
   prompts: readonly McpPromptRef[],
@@ -98,10 +107,7 @@ export function findPromptByCommand(
 ): McpPromptRef | null {
   const parsed = parseMcpPromptCommand(name);
   if (!parsed) return null;
-  return (
-    prompts.find((p) => sanitize(p.server) === parsed.server && sanitize(p.name) === parsed.prompt) ??
-    null
-  );
+  return namedPrompts(prompts).find(({ command }) => command === name)?.prompt ?? null;
 }
 
 /**
@@ -125,12 +131,13 @@ export function promptArgsFromText(
  * single notice.
  */
 export function formatMcpPromptLines(prompts: readonly McpPromptRef[]): string[] {
-  if (prompts.length === 0) return ["no MCP prompts available (no servers, or none expose prompts)"];
-  const lines = prompts.map((p) => {
+  const named = namedPrompts(prompts);
+  if (named.length === 0) return ["no MCP prompts available (no servers, or none expose prompts)"];
+  const lines = named.map(({ prompt: p, command }) => {
     const desc = p.description ? `  ${collapse(p.description, SUMMARY_CAP)}` : "";
     const argHint = (p.arguments?.length ?? 0) > 0 ? " [args]" : "";
-    return `/${mcpPromptCommandName(p.server, p.name)}${argHint}${desc}`;
+    return `/${command}${argHint}${desc}`;
   });
-  lines.push(`total: ${prompts.length} ${prompts.length === 1 ? "prompt" : "prompts"}`);
+  lines.push(`total: ${lines.length} ${lines.length === 1 ? "prompt" : "prompts"}`);
   return lines;
 }

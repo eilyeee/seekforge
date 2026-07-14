@@ -5,6 +5,7 @@ import type { ClientFrame, WsClient, WsClientHandlers } from "./lib/ws-types";
 const sent: ClientFrame[] = [];
 let lastHandlers: (WsClientHandlers & { getToken: () => string }) | undefined;
 let acceptSend = true;
+const openWorkspaceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./lib/ws", () => ({
   createWsClient: (handlers: WsClientHandlers & { getToken: () => string }): WsClient => {
@@ -35,6 +36,7 @@ vi.mock("./lib/api", () => ({
   api: {
     workspaces: () => Promise.resolve({ workspaces: [], recents: [] }),
     config: () => Promise.resolve({}),
+    openWorkspace: openWorkspaceMock,
   },
   ApiError: MockApiError,
   setTokenProvider: () => {},
@@ -42,11 +44,12 @@ vi.mock("./lib/api", () => ({
 }));
 
 const { useStore } = await import("./store");
-const { activeTab } = await import("./lib/tabs");
+const { activeTab, initialTabsState, updateTab } = await import("./lib/tabs");
 
 function resetStore(): void {
   sent.length = 0;
   acceptSend = true;
+  openWorkspaceMock.mockReset();
   // Fresh single-tab state for each test.
   useStore.setState((s) => ({
     tabs: {
@@ -68,6 +71,77 @@ function resetStore(): void {
     },
   }));
 }
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("store: workspace selection", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.setState({ tabs: initialTabsState("workspace-a"), activeWorkspaceId: "workspace-a" });
+  });
+
+  it("does not rebind the first tab after it owns a session", async () => {
+    useStore.setState((s) => ({
+      tabs: updateTab(s.tabs, "t1", (tab) => ({
+        title: "existing session",
+        chat: { ...tab.chat, sessionId: "session-a" },
+      })),
+    }));
+    openWorkspaceMock.mockResolvedValue({
+      workspace: { id: "workspace-b", name: "B", path: "/b" },
+      workspaces: [
+        { id: "workspace-a", name: "A", path: "/a" },
+        { id: "workspace-b", name: "B", path: "/b" },
+      ],
+      recents: [],
+    });
+
+    await useStore.getState().openWorkspace("/b");
+
+    expect(useStore.getState().activeWorkspaceId).toBe("workspace-b");
+    expect(useStore.getState().tabs.tabs[0]!.ws).toBe("workspace-a");
+    expect(useStore.getState().tabs.tabs[0]!.chat.sessionId).toBe("session-a");
+  });
+
+  it("lets the last concurrent openWorkspace request win", async () => {
+    const first = deferred<{
+      workspace: { id: string; name: string; path: string };
+      workspaces: { id: string; name: string; path: string }[];
+      recents: [];
+    }>();
+    const second = deferred<{
+      workspace: { id: string; name: string; path: string };
+      workspaces: { id: string; name: string; path: string }[];
+      recents: [];
+    }>();
+    openWorkspaceMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const firstOpen = useStore.getState().openWorkspace("/first");
+    const secondOpen = useStore.getState().openWorkspace("/second");
+    second.resolve({
+      workspace: { id: "workspace-second", name: "Second", path: "/second" },
+      workspaces: [{ id: "workspace-second", name: "Second", path: "/second" }],
+      recents: [],
+    });
+    await secondOpen;
+    first.resolve({
+      workspace: { id: "workspace-first", name: "First", path: "/first" },
+      workspaces: [{ id: "workspace-first", name: "First", path: "/first" }],
+      recents: [],
+    });
+    await firstOpen;
+
+    expect(useStore.getState().activeWorkspaceId).toBe("workspace-second");
+    expect(useStore.getState().workspaces.map((workspace) => workspace.id)).toEqual(["workspace-second"]);
+    expect(useStore.getState().tabs.tabs[0]!.ws).toBe("workspace-second");
+  });
+});
 
 describe("store: rejected sends", () => {
   beforeEach(resetStore);
