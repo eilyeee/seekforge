@@ -68,6 +68,11 @@ first one's answer.
   replayed the earlier truncated reply.
 - **Also caught:** `apps/tui/src/statusline-scheduler.ts` — the cache key omitted
   the status-line command, so replacing or re-enabling it reused stale output.
+- **Also caught:** provider response caches keyed only by model/request could
+  replay data across endpoints or tenants; include an opaque identity derived
+  from every response-affecting provider setting.
+- **Also caught:** normalized MCP prompt names can collide (`foo_bar`/`foo-bar`);
+  assign deterministic unique command names and use the same mapping for lookup.
 
 ## 4. Serialize and deserialize must be exact inverses
 
@@ -97,6 +102,9 @@ lands *between* the halves and corrupts the text on the next edit.
   rendering indexed a single UTF-16 unit and split emoji surrogate pairs.
 - **Also caught:** Vim word/end motions used direct string indexing and could
   stop inside a surrogate pair; classify and advance by editor code-point helpers.
+- **Also caught:** TUI vertical movement used UTF-16 offsets as terminal columns,
+  and tab titles sliced graphemes; compute display width and truncate only at
+  grapheme boundaries.
 
 ## 6. Every `addEventListener` needs a matching `removeEventListener`
 
@@ -129,6 +137,12 @@ path leaves every other path exposed.
 - **Also caught:** tool-call ids are not guaranteed unique across a whole
   session. Pair results within each assistant turn; a global responded-id set
   can make an interrupted call look complete when an earlier turn reused its id.
+- **Also caught:** an optional security field that is present but malformed must
+  reject the request. Invalid WebSocket `selectedHunks` previously widened a
+  partial permission response into approval of the complete patch.
+- **Also caught:** unknown subagent modes defaulted to writable `edit`; enum-like
+  security settings must reject unknown values instead of choosing a permissive
+  fallback.
 
 ## 8. `JSON.parse` succeeding does not mean you got an object
 
@@ -339,6 +353,9 @@ also permit non-finite values unless checked separately.
   accepting values such as `1x`, `1-2x`, and `*/2x`.
 - **Also caught:** CLI `serve --port` and `sessions prune` accepted junk suffixes
   because `parseInt("12junk")` returns `12`.
+- **Also caught:** CLI permission-hunk and `ask_user` selections accepted trailing
+  junk such as `1abc`; validate every token completely and against the offered
+  indices before approving or selecting it.
 
 ## 20. Lifecycle cleanup must prove ownership before deleting shared state
 
@@ -485,6 +502,8 @@ that were never adjacent, violating protocol ordering after a partial write.
 - **Do:** stop at the first malformed record and replay only the longest valid
   prefix; keep metadata replacement atomic with temp-file + rename.
 - **Caught:** `packages/core/src/agent/trace.ts` — session resume traces.
+- **Also caught:** checkpoint recovery skipped malformed rows and accepted later
+  snapshots, allowing rewind to trust state with a missing causal prefix.
 
 ## 26. Logical path equality is not physical workspace equality
 
@@ -546,6 +565,8 @@ also misses changes to the link itself.
 - **Also caught:** the server raw-upload boundary treated the physical target of
   a symlinked uploads directory as trusted, and directory listings reopened a
   verified path without rechecking identity after enumeration.
+- **Also caught:** project Skill discovery opened a symlinked `SKILL.md` outside
+  the workspace; validate the physical content file against its owning root.
 
 ## 30. Related mutations must share one serialization domain
 
@@ -566,6 +587,12 @@ as merge and remove even though their API routes and target ids differ.
   Every independent workspace mutation surface must acquire the same guard.
 - **Also caught:** Desktop Git stage/unstage/discard and commit used independent
   pending flags, allowing conflicting writes to be issued concurrently.
+- **Also caught:** backtrack restored files and truncated trace as separate
+  mutations, and memory compaction removed facts before archive persistence.
+  Perform the fallible prerequisite first, then commit the destructive update
+  while holding the shared guard.
+- **Also caught:** TUI `/rewind` lacked the active-run guard used by adjacent
+  history commands, allowing checkpoint restoration to race Agent writes.
 
 ## 31. Derived syntax semantics belong to parsed values
 
@@ -612,6 +639,12 @@ wait cannot interrupt the call while it owns the thread.
   in owned process groups with bounded output drainage, cancellation polling,
   and an internal deadline.
 - **Caught:** `apps/server/src/files.ts` regex search and Rust runtime Git calls.
+- **Also caught:** Core `search_text` ran arbitrary regular expressions on the
+  Node main thread; reject backreferences and ambiguous nested quantifiers before
+  constructing the expression.
+- **Also caught:** custom-command timeouts killed only the shell and accepted
+  captured stdout as success. Own the process group, bound output, terminate the
+  descendants, and reject every timeout or nonzero exit.
 
 ## 36. Persisted cache hits need full contract validation
 
@@ -685,6 +718,9 @@ during render lets an uncommitted render invalidate the state still on screen.
   without changing ownership, and invalidate the old instance in effect cleanup.
 - **Caught:** `apps/desktop/src/views/use-workspace-async.ts` — workspace changes
   mutated the previous coordinator before the render committed.
+- **Also caught:** workspace opens, memory mutations/statistics, and balance
+  requests committed after their owning workspace changed; bind every completion
+  and rollback to a generation or workspace identity.
 
 ## 43. Fallback branches must preserve request predicates
 
@@ -695,6 +731,17 @@ intermediate result can silently drop filters, sorting, or pagination.
   every predicate explicitly with a boundary test.
 - **Caught:** `apps/server/src/file-scan-search.ts` — an expanded uncached walk
   ignored the caller's `q` filter.
+
+## 44. Authenticate before revealing resource state
+
+Looking up a resource or checking whether it is enabled before authentication
+can turn status codes into an enumeration oracle even when the protected action
+itself never runs.
+
+- **Do:** verify credentials against a non-revealing fallback first, and return
+  the same authentication failure for missing, disabled, and enabled resources.
+- **Caught:** `apps/server/src/routes/triggers.ts` — forged GitHub webhook headers
+  distinguished unknown, disabled, and enabled trigger ids before HMAC validation.
 
 ---
 

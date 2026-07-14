@@ -24,6 +24,7 @@ import { composePrompt } from "../stdin-prompt.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { isCacheFresh } from "../version-check.js";
+import { parseIndexList, parseNumberedChoice } from "../input-selection.js";
 
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
 // whole point of the color-gating tests, so the control char is intentional.
@@ -65,6 +66,21 @@ test("memory compact rejects an invalid --prune-unused value before executing", 
     assert.equal(result.stdout, "");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("numbered selections consume the complete input", () => {
+  assert.equal(parseNumberedChoice("2", 3), 1);
+  assert.equal(parseNumberedChoice(" 3 ", 3), 2);
+  for (const invalid of ["", "0", "4", "1abc", "1.0", "1 2", "9007199254740992"]) {
+    assert.equal(parseNumberedChoice(invalid, 3), null, invalid);
+  }
+});
+
+test("hunk selections reject malformed and unknown indices", () => {
+  assert.deepEqual(parseIndexList("0, 2,2", [0, 1, 2]), [0, 2]);
+  for (const invalid of ["", "0,", "1abc", "-1", "3", "1.0", "9007199254740992"]) {
+    assert.equal(parseIndexList(invalid, [0, 1, 2]), null, invalid);
   }
 });
 

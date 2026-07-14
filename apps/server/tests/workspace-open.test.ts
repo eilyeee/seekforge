@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
+import { acquireSessionLease } from "@seekforge/core";
 import { forgetRecent, loadRecents, rememberRecent, isWorkspaceDir, recentsFilePath } from "../src/recents.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
 
@@ -114,6 +115,20 @@ describe("workspace open/remove endpoints", () => {
     expect(res.status).toBe(400);
     const err = (await res.json()) as { error: { message: string } };
     expect(err.error.message).toMatch(/worktree/i);
+  });
+
+  it("DELETE /api/workspaces/:id refuses a workspace with an active agent session", async () => {
+    await authed("/api/workspaces", { method: "POST", body: JSON.stringify({ path: other }) });
+    const target = (await jsonOf(await authed("/api/workspaces"))).workspaces.find((w) => w.path === other)!;
+    const lease = acquireSessionLease(other, "active-workspace-close");
+    try {
+      const res = await authed(`/api/workspaces/${target.id}`, { method: "DELETE" });
+      expect(res.status).toBe(409);
+      expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+      expect((await jsonOf(await authed("/api/workspaces"))).workspaces.some((w) => w.id === target.id)).toBe(true);
+    } finally {
+      lease.release();
+    }
   });
 
   it("DELETE /api/workspaces/recent forgets a recent path", async () => {

@@ -31,6 +31,7 @@ import {
   writeProjectFileAtomic,
 } from "../config.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
 import type { RouteCtx } from "./context.js";
 
@@ -152,13 +153,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 404, "not_found", `unknown command: ${name}`);
     }
     const expanded = expandUserCommand(command, typeof args === "string" ? args : "");
-    const text = await expandShellInjections(expanded, (cmd) =>
-      execFileAsync("/bin/sh", ["-c", cmd], { cwd: workspace, timeout: 10_000, maxBuffer: 1024 * 1024 })
-        .then(({ stdout }) => stdout)
-        .catch((err: NodeJS.ErrnoException & { stdout?: string }) =>
-          typeof err.stdout === "string" ? err.stdout : Promise.reject(err),
-        ),
-    );
+    const text = await expandShellInjections(expanded, (cmd) => runShellCommand(cmd, workspace));
     return sendJson(res, 200, { text });
   }
 
@@ -283,11 +278,19 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (trusted !== undefined && typeof trusted !== "boolean") {
       return sendApiError(res, 400, "bad_request", "trusted must be a boolean");
     }
-    if (env !== undefined && (typeof env !== "object" || env === null || Array.isArray(env))) {
-      return sendApiError(res, 400, "bad_request", "env must be an object");
+    if (
+      env !== undefined &&
+      (typeof env !== "object" || env === null || Array.isArray(env) ||
+        !Object.values(env as Record<string, unknown>).every((value) => typeof value === "string"))
+    ) {
+      return sendApiError(res, 400, "bad_request", "env must be an object with string values");
     }
-    if (headers !== undefined && (typeof headers !== "object" || headers === null || Array.isArray(headers))) {
-      return sendApiError(res, 400, "bad_request", "headers must be an object");
+    if (
+      headers !== undefined &&
+      (typeof headers !== "object" || headers === null || Array.isArray(headers) ||
+        !Object.values(headers as Record<string, unknown>).every((value) => typeof value === "string"))
+    ) {
+      return sendApiError(res, 400, "bad_request", "headers must be an object with string values");
     }
     // Need at least a transport: command (stdio) or url (HTTP).
     if (typeof command !== "string" && typeof serverUrl !== "string") {

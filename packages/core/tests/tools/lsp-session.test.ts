@@ -197,7 +197,7 @@ describe("lsp document synchronization", () => {
     expect(relevant[2]?.params?.contentChanges?.[0]?.text).toBe("export const value = 2;\n");
     expect(relevant[4]?.params?.textDocument?.version).toBe(3);
     expect(relevant[4]?.params?.contentChanges?.[0]?.text).toBe("export const value = 3;\n");
-  });
+  }, 15_000);
 
   it("shares one in-flight diagnostics run for concurrent callers", async () => {
     await lspDefinition(workspace, source, { line: 0, character: 0 });

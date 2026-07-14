@@ -24,6 +24,7 @@ const seenDeliveries = new Map<string, number>();
 const DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_SEEN_DELIVERIES = 10_000;
 const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment", "workflow_run"]);
+const UNKNOWN_TRIGGER_SECRET = "seekforge-unknown-trigger-secret";
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   await routes(ctx);
@@ -62,10 +63,6 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   if (method === "POST" && segs.length === 3 && segs[1] === "triggers") {
     const id = segs[2]!;
     const trigger = getTrigger(workspace, id);
-    if (!trigger) return sendApiError(res, 404, "not_found", `trigger not found: ${id}`);
-    if (!trigger.enabled) {
-      return sendApiError(res, 409, "conflict", `trigger is disabled: ${id}`);
-    }
     // Bespoke body read: an empty body must stay `undefined` (no payload
     // summary appended to the task), not readJsonBody's emptyOk `{}` — and
     // this route's parse-error message mentions the body being optional.
@@ -79,11 +76,19 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const signature = req.headers["x-hub-signature-256"];
     const githubDelivery = req.headers["x-github-delivery"];
     const githubEvent = req.headers["x-github-event"];
-    const githubSigned = checkGitHubSignature(trigger.secret, rawPayload, signature);
+    const githubRequest = typeof signature === "string" || typeof githubDelivery === "string";
+    const githubSigned = checkGitHubSignature(trigger?.secret ?? UNKNOWN_TRIGGER_SECRET, rawPayload, signature);
     const header = req.headers["x-seekforge-trigger-secret"];
     const presented = (typeof header === "string" ? header : undefined) ?? url.searchParams.get("secret");
+    if (githubRequest && (!trigger || !githubSigned)) {
+      return sendApiError(res, 403, "forbidden", "invalid trigger secret or GitHub signature");
+    }
+    if (!trigger) return sendApiError(res, 404, "not_found", `trigger not found: ${id}`);
     if (!githubSigned && !checkTriggerSecret(trigger.secret, presented)) {
       return sendApiError(res, 403, "forbidden", "invalid trigger secret or GitHub signature");
+    }
+    if (!trigger.enabled) {
+      return sendApiError(res, 409, "conflict", `trigger is disabled: ${id}`);
     }
     let deliveryKey: string | undefined;
     if (githubSigned) {
@@ -124,7 +129,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         maxCostUsd: trigger.maxCostUsd,
       });
       rest.triggerRuns?.add(run);
-      void run.completion.finally(() => rest.triggerRuns?.delete(run));
+      void run.completion.then(
+        () => rest.triggerRuns?.delete(run),
+        () => rest.triggerRuns?.delete(run),
+      );
       const { sessionId } = await run.started;
       return sendJson(res, 202, { sessionId, triggerId: id });
     } catch (err) {

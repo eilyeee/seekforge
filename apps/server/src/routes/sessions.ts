@@ -208,16 +208,23 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       throw error;
     }
     try {
-      // Truncating validates the turn index (null = turn 0 / out of range);
-      // file checkpoints are restored only after that validation passed.
-      const truncated = truncateSessionAtUserTurn(workspace, id, turn, lease);
-      if (truncated === null) {
+      let userTurns = 0;
+      try {
+        userTurns = loadSessionMessages(workspace, id).filter((message) => message.role === "user").length;
+      } catch {
+        userTurns = 0;
+      }
+      if (turn <= 0 || turn >= userTurns) {
         return sendApiError(res, 400, "bad_request", `turn ${turn} is not backtrackable (turn 0 or out of range)`);
       }
       let filesResult: { restored: number; deleted: number; skipped: number } | null = null;
       if (files === true) {
         const r = rewindSessionToTurn(workspace, id, turn, {}, lease);
         filesResult = { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length };
+      }
+      const truncated = truncateSessionAtUserTurn(workspace, id, turn, lease);
+      if (truncated === null) {
+        throw new Error(`validated backtrack turn became unavailable: ${turn}`);
       }
       return sendJson(res, 200, { ...truncated, files: filesResult });
     } finally {

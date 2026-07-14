@@ -5,7 +5,7 @@
  */
 
 import { basename, resolve as resolvePath } from "node:path";
-import { createDefaultDispatcher } from "@seekforge/core";
+import { acquireWorkspaceSessionGuard, createDefaultDispatcher, SessionBusyError } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { forgetRecent, isWorkspaceDir, loadRecents, rememberRecent } from "../recents.js";
 import { workspaceFor, type WorkspaceRegistry } from "../workspaces.js";
@@ -105,10 +105,18 @@ async function globalRoutes({ req, res, url, method, segs, rest }: GlobalRouteCt
     if (segs[2]!.startsWith("wt-")) {
       return sendApiError(res, 400, "bad_request", "use DELETE /api/worktrees/:id to remove a worktree");
     }
+    const target = rest.registry.resolve(segs[2]!);
+    let guard: ReturnType<typeof acquireWorkspaceSessionGuard> | undefined;
     try {
+      if (target) guard = acquireWorkspaceSessionGuard(target.path);
       rest.registry.unregister(segs[2]!);
     } catch (e) {
+      if (e instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", `workspace has an active session: ${segs[2]}`);
+      }
       return sendApiError(res, 400, "bad_request", e instanceof Error ? e.message : String(e));
+    } finally {
+      guard?.release();
     }
     return sendJson(res, 200, { workspaces: rest.registry.summary, recents: recentsView(rest.registry) });
   }

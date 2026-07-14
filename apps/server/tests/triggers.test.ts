@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
+import { startManagedTriggerRun } from "../src/trigger-run.js";
 import {
   buildTriggerTask,
   checkGitHubSignature,
@@ -377,6 +378,41 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
     expect(unsupported.status).toBe(400);
   });
 
+  it("does not reveal unknown or disabled triggers before GitHub signature verification", async () => {
+    await authed("/api/triggers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "hidden-disabled",
+        task: "t",
+        mode: "ask",
+        maxCostUsd: 1,
+        secret: "hidden-trigger-secret",
+        enabled: false,
+      }),
+    });
+    const headers = {
+      "x-github-delivery": "delivery-hidden",
+      "x-github-event": "push",
+      "x-hub-signature-256": "sha256=00",
+    };
+    const unknown = await fetch(`${base}/api/triggers/unknown-hidden`, { method: "POST", headers, body: "{}" });
+    const disabled = await fetch(`${base}/api/triggers/hidden-disabled`, { method: "POST", headers, body: "{}" });
+    const knownDummySignature = `sha256=${createHmac("sha256", "seekforge-unknown-trigger-secret")
+      .update("{}")
+      .digest("hex")}`;
+    const unknownWithDummySignature = await fetch(`${base}/api/triggers/unknown-hidden`, {
+      method: "POST",
+      headers: { ...headers, "x-hub-signature-256": knownDummySignature },
+      body: "{}",
+    });
+
+    expect(unknown.status).toBe(403);
+    expect(disabled.status).toBe(403);
+    expect(unknownWithDummySignature.status).toBe(403);
+    expect(await unknown.json()).toEqual(await disabled.json());
+  });
+
   it("does not consume a GitHub delivery id when the signed payload is malformed", async () => {
     const delivery = "delivery-malformed-retry";
     const badPayload = "{";
@@ -401,6 +437,26 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
 });
 
 describe("server shutdown", () => {
+  it("keeps trigger completion fulfilled when disposal throws", async () => {
+    const run = startManagedTriggerRun({
+      workspace: makeWorkspace(),
+      task: "done",
+      mode: "ask",
+      maxCostUsd: 1,
+      createAgent: () => ({
+        agent: {
+          runTask: async function* () {
+            yield { type: "session.created" as const, sessionId: "dispose-trigger" };
+          },
+        },
+        dispose: () => { throw new Error("dispose failed"); },
+      }),
+    });
+
+    await expect(run.started).resolves.toEqual({ sessionId: "dispose-trigger" });
+    await expect(run.completion).resolves.toBeUndefined();
+  });
+
   it("aborts and disposes background trigger runs before close resolves", async () => {
     const ws = makeWorkspace();
     writeFileIn(ws, ".seekforge/triggers.json", JSON.stringify([{

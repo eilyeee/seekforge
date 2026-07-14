@@ -101,10 +101,15 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           rejectStarted(err instanceof Error ? err : new Error(String(err)));
         }
       } finally {
-        handle.dispose();
-        if (!settled) {
-          settled = true;
-          rejectStarted(new Error("triggered run produced no session"));
+        try {
+          handle.dispose();
+        } catch {
+          // Runtime disposal must not reject detached completion or hide state cleanup.
+        } finally {
+          if (!settled) {
+            settled = true;
+            rejectStarted(new Error("triggered run produced no session"));
+          }
         }
       }
     })();

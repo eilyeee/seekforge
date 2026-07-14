@@ -22,6 +22,7 @@ import { expandFileRefs } from "@seekforge/shared/file-refs";
 import { t } from "../i18n.js";
 import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
+import { parseNumberedChoice } from "../input-selection.js";
 
 const HELP = t("repl.help");
 
@@ -71,9 +72,9 @@ function makeAskUser(rl: Interface): (q: { question: string; options: string[] }
     console.log(`\n${yellow(t("repl.question"))} ${q.question}`);
     q.options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
     const answer = (await rl.question(t("repl.answerPrompt", { max: q.options.length }))).trim();
-    const n = Number.parseInt(answer, 10);
-    if (!Number.isInteger(n) || n < 1 || n > q.options.length) return t("repl.userDeclined");
-    return q.options[n - 1] as string;
+    const selected = parseNumberedChoice(answer, q.options.length);
+    if (selected === null) return t("repl.userDeclined");
+    return q.options[selected] as string;
   };
 }
 

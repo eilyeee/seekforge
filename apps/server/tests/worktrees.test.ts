@@ -119,6 +119,20 @@ describe("POST /api/worktrees", () => {
     expect(b.branch).toBe("seekforge/dup-2");
   });
 
+  it("does not select the occupied terminal candidate after 100 slug conflicts", async () => {
+    const repo = makeGitRepo();
+    for (let candidateNumber = 1; candidateNumber <= 100; candidateNumber++) {
+      const slug = candidateNumber === 1 ? "crowded" : `crowded-${candidateNumber}`;
+      gitIn(repo, "branch", `seekforge/${slug}`);
+    }
+    const base = await boot(repo);
+
+    const created = await createWorktree(base, "crowded");
+
+    expect(created.id).toBe("wt-crowded-101");
+    expect(created.branch).toBe("seekforge/crowded-101");
+  });
+
   it("serializes concurrent creates of the same name (no TOCTOU 500)", async () => {
     const repo = makeGitRepo();
     const base = await boot(repo);

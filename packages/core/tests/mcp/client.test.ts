@@ -77,7 +77,10 @@ describe("mcp client", () => {
   });
 
   it("sends notifications/cancelled before rejecting a timed-out request", async () => {
-    const client = makeClient(100);
+    // This timeout also governs the follow-up IPC query below. Keep it well
+    // below the fixture's slow call while allowing process scheduling under a
+    // parallel workspace test run.
+    const client = makeClient(1_000);
     try {
       await expect(client.callTool("slow", {})).rejects.toMatchObject({ code: "mcp_timeout" });
       const cancelled = JSON.parse(await client.callTool("__getCancelled", {})) as number[];

@@ -135,6 +135,30 @@ describe("start -> events -> idle", () => {
     await rx.waitFor((f) => f.type === "idle");
     expect(seenInput).toEqual({ resumeSessionId: "s1", mode: "ask", task: "go on" });
   });
+
+  it("releases connection state when agent disposal throws", async () => {
+    let runs = 0;
+    const { server } = await boot(() => ({
+      agent: {
+        runTask: async function* () {
+          runs += 1;
+          yield { type: "session.created" as const, sessionId: `dispose-${runs}` };
+          yield { type: "session.completed" as const, report: emptyReport() };
+        },
+      },
+      dispose: () => { throw new Error("dispose failed"); },
+    }));
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "first", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "idle");
+    sendFrame(ws, { type: "start", task: "second", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) =>
+      f.type === "event" && (f.event as { sessionId?: string }).sessionId === "dispose-2");
+    await rx.waitFor((f) => f.type === "idle" && runs === 2);
+
+    expect(rx.frames.some((f) => f.type === "error" && f.code === "busy")).toBe(false);
+  });
 });
 
 describe("server shutdown", () => {
@@ -687,7 +711,7 @@ describe("permission bridge", () => {
     expect(resultSeen).toBe(false);
   });
 
-  it("ignores malformed selectedHunks instead of forwarding untrusted indices", async () => {
+  it("denies malformed selectedHunks instead of widening approval to every hunk", async () => {
     let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
     const { server } = await boot(
       fakeAgentFactory(async function* (opts) {
@@ -713,7 +737,7 @@ describe("permission bridge", () => {
     });
 
     await rx.waitFor((f) => f.type === "idle");
-    expect(resultSeen).toBe(true);
+    expect(resultSeen).toBe(false);
   });
 
   it("selectedHunks takes precedence over remember:session", async () => {

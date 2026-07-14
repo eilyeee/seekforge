@@ -131,6 +131,23 @@ describe("mcp add + delete", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/mcp rejects non-string env and header values", async () => {
+    const env = await authed("/api/mcp", {
+      method: "POST",
+      body: JSON.stringify({ name: "bad-env", command: "node", env: { TOKEN: 123 } }),
+    });
+    const headers = await authed("/api/mcp", {
+      method: "POST",
+      body: JSON.stringify({ name: "bad-headers", url: "https://example.test/mcp", headers: { authorization: null } }),
+    });
+
+    expect(env.status).toBe(400);
+    expect(headers.status).toBe(400);
+    const config = JSON.parse(readFileSync(join(workspace, ".seekforge/config.json"), "utf8"));
+    expect(config.mcpServers?.["bad-env"]).toBeUndefined();
+    expect(config.mcpServers?.["bad-headers"]).toBeUndefined();
+  });
+
   it("POST /api/mcp treats non-object config JSON as an empty config doc", async () => {
     const cfgPath = join(workspace, ".seekforge/config.json");
     writeFileIn(workspace, ".seekforge/config.json", "null");

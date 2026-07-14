@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const activeState = vi.hoisted(() => ({
   sessionIds: new Set<string>(),
   anySession: false,
+  rewindFails: false,
 }));
 
 vi.mock("@seekforge/core", async (importOriginal) => {
@@ -14,6 +15,10 @@ vi.mock("@seekforge/core", async (importOriginal) => {
     ...original,
     isSessionRunActive: (_workspace: string, sessionId: string) => activeState.sessionIds.has(sessionId),
     hasActiveSessionRuns: () => activeState.anySession,
+    rewindSessionToTurn: (...args: Parameters<typeof original.rewindSessionToTurn>) => {
+      if (activeState.rewindFails) throw new Error("checkpoint restore failed");
+      return original.rewindSessionToTurn(...args);
+    },
   };
 });
 
@@ -78,6 +83,7 @@ beforeAll(async () => {
 beforeEach(() => {
   activeState.sessionIds.clear();
   activeState.anySession = false;
+  activeState.rewindFails = false;
 });
 
 afterAll(async () => {
@@ -145,6 +151,23 @@ describe("active-session REST guards", () => {
 
     expect(readFileSync(messagesPath, "utf8")).toBe(before);
     expect(readFileSync(join(workspace, "src/active.txt"), "utf8")).toBe("during\n");
+  });
+
+  it("does not truncate the trace when checkpoint restoration fails", async () => {
+    const messagesPath = join(workspace, ".seekforge/sessions/active/messages.jsonl");
+    const before = readFileSync(messagesPath, "utf8");
+    activeState.rewindFails = true;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await authed("/api/sessions/active/backtrack", {
+        method: "POST",
+        body: JSON.stringify({ turn: 1, files: true }),
+      });
+      expect(res.status).toBe(500);
+    } finally {
+      log.mockRestore();
+    }
+    expect(readFileSync(messagesPath, "utf8")).toBe(before);
   });
 
   it("rejects rewind without restoring files", async () => {

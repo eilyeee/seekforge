@@ -265,12 +265,17 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       flushDeltas(); // buffered deltas precede the error frame
       fail("agent_error", err instanceof Error ? err.message : String(err));
     } finally {
-      handle?.dispose();
-      flushDeltas(); // don't lose a trailing chunk; also clears the timer
-      running = false;
-      controller = undefined;
-      denyAllPending();
-      if (!closed) send({ type: "idle" });
+      try {
+        handle?.dispose();
+      } catch {
+        // Disposal is best-effort; connection state must still be released.
+      } finally {
+        flushDeltas(); // don't lose a trailing chunk; also clears the timer
+        running = false;
+        controller = undefined;
+        denyAllPending();
+        if (!closed) send({ type: "idle" });
+      }
     }
   };
 
@@ -530,7 +535,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           selectedHunks.length > 0 &&
           selectedHunks.length <= 10_000 &&
           selectedHunks.every((index) => Number.isSafeInteger(index) && index >= 0);
-        if (allow && validSelectedHunks) {
+        if (allow && selectedHunks !== undefined && !validSelectedHunks) {
+          settle(false);
+        } else if (allow && validSelectedHunks) {
           settle({ allow: true, selectedHunks });
         } else if (allow && remember === "session") {
           // remember:"session" forwards the richer ConfirmResult so core grows

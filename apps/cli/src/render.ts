@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import type { AgentEvent, ConfirmResult, PermissionRequest, TokenUsage } from "@seekforge/shared";
 import { type Colorizer, colorIsEnabled, makeColorizer } from "./colors.js";
 import { t } from "./i18n.js";
+import { parseIndexList } from "./input-selection.js";
 
 function summarizeArgs(args: unknown, verbose = false): string {
   const text = JSON.stringify(args, null, verbose ? 2 : undefined) ?? "";
@@ -205,10 +206,8 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<Confirm
       // must deny — only an explicit y/yes approves every hunk.
       if (trimmed === "y" || trimmed === "yes") return true;
       // Try to parse as comma-separated hunk indices.
-      const parts = trimmed.split(/\s*,\s*/).map((s) => Number.parseInt(s, 10));
-      if (parts.length > 0 && parts.every((n) => Number.isInteger(n) && n >= 0)) {
-        return { allow: true, selectedHunks: parts };
-      }
+      const selected = parseIndexList(trimmed, req.hunks.map((hunk) => hunk.index));
+      if (selected) return { allow: true, selectedHunks: selected };
       return false;
     } finally {
       rl.close();

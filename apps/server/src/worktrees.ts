@@ -120,26 +120,22 @@ export class WorktreeManager {
       throw new WorktreeError("bad_request", "cannot create a worktree from another worktree", 400);
     }
 
-    // Pick a slug that collides with neither a registered workspace nor an
-    // existing seekforge/<slug> branch.
+    // Pick and synchronously reserve a slug that collides with neither a
+    // registered workspace nor an existing seekforge/<slug> branch.
     const wanted = worktreeSlug(name);
-    let slug = wanted;
-    // `n <= 100` so the final probe checks whether the candidate we settle on
-    // (`wanted-100`) is actually free rather than exiting on a slug still taken.
-    for (let n = 2; (await this.slugTaken(base.path, slug)) && n <= 100; n++) {
-      slug = `${wanted}-${n}`;
+    let slug: string | undefined;
+    for (let candidateNumber = 1; candidateNumber <= 1000; candidateNumber++) {
+      const candidate = candidateNumber === 1 ? wanted : `${wanted}-${candidateNumber}`;
+      if (await this.slugTaken(base.path, candidate)) continue;
+      // Close the await gap against creates for another base repository.
+      if (this.reservedSlugs.has(candidate) || this.registry.resolve(`wt-${candidate}`)) continue;
+      this.reservedSlugs.add(candidate);
+      slug = candidate;
+      break;
     }
-    // Close the await-gap: bump past any slug reserved by a concurrent create
-    // (synchronously, no await) and claim it before doing the async git work.
-    // Bounded so a saturated namespace surfaces an error instead of spinning the
-    // event loop forever (this loop never awaits).
-    for (let n = 2; this.reservedSlugs.has(slug) || this.registry.resolve(`wt-${slug}`); n++) {
-      if (n > 1000) {
-        throw new WorktreeError("bad_request", `too many worktrees named "${wanted}"`, 409);
-      }
-      slug = `${wanted}-${n}`;
+    if (slug === undefined) {
+      throw new WorktreeError("bad_request", `too many worktrees named "${wanted}"`, 409);
     }
-    this.reservedSlugs.add(slug);
 
     try {
       const { path: absPath, branch } = await delegate(createWorktree(base.path, slug));
