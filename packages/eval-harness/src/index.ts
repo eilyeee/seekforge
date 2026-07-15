@@ -6,7 +6,14 @@ export {
   validateCheck,
   validateTask,
   type Check,
+  type ExpectedSessionStatus,
+  type LoopResumeConfig,
+  type LoopTaskConfig,
+  type MemoryStatField,
+  type SessionScenarioConfig,
+  type SessionScenarioStep,
   type TaskDef,
+  type TaskRunner,
 } from "./tasks.js";
 export {
   evaluateCheck,
@@ -17,6 +24,7 @@ export {
   type RunTaskOptions,
   type SkillUsage,
   type TaskMetrics,
+  type TaskExecution,
   type TaskResult,
 } from "./task-runner.js";
 export { compare, toJson, toMarkdown, writeReport, type WrittenReport } from "./report.js";
@@ -40,6 +48,7 @@ export {
   type Variant,
 } from "./variants.js";
 export {
+  alternatingArmOrder,
   compareVariants,
   toAbJson,
   toAbMarkdown,
@@ -48,6 +57,20 @@ export {
   type AbWinner,
   type VariantRun,
 } from "./ab.js";
+export {
+  costDistribution,
+  proportionCi95,
+  type ConfidenceInterval,
+  type CostDistribution,
+} from "./statistics.js";
+export {
+  collectTrends,
+  toTrendMarkdown,
+  writeTrendReport,
+  type TrendEntry,
+  type TrendReport,
+  type WrittenTrendReport,
+} from "./trends.js";
 export {
   rankSkills,
   toSkillRankingMarkdown,

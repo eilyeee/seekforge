@@ -108,11 +108,11 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
  * - `notifications/initialized` is POSTed after a successful initialize.
  * - Requests time out after `requestTimeoutMs` (default 30s) via AbortController.
  *
- * Out of scope: full OAuth flows (authorization-code, token refresh). Static
- * `headers` cover bearer-token servers — and each header value may interpolate
+ * Static `headers` cover bearer-token servers — and each header value may interpolate
  * `${ENV_VAR}` so secrets live in the environment, not in committed config
- * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Servers needing
- * interactive auth are not supported. Server-initiated requests and standalone
+ * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Optional OAuth
+ * refresh-token config renews an expired bearer token after HTTP 401. Initial
+ * interactive authorization remains frontend-owned. Server-initiated requests and standalone
  * GET streams are also not supported (matching the stdio client's v1 surface).
  */
 
@@ -133,6 +133,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   let handshake: Promise<void> | undefined;
   let nextId = 1;
   let disposed = false;
+  let oauthAccessToken: string | undefined;
+  let oauthRefresh: Promise<string> | undefined;
   const inflight = new Set<AbortController>();
 
   function headers(): Record<string, string> {
@@ -140,13 +142,75 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     for (const [k, v] of Object.entries(options.config.headers ?? {})) {
       configured[k] = expandEnvRefs(v);
     }
+    if (oauthAccessToken !== undefined) {
+      for (const key of Object.keys(configured)) {
+        if (key.toLowerCase() === "authorization") delete configured[key];
+      }
+    }
     return {
       ...configured,
+      ...(oauthAccessToken !== undefined ? { authorization: `Bearer ${oauthAccessToken}` } : {}),
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...(negotiatedVersion !== undefined ? { "mcp-protocol-version": negotiatedVersion } : {}),
       ...(sessionId !== undefined ? { "mcp-session-id": sessionId } : {}),
     };
+  }
+
+  async function refreshAccessToken(signal: AbortSignal): Promise<string> {
+    if (oauthRefresh) return oauthRefresh;
+    const oauth = options.config.oauth;
+    if (!oauth) throw new McpError("mcp_auth_error", `MCP server "${options.name}" requires authentication`);
+    oauthRefresh = (async () => {
+      const body = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: expandEnvRefs(oauth.refreshToken),
+        client_id: expandEnvRefs(oauth.clientId),
+        ...(oauth.clientSecret !== undefined
+          ? { client_secret: expandEnvRefs(oauth.clientSecret) }
+          : {}),
+        ...(oauth.scope !== undefined ? { scope: expandEnvRefs(oauth.scope) } : {}),
+      });
+      let response: Response;
+      try {
+        response = await fetch(expandEnvRefs(oauth.tokenEndpoint), {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+          body,
+          signal,
+        });
+      } catch (error) {
+        throw new McpError(
+          "mcp_auth_error",
+          `MCP OAuth refresh failed for "${options.name}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new McpError(
+          "mcp_auth_error",
+          `MCP OAuth refresh failed for "${options.name}" with HTTP ${response.status}`,
+        );
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await response.text()) as unknown;
+      } catch {
+        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" returned invalid JSON`);
+      }
+      const token =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)["access_token"]
+          : undefined;
+      if (typeof token !== "string" || token.length === 0) {
+        throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" omitted access_token`);
+      }
+      oauthAccessToken = token;
+      return token;
+    })().finally(() => {
+      oauthRefresh = undefined;
+    });
+    return oauthRefresh;
   }
 
   /** POSTs one JSON-RPC message; `id === undefined` marks a notification (response body ignored). */
@@ -167,12 +231,18 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     try {
       let res: Response;
       try {
-        res = await fetch(url!, {
+        const send = (): Promise<Response> => fetch(url!, {
           method: "POST",
           headers: headers(),
           body: JSON.stringify({ jsonrpc: "2.0", ...(id !== undefined ? { id } : {}), method, params }),
           signal: controller.signal,
         });
+        res = await send();
+        if (res.status === 401 && options.config.oauth) {
+          await res.body?.cancel().catch(() => {});
+          await refreshAccessToken(controller.signal);
+          res = await send();
+        }
       } catch (err) {
         if (controller.signal.aborted) {
           throw disposed

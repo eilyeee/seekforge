@@ -203,6 +203,12 @@ describe("subagent controls", () => {
     expect((await rx.waitFor((f) => f.type === "error")).code).toBe("unknown_dispatch");
 
     sendFrame(ws, { type: "subagent.steer", dispatchId: "ag-1", message: "focus on parser tests" });
+    expect(await rx.waitFor((f) => f.type === "subagent.control")).toEqual({
+      type: "subagent.control",
+      dispatchId: "ag-1",
+      operation: "steer",
+      status: "accepted",
+    });
     let guidance: string[] = [];
     await waitUntil(() => {
       guidance = takeSteering?.() ?? [];
@@ -211,6 +217,12 @@ describe("subagent controls", () => {
     expect(guidance).toEqual(["focus on parser tests"]);
 
     sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    expect(await rx.waitFor((f) => f.type === "subagent.control")).toEqual({
+      type: "subagent.control",
+      dispatchId: "ag-1",
+      operation: "cancel",
+      status: "accepted",
+    });
     await waitUntil(() => manager?.get("ag-1")?.status === "cancelled");
     expect(manager?.get("ag-1")?.status).toBe("cancelled");
 

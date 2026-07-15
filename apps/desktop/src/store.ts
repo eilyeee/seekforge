@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage } from "@seekforge/shared";
 import { api, ApiError, setTokenProvider, setWorkspaceProvider } from "./lib/api";
 import { truncateChatAtItem } from "./lib/backtrack";
 import { appendUser, initialChatState } from "./lib/events";
@@ -41,6 +41,7 @@ export type View =
   | "memory"
   | "evolution"
   | "hooks"
+  | "security"
   | "settings"
   | "diagnostics";
 
@@ -204,7 +205,7 @@ type AppStore = {
   respondPermission: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
   /** Answers the pending ask_user question on the active tab. */
   respondQuestion: (answer: string) => void;
-  continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string) => void;
+  continueSession: (meta: SessionMeta, messages: ChatMessage[], workspaceId: string, events?: AgentEvent[]) => void;
 };
 
 /**
@@ -652,8 +653,8 @@ export const useStore = create<AppStore>()((set, get) => {
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingQuestion: null }) }));
     },
 
-    continueSession: (meta, messages, workspaceId) => {
-      const items = messagesToItems(messages);
+    continueSession: (meta, messages, workspaceId, events = []) => {
+      const items = messagesToItems(messages, events);
       set((s) => {
         // "Continue this session" always opens a NEW tab bound to the session,
         // in the workspace where the request originated.

@@ -5,7 +5,7 @@
  * tabs.test.ts.
  */
 import type { PermissionRequest } from "@seekforge/shared";
-import { initialChatState, reduceEvent, type ChatState } from "./events";
+import { acknowledgeSubagentControl, initialChatState, reduceEvent, type ChatState } from "./events";
 import { emptyLoopProgress, reduceLoopEvent, type LoopProgress } from "./loop";
 import type { ConnState, ServerFrame } from "./ws-types";
 
@@ -233,6 +233,11 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
       return updateTab(state, tabId, (tab) => ({
         loop: reduceLoopEvent(tab.loopResetPending ? emptyLoopProgress() : tab.loop, frame.event),
         loopResetPending: false,
+      }));
+
+    case "subagent.control":
+      return updateTab(state, tabId, (tab) => ({
+        chat: acknowledgeSubagentControl(tab.chat, frame.dispatchId, frame.operation),
       }));
 
     case "error":

@@ -6,7 +6,7 @@
  * (e.g. compaction strategy) per run — see variants.ts.
  */
 
-import { buildProvider, createAgentCore, createDefaultDispatcher } from "@seekforge/core";
+import { buildProvider, createAgentCore, createDefaultDispatcher, type AgentCoreDeps } from "@seekforge/core";
 import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
@@ -30,7 +30,7 @@ export function createDefaultAgentFactory(
       baseUrl: config.baseUrl,
       ...(config.modelPricing ? { modelPricing: config.modelPricing } : {}),
     };
-    const agent = createAgentCore({
+    const deps: AgentCoreDeps = {
       // A variant may override the main model (e.g. model-pro); else config.
       provider: buildProvider(providerInput, options.model ?? config.model),
       dispatcher: createDefaultDispatcher(),
@@ -59,7 +59,7 @@ export function createDefaultAgentFactory(
       ...(options.planModel
         ? { providerForModel: (m: string) => buildProvider(providerInput, m) }
         : {}),
-    });
-    return { agent };
+    };
+    return { agent: createAgentCore(deps), deps };
   };
 }

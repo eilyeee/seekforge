@@ -22,6 +22,7 @@ function startFakeServer(): Promise<{
   requests: RecordedRequest[];
   getOversizedSseDisconnects: () => number;
   getSessionDeletes: () => number;
+  getTokenRefreshes: () => number;
   close: () => Promise<void>;
 }> {
   const requests: RecordedRequest[] = [];
@@ -30,8 +31,16 @@ function startFakeServer(): Promise<{
   const invalidInitializeTokens = new Set<string>();
   let oversizedSseDisconnects = 0;
   let sessionDeletes = 0;
+  let tokenRefreshes = 0;
 
   const server: Server = createServer((req, res) => {
+    if (req.url === "/token") {
+      tokenRefreshes++;
+      req.resume();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ access_token: "refreshed-token", token_type: "Bearer" }));
+      return;
+    }
     if (req.method === "DELETE") {
       sessionDeletes++;
       res.writeHead(200).end();
@@ -51,6 +60,11 @@ function startFakeServer(): Promise<{
         headers: req.headers,
         params: msg.params,
       });
+
+      if (req.headers["x-require-oauth"] === "yes" && req.headers.authorization !== "Bearer refreshed-token") {
+        res.writeHead(401).end();
+        return;
+      }
 
       const json = (payload: unknown, headers: Record<string, string> = {}): void => {
         res.writeHead(200, { "content-type": "application/json", ...headers });
@@ -178,6 +192,7 @@ function startFakeServer(): Promise<{
         requests,
         getOversizedSseDisconnects: () => oversizedSseDisconnects,
         getSessionDeletes: () => sessionDeletes,
+        getTokenRefreshes: () => tokenRefreshes,
         close: () =>
           new Promise<void>((done) => {
             for (const res of hanging) res.destroy();
@@ -194,9 +209,17 @@ let requests: RecordedRequest[];
 let closeServer: () => Promise<void>;
 let getOversizedSseDisconnects: () => number;
 let getSessionDeletes: () => number;
+let getTokenRefreshes: () => number;
 
 beforeAll(async () => {
-  ({ url, requests, getOversizedSseDisconnects, getSessionDeletes, close: closeServer } = await startFakeServer());
+  ({
+    url,
+    requests,
+    getOversizedSseDisconnects,
+    getSessionDeletes,
+    getTokenRefreshes,
+    close: closeServer,
+  } = await startFakeServer());
 });
 
 afterAll(async () => {
@@ -212,6 +235,28 @@ function makeClient(timeoutMs?: number) {
 }
 
 describe("mcp client over streamable HTTP", () => {
+  it("refreshes an OAuth bearer token once after HTTP 401", async () => {
+    const before = getTokenRefreshes();
+    const client = createMcpClient({
+      name: "oauth-http",
+      config: {
+        url,
+        headers: { "x-require-oauth": "yes" },
+        oauth: {
+          tokenEndpoint: url.replace(/\/mcp$/, "/token"),
+          clientId: "client",
+          refreshToken: "refresh",
+        },
+      },
+    });
+    try {
+      expect((await client.listTools()).map((tool) => tool.name)).toEqual(["echo"]);
+      expect(getTokenRefreshes() - before).toBe(1);
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("handshakes, sends the configured headers + accept, and parses a JSON tools/list", async () => {
     requests.length = 0;
     const client = makeClient();

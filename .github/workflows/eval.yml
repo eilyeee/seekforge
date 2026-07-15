@@ -14,6 +14,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   eval:
@@ -30,6 +31,26 @@ jobs:
           node-version: "22"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Restore previous eval trend history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous=$(gh run list --workflow eval.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [[ -z "$previous" ]]; then
+            echo "No previous successful eval run; starting a new trend history."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/eval-history" evals/reports
+          if gh run download "$previous" --name "eval-trends-$previous" --dir "$RUNNER_TEMP/eval-history"; then
+            history=$(find "$RUNNER_TEMP/eval-history" -name trends.json -type f -print -quit)
+            if [[ -n "$history" ]]; then
+              cp "$history" "evals/reports/history-$previous.json"
+            fi
+          else
+            echo "Previous trend artifact is unavailable; continuing with current reports."
+          fi
       - name: Mark eval start
         run: touch "$RUNNER_TEMP/eval-start"
       - name: Run evals against the baseline
@@ -47,16 +68,31 @@ jobs:
         if: always()
         shell: bash
         run: |
-          report=$(find evals/reports -maxdepth 1 -name '*.md' -type f -newer "$RUNNER_TEMP/eval-start" -print | sort | tail -n 1)
+          report=$(find evals/reports -maxdepth 1 -name '*.md' ! -name 'trends.md' -type f -newer "$RUNNER_TEMP/eval-start" -print | sort | tail -n 1)
           if [[ -n "$report" ]]; then
             cat "$report" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No eval report was generated." >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [[ -f evals/reports/trends.md ]]; then
+            printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+            cat evals/reports/trends.md >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: eval-report
+          name: eval-report-${{ github.run_id }}
           path: evals/reports/
           if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload eval trends
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-trends-${{ github.run_id }}
+          path: |
+            evals/reports/trends.json
+            evals/reports/trends.md
+          if-no-files-found: ignore
+          retention-days: 90

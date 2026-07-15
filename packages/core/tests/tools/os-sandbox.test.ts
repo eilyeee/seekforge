@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildSandboxSpec,
+  composeSandboxProfiles,
+  probeSandboxCapabilities,
   sandboxedShell,
   setSandboxAvailabilityCheckForTests,
 } from "../../src/tools/os-sandbox.js";
@@ -19,6 +21,31 @@ const allAvailable = () => setSandboxAvailabilityCheckForTests(() => true);
 const noneAvailable = () => setSandboxAvailabilityCheckForTests(() => false);
 
 describe("buildSandboxSpec", () => {
+  it("composes profiles and probes platform capabilities", () => {
+    allAvailable();
+    expect(composeSandboxProfiles(
+      { filesystem: "workspace-write", network: "inherit", writablePaths: ["/one"] },
+      { filesystem: "read-only", network: "deny", writablePaths: ["/two"] },
+    )).toEqual({ filesystem: "read-only", network: "deny", writablePaths: ["/one", "/two"] });
+    expect(probeSandboxCapabilities("linux")).toMatchObject({
+      available: true,
+      binary: "bwrap",
+      filesystemIsolation: true,
+      networkIsolation: true,
+    });
+    expect(probeSandboxCapabilities("win32")).toMatchObject({ available: false, filesystemIsolation: false });
+  });
+
+  it("builds a composed profile with extra writable roots", () => {
+    allAvailable();
+    const spec = buildSandboxSpec(
+      { filesystem: "workspace-write", network: "deny", writablePaths: ["/tmp"] },
+      "/ws",
+      "linux",
+    )!;
+    expect(spec.args).toContain("--unshare-net");
+    expect(spec.args.join(" ")).toContain("--bind /tmp /tmp");
+  });
   it("returns null for level off, unknown platforms, and missing binaries", () => {
     allAvailable();
     expect(buildSandboxSpec("off", "/ws", "darwin")).toBeNull();

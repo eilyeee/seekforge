@@ -858,6 +858,81 @@ notification for a request id the server never observed.
 - **Caught:** `packages/core/tests/mcp/http.test.ts` — a 25 ms timer raced the
   initialize handshake and made the notification assertion nondeterministic.
 
+## 55. Budget the complete wire request, not only the obvious payload
+
+Messages are not the whole model request: tool definitions and their JSON
+schemas are serialized on every turn and can dominate the context window.
+
+- **Do:** estimate messages plus advertised tools at the provider boundary;
+  reserve room for both and deterministically narrow oversized tool catalogs.
+- **Caught:** `packages/core/src/agent/loop.ts` — context compaction considered
+  only messages, so a large MCP catalog could exceed the window after the UI
+  reported ample space.
+
+## 56. Every model call belongs to usage and budget accounting
+
+Auxiliary summarization, extraction, ranking, or review calls still consume
+tokens and money even when they are not the main agent turn.
+
+- **Do:** return usage from every successful provider response, including a
+  malformed semantic response, and aggregate it before the final report.
+- **Caught:** `packages/core/src/agent/context.ts` and `memory/extract.ts` — LLM
+  compaction and memory extraction discarded usage and understated Loop cost.
+
+## 57. Exposure is not evidence of use
+
+Putting a record in a prompt does not prove that it affected the model's work.
+Treating exposure as use makes retention and quality metrics self-fulfilling.
+
+- **Do:** record passive exposure, explicit retrieval, and established use as
+  separate counters; prune and evaluate against the signal actually intended.
+- **Caught:** `packages/core/src/agent/loop.ts` — every injected memory fact was
+  marked used even when it was irrelevant to the task.
+
+## 58. An append-only log recovers only its longest valid prefix
+
+Skipping a malformed JSONL record and accepting later lines lets state after a
+torn or corrupted write override the last durable state. Valid JSON scalars and
+schema-invalid objects are corruption too, not harmless records to ignore.
+
+- **Do:** parse and validate each record in order, stop at the first JSON or
+  schema failure, and enforce monotonic sequence/timestamp invariants before
+  accepting the next event. Before a later append, atomically truncate the
+  invalid suffix; otherwise all future valid records remain unreachable.
+- **Caught:** `apps/server/src/run-ledger.ts` — run snapshots and WS replay events
+  originally skipped malformed middle records and continued reading later state.
+
+## 59. Terminal lifecycle states must reject late async transitions
+
+Cancellation can race a provider, child process, or detached completion. The
+late callback still runs, but it no longer owns the lifecycle decision.
+
+- **Do:** enforce allowed state transitions in the central store; once a run is
+  succeeded, failed, or cancelled, ignore a conflicting terminal update.
+- **Caught:** `apps/server/src/run-ledger.ts` — a background run could be marked
+  cancelled and then overwritten as succeeded by a late completion event.
+
+## 60. Autonomous mutation entry points require a finite explicit budget
+
+A background or UI-triggered edit path can bypass the CLI's cost guard even when
+it ultimately calls the same Agent implementation.
+
+- **Do:** validate a finite positive budget at every autonomous mutation
+  boundary, watch cumulative usage events, and propagate cancellation into the
+  active provider/tool graph.
+- **Caught:** Desktop Security Center automatic fixes initially accepted
+  verification commands but no `maxCostUsd`, leaving the edit Agent unbounded.
+
+## 61. Failure-aware UI completion must not run success cleanup
+
+An async helper that catches an error and resolves normally makes downstream
+`.then(...)` handlers indistinguishable from success.
+
+- **Do:** return an explicit success result (or rethrow), and only close dialogs
+  or clear user input after confirmed success.
+- **Caught:** failed Finding lifecycle/fix requests closed their Desktop dialogs,
+  discarding the user's inputs while only showing an error behind the modal.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

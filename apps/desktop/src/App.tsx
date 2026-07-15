@@ -20,6 +20,7 @@ const AgentsView = lazy(() => import("./views/AgentsView").then((m) => ({ defaul
 const MemoryView = lazy(() => import("./views/MemoryView").then((m) => ({ default: m.MemoryView })));
 const EvolutionView = lazy(() => import("./views/EvolutionView").then((m) => ({ default: m.EvolutionView })));
 const HooksView = lazy(() => import("./views/HooksView").then((m) => ({ default: m.HooksView })));
+const SecurityView = lazy(() => import("./views/SecurityView").then((m) => ({ default: m.SecurityView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 const DiagnosticsView = lazy(() => import("./views/DiagnosticsView").then((m) => ({ default: m.DiagnosticsView })));
 
@@ -75,6 +76,7 @@ export function App() {
             {view === "memory" && <MemoryView key={activeWorkspaceId} />}
             {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
             {view === "hooks" && <HooksView key={activeWorkspaceId} />}
+            {view === "security" && <SecurityView key={activeWorkspaceId} />}
             {view === "settings" && <SettingsView key={activeWorkspaceId} />}
             {view === "diagnostics" && <DiagnosticsView key={activeWorkspaceId} />}
           </Suspense>

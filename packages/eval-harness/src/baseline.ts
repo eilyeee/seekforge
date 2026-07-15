@@ -1,5 +1,5 @@
 import type { TaskResult } from "./task-runner.js";
-import { validateCheck } from "./tasks.js";
+import { TASK_RUNNERS, validateCheck } from "./tasks.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,6 +81,28 @@ function validateResult(value: unknown, where: string): TaskResult {
   }
   if (value["error"] !== undefined && typeof value["error"] !== "string") {
     throw new Error(`${where}.error must be a string`);
+  }
+  if (value["execution"] !== undefined) {
+    const execution = value["execution"];
+    if (
+      !isRecord(execution) || typeof execution["runner"] !== "string" ||
+      !TASK_RUNNERS.includes(execution["runner"] as (typeof TASK_RUNNERS)[number]) ||
+      typeof execution["status"] !== "string" || execution["status"].length === 0 ||
+      typeof execution["expectedStatus"] !== "string" || execution["expectedStatus"].length === 0 ||
+      typeof execution["passed"] !== "boolean" ||
+      !Array.isArray(execution["sessionIds"]) ||
+      !execution["sessionIds"].every((id) => typeof id === "string" && id.length > 0)
+    ) {
+      throw new Error(`${where}.execution has an invalid orchestration shape`);
+    }
+    optionalMetric(execution["iterations"], `${where}.execution.iterations`, true);
+    optionalMetric(execution["maxIterations"], `${where}.execution.maxIterations`, true);
+    if (execution["resumed"] !== undefined && typeof execution["resumed"] !== "boolean") {
+      throw new Error(`${where}.execution.resumed must be a boolean`);
+    }
+    if (execution["steps"] !== undefined && !Array.isArray(execution["steps"])) {
+      throw new Error(`${where}.execution.steps must be an array`);
+    }
   }
   if (value["skills"] !== undefined) {
     if (!Array.isArray(value["skills"])) throw new Error(`${where}.skills must be an array`);

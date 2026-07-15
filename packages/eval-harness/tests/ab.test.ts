@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareVariants, toAbJson, toAbMarkdown, type VariantRun } from "../src/ab.js";
+import { alternatingArmOrder, compareVariants, toAbJson, toAbMarkdown, type VariantRun } from "../src/ab.js";
 import type { TaskResult } from "../src/task-runner.js";
 
 function res(overrides: Partial<TaskResult> & { taskId: string }): TaskResult {
@@ -111,5 +111,40 @@ describe("compareVariants", () => {
     expect(parsed.variants).toHaveLength(2);
     expect(parsed.comparison.variantA).toBe("control");
     expect(parsed.comparison.variantB).toBe("terse");
+  });
+
+  it("pairs repeated samples by task and sample without overwriting either result", () => {
+    const summary = compareVariants(
+      run("a", [res({ taskId: "t", sample: 1 }), res({ taskId: "t", sample: 2, success: false })]),
+      run("b", [res({ taskId: "t", sample: 1, success: false }), res({ taskId: "t", sample: 2 })]),
+    );
+    expect(summary.tasks.map((row) => [row.taskId, row.sample, row.winner])).toEqual([
+      ["t", 1, "a"],
+      ["t", 2, "b"],
+    ]);
+    expect(summary.paired).toMatchObject({ pairs: 2, decisivePairs: 2, aWinRate: 0.5 });
+    expect(summary.totals.a.successRateCi95.lower).toBeLessThan(0.5);
+    expect(summary.totals.a.costDistribution.count).toBe(2);
+  });
+
+  it("rejects duplicate paired sample keys and alternates execution order", () => {
+    expect(() => compareVariants(
+      run("a", [res({ taskId: "t", sample: 1 }), res({ taskId: "t", sample: 1 })]),
+      run("b", []),
+    )).toThrow(/duplicate A result/);
+    expect([0, 1, 2, 3].map(alternatingArmOrder)).toEqual([
+      ["a", "b"], ["b", "a"], ["a", "b"], ["b", "a"],
+    ]);
+  });
+
+  it("renders confidence intervals and cost distribution", () => {
+    const summary = compareVariants(
+      run("a", [res({ taskId: "t", sample: 1 })]),
+      run("b", [res({ taskId: "t", sample: 1, success: false })]),
+    );
+    const markdown = toAbMarkdown(summary);
+    expect(markdown).toContain("Success rate (95% CI)");
+    expect(markdown).toContain("Paired Win/Loss/Tie");
+    expect(markdown).toContain("Cost distribution");
   });
 });

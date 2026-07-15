@@ -18,33 +18,33 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
-| Desktop and local web workbench | Implemented, maturing | Expand end-to-end packaging and clean-install smoke coverage. |
-| DeepSeek provider and cost accounting | Production-ready foundation | Preserve provider-specific token/cache semantics as model support expands. |
+| Desktop and local web workbench | Implemented, maturing | Security Center, MCP editing, team planning, and historical subagent replay ship; expand signed cross-platform packaging. |
+| DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
-| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Improve examples, lifecycle tests, and failure diagnostics. |
+| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics and HTTP token refresh ship; complete interactive OAuth and long-lived HTTP streams. |
 | Worktrees and isolated execution | Implemented, maturing | Make worktree isolation the default for parallel issue/PR jobs. |
-| `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Worktree isolation, CI waiting, and review fixes ship; add failure-log feedback and branch resume. |
-| Scheduled jobs and webhook-triggered sessions | Implemented, security-sensitive | Harden operational persistence; GitHub uses HMAC, delivery dedupe, and an event whitelist. |
-| Browser / visual verification | Implemented, optional | Exercise real Playwright browsers in integration CI; confirmed loopback is allowed, other private networks are blocked. |
-| Rust runtime and Docker runner | Implemented, optional | Add non-skipped integration gates with real binaries/containers. |
-| Eval harness | Implemented | Publish periodic reports and grow real-world regression fixtures. |
+| `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and one bounded CI-log repair ship; expand provider/host compatibility fixtures. |
+| Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, history, cancellation, retry backoff, and WS replay ship; add retention controls. |
+| Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
+| Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
+| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, and trend reports ship. |
 | `@seekforge/core` embedding API | Internal / experimental | Package is private and source-exported; define build, semver, and compatibility policy before public SDK release. |
 | VS Code / JetBrains integration | Not implemented | Start with a thin client over the existing REST/WS server contract. |
 | Remote/team execution service | Design-stage | Stabilize a self-hosted runner contract without weakening local-first defaults. |
 
 ## Near-term priorities
 
-1. Add release-artifact smoke tests: install the packed CLI in a clean
-   environment and verify CLI/TUI/assets/cross-package exports on Node 20 and 22.
-2. Add optional integration CI that launches Playwright, the Rust runtime, and
-   the Docker runner rather than only testing definitions and error paths.
-3. Complete the PR feedback loop with bounded hosted CI failure-log repair and
-   existing-branch resume.
-4. Expand dogfooding fixtures and publish scheduled eval reports with pass rate,
-   cost, token usage, and failure details.
+1. Produce signed updater artifacts and add Linux/Windows clean-install Desktop
+   smoke jobs once platform signing credentials are available.
+2. Add run-ledger/event retention, compaction, and operator controls before
+   enabling long-lived remote runners by default.
+3. Expand real-project lifecycle eval fixtures and preserve enough CI trend
+   history to detect slow cost/quality drift across releases.
+4. Complete interactive OAuth authorization and long-lived Streamable HTTP MCP
+   notification/request handling; refresh-token operation already ships.
 5. Improve provider compatibility fixtures while keeping DeepSeek-specific cost
    and cache-hit reporting first class.
-6. Build a thin VS Code bridge over `seekforge serve` for chat, diffs,
+6. Build a thin VS Code bridge over the versioned `seekforge serve` contract for chat, diffs,
    permissions, session resume, and `@file` context.
 7. Decide whether to publish `@seekforge/core`; if yes, add compiled artifacts,
    supported entry points, examples, semver policy, and API compatibility tests.

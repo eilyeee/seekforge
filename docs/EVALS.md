@@ -36,9 +36,10 @@ comma-separated subset), `--baseline <file>`, `--fail-on-regression`,
 `--variant <name>`, `--ab <a,b>`, `--skill-ranking`, `--keep`, and
 `--list-variants`. `--repeat` accepts 1 to 20 samples and overrides the suite default; `--task` narrows the
 selected suite. Each run writes timestamped Markdown and JSON under
-`evals/reports/`; `--junit` additionally writes JUnit XML.
-Multi-sample runs are intentionally rejected with `--ab`; run each variant
-separately so all samples remain visible instead of reducing them to one winner.
+`evals/reports/`; `--junit` additionally writes JUnit XML. Existing flags and
+single-sample report fields remain compatible. `--ab` accepts the same
+`--repeat` count: each `(task, sample)` is a strict pair, and execution order
+alternates A→B then B→A to reduce provider-order and time drift.
 
 ### Suites and metrics
 
@@ -54,11 +55,52 @@ the latest cumulative usage emitted before a failed session; tool calls
 and failed tool calls; session errors; duration; cost; deterministic checks; and
 the existing heuristic session score. The report aggregates success rate, tool
 failure rate, session error rate, cost per success, and tokens per success.
+Paired A/B reports additionally include Wilson 95% confidence intervals for
+each arm's success rate and the decisive-pair win rate, plus
+min/quartile/p95/max costs and a 95% interval for mean sample cost.
 
 JSON reports retain the historical `{ generatedAt, results }` fields and add
 `metadata`, `aggregate`, and `gates`. Metadata identifies provider, model,
 variant, suite, repeat count, Git SHA, dataset SHA-256, Node version, and platform.
 This keeps old report readers working while making a run reproducible.
+
+After every standard or A/B run the harness rebuilds
+`evals/reports/trends.json` and `evals/reports/trends.md` from all valid
+timestamped report JSON. Malformed or incompatible history files are skipped
+rather than poisoning the current run.
+
+### Runner modes
+
+Tasks without `runner` retain the historical single-session `agent` behavior.
+Three runner values are supported:
+
+- `agent`: one `AgentCore.runTask` call. Optional `expectedStatus` is
+  `completed` (default) or `failed`.
+- `loop`: the real core `runAutoLoop` with a required `verifyCommand`,
+  `maxIterations`, and `expectedStatus`. Optional `resume` asserts the initial
+  persisted Loop status before calling `resumeAutoLoop` with additional
+  iterations and/or budget.
+- `session_scenario`: ordered `agent`, `memory.add`, `memory.approve`, and
+  `memory.reject` steps. An agent step with `resume: true` binds the next run to
+  the previous `sessionId`; terminal status is checked per step.
+
+```json
+{
+  "runner": "loop",
+  "mode": "edit",
+  "task": "Fix the implementation until tests pass.",
+  "loop": {
+    "verifyCommand": "npm test",
+    "maxIterations": 3,
+    "expectedStatus": "passed"
+  }
+}
+```
+
+Scenario tasks can assert lifecycle state with `memory_stats` checks and exact
+per-fact counters with `memory_fact_activity` (`uses`, `exposures`, or
+`retrievals`). Paths, regexes, terminal enums, aliases, finite budgets, and
+iteration limits are validated while loading the dataset.
 
 ### Variants (for `--variant` / `--ab`)
 
@@ -82,8 +124,9 @@ self-verify `npm test` + auto-run + final diff self-review). A/B a lever against
 Two zero-core-change capability A/Bs you can run in **one command** each once
 `DEEPSEEK_API_KEY` is set (no key ⇒ the run skips and exits 0). Each runs the full
 task set under `control` and the variant, then prints the `toAbMarkdown` table
-(per-task ✓/score/turns/cost, plus Win/Loss/Tie, cost Δ, and cost-per-success) and
-writes `evals/reports/ab-<ts>.json`.
+(per-sample pass/score/turns/cost, paired Win/Loss/Tie, confidence intervals,
+cost distribution, cost delta, and cost-per-success) and writes
+`evals/reports/ab-<ts>.json` plus `.md`.
 
 ```sh
 # Does a tighter context window (earlier/more compaction) save tokens without hurting completion?
@@ -192,6 +235,10 @@ LLM judges:
 - `command_succeeds` — `{ type, command, cwd? }`: shell command must exit 0.
 - `answer_matches` — `{ type, pattern }`: regex must match the agent's final
   summary.
+- `memory_stats` — `{ type, field, equals, tolerance? }`: compare a final
+  `memoryStats(workspace)` field.
+- `memory_fact_activity` — `{ type, fact, activity, equals }`: compare one
+  fact's exact `uses`, `exposures`, or `retrievals` counter.
 
 ### The mapping
 
@@ -281,7 +328,10 @@ The eval workflow is both `workflow_dispatch` and a Monday weekly schedule. It
 reads `DEEPSEEK_API_KEY` from repository secrets and runs `nightly` with three
 samples, the committed baseline, all suite gates, `--require-api-key`, and JUnit
 output. A missing key is an infrastructure failure, not a successful skip. It
-uploads all reports and appends the Markdown report to GitHub Step Summary.
+appends both the current report and `trends.md` to GitHub Step Summary. CI keeps
+the complete report directory as a 30-day artifact and publishes a dedicated
+`eval-trends-<run id>` artifact containing `trends.json` and `trends.md` for 90
+days.
 
 Adding scenarios requires a task + fixture under `evals/` and registration in
 `packages/eval-harness/tests/dataset.test.ts`; the deterministic dataset gate

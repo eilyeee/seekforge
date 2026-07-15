@@ -2,18 +2,27 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "@seekforge/shared";
+import type { ChatMessage, ToolDefinitionForModel } from "@seekforge/shared";
 import {
   clearOldToolResults,
   compactMessages,
   estimateMessagesTokens,
+  estimateRequestTokens,
+  estimateToolDefinitionsTokens,
   estimateTokens,
   llmCompactMessages,
   llmCompactSessionNow,
+  selectToolDefinitionsForBudget,
   shrinkToolResultsToFit,
   type SummaryProvider,
 } from "../../src/agent/context.js";
-import { createSessionTrace, loadSessionMessages, newSessionId } from "../../src/agent/trace.js";
+import {
+  createSessionTrace,
+  loadSessionMessages,
+  newSessionId,
+  rewriteSessionMessages,
+  writeCompactionSnapshot,
+} from "../../src/agent/trace.js";
 
 function msg(role: ChatMessage["role"], content: string, extra?: Partial<ChatMessage>): ChatMessage {
   return { role, content, ...extra };
@@ -111,6 +120,64 @@ describe("estimateTokens", () => {
     // "𝕏" is a surrogate pair (length 2): neither half is in a CJK range, so
     // it lands in the ~4-chars-per-token bucket — ceil(2/4) = 1.
     expect(estimateTokens("𝕏")).toBe(1);
+  });
+});
+
+describe("request token estimation", () => {
+  const tool = (name: string, description = "d"): ToolDefinitionForModel => ({
+    name,
+    description,
+    parameters: { type: "object", properties: { value: { type: "string" } } },
+  });
+
+  it("includes serialized tool definitions in the request estimate", () => {
+    const messages = [msg("user", "task")];
+    const tools = [tool("large_mcp_tool", "x".repeat(400))];
+    expect(estimateToolDefinitionsTokens(tools)).toBeGreaterThan(0);
+    expect(estimateRequestTokens(messages, tools)).toBe(
+      estimateMessagesTokens(messages) + estimateToolDefinitionsTokens(tools),
+    );
+  });
+
+  it("trims oversized catalogs while retaining essential and relevant tools", () => {
+    const tools = [
+      tool("read_file", "x".repeat(200)),
+      tool("deploy_service", "x".repeat(200)),
+      tool("unrelated_catalog", "x".repeat(200)),
+    ];
+    const budget = estimateToolDefinitionsTokens(tools.slice(0, 2));
+    const selected = selectToolDefinitionsForBudget(
+      tools,
+      [msg("user", "deploy the service after reading its config")],
+      budget,
+    );
+    expect(selected.map((entry) => entry.name)).toEqual(["read_file", "deploy_service"]);
+    expect(estimateToolDefinitionsTokens(selected)).toBeLessThanOrEqual(budget);
+  });
+});
+
+describe("persisted compaction snapshots", () => {
+  it("replays the compacted prefix plus messages appended after the snapshot", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-snapshot-"));
+    try {
+      const id = newSessionId();
+      const trace = createSessionTrace(workspace, id);
+      for (const message of conversation(20)) trace.message(message);
+      const raw = loadSessionMessages(workspace, id);
+      const compacted = compactMessages(raw, 1_000)!;
+      expect(writeCompactionSnapshot(workspace, id, compacted.messages)).toBe(true);
+      trace.message(msg("assistant", "after snapshot"));
+      const replay = loadSessionMessages(workspace, id);
+      expect(replay).toHaveLength(compacted.messages.length + 1);
+      expect(replay.at(-1)?.content).toBe("after snapshot");
+
+      // A trace rewrite invalidates the fingerprint, so stale derived state is
+      // ignored instead of being combined with unrelated history.
+      rewriteSessionMessages(workspace, id, [msg("system", "new"), msg("user", "task")]);
+      expect(loadSessionMessages(workspace, id).map((message) => message.content)).toEqual(["new", "task"]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

@@ -353,4 +353,35 @@ describe("reduceEvent", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect([...ids].sort((a, b) => a - b)).toEqual(ids);
   });
+
+  it("tracks a deterministic team DAG through dispatch lifecycle and completion", () => {
+    const plan = {
+      members: [
+        { id: "inspect", agentId: "explorer", task: "inspect parser", dependsOn: [] },
+        { id: "review", agentId: "reviewer", task: "review parser", dependsOn: ["inspect"] },
+      ],
+      maxConcurrency: 2,
+      failurePolicy: "stop" as const,
+    };
+    const s = play([
+      { type: "tool.started", toolName: "dispatch_team", args: plan },
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "explorer", task: "inspect parser", status: "running" },
+      { type: "subagent.completed", dispatchId: "ag-1", agentId: "explorer", task: "inspect parser", status: "done", resultSummary: "done" },
+      { type: "subagent.started", dispatchId: "ag-2", agentId: "reviewer", task: "review parser", status: "running" },
+      { type: "subagent.completed", dispatchId: "ag-2", agentId: "reviewer", task: "review parser", status: "done", resultSummary: "done" },
+      { type: "tool.completed", toolName: "dispatch_team", result: { ok: true, data: { status: "done", members: [
+        { id: "inspect", agentId: "explorer", status: "done" },
+        { id: "review", agentId: "reviewer", status: "done" },
+      ] } } },
+    ]);
+    const team = s.items.find((item) => item.kind === "team");
+    expect(team).toMatchObject({
+      kind: "team",
+      status: "done",
+      members: [
+        { id: "inspect", dispatchId: "ag-1", status: "done" },
+        { id: "review", dispatchId: "ag-2", status: "done", dependsOn: ["inspect"] },
+      ],
+    });
+  });
 });

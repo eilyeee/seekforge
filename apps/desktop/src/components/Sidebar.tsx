@@ -66,6 +66,7 @@ const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
   {
     titleKey: "nav.group.system",
     items: [
+      { view: "security", key: "nav.security", Icon: IconShield },
       { view: "hooks", key: "nav.hooks", Icon: IconShield },
       { view: "settings", key: "nav.settings", Icon: IconSettings },
       { view: "diagnostics", key: "nav.diagnostics", Icon: IconSettings },

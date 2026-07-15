@@ -353,10 +353,14 @@ export const mockEvolutionProposals: EvolutionProposal[] = [
 export const mockMcpServers: McpServer[] = [
   {
     name: "context7",
+    transport: "stdio",
     command: "npx",
     args: ["-y", "@upstash/context7-mcp"],
     trusted: false,
-    envKeys: ["CONTEXT7_API_KEY"],
+    env: { CONTEXT7_API_KEY: "********" },
+    headers: {},
+    source: "project",
+    shadowedGlobal: false,
   },
 ];
 

@@ -11,10 +11,14 @@ import {
   InvalidIssueError,
   buildAddArgs,
   buildBranchArgs,
+  buildBranchExistsArgs,
   buildBranchName,
   buildCommitArgs,
   buildCommitMessage,
   buildDetachedWorktreeArgs,
+  buildCiRepairPrompt,
+  buildFailedRunListArgs,
+  buildFailedRunLogArgs,
   buildIssueViewArgs,
   buildPrChecksArgs,
   buildPrCheckoutArgs,
@@ -28,6 +32,7 @@ import {
   buildTaskPrompt,
   buildWorktreeAddArgs,
   buildWorktreeRemoveArgs,
+  buildWorktreeReuseArgs,
   formatCommand,
   parseIssueNumber,
   type IssueRef,
@@ -80,6 +85,26 @@ test("rejects zero, negatives, non-numeric, empty, and non-issue URLs", () => {
   for (const bad of ["0", "-3", "abc", "", "   ", "12x", "https://github.com/o/r/pulls", "https://example.com/foo/1"]) {
     assert.throws(() => parseIssueNumber(bad), InvalidIssueError, `expected "${bad}" to throw`);
   }
+});
+
+test("builds existing-branch reuse argv", () => {
+  assert.deepEqual(buildBranchExistsArgs("seekforge/issue-42"), [
+    "show-ref", "--verify", "--quiet", "refs/heads/seekforge/issue-42",
+  ]);
+  assert.deepEqual(buildWorktreeReuseArgs("/tmp/wt", "seekforge/issue-42"), [
+    "worktree", "add", "/tmp/wt", "seekforge/issue-42",
+  ]);
+});
+
+test("bounds CI feedback and fetches only failed logs", () => {
+  assert.deepEqual(buildFailedRunListArgs("seekforge/issue-42"), [
+    "run", "list", "--branch", "seekforge/issue-42", "--status", "failure", "--limit", "1", "--json", "databaseId",
+  ]);
+  assert.deepEqual(buildFailedRunLogArgs(123), ["run", "view", "123", "--log-failed"]);
+  const prompt = buildCiRepairPrompt("x".repeat(30_000));
+  assert.ok(prompt.includes("[truncated]"));
+  assert.ok(prompt.length < 21_000);
+  assert.ok(prompt.includes("untrusted-ci-log"));
 });
 
 // --- branch name ------------------------------------------------------------

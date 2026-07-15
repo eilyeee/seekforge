@@ -14,8 +14,8 @@
  *   --keep                 Keep the throwaway workspaces for debugging.
  *   --variant <name>       Run under one named variant (see variants.ts).
  *                          Default: control; use --ab to compare two.
- *   --ab <a,b>             Run the FULL task set under variant a and variant b
- *                          and print a comparison table; writes ab-<ts>.json.
+ *   --ab <a,b>             Run paired samples under variants a and b, alternating
+ *                          arm order; writes ab-<ts>.json/.md.
  *   --skill-ranking        Append a skill-effectiveness ranking section.
  *   --list-variants        Print the variant registry and exit.
  *
@@ -27,7 +27,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "./args.js";
 import { aggregateResults } from "./aggregate.js";
-import { toAbJson, toAbMarkdown, compareVariants, type VariantRun } from "./ab.js";
+import { alternatingArmOrder, toAbJson, toAbMarkdown, compareVariants, type VariantRun } from "./ab.js";
 import { createDefaultAgentFactory } from "./agent-factory.js";
 import { loadEvalConfig } from "./config.js";
 import { evaluateGates, type GateResult } from "./gates.js";
@@ -38,8 +38,54 @@ import { createRunMetadata } from "./run-metadata.js";
 import { rankSkills, toSkillRankingMarkdown } from "./skill-ranking.js";
 import { assertFixturesExist, loadTasks, type TaskDef } from "./tasks.js";
 import { runTask, type TaskResult } from "./task-runner.js";
+import { writeTrendReport } from "./trends.js";
 import { loadSuiteConfig, selectSuite, type SuiteConfig } from "./suite-config.js";
-import { getVariant, listVariants } from "./variants.js";
+import { getVariant, listVariants, type AgentBuildOptions } from "./variants.js";
+
+type VariantExecutor = {
+  name: string;
+  options: AgentBuildOptions;
+  createAgent: ReturnType<typeof createDefaultAgentFactory>;
+};
+
+function variantExecutor(
+  name: string,
+  config: ReturnType<typeof loadEvalConfig>,
+): VariantExecutor {
+  const options = getVariant(name).apply({});
+  return { name, options, createAgent: createDefaultAgentFactory(config, options) };
+}
+
+async function runOne(
+  executor: VariantExecutor,
+  task: TaskDef,
+  keepDir: boolean,
+  sample: number,
+  repeat: number,
+): Promise<TaskResult> {
+  const sampleLabel = repeat > 1 ? ` sample ${sample}/${repeat}` : "";
+  console.log(`> [${executor.name}] ${task.id}${sampleLabel}: ${task.title}`);
+  const result = await runTask(task, {
+    createAgent: executor.createAgent,
+    keepDir,
+    taskSuffix: executor.options.taskSuffix,
+  });
+  if (repeat > 1) result.sample = sample;
+  const passed = result.checks.filter((check) => check.passed).length;
+  console.log(`  ${result.success ? "PASS" : "FAIL"} (${passed}/${result.checks.length} checks)`);
+  for (const check of result.checks) {
+    if (!check.passed) console.log(`    FAIL ${check.check.type}: ${check.detail ?? "failed"}`);
+  }
+  if (!result.execution?.passed) {
+    console.log(
+      `    terminal: ${result.execution?.status ?? "unknown"} ` +
+      `(expected ${result.execution?.expectedStatus ?? "completed"})`,
+    );
+  }
+  if (result.error) console.log(`    session error: ${result.error}`);
+  if (result.workspaceDir) console.log(`    workspace kept: ${result.workspaceDir}`);
+  return result;
+}
 
 /** Runs every task under one named variant, printing per-task progress. */
 async function runVariant(
@@ -49,35 +95,55 @@ async function runVariant(
   keepDir: boolean,
   repeat: number,
 ): Promise<TaskResult[]> {
-  const variant = getVariant(variantName);
-  const options = variant.apply({});
-  const createAgent = createDefaultAgentFactory(config, options);
+  const executor = variantExecutor(variantName, config);
   const results: TaskResult[] = [];
   for (let sample = 1; sample <= repeat; sample++) {
     for (const task of tasks) {
-      const sampleLabel = repeat > 1 ? ` sample ${sample}/${repeat}` : "";
-      console.log(`▶ [${variantName}] ${task.id}${sampleLabel}: ${task.title}`);
-      const result = await runTask(task, { createAgent, keepDir, taskSuffix: options.taskSuffix });
-      if (repeat > 1) result.sample = sample;
-      const passed = result.checks.filter((c) => c.passed).length;
-      console.log(`  ${result.success ? "✓ pass" : "✗ fail"} (${passed}/${result.checks.length} checks)`);
-      for (const check of result.checks) {
-        if (!check.passed) console.log(`    ✗ ${check.check.type}: ${check.detail ?? "failed"}`);
-      }
-      if (result.error) console.log(`    session error: ${result.error}`);
-      if (result.workspaceDir) console.log(`    workspace kept: ${result.workspaceDir}`);
-      results.push(result);
+      results.push(await runOne(executor, task, keepDir, sample, repeat));
     }
   }
   return results;
 }
 
-function writeAbReport(runs: VariantRun[], summary: ReturnType<typeof compareVariants>): string {
+/** Alternates arm order within every exact task/sample pair. */
+async function runAbVariants(
+  names: [string, string],
+  tasks: TaskDef[],
+  config: ReturnType<typeof loadEvalConfig>,
+  keepDir: boolean,
+  repeat: number,
+): Promise<VariantRun[]> {
+  const a = variantExecutor(names[0], config);
+  const b = variantExecutor(names[1], config);
+  const resultsA: TaskResult[] = [];
+  const resultsB: TaskResult[] = [];
+  let pairIndex = 0;
+  for (let sample = 1; sample <= repeat; sample++) {
+    for (const task of tasks) {
+      const order = alternatingArmOrder(pairIndex++).map((arm) => arm === "a" ? a : b);
+      for (const executor of order) {
+        const result = await runOne(executor, task, keepDir, sample, repeat);
+        (executor === a ? resultsA : resultsB).push(result);
+      }
+    }
+  }
+  return [
+    { variant: a.name, results: resultsA },
+    { variant: b.name, results: resultsB },
+  ];
+}
+
+function writeAbReport(
+  runs: VariantRun[],
+  summary: ReturnType<typeof compareVariants>,
+): { jsonPath: string; markdownPath: string } {
   mkdirSync(reportsDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const jsonPath = join(reportsDir, `ab-${stamp}.json`);
+  const markdownPath = join(reportsDir, `ab-${stamp}.md`);
   writeFileSync(jsonPath, toAbJson(runs, summary));
-  return jsonPath;
+  writeFileSync(markdownPath, `# SeekForge paired A/B report\n\n${toAbMarkdown(summary)}\n`);
+  return { jsonPath, markdownPath };
 }
 
 async function main(): Promise<void> {
@@ -126,23 +192,18 @@ async function main(): Promise<void> {
 
   // --ab: run the full set under two variants and compare.
   if (args.ab) {
-    if (repeat !== 1) {
-      throw new Error("multi-sample --repeat is not supported with --ab; run each variant separately");
-    }
     const [nameA, nameB] = args.ab;
-    const resultsA = await runVariant(nameA, tasks, config, args.keep, repeat);
-    const resultsB = await runVariant(nameB, tasks, config, args.keep, repeat);
-    const runs: VariantRun[] = [
-      { variant: nameA, results: resultsA },
-      { variant: nameB, results: resultsB },
-    ];
+    const runs = await runAbVariants([nameA, nameB], tasks, config, args.keep, repeat);
+    const resultsA = runs[0]!.results;
+    const resultsB = runs[1]!.results;
     const summary = compareVariants(runs[0]!, runs[1]!);
     console.log(`\n${toAbMarkdown(summary)}`);
     if (args.skillRanking) {
       console.log(`\n${toSkillRankingMarkdown(rankSkills([...resultsA, ...resultsB]))}`);
     }
-    const jsonPath = writeAbReport(runs, summary);
-    console.log(`\nA/B report written:\n  ${jsonPath}`);
+    const { jsonPath, markdownPath } = writeAbReport(runs, summary);
+    const trends = writeTrendReport(reportsDir);
+    console.log(`\nA/B report written:\n  ${markdownPath}\n  ${jsonPath}\n  ${trends.markdownPath}\n  ${trends.jsonPath}`);
     if ([...resultsA, ...resultsB].some((r) => !r.success)) process.exitCode = 1;
     return;
   }
@@ -185,8 +246,9 @@ async function main(): Promise<void> {
     aggregate: aggregateResults(results),
     ...(gateResult ? { gates: gateResult } : {}),
   });
+  const trends = writeTrendReport(reportsDir);
   if (args.junit !== undefined) writeJunit(results, args.junit, `SeekForge ${args.suite ?? "eval"}`);
-  console.log(`\nReport written:\n  ${markdownPath}\n  ${jsonPath}`);
+  console.log(`\nReport written:\n  ${markdownPath}\n  ${jsonPath}\n  ${trends.markdownPath}\n  ${trends.jsonPath}`);
   if (args.junit !== undefined) console.log(`  ${args.junit}`);
 
   // --fail-on-regression: the gate fails ONLY on a pass→fail vs the baseline

@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ChatMessage, FinalReport } from "@seekforge/shared";
+import type { ChatMessage, FinalReport, TokenUsage } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import {
   appendCandidates,
@@ -41,6 +41,8 @@ export type ExtractMemoryInput = {
 export type ExtractMemoryResult = {
   summaryMarkdown: string;
   candidates: MemoryCandidate[];
+  /** Usage consumed by the extraction request, including malformed responses. */
+  usage?: TokenUsage;
 };
 
 const MESSAGE_SNIPPET_CHARS = 200;
@@ -254,14 +256,14 @@ function parseExtraction(content: string): ParsedExtraction | undefined {
   return { summary: obj.summary, facts };
 }
 
-function degrade(input: ExtractMemoryInput): ExtractMemoryResult {
+function degrade(input: ExtractMemoryInput, usage?: TokenUsage): ExtractMemoryResult {
   const summaryMarkdown = buildMinimalSummary(input);
   try {
     writeSummary(input, summaryMarkdown);
   } catch {
     // Even fs failures must not propagate.
   }
-  return { summaryMarkdown, candidates: [] };
+  return { summaryMarkdown, candidates: [], ...(usage ? { usage } : {}) };
 }
 
 export async function extractMemoryFromSession(
@@ -269,6 +271,7 @@ export async function extractMemoryFromSession(
   input: ExtractMemoryInput,
 ): Promise<ExtractMemoryResult> {
   let parsed: ParsedExtraction | undefined;
+  let usage: TokenUsage | undefined;
   try {
     const response = await provider.chat({
       messages: [
@@ -278,11 +281,12 @@ export async function extractMemoryFromSession(
       temperature: 0,
       maxTokens: 1024,
     });
+    usage = response.usage;
     parsed = parseExtraction(response.content);
   } catch {
     parsed = undefined;
   }
-  if (!parsed) return degrade(input);
+  if (!parsed) return degrade(input, usage);
 
   try {
     const existing = readCandidates(input.workspace);
@@ -324,8 +328,8 @@ export async function extractMemoryFromSession(
 
     appendCandidates(input.workspace, candidates);
     writeSummary(input, parsed.summary);
-    return { summaryMarkdown: parsed.summary, candidates };
+    return { summaryMarkdown: parsed.summary, candidates, ...(usage ? { usage } : {}) };
   } catch {
-    return degrade(input);
+    return degrade(input, usage);
   }
 }

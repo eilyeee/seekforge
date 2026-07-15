@@ -73,4 +73,19 @@ describe("messagesToItems", () => {
       result: { ok: true, data: "plain text output" },
     });
   });
+
+  it("restores persisted team and subagent activity alongside messages", () => {
+    const items = messagesToItems(
+      [{ role: "user", content: "run the team" }],
+      [
+        { type: "tool.started", toolName: "dispatch_team", args: { members: [{ id: "review", agentId: "reviewer", task: "review", dependsOn: [] }] } },
+        { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "running" },
+        { type: "subagent.completed", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "done", resultSummary: "clean" },
+        { type: "tool.completed", toolName: "dispatch_team", result: { ok: true, data: { status: "done", members: [{ id: "review", agentId: "reviewer", status: "done" }] } } },
+      ],
+    );
+    expect(items.map((item) => item.kind)).toEqual(["user", "team", "subagent"]);
+    expect(items[1]).toMatchObject({ kind: "team", status: "done", members: [{ dispatchId: "ag-1", status: "done" }] });
+    expect(items[2]).toMatchObject({ kind: "subagent", resultSummary: "clean" });
+  });
 });

@@ -111,14 +111,15 @@ export {
   runShellCommand,
   TEST_COMMAND_TIMEOUT_MS,
 } from "./run-command.js";
-export { buildSandboxSpec, sandboxedShell } from "./os-sandbox.js";
-export type { SandboxLevel, SandboxSpec } from "./os-sandbox.js";
+export { buildSandboxSpec, composeSandboxProfiles, probeSandboxCapabilities, sandboxedShell } from "./os-sandbox.js";
+export type { SandboxCapabilityProbe, SandboxLevel, SandboxProfile, SandboxSpec } from "./os-sandbox.js";
 export { createBackgroundTasks } from "./background.js";
 export type {
   BackgroundTasks,
   BackgroundTaskSnapshot,
   BackgroundTaskStatus,
   BackgroundTaskSummary,
+  BackgroundTaskEvent,
 } from "./background.js";
 export { applyEdits, closestRegion } from "./edits.js";
 export type { SearchReplaceEdit } from "./edits.js";

@@ -49,6 +49,23 @@ export function canonicalArgs(argumentsJson: string | undefined): string {
   }
 }
 
+/** Detects a repeated suffix cycle (A→A, A→B→A→B, up to maxPeriod). */
+export function detectActionCycle(history: readonly string[], maxPeriod = 4): number | null {
+  const boundedMax = Math.max(1, Math.min(Math.floor(maxPeriod), 8));
+  for (let period = 1; period <= boundedMax; period++) {
+    if (history.length < period * 2) continue;
+    let matches = true;
+    for (let offset = 0; offset < period; offset++) {
+      if (history[history.length - 1 - offset] !== history[history.length - 1 - period - offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return period;
+  }
+  return null;
+}
+
 /** Only a successful foreground command can satisfy a verify/lint gate. */
 export function commandResultSatisfiesGate(result: ToolResult, configuredCommand?: string): boolean {
   const command = configuredCommand?.trim();

@@ -14,6 +14,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
 import { resolveForWrite } from "../tools/sandbox.js";
@@ -415,7 +416,7 @@ export function deleteSession(workspace: string, id: string, lease?: SessionLeas
  * crash; records after any malformed line may depend on the missing record and
  * must not be replayed independently (especially tool calls/results).
  */
-export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
+function loadRawSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const line of readSessionText(workspace, sessionId, "messages.jsonl").split("\n")) {
     if (!line.trim()) continue;
@@ -428,6 +429,73 @@ export function loadSessionMessages(workspace: string, sessionId: string): ChatM
     }
   }
   return messages;
+}
+
+type CompactionSnapshot = {
+  version: 1;
+  sourceMessageCount: number;
+  sourceFingerprint: string;
+  messages: ChatMessage[];
+};
+
+function messagesFingerprint(messages: ChatMessage[]): string {
+  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+}
+
+function parseCompactionSnapshot(value: unknown): CompactionSnapshot | undefined {
+  if (!isRecord(value) || value["version"] !== 1 ||
+      !Number.isInteger(value["sourceMessageCount"]) || (value["sourceMessageCount"] as number) < 0 ||
+      typeof value["sourceFingerprint"] !== "string" || !Array.isArray(value["messages"])) {
+    return undefined;
+  }
+  const messages: ChatMessage[] = [];
+  for (const raw of value["messages"]) {
+    const message = parseChatMessage(raw);
+    if (!message) return undefined;
+    messages.push(message);
+  }
+  return { ...value, messages } as CompactionSnapshot;
+}
+
+/**
+ * Loads the audit JSONL through the latest valid derived compaction snapshot.
+ * The source fingerprint makes stale snapshots fail closed after rewind,
+ * manual compaction, or any external trace repair.
+ */
+export function loadSessionMessages(workspace: string, sessionId: string): ChatMessage[] {
+  const raw = loadRawSessionMessages(workspace, sessionId);
+  try {
+    const snapshot = parseCompactionSnapshot(
+      JSON.parse(readSessionText(workspace, sessionId, "compaction.json")) as unknown,
+    );
+    if (!snapshot || snapshot.sourceMessageCount > raw.length) return raw;
+    const source = raw.slice(0, snapshot.sourceMessageCount);
+    if (messagesFingerprint(source) !== snapshot.sourceFingerprint) return raw;
+    return [...snapshot.messages, ...raw.slice(snapshot.sourceMessageCount)];
+  } catch {
+    return raw;
+  }
+}
+
+/** Persists a derived resume snapshot while keeping messages.jsonl as audit truth. */
+export function writeCompactionSnapshot(
+  workspace: string,
+  sessionId: string,
+  messages: ChatMessage[],
+  lease?: SessionLease,
+): boolean {
+  return withSessionMutation(workspace, sessionId, lease, () => {
+    const raw = loadRawSessionMessages(workspace, sessionId);
+    if (raw.length === 0 || messages.length >= raw.length) return false;
+    const snapshot: CompactionSnapshot = {
+      version: 1,
+      sourceMessageCount: raw.length,
+      sourceFingerprint: messagesFingerprint(raw),
+      messages,
+    };
+    writeSessionText(workspace, sessionId, "compaction.json", `${JSON.stringify(snapshot, null, 2)}\n`);
+    return true;
+  });
 }
 
 export type ManualCompactionResult = {

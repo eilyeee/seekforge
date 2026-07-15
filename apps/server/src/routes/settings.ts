@@ -5,7 +5,19 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   createMcpClient,
@@ -40,6 +52,10 @@ const execFileAsync = promisify(execFile);
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
 
+type McpScope = "global" | "project";
+
+const MASKED_SECRET = "********";
+
 function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -57,24 +73,102 @@ function parseConfigDoc(raw: string): ConfigDoc {
  */
 function mutateMcpServers(
   workspace: string,
+  scope: McpScope,
   mutate: (servers: Record<string, McpServerConfig>) => void,
 ): void {
-  const doc = readConfigDoc(workspace);
+  const doc = readConfigDoc(workspace, scope);
   const servers = { ...(doc.mcpServers ?? {}) };
   mutate(servers);
   if (Object.keys(servers).length === 0) delete doc.mcpServers;
   else doc.mcpServers = servers;
-  writeProjectFileAtomic(workspace, ".seekforge/config.json", `${JSON.stringify(doc, null, 2)}\n`);
+  writeConfigDoc(workspace, scope, doc);
 }
 
-/** Reads the project config.json (raw); returns {} on missing/invalid. */
-function readConfigDoc(workspace: string): ConfigDoc {
+/** Reads one config layer (raw); returns {} on missing/invalid. */
+function readConfigDoc(workspace: string, scope: McpScope = "project"): ConfigDoc {
   try {
-    const raw = readProjectFile(workspace, ".seekforge/config.json");
+    const raw = scope === "project"
+      ? readProjectFile(workspace, ".seekforge/config.json")
+      : readFileSync(join(homedir(), ".seekforge", "config.json"), "utf8");
     return raw === undefined ? {} : parseConfigDoc(raw);
   } catch {
     return {};
   }
+}
+
+function writeConfigDoc(workspace: string, scope: McpScope, doc: ConfigDoc): void {
+  const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  if (scope === "project") {
+    writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
+    return;
+  }
+  const target = join(homedir(), ".seekforge", "config.json");
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
+    throw new Error("global config must not be a symbolic link");
+  }
+  const temp = join(dirname(target), `.config-${randomBytes(12).toString("hex")}.tmp`);
+  try {
+    writeFileSync(temp, serialized, { flag: "wx", mode: 0o600 });
+    renameSync(temp, target);
+    chmodSync(target, 0o600);
+  } finally {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // rename consumed the temporary file, or creation failed
+    }
+  }
+}
+
+function mcpServersAt(workspace: string, scope: McpScope): Record<string, McpServerConfig> {
+  const servers = readConfigDoc(workspace, scope).mcpServers;
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return {};
+  return Object.fromEntries(Object.entries(servers).filter((entry) => isMcpServerConfig(entry[1])));
+}
+
+function maskedMap(values: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.keys(values ?? {}).sort().map((key) => [key, MASKED_SECRET]));
+}
+
+function preserveMaskedValues(
+  incoming: Record<string, string> | undefined,
+  previous: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (incoming === undefined) return undefined;
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === MASKED_SECRET && previous?.[key] !== undefined) result[key] = previous[key];
+    else result[key] = value;
+  }
+  return result;
+}
+
+function sanitizedOauth(oauth: McpServerConfig["oauth"]): Record<string, string> | undefined {
+  if (!oauth) return undefined;
+  return {
+    tokenEndpoint: oauth.tokenEndpoint,
+    clientId: oauth.clientId,
+    refreshToken: MASKED_SECRET,
+    ...(oauth.clientSecret !== undefined ? { clientSecret: MASKED_SECRET } : {}),
+    ...(oauth.scope !== undefined ? { scope: oauth.scope } : {}),
+  };
+}
+
+function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope, shadowedGlobal = false) {
+  return {
+    name,
+    transport: cfg.url ? "http" as const : "stdio" as const,
+    ...(cfg.command ? { command: cfg.command } : {}),
+    args: cfg.args ?? [],
+    ...(cfg.url ? { url: cfg.url } : {}),
+    env: maskedMap(cfg.env),
+    headers: maskedMap(cfg.headers),
+    ...(cfg.oauth ? { oauth: sanitizedOauth(cfg.oauth) } : {}),
+    trusted: cfg.trusted === true,
+    source,
+    shadowedGlobal,
+  };
 }
 
 const HOOK_STAGES = [
@@ -274,18 +368,18 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   }
 
   if (method === "GET" && path === "/api/mcp") {
-    // Configured servers only — never spawned here, env VALUES never exposed.
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
+    // Configured servers only — never spawned here. Project entries shadow
+    // same-name global entries; secret values are represented by a sentinel
+    // that POST understands as "keep the existing value".
+    const globalServers = mcpServersAt(workspace, "global");
+    const projectServers = mcpServersAt(workspace, "project");
+    const names = [...new Set([...Object.keys(globalServers), ...Object.keys(projectServers)])].sort();
     return sendJson(
       res,
       200,
-      servers.map(([name, cfg]) => ({
-        name,
-        command: cfg.command,
-        args: cfg.args ?? [],
-        trusted: cfg.trusted === true,
-        envKeys: Object.keys(cfg.env ?? {}),
-      })),
+      names.map((name) => projectServers[name]
+        ? sanitizedMcpServer(name, projectServers[name], "project", globalServers[name] !== undefined)
+        : sanitizedMcpServer(name, globalServers[name]!, "global")),
     );
   }
 
@@ -293,18 +387,25 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "POST" && path === "/api/mcp") {
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
-    const { name, command, args, env, url: serverUrl, headers, trusted } = (body ?? {}) as {
+    const { name, scope: rawScope, command, args, env, url: serverUrl, headers, oauth, trusted } = (body ?? {}) as {
       name?: unknown;
+      scope?: unknown;
       command?: unknown;
       args?: unknown;
       env?: unknown;
       url?: unknown;
       headers?: unknown;
+      oauth?: unknown;
       trusted?: unknown;
     };
     if (typeof name !== "string" || name.trim() === "") {
       return sendApiError(res, 400, "bad_request", "body must include a non-empty name");
     }
+    if (rawScope !== undefined && rawScope !== "global" && rawScope !== "project") {
+      return sendApiError(res, 400, "bad_request", 'scope must be "global" or "project"');
+    }
+    const scope: McpScope = rawScope === "global" ? "global" : "project";
+    const normalizedName = name.trim();
     if (command !== undefined && typeof command !== "string") {
       return sendApiError(res, 400, "bad_request", "command must be a string");
     }
@@ -331,33 +432,108 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     ) {
       return sendApiError(res, 400, "bad_request", "headers must be an object with string values");
     }
-    // Need at least a transport: command (stdio) or url (HTTP).
-    if (typeof command !== "string" && typeof serverUrl !== "string") {
-      return sendApiError(res, 400, "bad_request", "provide either command (stdio) or url (HTTP)");
+    if (oauth !== undefined) {
+      if (typeof oauth !== "object" || oauth === null || Array.isArray(oauth)) {
+        return sendApiError(res, 400, "bad_request", "oauth must be an object");
+      }
+      const value = oauth as Record<string, unknown>;
+      if (
+        typeof value.tokenEndpoint !== "string" || value.tokenEndpoint.trim() === "" ||
+        typeof value.clientId !== "string" || value.clientId.trim() === "" ||
+        typeof value.refreshToken !== "string" || value.refreshToken === "" ||
+        (value.clientSecret !== undefined && typeof value.clientSecret !== "string") ||
+        (value.scope !== undefined && typeof value.scope !== "string")
+      ) {
+        return sendApiError(res, 400, "bad_request", "oauth needs tokenEndpoint, clientId and refreshToken strings; clientSecret and scope are optional strings");
+      }
+    }
+    const hasCommand = typeof command === "string" && command.trim() !== "";
+    const hasUrl = typeof serverUrl === "string" && serverUrl.trim() !== "";
+    if (hasCommand === hasUrl) {
+      return sendApiError(res, 400, "bad_request", "provide exactly one non-empty command (stdio) or url (HTTP)");
+    }
+    if (hasCommand && oauth !== undefined) {
+      return sendApiError(res, 400, "bad_request", "oauth is supported only for HTTP MCP servers");
+    }
+    if (hasUrl) {
+      try {
+        const parsed = new URL(serverUrl.trim());
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported protocol");
+      } catch {
+        return sendApiError(res, 400, "bad_request", "url must be an absolute http or https URL");
+      }
+    }
+    const previous = mcpServersAt(workspace, scope)[normalizedName];
+    const nextEnv = preserveMaskedValues(env as Record<string, string> | undefined, previous?.env);
+    const nextHeaders = preserveMaskedValues(headers as Record<string, string> | undefined, previous?.headers);
+    let nextOauth: McpServerConfig["oauth"] | undefined;
+    if (oauth !== undefined) {
+      const incoming = oauth as NonNullable<McpServerConfig["oauth"]>;
+      if (incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken === undefined) {
+        return sendApiError(res, 400, "bad_request", "oauth refreshToken must be provided for a new server");
+      }
+      if (incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret === undefined) {
+        return sendApiError(res, 400, "bad_request", "oauth clientSecret placeholder has no existing value");
+      }
+      const refreshToken = incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken !== undefined
+        ? previous.oauth.refreshToken
+        : incoming.refreshToken;
+      const clientSecret = incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret !== undefined
+        ? previous.oauth.clientSecret
+        : incoming.clientSecret;
+      nextOauth = {
+        tokenEndpoint: incoming.tokenEndpoint.trim(),
+        clientId: incoming.clientId.trim(),
+        refreshToken,
+        ...(clientSecret !== undefined && clientSecret !== "" ? { clientSecret } : {}),
+        ...(incoming.scope !== undefined && incoming.scope.trim() !== "" ? { scope: incoming.scope.trim() } : {}),
+      };
     }
     const entry: McpServerConfig = {
-      ...(typeof command === "string" ? { command } : {}),
+      ...(hasCommand ? { command: command.trim() } : {}),
       ...(Array.isArray(args) && args.length > 0 ? { args: args as string[] } : {}),
-      ...(env !== undefined ? { env: env as Record<string, string> } : {}),
-      ...(typeof serverUrl === "string" ? { url: serverUrl } : {}),
-      ...(headers !== undefined ? { headers: headers as Record<string, string> } : {}),
+      ...(nextEnv !== undefined && Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
+      ...(hasUrl ? { url: serverUrl.trim() } : {}),
+      ...(nextHeaders !== undefined && Object.keys(nextHeaders).length > 0 ? { headers: nextHeaders } : {}),
+      ...(nextOauth ? { oauth: nextOauth } : {}),
       ...(trusted !== undefined ? { trusted } : {}),
     };
-    mutateMcpServers(workspace, (servers) => {
-      servers[name] = entry;
+    mutateMcpServers(workspace, scope, (servers) => {
+      servers[normalizedName] = entry;
     });
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, { ok: true, server: sanitizedMcpServer(normalizedName, entry, scope) });
   }
 
   // Remove an MCP server from the workspace config.json.
   if (method === "DELETE" && segs.length === 3 && segs[1] === "mcp") {
     const name = segs[2]!;
-    const config = loadConfig(workspace).mcpServers ?? {};
-    if (!config[name]) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
-    mutateMcpServers(workspace, (servers) => {
+    const rawScope = url.searchParams.get("scope");
+    if (rawScope !== null && rawScope !== "global" && rawScope !== "project") {
+      return sendApiError(res, 400, "bad_request", 'scope must be "global" or "project"');
+    }
+    const scope: McpScope = rawScope === "global" ? "global" : "project";
+    const config = mcpServersAt(workspace, scope);
+    if (!config[name]) return sendApiError(res, 404, "not_found", `MCP server not configured in ${scope} scope: ${name}`);
+    mutateMcpServers(workspace, scope, (servers) => {
       delete servers[name];
     });
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, { ok: true, scope });
+  }
+
+  if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "test") {
+    const name = segs[2]!;
+    const config = (loadConfig(workspace).mcpServers ?? {})[name];
+    if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
+    const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
+    const started = Date.now();
+    try {
+      const tools = await client.listTools();
+      return sendJson(res, 200, { ok: true, latencyMs: Date.now() - started, toolCount: tools.length });
+    } catch (err) {
+      return sendApiError(res, 502, "mcp_error", err instanceof Error ? err.message : String(err));
+    } finally {
+      client.dispose();
+    }
   }
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {

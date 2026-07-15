@@ -23,6 +23,8 @@ export {
   readRawProjectMemory,
   readSubdirMemories,
   recordFactAdded,
+  recordFactExposure,
+  recordFactRetrieval,
   recordFactUse,
   reconcileFactMeta,
   rejectMemoryCandidate,

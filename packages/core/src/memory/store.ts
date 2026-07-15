@@ -59,7 +59,17 @@ export function sessionSummaryPath(workspace: string, sessionId: string): string
 
 // --- Per-fact lifecycle metadata (sidecar; project.md stays clean) ----------
 
-export type FactMeta = { addedAt: string; uses: number; lastUsedAt?: string };
+export type FactMeta = {
+  addedAt: string;
+  /** Deliberate use, such as an explicit search_memory retrieval. */
+  uses: number;
+  /** Number of sessions whose initial brief exposed this fact. */
+  exposures?: number;
+  /** Number of explicit search_memory retrievals. */
+  retrievals?: number;
+  lastExposedAt?: string;
+  lastUsedAt?: string;
+};
 
 export function factMetaPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "memory", "fact-meta.json");
@@ -129,8 +139,9 @@ export function reconcileFactMeta(workspace: string, finalContent: string): void
   }
 }
 
-/** Bumps usage for every fact bullet present in an injected brief. */
-export function recordFactUse(workspace: string, briefText: string): void {
+type FactActivity = "exposure" | "use" | "retrieval";
+
+function recordFactActivity(workspace: string, briefText: string, activity: FactActivity): void {
   const now = new Date().toISOString();
   const meta = readFactMeta(workspace);
   let changed = false;
@@ -143,12 +154,38 @@ export function recordFactUse(workspace: string, briefText: string): void {
     const prev = meta[key];
     const entry: FactMeta =
       prev !== null && typeof prev === "object" ? prev : { addedAt: now, uses: 0 };
-    entry.uses = (typeof entry.uses === "number" && Number.isFinite(entry.uses) ? entry.uses : 0) + 1;
-    entry.lastUsedAt = now;
+    entry.uses = typeof entry.uses === "number" && Number.isFinite(entry.uses) ? entry.uses : 0;
+    if (activity === "exposure") {
+      entry.exposures =
+        (typeof entry.exposures === "number" && Number.isFinite(entry.exposures) ? entry.exposures : 0) + 1;
+      entry.lastExposedAt = now;
+    } else {
+      entry.uses += 1;
+      entry.lastUsedAt = now;
+      if (activity === "retrieval") {
+        entry.retrievals =
+          (typeof entry.retrievals === "number" && Number.isFinite(entry.retrievals) ? entry.retrievals : 0) + 1;
+      }
+    }
     meta[key] = entry;
     changed = true;
   }
   if (changed) writeFactMeta(workspace, meta);
+}
+
+/** Records passive prompt exposure without claiming the fact affected output. */
+export function recordFactExposure(workspace: string, briefText: string): void {
+  recordFactActivity(workspace, briefText, "exposure");
+}
+
+/** Records a deliberate fact use from a caller that can establish relevance. */
+export function recordFactUse(workspace: string, briefText: string): void {
+  recordFactActivity(workspace, briefText, "use");
+}
+
+/** Records facts returned by an explicit search_memory query. */
+export function recordFactRetrieval(workspace: string, briefText: string): void {
+  recordFactActivity(workspace, briefText, "retrieval");
 }
 
 function readFileIfExists(filePath: string): string | undefined {

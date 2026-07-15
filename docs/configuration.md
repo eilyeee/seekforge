@@ -487,6 +487,14 @@ type McpServerConfig = {
   url?: string;
   /** Extra HTTP headers sent on every request (HTTP only). */
   headers?: Record<string, string>;
+  /** Optional OAuth refresh-token flow; every string supports ${ENV_VAR}. */
+  oauth?: {
+    tokenEndpoint: string;
+    clientId: string;
+    clientSecret?: string;
+    refreshToken: string;
+    scope?: string;
+  };
   /** SeekForge-specific: trusted servers' tools run at "write" level (default false). */
   trusted?: boolean;
 };

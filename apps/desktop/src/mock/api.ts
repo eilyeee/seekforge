@@ -22,6 +22,7 @@ import type {
   MemoryCandidateType,
   MemoryFact,
   ServerConfig,
+  SecurityEvidencePackage,
   SessionMeta,
   Skill,
   Todo,
@@ -39,6 +40,17 @@ const sessions: SessionMeta[] = mockSessions.map((s) => ({ ...s }));
 // Monotonic counter so each fork yields a fresh, distinct session id.
 let forkSeq = 0;
 const mcpServers: McpServer[] = mockMcpServers.map((s) => ({ ...s }));
+const security: SecurityEvidencePackage = {
+  schemaVersion: 1,
+  generatedAt: new Date().toISOString(),
+  repository: "workspace",
+  findings: [],
+  scans: [],
+  fixes: [],
+  threatModels: [],
+  events: [],
+  disclaimer: "This export is an evidence package, not a certification or guarantee of compliance.",
+};
 const todos: Todo[] = [
   { index: 1, text: "ship the v11 capability UI", done: false },
   { index: 2, text: "rerun the eval baseline", done: true },
@@ -224,7 +236,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     const idx = mockWorktrees.findIndex((w) => w.id === wtm![1]);
     if (idx < 0) throw mockError(404, "not_found", `unknown worktree: ${wtm[1]}`);
     mockWorktrees.splice(idx, 1);
-    return { deleted: true };
+    return { ok: true, scope: "project" };
   }
   if (method === "GET" && path === "/api/health")
     return { version: "0.2.0-mock", workspace: "/mock/workspace", workspaces: mockWorkspaces };
@@ -266,7 +278,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && m) {
     const meta = sessions.find((s) => s.id === m![1]);
     if (!meta) throw new Error("session not found");
-    return { meta, messages: mockSessionMessages[meta.id] ?? [] };
+    return { meta, messages: mockSessionMessages[meta.id] ?? [], events: [] };
   }
 
   if (method === "GET" && path === "/api/skills") return skills.map((s) => ({ ...s }));
@@ -494,12 +506,10 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (typeof p !== "string" || p.trim() === "") throw mockError(400, "bad_request", "body must include a path");
     const id = (p.split("/").filter(Boolean).pop() ?? "imported-agent").replace(/[^a-z0-9-]+/gi, "-");
     return {
-      id,
-      name: id,
-      description: `Imported from ${p}`,
-      triggers: [],
-      mode: "edit",
-      scope: global ? "global" : "project",
+      ok: true,
+      dir: `${global ? "~/.seekforge" : ".seekforge"}/agents/${id}`,
+      agent: { id, name: id, description: `Imported from ${p}`, triggers: [], mode: "edit" },
+      droppedTools: ["UnsupportedTool"],
     };
   }
   m = /^\/api\/agents\/([^/]+)$/.exec(path);
@@ -624,41 +634,69 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/mcp") return mcpServers.map((s) => ({ ...s }));
   if (method === "POST" && path === "/api/mcp") {
-    const { name, command, args, env, url, trusted } = (body ?? {}) as {
+    const { name, scope, command, args, env, url, headers, oauth, trusted } = (body ?? {}) as {
       name?: string;
+      scope?: "global" | "project";
       command?: string;
       args?: string[];
       env?: Record<string, string>;
       url?: string;
+      headers?: Record<string, string>;
+      oauth?: McpServer["oauth"];
       trusted?: boolean;
     };
     if (typeof name !== "string" || name.trim() === "") throw mockError(400, "bad_request", "body must include a name");
     if (!command && !url) throw mockError(400, "bad_request", "provide a command (stdio) or url (http)");
-    if (mcpServers.some((s) => s.name === name)) throw mockError(409, "exists", `server "${name}" already exists`);
     const srv: McpServer = {
       name,
-      // stdio servers carry command+args; an http server is represented by its url.
-      command: command ?? url ?? "",
+      transport: url ? "http" : "stdio",
+      ...(command ? { command } : {}),
       args: args ?? [],
+      ...(url ? { url } : {}),
       trusted: trusted ?? false,
-      ...(env ? { envKeys: Object.keys(env) } : {}),
+      env: Object.fromEntries(Object.keys(env ?? {}).map((key) => [key, "********"])),
+      headers: Object.fromEntries(Object.keys(headers ?? {}).map((key) => [key, "********"])),
+      ...(oauth ? { oauth: { ...oauth, refreshToken: "********", ...(oauth.clientSecret ? { clientSecret: "********" } : {}) } } : {}),
+      source: scope ?? "project",
+      shadowedGlobal: false,
     };
-    mcpServers.push(srv);
-    return { ...srv };
+    const existing = mcpServers.findIndex((server) => server.name === name);
+    if (existing >= 0) mcpServers[existing] = srv;
+    else mcpServers.push(srv);
+    return { ok: true, server: { ...srv } };
   }
   m = /^\/api\/mcp\/([^/]+)\/tools$/.exec(path);
   if (method === "POST" && m) {
     const tools = mockMcpTools[decodeURIComponent(m[1]!)];
     if (!tools) throw mockError(504, "mcp_launch_failed", "failed to launch MCP server");
     await delay(400); // spawning takes a moment
-    return tools;
+    return { tools };
+  }
+  m = /^\/api\/mcp\/([^/]+)\/test$/.exec(path);
+  if (method === "POST" && m) {
+    const tools = mockMcpTools[decodeURIComponent(m[1]!)];
+    if (!tools) throw mockError(502, "mcp_error", "connection failed");
+    return { ok: true, latencyMs: 18, toolCount: tools.length };
   }
   m = /^\/api\/mcp\/([^/]+)$/.exec(path);
   if (method === "DELETE" && m) {
     const idx = mcpServers.findIndex((s) => s.name === decodeURIComponent(m![1]!));
     if (idx < 0) throw mockError(404, "not_found", "server not found");
+    const scope = new URLSearchParams(fullPath.split("?")[1] ?? "").get("scope") ?? "project";
     mcpServers.splice(idx, 1);
-    return { deleted: true };
+    return { ok: true, scope };
+  }
+
+  if (method === "GET" && path === "/api/security") return structuredClone(security);
+  if (method === "POST" && path === "/api/security/scan") {
+    const scan = { id: `scan-${security.scans.length + 1}`, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), status: "completed" as const, scanner: "mock", scannerVersion: "1", findingIds: [] };
+    security.scans.push(scan);
+    return { scan, findings: [] };
+  }
+  if (method === "POST" && path === "/api/security/threat-model") throw mockError(502, "threat_model_failed", "mock threat model needs a configured provider");
+  if (method === "GET" && path === "/api/security/export") {
+    const format = new URLSearchParams(fullPath.split("?")[1] ?? "").get("format") ?? "json";
+    return { format, filename: `seekforge-security-report.${format === "markdown" ? "md" : "json"}`, content: JSON.stringify(security, null, 2), disclaimer: security.disclaimer };
   }
 
   if (method === "GET" && path === "/api/files") {

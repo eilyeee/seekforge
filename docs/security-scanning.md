@@ -118,3 +118,17 @@ particular framework.
 | `security export --format json\|markdown\|sarif [-o PATH]` | Render the evidence package. |
 
 `scan`, `fix`, `verify`, and `threat-model` accept `-m/--model`.
+
+## Desktop Security Center
+
+The Desktop sidebar exposes the same repository-scoped evidence store under
+**Security**. It supports deep scans, Finding inspection and lifecycle changes,
+verified automatic fixes, threat-model generation, and JSON, Markdown, or SARIF
+exports. Switching workspaces reloads the selected repository's queue; no
+security state is shared between workspaces.
+
+Automatic fixes require an explicit positive Agent cost limit, a verify command,
+and an optional lint command. Desktop
+shows the resulting lifecycle and verification states independently, matching
+the CLI rules above. MCP credentials and command output remain masked or
+redacted in REST responses and exported evidence.

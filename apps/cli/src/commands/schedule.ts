@@ -16,6 +16,7 @@
  */
 
 import { listSessions } from "@seekforge/core";
+import { RunManager, readRunLedger } from "@seekforge/server";
 import { authorizeDir } from "../authorized-dirs.js";
 import { dim, fail, green, red } from "../colors.js";
 import {
@@ -25,7 +26,8 @@ import {
   generateId,
   isDue,
   loadRegistry,
-  markRun,
+  markRunResult,
+  nextRunAt,
   removeJob,
   saveRegistry,
   setEnabled,
@@ -33,6 +35,7 @@ import {
   type Job,
   type ScheduleMode,
 } from "../schedule.js";
+import { installScheduler, schedulerStatus, uninstallScheduler } from "../scheduler-install.js";
 import { runTaskCommand } from "./run.js";
 
 export type ScheduleAddOptions = {
@@ -97,8 +100,12 @@ export function scheduleAddCommand(opts: ScheduleAddOptions, projectPath: string
 }
 
 /** `schedule list` — print all jobs (id, schedule, mode, budget, enabled, lastRun). */
-export function scheduleListCommand(projectPath: string = process.cwd()): void {
+export function scheduleListCommand(projectPath: string = process.cwd(), json = false): void {
   const { jobs } = loadRegistry(projectPath);
+  if (json) {
+    console.log(JSON.stringify(jobs));
+    return;
+  }
   if (jobs.length === 0) {
     console.log(dim("no scheduled jobs. Add one with: seekforge schedule add --task \"…\" --every 1d --max-cost 0.50"));
     return;
@@ -154,7 +161,7 @@ export function scheduleSetEnabledCommand(id: string, enabled: boolean, projectP
   }
 }
 
-export type ScheduleRunOptions = { id?: string };
+export type ScheduleRunOptions = { id?: string; dryRun?: boolean; json?: boolean };
 
 /**
  * `schedule run [--id <id>]` — the TICK. Runs every DUE enabled job (or the one
@@ -191,16 +198,32 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
     }
 
     if (toRun.length === 0) {
-      console.log(dim("no jobs due."));
+      console.log(opts.json ? JSON.stringify({ due: [] }) : dim("no jobs due."));
+      return;
+    }
+
+    if (opts.dryRun) {
+      const output = { dryRun: true, due: toRun.map((job) => ({ id: job.id, attempt: (job.failureCount ?? 0) + 1 })) };
+      console.log(opts.json ? JSON.stringify(output) : `[dry-run] would run: ${toRun.map((job) => job.id).join(", ")}`);
       return;
     }
 
     for (const job of toRun) {
-      console.log(`\n▶ running scheduled job "${job.id}" (budget $${job.maxCostUsd.toFixed(2)}, mode ${job.mode})`);
+      if (!opts.json) console.log(`\n▶ running scheduled job "${job.id}" (budget $${job.maxCostUsd.toFixed(2)}, mode ${job.mode})`);
       const before = new Set(listSessions(projectPath).map((s) => s.id));
+      const runManager = new RunManager();
+      const ledgerRun = runManager.create({
+        workspace: projectPath,
+        source: "schedule",
+        attempt: (job.failureCount ?? 0) + 1,
+        labels: { jobId: job.id },
+      });
+      runManager.update(projectPath, ledgerRun.runId, { status: "running" });
+      let completed = false;
+      let failure: string | undefined;
 
       try {
-        await runTaskCommand(job.task, {
+        completed = await runTaskCommand(job.task, {
           mode: job.mode,
           maxCostUsd: job.maxCostUsd,
           // Machine format → confirm auto-denies: no interactive prompt can hang a
@@ -211,11 +234,22 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
           ...(job.mode === "edit" ? { permissionMode: "acceptEdits" } : {}),
         });
       } catch (err) {
-        console.error(red(`  job "${job.id}" errored: ${err instanceof Error ? err.message : String(err)}`));
+        failure = err instanceof Error ? err.message : String(err);
+        if (!opts.json) console.error(red(`  job "${job.id}" errored: ${failure}`));
       }
 
-      const newSessionIds = listSessions(projectPath).map((s) => s.id).filter((id) => !before.has(id));
-      console.log(
+      const sessions = listSessions(projectPath).filter((session) => !before.has(session.id));
+      const newSessionIds = sessions.map((session) => session.id);
+      const session = sessions.length === 1 ? sessions[0] : undefined;
+      const succeeded = completed && session?.status !== "failed" && session?.status !== "cancelled";
+      runManager.update(projectPath, ledgerRun.runId, {
+        status: succeeded ? "succeeded" : "failed",
+        ...(session ? { sessionId: session.id, costUsd: session.usage?.costUsd ?? 0 } : {}),
+        ...(!succeeded ? { error: { code: "schedule_failed", message: failure ?? "scheduled run did not complete" } } : {}),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(runManager.get(projectPath, ledgerRun.runId)));
+      } else console.log(
         newSessionIds.length === 1
           ? green(`  ✓ job "${job.id}" → session ${newSessionIds[0]}  (seekforge audit ${newSessionIds[0]})`)
           : newSessionIds.length === 0
@@ -226,10 +260,48 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
       // Stamp lastRunAt so interval/cron due-calculation advances. Reload under
       // the lease so another scheduler's stale snapshot cannot be persisted.
       const fresh = loadRegistry(projectPath);
-      saveRegistry(projectPath, { jobs: markRun(fresh.jobs, job.id, new Date()) });
+      saveRegistry(projectPath, { jobs: markRunResult(fresh.jobs, job.id, new Date(), succeeded) });
     }
   } finally {
     releaseLease();
+  }
+}
+
+export function scheduleNextCommand(projectPath: string = process.cwd(), json = false): void {
+  const next = loadRegistry(projectPath).jobs
+    .map((job) => ({ id: job.id, nextRunAt: nextRunAt(job)?.toISOString() }))
+    .filter((entry) => entry.nextRunAt !== undefined)
+    .sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!));
+  if (json) console.log(JSON.stringify(next));
+  else if (next.length === 0) console.log(dim("no enabled scheduled jobs."));
+  else for (const entry of next) console.log(`${entry.id}  ${entry.nextRunAt}`);
+}
+
+export function scheduleHistoryCommand(projectPath: string = process.cwd(), id?: string, json = false): void {
+  const runs = readRunLedger(projectPath).filter((run) =>
+    run.source === "schedule" && (id === undefined || run.labels?.["jobId"] === id));
+  if (json) console.log(JSON.stringify(runs));
+  else if (runs.length === 0) console.log(dim("no scheduled run history."));
+  else for (const run of runs) {
+    console.log(`${run.runId}  ${run.status}  job=${run.labels?.["jobId"] ?? "?"}  attempt=${run.attempt}  ${run.updatedAt}`);
+  }
+}
+
+export function scheduleInstallCommand(
+  action: "install" | "uninstall" | "status",
+  opts: { dryRun?: boolean; json?: boolean },
+  projectPath: string = process.cwd(),
+): void {
+  try {
+    const result = action === "install"
+      ? installScheduler(projectPath, opts.dryRun)
+      : action === "uninstall"
+        ? uninstallScheduler(projectPath, opts.dryRun)
+        : schedulerStatus(projectPath);
+    if (opts.json) console.log(JSON.stringify({ action, dryRun: opts.dryRun === true, ...result }));
+    else console.log(`${opts.dryRun ? "[dry-run] " : ""}scheduler ${action}: ${action === "status" ? (result.installed ? "installed" : "not installed") : result.command}`);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
   }
 }
 

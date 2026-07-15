@@ -59,8 +59,18 @@ defined by the CLI reference, server API, configuration docs, and SDK notes.
 ## State and concurrency
 
 Session traces are append-only JSONL and remain the source of truth for agent
-runs. Autonomous Loop state is a separate orchestration checkpoint that points
-to a session; see [Loop engineering](loop-engineering.md).
+runs. Automatic context compaction writes a fingerprinted derivative snapshot;
+resume uses it only while its source prefix still matches. Context admission
+budgets the complete provider request, including advertised tool schemas.
+Autonomous Loop state is a separate orchestration checkpoint that points to a
+session; see [Loop engineering](loop-engineering.md).
+
+Server-managed execution has a second append-only control plane:
+`.seekforge/runs.jsonl` stores run state and `.seekforge/run-events/<id>.jsonl`
+stores sequenced transport events. WS clients resume from `runId + afterSeq`;
+headless REST runs continue without a subscriber, while interactive WS runs
+retain an explicit disconnect-cancels policy. Terminal state transitions are
+centralized so cancellation cannot be overwritten by a late completion.
 
 Security scans use a separate append-only event source at
 `.seekforge/security/events.jsonl`. `packages/core/src/security` owns strict
@@ -82,6 +92,18 @@ declared concurrency limit, dependants wait, and the failure policy either stops
 pending work or continues independent branches. Team members emit the ordinary
 subagent lifecycle, so steering, cancellation, usage accounting, and traces do
 not diverge from one-off dispatches.
+
+The Desktop workbench exposes these domains through Server rather than
+reimplementing them. Security Center uses Core's Finding, threat, fix, and
+export lifecycle; MCP settings retain project/global ownership and mask
+secrets; restored sessions rebuild subagent cards from persisted events. Team
+plans are validated before being handed to the Core `dispatch_team` path.
+
+Continuous eval scenarios choose an explicit runner (`agent`, `loop`, or
+`session_scenario`). Loop, resume, and memory behavior therefore execute the
+real lifecycle while deterministic checks remain the scoring authority.
+Multi-sample A/B pairs by task and sample, alternates arm order, and publishes
+confidence intervals, cost distributions, and restored CI trends.
 
 Workspace mutations from Agent, REST, Git, worktree, and desktop surfaces must
 use the relevant shared session or repository coordination guard. UI requests

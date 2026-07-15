@@ -46,6 +46,8 @@ describe("createBackgroundTasks", () => {
     await waitFor(() => bg.get(id)!.stdout.length > len1);
 
     expect(bg.get(id)!.status).toBe("running");
+    expect(bg.get(id)!.runId).toMatch(/^run-bg-/);
+    expect(bg.get(id)!.attempt).toBe(1);
     expect(bg.get(id)!.exitCode).toBeUndefined();
 
     bg.kill(id);
@@ -56,6 +58,16 @@ describe("createBackgroundTasks", () => {
     expect(snap.command).toBe(TICK_LOOP);
     expect(snap.durationMs).toBeGreaterThan(0);
     expect(processAlive(pid!)).toBe(false);
+  });
+
+  it("emits run lifecycle events", async () => {
+    const events: Array<{ status: string; runId: string }> = [];
+    const bg = createBackgroundTasks({ onEvent: (event) => events.push(event) });
+    managers.push(bg);
+    const task = bg.start({ command: "exit 3", cwd: makeWorkspace() });
+    await waitFor(() => bg.get(task.id)?.status === "exited");
+    expect(events.map((event) => event.status)).toEqual(["running", "failed"]);
+    expect(events[0]!.runId).toBe(events[1]!.runId);
   });
 
   it("assigns sequential ids and lists summaries", async () => {

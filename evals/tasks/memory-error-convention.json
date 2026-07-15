@@ -3,11 +3,42 @@
   "title": "Recall a memory-only error-handling convention in a later edit",
   "fixture": "memory-error-convention",
   "mode": "edit",
+  "runner": "session_scenario",
   "task": "In src/account.js, make `withdraw` reject overdrafts: if `amount` is greater than `account.balance`, raise an error instead of returning a negative balance.",
+  "scenario": {
+    "steps": [
+      {
+        "type": "memory.add",
+        "key": "error-convention",
+        "content": "never `throw new Error(...)` directly — always raise failures with the `fail(code, message)` helper from src/errors.js so every error carries a machine-readable code (an eslint rule forbids bare throws of Error)",
+        "memoryType": "convention",
+        "approve": false
+      },
+      { "type": "memory.approve", "key": "error-convention" },
+      { "type": "agent", "expectedStatus": "completed" },
+      {
+        "type": "agent",
+        "task": "Resume the same session and review the overdraft change against the project error convention. Fix anything still inconsistent, then report the result.",
+        "mode": "edit",
+        "resume": true,
+        "expectedStatus": "completed"
+      }
+    ]
+  },
   "checks": [
     { "type": "file_contains", "path": "src/account.js", "pattern": "fail\\(" },
     { "type": "file_contains", "path": "src/account.js", "pattern": "errors" },
-    { "type": "file_not_contains", "path": "src/account.js", "pattern": "throw new Error" }
+    { "type": "file_not_contains", "path": "src/account.js", "pattern": "throw new Error" },
+    { "type": "memory_stats", "field": "totalApprovedFacts", "equals": 1 },
+    { "type": "memory_stats", "field": "approved", "equals": 1 },
+    { "type": "memory_stats", "field": "pending", "equals": 0 },
+    { "type": "memory_stats", "field": "exposedFraction", "equals": 1 },
+    {
+      "type": "memory_fact_activity",
+      "fact": "[convention] never `throw new Error(...)` directly — always raise failures with the `fail(code, message)` helper from src/errors.js so every error carries a machine-readable code (an eslint rule forbids bare throws of Error)",
+      "activity": "exposures",
+      "equals": 1
+    }
   ],
-  "notes": "Companion to memory-convention-recall. The `fail()`-not-`throw new Error` rule lives ONLY in .seekforge/memory/project.md — the task never mentions it. With memory injected (control) the agent should import and use fail() and avoid a bare `throw new Error`; the `no-memory` variant (injectMemory:false) should fail the fail()/throw checks. Measure with: eval --ab control,no-memory --task memory-error-convention."
+  "notes": "Exercises a pending-to-approved memory lifecycle, exposes the approved convention in a real agent run, then resumes the same session. The exposure assertion ensures resume replay does not double-count passive memory exposure."
 }

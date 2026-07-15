@@ -22,6 +22,18 @@ export type McpServerConfig = {
    */
   headers?: Record<string, string>;
   /**
+   * Optional OAuth 2 refresh-token configuration for remote HTTP servers.
+   * Values may use `${ENV_VAR}` references; refreshed access tokens remain
+   * process-local and are never written back to config.
+   */
+  oauth?: {
+    tokenEndpoint: string;
+    clientId: string;
+    clientSecret?: string;
+    refreshToken: string;
+    scope?: string;
+  };
+  /**
    * SeekForge-specific (default false). Untrusted servers' tools run at the
    * "env" permission level (always confirmed, even with -y); trusted servers'
    * tools run at "write" (auto-approved with -y, confirmed otherwise).

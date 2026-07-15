@@ -188,6 +188,26 @@ export function readProjectFile(workspace: string, rel: string): string | undefi
   }
 }
 
+/** Appends to a workspace-owned regular file without following symlinks. */
+export function appendProjectFile(workspace: string, rel: string, content: string): void {
+  const target = projectPath(workspace, rel, true);
+  let fd: number | undefined;
+  try {
+    fd = openSync(
+      target,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW,
+      0o600,
+    );
+    if (!fstatSync(fd).isFile()) {
+      throw new ProjectPathError(`project file is not a regular file: ${rel}`);
+    }
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** Atomically replaces a workspace-owned file after revalidating its physical path. */
 export function writeProjectFileAtomic(workspace: string, rel: string, content: string): void {
   const target = projectPath(workspace, rel, true);

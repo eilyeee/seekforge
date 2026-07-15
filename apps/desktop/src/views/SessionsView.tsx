@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage, SessionStatus } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage, SessionStatus } from "@seekforge/shared";
 import { ApiError, api } from "../lib/api";
 import { messagesToItems } from "../lib/messages";
 import { filterSessions } from "../lib/sessions-filter";
@@ -33,7 +33,7 @@ const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
   cancelled: "neutral",
 };
 
-type Detail = { meta: SessionMeta; messages: ChatMessage[]; workspaceId: string };
+type Detail = { meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[]; workspaceId: string };
 
 export function SessionsView() {
   const t = useT();
@@ -95,8 +95,8 @@ export function SessionsView() {
     setError(null);
     api
       .session(id, workspaceId)
-      .then(({ meta, messages }) => {
-        if (detailRequests.current.isCurrent(request)) setDetail({ meta, messages, workspaceId });
+      .then(({ meta, messages, events }) => {
+        if (detailRequests.current.isCurrent(request)) setDetail({ meta, messages, events, workspaceId });
       })
       .catch((e: unknown) => {
         if (detailRequests.current.isCurrent(request)) setError(String(e));
@@ -117,9 +117,9 @@ export function SessionsView() {
     setError(null);
     api
       .session(id, workspaceId)
-      .then(({ meta, messages }) => {
+      .then(({ meta, messages, events }) => {
         if (useStore.getState().activeWorkspaceId === workspaceId) {
-          continueSession(meta, messages, workspaceId);
+          continueSession(meta, messages, workspaceId, events);
         }
       })
       .catch((e: unknown) => setError(String(e)));
@@ -136,9 +136,9 @@ export function SessionsView() {
     api
       .forkSession(id, workspaceId)
       .then(({ id: newId }) => api.session(newId, workspaceId))
-      .then(({ meta, messages }) => {
+      .then(({ meta, messages, events }) => {
         if (useStore.getState().activeWorkspaceId === workspaceId) {
-          continueSession(meta, messages, workspaceId);
+          continueSession(meta, messages, workspaceId, events);
         }
       })
       .catch((e: unknown) => setError(t("sessions.forkError", { error: String(e) })));
@@ -200,13 +200,13 @@ export function SessionsView() {
             variant="primary"
             size="sm"
             className="ml-auto"
-            onClick={() => continueSession(detail.meta, detail.messages, detail.workspaceId)}
+            onClick={() => continueSession(detail.meta, detail.messages, detail.workspaceId, detail.events)}
           >
             {t("sessions.continueBtn")}
           </Button>
         </header>
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          <ChatItems items={messagesToItems(detail.messages)} />
+          <ChatItems items={messagesToItems(detail.messages, detail.events)} />
         </div>
       </div>
     );

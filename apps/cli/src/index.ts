@@ -26,7 +26,10 @@ import { runTaskCommand } from "./commands/run.js";
 import { sandboxRunCommand } from "./commands/sandbox.js";
 import {
   scheduleAddCommand,
+  scheduleHistoryCommand,
+  scheduleInstallCommand,
   scheduleListCommand,
+  scheduleNextCommand,
   scheduleRemoveCommand,
   scheduleRunCommand,
   scheduleSetEnabledCommand,
@@ -461,9 +464,10 @@ schedule
   });
 schedule
   .command("list", { isDefault: true })
+  .option("--json", "emit JSON")
   .description("list scheduled jobs (id, schedule, mode, budget, enabled, last run)")
-  .action(() => {
-    scheduleListCommand();
+  .action((opts: { json?: boolean }) => {
+    scheduleListCommand(process.cwd(), opts.json === true);
   });
 schedule
   .command("remove")
@@ -490,10 +494,31 @@ schedule
 schedule
   .command("run")
   .option("--id <id>", "run one specific job now (forced), instead of all due jobs")
+  .option("--dry-run", "show due jobs without running them")
+  .option("--json", "emit JSON/JSONL")
   .description("run all DUE jobs now (the tick to wire into cron/launchd); each run is headless + cost-bounded")
-  .action(async (opts: { id?: string }) => {
-    await scheduleRunCommand({ id: opts.id });
+  .action(async (opts: { id?: string; dryRun?: boolean; json?: boolean }) => {
+    await scheduleRunCommand(opts);
   });
+schedule
+  .command("next")
+  .option("--json", "emit JSON")
+  .description("show the next eligible run time for enabled jobs")
+  .action((opts: { json?: boolean }) => scheduleNextCommand(process.cwd(), opts.json === true));
+schedule
+  .command("history")
+  .option("--id <id>", "filter by job id")
+  .option("--json", "emit JSON")
+  .description("show append-only scheduled run history")
+  .action((opts: { id?: string; json?: boolean }) => scheduleHistoryCommand(process.cwd(), opts.id, opts.json === true));
+for (const action of ["install", "uninstall", "status"] as const) {
+  schedule
+    .command(action)
+    .option("--dry-run", "show the crontab operation without changing it")
+    .option("--json", "emit JSON")
+    .description(`${action} or inspect the per-project crontab tick`)
+    .action((opts: { dryRun?: boolean; json?: boolean }) => scheduleInstallCommand(action, opts));
+}
 
 program
   .command("ask")

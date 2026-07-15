@@ -1,14 +1,10 @@
-/**
- * Prompt/config A/B: run the full task set under two named variants and
- * compare them per task (success / score / turns / cost) plus win-loss-tie
- * totals. Aggregation and rendering here are pure; the actual running lives in
- * cli.ts so this stays testable without an agent.
- */
+/** Paired, multi-sample A/B aggregation and rendering. */
 
+import { costDistribution, proportionCi95, type ConfidenceInterval, type CostDistribution } from "./statistics.js";
 import type { TaskResult } from "./task-runner.js";
 
-const PASS = "✓";
-const FAIL = "✗";
+const PASS = "PASS";
+const FAIL = "FAIL";
 
 function mark(success: boolean): string {
   return success ? PASS : FAIL;
@@ -22,57 +18,70 @@ function fmtOpt(value: number | undefined): string {
   return value === undefined ? "-" : String(value);
 }
 
-/** Cost per success for one variant; "n/a" when it had zero successes. */
 function costPerSuccess(successes: number, cost: number): string {
   return successes === 0 ? "n/a" : `${fmtCost(cost / successes)} USD`;
 }
 
 function signed(value: number, digits: number): string {
   const fixed = value.toFixed(digits);
-  // Decide the sign AFTER rounding so a near-zero delta renders an unsigned "0"
-  // rather than a misleading "+0.0000" / "-0.0000".
   if (Number.parseFloat(fixed) === 0) return (0).toFixed(digits);
   return fixed.startsWith("-") ? fixed : `+${fixed}`;
 }
 
-/** One variant's results plus the variant name they were produced under. */
-export type VariantRun = {
-  variant: string;
-  results: TaskResult[];
-};
+function percent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
 
+function interval(ci: ConfidenceInterval): string {
+  return `${percent(ci.lower)}-${percent(ci.upper)}`;
+}
+
+export type VariantRun = { variant: string; results: TaskResult[] };
 export type AbWinner = "a" | "b" | "tie";
 
 export type AbTaskComparison = {
   taskId: string;
+  sample?: number;
   a?: TaskResult;
   b?: TaskResult;
-  /**
-   * Winner by success first, then score (higher), then turns (fewer), then
-   * cost (cheaper). "tie" when both miss on every axis OR are equal throughout.
-   */
+  /** Winner by success, score, turns, then cost. */
   winner: AbWinner;
+};
+
+export type AbVariantTotals = {
+  successes: number;
+  cost: number;
+  count: number;
+  successRate: number;
+  successRateCi95: ConfidenceInterval;
+  costDistribution: CostDistribution;
 };
 
 export type AbSummary = {
   variantA: string;
   variantB: string;
   tasks: AbTaskComparison[];
-  /**
-   * Counts where A wins / B wins / neither. A task both variants ran is a win
-   * for the better result (or a tie if equal); a task only one variant ran is
-   * credited to that variant.
-   */
   aWins: number;
   bWins: number;
   ties: number;
-  totals: {
-    a: { successes: number; cost: number; count: number };
-    b: { successes: number; cost: number; count: number };
+  paired: {
+    pairs: number;
+    decisivePairs: number;
+    aWinRate: number;
+    aWinRateCi95: ConfidenceInterval;
   };
+  totals: { a: AbVariantTotals; b: AbVariantTotals };
 };
 
-/** A < B means a is better; returns -1 (a better), 1 (b better), 0 (equal). */
+/** Deterministic order balancing for sequential provider calls. */
+export function alternatingArmOrder(pairIndex: number): readonly ["a", "b"] | readonly ["b", "a"] {
+  if (!Number.isSafeInteger(pairIndex) || pairIndex < 0) {
+    throw new Error("pairIndex must be a non-negative safe integer");
+  }
+  return pairIndex % 2 === 0 ? ["a", "b"] : ["b", "a"];
+}
+
+/** A < B means a is better. */
 function compareResults(a: TaskResult, b: TaskResult): number {
   if (a.success !== b.success) return a.success ? -1 : 1;
   const as = a.metrics.score;
@@ -85,102 +94,131 @@ function compareResults(a: TaskResult, b: TaskResult): number {
   return 0;
 }
 
-/** Pairs two variant runs by task id and decides a winner per task. */
-export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
-  const byId = new Map<string, AbTaskComparison>();
-  const order: string[] = [];
-  const ensure = (taskId: string): AbTaskComparison => {
-    let row = byId.get(taskId);
-    if (!row) {
-      row = { taskId, winner: "tie" };
-      byId.set(taskId, row);
-      order.push(taskId);
-    }
-    return row;
+function pairKey(result: TaskResult): string {
+  return `${result.taskId}\0${result.sample ?? 1}`;
+}
+
+function addArm(
+  rows: Map<string, AbTaskComparison>,
+  order: string[],
+  result: TaskResult,
+  arm: "a" | "b",
+): void {
+  const key = pairKey(result);
+  let row = rows.get(key);
+  if (!row) {
+    row = {
+      taskId: result.taskId,
+      ...(result.sample !== undefined ? { sample: result.sample } : {}),
+      winner: "tie",
+    };
+    rows.set(key, row);
+    order.push(key);
+  }
+  if (row[arm] !== undefined) {
+    throw new Error(`duplicate ${arm.toUpperCase()} result for paired sample ${result.taskId}#${result.sample ?? 1}`);
+  }
+  row[arm] = result;
+}
+
+function totals(results: TaskResult[]): AbVariantTotals {
+  const successes = results.filter((result) => result.success).length;
+  const count = results.length;
+  const costs = results.map((result) => result.metrics.costUsd);
+  return {
+    successes,
+    cost: costs.reduce((sum, cost) => sum + cost, 0),
+    count,
+    successRate: count === 0 ? 0 : successes / count,
+    successRateCi95: proportionCi95(successes, count),
+    costDistribution: costDistribution(costs),
   };
-  for (const r of a.results) ensure(r.taskId).a = r;
-  for (const r of b.results) ensure(r.taskId).b = r;
+}
+
+/** Pairs variants by the exact (task id, sample index) key. */
+export function compareVariants(a: VariantRun, b: VariantRun): AbSummary {
+  const rows = new Map<string, AbTaskComparison>();
+  const order: string[] = [];
+  for (const result of a.results) addArm(rows, order, result, "a");
+  for (const result of b.results) addArm(rows, order, result, "b");
 
   let aWins = 0;
   let bWins = 0;
   let ties = 0;
-  for (const taskId of order) {
-    const row = byId.get(taskId)!;
-    let winner: AbWinner = "tie";
+  for (const key of order) {
+    const row = rows.get(key)!;
     if (row.a && row.b) {
-      const cmp = compareResults(row.a, row.b);
-      winner = cmp < 0 ? "a" : cmp > 0 ? "b" : "tie";
+      const compared = compareResults(row.a, row.b);
+      row.winner = compared < 0 ? "a" : compared > 0 ? "b" : "tie";
     } else if (row.a) {
-      winner = "a"; // only A ran/has this task → credited to A
+      row.winner = "a";
     } else if (row.b) {
-      winner = "b";
+      row.winner = "b";
     }
-    row.winner = winner;
-    if (winner === "a") aWins++;
-    else if (winner === "b") bWins++;
+    if (row.winner === "a") aWins++;
+    else if (row.winner === "b") bWins++;
     else ties++;
   }
-
-  const total = (results: TaskResult[]) => ({
-    successes: results.filter((r) => r.success).length,
-    cost: results.reduce((sum, r) => sum + r.metrics.costUsd, 0),
-    count: results.length,
-  });
-
+  const pairedRows = order.map((key) => rows.get(key)!).filter((row) => row.a && row.b);
+  const pairedAWins = pairedRows.filter((row) => row.winner === "a").length;
+  const pairedBWins = pairedRows.filter((row) => row.winner === "b").length;
+  const decisivePairs = pairedAWins + pairedBWins;
   return {
     variantA: a.variant,
     variantB: b.variant,
-    tasks: order.map((id) => byId.get(id)!),
+    tasks: order.map((key) => rows.get(key)!),
     aWins,
     bWins,
     ties,
-    totals: { a: total(a.results), b: total(b.results) },
+    paired: {
+      pairs: pairedRows.length,
+      decisivePairs,
+      aWinRate: decisivePairs === 0 ? 0.5 : pairedAWins / decisivePairs,
+      aWinRateCi95: proportionCi95(pairedAWins, decisivePairs),
+    },
+    totals: { a: totals(a.results), b: totals(b.results) },
   };
 }
 
-function cell(r: TaskResult | undefined): string {
-  if (!r) return "- | - | - | -";
-  return `${mark(r.success)} | ${fmtOpt(r.metrics.score)} | ${fmtOpt(r.metrics.turns)} | ${fmtCost(r.metrics.costUsd)}`;
+function cell(result: TaskResult | undefined): string {
+  if (!result) return "- | - | - | -";
+  return `${mark(result.success)} | ${fmtOpt(result.metrics.score)} | ${fmtOpt(result.metrics.turns)} | ${fmtCost(result.metrics.costUsd)}`;
 }
 
 const WINNER_LABEL: Record<AbWinner, string> = { a: "A", b: "B", tie: "=" };
 
-/** Renders the A/B comparison as a markdown table with a win/loss/tie footer. */
 export function toAbMarkdown(summary: AbSummary): string {
   const { variantA, variantB } = summary;
   const lines: string[] = [
     `### A/B: ${variantA} (A) vs ${variantB} (B)`,
     "",
-    "| Task | A ✓ | A Score | A Turns | A Cost | B ✓ | B Score | B Turns | B Cost | Win |",
+    "| Task/sample | A | A Score | A Turns | A Cost | B | B Score | B Turns | B Cost | Win |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const row of summary.tasks) {
-    lines.push(`| ${row.taskId} | ${cell(row.a)} | ${cell(row.b)} | ${WINNER_LABEL[row.winner]} |`);
+    const label = row.sample === undefined ? row.taskId : `${row.taskId}#${row.sample}`;
+    lines.push(`| ${label} | ${cell(row.a)} | ${cell(row.b)} | ${WINNER_LABEL[row.winner]} |`);
   }
   const { a, b } = summary.totals;
-  const rateA = a.count === 0 ? 0 : Math.round((a.successes / a.count) * 100);
-  const rateB = b.count === 0 ? 0 : Math.round((b.successes / b.count) * 100);
   lines.push(
-    `| **Total** | ${a.successes}/${a.count} (${rateA}%) | | | ${fmtCost(a.cost)} | ` +
-      `${b.successes}/${b.count} (${rateB}%) | | | ${fmtCost(b.cost)} | |`,
-  );
-  lines.push("");
-  lines.push(
-    `**Win/Loss/Tie (A vs B):** ${summary.aWins} / ${summary.bWins} / ${summary.ties} ` +
-      `· cost Δ (B−A): ${signed(b.cost - a.cost, 4)}`,
-  );
-  lines.push(
-    `**Cost per success:** A ${costPerSuccess(a.successes, a.cost)} · ` +
-      `B ${costPerSuccess(b.successes, b.cost)}`,
+    `| **Total** | ${a.successes}/${a.count} (${percent(a.successRate)}) | | | ${fmtCost(a.cost)} | ` +
+      `${b.successes}/${b.count} (${percent(b.successRate)}) | | | ${fmtCost(b.cost)} | |`,
+    "",
+    `**Success rate (95% CI):** A ${percent(a.successRate)} [${interval(a.successRateCi95)}] | ` +
+      `B ${percent(b.successRate)} [${interval(b.successRateCi95)}]`,
+    `**Paired Win/Loss/Tie (A vs B):** ${summary.aWins} / ${summary.bWins} / ${summary.ties}; ` +
+      `A win rate among ${summary.paired.decisivePairs} decisive pairs: ${percent(summary.paired.aWinRate)} ` +
+      `[${interval(summary.paired.aWinRateCi95)}]`,
+    `**Cost distribution:** A median ${fmtCost(a.costDistribution.median)}, p95 ${fmtCost(a.costDistribution.p95)}, ` +
+      `mean ${fmtCost(a.costDistribution.mean)} [${fmtCost(a.costDistribution.meanCi95.lower)}-${fmtCost(a.costDistribution.meanCi95.upper)}]; ` +
+      `B median ${fmtCost(b.costDistribution.median)}, p95 ${fmtCost(b.costDistribution.p95)}, ` +
+      `mean ${fmtCost(b.costDistribution.mean)} [${fmtCost(b.costDistribution.meanCi95.lower)}-${fmtCost(b.costDistribution.meanCi95.upper)}]`,
+    `**Cost delta (B-A):** ${signed(b.cost - a.cost, 4)}`,
+    `**Cost per success:** A ${costPerSuccess(a.successes, a.cost)} | B ${costPerSuccess(b.successes, b.cost)}`,
   );
   return lines.join("\n");
 }
 
-/** Machine-readable A/B payload for evals/reports/ab-<ts>.json. */
 export function toAbJson(runs: VariantRun[], summary: AbSummary): string {
-  return `${JSON.stringify(
-    { generatedAt: new Date().toISOString(), variants: runs, comparison: summary },
-    null,
-    2,
-  )}\n`;
+  return `${JSON.stringify({ generatedAt: new Date().toISOString(), variants: runs, comparison: summary }, null, 2)}\n`;
 }

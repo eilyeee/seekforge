@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentEvent } from "@seekforge/shared";
+import type { AgentCoreDeps } from "@seekforge/core";
 import { evaluateCheck, runTask } from "../src/task-runner.js";
 import {
   FAKE_USAGE,
@@ -301,5 +302,107 @@ describe("runTask", () => {
     );
     expect(result.metrics.score).toBe(100);
     expect(result.metrics.turns).toBe(2);
+  });
+
+  it("runs a persisted loop and resumes it against the configured terminal states", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const calls: string[] = [];
+    const result = await runTask(
+      makeTask({
+        runner: "loop",
+        loop: {
+          verifyCommand: "npm test",
+          maxIterations: 1,
+          expectedStatus: "passed",
+          resume: { expectedInitialStatus: "exhausted", additionalIterations: 2 },
+        },
+        checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }],
+      }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: () => ({
+          agent: { async *runTask() { /* auto-loop owns the agent in production */ } },
+          deps: {} as AgentCoreDeps,
+        }),
+        runLoop: async (_deps, options) => {
+          calls.push(`run:${options.verifyCommand}:${options.maxIterations}`);
+          return {
+            status: "exhausted", iterations: 1, costUsd: 0.01, sessionId: "s1",
+            finalVerify: { code: 1, output: "red" }, loopId: "loop-1",
+          };
+        },
+        resumeLoop: async (_deps, loopId, options) => {
+          calls.push(`resume:${loopId}:${options.additionalIterations}`);
+          return {
+            status: "passed", iterations: 2, costUsd: 0.02, sessionId: "s1",
+            finalVerify: { code: 0, output: "green" }, loopId,
+          };
+        },
+      },
+    );
+    expect(calls).toEqual(["run:npm test:1", "resume:loop-1:2"]);
+    expect(result.success).toBe(true);
+    expect(result.execution).toMatchObject({
+      runner: "loop", status: "passed", expectedStatus: "passed", iterations: 2, maxIterations: 3, resumed: true,
+    });
+    expect(result.metrics.costUsd).toBe(0.02);
+  });
+
+  it("binds session_scenario resume steps to the prior session and applies memory lifecycle actions", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const inputs: Array<{ task: string; resumeSessionId?: string }> = [];
+    const result = await runTask(
+      makeTask({
+        runner: "session_scenario",
+        scenario: {
+          steps: [
+            { type: "memory.add", key: "rule", content: "use stable ids", approve: false },
+            { type: "memory.approve", key: "rule" },
+            { type: "agent" },
+            { type: "agent", task: "review it", resume: true },
+          ],
+        },
+        checks: [
+          { type: "memory_stats", field: "approved", equals: 1 },
+          { type: "memory_stats", field: "pending", equals: 0 },
+          { type: "memory_stats", field: "directAddedFacts", equals: 1 },
+        ],
+      }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent((input) => {
+          inputs.push({ task: input.task, ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}) });
+          return completedEvents();
+        }),
+      },
+    );
+    expect(inputs).toEqual([
+      { task: "do the thing" },
+      { task: "review it", resumeSessionId: "fake-session" },
+    ]);
+    expect(result.success).toBe(true);
+    expect(result.execution).toMatchObject({ runner: "session_scenario", resumed: true, passed: true });
+    expect(result.execution?.steps).toHaveLength(4);
+    expect(result.metrics.costUsd).toBe(FAKE_USAGE.costUsd);
+  });
+
+  it("treats an explicitly expected failed terminal state as a successful scenario outcome", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(
+      makeTask({
+        expectedStatus: "failed",
+        checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }],
+      }),
+      {
+        fixturesDir: fx.fixturesDir,
+        createAgent: fakeAgent(() => [
+          { type: "session.created", sessionId: "expected-failure" },
+          { type: "session.failed", error: { code: "expected", message: "deliberate" } },
+        ]),
+      },
+    );
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.execution).toMatchObject({ status: "failed", expectedStatus: "failed", passed: true });
   });
 });

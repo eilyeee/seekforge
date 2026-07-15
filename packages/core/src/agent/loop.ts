@@ -27,7 +27,7 @@ import {
   type ToolContext,
   type ToolDispatcher,
 } from "../tools/index.js";
-import { buildMemoryBrief, extractMemoryFromSession, recordFactUse } from "../memory/index.js";
+import { buildMemoryBrief, extractMemoryFromSession, recordFactExposure } from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
   AGENT_RESULT_TOOL,
@@ -54,7 +54,10 @@ import {
   clearOldToolResults,
   compactMessages,
   estimateMessagesTokens,
+  estimateRequestTokens,
+  estimateToolDefinitionsTokens,
   llmCompactMessages,
+  selectToolDefinitionsForBudget,
   shrinkToolResultsToFit,
 } from "./context.js";
 import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
@@ -64,6 +67,7 @@ import {
   canonicalArgs,
   classifyAutoGateResult,
   commandResultSatisfiesGate,
+  detectActionCycle,
   selectAutoGate,
   subtractUsage,
 } from "./loop-logic.js";
@@ -74,7 +78,15 @@ import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
-import { appendCheckpoint, createSessionTrace, loadSessionMessages, newSessionId, readSessionMeta, writeSessionMeta } from "./trace.js";
+import {
+  appendCheckpoint,
+  createSessionTrace,
+  loadSessionMessages,
+  newSessionId,
+  readSessionMeta,
+  writeCompactionSnapshot,
+  writeSessionMeta,
+} from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 
@@ -322,9 +334,9 @@ function buildWrapupNudge(turnsLeft: number): string {
 /** Turns to wait before another reflection nudge can fire (avoid nagging). */
 const REFLECTION_COOLDOWN_TURNS = 3;
 
-function buildReflectionNudge(): string {
+function buildReflectionNudge(reason = "a tool call that already failed earlier with the same arguments"): string {
   return (
-    "[harness] You just repeated a tool call that already failed earlier with the same arguments — " +
+    `[harness] You just repeated ${reason} — ` +
     "you are looping. Stop guessing: re-read the relevant code/output to understand WHY it fails, " +
     "then take a different approach. Do not issue that identical call again."
   );
@@ -431,14 +443,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
       // Task-relevant memory brief. Gated by deps.injectMemory (default on; the
       // eval's `no-memory` variant flips it off to measure memory's value), and
-      // records fact usage when a brief is actually injected (P2 lifecycle).
+      // records passive exposure when a brief is injected. Actual use is
+      // recorded only by explicit retrieval/use paths.
       // Resume is a replay: it still builds + injects the brief, but does NOT
-      // bump fact usage (recordFactUse writes fact-meta.json uses/lastUsedAt) —
-      // otherwise resuming would double-count usage and make resume non-idempotent.
+      // bump fact exposure —
+      // otherwise resuming would double-count exposure and make resume non-idempotent.
       const memoryFor = (taskText: string): string | undefined => {
         if (deps.injectMemory === false) return undefined;
         const brief = buildMemoryBrief(input.projectPath, taskText);
-        if (brief && !resuming) recordFactUse(input.projectPath, brief);
+        if (brief && !resuming) recordFactExposure(input.projectPath, brief);
         return brief;
       };
 
@@ -1264,6 +1277,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // Stuck detection: signatures (name+args) of tool calls that have
         // FAILED, so an identical re-failure can be caught as a loop.
         const seenFailedSigs = new Set<string>();
+        const recentActionFingerprints: string[] = [];
         let reflectionCooldown = 0;
         // Default-off failure escalation (see AgentCoreDeps): one-shot.
         let escalated = false;
@@ -1306,7 +1320,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             wrapupInjected.add(turnsLeft);
             messages.push({ role: "user", content: buildWrapupNudge(turnsLeft) });
           }
-          if (estimateMessagesTokens(messages) > budgetTokens) {
+          // Tool schemas are serialized into every provider request. Keep the
+          // full catalog while it is modest, but trim oversized MCP catalogs
+          // deterministically and reserve the remaining window for messages.
+          let requestTools = selectToolDefinitionsForBudget(
+            toolDefs,
+            messages,
+            Math.max(1, Math.floor(budgetTokens * 0.3)),
+          );
+          const messageBudgetTokens = Math.max(
+            1,
+            budgetTokens - estimateToolDefinitionsTokens(requestTools),
+          );
+          if (estimateRequestTokens(messages, requestTools) > budgetTokens) {
             // Micro-compaction first: blank stale tool outputs (cheap, keeps
             // structure). Full compaction only when that is not enough.
             const micro = clearOldToolResults(messages);
@@ -1321,19 +1347,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 ? await llmCompactMessages(
                     provider,
                     messages,
-                    budgetTokens,
+                    messageBudgetTokens,
                     {
                       ...(deps.compactFocus !== undefined ? { focus: deps.compactFocus } : {}),
                       signal: input.signal,
                     },
                   )
-                : null) ?? compactMessages(messages, budgetTokens);
+                : null) ?? compactMessages(messages, messageBudgetTokens);
+            if (compacted?.usage) {
+              usage = addUsage(usage, compacted.usage);
+              yield emit({ type: "usage.updated", usage });
+            }
             // Last resort: when the whole history is one assistant turn plus its
             // tool results, nothing can be dropped without orphaning a tool call
             // (compactMessages returns null) — shrink the oversized tool payloads
             // in place so the provider isn't handed an over-budget request.
-            if (!compacted && estimateMessagesTokens(messages) > budgetTokens) {
-              compacted = shrinkToolResultsToFit(messages, budgetTokens);
+            if (!compacted && estimateMessagesTokens(messages) > messageBudgetTokens) {
+              compacted = shrinkToolResultsToFit(messages, messageBudgetTokens);
             }
             if (compacted) {
               // Advisory heads-up before compaction mutates the conversation.
@@ -1345,6 +1375,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 }),
               );
               messages = compacted.messages;
+              // Persist a mechanical derivative of the durable trace. This
+              // avoids paying to compact the same history again on resume,
+              // while messages.jsonl remains the immutable audit source.
+              const persisted = loadSessionMessages(input.projectPath, sessionId);
+              const persistedCompaction =
+                compactMessages(persisted, messageBudgetTokens) ??
+                shrinkToolResultsToFit(persisted, messageBudgetTokens);
+              if (persistedCompaction) {
+                writeCompactionSnapshot(
+                  input.projectPath,
+                  sessionId,
+                  persistedCompaction.messages,
+                  sessionLease,
+                );
+              }
               yield emit({
                 type: "context.compacted",
                 droppedTurns: compacted.droppedTurns,
@@ -1365,13 +1410,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             }
           }
 
+          // Compaction can change task relevance and always changes message
+          // occupancy, so finalize the request catalog after it completes.
+          requestTools = selectToolDefinitionsForBudget(
+            toolDefs,
+            messages,
+            Math.max(1, Math.floor(budgetTokens * 0.3)),
+          );
+
           const requestProvider = () => deps.onModelDelta
             ? provider.chatStream(
-                { messages, tools: toolDefs, signal: input.signal },
+                { messages, tools: requestTools, signal: input.signal },
                 deps.onModelDelta,
                 deps.onReasoningDelta,
               )
-            : provider.chat({ messages, tools: toolDefs, signal: input.signal });
+            : provider.chat({ messages, tools: requestTools, signal: input.signal });
           const res = deps.retryBus
             ? await deps.retryBus.run(routeRetry, requestProvider)
             : await requestProvider();
@@ -1380,7 +1433,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
           // Window occupancy after each provider response (cheap estimate).
           // Distinct from usage.updated, which tracks cumulative token cost.
-          const usedTokens = estimateMessagesTokens(messages);
+          const usedTokens = estimateRequestTokens(messages, requestTools);
           yield emit({
             type: "context.usage",
             usedTokens,
@@ -1689,16 +1742,36 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             if (seenFailedSigs.has(sig)) repeatedFailure = true;
             seenFailedSigs.add(sig);
           }
-          if (repeatedFailure && reflectionCooldown === 0) {
+          const turnFingerprint = turnCalls
+            .map((call, index) => {
+              const result = callResults[index];
+              const outcome = result?.ok ? "ok" : `error:${result?.error?.code ?? "unknown"}`;
+              return `${call.name}:${canonicalArgs(call.argumentsJson)}:${outcome}`;
+            })
+            .sort()
+            .join("|") + `:files=${[...changedFiles].sort().join(",")}`;
+          recentActionFingerprints.push(turnFingerprint);
+          if (recentActionFingerprints.length > 8) recentActionFingerprints.shift();
+          const cyclePeriod = detectActionCycle(recentActionFingerprints);
+          const cyclicStagnation = cyclePeriod !== null;
+          const stuck = repeatedFailure || cyclicStagnation;
+          if (stuck && reflectionCooldown === 0) {
             reflectionCooldown = REFLECTION_COOLDOWN_TURNS;
-            messages.push({ role: "user", content: buildReflectionNudge() });
+            messages.push({
+              role: "user",
+              content: buildReflectionNudge(
+                cyclicStagnation
+                  ? `a ${cyclePeriod}-turn action cycle without a new file outcome`
+                  : undefined,
+              ),
+            });
           }
 
           // escalateOnFailure: once the model is clearly looping, hand the rest
           // of the run to the stronger planModel (one-time, needs the routing
           // deps). Pairs with the reflection nudge above.
           if (
-            repeatedFailure &&
+            stuck &&
             deps.escalateOnFailure &&
             !escalated &&
             deps.planModel !== undefined &&
@@ -1726,26 +1799,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           throw new AgentLimitError("max_turns_exceeded", `no final answer within ${limits.maxAgentTurns} turns`);
         }
 
-        const report: FinalReport = {
+        let report: FinalReport = {
           summary: finalContent,
           changedFiles: [...changedFiles],
           commandsRun,
           verification: commandsRun.length > 0 ? `commands run: ${commandsRun.join("; ")}` : "no commands were run",
           usage,
         };
-        trace.summary(finalContent);
-        writeSessionMeta(input.projectPath, {
-          ...meta,
-          status: "completed",
-          updatedAt: new Date().toISOString(),
-          usage: addUsage(priorUsage, usage),
-          ...(lastPlanItems ? { plan: lastPlanItems } : {}),
-        });
 
         if (deps.extractMemory && input.mode === "edit") {
           yield emit({ type: "step.started", title: "extracting memory" });
           try {
-            await extractMemoryFromSession(deps.provider, {
+            const extraction = await extractMemoryFromSession(deps.provider, {
               workspace: input.projectPath,
               sessionId,
               task: input.task,
@@ -1755,11 +1820,25 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 ? { autoApproveConfidence: deps.memoryAutoApproveConfidence }
                 : {}),
             });
+            if (extraction.usage) {
+              usage = addUsage(usage, extraction.usage);
+              report = { ...report, usage };
+              yield emit({ type: "usage.updated", usage });
+            }
             yield emit({ type: "step.completed", title: "extracting memory" });
           } catch {
             // memory extraction must never fail the session
           }
         }
+
+        trace.summary(finalContent);
+        writeSessionMeta(input.projectPath, {
+          ...meta,
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+          usage: addUsage(priorUsage, usage),
+          ...(lastPlanItems ? { plan: lastPlanItems } : {}),
+        });
 
         sessionEndStatus = "completed";
         yield emit({ type: "session.completed", report });

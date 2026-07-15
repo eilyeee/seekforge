@@ -5,6 +5,7 @@ import {
   canonicalArgs,
   classifyAutoGateResult,
   commandResultSatisfiesGate,
+  detectActionCycle,
   selectAutoGate,
   subtractUsage,
 } from "../../src/agent/loop-logic.js";
@@ -38,6 +39,15 @@ describe("canonicalArgs", () => {
     expect(canonicalArgs("{bad")).toBe("{bad");
     expect(canonicalArgs(undefined)).toBe("");
     expect(canonicalArgs("")).toBe("");
+  });
+});
+
+describe("action cycle detection", () => {
+  it("detects one- and two-step suffix cycles but ignores progress", () => {
+    expect(detectActionCycle(["read", "read"])).toBe(1);
+    expect(detectActionCycle(["read", "search", "read", "search"])).toBe(2);
+    expect(detectActionCycle(["read", "search", "edit"])).toBeNull();
+    expect(detectActionCycle([])).toBeNull();
   });
 });
 

@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
-import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
+import { randomBytes } from "node:crypto";
+import { buildSandboxSpec, sandboxedShell, type SandboxLevel, type SandboxProfile } from "./os-sandbox.js";
 
 /** Per-stream ring buffer: keep only the LAST N chars of stdout/stderr. */
 const RING_BUFFER_CHARS = 100_000;
@@ -10,6 +11,7 @@ export type BackgroundTaskStatus = "running" | "exited";
 
 export type BackgroundTaskSnapshot = {
   id: string;
+  runId: string;
   command: string;
   status: BackgroundTaskStatus;
   /** Present once the task exited; null when killed (no exit code). */
@@ -18,14 +20,28 @@ export type BackgroundTaskSnapshot = {
   stderr: string;
   durationMs: number;
   pid?: number;
+  attempt: 1;
+  costUsd: 0;
+  error?: { code: string; message: string };
 };
 
 export type BackgroundTaskSummary = {
   id: string;
+  runId: string;
   command: string;
   status: BackgroundTaskStatus;
   startedAt: string;
   durationMs: number;
+  attempt: 1;
+};
+
+export type BackgroundTaskEvent = {
+  runId: string;
+  taskId: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  attempt: 1;
+  costUsd: 0;
+  error?: { code: string; message: string };
 };
 
 /**
@@ -43,7 +59,7 @@ export type BackgroundTasks = {
   start(input: {
     command: string;
     cwd: string;
-    sandbox?: SandboxLevel | undefined;
+    sandbox?: SandboxLevel | SandboxProfile | undefined;
     workspace?: string | undefined;
   }): { id: string; pid?: number };
   get(id: string): BackgroundTaskSnapshot | undefined;
@@ -56,6 +72,7 @@ export type BackgroundTasks = {
 
 type TaskRecord = {
   id: string;
+  runId: string;
   command: string;
   child: ChildProcess;
   startedAt: number;
@@ -64,6 +81,8 @@ type TaskRecord = {
   stderr: string;
   status: BackgroundTaskStatus;
   exitCode: number | null;
+  killed: boolean;
+  error?: { code: string; message: string };
 };
 
 function appendRing(cur: string, text: string): string {
@@ -71,12 +90,13 @@ function appendRing(cur: string, text: string): string {
   return next.length > RING_BUFFER_CHARS ? next.slice(next.length - RING_BUFFER_CHARS) : next;
 }
 
-export function createBackgroundTasks(): BackgroundTasks {
+export function createBackgroundTasks(options: { onEvent?: (event: BackgroundTaskEvent) => void } = {}): BackgroundTasks {
   const tasks = new Map<string, TaskRecord>();
   let nextId = 0;
 
   function killTask(task: TaskRecord): void {
     if (task.status !== "running") return;
+    task.killed = true;
     const pid = task.child.pid;
     if (pid !== undefined) {
       try {
@@ -101,6 +121,7 @@ export function createBackgroundTasks(): BackgroundTasks {
       }
       const shell = sandboxedShell(command, sandbox, workspace);
       const id = `bg-${++nextId}`;
+      const runId = `run-bg-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
       const child = spawn(shell.bin, shell.args, {
         cwd,
         detached: true, // own process group -> tree kill
@@ -108,6 +129,7 @@ export function createBackgroundTasks(): BackgroundTasks {
       });
       const task: TaskRecord = {
         id,
+        runId,
         command,
         child,
         startedAt: Date.now(),
@@ -115,8 +137,10 @@ export function createBackgroundTasks(): BackgroundTasks {
         stderr: "",
         status: "running",
         exitCode: null,
+        killed: false,
       };
       tasks.set(id, task);
+      options.onEvent?.({ runId, taskId: id, status: "running", attempt: 1, costUsd: 0 });
 
       // Decode each stream through its own StringDecoder so a multi-byte UTF-8
       // sequence split across two `data` chunks isn't mangled into U+FFFD.
@@ -130,6 +154,7 @@ export function createBackgroundTasks(): BackgroundTasks {
           task.status = "exited";
           task.endedAt = Date.now();
         }
+        task.error = { code: "spawn_failed", message: err.message };
       });
       child.on("close", (code) => {
         // Flush any bytes held back by the decoders (incomplete trailing seq).
@@ -138,6 +163,14 @@ export function createBackgroundTasks(): BackgroundTasks {
         task.status = "exited";
         task.exitCode = code;
         task.endedAt = task.endedAt ?? Date.now();
+        options.onEvent?.({
+          runId,
+          taskId: id,
+          status: task.killed ? "cancelled" : code === 0 ? "succeeded" : "failed",
+          attempt: 1,
+          costUsd: 0,
+          ...(task.error ? { error: task.error } : code && code !== 0 ? { error: { code: "exit_nonzero", message: `command exited ${code}` } } : {}),
+        });
       });
 
       return { id, ...(child.pid !== undefined ? { pid: child.pid } : {}) };
@@ -148,6 +181,7 @@ export function createBackgroundTasks(): BackgroundTasks {
       if (!t) return undefined;
       return {
         id: t.id,
+        runId: t.runId,
         command: t.command,
         status: t.status,
         ...(t.status === "exited" ? { exitCode: t.exitCode } : {}),
@@ -155,6 +189,9 @@ export function createBackgroundTasks(): BackgroundTasks {
         stderr: t.stderr,
         durationMs: (t.endedAt ?? Date.now()) - t.startedAt,
         ...(t.child.pid !== undefined ? { pid: t.child.pid } : {}),
+        attempt: 1,
+        costUsd: 0,
+        ...(t.error ? { error: t.error } : {}),
       };
     },
 
@@ -168,10 +205,12 @@ export function createBackgroundTasks(): BackgroundTasks {
     list() {
       return [...tasks.values()].map((t) => ({
         id: t.id,
+        runId: t.runId,
         command: t.command,
         status: t.status,
         startedAt: new Date(t.startedAt).toISOString(),
         durationMs: (t.endedAt ?? Date.now()) - t.startedAt,
+        attempt: 1,
       }));
     },
 

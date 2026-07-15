@@ -10,11 +10,12 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CreateAgentFn } from "../agent.js";
+import type { CreateAgentFn, RunLoopFn } from "../agent.js";
 import type { ServerCoordinator } from "../coordinator.js";
 import type { Workspace, WorkspaceRegistry } from "../workspaces.js";
 import type { WorktreeManager } from "../worktrees.js";
 import type { TriggerRunHandle } from "../trigger-run.js";
+import type { RunManager } from "../run-ledger.js";
 
 export type RestContext = {
   registry: WorkspaceRegistry;
@@ -26,8 +27,10 @@ export type RestContext = {
    * cost-bounded run. Injectable so tests can supply a fake (no real LLM call).
    */
   createAgent: CreateAgentFn;
+  runLoop: RunLoopFn;
   /** Active headless runs, owned by startServer and drained during shutdown. */
   triggerRuns?: Set<TriggerRunHandle>;
+  runManager: RunManager;
 };
 
 /** Context for the global (non-workspace-scoped) routes. */

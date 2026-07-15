@@ -4,9 +4,16 @@
  * now live in @seekforge/shared so server + desktop share ONE definition. The
  * desktop-only WS *client* helper types stay local below.
  */
-import type { ClientFrame, ServerFrame } from "@seekforge/shared";
+import type { ClientFrame, ServerFrame as SharedServerFrame } from "@seekforge/shared";
 
-export type { RunOverrides, ClientFrame, ServerFrame } from "@seekforge/shared";
+export type { RunOverrides, ClientFrame } from "@seekforge/shared";
+
+export type ServerFrame = SharedServerFrame | {
+  type: "subagent.control";
+  dispatchId: string;
+  operation: "steer" | "cancel";
+  status: "accepted";
+};
 
 export type ConnState = "disconnected" | "connecting" | "connected";
 

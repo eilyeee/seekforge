@@ -2,8 +2,8 @@
  * Replays a persisted session transcript (ChatMessage[]) into ChatItems so
  * the Sessions view reuses the same renderer as live chat. Pure logic.
  */
-import type { ChatMessage, ToolResult } from "@seekforge/shared";
-import { planItemsFrom, type ChatItem, type NewChatItem, type PlanItem } from "./events";
+import type { AgentEvent, ChatMessage, ToolResult } from "@seekforge/shared";
+import { initialChatState, planItemsFrom, reduceEvent, type ChatItem, type NewChatItem, type PlanItem } from "./events";
 
 function tryParseJson(text: string): unknown {
   try {
@@ -22,7 +22,7 @@ function parseToolResult(content: string): ToolResult {
   return { ok: true, data: parsed !== undefined ? parsed : content };
 }
 
-export function messagesToItems(messages: ChatMessage[]): ChatItem[] {
+export function messagesToItems(messages: ChatMessage[], events: AgentEvent[] = []): ChatItem[] {
   const resultsByCallId = new Map<string, ToolResult>();
   for (const m of messages) {
     if (m.role === "tool" && m.toolCallId) resultsByCallId.set(m.toolCallId, parseToolResult(m.content));
@@ -70,5 +70,7 @@ export function messagesToItems(messages: ChatMessage[]): ChatItem[] {
       });
     }
   }
-  return items;
+  let history = { ...initialChatState(), items, nextId };
+  for (const event of events) history = reduceEvent(history, event);
+  return history.items;
 }

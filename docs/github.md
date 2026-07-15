@@ -7,8 +7,8 @@ draft pull request — the OpenHands-style "give it an issue, get a PR" flow.
 **Maturity:** implemented and usable, with an explicit human-initiated push/PR
 boundary. Issue fixes run in an isolated worktree by default, `--wait-ci` can
 wait for hosted checks, and `seekforge resolve-review` can address review
-feedback. CI failure-log feedback and safe resume of an existing issue branch
-remain future work.
+feedback. Existing local `seekforge/issue-<n>` branches are reused when they are
+not checked out elsewhere. `--wait-ci` can perform one bounded CI repair pass.
 
 ```
 seekforge resolve <issue-number-or-url> --max-cost <n> [--base <branch>] [--model <m>] [--no-draft] [--no-worktree] [--wait-ci] [--dry-run]
@@ -27,7 +27,8 @@ command.
 
 1. **Fetch the issue** (read-only): `gh issue view <n> --json title,body,number`.
    A full issue URL is accepted too — the number is extracted from it.
-2. **Create an isolated worktree and work branch** from the selected base. Pass
+2. **Create an isolated worktree and work branch** from the selected base, or
+   reuse the existing local issue branch. Pass
    `--no-worktree` only when you intentionally want to change the current checkout.
 3. **Run the agent headless** to fix it. The task prompt is built from the issue:
 
@@ -46,7 +47,10 @@ command.
    `git add -A` → `git commit -m "Resolve #<n>: <title>"` →
    `git push -u origin seekforge/issue-<n>` →
    `gh pr create --draft --base <base> --head <branch> --title "…" --body "Resolves #<n> …"`.
-6. **Print the PR URL.**
+6. **Print the PR URL.** With `--wait-ci`, a failed check triggers at most one
+   repair: the newest failed Actions run's failed-step logs are capped at 20,000
+   characters, fenced as untrusted data, fed to the agent, verified, committed,
+   pushed, and checked once more.
 
 If the agent made no changes, `resolve` stops before committing (nothing to PR).
 
@@ -60,7 +64,7 @@ If the agent made no changes, `resolve` stops before committing (nothing to PR).
 | `--no-draft` | Open a ready-for-review PR instead of a draft (draft is the default). |
 | `--dry-run` | Do steps 1–4 (fetch + branch + fix + verify), then **print** the exact commit/push/PR commands that *would* run — without pushing or opening a PR. |
 | `--no-worktree` | Use the current checkout instead of the default temporary isolated worktree. |
-| `--wait-ci` | Wait for hosted PR checks after creation and return failure when a check fails. |
+| `--wait-ci` | Wait for hosted PR checks; on failure, allow one bounded failed-log repair and check once more. |
 
 ## Prerequisites
 
@@ -94,8 +98,3 @@ isolated worktree, gives its comments and reviews to a bounded headless agent
 run, verifies the changes, then commits and pushes them. It supports
 `--no-worktree`, `--dry-run`, `--wait-ci`, and `--model` with the same safety
 model as `resolve`.
-
-## Next hardening steps
-
-- Feed bounded hosted CI failure logs into an explicit follow-up repair run.
-- Resume an existing issue branch safely without duplicating commits or PRs.

@@ -33,14 +33,14 @@ export function Modal({ title, children, footer, onDismiss, wide }: Props) {
       <div
         role="dialog"
         aria-modal="true"
-        className={`w-full ${wide ? "max-w-lg" : "max-w-md"} rounded-xl border border-subtle bg-surface-raised p-5 shadow-2xl shadow-black/50`}
+        className={`flex max-h-[calc(100vh-2rem)] w-full flex-col ${wide ? "max-w-lg" : "max-w-md"} rounded-xl border border-subtle bg-surface-raised p-5 shadow-2xl shadow-black/50`}
         onClick={(e) => e.stopPropagation()}
       >
         {title !== undefined && (
-          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-primary">{title}</div>
+          <div className="mb-3 flex shrink-0 items-center gap-2 text-sm font-semibold text-primary">{title}</div>
         )}
-        {children}
-        {footer !== undefined && <div className="mt-4 flex justify-end gap-2">{footer}</div>}
+        <div className="min-h-0 overflow-y-auto">{children}</div>
+        {footer !== undefined && <div className="mt-4 flex shrink-0 justify-end gap-2">{footer}</div>}
       </div>
     </div>
   );

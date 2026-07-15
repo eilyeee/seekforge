@@ -36,6 +36,10 @@ export type MemoryStats = {
    * are no approved facts.
    */
   usedFraction: number;
+  /** Fraction of approved facts passively exposed in at least one brief. */
+  exposedFraction: number;
+  /** Total explicit search_memory retrievals for approved project facts. */
+  retrievalCount: number;
   /**
    * Candidate rejection rate (0..1): rejected / (approved + rejected + pending).
    * 0 when there are no candidates at all.
@@ -58,6 +62,8 @@ const EMPTY: MemoryStats = {
   autoExtractedFacts: 0,
   directAddedFacts: 0,
   usedFraction: 0,
+  exposedFraction: 0,
+  retrievalCount: 0,
   rejectionRate: 0,
   avgConfidenceUsed: null,
   avgConfidenceUnused: null,
@@ -106,6 +112,8 @@ export function memoryStats(workspace: string): MemoryStats {
     let autoExtractedFacts = 0;
     let directAddedFacts = 0;
     let usedCount = 0;
+    let exposedCount = 0;
+    let retrievalCount = 0;
     // Confidence buckets keyed on whether the fact was used.
     let usedConfSum = 0;
     let usedConfN = 0;
@@ -127,6 +135,8 @@ export function memoryStats(workspace: string): MemoryStats {
       // Usage (precision proxy) via fact-meta, keyed by bullet body.
       const used = (meta[body]?.uses ?? 0) > 0;
       if (used) usedCount++;
+      if ((meta[body]?.exposures ?? 0) > 0) exposedCount++;
+      retrievalCount += meta[body]?.retrievals ?? 0;
 
       // Confidence calibration: only facts with a known model confidence (a
       // matched candidate) contribute to the used/unused averages.
@@ -146,6 +156,8 @@ export function memoryStats(workspace: string): MemoryStats {
       autoExtractedFacts,
       directAddedFacts,
       usedFraction: totalApprovedFacts > 0 ? usedCount / totalApprovedFacts : 0,
+      exposedFraction: totalApprovedFacts > 0 ? exposedCount / totalApprovedFacts : 0,
+      retrievalCount,
       rejectionRate,
       avgConfidenceUsed: usedConfN > 0 ? usedConfSum / usedConfN : null,
       avgConfidenceUnused: unusedConfN > 0 ? unusedConfSum / unusedConfN : null,

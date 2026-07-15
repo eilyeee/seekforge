@@ -11,10 +11,14 @@ import {
   InvalidIssueError,
   buildAddArgs,
   buildBranchArgs,
+  buildBranchExistsArgs,
   buildBranchName,
   buildCommitArgs,
   buildCommitMessage,
   buildDetachedWorktreeArgs,
+  buildCiRepairPrompt,
+  buildFailedRunListArgs,
+  buildFailedRunLogArgs,
   buildIssueViewArgs,
   buildPrChecksArgs,
   buildPrCheckoutArgs,
@@ -26,6 +30,7 @@ import {
   buildTaskPrompt,
   buildWorktreeAddArgs,
   buildWorktreeRemoveArgs,
+  buildWorktreeReuseArgs,
   formatCommand,
   parseIssueNumber,
   type IssueRef,
@@ -116,6 +121,46 @@ function removeWorktree(projectPath: string, path: string, force: boolean): void
   run("git", buildWorktreeRemoveArgs(path, force), projectPath);
 }
 
+function existingBranch(projectPath: string, branch: string): boolean {
+  return run("git", buildBranchExistsArgs(branch), projectPath).code === 0;
+}
+
+async function repairFailedCi(
+  projectPath: string,
+  workPath: string,
+  branch: string,
+  maxCost: number,
+  model: string | undefined,
+): Promise<boolean> {
+  const listed = run("gh", buildFailedRunListArgs(branch), workPath);
+  if (listed.code !== 0) return false;
+  let runId: number | undefined;
+  try {
+    const parsed: unknown = JSON.parse(listed.stdout);
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "object" && parsed[0] !== null) {
+      const value = (parsed[0] as Record<string, unknown>)["databaseId"];
+      if (Number.isSafeInteger(value) && (value as number) > 0) runId = value as number;
+    }
+  } catch {
+    return false;
+  }
+  if (runId === undefined) return false;
+  const logs = run("gh", buildFailedRunLogArgs(runId), workPath);
+  if (logs.code !== 0 || logs.stdout.trim() === "") return false;
+  const completed = await runTaskCommand(buildCiRepairPrompt(logs.stdout), {
+    mode: "edit",
+    permissionMode: "acceptEdits",
+    maxCostUsd: maxCost,
+    model,
+  });
+  if (!completed || !changed(workPath) || !verify(projectPath, workPath)) return false;
+  for (const args of [buildAddArgs(), buildCommitArgs(`Fix CI for ${branch}`), buildPushArgs(branch)]) {
+    const result = run("git", args, workPath);
+    if (result.code !== 0) return false;
+  }
+  return true;
+}
+
 export async function resolveCommand(issueArg: string, opts: ResolveOptions): Promise<void> {
   const projectPath = process.cwd();
   if (!validBudget(opts.maxCost)) return;
@@ -151,9 +196,10 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   const base = opts.base?.trim() || DEFAULT_BASE_BRANCH;
   const useWorktree = opts.worktree ?? true;
   const workPath = useWorktree ? createTempWorktreePath() : projectPath;
+  const reuseBranch = existingBranch(projectPath, branch);
   const branchResult = useWorktree
-    ? run("git", buildWorktreeAddArgs(workPath, branch, base), projectPath)
-    : run("git", buildBranchArgs(branch), projectPath);
+    ? run("git", reuseBranch ? buildWorktreeReuseArgs(workPath, branch) : buildWorktreeAddArgs(workPath, branch, base), projectPath)
+    : run("git", reuseBranch ? ["checkout", branch] : buildBranchArgs(branch), projectPath);
   if (branchResult.code !== 0) {
     fail(`failed to create work branch "${branch}"`, { hint: branchResult.stderr.trim() || undefined });
     return;
@@ -216,8 +262,12 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
     if (opts.waitCi) {
       const checks = run("gh", buildPrChecksArgs(url || branch), workPath);
       if (checks.code !== 0) {
-        fail("PR checks failed or could not be completed", { hint: checks.stderr.trim() || undefined });
-        return;
+        console.error("PR checks failed; attempting one bounded repair from failed-step logs.");
+        const repaired = await repairFailedCi(projectPath, workPath, branch, opts.maxCost, opts.model);
+        if (!repaired || run("gh", buildPrChecksArgs(url || branch), workPath).code !== 0) {
+          fail("PR checks failed after the bounded repair attempt", { hint: checks.stderr.trim() || undefined });
+          return;
+        }
       }
       console.log("✓ PR checks passed");
     }

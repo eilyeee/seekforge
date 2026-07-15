@@ -1,8 +1,9 @@
 /** REST client per SERVER-API.md; attaches Authorization: Bearer <token>. */
-import type { ChatMessage } from "@seekforge/shared";
+import type { AgentEvent, ChatMessage } from "@seekforge/shared";
 import { isMock } from "../mock";
 import type {
   AccountBalance,
+  AgentImportResult,
   AgentInfo,
   BacktrackResult,
   CommandsResponse,
@@ -15,6 +16,7 @@ import type {
   HooksConfig,
   McpPrompt,
   McpResource,
+  McpScope,
   McpServer,
   McpTool,
   MemoryCandidate,
@@ -25,12 +27,16 @@ import type {
   PruneResult,
   RewindResult,
   SearchResult,
+  SecurityEvidencePackage,
+  SecurityFinding,
+  SecurityFix,
   ServerConfig,
   SessionMeta,
   SessionTurn,
   Skill,
   SkillScope,
   Todo,
+  ThreatModel,
   TreeResponse,
   Workspace,
   WorkspacesResponse,
@@ -173,7 +179,7 @@ export const api = {
   // Workspace-scoped: `?ws=<active>` is appended centrally via withWorkspace.
   sessions: (ws?: string) => request<SessionMeta[]>("GET", withWorkspace("/api/sessions", ws)),
   session: (id: string, ws?: string) =>
-    request<{ meta: SessionMeta; messages: ChatMessage[] }>(
+    request<{ meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[] }>(
       "GET",
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
@@ -210,7 +216,7 @@ export const api = {
       ...(global ? { global: true } : {}),
     }),
   agents: (ws?: string) => request<AgentInfo[]>("GET", withWorkspace("/api/agents", ws)),
-  agent: (id: string) => request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`)),
+  agent: (id: string, ws?: string) => request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws)),
   evolution: () => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution")),
   evolutionAction: (id: string, action: "accept" | "reject") =>
     request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`)),
@@ -219,9 +225,9 @@ export const api = {
       "POST",
       withWorkspace(`/api/evolution/${encodeURIComponent(id)}/apply`),
     ),
-  mcp: () => request<McpServer[]>("GET", withWorkspace("/api/mcp")),
-  mcpTools: (name: string) =>
-    request<McpTool[]>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`)),
+  mcp: (ws?: string) => request<McpServer[]>("GET", withWorkspace("/api/mcp", ws)),
+  mcpTools: (name: string, ws?: string) =>
+    request<{ tools: McpTool[] }>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`, ws)).then((result) => result.tools),
   // Worktree sessions. Create/list are scoped to the base workspace via `ws`;
   // merge/delete identify the worktree by id (any valid `ws` works, so we pass
   // the worktree's own workspace id — the server resolves the base itself).
@@ -308,8 +314,8 @@ export const api = {
     request<PruneResult>("POST", withWorkspace("/api/sessions/prune"), opts ?? {}),
 
   // Agents import (workspace-scoped).
-  agentImport: (path: string, global?: boolean) =>
-    request<AgentInfo>("POST", withWorkspace("/api/agents/import"), { path, ...(global ? { global: true } : {}) }),
+  agentImport: (path: string, global?: boolean, ws?: string) =>
+    request<AgentImportResult>("POST", withWorkspace("/api/agents/import", ws), { path, ...(global ? { global: true } : {}) }),
 
   // MCP server management (workspace-scoped).
   mcpAdd: (cfg: {
@@ -319,10 +325,54 @@ export const api = {
     env?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    oauth?: {
+      tokenEndpoint: string;
+      clientId: string;
+      clientSecret?: string;
+      refreshToken: string;
+      scope?: string;
+    };
     trusted?: boolean;
-  }) => request<McpServer>("POST", withWorkspace("/api/mcp"), cfg),
-  mcpRemove: (name: string) =>
-    request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/mcp/${encodeURIComponent(name)}`)),
+    scope?: McpScope;
+  }, ws?: string) => request<{ ok: true; server: McpServer }>("POST", withWorkspace("/api/mcp", ws), cfg),
+  mcpRemove: (name: string, scope: McpScope, ws?: string) =>
+    request<{ ok: true; scope: McpScope }>(
+      "DELETE",
+      withWorkspace(`/api/mcp/${encodeURIComponent(name)}?scope=${encodeURIComponent(scope)}`, ws),
+    ),
+  mcpTest: (name: string, ws?: string) =>
+    request<{ ok: true; latencyMs: number; toolCount: number }>(
+      "POST",
+      withWorkspace(`/api/mcp/${encodeURIComponent(name)}/test`, ws),
+    ),
+
+  // Security Center (workspace-scoped).
+  security: (ws?: string) => request<SecurityEvidencePackage>("GET", withWorkspace("/api/security", ws)),
+  securityScan: (maxFindings = 50, ws?: string) =>
+    request<{ scan: SecurityEvidencePackage["scans"][number]; findings: SecurityFinding[] }>(
+      "POST",
+      withWorkspace("/api/security/scan", ws),
+      { maxFindings },
+    ),
+  securityFindingStatus: (id: string, status: SecurityFinding["status"], reason: string, ws?: string) =>
+    request<SecurityFinding>(
+      "POST",
+      withWorkspace(`/api/security/findings/${encodeURIComponent(id)}/status`, ws),
+      { status, reason },
+    ),
+  securityFix: (id: string, maxCostUsd: number, verifyCommand: string, lintCommand?: string, ws?: string) =>
+    request<{ fix: SecurityFix; finding?: SecurityFinding }>(
+      "POST",
+      withWorkspace(`/api/security/findings/${encodeURIComponent(id)}/fix`, ws),
+      { maxCostUsd, verifyCommand, ...(lintCommand?.trim() ? { lintCommand } : {}) },
+    ),
+  securityThreatModel: (ws?: string) =>
+    request<ThreatModel>("POST", withWorkspace("/api/security/threat-model", ws)),
+  securityExport: (format: "json" | "markdown" | "sarif", ws?: string) =>
+    request<{ format: string; filename: string; content: string; disclaimer: string }>(
+      "GET",
+      withWorkspace(`/api/security/export?format=${format}`, ws),
+    ),
 
   // Environment diagnostics (workspace-scoped).
   doctor: () => request<DoctorReport>("GET", withWorkspace("/api/doctor")),

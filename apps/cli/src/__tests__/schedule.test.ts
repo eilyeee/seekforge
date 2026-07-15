@@ -20,6 +20,8 @@ import {
   isValidSchedule,
   loadRegistry,
   markRun,
+  markRunResult,
+  nextRunAt,
   parseCron,
   parseInterval,
   removeJob,
@@ -195,6 +197,37 @@ test("validateJobInput rejects a bad schedule, bad mode, empty id/task", () => {
   assert.equal(validateJobInput({ id: "", task: "t", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
   assert.equal(validateJobInput({ id: "x", task: "", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
   assert.equal(validateJobInput({ id: "bad id", task: "t", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
+});
+
+test("failed runs back off exponentially and success clears retry state", () => {
+  const at = new Date("2026-01-01T00:00:00.000Z");
+  const failedOnce = markRunResult([baseJob()], "j1", at, false)[0]!;
+  assert.equal(failedOnce.failureCount, 1);
+  assert.equal(failedOnce.nextRetryAt, "2026-01-01T00:01:00.000Z");
+  assert.equal(isDue(failedOnce, new Date("2026-01-01T00:00:59.000Z")), false);
+  assert.equal(isDue(failedOnce, new Date("2026-01-01T00:01:00.000Z")), true);
+  const failedTwice = markRunResult([failedOnce], "j1", new Date(failedOnce.nextRetryAt!), false)[0]!;
+  assert.equal(failedTwice.failureCount, 2);
+  assert.equal(failedTwice.nextRetryAt, "2026-01-01T00:03:00.000Z");
+  const passedJob = markRunResult([failedTwice], "j1", new Date("2026-01-01T00:03:00.000Z"), true)[0]!;
+  assert.equal(passedJob.failureCount, undefined);
+  assert.equal(passedJob.nextRetryAt, undefined);
+});
+
+test("nextRunAt handles intervals, cron, disabled jobs, and retry floors", () => {
+  const from = new Date(2026, 0, 1, 10, 0, 30);
+  const intervalLast = new Date(from.getTime() - 15 * 60_000);
+  assert.equal(nextRunAt(baseJob({ lastRunAt: intervalLast.toISOString() }), from)?.getTime(), from.getTime() + 15 * 60_000);
+  const cronNext = nextRunAt(baseJob({ schedule: "5 10 * * *" }), from)!;
+  assert.equal(cronNext.getHours(), 10);
+  assert.equal(cronNext.getMinutes(), 5);
+  assert.equal(cronNext.getDate(), from.getDate());
+  assert.equal(nextRunAt(baseJob({ enabled: false }), from), undefined);
+  const retryAt = new Date(from.getTime() + 60 * 60_000);
+  assert.equal(
+    nextRunAt(baseJob({ nextRetryAt: retryAt.toISOString() }), from)?.getTime(),
+    retryAt.getTime(),
+  );
 });
 
 // --- pure registry operations -----------------------------------------------

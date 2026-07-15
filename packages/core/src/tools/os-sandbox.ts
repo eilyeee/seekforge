@@ -19,6 +19,22 @@ import * as path from "node:path";
 
 export type SandboxLevel = "off" | "read-only" | "workspace-write" | "restricted";
 
+export type SandboxProfile = {
+  filesystem: "read-only" | "workspace-write";
+  network: "inherit" | "deny";
+  /** Explicit additional writable roots. They are never inferred from commands. */
+  writablePaths?: string[];
+};
+
+export type SandboxCapabilityProbe = {
+  platform: string;
+  available: boolean;
+  binary?: "sandbox-exec" | "bwrap";
+  filesystemIsolation: boolean;
+  networkIsolation: boolean;
+  reason?: string;
+};
+
 /** Wrapper prefix to prepend before ["/bin/sh", "-c", command]. */
 export type SandboxSpec = { bin: string; args: string[] };
 
@@ -62,10 +78,58 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
+function normalizeProfile(input: Exclude<SandboxLevel, "off"> | SandboxProfile): SandboxProfile {
+  if (typeof input !== "string") return input;
+  return {
+    filesystem: input === "read-only" ? "read-only" : "workspace-write",
+    network: input === "restricted" ? "deny" : "inherit",
+  };
+}
+
+/** Compose restrictions; restrictive filesystem/network settings win. */
+export function composeSandboxProfiles(...profiles: SandboxProfile[]): SandboxProfile {
+  return {
+    filesystem: profiles.some((profile) => profile.filesystem === "read-only") ? "read-only" : "workspace-write",
+    network: profiles.some((profile) => profile.network === "deny") ? "deny" : "inherit",
+    writablePaths: [...new Set(profiles.flatMap((profile) => profile.writablePaths ?? []))],
+  };
+}
+
+export function probeSandboxCapabilities(platform: string = process.platform): SandboxCapabilityProbe {
+  if (platform === "darwin") {
+    const available = availabilityCheck("sandbox-exec");
+    return {
+      platform,
+      available,
+      ...(available ? { binary: "sandbox-exec" as const } : { reason: "sandbox-exec was not found on PATH" }),
+      filesystemIsolation: available,
+      networkIsolation: available,
+    };
+  }
+  if (platform === "linux") {
+    const available = availabilityCheck("bwrap");
+    return {
+      platform,
+      available,
+      ...(available ? { binary: "bwrap" as const } : { reason: "bwrap was not found on PATH" }),
+      filesystemIsolation: available,
+      networkIsolation: available,
+    };
+  }
+  return {
+    platform,
+    available: false,
+    filesystemIsolation: false,
+    networkIsolation: false,
+    reason: `OS sandboxing is unsupported on ${platform}`,
+  };
+}
+
 /** Writable roots: temp dirs + /dev, and workspace for write-capable levels. */
-function darwinWritablePaths(level: Exclude<SandboxLevel, "off">, workspace: string): string[] {
+function darwinWritablePaths(profile: SandboxProfile, workspace: string): string[] {
   const candidates = [
-    ...(level === "read-only" ? [] : [workspace]),
+    ...(profile.filesystem === "read-only" ? [] : [workspace]),
+    ...(profile.writablePaths ?? []).map(realpathOrNull),
     os.tmpdir(),
     process.env.TMPDIR !== undefined ? realpathOrNull(process.env.TMPDIR) : null,
     "/private/tmp",
@@ -78,33 +142,37 @@ function darwinWritablePaths(level: Exclude<SandboxLevel, "off">, workspace: str
   return unique;
 }
 
-function buildSeatbeltProfile(level: Exclude<SandboxLevel, "off">, workspace: string): string {
+function buildSeatbeltProfile(profile: SandboxProfile, workspace: string): string {
   const lines = ["(version 1)", "(allow default)", "(deny file-write*)"];
-  for (const p of darwinWritablePaths(level, workspace)) {
+  for (const p of darwinWritablePaths(profile, workspace)) {
     lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`);
   }
   // A workspace may itself live below TMPDIR. Re-apply its stronger read-only
   // rule after the broad temporary-directory allowances.
-  if (level === "read-only") {
+  if (profile.filesystem === "read-only") {
     lines.push(`(deny file-write* (subpath "${escapeSeatbeltPath(workspace)}"))`);
   }
-  if (level === "restricted") lines.push("(deny network*)");
+  if (profile.network === "deny") lines.push("(deny network*)");
   return lines.join("\n");
 }
 
-function buildBwrapArgs(level: Exclude<SandboxLevel, "off">, workspace: string): string[] {
+function buildBwrapArgs(profile: SandboxProfile, workspace: string): string[] {
   const args = [
     "--ro-bind", "/", "/",
-    ...(level === "read-only" ? [] : ["--bind", workspace, workspace]),
+    ...(profile.filesystem === "read-only" ? [] : ["--bind", workspace, workspace]),
+    ...(profile.writablePaths ?? []).flatMap((candidate) => {
+      const root = realpathOrNull(candidate);
+      return root ? ["--bind", root, root] : [];
+    }),
     "--bind", "/tmp", "/tmp",
     // Later nested mounts override the writable /tmp bind for a workspace
     // located below /tmp.
-    ...(level === "read-only" ? ["--ro-bind", workspace, workspace] : []),
+    ...(profile.filesystem === "read-only" ? ["--ro-bind", workspace, workspace] : []),
     "--dev", "/dev",
     "--proc", "/proc",
     "--die-with-parent",
   ];
-  if (level === "restricted") args.push("--unshare-net");
+  if (profile.network === "deny") args.push("--unshare-net");
   return args;
 }
 
@@ -113,18 +181,19 @@ function buildBwrapArgs(level: Exclude<SandboxLevel, "off">, workspace: string):
  * (unknown platform, level "off", or the sandbox binary is missing).
  */
 export function buildSandboxSpec(
-  level: SandboxLevel,
+  level: SandboxLevel | SandboxProfile,
   workspace: string,
   platform: string = process.platform,
 ): SandboxSpec | null {
   if (level === "off") return null;
+  const profile = normalizeProfile(level);
   if (platform === "darwin") {
     if (!availabilityCheck("sandbox-exec")) return null;
-    return { bin: "sandbox-exec", args: ["-p", buildSeatbeltProfile(level, workspace)] };
+    return { bin: "sandbox-exec", args: ["-p", buildSeatbeltProfile(profile, workspace)] };
   }
   if (platform === "linux") {
     if (!availabilityCheck("bwrap")) return null;
-    return { bin: "bwrap", args: buildBwrapArgs(level, workspace) };
+    return { bin: "bwrap", args: buildBwrapArgs(profile, workspace) };
   }
   return null;
 }
@@ -136,7 +205,7 @@ export function buildSandboxSpec(
  */
 export function sandboxedShell(
   command: string,
-  level: SandboxLevel | undefined,
+  level: SandboxLevel | SandboxProfile | undefined,
   workspace: string,
 ): { bin: string; args: string[]; sandboxed: boolean } {
   const spec = level !== undefined ? buildSandboxSpec(level, workspace) : null;

@@ -19,6 +19,7 @@
 
 import type { CreateAgentFn } from "./agent.js";
 import type { TriggerMode } from "./triggers.js";
+import type { RunManager, RunStatus } from "./run-ledger.js";
 
 /** Answer given for a headless ask_user (no interactive user to answer). */
 export const HEADLESS_DECLINE = "(no interactive user: this is a headless triggered run)";
@@ -30,6 +31,8 @@ export type StartTriggerRunInput = {
   mode: TriggerMode;
   /** Hard cap on cumulative spend (USD); the run aborts on reaching it. */
   maxCostUsd: number;
+  runManager?: RunManager;
+  runId?: string;
 };
 
 export type TriggerRunHandle = {
@@ -45,6 +48,7 @@ export type TriggerRunHandle = {
  */
 export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunHandle {
   const controller = new AbortController();
+  if (input.runManager && input.runId) input.runManager.start(input.runId, input.workspace, controller);
   let resolveStarted!: (value: { sessionId: string }) => void;
   let rejectStarted!: (error: Error) => void;
   const started = new Promise<{ sessionId: string }>((resolve, reject) => {
@@ -54,6 +58,8 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
   let settled = false;
   const completion = (async () => {
       let handle: Awaited<ReturnType<CreateAgentFn>> | undefined;
+      let terminalStatus: RunStatus | undefined;
+      let sessionId = "";
       try {
         handle = await input.createAgent({
           workspace: input.workspace,
@@ -73,22 +79,49 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           approvalMode: "acceptEdits",
           signal: controller.signal,
         })) {
+          if (event.type === "session.created") sessionId = event.sessionId;
+          if (input.runManager && input.runId) {
+            input.runManager.appendFrame(input.workspace, input.runId, {
+              type: "event",
+              sessionId,
+              event,
+            });
+          }
           if (event.type === "session.created") {
+            input.runManager?.update(input.workspace, input.runId ?? "", { sessionId: event.sessionId });
             if (!settled) {
               settled = true;
               resolveStarted({ sessionId: event.sessionId });
             }
           } else if (event.type === "usage.updated") {
+            input.runManager?.update(input.workspace, input.runId ?? "", { costUsd: event.usage.costUsd });
             // Cumulative spend guard — a SOFT, reactive cap: we abort on the
             // first usage event at/over budget, so the in-flight model turn that
             // crossed it can overshoot by one call. Bound turns/tokens too if a
             // hard ceiling is ever required.
             if (event.usage.costUsd >= input.maxCostUsd) controller.abort();
           } else if (event.type === "session.completed") {
+            terminalStatus = "succeeded";
+            input.runManager?.update(input.workspace, input.runId ?? "", {
+              status: terminalStatus,
+              costUsd: event.report.usage.costUsd,
+            });
             if (event.report.usage.costUsd >= input.maxCostUsd) controller.abort();
+          } else if (event.type === "session.failed") {
+            terminalStatus = event.error.code === "cancelled" ? "cancelled" : "failed";
+            input.runManager?.update(input.workspace, input.runId ?? "", {
+              status: terminalStatus,
+              error: { code: event.error.code, message: event.error.message },
+            });
           }
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        terminalStatus = controller.signal.aborted ? "cancelled" : "failed";
+        input.runManager?.update(input.workspace, input.runId ?? "", {
+          status: terminalStatus,
+          error: { code: terminalStatus === "cancelled" ? "cancelled" : "trigger_error", message },
+        });
         // A failure after we've already resolved (i.e. mid-background-run) is
         // recorded in the session trace as session.failed; swallow it here so
         // it doesn't surface as an unhandled rejection.
@@ -105,6 +138,12 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           if (!settled) {
             settled = true;
             rejectStarted(new Error("triggered run produced no session"));
+          }
+          if (terminalStatus === undefined) {
+            input.runManager?.update(input.workspace, input.runId ?? "", {
+              status: controller.signal.aborted ? "cancelled" : "failed",
+              error: { code: "incomplete", message: "triggered run ended without a terminal event" },
+            });
           }
         }
       }

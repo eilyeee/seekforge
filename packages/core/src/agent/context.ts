@@ -1,4 +1,9 @@
-import type { ChatMessage, ProviderToolCall } from "@seekforge/shared";
+import type {
+  ChatMessage,
+  ProviderToolCall,
+  TokenUsage,
+  ToolDefinitionForModel,
+} from "@seekforge/shared";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 import { acquireSessionLease } from "./session-lease.js";
 
@@ -76,6 +81,103 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
   let total = 0;
   for (const m of messages) total += estimateMessageTokens(m);
   return total;
+}
+
+/**
+ * Tool definitions are part of every provider request and can be larger than
+ * the conversation when many MCP servers are enabled. Keep this estimate at
+ * the same boundary as message estimation so context decisions account for
+ * the complete wire request rather than messages alone.
+ */
+export function estimateToolDefinitionsTokens(tools: ToolDefinitionForModel[] | undefined): number {
+  if (!tools || tools.length === 0) return 0;
+  let total = 0;
+  for (const tool of tools) {
+    total += estimateToolDefinitionTokens(tool);
+  }
+  return total;
+}
+
+function estimateToolDefinitionTokens(tool: ToolDefinitionForModel): number {
+  return (
+    PER_MESSAGE_OVERHEAD +
+    estimateTokens(tool.name) +
+    estimateTokens(tool.description) +
+    estimateTokens(JSON.stringify(tool.parameters))
+  );
+}
+
+const ESSENTIAL_TOOL_NAMES = new Set([
+  "read_file",
+  "search_text",
+  "glob",
+  "list_files",
+  "apply_patch",
+  "write_file",
+  "run_command",
+  "git_status",
+  "git_diff",
+  "update_plan",
+  "dispatch_agent",
+  "dispatch_team",
+  "agent_result",
+  "agent_send",
+]);
+
+/**
+ * Large MCP catalogs can consume most of a model window before any message is
+ * sent. Retain the normal full catalog while it fits; only under pressure keep
+ * core workflow tools, recently used tools, and definitions relevant to the
+ * current user text. Ordering is deterministic so retries advertise the same
+ * catalog.
+ */
+export function selectToolDefinitionsForBudget(
+  tools: ToolDefinitionForModel[],
+  messages: ChatMessage[],
+  maxTokens: number,
+): ToolDefinitionForModel[] {
+  if (estimateToolDefinitionsTokens(tools) <= maxTokens) return tools;
+
+  const recentNames = new Set<string>();
+  for (const message of messages.slice(-12)) {
+    for (const call of message.toolCalls ?? []) recentNames.add(call.name);
+  }
+  const userText = messages
+    .filter((message) => message.role === "user")
+    .slice(-2)
+    .map((message) => message.content)
+    .join(" ")
+    .toLowerCase();
+
+  const ranked = tools.map((tool, index) => {
+    const nameParts = tool.name.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part.length >= 3);
+    const relevant = nameParts.some((part) => userText.includes(part));
+    const priority = ESSENTIAL_TOOL_NAMES.has(tool.name)
+      ? 3
+      : recentNames.has(tool.name)
+        ? 2
+        : relevant
+          ? 1
+          : 0;
+    return { tool, index, priority, tokens: estimateToolDefinitionTokens(tool) };
+  });
+  ranked.sort((a, b) => b.priority - a.priority || a.index - b.index);
+
+  const selected: typeof ranked = [];
+  let used = 0;
+  for (const entry of ranked) {
+    if (selected.length > 0 && used + entry.tokens > maxTokens) continue;
+    selected.push(entry);
+    used += entry.tokens;
+  }
+  return selected.sort((a, b) => a.index - b.index).map((entry) => entry.tool);
+}
+
+export function estimateRequestTokens(
+  messages: ChatMessage[],
+  tools?: ToolDefinitionForModel[],
+): number {
+  return estimateMessagesTokens(messages) + estimateToolDefinitionsTokens(tools);
 }
 
 /** Tool outputs at or below this length are never micro-cleared. */
@@ -183,6 +285,8 @@ export type CompactionResult = {
   messages: ChatMessage[];
   droppedTurns: number;
   summaryTokens: number;
+  /** Provider usage consumed to produce the summary; absent for mechanical compaction. */
+  usage?: TokenUsage;
 };
 
 const KEEP_HEAD = 2; // system prompt + original task
@@ -322,7 +426,10 @@ const LLM_SUMMARY_INSTRUCTION =
 
 /** Minimal provider surface needed for summarization (ChatProvider satisfies it). */
 export type SummaryProvider = {
-  chat(req: { messages: ChatMessage[]; signal?: AbortSignal }): Promise<{ content: string }>;
+  chat(req: { messages: ChatMessage[]; signal?: AbortSignal }): Promise<{
+    content: string;
+    usage?: TokenUsage;
+  }>;
 };
 
 /** Role-prefixed, size-capped plain-text rendering of the dropped segment. */
@@ -376,29 +483,33 @@ export async function llmCompactMessages(
       ? `${LLM_SUMMARY_INSTRUCTION} Focus especially on: ${focus}.`
       : LLM_SUMMARY_INSTRUCTION;
   let summary: string;
+  let usage: TokenUsage | undefined;
   try {
     const res = await provider.chat({
       messages: [{ role: "user", content: `${instruction}\n\n${segment}` }],
       signal: opts?.signal,
     });
     summary = res.content.trim();
+    usage = res.usage;
   } catch {
     return null; // provider error → caller falls back to mechanical compaction
   }
   if (summary === "") return null;
 
-  return assembleCompaction(
+  const compacted = assembleCompaction(
     messages,
     split.tailStart,
     compactionSummaryMessage("Summary", summary),
     split.dropped.length,
   );
+  return usage ? { ...compacted, usage } : compacted;
 }
 
 export type LlmCompactSessionResult = {
   droppedTurns: number;
   beforeTokens: number;
   afterTokens: number;
+  usage?: TokenUsage;
 };
 
 /**
@@ -445,6 +556,7 @@ export async function llmCompactSessionNow(
       droppedTurns: compacted.droppedTurns,
       beforeTokens,
       afterTokens: estimateMessagesTokens(compacted.messages),
+      ...(compacted.usage ? { usage: compacted.usage } : {}),
     };
   } finally {
     lease.release();

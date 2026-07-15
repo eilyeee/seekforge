@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
+import { teamPlanTask, validateTeamPlan, type TeamMemberPlan } from "../lib/team";
 import {
   Badge,
   Button,
@@ -14,6 +15,8 @@ import {
   IconChevron,
   IconSparkle,
   Input,
+  Select,
+  TextArea,
   type BadgeTone,
 } from "../components/ui";
 import type { AgentInfo, AgentScope } from "../types";
@@ -51,6 +54,7 @@ export function AgentsView() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const detailRequests = useRef(new LatestRequest());
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
@@ -59,7 +63,7 @@ export function AgentsView() {
 
   const refresh = () =>
     api
-      .agents()
+      .agents(ws)
       .then(setAgents)
       .catch((e: unknown) => setError(String(e)));
 
@@ -70,6 +74,7 @@ export function AgentsView() {
     setError(null);
     setQuery("");
     setImportOpen(false);
+    setTeamOpen(false);
     setNote(null);
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -79,7 +84,7 @@ export function AgentsView() {
     const request = detailRequests.current.begin();
     setError(null);
     api
-      .agent(id)
+      .agent(id, ws)
       .then((agent) => {
         if (detailRequests.current.isCurrent(request)) setDetail(agent);
       })
@@ -171,9 +176,14 @@ export function AgentsView() {
             <h1 className="text-lg font-semibold text-primary">{t("agents.title")}</h1>
             <p className="mt-1 text-xs text-tertiary">{t("agents.emptyDescription")}</p>
           </div>
-          <Button size="sm" className="shrink-0" onClick={() => setImportOpen(true)}>
-            {t("agents.importBtn")}
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button size="sm" variant="primary" onClick={() => setTeamOpen(true)}>
+              {t("agents.teamBtn")}
+            </Button>
+            <Button size="sm" onClick={() => setImportOpen(true)}>
+              {t("agents.importBtn")}
+            </Button>
+          </div>
         </div>
         <div className="mt-3 max-w-md">
           <Input
@@ -244,15 +254,117 @@ export function AgentsView() {
         <ImportAgentDialog
           onClose={() => setImportOpen(false)}
           onImport={(path, global) =>
-            api.agentImport(path, global).then((agent) => {
+            api.agentImport(path, global, ws).then((result) => {
               setImportOpen(false);
-              setNote(t("agents.importDone", { id: agent.id }));
+              setNote(
+                result.droppedTools.length > 0
+                  ? t("agents.importDoneDropped", { id: result.agent.id, tools: result.droppedTools.join(", ") })
+                  : t("agents.importDone", { id: result.agent.id }),
+              );
               void refresh();
             })
           }
         />
       )}
+      {teamOpen && agents && (
+        <TeamPlanDialog
+          agents={agents}
+          onClose={() => setTeamOpen(false)}
+          onSubmit={(task) => {
+            setTeamOpen(false);
+            useStore.getState().sendTask(task);
+            useStore.getState().setView("chat");
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+export function TeamPlanDialog({ agents, onClose, onSubmit }: {
+  agents: AgentInfo[];
+  onClose: () => void;
+  onSubmit: (task: string) => void;
+}) {
+  const t = useT();
+  const firstAgent = agents[0]?.id ?? "";
+  const [members, setMembers] = useState<TeamMemberPlan[]>([
+    { id: "member-1", agentId: firstAgent, task: "", dependsOn: [] },
+  ]);
+  const [maxConcurrency, setMaxConcurrency] = useState(3);
+  const [failurePolicy, setFailurePolicy] = useState<"stop" | "continue">("stop");
+  const [error, setError] = useState<string | null>(null);
+
+  const update = (index: number, patch: Partial<TeamMemberPlan>) =>
+    setMembers((current) => current.map((member, at) => at === index ? { ...member, ...patch } : member));
+
+  const submit = () => {
+    const result = validateTeamPlan(
+      { members, maxConcurrency, failurePolicy },
+      new Set(agents.map((agent) => agent.id)),
+    );
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onSubmit(teamPlanTask(result.plan));
+  };
+
+  return (
+    <ConfirmDialog
+      title={t("agents.teamTitle")}
+      confirmLabel={t("agents.teamRun")}
+      confirmDisabled={agents.length === 0}
+      onConfirm={submit}
+      onCancel={onClose}
+    >
+      <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 text-xs">
+        <div className="grid grid-cols-2 gap-2">
+          <label>
+            <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamConcurrency")}</span>
+            <Input type="number" min={1} max={6} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} className="mt-1 font-mono" />
+          </label>
+          <label>
+            <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamFailurePolicy")}</span>
+            <Select value={failurePolicy} onChange={(value) => setFailurePolicy(value as "stop" | "continue")} className="mt-1 w-full" options={[
+              { value: "stop", label: t("agents.teamStop") },
+              { value: "continue", label: t("agents.teamContinue") },
+            ]} />
+          </label>
+        </div>
+        {members.map((member, index) => (
+          <div key={index} className="space-y-2 rounded-md border border-subtle bg-surface-raised p-3">
+            <div className="grid grid-cols-2 gap-2">
+              <label>
+                <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamMemberId")}</span>
+                <Input value={member.id} onChange={(event) => update(index, { id: event.target.value })} className="mt-1 font-mono" />
+              </label>
+              <label>
+                <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamAgent")}</span>
+                <Select value={member.agentId} onChange={(value) => update(index, { agentId: value })} className="mt-1 w-full" options={agents.map((agent) => ({ value: agent.id, label: `${agent.name} (${agent.id})` }))} />
+              </label>
+            </div>
+            <label className="block">
+              <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamTask")}</span>
+              <TextArea value={member.task} onChange={(event) => update(index, { task: event.target.value })} rows={3} className="mt-1" />
+            </label>
+            <label className="block">
+              <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamDepends")}</span>
+              <Input value={member.dependsOn.join(", ")} onChange={(event) => update(index, { dependsOn: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })} placeholder={t("agents.teamDependsPlaceholder")} className="mt-1 font-mono" />
+            </label>
+            {members.length > 1 && (
+              <Button size="sm" variant="ghost" className="text-danger" onClick={() => setMembers((current) => current.filter((_, at) => at !== index))}>
+                <span aria-hidden>×</span>{t("agents.teamRemoveMember")}
+              </Button>
+            )}
+          </div>
+        ))}
+        <Button size="sm" variant="ghost" disabled={members.length >= 12} onClick={() => setMembers((current) => [...current, { id: `member-${current.length + 1}`, agentId: firstAgent, task: "", dependsOn: [] }])}>
+          <span aria-hidden>+</span>{t("agents.teamAddMember")}
+        </Button>
+        {error && <p className="font-mono text-xs text-danger">{error}</p>}
+      </div>
+    </ConfirmDialog>
   );
 }
 

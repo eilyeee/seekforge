@@ -83,21 +83,23 @@ function SettingsRow({
   );
 }
 
-/** MCP servers list + on-demand tool listing (POST /api/mcp/:name/tools),
- * with an add form (stdio command/args OR url) and per-server remove. */
+type McpConnectionState = "testing" | { ok: true; latencyMs: number; toolCount: number } | { ok: false; error: string };
+
+/** Effective MCP servers with explicit config provenance and per-server health. */
 function McpSection() {
   const t = useT();
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Per server: tool list, an error string, or "loading". */
   const [tools, setTools] = useState<Record<string, McpTool[] | { error: string } | "loading">>({});
-  const [addOpen, setAddOpen] = useState(false);
-  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [connections, setConnections] = useState<Record<string, McpConnectionState>>({});
+  const [editor, setEditor] = useState<McpServer | "new" | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<McpServer | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
 
   const refresh = () =>
     api
-      .mcp()
+      .mcp(ws)
       .then(setServers)
       .catch((e: unknown) => setLoadError(String(e)));
 
@@ -105,7 +107,8 @@ function McpSection() {
     setServers(null);
     setLoadError(null);
     setTools({});
-    setAddOpen(false);
+    setConnections({});
+    setEditor(null);
     setPendingRemove(null);
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,26 +117,36 @@ function McpSection() {
   const listTools = (name: string) => {
     setTools((t) => ({ ...t, [name]: "loading" }));
     api
-      .mcpTools(name)
+      .mcpTools(name, ws)
       .then((list) => setTools((t) => ({ ...t, [name]: list })))
       .catch((e: unknown) => setTools((t) => ({ ...t, [name]: { error: String(e) } })));
   };
 
   const confirmRemove = () => {
     if (!pendingRemove) return;
-    const name = pendingRemove;
+    const server = pendingRemove;
     setPendingRemove(null);
     api
-      .mcpRemove(name)
+      .mcpRemove(server.name, server.source, ws)
       .then(refresh)
       .catch((e: unknown) => setLoadError(String(e)));
+  };
+
+  const testConnection = (name: string) => {
+    setConnections((states) => ({ ...states, [name]: "testing" }));
+    api
+      .mcpTest(name, ws)
+      .then((result) => setConnections((states) => ({ ...states, [name]: result })))
+      .catch((error: unknown) =>
+        setConnections((states) => ({ ...states, [name]: { ok: false, error: String(error) } })),
+      );
   };
 
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
         <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpServers")}</h2>
-        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
+        <Button variant="ghost" size="sm" onClick={() => setEditor("new")}>
           {t("settings.mcpAddBtn")}
         </Button>
       </div>
@@ -148,33 +161,55 @@ function McpSection() {
         <div className="space-y-3">
           {servers.map((srv) => {
             const state = tools[srv.name];
+            const connection = connections[srv.name];
             return (
               <Card key={srv.name} className="p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm text-primary">{srv.name}</span>
+                  <Badge tone={srv.source === "project" ? "ok" : "accent"}>{srv.source}</Badge>
+                  <Badge tone="neutral">{srv.transport}</Badge>
                   <Badge tone={srv.trusted ? "ok" : "neutral"}>{t(srv.trusted ? "settings.mcpTrusted" : "settings.mcpUntrusted")}</Badge>
-                  {srv.envKeys !== undefined && <Badge tone="neutral">{t("settings.mcpEnv", { count: srv.envKeys.length })}</Badge>}
+                  {Object.keys(srv.env).length > 0 && <Badge tone="neutral">{t("settings.mcpEnv", { count: Object.keys(srv.env).length })}</Badge>}
+                  {srv.shadowedGlobal && <Badge tone="warn">{t("settings.mcpShadowsGlobal")}</Badge>}
                   <Button
                     variant="ghost"
                     size="sm"
                     className="ml-auto"
+                    disabled={connection === "testing"}
+                    onClick={() => testConnection(srv.name)}
+                  >
+                    {connection === "testing" ? t("settings.mcpTesting") : t("settings.mcpTest")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={state === "loading"}
                     onClick={() => listTools(srv.name)}
                   >
                     {state === "loading" ? t("settings.mcpListing") : t("settings.mcpListTools")}
                   </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditor(srv)}>
+                    {t("settings.mcpEditBtn")}
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="text-tertiary hover:text-danger"
-                    onClick={() => setPendingRemove(srv.name)}
+                    onClick={() => setPendingRemove(srv)}
                   >
                     {t("settings.mcpRemoveBtn")}
                   </Button>
                 </div>
                 <div className="mt-1.5 font-mono text-xs text-tertiary">
-                  {srv.command} {srv.args.join(" ")}
+                  {srv.transport === "http" ? srv.url : `${srv.command ?? ""} ${srv.args.join(" ")}`}
                 </div>
+                {connection && connection !== "testing" && (
+                  <p className={`mt-2 font-mono text-xs ${connection.ok ? "text-ok" : "text-danger"}`}>
+                    {connection.ok
+                      ? t("settings.mcpTestOk", { latency: connection.latencyMs, tools: connection.toolCount })
+                      : connection.error}
+                  </p>
+                )}
                 {state !== undefined && state !== "loading" && (
                   <div className="mt-2 border-t border-subtle pt-2">
                     {Array.isArray(state) ? (
@@ -203,61 +238,157 @@ function McpSection() {
         </>
       )}
 
-      {addOpen && (
-        <AddMcpDialog
-          onClose={() => setAddOpen(false)}
-          onAdded={() => {
-            setAddOpen(false);
+      {editor && (
+        <McpEditorDialog
+          initial={editor === "new" ? undefined : editor}
+          ws={ws}
+          onClose={() => setEditor(null)}
+          onSaved={() => {
+            setEditor(null);
             void refresh();
           }}
         />
       )}
       {pendingRemove && (
         <ConfirmDialog
-          title={t("settings.mcpRemoveTitle", { name: pendingRemove })}
+          title={t("settings.mcpRemoveTitle", { name: pendingRemove.name })}
           confirmLabel={t("settings.mcpRemoveConfirm")}
           danger
           onConfirm={confirmRemove}
           onCancel={() => setPendingRemove(null)}
         >
-          {t("settings.mcpRemoveBody")}
+          {t("settings.mcpRemoveBodyScoped", { scope: pendingRemove.source })}
         </ConfirmDialog>
       )}
     </section>
   );
 }
 
-/** Add-MCP form: name + a stdio transport (command/args) OR an http url. */
-function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+type KeyValueRow = { key: string; value: string };
+
+function rowsOf(values: Record<string, string>): KeyValueRow[] {
+  return Object.entries(values).map(([key, value]) => ({ key, value }));
+}
+
+function recordOf(rows: KeyValueRow[]): Record<string, string> | null {
+  const values: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!key) continue;
+    if (values[key] !== undefined) return null;
+    values[key] = row.value;
+  }
+  return values;
+}
+
+function KeyValueEditor({ label, rows, onChange, disabled }: {
+  label: string;
+  rows: KeyValueRow[];
+  onChange: (rows: KeyValueRow[]) => void;
+  disabled: boolean;
+}) {
   const t = useT();
-  const [name, setName] = useState("");
-  const [transport, setTransport] = useState<"stdio" | "http">("stdio");
-  const [command, setCommand] = useState("");
-  const [args, setArgs] = useState("");
-  const [url, setUrl] = useState("");
-  const [trusted, setTrusted] = useState(false);
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-2xs uppercase tracking-wider text-tertiary">{label}</span>
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange([...rows, { key: "", value: "" }])}>
+          <span aria-hidden>+</span>{t("settings.mcpFieldAdd")}
+        </Button>
+      </div>
+      <div className="mt-1 space-y-1.5">
+        {rows.map((row, index) => (
+          <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-1.5">
+            <Input
+              value={row.key}
+              aria-label={`${label} key ${index + 1}`}
+              placeholder={t("settings.mcpKeyPlaceholder")}
+              className="font-mono"
+              disabled={disabled}
+              onChange={(event) => onChange(rows.map((item, at) => at === index ? { ...item, key: event.target.value } : item))}
+            />
+            <Input
+              value={row.value}
+              aria-label={`${label} value ${index + 1}`}
+              placeholder={t("settings.mcpValuePlaceholder")}
+              className="font-mono"
+              disabled={disabled}
+              onChange={(event) => onChange(rows.map((item, at) => at === index ? { ...item, value: event.target.value } : item))}
+            />
+            <Button size="sm" variant="ghost" aria-label={t("settings.mcpFieldRemove")} disabled={disabled} onClick={() => onChange(rows.filter((_, at) => at !== index))}>
+              <span aria-hidden>×</span>
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Complete stdio/HTTP editor. Secret placeholders round-trip without disclosure. */
+export function McpEditorDialog({ initial, ws, onClose, onSaved }: {
+  initial?: McpServer;
+  ws: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const t = useT();
+  const [name, setName] = useState(initial?.name ?? "");
+  const [scope, setScope] = useState(initial?.source ?? "project");
+  const [transport, setTransport] = useState<"stdio" | "http">(initial?.transport ?? "stdio");
+  const [command, setCommand] = useState(initial?.command ?? "");
+  const [args, setArgs] = useState<string[]>(initial?.args ?? []);
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [env, setEnv] = useState<KeyValueRow[]>(rowsOf(initial?.env ?? {}));
+  const [headers, setHeaders] = useState<KeyValueRow[]>(rowsOf(initial?.headers ?? {}));
+  const [oauthEnabled, setOauthEnabled] = useState(initial?.oauth !== undefined);
+  const [tokenEndpoint, setTokenEndpoint] = useState(initial?.oauth?.tokenEndpoint ?? "");
+  const [clientId, setClientId] = useState(initial?.oauth?.clientId ?? "");
+  const [clientSecret, setClientSecret] = useState(initial?.oauth?.clientSecret ?? "");
+  const [refreshToken, setRefreshToken] = useState(initial?.oauth?.refreshToken ?? "");
+  const [oauthScope, setOauthScope] = useState(initial?.oauth?.scope ?? "");
+  const [trusted, setTrusted] = useState(initial?.trusted ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit =
-    name.trim() !== "" && (transport === "stdio" ? command.trim() !== "" : url.trim() !== "");
+    name.trim() !== "" &&
+    (transport === "stdio"
+      ? command.trim() !== ""
+      : url.trim() !== "" && (!oauthEnabled || (tokenEndpoint.trim() !== "" && clientId.trim() !== "" && refreshToken !== "")));
 
   const submit = () => {
     if (!canSubmit || busy) return;
     setBusy(true);
     setError(null);
-    const cfg =
-      transport === "stdio"
-        ? {
-            name: name.trim(),
-            command: command.trim(),
-            args: args.trim() === "" ? [] : args.trim().split(/\s+/),
-            trusted,
-          }
-        : { name: name.trim(), url: url.trim(), trusted };
+    const envValues = recordOf(env);
+    const headerValues = recordOf(headers);
+    if (envValues === null || headerValues === null) {
+      setError(t("settings.mcpDuplicateKey"));
+      setBusy(false);
+      return;
+    }
+    const cfg = transport === "stdio"
+      ? { name: name.trim(), scope, command: command.trim(), args, env: envValues, trusted }
+      : {
+          name: name.trim(),
+          scope,
+          url: url.trim(),
+          headers: headerValues,
+          ...(oauthEnabled ? {
+            oauth: {
+              tokenEndpoint: tokenEndpoint.trim(),
+              clientId: clientId.trim(),
+              refreshToken,
+              ...(clientSecret !== "" ? { clientSecret } : {}),
+              ...(oauthScope.trim() !== "" ? { scope: oauthScope.trim() } : {}),
+            },
+          } : {}),
+          trusted,
+        };
     api
-      .mcpAdd(cfg)
-      .then(onAdded)
+      .mcpAdd(cfg, ws)
+      .then(onSaved)
       .catch((e: unknown) => {
         setError(t("settings.mcpAddError", { error: String(e) }));
         setBusy(false);
@@ -266,8 +397,8 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
 
   return (
     <ConfirmDialog
-      title={t("settings.mcpAddTitle")}
-      confirmLabel={busy ? "…" : t("settings.mcpAddConfirm")}
+      title={t(initial ? "settings.mcpEditTitle" : "settings.mcpAddTitle")}
+      confirmLabel={busy ? "…" : t("settings.mcpSaveConfirm")}
       onConfirm={submit}
       onCancel={onClose}
     >
@@ -280,7 +411,17 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
             onChange={(e) => setName(e.target.value)}
             placeholder={t("settings.mcpAddNamePlaceholder")}
             className="mt-1 font-mono"
-            disabled={busy}
+            disabled={busy || initial !== undefined}
+          />
+        </label>
+        <label className="block">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpScope")}</span>
+          <Select
+            value={scope}
+            onChange={(value) => setScope(value as "global" | "project")}
+            disabled={busy || initial !== undefined}
+            className="mt-1 w-full"
+            options={[{ value: "project", label: t("settings.mcpScopeProject") }, { value: "global", label: t("settings.mcpScopeGlobal") }]}
           />
         </label>
         <label className="block">
@@ -308,16 +449,23 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
                 disabled={busy}
               />
             </label>
-            <label className="block">
-              <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddArgs")}</span>
-              <Input
-                value={args}
-                onChange={(e) => setArgs(e.target.value)}
-                placeholder={t("settings.mcpAddArgsPlaceholder")}
-                className="mt-1 font-mono"
-                disabled={busy}
-              />
-            </label>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddArgs")}</span>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setArgs([...args, ""])}>
+                  <span aria-hidden>+</span>{t("settings.mcpFieldAdd")}
+                </Button>
+              </div>
+              <div className="mt-1 space-y-1.5">
+                {args.map((arg, index) => (
+                  <div key={index} className="flex gap-1.5">
+                    <Input value={arg} aria-label={`${t("settings.mcpAddArgs")} ${index + 1}`} className="font-mono" disabled={busy} onChange={(event) => setArgs(args.map((value, at) => at === index ? event.target.value : value))} />
+                    <Button size="sm" variant="ghost" aria-label={t("settings.mcpFieldRemove")} disabled={busy} onClick={() => setArgs(args.filter((_, at) => at !== index))}><span aria-hidden>×</span></Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <KeyValueEditor label={t("settings.mcpEnvVars")} rows={env} onChange={setEnv} disabled={busy} />
           </>
         ) : (
           <label className="block">
@@ -330,6 +478,24 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
               disabled={busy}
             />
           </label>
+        )}
+        {transport === "http" && <KeyValueEditor label={t("settings.mcpHeaders")} rows={headers} onChange={setHeaders} disabled={busy} />}
+        {transport === "http" && (
+          <div className="space-y-2 border-t border-subtle pt-3">
+            <label className="flex items-center gap-2 text-secondary">
+              <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} className="accent-accent" disabled={busy} />
+              {t("settings.mcpOauthEnabled")}
+            </label>
+            {oauthEnabled && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="sm:col-span-2"><span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthTokenEndpoint")}</span><Input value={tokenEndpoint} onChange={(event) => setTokenEndpoint(event.target.value)} className="mt-1 font-mono" disabled={busy} /></label>
+                <label><span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthClientId")}</span><Input value={clientId} onChange={(event) => setClientId(event.target.value)} className="mt-1 font-mono" disabled={busy} /></label>
+                <label><span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthScope")}</span><Input value={oauthScope} onChange={(event) => setOauthScope(event.target.value)} className="mt-1 font-mono" disabled={busy} /></label>
+                <label><span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthClientSecret")}</span><Input type="password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} className="mt-1 font-mono" disabled={busy} /></label>
+                <label><span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthRefreshToken")}</span><Input type="password" value={refreshToken} onChange={(event) => setRefreshToken(event.target.value)} className="mt-1 font-mono" disabled={busy} /></label>
+              </div>
+            )}
+          </div>
         )}
         <label className="flex items-center gap-2 text-secondary">
           <input

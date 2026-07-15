@@ -535,6 +535,10 @@ export type MemoryStats = {
   directAddedFacts: number;
   /** Fraction (0..1) of approved facts used at least once. */
   usedFraction: number;
+  /** Fraction passively exposed in at least one session brief. */
+  exposedFraction?: number;
+  /** Total explicit search_memory retrievals. */
+  retrievalCount?: number;
   /** Candidate rejection rate (0..1). */
   rejectionRate: number;
   avgConfidenceUsed: number | null;

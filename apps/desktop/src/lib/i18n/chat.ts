@@ -35,6 +35,14 @@ export const chat = {
     "chat.subagent.steer": "Send",
     "chat.subagent.cancelTitle": "Cancel this subagent",
     "chat.subagent.cancel": "Cancel",
+    "chat.subagent.steerAccepted": "guidance accepted",
+    "chat.subagent.cancelAccepted": "cancellation accepted",
+    "chat.team.title": "Agent team",
+    "chat.team.list": "List",
+    "chat.team.dag": "DAG",
+    "chat.team.dependsOn": "depends on",
+    "chat.team.concurrency": "concurrency {count}",
+    "chat.team.stage": "stage {index}",
 
     // ToolRow
     "chat.tool.args": "args",
@@ -172,6 +180,14 @@ export const chat = {
     "chat.subagent.steer": "发送",
     "chat.subagent.cancelTitle": "中止这个子 Agent",
     "chat.subagent.cancel": "中止",
+    "chat.subagent.steerAccepted": "引导已接受",
+    "chat.subagent.cancelAccepted": "中止请求已接受",
+    "chat.team.title": "Agent 团队",
+    "chat.team.list": "列表",
+    "chat.team.dag": "DAG",
+    "chat.team.dependsOn": "依赖",
+    "chat.team.concurrency": "并发 {count}",
+    "chat.team.stage": "阶段 {index}",
 
     // ToolRow
     "chat.tool.args": "参数",

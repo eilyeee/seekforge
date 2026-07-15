@@ -78,7 +78,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge doctor` | run environment diagnostics (api key, node, git, runtime, mcp, editor, clipboard) |
 | `seekforge resolve <issue> --max-cost <usd>` | fix a GitHub issue in an isolated worktree and open a draft PR; supports `--wait-ci` and `--dry-run` — see [GitHub workflow](docs/github.md) |
 | `seekforge resolve-review <pr> --max-cost <usd>` | address actionable PR review feedback, verify, commit, and push fixes |
-| `seekforge schedule add\|list\|run` | manage local cost-bounded scheduled agent jobs — see [Scheduling](docs/scheduling.md) |
+| `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | deep repository security review, Finding queue/lifecycle, verified remediation, threat modeling, and JSON/Markdown/SARIF evidence export — see [Security scanning](docs/security-scanning.md) |

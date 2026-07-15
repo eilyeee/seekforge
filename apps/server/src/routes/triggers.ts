@@ -121,12 +121,19 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       }
     }
     try {
+      const ledgerRun = rest.runManager.create({
+        workspace,
+        source: "trigger",
+        labels: { triggerId: id },
+      });
       const run = startManagedTriggerRun({
         createAgent: rest.createAgent,
         workspace,
         task,
         mode: trigger.mode,
         maxCostUsd: trigger.maxCostUsd,
+        runManager: rest.runManager,
+        runId: ledgerRun.runId,
       });
       rest.triggerRuns?.add(run);
       void run.completion.then(
@@ -134,7 +141,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         () => rest.triggerRuns?.delete(run),
       );
       const { sessionId } = await run.started;
-      return sendJson(res, 202, { sessionId, triggerId: id });
+      return sendJson(res, 202, { runId: ledgerRun.runId, sessionId, triggerId: id });
     } catch (err) {
       if (deliveryKey !== undefined) seenDeliveries.delete(deliveryKey);
       return sendApiError(res, 500, "internal", err instanceof Error ? err.message : String(err));

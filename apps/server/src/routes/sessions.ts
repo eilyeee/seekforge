@@ -23,9 +23,86 @@ import {
   SessionBusyError,
   truncateSessionAtUserTurn,
 } from "@seekforge/core";
+import type { AgentEvent, ToolResult } from "@seekforge/shared";
+import { readProjectFile } from "../config.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { isSafeId } from "../ids.js";
 import type { RouteCtx } from "./context.js";
+
+type HistoricalAgentEvent = Extract<AgentEvent, { type: `subagent.${string}` | "tool.started" | "tool.completed" }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | null | false {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  if (value.type === "tool.started") {
+    return value.toolName === "dispatch_team" ? { type: "tool.started", toolName: "dispatch_team", args: value.args } : null;
+  }
+  if (value.type === "tool.completed") {
+    if (value.toolName !== "dispatch_team") return null;
+    if (!isRecord(value.result) || typeof value.result.ok !== "boolean") return false;
+    return { type: "tool.completed", toolName: "dispatch_team", result: value.result as ToolResult };
+  }
+  if (!value.type.startsWith("subagent.")) return null;
+  const dispatchId = value.dispatchId;
+  const agentId = value.agentId;
+  const task = value.task;
+  if (typeof dispatchId !== "string" || typeof agentId !== "string" || typeof task !== "string") return false;
+  const subSessionId = typeof value.subSessionId === "string" ? value.subSessionId : undefined;
+  if (value.type === "subagent.started" && value.status === "running") {
+    return { type: value.type, dispatchId, agentId, task, status: "running" };
+  }
+  if (value.type === "subagent.step" && value.status === "running" && typeof value.toolName === "string") {
+    return { type: value.type, dispatchId, agentId, task, status: "running", toolName: value.toolName, ...(subSessionId ? { subSessionId } : {}) };
+  }
+  if (value.type === "subagent.completed" && value.status === "done" && typeof value.resultSummary === "string") {
+    return { type: value.type, dispatchId, agentId, task, status: "done", resultSummary: value.resultSummary, ...(subSessionId ? { subSessionId } : {}) };
+  }
+  if (
+    value.type === "subagent.failed" &&
+    value.status === "failed" &&
+    typeof value.resultSummary === "string" &&
+    isRecord(value.error) &&
+    typeof value.error.code === "string" &&
+    typeof value.error.message === "string"
+  ) {
+    return {
+      type: value.type,
+      dispatchId,
+      agentId,
+      task,
+      status: "failed",
+      resultSummary: value.resultSummary,
+      error: { code: value.error.code, message: value.error.message },
+      ...(subSessionId ? { subSessionId } : {}),
+    };
+  }
+  if (value.type === "subagent.cancelled" && value.status === "cancelled" && typeof value.reason === "string") {
+    return { type: value.type, dispatchId, agentId, task, status: "cancelled", reason: value.reason, ...(subSessionId ? { subSessionId } : {}) };
+  }
+  return false;
+}
+
+function loadOrchestrationEvents(workspace: string, sessionId: string): HistoricalAgentEvent[] {
+  const raw = readProjectFile(workspace, `.seekforge/sessions/${sessionId}/events.jsonl`);
+  if (raw === undefined) return [];
+  const events: HistoricalAgentEvent[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      break;
+    }
+    const event = persistedOrchestrationEvent(parsed);
+    if (event === false) break;
+    if (event !== null) events.push(event);
+  }
+  return events;
+}
 
 function sessionMutation<T>(
   res: RouteCtx["res"],
@@ -145,7 +222,13 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     } catch {
       // a session may exist with no messages.jsonl yet
     }
-    return sendJson(res, 200, { meta, messages });
+    let events: HistoricalAgentEvent[] = [];
+    try {
+      events = loadOrchestrationEvents(workspace, id);
+    } catch {
+      // A legacy session may have no readable events file; messages still load.
+    }
+    return sendJson(res, 200, { meta, messages, events });
   }
 
   // User-turn index of a session: every role:"user" message in file order,

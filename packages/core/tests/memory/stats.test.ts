@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { addMemoryFact, approveMemoryCandidate, memoryStats, recordFactUse } from "../../src/memory/index.js";
+import {
+  addMemoryFact,
+  approveMemoryCandidate,
+  memoryStats,
+  recordFactExposure,
+  recordFactRetrieval,
+  recordFactUse,
+} from "../../src/memory/index.js";
 import { DIRECT_SOURCE_MARKER } from "../../src/memory/stats.js";
 import { makeCandidate, makeWorkspace, writeCandidatesRaw, writeProjectMemory } from "./helpers.js";
 
@@ -12,6 +19,8 @@ describe("memoryStats", () => {
       autoExtractedFacts: 0,
       directAddedFacts: 0,
       usedFraction: 0,
+      exposedFraction: 0,
+      retrievalCount: 0,
       rejectionRate: 0,
       avgConfidenceUsed: null,
       avgConfidenceUnused: null,
@@ -19,6 +28,21 @@ describe("memoryStats", () => {
       approved: 0,
       rejected: 0,
     });
+  });
+
+  it("separates passive exposure from deliberate retrieval", () => {
+    const ws = makeWorkspace();
+    addMemoryFact(ws, { content: "fact one", type: "tech" });
+    recordFactExposure(ws, "- [tech] fact one");
+    let stats = memoryStats(ws);
+    expect(stats.exposedFraction).toBe(1);
+    expect(stats.usedFraction).toBe(0);
+    expect(stats.retrievalCount).toBe(0);
+
+    recordFactRetrieval(ws, "- [tech] fact one");
+    stats = memoryStats(ws);
+    expect(stats.usedFraction).toBe(1);
+    expect(stats.retrievalCount).toBe(1);
   });
 
   it("distinguishes auto-extracted from direct-added approved facts", () => {

@@ -796,6 +796,8 @@ describe("agent loop: LLM compaction", () => {
     const summary = turnMessages.find((m) => m.content.includes("[Context compacted"));
     expect(summary?.content).toContain("LLM-SUMMARY: edited a.ts, tests green");
     expect(summary?.content).not.toContain("Digest of the dropped earlier turns");
+    const completed = events.find((event) => event.type === "session.completed");
+    expect(completed?.type === "session.completed" ? completed.report.usage.costUsd : 0).toBe(0.002);
   });
 
   it("falls back to the mechanical digest when the summarization call fails", async () => {
@@ -842,6 +844,37 @@ describe("agent loop: LLM compaction", () => {
     expect(
       provider.requests[0]!.messages.some((m) => m.content.includes("Digest of the dropped earlier turns")),
     ).toBe(true);
+  });
+});
+
+describe("agent loop: auxiliary usage accounting", () => {
+  it("includes post-task memory extraction in the final report", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-memory-usage-"));
+    try {
+      const provider = fakeProvider([
+        response({ content: "done" }),
+        response({ content: '```json\n{"summary":"## Task\\ndone","facts":[]}\n```' }),
+      ]);
+      const agent = createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher({ ok: true }),
+        confirm: async () => true,
+        extractMemory: true,
+      });
+      const events = await collect(agent.runTask({
+        projectPath: workspace,
+        task: "complete the edit",
+        mode: "edit",
+        approvalMode: "auto",
+      }));
+      const completed = events.find((event) => event.type === "session.completed");
+      const created = events.find((event) => event.type === "session.created");
+      expect(completed?.type === "session.completed" ? completed.report.usage.costUsd : 0).toBe(0.002);
+      expect(readSessionMeta(workspace, created?.type === "session.created" ? created.sessionId : "")?.usage?.costUsd)
+        .toBe(0.002);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

@@ -94,10 +94,10 @@ describe("mockRequest — mcp add/remove + agents import + doctor", () => {
       name: "test-mcp",
       command: "npx",
       args: ["-y", "pkg"],
-    })) as McpServer;
-    expect(added.name).toBe("test-mcp");
-    const removed = (await mockRequest("DELETE", "/api/mcp/test-mcp")) as { deleted: boolean };
-    expect(removed.deleted).toBe(true);
+    })) as { ok: true; server: McpServer };
+    expect(added.server.name).toBe("test-mcp");
+    const removed = (await mockRequest("DELETE", "/api/mcp/test-mcp?scope=project")) as { ok: true; scope: string };
+    expect(removed.ok).toBe(true);
   });
 
   it("rejects adding an MCP server with neither command nor url", async () => {
@@ -105,11 +105,12 @@ describe("mockRequest — mcp add/remove + agents import + doctor", () => {
   });
 
   it("imports an agent from a path", async () => {
-    const agent = (await mockRequest("POST", "/api/agents/import", { path: "/tmp/reviewer" })) as {
-      id: string;
-      scope: string;
+    const result = (await mockRequest("POST", "/api/agents/import", { path: "/tmp/reviewer" })) as {
+      agent: { id: string };
+      droppedTools: string[];
     };
-    expect(agent.scope).toBe("project");
+    expect(result.agent.id).toBe("reviewer");
+    expect(result.droppedTools).toEqual(["UnsupportedTool"]);
   });
 
   it("returns a DoctorReport", async () => {

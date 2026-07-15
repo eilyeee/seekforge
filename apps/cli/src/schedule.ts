@@ -34,6 +34,10 @@ export type Job = {
   maxCostUsd: number;
   /** ISO timestamp of the last tick that ran this job (absent = never run). */
   lastRunAt?: string;
+  /** Consecutive failed attempts; drives bounded exponential retry backoff. */
+  failureCount?: number;
+  /** Earliest retry time after a failed attempt. */
+  nextRetryAt?: string;
   enabled: boolean;
 };
 
@@ -232,6 +236,8 @@ function isJob(v: unknown): v is Job {
     (j["mode"] === "ask" || j["mode"] === "edit") &&
     typeof j["maxCostUsd"] === "number" && Number.isFinite(j["maxCostUsd"]) && j["maxCostUsd"] > 0 &&
     typeof j["enabled"] === "boolean"
+    && (j["failureCount"] === undefined || (Number.isSafeInteger(j["failureCount"]) && (j["failureCount"] as number) >= 0))
+    && (j["nextRetryAt"] === undefined || typeof j["nextRetryAt"] === "string")
   );
 }
 
@@ -385,6 +391,10 @@ function floorMinute(ms: number): number {
  */
 export function isDue(job: Job, now: Date): boolean {
   if (!job.enabled) return false;
+  if (job.nextRetryAt) {
+    const retry = Date.parse(job.nextRetryAt);
+    if (!Number.isNaN(retry)) return now.getTime() >= retry;
+  }
   const interval = parseInterval(job.schedule);
   if (interval !== null) {
     if (!job.lastRunAt) return true;
@@ -505,4 +515,50 @@ export function setEnabled(jobs: Job[], id: string, enabled: boolean): { jobs: J
 /** Stamp `lastRunAt` on `id` (called after a tick runs a job). */
 export function markRun(jobs: Job[], id: string, at: Date): Job[] {
   return jobs.map((j) => (j.id === id ? { ...j, lastRunAt: at.toISOString() } : j));
+}
+
+export const MAX_RETRY_BACKOFF_MS = 60 * 60_000;
+
+/** Persist attempt outcome and apply exponential retry backoff after failures. */
+export function markRunResult(jobs: Job[], id: string, at: Date, succeeded: boolean): Job[] {
+  return jobs.map((job) => {
+    if (job.id !== id) return job;
+    if (succeeded) {
+      const { failureCount: _failureCount, nextRetryAt: _nextRetryAt, ...rest } = job;
+      return { ...rest, lastRunAt: at.toISOString() };
+    }
+    const failureCount = (job.failureCount ?? 0) + 1;
+    const delay = Math.min(MAX_RETRY_BACKOFF_MS, 60_000 * (2 ** Math.min(failureCount - 1, 10)));
+    return {
+      ...job,
+      lastRunAt: at.toISOString(),
+      failureCount,
+      nextRetryAt: new Date(at.getTime() + delay).toISOString(),
+    };
+  });
+}
+
+/** Next eligible tick, including a pending retry backoff. */
+export function nextRunAt(job: Job, from: Date = new Date()): Date | undefined {
+  if (!job.enabled) return undefined;
+  const retryMs = job.nextRetryAt ? Date.parse(job.nextRetryAt) : Number.NaN;
+  if (!Number.isNaN(retryMs)) return new Date(Math.max(from.getTime(), retryMs));
+  const interval = parseInterval(job.schedule);
+  let scheduled: number | undefined;
+  if (interval !== null) {
+    const last = job.lastRunAt ? Date.parse(job.lastRunAt) : Number.NaN;
+    scheduled = Number.isNaN(last) ? from.getTime() : Math.max(from.getTime(), last + interval);
+  } else {
+    const candidate = new Date(floorMinute(from.getTime()) + 60_000);
+    const limit = candidate.getTime() + 366 * 24 * 60 * 60_000;
+    while (candidate.getTime() <= limit) {
+      if (cronMatches(job.schedule, candidate)) {
+        scheduled = candidate.getTime();
+        break;
+      }
+      candidate.setTime(candidate.getTime() + 60_000);
+    }
+  }
+  if (scheduled === undefined) return undefined;
+  return new Date(scheduled);
 }

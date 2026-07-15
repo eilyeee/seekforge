@@ -25,12 +25,15 @@ import type { GlobalRouteCtx, RestContext, RouteCtx } from "./routes/context.js"
 import * as filesRoutes from "./routes/files.js";
 import * as gitRoutes from "./routes/git.js";
 import * as memoryRoutes from "./routes/memory.js";
+import * as runRoutes from "./routes/runs.js";
 import * as sessionRoutes from "./routes/sessions.js";
+import * as securityRoutes from "./routes/security.js";
 import * as settingsRoutes from "./routes/settings.js";
 import * as skillsAgentsRoutes from "./routes/skills-agents.js";
 import * as triggerRoutes from "./routes/triggers.js";
 import * as workspaceRoutes from "./routes/workspaces.js";
 import { WorktreeError } from "./worktrees.js";
+import { SERVER_CAPABILITIES, SERVER_PROTOCOL_VERSION } from "./run-ledger.js";
 
 // Re-exports for embedders/back-compat: index.ts imports the senders from
 // here, and RestContext/ApprovedFact were historically part of this module.
@@ -46,12 +49,14 @@ export type { ApprovedFact } from "./routes/memory.js";
  */
 const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   workspaceRoutes.handle, // worktrees + /api/project
+  runRoutes.handle,
   triggerRoutes.handle,
   sessionRoutes.handle,
   filesRoutes.handle,
   gitRoutes.handle,
   skillsAgentsRoutes.handle,
   memoryRoutes.handle,
+  securityRoutes.handle,
   settingsRoutes.handle,
 ];
 
@@ -78,9 +83,23 @@ export async function handleApi(
     if (method === "GET" && path === "/api/health") {
       return sendJson(res, 200, {
         version: ctx.version,
+        protocolVersion: SERVER_PROTOCOL_VERSION,
+        capabilities: SERVER_CAPABILITIES,
+        ready: true,
         workspace: ctx.registry.default.path,
         workspaces: ctx.registry.summary,
       });
+    }
+
+    if (method === "GET" && path === "/api/ready") {
+      return sendJson(res, 200, { ready: true, version: ctx.version });
+    }
+
+    if (method === "GET" && path === "/api/metrics") {
+      const metrics = ctx.runManager.metrics();
+      res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
+      res.end(`${Object.entries(metrics).map(([name, value]) => `${name} ${value}`).join("\n")}\n`);
+      return;
     }
 
     if (method === "GET" && path === "/api/models") {

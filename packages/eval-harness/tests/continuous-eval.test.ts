@@ -79,6 +79,9 @@ describe("baseline validation and gates", () => {
     const partialTokens = result();
     delete partialTokens.metrics.totalTokens;
     expect(() => parseBaseline(JSON.stringify({ results: [partialTokens] }))).toThrow(/all present or all absent/);
+    expect(() => parseBaseline(JSON.stringify({ results: [{
+      ...result(), execution: { runner: "unknown", status: "done", expectedStatus: "done", passed: true, sessionIds: [] },
+    }] }))).toThrow(/orchestration shape/);
   });
 
   it("fails quality, efficiency, and reliability gates including empty samples", () => {

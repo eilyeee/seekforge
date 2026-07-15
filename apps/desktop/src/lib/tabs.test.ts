@@ -262,6 +262,28 @@ describe("routeFrame", () => {
   });
 });
 
+describe("subagent control acknowledgements", () => {
+  it("attaches steer/cancel acceptance to the active dispatch card", () => {
+    let state = routeFrame(initialTabsState(), "t1", event({
+      type: "subagent.started",
+      dispatchId: "ag-1",
+      agentId: "reviewer",
+      task: "review",
+      status: "running",
+    }));
+    state = routeFrame(state, "t1", {
+      type: "subagent.control",
+      dispatchId: "ag-1",
+      operation: "steer",
+      status: "accepted",
+    });
+    expect(activeTab(state).chat.items[0]).toMatchObject({
+      kind: "subagent",
+      control: { operation: "steer", status: "accepted" },
+    });
+  });
+});
+
 describe("header-control state (model/thinking/effort)", () => {
   it("fresh tabs default to config-driven controls", () => {
     const tab = activeTab(initialTabsState());

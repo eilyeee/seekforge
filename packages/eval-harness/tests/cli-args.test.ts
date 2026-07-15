@@ -38,6 +38,10 @@ describe("parseArgs", () => {
     expect(args.repeat).toBe(3);
     expect(args.junit).toBe("out/junit.xml");
     expect(args.requireApiKey).toBe(true);
+    expect(parseArgs(["--ab", "control,verify-gate", "--repeat", "3"])).toMatchObject({
+      ab: ["control", "verify-gate"],
+      repeat: 3,
+    });
   });
 
   it("rejects missing and unsafe repeat counts", () => {

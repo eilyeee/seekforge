@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useT } from "../../lib/i18n";
 import { api } from "../../lib/api";
 import type { ChatItem } from "../../lib/events";
+import { teamLayers } from "../../lib/team";
 import { isImagePath, splitImageMarkers } from "../../lib/composer";
 import { formatTokens, formatUsd } from "../../lib/usage";
 import { Markdown } from "../Markdown";
@@ -187,6 +188,11 @@ function SubagentBlock({
         </div>
       )}
       {item.error && <div className="mt-1 font-mono text-2xs text-danger">[{item.error.code}] {item.error.message}</div>}
+      {item.control && (
+        <div className="mt-1 font-mono text-2xs text-ok">
+          {t(`chat.subagent.${item.control.operation}Accepted`)}
+        </div>
+      )}
       {running && onSteer && (
         <div className="mt-2 flex items-center gap-1.5">
           <Input
@@ -207,6 +213,55 @@ function SubagentBlock({
             <IconArrowRight size={14} />
             {t("chat.subagent.steer")}
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeamBlock({ item }: { item: Extract<ChatItem, { kind: "team" }> }) {
+  const t = useT();
+  const [mode, setMode] = useState<"list" | "dag">("list");
+  const tone = item.status === "done" ? "ok" : item.status === "failed" ? "danger" : item.status === "cancelled" ? "warn" : "accent";
+  const memberRow = (member: typeof item.members[number]) => {
+    const memberTone = member.status === "done" ? "ok" : member.status === "failed" ? "danger" : member.status === "cancelled" || member.status === "skipped" ? "warn" : member.status === "running" ? "accent" : "neutral";
+    return (
+      <div key={member.id} className="min-w-0 rounded-md border border-subtle bg-surface px-2.5 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-mono font-semibold text-secondary">{member.id}</span>
+          <span className="truncate font-mono text-2xs text-tertiary">{member.agentId}</span>
+          <Badge tone={memberTone}>{member.status}</Badge>
+        </div>
+        <p className="mt-1 break-words text-secondary">{member.task}</p>
+        {member.dependsOn.length > 0 && <p className="mt-1 font-mono text-2xs text-tertiary">{t("chat.team.dependsOn")}: {member.dependsOn.join(", ")}</p>}
+        {member.dispatchId && <p className="mt-1 font-mono text-2xs text-tertiary">{member.dispatchId}</p>}
+        {member.reason && <p className="mt-1 text-2xs text-warn">{member.reason}</p>}
+      </div>
+    );
+  };
+  return (
+    <div className="rounded-lg border border-subtle bg-surface-raised px-3 py-2.5 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <IconCornerDownRight size={14} className="text-tertiary" />
+        <span className="font-semibold text-primary">{t("chat.team.title")}</span>
+        <Badge tone={tone}>{item.status}</Badge>
+        <span className="font-mono text-2xs text-tertiary">{t("chat.team.concurrency", { count: item.maxConcurrency })}</span>
+        <span className="font-mono text-2xs text-tertiary">{item.failurePolicy}</span>
+        <div className="ml-auto inline-flex rounded-md border border-subtle p-0.5">
+          <button type="button" className={`rounded px-2 py-0.5 ${mode === "list" ? "bg-surface-overlay text-primary" : "text-tertiary"}`} onClick={() => setMode("list")}>{t("chat.team.list")}</button>
+          <button type="button" className={`rounded px-2 py-0.5 ${mode === "dag" ? "bg-surface-overlay text-primary" : "text-tertiary"}`} onClick={() => setMode("dag")}>{t("chat.team.dag")}</button>
+        </div>
+      </div>
+      {mode === "list" ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">{item.members.map(memberRow)}</div>
+      ) : (
+        <div className="mt-2 flex min-w-0 gap-3 overflow-x-auto pb-1">
+          {teamLayers(item.members).map((layer, index) => (
+            <div key={index} className="w-56 shrink-0 space-y-2">
+              <div className="font-mono text-2xs text-tertiary">{t("chat.team.stage", { index: index + 1 })}</div>
+              {layer.map(memberRow)}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -275,6 +330,8 @@ function ItemView({
       );
     case "subagent":
       return <SubagentBlock item={item} onSteer={onSubagentSteer} onCancel={onSubagentCancel} />;
+    case "team":
+      return <TeamBlock item={item} />;
     case "file": {
       const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
       if (isImage) return <ImageFileChip path={item.path} />;

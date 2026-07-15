@@ -25,6 +25,12 @@ import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from 
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
+import {
+  SERVER_CAPABILITIES,
+  SERVER_PROTOCOL_VERSION,
+  type RunManager,
+  type RunStatus,
+} from "./run-ledger.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -44,10 +50,13 @@ type ModelDeltaEvent = { type: "model.delta"; chunk: string };
 type ReasoningDeltaEvent = { type: "reasoning.delta"; chunk: string };
 
 type ServerFrame =
+  | { type: "hello"; protocolVersion: number; capabilities: readonly string[]; disconnectPolicy: "cancel"; backgroundDisconnectPolicy: "continue" }
+  | { type: "run.accepted"; runId: string; status: "queued" }
   | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent | ReasoningDeltaEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
   | { type: "question.request"; id: string; question: string; options: string[] }
   | { type: "loop.event"; event: LoopEvent }
+  | { type: "subagent.control"; dispatchId: string; operation: "steer" | "cancel"; status: "accepted" }
   | { type: "error"; code: string; message: string }
   | { type: "idle" };
 
@@ -58,6 +67,7 @@ export type ConnectionDeps = {
   resumeLoop: ResumeLoopFn;
   permissionTimeoutMs?: number;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
+  runManager: RunManager;
 };
 
 type RunInput = {
@@ -120,6 +130,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let controller: AbortController | undefined;
   let activeDispatchManager: DispatchManager | undefined;
   let requestCounter = 0;
+  let activeRunId: string | undefined;
+  let activeWorkspace: string | undefined;
   // requestId -> settle(result); settling clears its timeout and unregisters.
   // The result is the core ConfirmResult so "allow for session" can grow the
   // run's session allowlist ({ allow: true, remember: "session" }).
@@ -138,11 +150,22 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     // event above rather than an unhandled emitter throw.
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame), () => {});
   };
+  const sendRun = (runId: string, workspace: string, frame: ServerFrame): void => {
+    const stored = deps.runManager.appendFrame(workspace, runId, frame as unknown as Record<string, unknown>);
+    send({ ...frame, runId, seq: stored.seq } as unknown as ServerFrame);
+  };
   const fail = (code: string, message: string): void => send({ type: "error", code, message });
   const launch = (operation: Promise<void>): void => {
     const tracked = deps.trackOperation?.(operation) ?? operation;
     void tracked.catch(() => {});
   };
+  send({
+    type: "hello",
+    protocolVersion: SERVER_PROTOCOL_VERSION,
+    capabilities: SERVER_CAPABILITIES,
+    disconnectPolicy: "cancel",
+    backgroundDisconnectPolicy: "continue",
+  });
 
   // --- delta coalescing (see DELTA_FLUSH_MS) -------------------------------
   // At most one delta kind is buffered at a time; a coalesced frame is just a
@@ -170,7 +193,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     const event = { type: pendingDeltaType, chunk: pendingDeltaChunk };
     pendingDeltaType = undefined;
     pendingDeltaChunk = "";
-    send({ type: "event", sessionId: pendingDeltaSessionId, event });
+    const frame: ServerFrame = { type: "event", sessionId: pendingDeltaSessionId, event };
+    if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, frame);
+    else send(frame);
   };
 
   const bufferDelta = (
@@ -209,7 +234,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       timer = setTimeout(() => settle(false), timeoutMs);
       pending.set(requestId, settle);
       flushDeltas(); // buffered text must render before the permission prompt
-      send({ type: "permission.request", requestId, request });
+      if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, { type: "permission.request", requestId, request });
+      else send({ type: "permission.request", requestId, request });
     });
 
   /** ask_user bridge, mirroring `confirm`: timeout/disconnect = declined. */
@@ -229,12 +255,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       timer = setTimeout(() => settle(DECLINED_ANSWER), timeoutMs);
       pendingQuestions.set(id, settle);
       flushDeltas(); // buffered text must render before the question prompt
-      send({ type: "question.request", id, question: q.question, options: q.options });
+      if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, { type: "question.request", id, question: q.question, options: q.options });
+      else send({ type: "question.request", id, question: q.question, options: q.options });
     });
 
-  const run = async (input: RunInput): Promise<void> => {
+  const run = async (runId: string, input: RunInput): Promise<void> => {
     running = true;
     controller = new AbortController();
+    activeRunId = runId;
+    activeWorkspace = input.workspace;
+    deps.runManager.start(runId, input.workspace, controller);
     const dispatchManager = createDispatchManager();
     activeDispatchManager = dispatchManager;
     let sessionId = input.resumeSessionId ?? "";
@@ -242,6 +272,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     // the finally still resets `running`, drains pending prompts, and sends idle
     // — otherwise the connection would wedge with running=true forever.
     let handle: Awaited<ReturnType<typeof deps.createAgent>> | undefined;
+    let terminalStatus: RunStatus | undefined;
     try {
       // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
       // for this turn, on top of (winning over) any frame overrides.
@@ -281,15 +312,35 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         signal: controller.signal,
       })) {
-        if (event.type === "session.created") sessionId = event.sessionId;
+        if (event.type === "session.created") {
+          sessionId = event.sessionId;
+          deps.runManager.update(input.workspace, runId, { sessionId });
+        } else if (event.type === "usage.updated") {
+          deps.runManager.update(input.workspace, runId, { costUsd: event.usage.costUsd });
+        } else if (event.type === "session.completed") {
+          terminalStatus = "succeeded";
+          deps.runManager.update(input.workspace, runId, { status: terminalStatus, costUsd: event.report.usage.costUsd });
+        } else if (event.type === "session.failed") {
+          terminalStatus = event.error.code === "cancelled" ? "cancelled" : "failed";
+          deps.runManager.update(input.workspace, runId, {
+            status: terminalStatus,
+            error: { code: event.error.code, message: event.error.message },
+          });
+        }
         flushDeltas(); // buffered deltas precede every structured event
-        send({ type: "event", sessionId, event });
+        sendRun(runId, input.workspace, { type: "event", sessionId, event });
       }
     } catch (err) {
       // The core reports failures as session.failed events; this is a guard
       // against a misbehaving (e.g. injected) agent implementation.
       flushDeltas(); // buffered deltas precede the error frame
-      fail("agent_error", err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      terminalStatus = controller.signal.aborted ? "cancelled" : "failed";
+      deps.runManager.update(input.workspace, runId, {
+        status: terminalStatus,
+        error: { code: terminalStatus === "cancelled" ? "cancelled" : "agent_error", message },
+      });
+      sendRun(runId, input.workspace, { type: "error", code: "agent_error", message });
     } finally {
       try {
         handle?.dispose();
@@ -299,6 +350,15 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         flushDeltas(); // don't lose a trailing chunk; also clears the timer
         running = false;
         controller = undefined;
+        if (terminalStatus === undefined) {
+          terminalStatus = "failed";
+          deps.runManager.update(input.workspace, runId, {
+            status: terminalStatus,
+            error: { code: "incomplete", message: "agent run ended without a terminal event" },
+          });
+        }
+        activeRunId = undefined;
+        activeWorkspace = undefined;
         if (activeDispatchManager === dispatchManager) activeDispatchManager = undefined;
         denyAllPending();
         if (!closed) send({ type: "idle" });
@@ -306,7 +366,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
-  const loop = async (input: {
+  const loop = async (runId: string, input: {
     workspace: string;
     task: string;
     verifyCommand: string;
@@ -316,8 +376,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   }): Promise<void> => {
     running = true;
     controller = new AbortController();
+    activeRunId = runId;
+    activeWorkspace = input.workspace;
+    deps.runManager.start(runId, input.workspace, controller);
     try {
-      await deps.runLoop(
+      const result = await deps.runLoop(
         {
           workspace: input.workspace,
           confirm,
@@ -340,20 +403,33 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.budget !== undefined ? { costBudgetUsd: input.budget } : {}),
           approvalMode: "acceptEdits",
           signal: controller.signal,
-          onEvent: (event) => send({ type: "loop.event", event }),
+          onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
         },
       );
+      deps.runManager.update(input.workspace, runId, {
+        status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
+        sessionId: result.sessionId,
+        costUsd: result.costUsd,
+        ...(result.status !== "passed" ? { error: { code: result.status, message: `loop ended with status ${result.status}` } } : {}),
+      });
     } catch (err) {
-      fail("loop_error", err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      deps.runManager.update(input.workspace, runId, {
+        status: controller.signal.aborted ? "cancelled" : "failed",
+        error: { code: "loop_error", message },
+      });
+      sendRun(runId, input.workspace, { type: "error", code: "loop_error", message });
     } finally {
       running = false;
       controller = undefined;
+      activeRunId = undefined;
+      activeWorkspace = undefined;
       denyAllPending();
       if (!closed) send({ type: "idle" });
     }
   };
 
-  const resumeLoop = async (input: {
+  const resumeLoop = async (runId: string, input: {
     workspace: string;
     loopId: string;
     addedIterations?: number;
@@ -362,8 +438,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   }): Promise<void> => {
     running = true;
     controller = new AbortController();
+    activeRunId = runId;
+    activeWorkspace = input.workspace;
+    deps.runManager.start(runId, input.workspace, controller);
     try {
-      await deps.resumeLoop(
+      const result = await deps.resumeLoop(
         {
           workspace: input.workspace,
           confirm,
@@ -378,14 +457,27 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.addedBudget !== undefined ? { additionalCostBudgetUsd: input.addedBudget } : {}),
           approvalMode: "acceptEdits",
           signal: controller.signal,
-          onEvent: (event) => send({ type: "loop.event", event }),
+          onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
         },
       );
+      deps.runManager.update(input.workspace, runId, {
+        status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
+        sessionId: result.sessionId,
+        costUsd: result.costUsd,
+        ...(result.status !== "passed" ? { error: { code: result.status, message: `loop ended with status ${result.status}` } } : {}),
+      });
     } catch (err) {
-      fail("loop_error", err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      deps.runManager.update(input.workspace, runId, {
+        status: controller.signal.aborted ? "cancelled" : "failed",
+        error: { code: "loop_error", message },
+      });
+      sendRun(runId, input.workspace, { type: "error", code: "loop_error", message });
     } finally {
       running = false;
       controller = undefined;
+      activeRunId = undefined;
+      activeWorkspace = undefined;
       denyAllPending();
       if (!closed) send({ type: "idle" });
     }
@@ -428,8 +520,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         // Omitted ws -> the default (first) workspace, preserving old clients.
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
+        const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "ws" });
+        sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
         // plan is passed through as-is (the UI sends mode:"ask" + plan:true).
-        launch(run({ task, mode, approvalMode, plan, workspace: workspace.path, ...parsed }));
+        launch(run(ledgerRun.runId, { task, mode, approvalMode, plan, workspace: workspace.path, ...parsed }));
         return;
       }
 
@@ -461,10 +555,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         // store (same predicate the REST session routes use).
         const meta = isSafeId(sessionId) ? readSessionMeta(workspace.path, sessionId) : undefined;
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
+        const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "ws", labels: { resumedSessionId: sessionId } });
+        sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute). Approvals default to interactive
         // ("confirm") but the client may change them per follow-up message.
-        launch(run({
+        launch(run(ledgerRun.runId, {
           task,
           mode: mode ?? meta.mode,
           approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
@@ -506,7 +602,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if ("error" in parsedOverrides) return fail("bad_frame", `loop.${parsedOverrides.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
-        launch(loop({
+        const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop" });
+        sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
+        launch(loop(ledgerRun.runId, {
           workspace: workspace.path,
           task,
           verifyCommand,
@@ -541,7 +639,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if ("error" in parsedOverrides) return fail("bad_frame", `loop.resume.${parsedOverrides.error}`);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
-        launch(resumeLoop({
+        const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop", labels: { loopId } });
+        sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
+        launch(resumeLoop(ledgerRun.runId, {
           workspace: workspace.path,
           loopId,
           ...(addedIterations !== undefined ? { addedIterations } : {}),
@@ -597,6 +697,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         }
         const result = activeDispatchManager.cancel(dispatchId);
         if (!result.ok) return fail(result.code, result.message);
+        send({ type: "subagent.control", dispatchId, operation: "cancel", status: "accepted" });
         return;
       }
 
@@ -619,6 +720,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         }
         const result = activeDispatchManager.steer(dispatchId, message);
         if (!result.ok) return fail(result.code, result.message);
+        send({ type: "subagent.control", dispatchId, operation: "steer", status: "accepted" });
         return;
       }
 
@@ -626,7 +728,28 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (!running || !controller) return fail("not_running", "no session is running");
         // Unblock a run paused on a permission prompt so it observes the abort.
         denyAllPending();
-        controller.abort();
+        if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);
+        else controller.abort();
+        return;
+      }
+
+      case "subscribe": {
+        const { runId, afterSeq, ws: wsId } = frame;
+        if (typeof runId !== "string" || !/^run-[A-Za-z0-9-]+$/.test(runId)) {
+          return fail("bad_frame", "subscribe.runId must be a valid run id");
+        }
+        if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || (afterSeq as number) < 0)) {
+          return fail("bad_frame", "subscribe.afterSeq must be a non-negative safe integer");
+        }
+        if (wsId !== undefined && typeof wsId !== "string") {
+          return fail("bad_frame", "subscribe.ws must be a string when present");
+        }
+        const workspace = deps.registry.resolve(wsId);
+        if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
+        if (!deps.runManager.get(workspace.path, runId)) return fail("unknown_run", `run not found: ${runId}`);
+        for (const event of deps.runManager.events(workspace.path, runId, (afterSeq as number | undefined) ?? 0)) {
+          send({ ...event.frame, runId, seq: event.seq } as unknown as ServerFrame);
+        }
         return;
       }
 
@@ -644,6 +767,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     pendingDeltaChunk = "";
     denyAllPending();
     activeDispatchManager?.disposeAll();
-    controller?.abort();
+    if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);
+    else controller?.abort();
   });
 }

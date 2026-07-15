@@ -3,6 +3,7 @@
  * chat items. No DOM, no store — unit-tested in events.test.ts.
  */
 import type { AgentError, AgentEvent, FinalReport, SubagentStatus, TokenUsage, ToolResult } from "@seekforge/shared";
+import { validateTeamPlan, type TeamMemberPlan } from "./team";
 import { addUsage, emptyUsage } from "./usage";
 
 /** update_plan checklist item (mirrors @seekforge/core tools/builtins/plan.ts). */
@@ -50,6 +51,19 @@ export type ChatItem =
       subSessionId?: string;
       resultSummary?: string;
       error?: { code: string; message: string };
+      control?: { operation: "steer" | "cancel"; status: "accepted" };
+    }
+  | {
+      kind: "team";
+      id: number;
+      status: "running" | "done" | "failed" | "cancelled";
+      maxConcurrency: number;
+      failurePolicy: "stop" | "continue";
+      members: Array<TeamMemberPlan & {
+        status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
+        dispatchId?: string;
+        reason?: string;
+      }>;
     }
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
@@ -155,6 +169,59 @@ function activeSubagentIndex(items: ChatItem[], dispatchId: string): number {
   );
 }
 
+function activeTeamIndex(items: ChatItem[]): number {
+  return findLastIndex(items, (item) => item.kind === "team" && item.status === "running");
+}
+
+function bindTeamDispatch(state: ChatState, event: Extract<AgentEvent, { type: "subagent.started" }>): ChatState {
+  const index = activeTeamIndex(state.items);
+  if (index < 0) return state;
+  const team = state.items[index] as Extract<ChatItem, { kind: "team" }>;
+  const memberIndex = team.members.findIndex(
+    (member) => member.status === "pending" && member.agentId === event.agentId && member.task === event.task,
+  );
+  if (memberIndex < 0) return state;
+  const members = [...team.members];
+  members[memberIndex] = { ...members[memberIndex]!, status: "running", dispatchId: event.dispatchId };
+  const items = [...state.items];
+  items[index] = { ...team, members };
+  return { ...state, items };
+}
+
+function updateTeamDispatch(
+  state: ChatState,
+  event: Extract<AgentEvent, { type: "subagent.completed" | "subagent.failed" | "subagent.cancelled" }>,
+): ChatState {
+  const index = activeTeamIndex(state.items);
+  if (index < 0) return state;
+  const team = state.items[index] as Extract<ChatItem, { kind: "team" }>;
+  const memberIndex = team.members.findIndex((member) => member.dispatchId === event.dispatchId);
+  if (memberIndex < 0) return state;
+  const members = [...team.members];
+  members[memberIndex] = {
+    ...members[memberIndex]!,
+    status: event.status,
+    ...(event.type === "subagent.cancelled" ? { reason: event.reason } : {}),
+    ...(event.type === "subagent.failed" ? { reason: event.error.message } : {}),
+  };
+  const items = [...state.items];
+  items[index] = { ...team, members };
+  return { ...state, items };
+}
+
+export function acknowledgeSubagentControl(
+  state: ChatState,
+  dispatchId: string,
+  operation: "steer" | "cancel",
+): ChatState {
+  const index = activeSubagentIndex(state.items, dispatchId);
+  if (index < 0) return state;
+  const item = state.items[index] as Extract<ChatItem, { kind: "subagent" }>;
+  const items = [...state.items];
+  items[index] = { ...item, control: { operation, status: "accepted" } };
+  return { ...state, items };
+}
+
 /** Ends the streaming thinking block (any later event = the answer started). */
 function finishThinking(state: ChatState): ChatState {
   const idx = findLastIndex(state.items, (i) => i.kind === "thinking" && i.streaming);
@@ -201,6 +268,7 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
     }
 
     case "subagent.started":
+      state = bindTeamDispatch(state, ev);
       return push(state, {
         kind: "subagent",
         dispatchId: ev.dispatchId,
@@ -236,6 +304,7 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
     case "subagent.completed":
     case "subagent.failed":
     case "subagent.cancelled": {
+      state = updateTeamDispatch(state, ev);
       const idx = activeSubagentIndex(state.items, ev.dispatchId);
       const base: Omit<Extract<ChatItem, { kind: "subagent" }>, "id"> = {
         kind: "subagent",
@@ -283,6 +352,17 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
     case "tool.started": {
       // update_plan renders as the plan checklist, not as a tool row.
       if (ev.toolName === "update_plan") return state;
+      if (ev.toolName === "dispatch_team") {
+        const validated = validateTeamPlan(ev.args);
+        if (!validated.ok) return state;
+        return push(state, {
+          kind: "team",
+          status: "running",
+          maxConcurrency: validated.plan.maxConcurrency,
+          failurePolicy: validated.plan.failurePolicy,
+          members: validated.plan.members.map((member) => ({ ...member, status: "pending" })),
+        });
+      }
       return push(state, { kind: "tool", name: ev.toolName, args: ev.args, status: "running" });
     }
 
@@ -290,6 +370,35 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       if (ev.toolName === "update_plan") {
         const items = ev.result.ok ? planItemsFrom(ev.result.data) : null;
         return items ? upsertPlan(state, items) : state;
+      }
+      if (ev.toolName === "dispatch_team") {
+        const index = activeTeamIndex(state.items);
+        if (index < 0) return state;
+        const team = state.items[index] as Extract<ChatItem, { kind: "team" }>;
+        const data = ev.result.data;
+        const record = typeof data === "object" && data !== null && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+        const outcomes = Array.isArray(record?.members) ? record.members : [];
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const outcome of outcomes) {
+          if (typeof outcome === "object" && outcome !== null && !Array.isArray(outcome) && typeof (outcome as { id?: unknown }).id === "string") {
+            byId.set((outcome as { id: string }).id, outcome as Record<string, unknown>);
+          }
+        }
+        const statuses = new Set(["pending", "running", "done", "failed", "cancelled", "skipped"]);
+        const members = team.members.map((member) => {
+          const outcome = byId.get(member.id);
+          const status = outcome && typeof outcome.status === "string" && statuses.has(outcome.status)
+            ? outcome.status as typeof member.status
+            : member.status;
+          return { ...member, status, ...(typeof outcome?.reason === "string" ? { reason: outcome.reason } : {}) };
+        });
+        const reportedStatus = record?.status;
+        const status = reportedStatus === "done" || reportedStatus === "failed" || reportedStatus === "cancelled"
+          ? reportedStatus
+          : ev.result.ok ? "done" : "failed";
+        const items = [...state.items];
+        items[index] = { ...team, status, members };
+        return { ...state, items };
       }
       const status = ev.result.ok ? "ok" : "error";
       const idx = findLastIndex(

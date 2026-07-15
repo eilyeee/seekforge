@@ -67,6 +67,16 @@ function seedWorkspace(ws: string, mcpServerPath: string): void {
   );
   writeFileIn(
     ws,
+    ".seekforge/sessions/s1/events.jsonl",
+    [
+      { type: "tool.started", toolName: "dispatch_team", args: { members: [{ id: "review", agentId: "reviewer", task: "review", dependsOn: [] }] } },
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "running" },
+      { type: "subagent.completed", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "done", resultSummary: "clean" },
+      { type: "tool.completed", toolName: "dispatch_team", result: { ok: true, data: { status: "done", members: [{ id: "review", agentId: "reviewer", status: "done" }] } } },
+    ].map((event) => `${JSON.stringify(event)}\n`).join(""),
+  );
+  writeFileIn(
+    ws,
     ".seekforge/sessions/s2/session.json",
     JSON.stringify({
       id: "s2",
@@ -283,12 +293,18 @@ describe("REST endpoints", () => {
     expect(body.map((m: { id: string }) => m.id)).toEqual(["s3", "s2", "s1"]);
   });
 
-  it("GET /api/sessions/:id returns meta and messages", async () => {
+  it("GET /api/sessions/:id returns meta, messages, and orchestration events", async () => {
     const res = await authed("/api/sessions/s1");
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
     expect(body.meta.id).toBe("s1");
     expect(body.messages).toEqual([{ role: "user", content: "hi" }]);
+    expect(body.events.map((event: { type: string }) => event.type)).toEqual([
+      "tool.started",
+      "subagent.started",
+      "subagent.completed",
+      "tool.completed",
+    ]);
   });
 
   it("GET /api/sessions/:id is 404 for unknown and traversal-looking ids", async () => {
@@ -642,14 +658,24 @@ describe("mcp endpoints", () => {
     const fake = body.find((s: { name: string }) => s.name === "fake");
     expect(fake).toEqual({
       name: "fake",
+      transport: "stdio",
       command: process.execPath,
       args: [mcpFixture.serverPath],
+      env: { SECRET_TOKEN: "********" },
+      headers: {},
       trusted: false,
-      envKeys: ["SECRET_TOKEN"],
+      source: "project",
+      shadowedGlobal: false,
     });
 
     const broken = body.find((s: { name: string }) => s.name === "broken");
-    expect(broken).toMatchObject({ name: "broken", trusted: true, envKeys: [] });
+    expect(broken).toMatchObject({ name: "broken", transport: "stdio", trusted: true, env: {}, source: "project" });
+  });
+
+  it("POST /api/mcp/:name/test reports per-server connection status", async () => {
+    const res = await authed("/api/mcp/fake/test", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toMatchObject({ ok: true, toolCount: 2 });
   });
 
   it("POST /api/mcp/:name/tools spawns, lists tools, and disposes", async () => {

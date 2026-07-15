@@ -87,7 +87,15 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 
 | Method/Path | Response |
 | --- | --- |
-| GET /api/health | `{version, workspace, workspaces: [{id, name, path}]}` (global; `workspace` = default path) |
+| GET /api/health | `{version, protocolVersion, capabilities, ready, workspace, workspaces}` (global) |
+| GET /api/ready | `{ready:true, version}` readiness probe (global) |
+| GET /api/metrics | Prometheus text metrics for HTTP and run lifecycle counters (global) |
+| GET /api/runs | latest snapshot of every append-only run in the selected workspace |
+| GET /api/runs/:id | one run snapshot (`runId/source/status/attempt/sessionId/costUsd/error`) |
+| GET /api/runs/:id/events?afterSeq=N | persisted WS events with `seq > N` |
+| POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged |
+| DELETE /api/runs/:id | alias of the cancel endpoint |
+| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?}`; loops require `verifyCommand`; returns `202 RunRecord` immediately |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
@@ -103,7 +111,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | PUT /api/file | body `{path, content}` → `{ok:true}`; creates/replaces a workspace text file after the same confinement checks. Returns 409 `session_busy` while an Agent session owns the workspace, preventing editor writes from racing Agent changes |
 | POST /api/upload | body `{name, dataBase64}` — saves a pasted/dropped image to `.seekforge/uploads/img-<stamp>.<ext>` and returns `{path}` (workspace-relative; core `image_analyze` consumes it). Only the extension of `name` is used (png/jpg/jpeg/gif/webp); decoded size capped at 4 MB; `dataBase64` may carry a data-URL prefix. Errors: 400 `bad_request` (bad JSON/fields/extension/base64), 413 `too_large`. |
 | GET /api/raw?path=`<workspace-relative>` | streams the raw image bytes with the matching `Content-Type` (png/jpg/jpeg/gif/webp) so the UI can render real `<img>` thumbnails of uploaded images. **Hard-confined**: `path` must resolve to a regular file *inside* the physical `.seekforge/uploads/` directory of the workspace — traversal (`..`), absolute paths, any symlinked path component, and paths outside `.seekforge/uploads/` are refused. This is deliberately NOT a general file-serving endpoint. Cached `immutable` (upload names are unique). Errors: 400 `bad_request` (missing/escaping/outside-uploads path), 415 `unsupported_media_type` (non-image extension), 404 `not_found` (missing/not a file), 413 `too_large` (over 8 MB). Like all `/api/*` routes the token is required; `<img>` tags pass it via `?token=`. |
-| GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[]}` |
+| GET /api/sessions/:id | `{meta: SessionMeta, messages: ChatMessage[], events: AgentEvent[]}`; events let Desktop reconstruct persisted subagent state |
 | GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
 | POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts, or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
@@ -126,8 +134,17 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
 | POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
-| GET /api/mcp | configured servers `{name, command, args, trusted, envKeys}[]` (no spawn; env key names only, values never exposed) |
+| GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; project entries shadow same-name global entries |
+| POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, and optional refresh-token `oauth`; masked sentinels preserve existing secrets |
+| DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer |
+| POST /api/mcp/:name/test | connect, list tools, dispose, and return `{ok, latencyMs, toolCount}` |
 | POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
+| GET /api/security | current repository evidence package (Findings, scans, fixes, threat models, events) |
+| POST /api/security/scan | run a repository scan; optional body `{maxFindings:1..100}` |
+| POST /api/security/threat-model | generate and persist an evidence-backed threat model |
+| POST /api/security/findings/:id/status | body `{status, reason?}`; records a validated Finding lifecycle transition |
+| POST /api/security/findings/:id/fix | body `{maxCostUsd, verifyCommand, lintCommand?}`; runs a cost-bounded edit Agent, exact sandboxed checks, and a fresh scan |
+| GET /api/security/export?format=json\|markdown\|sarif | rendered compliance evidence package and filename |
 | POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
 | PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key |
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
@@ -164,6 +181,16 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
 One WS connection drives at most one *running* session at a time.
 All frames are JSON objects with a `type` field.
 
+The server first sends `{"type":"hello","protocolVersion":1,"capabilities":[...],"disconnectPolicy":"cancel","backgroundDisconnectPolicy":"continue"}`.
+Every accepted run receives a stable `runId`; persisted run frames carry a
+strictly increasing `seq`. A reconnecting client sends
+`{"type":"subscribe","runId":"...","afterSeq":42,"ws":"..."?}` to replay
+only missing frames. Disconnect remains fail-closed: it immediately cancels an
+active run, denies pending prompts, and retains emitted frames for replay.
+This cancel-on-disconnect rule applies only to runs started by that WS. Runs
+started through `POST /api/runs` are headless, deny interactive approvals, and
+continue independently when subscribers disconnect.
+
 ### client → server
 
 ```jsonc
@@ -179,6 +206,7 @@ All frames are JSON objects with a `type` field.
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
 {"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
 {"type": "cancel"}                                            // cancel the running session OR loop
+{"type": "subscribe", "runId": "run-...", "afterSeq": 42, "ws": "<id>"?}
 ```
 
 `model` / `thinking` / `reasoningEffort` are optional per-run overrides on
@@ -206,6 +234,8 @@ return `bad_frame`.
 ### server → client
 
 ```jsonc
+{"type": "hello", "protocolVersion": 1, "capabilities": ["runs.v1", "ws.replay", "runs.background"], "disconnectPolicy": "cancel", "backgroundDisconnectPolicy": "continue"}
+{"type": "run.accepted", "runId": "run-...", "status": "queued", "seq": 1}
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
 {"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
@@ -213,6 +243,10 @@ return `bad_frame`.
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```
+
+Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
+are stored under `.seekforge/run-events/<runId>.jsonl`. Terminal history remains
+queryable after restart. `seq` is scoped to one run.
 
 Dispatched children are observable through structured `AgentEvent` variants:
 

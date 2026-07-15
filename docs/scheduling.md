@@ -3,8 +3,8 @@
 SeekForge can run a task on a schedule — a nightly code review, a periodic
 dependency check, a "summarize what changed today" digest. Scheduling is
 **local-first**: there is no cloud, no daemon, and no external service. You
-register jobs in the project, and you wire the *tick* (`seekforge schedule run`)
-into your operating system's scheduler (cron / launchd / systemd timer).
+register jobs in the project, then use `seekforge schedule install` for an
+idempotent per-project crontab tick or wire `seekforge schedule run` manually.
 
 Every scheduled run is a **normal, auditable session** — it writes the same
 JSONL trace as an interactive run, so it shows up in `seekforge sessions`, can be
@@ -92,11 +92,27 @@ seekforge schedule run
 
 # Force-run one specific job now, regardless of its due time
 seekforge schedule run --id weekday-fix
+
+# Inspect without running; show next ticks and append-only history
+seekforge schedule run --dry-run --json
+seekforge schedule next
+seekforge schedule history --id weekday-fix --json
+
+# Manage the once-per-minute project crontab block
+seekforge schedule install --dry-run
+seekforge schedule install
+seekforge schedule status --json
+seekforge schedule uninstall
 ```
 
 `schedule add` flags: `--task` (required), one of `--every <interval>` /
 `--cron "<expr>"`, `--max-cost <usd>` (required), `--mode ask|edit` (default
 `ask`), and `--id <name>` (default: derived from the task).
+
+Every attempt is appended to `.seekforge/runs.jsonl` with its `runId`, attempt,
+status, session, cost, and error. Failures retry with exponential backoff from
+one minute up to one hour; success clears the failure counter. `--json` is
+available on list/run/next/history/install/uninstall/status.
 
 ## Wiring the tick into your OS scheduler
 

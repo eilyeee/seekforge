@@ -38,7 +38,15 @@ The config format is Claude Code–compatible:
       "url": "https://example.com/mcp",
       // Optional: extra HTTP headers sent on every request
       "headers": {
-        "Authorization": "Bearer <token>"
+        "Authorization": "Bearer ${MCP_TOKEN}"
+      },
+      // Optional refresh-token flow. Secrets should use environment refs;
+      // refreshed access tokens stay in memory and are never persisted.
+      "oauth": {
+        "tokenEndpoint": "https://example.com/oauth/token",
+        "clientId": "${MCP_CLIENT_ID}",
+        "clientSecret": "${MCP_CLIENT_SECRET}",
+        "refreshToken": "${MCP_REFRESH_TOKEN}"
       }
     }
   }
@@ -50,7 +58,7 @@ The config format is Claude Code–compatible:
 | Has `url`? | Transport       | Effective fields         |
 |---|---|---|
 | No         | stdio           | `command`, `args`, `env` |
-| Yes        | Streamable HTTP | `url`, `headers`         |
+| Yes        | Streamable HTTP | `url`, `headers`, `oauth` |
 
 A server must have either `command` (stdio) or `url` (HTTP); having neither
 causes a configuration error.
@@ -146,6 +154,11 @@ waiting on a response that cannot arrive. After initialization, HTTP requests
 include the negotiated `MCP-Protocol-Version` header. Streamable HTTP responses
 must be JSON-RPC objects whose id matches
 the pending request; scalar, array, null, and mismatched-id responses are rejected.
+When `oauth` is configured, an HTTP 401 triggers one standards-based
+`refresh_token` exchange and retries the original request once. SeekForge does
+not persist the returned access token. Initial interactive authorization is a
+frontend responsibility; unattended processes therefore need a refresh token
+or a static header before startup.
 
 `tools/list`, `resources/list`, and `prompts/list` consume every opaque
 `nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages

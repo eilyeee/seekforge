@@ -18,6 +18,7 @@ import {
   ALWAYS_INCLUDE_TYPES,
   parseMemoryBullet,
   rankMemoryBullets,
+  recordFactRetrieval,
   readGlobalMemory,
   readProjectMemory,
   readSubdirMemories,
@@ -109,6 +110,11 @@ const searchMemory = defineTool({
         ? `Project memory (${chosen.length} fact${chosen.length === 1 ? "" : "s"}):`
         : `Project memory matching "${query}" (${chosen.length} fact${chosen.length === 1 ? "" : "s"}):`;
     const lines = chosen.map((b) => `${b.line}  (${b.source})`);
+    // Only root project facts have this workspace's fact-meta sidecar.
+    recordFactRetrieval(
+      ctx.workspace,
+      chosen.filter((b) => b.source === "project").map((b) => b.line).join("\n"),
+    );
     return { data: { text: [header, ...lines].join("\n") } };
   },
 });

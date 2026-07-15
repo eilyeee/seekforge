@@ -13,6 +13,7 @@ agent, then grades with deterministic checks only (no LLM judges).
   "title": "Human-readable title",
   "fixture": "fixtures/<name> directory",
   "mode": "edit",                  // or "ask"
+  "runner": "agent",               // optional: agent | loop | session_scenario
   "task": "The prompt given to the agent.",
   "checks": [ /* see below */ ],
   "notes": "optional rationale"
@@ -24,6 +25,14 @@ Supported checks (see `packages/eval-harness/src/tasks.ts`):
 - `file_contains` / `file_not_contains` — regex against a workspace file
 - `command_succeeds` — shell command exit code 0 (optional `cwd`)
 - `answer_matches` — regex against the agent's final answer (ask mode)
+- `memory_stats` — exact/tolerant comparison against a final memoryStats field
+- `memory_fact_activity` — exact uses/exposures/retrievals count for one fact
+
+Omitting `runner` preserves the original one-session agent run. `loop` tasks
+provide `loop.verifyCommand`, `loop.maxIterations`, and `loop.expectedStatus`,
+with optional persisted resume settings. `session_scenario` tasks run ordered
+agent and memory lifecycle steps; an agent step with `resume: true` resumes the
+previous session rather than starting a new trace.
 
 ## Fixture conventions
 
@@ -66,8 +75,14 @@ duration, tool failures, and session errors. JSON reports add run metadata,
 per-task and whole-run aggregates, and gate outcomes while retaining the old
 `generatedAt` and `results` fields. `--junit <path>` emits one testcase per
 sample for CI consumers.
-`--ab` remains a single-sample experiment; combining it with a repeat count
-greater than one is rejected rather than silently discarding samples.
+`--ab` supports repeated paired samples. Calls alternate A→B and B→A for each
+successive `(task, sample)` pair; reports include per-arm success intervals,
+paired-win intervals, and sample-cost distributions.
+
+Every standard or A/B run also rebuilds `reports/trends.json` and
+`reports/trends.md` from persisted report JSON. The scheduled workflow adds the
+current report and trends to its step summary and uploads dedicated trend
+artifacts.
 
 Suite gates cover success rate, cost per success, tokens per success, tool
 failure rate, and session error rate. When a baseline is supplied, they also
@@ -125,14 +140,13 @@ intact — replacing the system prompt outright would disable skills, see `agent
 pnpm --filter @seekforge/eval-harness eval -- --variant terse-prompt
 pnpm --filter @seekforge/eval-harness eval -- --list-variants
 
-# A/B: run the FULL task set under two variants, print a comparison table,
-# and write a machine-readable evals/reports/ab-<ts>.json
-pnpm --filter @seekforge/eval-harness eval -- --ab control,terse-prompt
+# Paired A/B with three samples per task; writes .json and .md reports.
+pnpm --filter @seekforge/eval-harness eval -- --ab control,terse-prompt --repeat 3
 ```
 
-The A/B table reports, per task, each variant's success / score / turns / cost
-and a per-task winner (success, then higher score, then fewer turns, then
-cheaper), plus win/loss/tie totals.
+The A/B table reports each paired task/sample, arm success / score / turns /
+cost and a winner (success, then higher score, fewer turns, then cheaper), plus
+success-rate and paired-win 95% confidence intervals and cost distributions.
 
 ## Measurement runbook: round-52 transparent capabilities
 

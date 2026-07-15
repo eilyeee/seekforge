@@ -26,6 +26,7 @@ import {
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
 import { MAX_LOOP_ITERATIONS, MAX_LOOP_WARNING_LENGTH, MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
+import { detectActionCycle } from "./loop-logic.js";
 
 export type LoopStatus =
   | "passed" // verification command exited 0
@@ -454,6 +455,9 @@ async function runAutoLoopWithLease(
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousWorkspace = workspaceFingerprint(opts.workspace);
+  const progressFingerprints = [
+    `${previousDiagnostics.fingerprint}:${previousWorkspace ?? "unknown-workspace"}`,
+  ];
   let iterations = initialIterations;
 
   for (let i = iterations + 1; i <= maxIterations; i++) {
@@ -560,7 +564,10 @@ async function runAutoLoopWithLease(
     const sameFailure = diagnostics.fingerprint === previousDiagnostics.fingerprint;
     const sameWorkspace = currentWorkspace !== null && previousWorkspace !== null &&
       currentWorkspace === previousWorkspace;
-    if (sameFailure && sameWorkspace) {
+    progressFingerprints.push(`${diagnostics.fingerprint}:${currentWorkspace ?? "unknown-workspace"}`);
+    if (progressFingerprints.length > 8) progressFingerprints.shift();
+    const cyclePeriod = detectActionCycle(progressFingerprints);
+    if ((sameFailure && sameWorkspace) || cyclePeriod !== null) {
       return done({ status: "no_progress", iterations: i, costUsd, sessionId, finalVerify: v });
     }
     previousDiagnostics = diagnostics;

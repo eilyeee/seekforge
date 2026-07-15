@@ -18,11 +18,17 @@ import { WorktreeManager } from "./worktrees.js";
 import { handleConnection } from "./ws.js";
 import type { TriggerRunHandle } from "./trigger-run.js";
 import { ServerCoordinator } from "./coordinator.js";
+import { RunManager } from "./run-ledger.js";
+import { createStructuredLogger, type StructuredLogger } from "./logger.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
 export type { Workspace } from "./workspaces.js";
 export type { MergeResult, WorktreeStatus } from "./worktrees.js";
+export { readRunEvents, readRunLedger, RunManager } from "./run-ledger.js";
+export type { RunEvent, RunRecord, RunSource, RunStatus } from "./run-ledger.js";
+export { createStructuredLogger } from "./logger.js";
+export type { StructuredLogger } from "./logger.js";
 
 // Normally reads @seekforge/server's package version. In a bun --compile
 // binary (the Tauri sidecar) the package.json isn't on the virtual FS, so
@@ -56,6 +62,8 @@ export type StartServerOptions = {
   resumeLoop?: ResumeLoopFn;
   /** Test/embedding override for the static UI root. Default: apps/desktop/dist. */
   staticDir?: string;
+  /** Structured JSON logger override. Defaults to stderr. */
+  logger?: StructuredLogger;
 };
 
 export type RunningServer = {
@@ -78,12 +86,27 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
   const triggerRuns = new Set<TriggerRunHandle>();
+  const runManager = new RunManager();
+  const logger = opts.logger ?? createStructuredLogger();
 
   let port = 0; // the real port, known after listen()
 
   const server = createServer((req, res) => {
     // Deliberately no Access-Control-Allow-Origin header (same-origin UI only).
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const requestStartedAt = Date.now();
+    const requestId = randomBytes(8).toString("hex");
+    res.once("finish", () => {
+      const durationMs = Date.now() - requestStartedAt;
+      runManager.recordHttp(res.statusCode, durationMs);
+      logger.log(res.statusCode >= 500 ? "error" : "info", "http.request", {
+        requestId,
+        method: req.method ?? "GET",
+        path: url.pathname,
+        status: res.statusCode,
+        durationMs,
+      });
+    });
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
       // The token gates capability (API/WS). Static assets are public: the
       // UI bundle is not a secret, and index.html's subresource requests
@@ -97,7 +120,9 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         coordinator,
         version,
         createAgent,
+        runLoop,
         triggerRuns,
+        runManager,
       }).catch((e: unknown) => {
         // Defense-in-depth: handleApi answers its own errors, but never leave a
         // request hanging on an unexpected rejection.
@@ -132,6 +157,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       createAgent,
       runLoop,
       resumeLoop,
+      runManager,
       trackOperation: (operation) => coordinator.track(operation),
     }));
   });
@@ -148,6 +174,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     throw new Error("could not determine the listen port");
   }
   port = address.port;
+  logger.log("info", "server.ready", { port, workspaces: registry.summary.length });
 
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -164,6 +191,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       await Promise.allSettled([...triggerRuns].map((run) => run.completion));
       await coordinator.drain();
       await closing;
+      logger.log("info", "server.closed", { port });
     })();
     return closePromise;
   };
