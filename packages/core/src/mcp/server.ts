@@ -134,7 +134,11 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     ],
   });
 
-  async function readResource(id: JsonRpcMessage["id"], params: Record<string, unknown>): Promise<void> {
+  async function readResource(
+    id: JsonRpcMessage["id"],
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const uri = params["uri"];
     if (uri === WORKSPACE_OVERVIEW_URI) {
       respond(id, {
@@ -145,7 +149,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     if (uri === WORKSPACE_STATUS_URI) {
       const result = await dispatcher.execute(
         { id: `mcp-call-${nextCallId++}`, name: "git_status", arguments: {} },
-        ctx,
+        { ...ctx, ...(signal ? { signal } : {}) },
       );
       if (!result.ok) {
         respondError(id, -32603, result.error?.message ?? "git_status failed");
@@ -269,7 +273,21 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
         respond(id, listResourcesResult());
         return;
       case "resources/read":
-        await readResource(id, params);
+        if (id === undefined || id === null) {
+          await readResource(id, params);
+          return;
+        }
+        {
+          const controller = new AbortController();
+          inflight.set(id, controller);
+          try {
+            await readResource(id, params, controller.signal);
+          } catch (err) {
+            respondError(id, -32603, `Internal error: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            if (inflight.get(id) === controller) inflight.delete(id);
+          }
+        }
         return;
       case "prompts/list":
         respond(id, { prompts: SERVER_PROMPTS });

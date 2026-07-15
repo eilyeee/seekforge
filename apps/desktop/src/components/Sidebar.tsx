@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { activeTab, useStore, type View } from "../store";
 import { useT } from "../lib/i18n";
 import {
@@ -87,6 +87,38 @@ export function Sidebar() {
   const conn = useStore((s) => activeTab(s.tabs).conn);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobilePanelRef = useRef<HTMLElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeMobile = () => {
+    setMobileOpen(false);
+    window.requestAnimationFrame(() => mobileTriggerRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    mobilePanelRef.current?.querySelector<HTMLElement>("button")?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobile();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [...(mobilePanelRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? [])];
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileOpen]);
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       storeCollapsed(!c);
@@ -102,6 +134,7 @@ export function Sidebar() {
       }`}
     >
       <button
+        ref={desktop ? undefined : mobileTriggerRef}
         type="button"
         onClick={desktop ? toggleCollapsed : () => setMobileOpen(true)}
         title={t("nav.expand")}
@@ -114,7 +147,13 @@ export function Sidebar() {
   );
 
   const full = (mobile: boolean) => (
-    <aside className={`${mobile ? "fixed inset-y-0 left-0 z-50 flex shadow-xl sm:hidden" : "hidden sm:flex"} w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised`}>
+    <aside
+      ref={mobile ? mobilePanelRef : undefined}
+      role={mobile ? "dialog" : undefined}
+      aria-modal={mobile ? true : undefined}
+      aria-label={mobile ? t("nav.group.system") : undefined}
+      className={`${mobile ? "fixed inset-y-0 left-0 z-50 flex shadow-xl sm:hidden" : "hidden sm:flex"} w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised`}
+    >
       <div
         data-tauri-drag-region
         className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
@@ -125,7 +164,7 @@ export function Sidebar() {
         </span>
         <button
           type="button"
-          onClick={mobile ? () => setMobileOpen(false) : toggleCollapsed}
+          onClick={mobile ? closeMobile : toggleCollapsed}
           title={t(mobile ? "nav.close" : "nav.collapse")}
           aria-label={t(mobile ? "nav.close" : "nav.collapse")}
           className="focus-ring ml-auto rounded p-1 text-tertiary hover:bg-surface-overlay hover:text-secondary"
@@ -149,7 +188,7 @@ export function Sidebar() {
                   type="button"
                   onClick={() => {
                     setView(v);
-                    if (mobile) setMobileOpen(false);
+                    if (mobile) closeMobile();
                   }}
                   aria-current={active ? "page" : undefined}
                   className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
@@ -172,7 +211,10 @@ export function Sidebar() {
       <div className="px-2 pb-1">
         <button
           type="button"
-          onClick={toggleTodos}
+          onClick={() => {
+            toggleTodos();
+            if (mobile) closeMobile();
+          }}
           title={t("todos.title")}
           aria-pressed={todosOpen}
           className={`focus-ring flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
@@ -204,7 +246,7 @@ export function Sidebar() {
             type="button"
             aria-label={t("nav.close")}
             className="fixed inset-0 z-40 bg-black/30 sm:hidden"
-            onClick={() => setMobileOpen(false)}
+            onClick={closeMobile}
           />
           {full(true)}
         </>

@@ -95,13 +95,17 @@ export function ChatView() {
   };
 
   /** Server config (sandbox badge + thinking default); refreshed per workspace. */
-  const [config, setConfig] = useState<ServerConfig | null>(null);
+  const [configState, setConfigState] = useState<{ workspaceId: string; value: ServerConfig | null }>({
+    workspaceId: tab.ws,
+    value: null,
+  });
+  const config = valueForWorkspace(configState, tab.ws);
   useEffect(() => {
     let alive = true;
     api
       .config(tab.ws)
-      .then((value) => { if (alive) setConfig(value); })
-      .catch(() => { if (alive) setConfig(null); });
+      .then((value) => { if (alive) setConfigState({ workspaceId: tab.ws, value }); })
+      .catch(() => { if (alive) setConfigState({ workspaceId: tab.ws, value: null }); });
     return () => { alive = false; };
   }, [tab.ws]);
 

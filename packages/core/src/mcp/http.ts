@@ -266,21 +266,21 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: CLIENT_CAPABILITIES,
         clientInfo: CLIENT_INFO,
-      }).then(
-        async (result) => {
+      })
+        .then(async (result) => {
           if (typeof result?.protocolVersion !== "string" || result.protocolVersion.length === 0) {
             throw new McpError("mcp_parse_error", "MCP initialize result omitted protocolVersion");
           }
           negotiatedVersion = result.protocolVersion;
           // A failed notification is non-fatal: the next request surfaces issues.
           await post("notifications/initialized", undefined, undefined).catch(() => {});
-        },
-        (err: Error) => {
+        })
+        .catch((err: unknown) => {
           handshake = undefined;
+          sessionId = undefined;
           negotiatedVersion = undefined;
           throw err;
-        },
-      );
+        });
     }
     return handshake;
   }
@@ -313,11 +313,18 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       return rawRequest<T>(method, params, signal);
     },
     dispose(): void {
+      const deleteHeaders = sessionId !== undefined ? headers() : undefined;
       disposed = true;
       handshake = undefined;
+      sessionId = undefined;
       negotiatedVersion = undefined;
       for (const c of inflight) c.abort();
       inflight.clear();
+      if (deleteHeaders) {
+        void fetch(url, { method: "DELETE", headers: deleteHeaders })
+          .then((response) => response.body?.cancel())
+          .catch(() => {});
+      }
     },
   };
 }

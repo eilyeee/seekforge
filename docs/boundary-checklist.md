@@ -199,8 +199,8 @@ path leaves every other path exposed.
   startup on the first property access.
 - **Also caught:** `packages/shared/src/config-layers.ts` — an object-shaped
   config could still supply non-array permission rules, non-object MCP maps, or
-  malformed hooks and crash merging or downstream consumers. Validate every
-  structured field and retain lower-precedence valid values.
+  malformed MCP entries/hooks and crash merging or downstream consumers.
+  Validate every structured field and retain lower-precedence valid values.
 - **Also caught:** safely ignoring a non-object config is not enough if doctor
   still reports it as valid merely because `JSON.parse` succeeded. Configuration
   diagnostics must validate the expected top-level shape too.
@@ -767,8 +767,8 @@ active sandbox, permission, cancellation, or resource policy.
 Ignoring `nextCursor` silently hides data; trusting it forever lets a malformed
 server create an infinite loop.
 
-- **Do:** consume every opaque cursor, reject repeats, and impose a documented
-  page/item bound.
+- **Do:** consume every opaque cursor, including the valid empty string; only an
+  absent cursor ends pagination. Reject repeats and impose a documented page/item bound.
 - **Caught:** `packages/core/src/mcp/client.ts` — tool, resource, and prompt
   discovery returned only the first page.
 
@@ -781,6 +781,82 @@ answers. Advertising a partially implemented feature is worse than omitting it.
   negotiated version/capability state for later requests.
 - **Caught:** `packages/core/src/mcp/http.ts` — HTTP advertised roots but could
   discard a request-scoped `roots/list`, deadlocking a conforming server.
+
+## 48. A memoized startup promise must reset on every failure path
+
+Using the two-callback form of `promise.then(success, failure)` does not send an
+exception thrown by `success` to that `failure` callback. The rejected promise
+can remain cached forever even though the transport intends the next call to
+retry initialization.
+
+- **Do:** attach a final `.catch(...)` after handshake validation, and clear all
+  partial lifecycle state (session id, negotiated version, cached promise).
+- **Caught:** `packages/core/src/mcp/http.ts` — a malformed initialize result
+  permanently poisoned the client and retained the server's partial session id.
+
+## 49. A broad writable parent can override a protected nested root
+
+Allowing a temporary directory to stay writable also allows every workspace
+below it unless the nested workspace is explicitly protected again.
+
+- **Do:** order mount/profile rules so the narrower workspace policy wins over
+  broad temp allowances, and test the workspace-inside-temp case directly.
+- **Caught:** `packages/core/src/tools/os-sandbox.ts` — `read-only` workspaces
+  below `/tmp` or `TMPDIR` inherited the parent's write permission.
+
+## 50. Interactive prompts are a serialized resource unless the UI queues them
+
+Launching concurrent operations that each await a confirmation can overwrite a
+single pending-prompt slot and leave the displaced Promise unresolved forever.
+
+- **Do:** serialize interactive authorization, then run already-approved work
+  with the requested concurrency; use a completion-driven scheduler so a slow
+  sibling does not hold an unrelated ready branch behind a batch barrier.
+- **Caught:** `packages/core/src/agent/loop.ts` — concurrent edit team members
+  raced one-slot permission UIs and `Promise.all` stalled newly ready branches.
+
+## 51. Async results need the complete mutable destination identity
+
+Checking only a workspace id is insufficient when a result writes into a tab:
+the user can switch tabs in one workspace, or switch A→B→A before completion.
+
+- **Do:** capture workspace and tab identity, support cancellation, omit empty
+  optional arguments, and retain retry state when a request fails.
+- **Caught:** `apps/desktop/src/views/SettingsView.tsx` — a slow MCP Prompt could
+  overwrite another tab's draft and treated empty optional arguments as values.
+
+## 52. External context must remain visibly data at the model boundary
+
+Appending third-party text directly to a user task gives embedded directives the
+same visual authority as the user's request, even when tool permissions remain gated.
+
+- **Do:** serialize external content inside an explicit untrusted-data envelope,
+  omit untrusted transport errors from prompts, and reinforce the system rule.
+- **Caught:** `apps/server/src/agent.ts` and `apps/tui/src/app.tsx` — MCP Resource
+  content was concatenated directly onto the task message.
+
+## 53. Startup cancellation and cleanup begin before the main operation
+
+Cancellation attached only to the final run cannot stop provider/tool discovery
+that happens while assembling that run. A later construction failure can also
+leak resources acquired earlier.
+
+- **Do:** thread the run signal through discovery, dispose partial clients on
+  every throw, and isolate malformed entries before constructing clients.
+- **Caught:** `packages/core/src/mcp/tools.ts` and `apps/server/src/agent.ts` — MCP
+  discovery ignored cancellation and partial Agent assembly could leak clients.
+
+## 54. Cancellation observability starts only after request dispatch
+
+An abort during initialization can correctly prevent the real request from ever
+being sent. A test that uses a fixed timer may then expect a cancellation
+notification for a request id the server never observed.
+
+- **Do:** when asserting transport cancellation side effects, synchronize on the
+  server receiving the target request before aborting it; measure latency from
+  the abort edge, not from client construction or handshake startup.
+- **Caught:** `packages/core/tests/mcp/http.test.ts` — a 25 ms timer raced the
+  initialize handshake and made the notification assertion nondeterministic.
 
 ---
 

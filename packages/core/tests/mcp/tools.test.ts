@@ -96,6 +96,28 @@ describe("buildMcpToolSpecs", () => {
 
     expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
   });
+
+  it("propagates cancellation while discovering tools", async () => {
+    const controller = new AbortController();
+    const cancelled = new Error("cancelled");
+    const client = {
+      listTools: vi.fn(async (signal?: AbortSignal) => {
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(cancelled), { once: true });
+        });
+        return [];
+      }),
+    } as unknown as McpClient;
+
+    const pending = buildMcpToolSpecs(
+      [{ serverName: "slow", client, trusted: false }],
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(pending).rejects.toBe(cancelled);
+    expect(client.listTools).toHaveBeenCalledWith(controller.signal);
+  });
 });
 
 describe("dispatch through createDefaultDispatcher", () => {
@@ -245,6 +267,19 @@ describe("loadMcpToolSpecs", () => {
     });
     try {
       expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("skips a malformed server entry without blocking healthy servers", async () => {
+    const { specs, entries, dispose } = await loadMcpToolSpecs({
+      malformed: null as never,
+      fake: { command: process.execPath, args: [serverPath] },
+    });
+    try {
+      expect(entries.map((entry) => entry.serverName)).toEqual(["fake"]);
+      expect(specs.map((spec) => spec.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
     } finally {
       dispose();
     }

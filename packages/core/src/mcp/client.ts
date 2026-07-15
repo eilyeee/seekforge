@@ -23,7 +23,7 @@ export type McpClientOptions = {
 
 export type McpClient = {
   /** tools/list — missing result.tools is treated as an empty list. */
-  listTools(): Promise<McpTool[]>;
+  listTools(signal?: AbortSignal): Promise<McpTool[]>;
   /**
    * tools/call — returns the result content flattened to text (text parts
    * joined with "\n"; non-text parts become "[<type> content]").
@@ -31,7 +31,7 @@ export type McpClient = {
    */
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
   /** resources/list — missing result.resources is treated as an empty list. */
-  listResources(): Promise<McpResource[]>;
+  listResources(signal?: AbortSignal): Promise<McpResource[]>;
   /**
    * resources/read — returns the contents flattened to text (text parts
    * joined with "\n"; blob parts become "[binary content]"), capped at
@@ -39,7 +39,7 @@ export type McpClient = {
    */
   readResource(uri: string, signal?: AbortSignal): Promise<string>;
   /** prompts/list — missing result.prompts is treated as an empty list. */
-  listPrompts(): Promise<McpPrompt[]>;
+  listPrompts(signal?: AbortSignal): Promise<McpPrompt[]>;
   /**
    * prompts/get — returns the prompt's messages flattened to a single string
    * (each message rendered as "<role>: <text>", non-text parts become a
@@ -120,6 +120,7 @@ async function listAll<T>(
   transport: McpTransport,
   method: string,
   field: string,
+  signal?: AbortSignal,
 ): Promise<T[]> {
   const values: T[] = [];
   const seen = new Set<string>();
@@ -128,6 +129,7 @@ async function listAll<T>(
     const res = await transport.request<PaginatedResult<Record<string, unknown>>>(
       method,
       cursor === undefined ? {} : { cursor },
+      signal,
     );
     if (typeof res !== "object" || res === null || Array.isArray(res)) {
       throw new McpError("mcp_error", `${method} result must be an object`);
@@ -141,7 +143,7 @@ async function listAll<T>(
       throw new McpError("mcp_pagination_limit", `${method} exceeded ${MAX_LIST_ITEMS} items`);
     }
     const next = res?.nextCursor;
-    if (next === undefined || next === "") return values;
+    if (next === undefined) return values;
     if (typeof next !== "string") throw new McpError("mcp_error", `${method} nextCursor must be a string`);
     if (seen.has(next)) throw new McpError("mcp_pagination_loop", `${method} repeated cursor ${JSON.stringify(next)}`);
     seen.add(next);
@@ -385,8 +387,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     : createStdioTransport(options);
 
   return {
-    async listTools(): Promise<McpTool[]> {
-      return listAll<McpTool>(transport, "tools/list", "tools");
+    async listTools(signal?: AbortSignal): Promise<McpTool[]> {
+      return listAll<McpTool>(transport, "tools/list", "tools", signal);
     },
 
     async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
@@ -398,8 +400,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
       return text;
     },
 
-    async listResources(): Promise<McpResource[]> {
-      return listAll<McpResource>(transport, "resources/list", "resources");
+    async listResources(signal?: AbortSignal): Promise<McpResource[]> {
+      return listAll<McpResource>(transport, "resources/list", "resources", signal);
     },
 
     async readResource(uri: string, signal?: AbortSignal): Promise<string> {
@@ -410,8 +412,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
         : text;
     },
 
-    async listPrompts(): Promise<McpPrompt[]> {
-      return listAll<McpPrompt>(transport, "prompts/list", "prompts");
+    async listPrompts(signal?: AbortSignal): Promise<McpPrompt[]> {
+      return listAll<McpPrompt>(transport, "prompts/list", "prompts", signal);
     },
 
     async getPrompt(name: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<string> {

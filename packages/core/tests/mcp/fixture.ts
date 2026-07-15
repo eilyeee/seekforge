@@ -120,10 +120,11 @@ rl.on("line", (line) => {
   }
   if (msg.method === "tools/list") {
     const cursor = msg.params && msg.params.cursor;
-    send({ jsonrpc: "2.0", id: msg.id, result: cursor === "tools-2"
+    const hasCursor = msg.params && Object.prototype.hasOwnProperty.call(msg.params, "cursor");
+    send({ jsonrpc: "2.0", id: msg.id, result: hasCursor && cursor === ""
       ? { tools: [{ name: "boom", description: "Always fails." }] }
       : { tools: [{ name: "echo", description: "Echoes arguments back.\\nSecond line of docs.",
-          inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }], nextCursor: "tools-2" } });
+          inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }], nextCursor: "" } });
     return;
   }
   if (msg.method === "resources/list") {

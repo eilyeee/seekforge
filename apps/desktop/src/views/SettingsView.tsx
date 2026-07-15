@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { useT, useLocale, setLocale, type Locale } from "../lib/i18n";
 import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
-import { useStore } from "../store";
+import { activeTab, useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
 import type { ConfigKey, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
@@ -427,6 +427,10 @@ function McpPromptsSection({ ws }: { ws: string }) {
   const [selected, setSelected] = useState<McpPrompt | null>(null);
   const [args, setArgs] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => requestRef.current?.abort(), []);
 
   const load = () => {
     setState("loading");
@@ -434,25 +438,51 @@ function McpPromptsSection({ ws }: { ws: string }) {
   };
 
   const open = (prompt: McpPrompt) => {
+    requestRef.current?.abort();
     setArgs(Object.fromEntries((prompt.arguments ?? []).map((arg) => [arg.name, ""])));
+    setPromptError(null);
+    setRunning(false);
     setSelected(prompt);
   };
 
   const usePrompt = async () => {
     if (!selected) return;
+    const origin = activeTab(useStore.getState().tabs);
+    if (origin.ws !== ws) return;
+    const controller = new AbortController();
+    requestRef.current?.abort();
+    requestRef.current = controller;
+    setPromptError(null);
     setRunning(true);
     try {
-      const result = await api.mcpPrompt(selected.server, selected.name, args, ws);
-      if (useStore.getState().activeWorkspaceId !== ws) return;
+      const submittedArgs = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== ""));
+      const result = await api.mcpPrompt(selected.server, selected.name, submittedArgs, ws, controller.signal);
+      const current = useStore.getState();
+      const currentTab = activeTab(current.tabs);
+      if (current.activeWorkspaceId !== ws || currentTab.tabId !== origin.tabId || currentTab.ws !== ws) return;
       composeInChat(result.text);
       setSelected(null);
     } catch (e) {
-      setState({ error: String(e) });
-      setSelected(null);
+      if (!(e instanceof Error && e.name === "AbortError")) setPromptError(String(e));
     } finally {
-      setRunning(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setRunning(false);
+      }
     }
   };
+
+  const cancelPrompt = () => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setRunning(false);
+    setPromptError(null);
+    setSelected(null);
+  };
+
+  const requiredMissing = selected?.arguments?.some(
+    (argument) => Boolean(argument.required) && !(args[argument.name] ?? "").trim(),
+  ) ?? false;
 
   return (
     <div className="mt-4">
@@ -483,17 +513,19 @@ function McpPromptsSection({ ws }: { ws: string }) {
         <ConfirmDialog
           title={`${selected.server} / ${selected.name}`}
           confirmLabel={running ? t("settings.mcpListing") : t("settings.mcpUsePrompt")}
+          confirmDisabled={running || requiredMissing}
           onConfirm={() => void usePrompt()}
-          onCancel={() => setSelected(null)}
+          onCancel={cancelPrompt}
         >
           <div className="space-y-3">
             {selected.description && <p className="text-xs text-secondary">{selected.description}</p>}
             {(selected.arguments ?? []).map((arg) => (
               <label key={arg.name} className="block text-xs text-secondary">
                 <span>{arg.name}{arg.required ? " *" : ""}</span>
-                <Input value={args[arg.name] ?? ""} onChange={(e) => setArgs((current) => ({ ...current, [arg.name]: e.target.value }))} className="mt-1" />
+                <Input disabled={running} value={args[arg.name] ?? ""} onChange={(e) => setArgs((current) => ({ ...current, [arg.name]: e.target.value }))} className="mt-1" />
               </label>
             ))}
+            {promptError && <p className="font-mono text-xs text-danger">{promptError}</p>}
           </div>
         </ConfirmDialog>
       )}

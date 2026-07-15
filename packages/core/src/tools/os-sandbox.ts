@@ -83,6 +83,11 @@ function buildSeatbeltProfile(level: Exclude<SandboxLevel, "off">, workspace: st
   for (const p of darwinWritablePaths(level, workspace)) {
     lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`);
   }
+  // A workspace may itself live below TMPDIR. Re-apply its stronger read-only
+  // rule after the broad temporary-directory allowances.
+  if (level === "read-only") {
+    lines.push(`(deny file-write* (subpath "${escapeSeatbeltPath(workspace)}"))`);
+  }
   if (level === "restricted") lines.push("(deny network*)");
   return lines.join("\n");
 }
@@ -92,6 +97,9 @@ function buildBwrapArgs(level: Exclude<SandboxLevel, "off">, workspace: string):
     "--ro-bind", "/", "/",
     ...(level === "read-only" ? [] : ["--bind", workspace, workspace]),
     "--bind", "/tmp", "/tmp",
+    // Later nested mounts override the writable /tmp bind for a workspace
+    // located below /tmp.
+    ...(level === "read-only" ? ["--ro-bind", workspace, workspace] : []),
     "--dev", "/dev",
     "--proc", "/proc",
     "--die-with-parent",

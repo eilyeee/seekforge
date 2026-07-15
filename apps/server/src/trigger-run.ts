@@ -63,6 +63,7 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           confirm: async () => false,
           askUser: async () => HEADLESS_DECLINE,
           extractMemory: input.mode === "edit",
+          signal: controller.signal,
         });
         const task = handle.expandTask ? await handle.expandTask(input.task, controller.signal) : input.task;
         for await (const event of handle.agent.runTask({

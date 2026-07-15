@@ -40,6 +40,10 @@ const execFileAsync = promisify(execFile);
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
 
+function isMcpServerConfig(value: unknown): value is McpServerConfig {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseConfigDoc(raw: string): ConfigDoc {
   const parsed = JSON.parse(raw) as unknown;
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
@@ -205,7 +209,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand like POST /api/mcp/:name/tools. A server that fails or lacks
   // resource support contributes zero entries (listMcpResources never throws).
   if (method === "GET" && path === "/api/mcp/resources") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) => isMcpServerConfig(entry[1]));
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
@@ -222,7 +226,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand. Mirrors /api/mcp/resources: a server that fails or lacks prompt
   // support contributes zero entries (listMcpPrompts never throws).
   if (method === "GET" && path === "/api/mcp/prompts") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {});
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) => isMcpServerConfig(entry[1]));
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
@@ -239,12 +243,18 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     const serverName = segs[3]!;
     const promptName = segs[4]!;
     const config = (loadConfig(workspace).mcpServers ?? {})[serverName];
-    if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
+    if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
-    const rawArgs = (body as { arguments?: unknown } | null)?.arguments;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return sendApiError(res, 400, "bad_request", "body must be an object");
+    }
+    const rawArgs = (body as { arguments?: unknown }).arguments;
     if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
       return sendApiError(res, 400, "bad_request", "arguments must be an object when present");
+    }
+    if (rawArgs !== undefined && Object.values(rawArgs as Record<string, unknown>).some((value) => typeof value !== "string")) {
+      return sendApiError(res, 400, "bad_request", "argument values must be strings");
     }
     const client = createMcpClient({ name: serverName, config, workspaceRoots: [workspace] });
     const entries: McpClientEntry[] = [{ serverName, client, trusted: config.trusted === true }];
@@ -353,7 +363,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
     const name = segs[2]!;
     const config = (loadConfig(workspace).mcpServers ?? {})[name];
-    if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
+    if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
     const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
     try {
       const tools = await client.listTools();

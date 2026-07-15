@@ -9,12 +9,13 @@ type Props = {
   confirmLabel?: string;
   /** Red confirm button for destructive actions. */
   danger?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
 
 /** Small confirm modal (Escape / backdrop = cancel). */
-export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, children, confirmLabel, danger, confirmDisabled, onConfirm, onCancel }: Props) {
   const t = useT();
   const label = confirmLabel ?? t("action.confirm");
   return (
@@ -24,7 +25,7 @@ export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm
       footer={
         <>
           <Button onClick={onCancel}>{t("action.cancel")}</Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} autoFocus>
+          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={confirmDisabled} autoFocus>
             {label}
           </Button>
         </>

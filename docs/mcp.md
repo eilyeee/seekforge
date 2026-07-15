@@ -181,7 +181,9 @@ tagged with its server name. The programmatic surface:
 
 TUI and Server/Desktop runs expand up to five `@mcp:<server>:<uri>` references
 per message before the task reaches the model. Failures are included as bounded
-unavailable-resource blocks rather than aborting the whole run.
+unavailable-resource blocks rather than aborting the whole run. Resource bodies
+are serialized into an explicit untrusted-data envelope; embedded directives do
+not become user instructions or change the permission policy.
 
 ### 1.9 Prompts
 

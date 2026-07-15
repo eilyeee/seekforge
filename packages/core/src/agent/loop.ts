@@ -48,6 +48,7 @@ import {
   type AgentDefinition,
   type DispatchHooks,
   type DispatchManager,
+  type TeamMemberPlan,
 } from "../subagents/index.js";
 import {
   clearOldToolResults,
@@ -85,6 +86,21 @@ import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from ".
 export type RetryBus = {
   run<T>(emit: (info: RetryInfo) => void, operation: () => Promise<T>): Promise<T>;
 };
+
+type ConfirmQueue = {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+};
+
+function createConfirmQueue(): ConfirmQueue {
+  let tail = Promise.resolve();
+  return {
+    run<T>(operation: () => Promise<T>): Promise<T> {
+      const result = tail.then(operation, operation);
+      tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+  };
+}
 
 /** Convenience: a fresh bus plus the onRetry callback to hand the provider. */
 export function createRetryBus(): RetryBus & { onRetry: (info: RetryInfo) => void } {
@@ -278,6 +294,8 @@ export type AgentCoreDeps = {
   _dispatchManager?: DispatchManager;
   /** Internal: safe-point steering queue for a nested subagent run. */
   _takeSubagentSteering?: () => string[];
+  /** Internal: shared interactive permission queue across nested runs. */
+  _confirmQueue?: ConfirmQueue;
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -362,6 +380,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   // so it never affects a normally-configured window.)
   const budgetTokens = Math.max(1, Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS);
   const depth = deps._depth ?? 0;
+  const confirmQueue = deps._confirmQueue ?? createConfirmQueue();
   // dispatch_agent is only advertised at depth 0 — dispatched runs never recurse.
   const roster: AgentDefinition[] = depth === 0 ? (deps.subagents ?? []) : [];
 
@@ -602,15 +621,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       // notification hooks fire just before the user is interrupted (a
       // permission prompt or an ask_user question), so external notifiers
       // (sound, desktop alert) can ping. Advisory; never affects the answer.
-      const confirmWithNotify = async (req: PermissionRequest): Promise<ConfirmResult> => {
-        await runHooks("notification", deps.hooks?.notification, {
-          sessionId,
-          workspace: input.projectPath,
-          kind: "permission",
-          detail: req,
+      const confirmWithNotify = (req: PermissionRequest): Promise<ConfirmResult> =>
+        confirmQueue.run(async () => {
+          throwIfCancelled();
+          await runHooks("notification", deps.hooks?.notification, {
+            sessionId,
+            workspace: input.projectPath,
+            kind: "permission",
+            detail: req,
+          });
+          return deps.confirm(req);
         });
-        return deps.confirm(req);
-      };
       // Boolean view of confirmWithNotify for the dispatch flow, which only
       // needs allow/deny (allow-for-session has no meaning for a one-off
       // agent dispatch). Normalizes the boolean | { allow } contract.
@@ -802,6 +823,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           _depth: depth + 1,
           _dispatchManager: undefined,
           _takeSubagentSteering: hooks.takeSteering,
+          _confirmQueue: confirmQueue,
           dispatcher: def.tools ? whitelistDispatcher(deps.dispatcher, def.tools) : deps.dispatcher,
           onModelDelta: undefined,
           extractMemory: false,
@@ -933,7 +955,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
        * the dispatch id immediately while the run continues under the
        * manager (poll with agent_result).
        */
-      async function runDispatch(rawArgs: unknown): Promise<ToolResult> {
+      async function runDispatch(rawArgs: unknown, skipConfirm = false): Promise<ToolResult> {
         const a = rawArgs as { agentId?: unknown; task?: unknown; background?: unknown };
         const agentId = typeof a?.agentId === "string" ? a.agentId : "";
         const task = typeof a?.task === "string" ? a.task.trim() : "";
@@ -967,7 +989,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
 
         // ask-mode agents are read-only and auto-allowed; edit-mode agents
         // go through the normal approval flow (unless approvalMode is auto).
-        if (def.mode === "edit" && input.approvalMode !== "auto") {
+        if (!skipConfirm && def.mode === "edit" && input.approvalMode !== "auto") {
           const approved = await confirmAllowed({
             toolName: DISPATCH_AGENT_TOOL,
             permission: "write",
@@ -1006,20 +1028,21 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         type MemberOutcome = {
           id: string;
           agentId: string;
-          status: "pending" | "done" | "failed" | "skipped";
+          status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
           result?: ToolResult;
           reason?: string;
         };
         const outcomes = new Map<string, MemberOutcome>(
           validated.plan.members.map((member) => [member.id, { id: member.id, agentId: member.agentId, status: "pending" }]),
         );
+        const running = new Map<string, Promise<{ member: TeamMemberPlan; result: ToolResult }>>();
         let stopped = false;
-        while ([...outcomes.values()].some((outcome) => outcome.status === "pending")) {
+        while ([...outcomes.values()].some((outcome) => outcome.status === "pending" || outcome.status === "running")) {
           for (const member of validated.plan.members) {
             const outcome = outcomes.get(member.id)!;
             if (outcome.status !== "pending") continue;
             const dependencies = member.dependsOn.map((id) => outcomes.get(id)!);
-            if (dependencies.some((dep) => dep.status === "failed" || dep.status === "skipped")) {
+            if (dependencies.some((dep) => dep.status === "failed" || dep.status === "cancelled" || dep.status === "skipped")) {
               outcome.status = "skipped";
               outcome.reason = "dependency failed";
             }
@@ -1031,37 +1054,81 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 outcome.reason = "team stopped after a member failure";
               }
             }
-            break;
           }
-          const ready = validated.plan.members
-            .filter((member) => {
-              const outcome = outcomes.get(member.id)!;
-              return outcome.status === "pending" && member.dependsOn.every((id) => outcomes.get(id)!.status === "done");
-            })
-            .slice(0, validated.plan.maxConcurrency);
-          if (ready.length === 0) break; // graph was validated; only skipped members can remain here
-          const results = await Promise.all(
-            ready.map(async (member) => ({
-              member,
-              result: await runDispatch({ agentId: member.agentId, task: member.task }),
-            })),
-          );
-          for (const { member, result } of results) {
-            const outcome = outcomes.get(member.id)!;
-            outcome.status = result.ok ? "done" : "failed";
-            outcome.result = result;
-            if (!result.ok && validated.plan.failurePolicy === "stop") stopped = true;
+          while (!stopped && running.size < validated.plan.maxConcurrency) {
+            const member = validated.plan.members.find((candidate) => {
+              const outcome = outcomes.get(candidate.id)!;
+              return outcome.status === "pending" && candidate.dependsOn.every((id) => outcomes.get(id)!.status === "done");
+            });
+            if (!member) break;
+
+            const def = roster.find((candidate) => candidate.id === member.agentId)!;
+            if (input.mode === "edit" && def.mode === "edit" && input.approvalMode !== "auto") {
+              // Frontends expose one interactive permission slot per run. Ask
+              // serially, then launch approved members with normal concurrency.
+              const approved = await confirmAllowed({
+                toolName: DISPATCH_AGENT_TOOL,
+                permission: "write",
+                description: `Dispatch agent ${def.id}: ${member.task.slice(0, 100)}`,
+              });
+              if (!approved) {
+                const outcome = outcomes.get(member.id)!;
+                outcome.status = "failed";
+                outcome.result = {
+                  ok: false,
+                  error: { code: "denied_by_user", message: `dispatch of agent "${def.id}" denied by user` },
+                };
+                if (validated.plan.failurePolicy === "stop") stopped = true;
+                continue;
+              }
+            }
+
+            outcomes.get(member.id)!.status = "running";
+            const promise = runDispatch({ agentId: member.agentId, task: member.task }, true).then(
+              (result) => ({ member, result }),
+              (err: unknown) => ({
+                member,
+                result: {
+                  ok: false,
+                  error: { code: "subagent_failed", message: err instanceof Error ? err.message : String(err) },
+                },
+              }),
+            );
+            running.set(member.id, promise);
+          }
+
+          if (running.size === 0) continue;
+          const { member, result } = await Promise.race(running.values());
+          running.delete(member.id);
+          const outcome = outcomes.get(member.id)!;
+          outcome.status = result.ok
+            ? "done"
+            : result.error?.code === "subagent_cancelled"
+              ? "cancelled"
+              : "failed";
+          outcome.result = result;
+          if (!result.ok && validated.plan.failurePolicy === "stop") {
+            stopped = true;
           }
         }
         const members = validated.plan.members.map((member) => outcomes.get(member.id)!);
         const failed = members.filter((member) => member.status === "failed");
-        return failed.length === 0
-          ? { ok: true, data: { status: "done", members } }
-          : {
+        const cancelled = members.filter((member) => member.status === "cancelled");
+        if (failed.length > 0) {
+          return {
               ok: false,
               data: { status: "failed", members },
               error: { code: "team_failed", message: `${failed.length} team member(s) failed` },
             };
+        }
+        if (cancelled.length > 0) {
+          return {
+            ok: false,
+            data: { status: "cancelled", members },
+            error: { code: "team_cancelled", message: `${cancelled.length} team member(s) cancelled` },
+          };
+        }
+        return { ok: true, data: { status: "done", members } };
       }
 
       /** Handles an agent_result tool call (synchronous status poll). */

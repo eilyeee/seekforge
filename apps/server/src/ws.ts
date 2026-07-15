@@ -257,6 +257,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         onReasoningDelta: (chunk) => bufferDelta("reasoning.delta", sessionId, chunk),
         extractMemory: input.mode === "edit",
         dispatchManager,
+        signal: controller.signal,
         ...(overrides ? { overrides } : {}),
       });
       // An output-style override resolves to a system-prompt addendum; an unknown

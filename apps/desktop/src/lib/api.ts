@@ -77,13 +77,28 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
+function abortError(): Error {
+  const error = new Error("request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function request<T>(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw abortError();
   if (isMock()) {
     try {
       // Loaded lazily so the dev-only mock + fixtures stay out of the prod bundle.
       const { mockRequest } = await import("../mock/api");
-      return (await mockRequest(method, path, body)) as T;
+      const result = (await mockRequest(method, path, body)) as T;
+      if (signal?.aborted) throw abortError();
+      return result;
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw e;
       // mock errors carry {code, status} props; normalize to ApiError so
       // views can branch on status (e.g. rewind 404) like with the server.
       const err = e as { code?: string; status?: number; message?: string };
@@ -97,6 +112,7 @@ async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: strin
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (!res.ok) {
     let code = "http_error";
@@ -256,11 +272,12 @@ export const api = {
   balance: (ws?: string) => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance", ws)),
   mcpResources: (ws?: string) => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources", ws)),
   mcpPrompts: (ws?: string) => request<{ prompts: McpPrompt[] }>("GET", withWorkspace("/api/mcp/prompts", ws)),
-  mcpPrompt: (server: string, name: string, args: Record<string, unknown> = {}, ws?: string) =>
+  mcpPrompt: (server: string, name: string, args: Record<string, unknown> = {}, ws?: string, signal?: AbortSignal) =>
     request<{ text: string }>(
       "POST",
       withWorkspace(`/api/mcp/prompts/${encodeURIComponent(server)}/${encodeURIComponent(name)}`, ws),
       { arguments: args },
+      signal,
     ),
   models: () => request<ModelInfo[]>("GET", "/api/models"),
 

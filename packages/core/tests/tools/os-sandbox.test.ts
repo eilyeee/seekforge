@@ -58,7 +58,27 @@ describe("buildSandboxSpec", () => {
     const profile = buildSandboxSpec("read-only", "/work/project", "darwin")!.args[1]!;
     expect(profile).toContain("(deny file-write*)");
     expect(profile).not.toContain('(allow file-write* (subpath "/work/project"))');
+    expect(profile).toContain('(deny file-write* (subpath "/work/project"))');
     expect(profile).not.toContain("(deny network*)");
+  });
+
+  it("read-only re-protects a workspace nested below a writable temp directory", () => {
+    allAvailable();
+    const workspace = path.join(os.tmpdir(), "seekforge-read-only-workspace");
+    const darwin = buildSandboxSpec("read-only", workspace, "darwin")!.args[1]!;
+    expect(darwin.indexOf(`(allow file-write* (subpath "${os.tmpdir()}"))`)).toBeLessThan(
+      darwin.indexOf(`(deny file-write* (subpath "${workspace}"))`),
+    );
+
+    const linux = buildSandboxSpec("read-only", "/tmp/seekforge-read-only-workspace", "linux")!.args;
+    expect(linux).toEqual([
+      "--ro-bind", "/", "/",
+      "--bind", "/tmp", "/tmp",
+      "--ro-bind", "/tmp/seekforge-read-only-workspace", "/tmp/seekforge-read-only-workspace",
+      "--dev", "/dev",
+      "--proc", "/proc",
+      "--die-with-parent",
+    ]);
   });
 
   it("escapes double quotes and backslashes in seatbelt paths", () => {
@@ -82,7 +102,7 @@ describe("buildSandboxSpec", () => {
     const restricted = buildSandboxSpec("restricted", "/ws", "linux")!;
     expect(restricted.args).toEqual([...ww.args, "--unshare-net"]);
     const readOnly = buildSandboxSpec("read-only", "/ws", "linux")!;
-    expect(readOnly.args).not.toContain("/ws");
+    expect(readOnly.args).toContain("/ws");
     expect(readOnly.args).toContain("/tmp");
   });
 });

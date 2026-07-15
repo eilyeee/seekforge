@@ -51,26 +51,29 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
 /**
  * Lists each server's tools and converts them to dispatcher ToolSpecs named
  * `mcp__<server>__<tool>`. A failing server logs a warning to stderr and
- * contributes zero tools; this function never throws.
+ * contributes zero tools. Cancellation is propagated to the caller.
  */
-export async function buildMcpToolSpecs(clients: McpClientEntry[]): Promise<ToolSpec[]> {
-  const specs: ToolSpec[] = [];
-  for (const entry of clients) {
+export async function buildMcpToolSpecs(clients: McpClientEntry[], signal?: AbortSignal): Promise<ToolSpec[]> {
+  const groups = await Promise.all(clients.map(async (entry): Promise<ToolSpec[]> => {
     try {
-      const tools: unknown = await entry.client.listTools();
+      const tools: unknown = await entry.client.listTools(signal);
       if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
+      const specs: ToolSpec[] = [];
       for (const value of tools) {
         if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
         const tool = value as Partial<McpTool>;
         if (typeof tool.name !== "string" || tool.name.length === 0) continue;
         specs.push(toToolSpec(entry, tool as McpTool));
       }
+      return specs;
     } catch (err) {
+      if (signal?.aborted) throw err;
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`warning: MCP server "${entry.serverName}" unavailable: ${message}\n`);
+      return [];
     }
-  }
-  return specs;
+  }));
+  return groups.flat();
 }
 
 /** One resource as surfaced to callers, tagged with its server name. */
@@ -175,22 +178,33 @@ export async function getMcpPrompt(
 export async function loadMcpToolSpecs(
   servers: Record<string, McpServerConfig>,
   workspaceRoots?: string[],
+  signal?: AbortSignal,
 ): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
-  const entries: McpClientEntry[] = Object.entries(servers).map(([serverName, config]) => ({
-    serverName,
-    client: createMcpClient({
-      name: serverName,
-      config,
-      ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
-    }),
-    trusted: config.trusted ?? false,
-  }));
-  const specs = await buildMcpToolSpecs(entries);
-  return {
-    specs,
-    entries,
-    dispose: () => {
-      for (const e of entries) e.client.dispose();
-    },
+  const entries: McpClientEntry[] = [];
+  for (const [serverName, value] of Object.entries(servers)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      process.stderr.write(`warning: MCP server "${serverName}" has an invalid configuration\n`);
+      continue;
+    }
+    const config = value as McpServerConfig;
+    entries.push({
+      serverName,
+      client: createMcpClient({
+        name: serverName,
+        config,
+        ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
+      }),
+      trusted: config.trusted === true,
+    });
+  }
+  const dispose = () => {
+    for (const entry of entries) entry.client.dispose();
   };
+  try {
+    const specs = await buildMcpToolSpecs(entries, signal);
+    return { specs, entries, dispose };
+  } catch (err) {
+    dispose();
+    throw err;
+  }
 }

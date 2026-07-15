@@ -104,8 +104,11 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   let hasMcpServers = false;
   for (const layer of layers) {
     if (!isRecord(layer.mcpServers)) continue;
-    Object.assign(mcpServers, layer.mcpServers);
     hasMcpServers = true;
+    for (const [name, config] of Object.entries(layer.mcpServers)) {
+      // An invalid higher-precedence entry must not erase a valid lower layer.
+      if (isRecord(config)) mcpServers[name] = config;
+    }
   }
 
   // permissionRules concatenate higher-precedence layers first: evaluation is

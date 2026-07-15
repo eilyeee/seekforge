@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAgentCore } from "../../src/agent/loop.js";
+import { createDispatchManager } from "../../src/subagents/manager.js";
 import { validateAgentTeam } from "../../src/subagents/team.js";
 import type { AgentDefinition } from "../../src/subagents/types.js";
 import {
   collect,
+  deferred,
   fakeDispatcher,
   isParentRequest,
   response,
@@ -170,6 +172,144 @@ describe("validateAgentTeam", () => {
       });
       expect(events.some((event) => event.type === "subagent.started")).toBe(false);
     } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes edit-member confirmations before launching approved work concurrently", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-team-confirm-"));
+    let parentTurns = 0;
+    let confirming = 0;
+    let maxConfirming = 0;
+    const provider = routedProvider((request) => {
+      if (isParentRequest(request)) {
+        parentTurns++;
+        return parentTurns === 1
+          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
+              members: [
+                { id: "fix-a", agentId: "fixer", task: "edit a" },
+                { id: "fix-b", agentId: "fixer", task: "edit b" },
+              ],
+              maxConcurrency: 2,
+            }))
+          : response({ content: "done" });
+      }
+      return request.messages.some((message) => message.role === "tool")
+        ? response({ content: "fixed" })
+        : toolCallsResponse(toolCall("write-1", "write_file", { path: "x.ts", content: "x" }));
+    });
+
+    try {
+      const events = await collect(createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher(),
+        confirm: async () => {
+          confirming++;
+          maxConfirming = Math.max(maxConfirming, confirming);
+          await Promise.resolve();
+          confirming--;
+          return true;
+        },
+        subagents: [fixer],
+      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+
+      expect(maxConfirming).toBe(1);
+      expect(confirming).toBe(0);
+      expect(toolCompleted(events, "dispatch_team")[0]!.result.ok).toBe(true);
+      expect(events.filter((event) => event.type === "subagent.started")).toHaveLength(2);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("fills a free concurrency slot as soon as a dependency branch becomes ready", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-team-ready-"));
+    const slowGate = deferred<void>();
+    let parentTurns = 0;
+    let synthesisStarted = false;
+    const provider = routedProvider(async (request) => {
+      if (isParentRequest(request)) {
+        parentTurns++;
+        return parentTurns === 1
+          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
+              members: [
+                { id: "slow", agentId: "reviewer", task: "slow branch" },
+                { id: "fast", agentId: "tester", task: "fast branch" },
+                { id: "synthesis", agentId: "tester", task: "synthesize fast", dependsOn: ["fast"] },
+              ],
+              maxConcurrency: 2,
+            }))
+          : response({ content: "done" });
+      }
+      const userText = request.messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
+      if (userText.includes("slow branch")) {
+        await slowGate.promise;
+        return response({ content: "slow done" });
+      }
+      if (userText.includes("synthesize fast")) {
+        synthesisStarted = true;
+        slowGate.resolve();
+        return response({ content: "synthesis done" });
+      }
+      return response({ content: "fast done" });
+    });
+
+    try {
+      const events = await collect(createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher(),
+        confirm: async () => true,
+        subagents: agents,
+      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+
+      expect(synthesisStarted).toBe(true);
+      expect(toolCompleted(events, "dispatch_team")[0]!.result.ok).toBe(true);
+    } finally {
+      slowGate.resolve();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an explicitly cancelled member as team_cancelled", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-team-cancel-"));
+    const nestedGate = deferred<void>();
+    const manager = createDispatchManager();
+    let parentTurns = 0;
+    const provider = routedProvider(async (request) => {
+      if (isParentRequest(request)) {
+        parentTurns++;
+        return parentTurns === 1
+          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
+              members: [{ id: "review", agentId: "reviewer", task: "wait for cancellation" }],
+            }))
+          : response({ content: "done" });
+      }
+      await nestedGate.promise;
+      return response({ content: "too late" });
+    });
+
+    try {
+      const events = [];
+      const stream = createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher(),
+        confirm: async () => true,
+        subagents: agents,
+        dispatchManager: manager,
+      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace });
+      for await (const event of stream) {
+        events.push(event);
+        if (event.type === "subagent.started") manager.cancel(event.dispatchId);
+      }
+
+      expect(toolCompleted(events, "dispatch_team")[0]!.result).toMatchObject({
+        ok: false,
+        error: { code: "team_cancelled" },
+        data: { status: "cancelled", members: [{ id: "review", status: "cancelled" }] },
+      });
+      expect(events.some((event) => event.type === "subagent.cancelled")).toBe(true);
+    } finally {
+      nestedGate.resolve();
       rmSync(workspace, { recursive: true, force: true });
     }
   });

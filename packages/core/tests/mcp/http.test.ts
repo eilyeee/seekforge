@@ -21,14 +21,22 @@ function startFakeServer(): Promise<{
   url: string;
   requests: RecordedRequest[];
   getOversizedSseDisconnects: () => number;
+  getSessionDeletes: () => number;
   close: () => Promise<void>;
 }> {
   const requests: RecordedRequest[] = [];
   const sockets = new Set<Socket>();
   const hanging: ServerResponse[] = [];
+  const invalidInitializeTokens = new Set<string>();
   let oversizedSseDisconnects = 0;
+  let sessionDeletes = 0;
 
   const server: Server = createServer((req, res) => {
+    if (req.method === "DELETE") {
+      sessionDeletes++;
+      res.writeHead(200).end();
+      return;
+    }
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
@@ -50,6 +58,19 @@ function startFakeServer(): Promise<{
       };
 
       if (msg.method === "initialize") {
+        const invalidOnce = req.headers["x-invalid-initialize-once"];
+        if (typeof invalidOnce === "string" && !invalidInitializeTokens.has(invalidOnce)) {
+          invalidInitializeTokens.add(invalidOnce);
+          json(
+            {
+              jsonrpc: "2.0",
+              id: msg.id,
+              result: { capabilities: {}, serverInfo: { name: "invalid-once", version: "0" } },
+            },
+            { "mcp-session-id": SESSION_ID },
+          );
+          return;
+        }
         json(
           {
             jsonrpc: "2.0",
@@ -156,6 +177,7 @@ function startFakeServer(): Promise<{
         url: `http://127.0.0.1:${address.port}/mcp`,
         requests,
         getOversizedSseDisconnects: () => oversizedSseDisconnects,
+        getSessionDeletes: () => sessionDeletes,
         close: () =>
           new Promise<void>((done) => {
             for (const res of hanging) res.destroy();
@@ -171,9 +193,10 @@ let url: string;
 let requests: RecordedRequest[];
 let closeServer: () => Promise<void>;
 let getOversizedSseDisconnects: () => number;
+let getSessionDeletes: () => number;
 
 beforeAll(async () => {
-  ({ url, requests, getOversizedSseDisconnects, close: closeServer } = await startFakeServer());
+  ({ url, requests, getOversizedSseDisconnects, getSessionDeletes, close: closeServer } = await startFakeServer());
 });
 
 afterAll(async () => {
@@ -252,6 +275,24 @@ describe("mcp client over streamable HTTP", () => {
     }
   });
 
+  it("retries after a malformed initialize result and drops its partial session", async () => {
+    requests.length = 0;
+    const client = createMcpClient({
+      name: "retry-http",
+      config: { url, headers: { "x-invalid-initialize-once": "retry-http" } },
+    });
+    try {
+      await expect(client.listTools()).rejects.toMatchObject({ code: "mcp_parse_error" });
+      await expect(client.listTools()).resolves.toHaveLength(1);
+
+      const initializes = requests.filter((request) => request.method === "initialize");
+      expect(initializes).toHaveLength(2);
+      expect(initializes[1]!.headers["mcp-session-id"]).toBeUndefined();
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("lists resources through the same transport", async () => {
     const client = makeClient();
     try {
@@ -299,9 +340,12 @@ describe("mcp client over streamable HTTP", () => {
     const client = makeClient(5_000);
     const controller = new AbortController();
     try {
-      const started = Date.now();
       const pending = client.callTool("slow", {}, controller.signal);
-      setTimeout(() => controller.abort(), 25);
+      await vi.waitFor(() => {
+        expect(requests.some((request) => request.method === "tools/call")).toBe(true);
+      });
+      const started = Date.now();
+      controller.abort();
       await expect(pending).rejects.toMatchObject({
         name: "McpError",
         code: "mcp_cancelled",
@@ -364,6 +408,14 @@ describe("mcp client over streamable HTTP", () => {
     const client = makeClient();
     client.dispose();
     await expect(client.listTools()).rejects.toMatchObject({ code: "disposed" });
+  });
+
+  it("deletes an initialized HTTP session on dispose", async () => {
+    const before = getSessionDeletes();
+    const client = makeClient();
+    await client.listTools();
+    client.dispose();
+    await vi.waitFor(() => expect(getSessionDeletes()).toBeGreaterThan(before));
   });
 
   it("rejects a config with neither command nor url (stdio path)", async () => {

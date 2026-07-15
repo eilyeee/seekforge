@@ -368,4 +368,15 @@ describe("GET /api/mcp/prompts", () => {
     expect(res.status).toBe(200);
     expect(await jsonOf(res)).toEqual({ text: "user: Hello Ada" });
   });
+
+  it.each([
+    42,
+    [],
+    { arguments: [] },
+    { arguments: { who: 42 } },
+  ])("rejects malformed prompt arguments locally: %j", async (body) => {
+    const res = await post("/api/mcp/prompts/fake/greet", body);
+    expect(res.status).toBe(400);
+    expect((await jsonOf(res)).error.code).toBe("bad_request");
+  });
 });

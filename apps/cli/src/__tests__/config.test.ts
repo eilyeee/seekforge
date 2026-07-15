@@ -111,6 +111,20 @@ test("settings mcpServers win over project for same server name", () => {
   cleanup();
 });
 
+test("invalid higher-layer MCP entries do not erase valid lower-layer servers", () => {
+  const { projectPath, cleanup } = setupProject({
+    mcpServers: { fs: { command: "node", args: ["server.js"] } },
+  });
+  const settingsPath = writeSettings(projectPath, "settings.json", {
+    mcpServers: { fs: null, broken: [] },
+  });
+
+  const config = loadConfig(projectPath, settingsPath);
+  assert.deepEqual(config.mcpServers?.["fs"], { command: "node", args: ["server.js"] });
+  assert.equal(config.mcpServers?.["broken"], undefined);
+  cleanup();
+});
+
 // ── permissionRules layering ─────────────────────────────────────────────────
 
 test("settings permissionRules are prepended (higher priority than project)", () => {
