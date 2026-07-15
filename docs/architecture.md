@@ -76,6 +76,13 @@ turn boundary. Server WS frames expose those controls; TUI and Desktop render
 the same shared event contract and retain completed cards when a later run
 reuses a run-local dispatch id.
 
+`dispatch_team` adds deterministic orchestration over the same manager. A team
+is a validated acyclic graph of named members; ready members run up to the
+declared concurrency limit, dependants wait, and the failure policy either stops
+pending work or continues independent branches. Team members emit the ordinary
+subagent lifecycle, so steering, cancellation, usage accounting, and traces do
+not diverge from one-off dispatches.
+
 Workspace mutations from Agent, REST, Git, worktree, and desktop surfaces must
 use the relevant shared session or repository coordination guard. UI requests
 must also reject stale completion when the active workspace changes. A request

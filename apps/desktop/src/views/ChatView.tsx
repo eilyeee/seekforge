@@ -46,7 +46,7 @@ export function ChatView() {
   const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
-  const { setModel, setThinking, setReasoningEffort, setOutputStyle, truncateAtItem, startLoop, resumeLoop } =
+  const { setModel, setThinking, setReasoningEffort, setOutputStyle, setSandbox, truncateAtItem, startLoop, resumeLoop } =
     useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
@@ -463,13 +463,7 @@ export function ChatView() {
           config={config}
           onSetMode={setMode}
           onSetApprovalMode={setApprovalMode}
-          onSetSandbox={(value) => {
-            const origin = { tabId: tab.tabId, workspaceId: tab.ws };
-            void api.setConfig("sandbox", value, undefined, origin.workspaceId).then((next) => {
-              const current = activeTab(useStore.getState().tabs);
-              if (current.tabId === origin.tabId && current.ws === origin.workspaceId) setConfig(next);
-            }).catch(() => {});
-          }}
+          onSetSandbox={setSandbox}
         />
         </div>
       </div>

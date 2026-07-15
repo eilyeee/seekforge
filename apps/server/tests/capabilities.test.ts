@@ -362,4 +362,10 @@ describe("GET /api/mcp/prompts", () => {
       { server: "fake", name: "summarize" },
     ]);
   });
+
+  it("resolves one prompt with workspace-scoped arguments", async () => {
+    const res = await post("/api/mcp/prompts/fake/greet", { arguments: { who: "Ada" } });
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toEqual({ text: "user: Hello Ada" });
+  });
 });

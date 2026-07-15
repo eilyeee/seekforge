@@ -40,13 +40,40 @@ function connect(workspace: string, readOnly?: boolean) {
   });
 
   let nextId = 1;
-  const request = (method: string, params?: Record<string, unknown>): Promise<JsonRpcResponse> => {
+  const rawRequest = (method: string, params?: Record<string, unknown>): Promise<JsonRpcResponse> => {
     const id = nextId++;
     const p = new Promise<JsonRpcResponse>((resolve) => pending.set(id, resolve));
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     return p;
   };
+  let initializeSent = false;
+  let initialized = false;
+  let ready: Promise<void> | undefined;
+  const ensureReady = (): Promise<void> => {
+    if (initialized) return Promise.resolve();
+    if (!ready) {
+      ready = (async () => {
+        if (!initializeSent) {
+          initializeSent = true;
+          await rawRequest("initialize", { protocolVersion: "2025-06-18" });
+        }
+        input.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+        initialized = true;
+      })();
+    }
+    return ready;
+  };
+  const request = async (method: string, params?: Record<string, unknown>): Promise<JsonRpcResponse> => {
+    if (method === "initialize") {
+      initializeSent = true;
+      return rawRequest(method, params);
+    }
+    if (initialized) return rawRequest(method, params);
+    await ensureReady();
+    return rawRequest(method, params);
+  };
   const notify = (method: string, params?: Record<string, unknown>): void => {
+    if (method === "notifications/initialized") initialized = true;
     input.write(`${JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}) })}\n`);
   };
   return { server, request, notify, unsolicited };
@@ -139,13 +166,33 @@ describe("mcp server", () => {
     expect(result.isError).toBe(false);
   });
 
-  it("resources/list is empty and unknown methods get -32601", async () => {
+  it("lists and reads workspace resources", async () => {
     const c = client();
     const resources = await c.request("resources/list");
-    expect(resources.result).toEqual({ resources: [] });
-    const unknown = await c.request("prompts/list");
-    expect(unknown.error).toMatchObject({ code: -32601 });
-    expect(unknown.error!.message).toContain("prompts/list");
+    expect((resources.result!["resources"] as Array<{ uri: string }>).map((r) => r.uri)).toEqual([
+      "seekforge://workspace/overview",
+      "seekforge://workspace/status",
+    ]);
+    const overview = await c.request("resources/read", { uri: "seekforge://workspace/overview" });
+    const content = overview.result!["contents"] as Array<{ text: string }>;
+    expect(JSON.parse(content[0]!.text)).toMatchObject({ workspace, readOnly: true });
+    const missing = await c.request("resources/read", { uri: "seekforge://workspace/missing" });
+    expect(missing.error).toMatchObject({ code: -32602 });
+  });
+
+  it("lists and renders built-in prompts", async () => {
+    const c = client();
+    const listed = await c.request("prompts/list");
+    expect((listed.result!["prompts"] as Array<{ name: string }>).map((p) => p.name)).toEqual([
+      "review-changes",
+      "security-review",
+    ]);
+    const prompt = await c.request("prompts/get", {
+      name: "security-review",
+      arguments: { focus: "authentication" },
+    });
+    const messages = prompt.result!["messages"] as Array<{ content: { text: string } }>;
+    expect(messages[0]!.content.text).toContain("authentication");
   });
 
   it("reports a tool failure as isError content, not a protocol error", async () => {
@@ -170,7 +217,7 @@ describe("mcp server", () => {
     ]);
     expect(ping.result).toEqual({});
 
-    c.notify("notifications/cancelled", { requestId: 1, reason: "test complete" });
+    c.notify("notifications/cancelled", { requestId: 2, reason: "test complete" });
     await expect(slow).resolves.toMatchObject({
       result: { isError: true },
     });
@@ -178,12 +225,13 @@ describe("mcp server", () => {
 
   it("aborts the matching tool call on notifications/cancelled", async () => {
     const c = client(false);
+    await c.request("ping");
     const started = Date.now();
     const slow = c.request("tools/call", {
       name: "run_command",
       arguments: { command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 5000)"` },
     });
-    c.notify("notifications/cancelled", { requestId: 1, reason: "caller aborted" });
+    c.notify("notifications/cancelled", { requestId: 3, reason: "caller aborted" });
 
     await expect(slow).resolves.toMatchObject({
       result: { isError: true },

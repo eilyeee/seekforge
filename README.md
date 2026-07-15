@@ -168,9 +168,9 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   reasoning with tool calling — control it via `/think on|off|high|max` or
   the `thinking` / `reasoningEffort` config keys; streamed reasoning renders
   as a collapsible thought block and is never echoed back into requests.
-- **OS sandbox (opt-in)**: `"sandbox": "workspace-write" | "restricted"`
-  wraps commands in seatbelt (macOS) / bwrap (Linux); `restricted` also cuts
-  network. Hard-fails if requested but unavailable — never silently
+- **OS sandbox (opt-in)**: `"sandbox": "read-only" | "workspace-write" | "restricted"`
+  wraps commands in seatbelt (macOS) / bwrap (Linux); `read-only` protects the
+  workspace and `restricted` also cuts network. Hard-fails if requested but unavailable — never silently
   unsandboxed. A denial-looking failure asks once before retrying unsandboxed.
 - **Hooks** fire at 9 stages (preToolUse, postToolUse, sessionStart,
   userPromptSubmit, preCompact, stop, subagentStop, notification,
@@ -222,7 +222,7 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
 
 By default this is **misuse protection within a project you already trust** —
 any project command (e.g. `npm test`) runs that project's code. For OS-level
-isolation, opt into the sandbox (`"sandbox": "workspace-write" | "restricted"`,
+isolation, opt into the sandbox (`"sandbox": "read-only" | "workspace-write" | "restricted"`,
 seatbelt/bwrap; see above).
 
 ## Rust execution backend (optional)

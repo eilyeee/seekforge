@@ -90,7 +90,10 @@ const runCommand = defineTool({
       };
     }
 
-    if (ctx.runtime) {
+    // The native runtime protocol has no sandbox field. Using it while a
+    // sandbox is active would silently bypass the caller's OS policy, so the
+    // wrapped shell path is authoritative for every sandboxed command.
+    if (ctx.runtime && (ctx.sandbox === undefined || ctx.sandbox === "off")) {
       const r = await callRuntime<{
         exitCode: number;
         stdout: string;

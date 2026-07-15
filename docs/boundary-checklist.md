@@ -752,6 +752,36 @@ itself never runs.
 - **Caught:** `apps/server/src/routes/triggers.ts` — forged GitHub webhook headers
   distinguished unknown, disabled, and enabled trigger ids before HMAC validation.
 
+## 45. Alternate execution backends must preserve security policy
+
+A faster backend is not interchangeable when its protocol cannot express the
+active sandbox, permission, cancellation, or resource policy.
+
+- **Do:** route through a policy-capable backend or reject; never silently drop
+  the unsupported constraint.
+- **Caught:** `packages/core/src/tools/builtins/command.ts` — the Rust Runtime
+  path bypassed an active OS command sandbox.
+
+## 46. Opaque pagination needs progress guards
+
+Ignoring `nextCursor` silently hides data; trusting it forever lets a malformed
+server create an infinite loop.
+
+- **Do:** consume every opaque cursor, reject repeats, and impose a documented
+  page/item bound.
+- **Caught:** `packages/core/src/mcp/client.ts` — tool, resource, and prompt
+  discovery returned only the first page.
+
+## 47. Advertised capabilities are executable promises
+
+Declaring a protocol capability can cause the peer to send requests and wait for
+answers. Advertising a partially implemented feature is worse than omitting it.
+
+- **Do:** advertise only capabilities the active transport can service; retain
+  negotiated version/capability state for later requests.
+- **Caught:** `packages/core/src/mcp/http.ts` — HTTP advertised roots but could
+  discard a request-scoped `roots/list`, deadlocking a conforming server.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -600,6 +600,28 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     };
   }
 
+  if (method === "GET" && path === "/api/mcp/prompts") {
+    await delay(300);
+    return {
+      prompts: [
+        { server: "context7", name: "review", description: "Review a feature against current documentation." },
+        {
+          server: "context7",
+          name: "explain-library",
+          description: "Explain a library API for a target audience.",
+          arguments: [{ name: "library", required: true }, { name: "audience" }],
+        },
+      ],
+    };
+  }
+  if (method === "POST" && path.startsWith("/api/mcp/prompts/")) {
+    const parts = path.split("/").map(decodeURIComponent);
+    const server = parts[4] ?? "server";
+    const name = parts[5] ?? "prompt";
+    const args = ((body as { arguments?: Record<string, unknown> } | undefined)?.arguments ?? {});
+    return { text: `Use MCP prompt ${server}/${name}.\n\nArguments: ${JSON.stringify(args)}` };
+  }
+
   if (method === "GET" && path === "/api/mcp") return mcpServers.map((s) => ({ ...s }));
   if (method === "POST" && path === "/api/mcp") {
     const { name, command, args, env, url, trusted } = (body ?? {}) as {

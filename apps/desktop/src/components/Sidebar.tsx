@@ -86,6 +86,7 @@ export function Sidebar() {
   // Connection state of the active tab's socket (each tab owns one).
   const conn = useStore((s) => activeTab(s.tabs).conn);
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       storeCollapsed(!c);
@@ -93,30 +94,27 @@ export function Sidebar() {
     });
   };
 
-  // Collapsed: hide the whole list; leave only a thin strip with one ›-button.
-  if (collapsed) {
-    return (
-      <aside
-        data-tauri-drag-region
-        className={`flex w-10 shrink-0 flex-col items-center border-r border-subtle bg-surface-raised/60 ${
-          IS_MAC ? "pt-9" : "pt-3"
-        }`}
+  const rail = (desktop: boolean) => (
+    <aside
+      data-tauri-drag-region
+      className={`${desktop ? "hidden sm:flex" : "flex sm:hidden"} w-10 shrink-0 flex-col items-center border-r border-subtle bg-surface-raised/60 ${
+        IS_MAC ? "pt-9" : "pt-3"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={desktop ? toggleCollapsed : () => setMobileOpen(true)}
+        title={t("nav.expand")}
+        aria-label={t("nav.expand")}
+        className="focus-ring rounded p-1.5 text-tertiary hover:bg-surface-overlay hover:text-secondary"
       >
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          title={t("nav.expand")}
-          aria-label={t("nav.expand")}
-          className="focus-ring rounded p-1.5 text-tertiary hover:bg-surface-overlay hover:text-secondary"
-        >
-          <IconChevron size={16} />
-        </button>
-      </aside>
-    );
-  }
+        <IconChevron size={16} />
+      </button>
+    </aside>
+  );
 
-  return (
-    <aside className="flex w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised/60">
+  const full = (mobile: boolean) => (
+    <aside className={`${mobile ? "fixed inset-y-0 left-0 z-50 flex shadow-xl sm:hidden" : "hidden sm:flex"} w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised`}>
       <div
         data-tauri-drag-region
         className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
@@ -127,9 +125,9 @@ export function Sidebar() {
         </span>
         <button
           type="button"
-          onClick={toggleCollapsed}
-          title={t("nav.collapse")}
-          aria-label={t("nav.collapse")}
+          onClick={mobile ? () => setMobileOpen(false) : toggleCollapsed}
+          title={t(mobile ? "nav.close" : "nav.collapse")}
+          aria-label={t(mobile ? "nav.close" : "nav.collapse")}
           className="focus-ring ml-auto rounded p-1 text-tertiary hover:bg-surface-overlay hover:text-secondary"
         >
           <IconChevron size={14} className="rotate-180" />
@@ -149,7 +147,10 @@ export function Sidebar() {
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setView(v)}
+                  onClick={() => {
+                    setView(v);
+                    if (mobile) setMobileOpen(false);
+                  }}
                   aria-current={active ? "page" : undefined}
                   className={`focus-ring group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                     active
@@ -191,5 +192,23 @@ export function Sidebar() {
         {t(`status.${conn}`)}
       </div>
     </aside>
+  );
+
+  return (
+    <>
+      {rail(false)}
+      {collapsed ? rail(true) : full(false)}
+      {mobileOpen && (
+        <>
+          <button
+            type="button"
+            aria-label={t("nav.close")}
+            className="fixed inset-0 z-40 bg-black/30 sm:hidden"
+            onClick={() => setMobileOpen(false)}
+          />
+          {full(true)}
+        </>
+      )}
+    </>
   );
 }

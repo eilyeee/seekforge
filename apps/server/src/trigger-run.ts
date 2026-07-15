@@ -51,28 +51,23 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
     resolveStarted = resolve;
     rejectStarted = reject;
   });
-  let handle: ReturnType<CreateAgentFn>;
-  try {
-    handle = input.createAgent({
-        workspace: input.workspace,
-        // Headless: auto-deny every confirmation. Combined with approvalMode
-        // "acceptEdits", in-workspace edits still apply autonomously, but
-        // commands, env changes and dangerous calls are refused.
-        confirm: async () => false,
-        askUser: async () => HEADLESS_DECLINE,
-        extractMemory: input.mode === "edit",
-    });
-  } catch (err) {
-    rejectStarted(err instanceof Error ? err : new Error(String(err)));
-    return { started, completion: Promise.resolve(), abort: () => controller.abort() };
-  }
-
   let settled = false;
   const completion = (async () => {
+      let handle: Awaited<ReturnType<CreateAgentFn>> | undefined;
       try {
+        handle = await input.createAgent({
+          workspace: input.workspace,
+          // Headless: auto-deny every confirmation. Combined with approvalMode
+          // "acceptEdits", in-workspace edits still apply autonomously, but
+          // commands, env changes and dangerous calls are refused.
+          confirm: async () => false,
+          askUser: async () => HEADLESS_DECLINE,
+          extractMemory: input.mode === "edit",
+        });
+        const task = handle.expandTask ? await handle.expandTask(input.task, controller.signal) : input.task;
         for await (const event of handle.agent.runTask({
           projectPath: input.workspace,
-          task: input.task,
+          task,
           mode: input.mode,
           approvalMode: "acceptEdits",
           signal: controller.signal,
@@ -102,7 +97,7 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
         }
       } finally {
         try {
-          handle.dispose();
+          handle?.dispose();
         } catch {
           // Runtime disposal must not reject detached completion or hide state cleanup.
         } finally {

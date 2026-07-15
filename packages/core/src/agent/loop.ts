@@ -34,13 +34,16 @@ import {
   AGENT_SEND_TOOL,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DISPATCH_AGENT_TOOL,
+  DISPATCH_TEAM_TOOL,
   buildAgentResultToolDefinition,
   buildAgentSendToolDefinition,
   buildDispatchToolDefinition,
+  buildDispatchTeamToolDefinition,
   buildSubagentPrompt,
   buildSubagentRoster,
   createDispatchManager,
   createEventQueue,
+  validateAgentTeam,
   whitelistDispatcher,
   type AgentDefinition,
   type DispatchHooks,
@@ -674,6 +677,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ? [
               ...deps.dispatcher.list(),
               buildDispatchToolDefinition(roster),
+              buildDispatchTeamToolDefinition(roster),
               buildAgentResultToolDefinition(),
               buildAgentSendToolDefinition(),
             ]
@@ -991,6 +995,73 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           return { ok: true, data: { dispatchId, agentId: def.id, status: "running" } };
         }
         return started.promise;
+      }
+
+      /** Executes a validated dependency graph through the normal dispatch lifecycle. */
+      async function runTeam(rawArgs: unknown): Promise<ToolResult> {
+        const validated = validateAgentTeam(rawArgs, roster);
+        if (!validated.ok) {
+          return { ok: false, error: { code: "invalid_team", message: validated.message } };
+        }
+        type MemberOutcome = {
+          id: string;
+          agentId: string;
+          status: "pending" | "done" | "failed" | "skipped";
+          result?: ToolResult;
+          reason?: string;
+        };
+        const outcomes = new Map<string, MemberOutcome>(
+          validated.plan.members.map((member) => [member.id, { id: member.id, agentId: member.agentId, status: "pending" }]),
+        );
+        let stopped = false;
+        while ([...outcomes.values()].some((outcome) => outcome.status === "pending")) {
+          for (const member of validated.plan.members) {
+            const outcome = outcomes.get(member.id)!;
+            if (outcome.status !== "pending") continue;
+            const dependencies = member.dependsOn.map((id) => outcomes.get(id)!);
+            if (dependencies.some((dep) => dep.status === "failed" || dep.status === "skipped")) {
+              outcome.status = "skipped";
+              outcome.reason = "dependency failed";
+            }
+          }
+          if (stopped) {
+            for (const outcome of outcomes.values()) {
+              if (outcome.status === "pending") {
+                outcome.status = "skipped";
+                outcome.reason = "team stopped after a member failure";
+              }
+            }
+            break;
+          }
+          const ready = validated.plan.members
+            .filter((member) => {
+              const outcome = outcomes.get(member.id)!;
+              return outcome.status === "pending" && member.dependsOn.every((id) => outcomes.get(id)!.status === "done");
+            })
+            .slice(0, validated.plan.maxConcurrency);
+          if (ready.length === 0) break; // graph was validated; only skipped members can remain here
+          const results = await Promise.all(
+            ready.map(async (member) => ({
+              member,
+              result: await runDispatch({ agentId: member.agentId, task: member.task }),
+            })),
+          );
+          for (const { member, result } of results) {
+            const outcome = outcomes.get(member.id)!;
+            outcome.status = result.ok ? "done" : "failed";
+            outcome.result = result;
+            if (!result.ok && validated.plan.failurePolicy === "stop") stopped = true;
+          }
+        }
+        const members = validated.plan.members.map((member) => outcomes.get(member.id)!);
+        const failed = members.filter((member) => member.status === "failed");
+        return failed.length === 0
+          ? { ok: true, data: { status: "done", members } }
+          : {
+              ok: false,
+              data: { status: "failed", members },
+              error: { code: "team_failed", message: `${failed.length} team member(s) failed` },
+            };
       }
 
       /** Handles an agent_result tool call (synchronous status poll). */
@@ -1394,7 +1465,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           };
 
           const isDispatchFamily = (name: string): boolean =>
-            dispatchManager !== undefined && (name === DISPATCH_AGENT_TOOL || name === AGENT_SEND_TOOL);
+            dispatchManager !== undefined &&
+            (name === DISPATCH_AGENT_TOOL || name === DISPATCH_TEAM_TOOL || name === AGENT_SEND_TOOL);
 
           // Dispatch-family calls of this turn start first and run
           // CONCURRENTLY; their nested events flow through the queue while
@@ -1411,7 +1483,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               continue;
             }
             pendingDispatches++;
-            const run = tc.name === DISPATCH_AGENT_TOOL ? runDispatch(args) : runAgentSend(args);
+            const run = tc.name === DISPATCH_AGENT_TOOL
+              ? runDispatch(args)
+              : tc.name === DISPATCH_TEAM_TOOL
+                ? runTeam(args)
+                : runAgentSend(args);
             void run
               .then(
                 (result) => result,

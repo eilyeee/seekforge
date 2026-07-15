@@ -33,8 +33,8 @@ export type TuiConfig = {
   notify?: boolean;
   /** Start the composer in vim mode (/vim toggles at runtime). */
   vim?: boolean;
-  /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
-  sandbox?: "off" | "workspace-write" | "restricted";
+  /** OS-level command sandbox (off when unset). */
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   /** Shell command producing one custom status-bar line (JSON payload on stdin). */
   statusLine?: string;
   /** Warn at 80% and 100% of this cumulative cost (USD) per TUI session. */

@@ -93,7 +93,7 @@ export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {
   /** Extra command prefixes allowed to auto-run (passed through as-is). */
   commandAllowlist?: string[];
   /** OS-level command sandbox; "off" (or unset) adds no key. */
-  sandbox?: "off" | "workspace-write" | "restricted";
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   compaction?: "mechanical" | "llm";
   /** Already resolved by the caller (the TUI folds in routing.planModel). */
   planModel?: string;

@@ -65,6 +65,8 @@ const HANDSHAKE_TIMEOUT_MS = 120_000;
 // which we accept (we do not enforce an exact match).
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
+const MAX_LIST_PAGES = 100;
+const MAX_LIST_ITEMS = 10_000;
 
 /**
  * Client capabilities advertised in initialize. We support filesystem roots
@@ -82,6 +84,7 @@ type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: 
 type ReadResourceResult = { contents?: ResourceContent[] };
 type PromptMessage = { role?: string; content?: ContentPart | ContentPart[] };
 type GetPromptResult = { description?: string; messages?: PromptMessage[] };
+type PaginatedResult<T> = { nextCursor?: string } & T;
 
 function flattenContent(parts: ContentPart[]): string {
   return parts
@@ -110,6 +113,41 @@ function flattenPromptMessages(messages: PromptMessage[]): string {
 function buildRootsResult(workspaceRoots: string[] | undefined): { roots: Array<{ uri: string; name?: string }> } {
   const roots = (workspaceRoots ?? []).map((p) => ({ uri: pathToFileURL(p).href, name: "workspace" }));
   return { roots };
+}
+
+/** Reads a complete MCP list while failing closed on malformed cursor loops. */
+async function listAll<T>(
+  transport: McpTransport,
+  method: string,
+  field: string,
+): Promise<T[]> {
+  const values: T[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const res = await transport.request<PaginatedResult<Record<string, unknown>>>(
+      method,
+      cursor === undefined ? {} : { cursor },
+    );
+    if (typeof res !== "object" || res === null || Array.isArray(res)) {
+      throw new McpError("mcp_error", `${method} result must be an object`);
+    }
+    const batch = res[field];
+    if (batch !== undefined && !Array.isArray(batch)) {
+      throw new McpError("mcp_error", `${method} result.${field} must be an array`);
+    }
+    values.push(...((batch ?? []) as T[]));
+    if (values.length > MAX_LIST_ITEMS) {
+      throw new McpError("mcp_pagination_limit", `${method} exceeded ${MAX_LIST_ITEMS} items`);
+    }
+    const next = res?.nextCursor;
+    if (next === undefined || next === "") return values;
+    if (typeof next !== "string") throw new McpError("mcp_error", `${method} nextCursor must be a string`);
+    if (seen.has(next)) throw new McpError("mcp_pagination_loop", `${method} repeated cursor ${JSON.stringify(next)}`);
+    seen.add(next);
+    cursor = next;
+  }
+  throw new McpError("mcp_pagination_limit", `${method} exceeded ${MAX_LIST_PAGES} pages`);
 }
 
 /** Minimal transport contract shared by the stdio and Streamable HTTP backends. */
@@ -348,9 +386,7 @@ export function createMcpClient(options: McpClientOptions): McpClient {
 
   return {
     async listTools(): Promise<McpTool[]> {
-      // v1: no pagination (nextCursor ignored).
-      const res = await transport.request<{ tools?: McpTool[] }>("tools/list", {});
-      return res?.tools ?? [];
+      return listAll<McpTool>(transport, "tools/list", "tools");
     },
 
     async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
@@ -363,9 +399,7 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     },
 
     async listResources(): Promise<McpResource[]> {
-      // v1: no pagination (nextCursor ignored), like listTools.
-      const res = await transport.request<{ resources?: McpResource[] }>("resources/list", {});
-      return res?.resources ?? [];
+      return listAll<McpResource>(transport, "resources/list", "resources");
     },
 
     async readResource(uri: string, signal?: AbortSignal): Promise<string> {
@@ -377,9 +411,7 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     },
 
     async listPrompts(): Promise<McpPrompt[]> {
-      // v1: no pagination (nextCursor ignored), like listTools/listResources.
-      const res = await transport.request<{ prompts?: McpPrompt[] }>("prompts/list", {});
-      return res?.prompts ?? [];
+      return listAll<McpPrompt>(transport, "prompts/list", "prompts");
     },
 
     async getPrompt(name: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<string> {

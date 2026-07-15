@@ -500,7 +500,7 @@ export type ServerConfig = {
   /** Masked by the server (`sk-xxx****`). */
   apiKey?: string;
   /** Engine knobs — always present on GET /api/config (effective defaults). */
-  sandbox?: "off" | "workspace-write" | "restricted";
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   compaction?: "mechanical" | "llm";
   thinking?: boolean;
   reasoningEffort?: "high" | "max" | null;
@@ -650,6 +650,14 @@ export type AccountBalance = { currency: string; totalBalance: string };
 
 /** GET /api/mcp/resources entry. Inline reference syntax: @mcp:<server>:<uri>. */
 export type McpResource = { server: string; uri: string; name?: string };
+
+/** GET /api/mcp/prompts entry. */
+export type McpPrompt = {
+  server: string;
+  name: string;
+  description?: string;
+  arguments?: Array<{ name: string; description?: string; required?: boolean }>;
+};
 
 /** GET /api/tree entry (one file or directory in a workspace-relative dir). */
 export type TreeEntry = { name: string; path: string; type: "file" | "dir" };
@@ -806,6 +814,8 @@ export type RunOverrides = {
   reasoningEffort?: "high" | "max";
   /** Output style name (built-in or custom); resolved server-side. */
   outputStyle?: string;
+  /** Run-local OS sandbox override; absent keeps the project configuration. */
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
 };
 
 /** WS client → server frames (path /ws). */

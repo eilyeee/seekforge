@@ -13,6 +13,8 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadAgentDefinitions,
+  loadMcpToolSpecs,
+  readMcpResource,
   runAutoLoop,
   resumeAutoLoop,
   type AgentCore,
@@ -21,6 +23,8 @@ import {
   type LoopResult,
   type RuntimeClient,
   type DispatchManager,
+  type ToolSpec,
+  type McpClientEntry,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
@@ -32,6 +36,8 @@ export type RunOverrides = {
   reasoningEffort?: "high" | "max";
   /** Output style name (built-in or custom), resolved to appendSystemPrompt. */
   outputStyle?: string;
+  /** Run-local sandbox override (frame wins over project config). */
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
 };
 
 export type CreateAgentOptions = {
@@ -56,10 +62,12 @@ export type CreateAgentOptions = {
 
 export type AgentHandle = {
   agent: AgentCore;
+  /** Resolves inline @mcp:<server>:<uri> references using this run's clients. */
+  expandTask?: (task: string, signal?: AbortSignal) => Promise<string>;
   dispose: () => void;
 };
 
-export type CreateAgentFn = (opts: CreateAgentOptions) => AgentHandle;
+export type CreateAgentFn = (opts: CreateAgentOptions) => AgentHandle | Promise<AgentHandle>;
 
 /**
  * Runs the core auto-loop for a connection-scoped agent assembly. The same
@@ -79,7 +87,10 @@ export type ResumeLoopFn = (
  * feeds it to createAgentCore) and runDefaultLoop (which feeds it to
  * runAutoLoop) so a loop's inner runs use the exact same plumbing as a run.
  */
-export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runtime?: RuntimeClient } {
+export function buildAgentDeps(
+  opts: CreateAgentOptions,
+  mcpToolSpecs: ToolSpec[] = [],
+): AgentCoreDeps & { runtime?: RuntimeClient } {
   const config = loadConfig(opts.workspace);
 
   let runtime: RuntimeClient | undefined;
@@ -110,7 +121,7 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
       reasoningEffort,
       modelPricing: config.modelPricing,
       commandAllowlist: config.commandAllowlist,
-      sandbox: config.sandbox,
+      sandbox: opts.overrides?.sandbox ?? config.sandbox,
       compaction: config.compaction,
       planModel: config.planModel,
       escalateOnFailure: config.escalateOnFailure,
@@ -119,7 +130,7 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
       autoLint: config.autoLint,
       editFormat: config.editFormat,
     }),
-    dispatcher: createDefaultDispatcher(),
+    dispatcher: createDefaultDispatcher(mcpToolSpecs),
     confirm: opts.confirm,
     onModelDelta: opts.onModelDelta,
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
@@ -133,10 +144,40 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
   };
 }
 
-export const createDefaultAgent: CreateAgentFn = (opts) => {
-  const deps = buildAgentDeps(opts);
+async function prepareAgentDeps(opts: CreateAgentOptions): Promise<{
+  deps: AgentCoreDeps & { runtime?: RuntimeClient };
+  entries: McpClientEntry[];
+  disposeMcp: () => void;
+}> {
+  const servers = loadConfig(opts.workspace).mcpServers ?? {};
+  const mcp = await loadMcpToolSpecs(servers, [opts.workspace]);
+  return { deps: buildAgentDeps(opts, mcp.specs), entries: mcp.entries, disposeMcp: mcp.dispose };
+}
+
+async function expandMcpResources(task: string, entries: McpClientEntry[], signal?: AbortSignal): Promise<string> {
+  const refs = [...task.matchAll(/@mcp:([A-Za-z0-9_-]+):(\S+)/g)].slice(0, 5);
+  if (refs.length === 0) return task;
+  const blocks: string[] = [];
+  for (const match of refs) {
+    const server = match[1]!;
+    const uri = match[2]!;
+    try {
+      blocks.push(`[MCP resource ${server}:${uri}]\n${await readMcpResource(server, uri, entries, signal)}`);
+    } catch (err) {
+      blocks.push(`[MCP resource ${server}:${uri} unavailable: ${err instanceof Error ? err.message : String(err)}]`);
+    }
+  }
+  return `${task}\n\n${blocks.join("\n\n")}`;
+}
+
+export const createDefaultAgent: CreateAgentFn = async (opts) => {
+  const { deps, entries, disposeMcp } = await prepareAgentDeps(opts);
   const agent = createAgentCore(deps);
-  return { agent, dispose: () => deps.runtime?.dispose() };
+  return {
+    agent,
+    expandTask: (task, signal) => expandMcpResources(task, entries, signal),
+    dispose: () => { deps.runtime?.dispose(); disposeMcp(); },
+  };
 };
 
 /**
@@ -144,12 +185,13 @@ export const createDefaultAgent: CreateAgentFn = (opts) => {
  * The loop internally builds the agent via createAgentCore(deps), so its
  * runs share this socket's confirm/askUser/onModelDelta bridges.
  */
-export const runDefaultLoop: RunLoopFn = (opts, loopOpts) => {
-  const deps = buildAgentDeps(opts);
-  return runAutoLoop(deps, loopOpts).finally(() => deps.runtime?.dispose());
+export const runDefaultLoop: RunLoopFn = async (opts, loopOpts) => {
+  const { deps, entries, disposeMcp } = await prepareAgentDeps(opts);
+  const task = await expandMcpResources(loopOpts.task, entries, loopOpts.signal);
+  return runAutoLoop(deps, { ...loopOpts, task }).finally(() => { deps.runtime?.dispose(); disposeMcp(); });
 };
 
-export const resumeDefaultLoop: ResumeLoopFn = (opts, loopId, loopOpts) => {
-  const deps = buildAgentDeps(opts);
-  return resumeAutoLoop(deps, loopId, loopOpts).finally(() => deps.runtime?.dispose());
+export const resumeDefaultLoop: ResumeLoopFn = async (opts, loopId, loopOpts) => {
+  const { deps, disposeMcp } = await prepareAgentDeps(opts);
+  return resumeAutoLoop(deps, loopId, loopOpts).finally(() => { deps.runtime?.dispose(); disposeMcp(); });
 };

@@ -38,6 +38,16 @@ export {
 } from "./dispatch.js";
 export { createEventQueue, type EventQueue } from "./events.js";
 export {
+  DISPATCH_TEAM_TOOL,
+  MAX_TEAM_CONCURRENCY,
+  MAX_TEAM_MEMBERS,
+  buildDispatchTeamToolDefinition,
+  validateAgentTeam,
+  type AgentTeamPlan,
+  type TeamMemberPlan,
+  type TeamPlanValidation,
+} from "./team.js";
+export {
   createDispatchManager,
   MAX_STEER_MESSAGE_LENGTH,
   MAX_STEER_QUEUE_LENGTH,

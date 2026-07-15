@@ -775,7 +775,7 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `runtimeBin` | string | String |
 | `commandAllowlist` | string[] | Comma-separated string (`"pnpm test, cargo build"`) |
 | `models` | string[] | Comma-separated string (`"deepseek-v4-flash, deepseek-v4-pro"`) |
-| `sandbox` | enum | `off` / `workspace-write` / `restricted` |
+| `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |
 | `compaction` | enum | `mechanical` / `llm` |
 | `thinking` | boolean | `true` / `false` |
 | `reasoningEffort` | enum | `high` / `max` |

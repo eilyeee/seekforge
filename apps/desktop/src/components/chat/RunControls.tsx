@@ -5,14 +5,14 @@ import type { ApprovalChoice, ChatTab, StartMode } from "../../store";
 import type { ServerConfig } from "../../types";
 
 const MODES: StartMode[] = ["edit", "ask", "plan"];
-type Sandbox = "off" | "workspace-write" | "restricted";
+type Sandbox = "off" | "read-only" | "workspace-write" | "restricted";
 
 type Props = {
   tab: ChatTab;
   config: ServerConfig | null;
   onSetMode: (m: StartMode) => void;
   onSetApprovalMode: (a: ApprovalChoice) => void;
-  onSetSandbox: (s: Sandbox) => void;
+  onSetSandbox: (s: Sandbox | null) => void;
 };
 
 /**
@@ -26,9 +26,12 @@ export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSa
   const running = tab.chat.running;
   const inSession = !!tab.chat.sessionId;
 
-  const sandbox = (config?.sandbox ?? "off") as Sandbox;
+  const configuredSandbox = (config?.sandbox ?? "off") as Sandbox;
+  const sandbox = tab.sandbox ?? "project";
   const sandboxOptions: SelectOption[] = [
+    { value: "project", label: t("chat.sandbox.project", { mode: configuredSandbox }) },
     { value: "off", label: t("chat.sandboxOff") },
+    { value: "read-only", label: t("chat.sandbox.readOnly") },
     { value: "workspace-write", label: t("chat.sandbox.workspaceWrite") },
     { value: "restricted", label: t("chat.sandbox.restricted") },
   ];
@@ -47,7 +50,7 @@ export function RunControls({ tab, config, onSetMode, onSetApprovalMode, onSetSa
         up
         value={sandbox}
         options={sandboxOptions}
-        onChange={(v) => onSetSandbox(v as Sandbox)}
+        onChange={(v) => onSetSandbox(v === "project" ? null : (v as Sandbox))}
         size="sm"
         disabled={running}
         leading={<IconShield size={14} />}

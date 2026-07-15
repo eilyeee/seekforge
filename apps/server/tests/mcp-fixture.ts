@@ -62,6 +62,13 @@ rl.on("line", (line) => {
     ] } });
     return;
   }
+  if (msg.method === "prompts/get") {
+    const who = (msg.params.arguments && msg.params.arguments.who) || "world";
+    send({ jsonrpc: "2.0", id: msg.id, result: { messages: [
+      { role: "user", content: { type: "text", text: "Hello " + who } },
+    ] } });
+    return;
+  }
   send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found: " + msg.method } });
 });
 `;

@@ -75,6 +75,8 @@ export type ChatTab = {
   reasoningEffort: "high" | "max";
   /** Output style name; "" or "default" = server default (nothing sent). */
   outputStyle: string;
+  /** Run-local sandbox; null = use the project configuration. */
+  sandbox: "off" | "read-only" | "workspace-write" | "restricted" | null;
   /**
    * Loop-mode progress for this tab: the streamed loop.event feed + the final
    * result. Reset when a new loop starts or the session is reset.
@@ -128,6 +130,7 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     thinking: null,
     reasoningEffort: "high",
     outputStyle: "",
+    sandbox: null,
     loop: emptyLoopProgress(),
     loopRunning: false,
     loopResetPending: false,

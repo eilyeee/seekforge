@@ -129,7 +129,8 @@ All are fields on `AgentCoreDeps` (or discovered from the workspace):
 - **MCP** — `loadMcpToolSpecs(config.mcpServers, [workspacePath])` returns
   `{ specs, dispose }`; hand `specs` to the dispatcher (remember to `dispose`).
 - **Subagents** — `deps.subagents = loadAgentDefinitions(workspace)` makes them
-  dispatchable via the synthetic `dispatch_agent` tool; `deps.providerForModel`
+  dispatchable via `dispatch_agent` and the dependency-aware `dispatch_team`;
+  `deps.providerForModel`
   builds a provider for a subagent's `model` override.
 - **Hooks** — `deps.hooks` (a `HookConfig`) fires shell hooks around tool calls
   and lifecycle stages (`preToolUse` can block). See

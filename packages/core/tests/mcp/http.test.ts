@@ -213,7 +213,7 @@ describe("mcp client over streamable HTTP", () => {
     }
   });
 
-  it("sends protocol 2025-06-18 and the roots capability in initialize", async () => {
+  it("negotiates protocol headers without advertising unsupported HTTP roots", async () => {
     requests.length = 0;
     const client = makeClient();
     try {
@@ -221,8 +221,11 @@ describe("mcp client over streamable HTTP", () => {
       const init = requests.find((r) => r.method === "initialize");
       expect(init?.params).toMatchObject({
         protocolVersion: "2025-06-18",
-        capabilities: { roots: { listChanged: true } },
+        capabilities: {},
       });
+      expect(init?.headers["mcp-protocol-version"]).toBeUndefined();
+      const tools = requests.find((r) => r.method === "tools/list");
+      expect(tools?.headers["mcp-protocol-version"]).toBe("2024-11-05");
     } finally {
       client.dispose();
     }

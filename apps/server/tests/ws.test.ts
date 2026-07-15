@@ -551,6 +551,7 @@ describe("override + output-style contract (frame -> agent)", () => {
       model: "deepseek-v4-pro",
       thinking: true,
       reasoningEffort: "max",
+      sandbox: "read-only",
     });
     await rx.waitFor((f) => f.type === "idle");
     expect(overrides).toMatchObject({ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" });
@@ -957,9 +958,10 @@ describe("per-run model/thinking overrides", () => {
       model: "deepseek-v4-pro",
       thinking: true,
       reasoningEffort: "max",
+      sandbox: "read-only",
     });
     await rx.waitFor((f) => f.type === "idle");
-    expect(seen).toEqual([{ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" }]);
+    expect(seen).toEqual([{ model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max", sandbox: "read-only" }]);
   });
 
   it("start without overrides leaves them undefined (config wins)", async () => {

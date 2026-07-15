@@ -81,7 +81,7 @@ type RunInput = {
 export function parseRunOverrides(
   frame: Record<string, unknown>,
 ): { overrides?: RunOverrides } | { error: string } {
-  const { model, thinking, reasoningEffort, outputStyle } = frame;
+  const { model, thinking, reasoningEffort, outputStyle, sandbox } = frame;
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
     return { error: "model must be a non-empty string when present" };
   }
@@ -94,11 +94,21 @@ export function parseRunOverrides(
   if (outputStyle !== undefined && (typeof outputStyle !== "string" || outputStyle.length === 0)) {
     return { error: "outputStyle must be a non-empty string when present" };
   }
+  if (
+    sandbox !== undefined &&
+    sandbox !== "off" &&
+    sandbox !== "read-only" &&
+    sandbox !== "workspace-write" &&
+    sandbox !== "restricted"
+  ) {
+    return { error: 'sandbox must be "off", "read-only", "workspace-write", or "restricted" when present' };
+  }
   const overrides: RunOverrides = {
     ...(model !== undefined ? { model } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(outputStyle !== undefined ? { outputStyle } : {}),
+    ...(sandbox !== undefined ? { sandbox } : {}),
   };
   return Object.keys(overrides).length > 0 ? { overrides } : {};
 }
@@ -231,7 +241,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     // createAgent is built INSIDE the try: if it (or resolveOutputStyle) throws,
     // the finally still resets `running`, drains pending prompts, and sends idle
     // — otherwise the connection would wedge with running=true forever.
-    let handle: ReturnType<typeof deps.createAgent> | undefined;
+    let handle: Awaited<ReturnType<typeof deps.createAgent>> | undefined;
     try {
       // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
       // for this turn, on top of (winning over) any frame overrides.
@@ -239,7 +249,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       const overrides = effort
         ? { ...input.overrides, thinking: true, reasoningEffort: effort }
         : input.overrides;
-      handle = deps.createAgent({
+      handle = await deps.createAgent({
         workspace: input.workspace,
         confirm,
         askUser,
@@ -259,9 +269,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           appendSystemPrompt = undefined;
         }
       }
+      const expandedTask = handle.expandTask ? await handle.expandTask(input.task, controller.signal) : input.task;
       for await (const event of handle.agent.runTask({
         projectPath: input.workspace,
-        task: input.task,
+        task: expandedTask,
         mode: input.mode,
         plan: input.plan,
         approvalMode: input.approvalMode,

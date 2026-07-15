@@ -13,6 +13,7 @@ import type {
   FileContent,
   GitStatus,
   HooksConfig,
+  McpPrompt,
   McpResource,
   McpServer,
   McpTool,
@@ -253,7 +254,14 @@ export const api = {
   todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }) =>
     request<Todo[]>("POST", withWorkspace("/api/todos"), op),
   balance: (ws?: string) => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance", ws)),
-  mcpResources: () => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources")),
+  mcpResources: (ws?: string) => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources", ws)),
+  mcpPrompts: (ws?: string) => request<{ prompts: McpPrompt[] }>("GET", withWorkspace("/api/mcp/prompts", ws)),
+  mcpPrompt: (server: string, name: string, args: Record<string, unknown> = {}, ws?: string) =>
+    request<{ text: string }>(
+      "POST",
+      withWorkspace(`/api/mcp/prompts/${encodeURIComponent(server)}/${encodeURIComponent(name)}`, ws),
+      { arguments: args },
+    ),
   models: () => request<ModelInfo[]>("GET", "/api/models"),
 
   // Memory stats + compaction (workspace-scoped).

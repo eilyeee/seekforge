@@ -111,6 +111,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
 | GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks resource support contributes zero entries |
 | GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks prompt support contributes zero entries. Mirrors GET /api/mcp/resources |
+| POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one MCP prompt in the selected workspace; 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |

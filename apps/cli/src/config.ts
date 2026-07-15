@@ -29,8 +29,8 @@ export type CliConfig = {
    * the file directly; not settable via `config set`.
    */
   hooks?: HookConfig;
-  /** OS-level command sandbox: "workspace-write" or "restricted" (off when unset). */
-  sandbox?: "off" | "workspace-write" | "restricted";
+  /** OS-level command sandbox (off when unset). */
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   /** Context compaction strategy: "llm" summarizes via the model (default mechanical). */
   compaction?: "mechanical" | "llm";
   /** DeepSeek V4 thinking mode (default: API default). /think toggles in the REPL. */

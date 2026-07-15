@@ -23,6 +23,8 @@ export type HeaderControls = {
   reasoningEffort: "high" | "max";
   /** Output style name; "" or "default" = server default (field omitted). */
   outputStyle: string;
+  /** Run-local sandbox; null = project config default. */
+  sandbox?: RunOverrides["sandbox"] | null;
 };
 
 /**
@@ -38,6 +40,7 @@ export function overridesOf(controls: HeaderControls): RunOverrides {
     ...(controls.thinking !== null ? { thinking: controls.thinking } : {}),
     ...(controls.thinking === true ? { reasoningEffort: controls.reasoningEffort } : {}),
     ...(style !== "" && style !== "default" ? { outputStyle: style } : {}),
+    ...(controls.sandbox != null ? { sandbox: controls.sandbox } : {}),
   };
 }
 

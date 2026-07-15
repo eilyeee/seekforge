@@ -6,7 +6,7 @@ import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
-import type { ConfigKey, McpResource, McpServer, McpTool, ServerConfig } from "../types";
+import type { ConfigKey, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -196,7 +196,12 @@ function McpSection() {
           })}
         </div>
       )}
-      {servers !== null && servers.length > 0 && <McpResourcesSection />}
+      {servers !== null && servers.length > 0 && (
+        <>
+          <McpResourcesSection ws={ws} />
+          <McpPromptsSection ws={ws} />
+        </>
+      )}
 
       {addOpen && (
         <AddMcpDialog
@@ -347,7 +352,7 @@ function AddMcpDialog({ onClose, onAdded }: { onClose: () => void; onAdded: () =
  * on demand). Each row has a copy button for the @mcp:<server>:<uri> inline
  * reference syntax (paste it into a task to pull the resource in).
  */
-function McpResourcesSection() {
+function McpResourcesSection({ ws }: { ws: string }) {
   const t = useT();
   const [state, setState] = useState<McpResource[] | { error: string } | "loading" | null>(null);
   const [copiedUri, setCopiedUri] = useState<string | null>(null);
@@ -355,7 +360,7 @@ function McpResourcesSection() {
   const load = () => {
     setState("loading");
     api
-      .mcpResources()
+      .mcpResources(ws)
       .then((r) => setState(r.resources))
       .catch((e: unknown) => setState({ error: String(e) }));
   };
@@ -409,6 +414,88 @@ function McpResourcesSection() {
             <p className="font-mono text-xs text-danger">{state.error}</p>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Lists MCP prompts and expands one into the chat composer. */
+function McpPromptsSection({ ws }: { ws: string }) {
+  const t = useT();
+  const composeInChat = useStore((s) => s.composeInChat);
+  const [state, setState] = useState<McpPrompt[] | { error: string } | "loading" | null>(null);
+  const [selected, setSelected] = useState<McpPrompt | null>(null);
+  const [args, setArgs] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+
+  const load = () => {
+    setState("loading");
+    api.mcpPrompts(ws).then((r) => setState(r.prompts)).catch((e: unknown) => setState({ error: String(e) }));
+  };
+
+  const open = (prompt: McpPrompt) => {
+    setArgs(Object.fromEntries((prompt.arguments ?? []).map((arg) => [arg.name, ""])));
+    setSelected(prompt);
+  };
+
+  const usePrompt = async () => {
+    if (!selected) return;
+    setRunning(true);
+    try {
+      const result = await api.mcpPrompt(selected.server, selected.name, args, ws);
+      if (useStore.getState().activeWorkspaceId !== ws) return;
+      composeInChat(result.text);
+      setSelected(null);
+    } catch (e) {
+      setState({ error: String(e) });
+      setSelected(null);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 px-1">
+        <h3 className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpPrompts")}</h3>
+        <Button variant="ghost" size="sm" disabled={state === "loading"} onClick={load}>
+          {state === "loading" ? t("settings.mcpListing") : state === null ? t("settings.mcpListPrompts") : t("settings.mcpRefresh")}
+        </Button>
+      </div>
+      {state !== null && state !== "loading" && (
+        <div className="mt-2">
+          {Array.isArray(state) ? state.length === 0 ? (
+            <p className="px-1 text-xs text-tertiary">{t("settings.mcpPromptsEmpty")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {state.map((prompt) => (
+                <li key={`${prompt.server}:${prompt.name}`} className="flex items-center gap-2 rounded-lg border border-subtle bg-surface-raised px-2 py-1 text-xs">
+                  <span className="font-mono text-accent">{prompt.server}</span>
+                  <span className="min-w-0 flex-1 truncate text-secondary" title={prompt.description}>{prompt.name}{prompt.description ? ` — ${prompt.description}` : ""}</span>
+                  <Button variant="ghost" size="sm" onClick={() => open(prompt)}>{t("settings.mcpUsePrompt")}</Button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="font-mono text-xs text-danger">{state.error}</p>}
+        </div>
+      )}
+      {selected && (
+        <ConfirmDialog
+          title={`${selected.server} / ${selected.name}`}
+          confirmLabel={running ? t("settings.mcpListing") : t("settings.mcpUsePrompt")}
+          onConfirm={() => void usePrompt()}
+          onCancel={() => setSelected(null)}
+        >
+          <div className="space-y-3">
+            {selected.description && <p className="text-xs text-secondary">{selected.description}</p>}
+            {(selected.arguments ?? []).map((arg) => (
+              <label key={arg.name} className="block text-xs text-secondary">
+                <span>{arg.name}{arg.required ? " *" : ""}</span>
+                <Input value={args[arg.name] ?? ""} onChange={(e) => setArgs((current) => ({ ...current, [arg.name]: e.target.value }))} className="mt-1" />
+              </label>
+            ))}
+          </div>
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -657,6 +744,7 @@ export function SettingsView() {
                   className="w-full"
                   options={[
                     { value: "off", label: t("settings.sandboxOff") },
+                    { value: "read-only", label: t("settings.sandboxReadOnly") },
                     { value: "workspace-write", label: t("settings.sandboxWorkspaceWrite") },
                     { value: "restricted", label: t("settings.sandboxRestricted") },
                   ]}

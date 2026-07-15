@@ -53,6 +53,14 @@ describe("buildSandboxSpec", () => {
     expect(profile).toContain("(deny network*)");
   });
 
+  it("read-only on darwin leaves the workspace outside writable roots", () => {
+    allAvailable();
+    const profile = buildSandboxSpec("read-only", "/work/project", "darwin")!.args[1]!;
+    expect(profile).toContain("(deny file-write*)");
+    expect(profile).not.toContain('(allow file-write* (subpath "/work/project"))');
+    expect(profile).not.toContain("(deny network*)");
+  });
+
   it("escapes double quotes and backslashes in seatbelt paths", () => {
     allAvailable();
     const profile = buildSandboxSpec("workspace-write", '/ws/we"ird\\dir', "darwin")!.args[1]!;
@@ -73,6 +81,9 @@ describe("buildSandboxSpec", () => {
     ]);
     const restricted = buildSandboxSpec("restricted", "/ws", "linux")!;
     expect(restricted.args).toEqual([...ww.args, "--unshare-net"]);
+    const readOnly = buildSandboxSpec("read-only", "/ws", "linux")!;
+    expect(readOnly.args).not.toContain("/ws");
+    expect(readOnly.args).toContain("/tmp");
   });
 });
 
@@ -135,9 +146,17 @@ describe("sandbox requested but unavailable", () => {
 
 const hasSeatbelt =
   process.platform === "darwin" && spawnSync("/usr/bin/which", ["sandbox-exec"]).status === 0;
+const canWriteHome = (() => {
+  try {
+    fs.accessSync(os.homedir(), fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 describe("seatbelt integration (darwin only)", () => {
-  it.skipIf(!hasSeatbelt)(
+  it.skipIf(!hasSeatbelt || !canWriteHome)(
     "workspace-write allows writes inside the workspace and blocks them outside",
     () => {
       const ws = makeWorkspace();

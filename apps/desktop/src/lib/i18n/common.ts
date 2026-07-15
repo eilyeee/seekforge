@@ -19,6 +19,7 @@ export const common = {
     "nav.group.system": "System",
     "nav.collapse": "Collapse sidebar",
     "nav.expand": "Expand sidebar",
+    "nav.close": "Close navigation",
     "nav.workspace": "WORKSPACE",
     "nav.todos": "Todos",
     // Hooks editor
@@ -102,6 +103,7 @@ export const common = {
     "nav.group.system": "系统",
     "nav.collapse": "收起侧边栏",
     "nav.expand": "展开侧边栏",
+    "nav.close": "关闭导航",
     "nav.workspace": "工作区",
     "nav.todos": "待办",
     // Hooks editor

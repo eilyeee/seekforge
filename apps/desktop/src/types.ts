@@ -43,6 +43,7 @@ export type {
   Todo,
   AccountBalance,
   McpResource,
+  McpPrompt,
   TreeEntry,
   TreeResponse,
   FileContent,

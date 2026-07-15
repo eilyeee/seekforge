@@ -80,7 +80,7 @@ describe("loadConfig permissionRules merge", () => {
 });
 
 describe("createDefaultAgent permissionRules pass-through", () => {
-  it("forwards configured permissionRules into createAgentCore", () => {
+  it("forwards configured permissionRules into createAgentCore", async () => {
     const workspace = makeWorkspace();
     writeFileIn(home, ".seekforge/config.json", JSON.stringify({ permissionRules: [globalRule] }));
     writeFileIn(
@@ -89,24 +89,26 @@ describe("createDefaultAgent permissionRules pass-through", () => {
       JSON.stringify({ apiKey: "sk-test", permissionRules: [projectRule] }),
     );
 
-    createDefaultAgent({
+    const handle = await createDefaultAgent({
       workspace,
       confirm: async () => ({ allow: true }),
       extractMemory: false,
     });
+    handle.dispose();
 
     expect(captured.deps?.["permissionRules"]).toEqual([projectRule, globalRule]);
   });
 
-  it("does not set permissionRules when none are configured", () => {
+  it("does not set permissionRules when none are configured", async () => {
     const workspace = makeWorkspace();
     writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test" }));
 
-    createDefaultAgent({
+    const handle = await createDefaultAgent({
       workspace,
       confirm: async () => ({ allow: true }),
       extractMemory: false,
     });
+    handle.dispose();
 
     expect(captured.deps).toBeDefined();
     expect("permissionRules" in (captured.deps ?? {})).toBe(false);

@@ -38,7 +38,7 @@ the SeekForge feature you already know from another tool.
   `seekforge rewind` undoes a session's file changes.
 - **Layered permission boundaries.** A built-in permission policy plus
   fine-grained `permissionRules` (allow/deny by tool + match), an optional
-  OS-level `sandbox` (`workspace-write` / `restricted`), a `commandAllowlist`,
+  OS-level `sandbox` (`read-only` / `workspace-write` / `restricted`), a `commandAllowlist`,
   and shell `hooks` that can block tool calls.
 - **Git worktree sessions.** `/worktree new` runs the agent on an isolated
   `git worktree` under `.seekforge/worktrees/` on a `seekforge/<slug>` branch,

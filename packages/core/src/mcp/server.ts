@@ -26,6 +26,20 @@ import { createDefaultDispatcher, type ToolContext } from "../tools/index.js";
 /** Must match what our own client sends (client.ts PROTOCOL_VERSION). */
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "seekforge", version: "0.7.0" };
+const WORKSPACE_OVERVIEW_URI = "seekforge://workspace/overview";
+const WORKSPACE_STATUS_URI = "seekforge://workspace/status";
+
+const SERVER_PROMPTS = [
+  {
+    name: "review-changes",
+    description: "Review the current workspace changes for correctness, security, and missing tests.",
+  },
+  {
+    name: "security-review",
+    description: "Threat-model and audit a workspace area supplied as the focus argument.",
+    arguments: [{ name: "focus", description: "Optional path, feature, or trust boundary to prioritize.", required: false }],
+  },
+] as const;
 
 /** Tools exposed in read-only mode (all classify as L0 readonly). */
 export const MCP_READONLY_TOOLS = [
@@ -89,6 +103,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
   };
 
   let closed = false;
+  let lifecycle: "new" | "initializing" | "ready" = "new";
   let nextCallId = 1;
   const inflight = new Map<number | string, AbortController>();
 
@@ -111,6 +126,55 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
       .filter((t) => exposed.has(t.name))
       .map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })),
   });
+
+  const listResourcesResult = (): unknown => ({
+    resources: [
+      { uri: WORKSPACE_OVERVIEW_URI, name: "Workspace overview", mimeType: "application/json" },
+      { uri: WORKSPACE_STATUS_URI, name: "Git status", mimeType: "application/json" },
+    ],
+  });
+
+  async function readResource(id: JsonRpcMessage["id"], params: Record<string, unknown>): Promise<void> {
+    const uri = params["uri"];
+    if (uri === WORKSPACE_OVERVIEW_URI) {
+      respond(id, {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ workspace: opts.workspace, readOnly }) }],
+      });
+      return;
+    }
+    if (uri === WORKSPACE_STATUS_URI) {
+      const result = await dispatcher.execute(
+        { id: `mcp-call-${nextCallId++}`, name: "git_status", arguments: {} },
+        ctx,
+      );
+      if (!result.ok) {
+        respondError(id, -32603, result.error?.message ?? "git_status failed");
+        return;
+      }
+      respond(id, {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify(result.data ?? null) }],
+      });
+      return;
+    }
+    respondError(id, -32602, `Unknown resource: ${String(uri)}`);
+  }
+
+  function getPrompt(id: JsonRpcMessage["id"], params: Record<string, unknown>): void {
+    const name = params["name"];
+    const args = typeof params["arguments"] === "object" && params["arguments"] !== null && !Array.isArray(params["arguments"])
+      ? params["arguments"] as Record<string, unknown>
+      : {};
+    if (name === "review-changes") {
+      respond(id, { messages: [{ role: "user", content: { type: "text", text: "Review all current workspace changes. Prioritize correctness, security regressions, boundary cases, and missing tests. Report findings by severity with file references." } }] });
+      return;
+    }
+    if (name === "security-review") {
+      const focus = typeof args["focus"] === "string" && args["focus"].trim() ? ` Focus on: ${args["focus"].trim()}.` : "";
+      respond(id, { messages: [{ role: "user", content: { type: "text", text: `Threat-model and audit this workspace. Identify assets, trust boundaries, attack paths, concrete vulnerabilities, and mitigations.${focus}` } }] });
+      return;
+    }
+    respondError(id, -32602, `Unknown prompt: ${String(name)}`);
+  }
 
   async function callTool(
     id: JsonRpcMessage["id"],
@@ -146,16 +210,28 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     if (typeof method !== "string") return; // a response/garbage: ignore
     const id = msg.id;
     const params = msg.params ?? {};
-    switch (method) {
-      case "initialize":
-        respond(id, {
-          protocolVersion: PROTOCOL_VERSION,
-          serverInfo: SERVER_INFO,
-          capabilities: { tools: {}, resources: {} },
-        });
+    if (method === "initialize") {
+      if (lifecycle !== "new") {
+        respondError(id, -32600, "initialize may only be sent once");
         return;
-      case "notifications/initialized":
-        return; // notification: no response
+      }
+      lifecycle = "initializing";
+      respond(id, {
+        protocolVersion: PROTOCOL_VERSION,
+        serverInfo: SERVER_INFO,
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+      });
+      return;
+    }
+    if (method === "notifications/initialized") {
+      if (lifecycle === "initializing") lifecycle = "ready";
+      return;
+    }
+    if (lifecycle !== "ready") {
+      respondError(id, -32002, lifecycle === "new" ? "server is not initialized" : "initialization not completed");
+      return;
+    }
+    switch (method) {
       case "ping":
         respond(id, {});
         return;
@@ -190,7 +266,16 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
         return;
       }
       case "resources/list":
-        respond(id, { resources: [] });
+        respond(id, listResourcesResult());
+        return;
+      case "resources/read":
+        await readResource(id, params);
+        return;
+      case "prompts/list":
+        respond(id, { prompts: SERVER_PROMPTS });
+        return;
+      case "prompts/get":
+        getPrompt(id, params);
         return;
       default:
         respondError(id, -32601, `Method not found: ${method}`);

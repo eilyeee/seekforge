@@ -12,6 +12,7 @@ import {
   expandShellInjections,
   expandUserCommand,
   fetchBalance,
+  getMcpPrompt,
   listMcpPrompts,
   listMcpResources,
   listOutputStyles,
@@ -231,6 +232,34 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendJson(res, 200, { prompts: await listMcpPrompts(entries) });
     } finally {
       for (const e of entries) e.client.dispose();
+    }
+  }
+
+  if (method === "POST" && segs.length === 5 && segs[1] === "mcp" && segs[2] === "prompts") {
+    const serverName = segs[3]!;
+    const promptName = segs[4]!;
+    const config = (loadConfig(workspace).mcpServers ?? {})[serverName];
+    if (!config) return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const rawArgs = (body as { arguments?: unknown } | null)?.arguments;
+    if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
+      return sendApiError(res, 400, "bad_request", "arguments must be an object when present");
+    }
+    const client = createMcpClient({ name: serverName, config, workspaceRoots: [workspace] });
+    const entries: McpClientEntry[] = [{ serverName, client, trusted: config.trusted === true }];
+    try {
+      const text = await getMcpPrompt(
+        serverName,
+        promptName,
+        rawArgs as Record<string, unknown> | undefined,
+        entries,
+      );
+      return sendJson(res, 200, { text });
+    } catch (err) {
+      return sendApiError(res, 502, "mcp_error", err instanceof Error ? err.message : String(err));
+    } finally {
+      client.dispose();
     }
   }
 

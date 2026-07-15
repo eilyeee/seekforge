@@ -133,12 +133,17 @@ symlink escapes, `..`, and absolute paths outside the root are all rejected:
 wraps `/bin/sh -c` so shell commands cannot write outside the workspace, and can
 also cut off the network:
 
-- Levels `off` / `workspace-write` / `restricted` (`os-sandbox.ts:19`);
+- Levels `off` / `read-only` / `workspace-write` / `restricted`;
+  `read-only` keeps the workspace read-only while allowing temporary files,
+  and `restricted` additionally disables network access;
   seatbelt on darwin, bwrap on linux (`buildSandboxSpec` `:106`,
   `sandboxedShell` `:128`).
 - If a sandbox is requested but the wrapper cannot be built, the command is
   **rejected**, not silently run unsandboxed
   (`run-command.ts::runShellCommand`, `sandbox_unavailable`).
+- A configured native Runtime is bypassed while any sandbox is active because
+  the Runtime protocol has no sandbox field; commands use the wrapped shell
+  rather than silently escaping the policy.
 
 ---
 

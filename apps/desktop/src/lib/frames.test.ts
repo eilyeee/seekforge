@@ -99,10 +99,15 @@ describe("overridesOf (header controls -> frame fields)", () => {
       overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "default" }),
     ).toEqual({});
   });
+
+  it("sends a run-local sandbox only when explicitly selected", () => {
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: null })).toEqual({});
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: "read-only" })).toEqual({ sandbox: "read-only" });
+  });
 });
 
 describe("frame builders carry per-run overrides", () => {
-  const overrides = { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max" } as const;
+  const overrides = { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max", sandbox: "restricted" } as const;
 
   it("buildStartFrame spreads overrides into the frame (plan mode too)", () => {
     expect(buildStartFrame("go", "edit", "confirm", "", overrides)).toMatchObject(overrides);

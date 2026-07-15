@@ -43,6 +43,7 @@ export type BaseConfigShape = {
   /** Provider preset name; drives the env API-key selection ("deepseek" default). */
   provider?: string;
   runtimeBin?: string;
+  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
   permissionRules?: PermissionRule[];
   mcpServers?: Record<string, unknown>;
   hooks?: Partial<Record<HookStage, HookEntry[]>>;
@@ -138,6 +139,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   delete scalars.apiKey;
   delete scalars.provider;
   delete scalars.runtimeBin;
+  delete scalars.sandbox;
   delete scalars.permissionRules;
   delete scalars.mcpServers;
   delete scalars.hooks;
@@ -145,10 +147,17 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   let apiKey: string | undefined;
   let provider: string | undefined;
   let runtimeBin: string | undefined;
+  let sandbox: BaseConfigShape["sandbox"];
   for (const layer of layers) {
     if (typeof layer.apiKey === "string") apiKey = layer.apiKey;
     if (typeof layer.provider === "string") provider = layer.provider;
     if (typeof layer.runtimeBin === "string") runtimeBin = layer.runtimeBin;
+    if (
+      layer.sandbox === "off" ||
+      layer.sandbox === "read-only" ||
+      layer.sandbox === "workspace-write" ||
+      layer.sandbox === "restricted"
+    ) sandbox = layer.sandbox;
   }
 
   // Env overrides (final step). The provider is resolved with ??-semantics
@@ -172,6 +181,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
     ...(apiKey !== undefined ? { apiKey } : {}),
     ...(provider !== undefined ? { provider } : {}),
     ...(runtimeBin !== undefined ? { runtimeBin } : {}),
+    ...(sandbox !== undefined ? { sandbox } : {}),
     // Preserve explicit empty structured values while leaving keys absent when
     // no layer supplied a valid value.
     ...(hasPermissionRules ? { permissionRules } : {}),

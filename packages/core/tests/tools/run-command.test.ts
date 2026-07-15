@@ -528,6 +528,28 @@ describe("run_command sandbox escalation", () => {
     return calls;
   }
 
+  it("does not bypass an active sandbox through the native runtime", async () => {
+    const ws = makeWorkspace();
+    const calls = stubShell([{ exitCode: 0, stdout: "sandboxed\n", stderr: "", durationMs: 1 }]);
+    let runtimeCalls = 0;
+    const runtime = {
+      call: async () => {
+        runtimeCalls++;
+        throw new Error("runtime must not be called");
+      },
+      ping: async () => ({ version: "test" }),
+      dispose: () => {},
+    };
+    const res = await dispatcher.execute(
+      call("run_command", { command: "echo sandboxed" }),
+      makeCtx(ws, { sandbox: "read-only", runtime }),
+    );
+    expect(res.ok).toBe(true);
+    expect(runtimeCalls).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.options.sandbox).toBe("read-only");
+  });
+
   const denial: ShellResult = {
     exitCode: 1,
     stdout: "",

@@ -137,18 +137,20 @@ Client info sent in `initialize`:
 
 ### 1.6 Capabilities
 
-The client advertises `roots.listChanged: true` in its initialize capabilities.
+The stdio client advertises `roots.listChanged: true` in its initialize capabilities.
 Workspace paths (absolute directories passed at startup) are advertised to each
 server via the roots capability and answered on server-initiated `roots/list`
-requests. For the stdio transport, server-initiated `roots/list` is handled
-inline; for the HTTP transport, the capability is advertised but live
-`roots/list` answering is not supported by the current one-POST-per-message
-transport. Streamable HTTP responses must be JSON-RPC objects whose id matches
+requests. The request-scoped HTTP transport does not advertise roots because it
+cannot answer server-initiated requests; this prevents a conforming server from
+waiting on a response that cannot arrive. After initialization, HTTP requests
+include the negotiated `MCP-Protocol-Version` header. Streamable HTTP responses
+must be JSON-RPC objects whose id matches
 the pending request; scalar, array, null, and mismatched-id responses are rejected.
 
-Pagination (`nextCursor`) is currently ignored for `tools/list`,
-`resources/list`, and `prompts/list` — all results are fetched in a single
-request.
+`tools/list`, `resources/list`, and `prompts/list` consume every opaque
+`nextCursor`. Repeated cursors are rejected and discovery is capped at 100 pages
+and 10,000 items so a malformed or hostile server cannot create an infinite
+loop or unbounded catalog allocation.
 
 ### 1.7 Trust Model
 
@@ -177,10 +179,9 @@ tagged with its server name. The programmatic surface:
   (`RESOURCE_READ_MAX_CHARS`); longer responses are truncated with a
   `…[truncated]` suffix.
 
-> **Planned:** Resource inlining via `@mcp:<server>:<uri>` in messages is noted
-> in the README but is not yet wired into the agent loop. The underlying
-> read functions (`listMcpResources`, `readMcpResource`) exist and are exported
-> from `@seekforge/core`.
+TUI and Server/Desktop runs expand up to five `@mcp:<server>:<uri>` references
+per message before the task reaches the model. Failures are included as bounded
+unavailable-resource blocks rather than aborting the whole run.
 
 ### 1.9 Prompts
 
@@ -193,8 +194,9 @@ tagged with its server name:
   messages, flattened to a single string (`role: content` per message), capped
   at 50,000 characters.
 
-> **Planned:** Prompts surfaced as slash commands in the agent loop is noted in
-> the README but not yet wired. The underlying functions exist and are exported.
+TUI exposes prompt commands. Desktop Settings lists prompt templates, collects
+their declared arguments, resolves them through the workspace-scoped server API,
+and inserts the rendered prompt into the chat composer.
 
 ---
 
@@ -225,8 +227,7 @@ seekforge mcp-serve: FULL ACCESS (trusted callers only) on /path/to/workspace
 
 ### 2.2 Protocol
 
-The server speaks protocol version `2024-11-05` (the older revision, which is
-widely supported by existing MCP clients). Server info:
+The server speaks protocol version `2025-06-18`. Server info:
 
 ```json
 { "name": "seekforge", "version": "0.7.0" }
@@ -236,15 +237,15 @@ widely supported by existing MCP clients). Server info:
 
 | Method                      | Supported | Notes                      |
 |---|---|---|
-| `initialize`                | ✅        | Returns `capabilities: { tools: {}, resources: {} }` |
+| `initialize`                | ✅        | Returns tool, resource, and prompt capabilities |
 | `notifications/initialized` | ✅        | Notification; no response  |
 | `ping`                      | ✅        | Returns `{}`               |
 | `tools/list`                | ✅        | Lists exposed tools        |
 | `tools/call`                | ✅        | Executes a tool; errors return `isError: true` in the result, not a JSON-RPC error |
-| `resources/list`            | ✅        | Returns `{ resources: [] }` (no resources exposed) |
-| `prompts/list`              | ❌        | Returns `-32601`           |
-| `resources/read`            | ❌        | Returns `-32601`           |
-| `prompts/get`               | ❌        | Returns `-32601`           |
+| `resources/list`            | ✅        | Workspace overview and Git status resources |
+| `resources/read`            | ✅        | Reads an advertised workspace resource |
+| `prompts/list`              | ✅        | Lists review and security-review prompts |
+| `prompts/get`               | ✅        | Renders a built-in prompt |
 
 Tool call results always contain:
 

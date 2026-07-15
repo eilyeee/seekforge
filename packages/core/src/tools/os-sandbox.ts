@@ -3,12 +3,13 @@
  * platform sandbox so shell commands cannot write outside the workspace.
  *
  *   - darwin: sandbox-exec (seatbelt) with a deny-by-default file-write profile
- *     that re-allows the workspace and temp dirs; "restricted" also denies network.
- *   - linux:  bwrap with a read-only root, the workspace and /tmp bound
- *     writable; "restricted" also unshares the network namespace.
+ *     that re-allows temp dirs and, for write levels, the workspace.
+ *   - linux: bwrap with a read-only root and /tmp writable; write levels also
+ *     bind the workspace writable. "restricted" also unshares the network.
  *
  * Levels:
  *   - "off" (or absent): no wrapper — current behavior.
+ *   - "read-only": workspace is read-only; temp dirs remain writable.
  *   - "workspace-write": file writes confined to workspace + temp dirs.
  *   - "restricted": workspace-write plus no network.
  */
@@ -16,7 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-export type SandboxLevel = "off" | "workspace-write" | "restricted";
+export type SandboxLevel = "off" | "read-only" | "workspace-write" | "restricted";
 
 /** Wrapper prefix to prepend before ["/bin/sh", "-c", command]. */
 export type SandboxSpec = { bin: string; args: string[] };
@@ -61,10 +62,10 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
-/** Writable roots under workspace-write: workspace + temp dirs + /dev. */
-function darwinWritablePaths(workspace: string): string[] {
+/** Writable roots: temp dirs + /dev, and workspace for write-capable levels. */
+function darwinWritablePaths(level: Exclude<SandboxLevel, "off">, workspace: string): string[] {
   const candidates = [
-    workspace,
+    ...(level === "read-only" ? [] : [workspace]),
     os.tmpdir(),
     process.env.TMPDIR !== undefined ? realpathOrNull(process.env.TMPDIR) : null,
     "/private/tmp",
@@ -79,7 +80,7 @@ function darwinWritablePaths(workspace: string): string[] {
 
 function buildSeatbeltProfile(level: Exclude<SandboxLevel, "off">, workspace: string): string {
   const lines = ["(version 1)", "(allow default)", "(deny file-write*)"];
-  for (const p of darwinWritablePaths(workspace)) {
+  for (const p of darwinWritablePaths(level, workspace)) {
     lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`);
   }
   if (level === "restricted") lines.push("(deny network*)");
@@ -89,7 +90,7 @@ function buildSeatbeltProfile(level: Exclude<SandboxLevel, "off">, workspace: st
 function buildBwrapArgs(level: Exclude<SandboxLevel, "off">, workspace: string): string[] {
   const args = [
     "--ro-bind", "/", "/",
-    "--bind", workspace, workspace,
+    ...(level === "read-only" ? [] : ["--bind", workspace, workspace]),
     "--bind", "/tmp", "/tmp",
     "--dev", "/dev",
     "--proc", "/proc",

@@ -76,11 +76,11 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "prompts/list") {
-    send({ jsonrpc: "2.0", id: msg.id, result: { prompts: [
-      { name: "greet", description: "Greets someone.",
-        arguments: [{ name: "name", description: "Who to greet", required: true }] },
-      { name: "review", description: "Reviews code." },
-    ] } });
+    const cursor = msg.params && msg.params.cursor;
+    send({ jsonrpc: "2.0", id: msg.id, result: cursor === "prompts-2"
+      ? { prompts: [{ name: "review", description: "Reviews code." }] }
+      : { prompts: [{ name: "greet", description: "Greets someone.",
+          arguments: [{ name: "name", description: "Who to greet", required: true }] }], nextCursor: "prompts-2" } });
     return;
   }
   if (msg.method === "prompts/get") {
@@ -119,18 +119,18 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "tools/list") {
-    send({ jsonrpc: "2.0", id: msg.id, result: { tools: [
-      { name: "echo", description: "Echoes arguments back.\\nSecond line of docs.",
-        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
-      { name: "boom", description: "Always fails." },
-    ] } });
+    const cursor = msg.params && msg.params.cursor;
+    send({ jsonrpc: "2.0", id: msg.id, result: cursor === "tools-2"
+      ? { tools: [{ name: "boom", description: "Always fails." }] }
+      : { tools: [{ name: "echo", description: "Echoes arguments back.\\nSecond line of docs.",
+          inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }], nextCursor: "tools-2" } });
     return;
   }
   if (msg.method === "resources/list") {
-    send({ jsonrpc: "2.0", id: msg.id, result: { resources: [
-      { uri: "mem://notes", name: "Notes", mimeType: "text/plain" },
-      { uri: "mem://logo" },
-    ] } });
+    const cursor = msg.params && msg.params.cursor;
+    send({ jsonrpc: "2.0", id: msg.id, result: cursor === "resources-2"
+      ? { resources: [{ uri: "mem://logo" }] }
+      : { resources: [{ uri: "mem://notes", name: "Notes", mimeType: "text/plain" }], nextCursor: "resources-2" } });
     return;
   }
   if (msg.method === "resources/read") {

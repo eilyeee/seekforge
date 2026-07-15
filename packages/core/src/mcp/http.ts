@@ -6,13 +6,10 @@ const MAX_SSE_EVENT_CHARS = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
-// We advertise the roots capability for parity with the stdio transport. Note:
-// answering a server-initiated roots/list request requires the client to read
-// the server's standalone GET SSE stream, which this one-POST-per-message
-// transport does not open (matching its existing "no server-initiated requests"
-// scope). The capability is advertised so HTTP servers that only read
-// capabilities.roots still see it; live roots/list answering is stdio-only.
-const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
+// This request-scoped HTTP implementation does not yet accept server requests.
+// Do not advertise roots here: a conforming server may otherwise issue
+// roots/list and wait forever for a response. Stdio supports roots fully.
+const CLIENT_CAPABILITIES = {} as const;
 
 type JsonRpcResponse = {
   jsonrpc?: string;
@@ -132,6 +129,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
   let sessionId: string | undefined;
+  let negotiatedVersion: string | undefined;
   let handshake: Promise<void> | undefined;
   let nextId = 1;
   let disposed = false;
@@ -143,9 +141,10 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       configured[k] = expandEnvRefs(v);
     }
     return {
+      ...configured,
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      ...configured,
+      ...(negotiatedVersion !== undefined ? { "mcp-protocol-version": negotiatedVersion } : {}),
       ...(sessionId !== undefined ? { "mcp-session-id": sessionId } : {}),
     };
   }
@@ -238,7 +237,11 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     try {
       msg = await post(method, params, id, signal);
     } catch (err) {
-      if (err instanceof McpError && (err.code === "mcp_cancelled" || err.code === "mcp_timeout")) {
+      if (
+        method !== "initialize" &&
+        err instanceof McpError &&
+        (err.code === "mcp_cancelled" || err.code === "mcp_timeout")
+      ) {
         // Start the notification before rejecting, but do not wait for its
         // response: a server that ignored the original request may also never
         // answer this notification, which must not add a second timeout window.
@@ -259,17 +262,22 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   /** Runs the initialize handshake exactly once; a failure resets so the next call retries. */
   function ensureReady(): Promise<void> {
     if (!handshake) {
-      handshake = rawRequest("initialize", {
+      handshake = rawRequest<{ protocolVersion?: unknown }>("initialize", {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: CLIENT_CAPABILITIES,
         clientInfo: CLIENT_INFO,
       }).then(
-        async () => {
+        async (result) => {
+          if (typeof result?.protocolVersion !== "string" || result.protocolVersion.length === 0) {
+            throw new McpError("mcp_parse_error", "MCP initialize result omitted protocolVersion");
+          }
+          negotiatedVersion = result.protocolVersion;
           // A failed notification is non-fatal: the next request surfaces issues.
           await post("notifications/initialized", undefined, undefined).catch(() => {});
         },
         (err: Error) => {
           handshake = undefined;
+          negotiatedVersion = undefined;
           throw err;
         },
       );
@@ -307,6 +315,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     dispose(): void {
       disposed = true;
       handshake = undefined;
+      negotiatedVersion = undefined;
       for (const c of inflight) c.abort();
       inflight.clear();
     },

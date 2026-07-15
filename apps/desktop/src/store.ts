@@ -179,6 +179,7 @@ type AppStore = {
   setThinking: (on: boolean) => void;
   setReasoningEffort: (effort: "high" | "max") => void;
   setOutputStyle: (style: string) => void;
+  setSandbox: (sandbox: ChatTab["sandbox"]) => void;
   /**
    * Drops the given user item and everything after it from the active tab's
    * transcript (after a successful POST backtrack on the server).
@@ -472,6 +473,8 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setOutputStyle: (outputStyle) =>
       set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { outputStyle }) })),
+
+    setSandbox: (sandbox) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { sandbox }) })),
 
     todosOpen: false,
     toggleTodos: () => set((s) => ({ todosOpen: !s.todosOpen })),

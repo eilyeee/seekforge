@@ -21,7 +21,7 @@ const ALLOWED_KEYS = [
 
 /** Allowed values for the enum-typed config keys. */
 const ENUM_VALUES: Record<string, readonly string[]> = {
-  sandbox: ["off", "workspace-write", "restricted"],
+  sandbox: ["off", "read-only", "workspace-write", "restricted"],
   compaction: ["mechanical", "llm"],
   reasoningEffort: ["high", "max"],
 };
