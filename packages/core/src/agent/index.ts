@@ -63,6 +63,7 @@ export {
 } from "./auto-loop.js";
 export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 export {
+  appendLoopLog,
   createLoopState,
   hasActiveLoopLease,
   isLoopLeaseActive,

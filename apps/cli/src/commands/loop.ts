@@ -82,7 +82,10 @@ export function formatSummary(result: LoopResult): string {
     t("cmd.loop.summaryIterations", { n: result.iterations }),
     t("cmd.loop.summaryCost", { cost: result.costUsd.toFixed(4) }),
   ];
-  if (result.loopId) lines.push(`loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`);
+  if (result.loopId) {
+    lines.push(`loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`);
+    lines.push(`log: .seekforge/loops/${result.loopId}.log`);
+  }
   if (result.sessionId) {
     lines.push(
       t("cmd.loop.summarySession", { id: result.sessionId }),

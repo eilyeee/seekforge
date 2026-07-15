@@ -17,6 +17,7 @@ import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
   acquireLoopLease,
+  appendLoopLog,
   createLoopState,
   loadLoopState,
   saveLoopState,
@@ -283,9 +284,18 @@ function liveVerifyOutput(
 }
 
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
-  const emit = (event: LoopEvent): void => opts.onEvent?.(event);
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
+  // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
+  // (JSONL) so the run has a durable record, not just ephemeral terminal output.
+  // Logging is best-effort and must never break the loop; a persistently broken
+  // directory still surfaces via the state-persistence warning below.
+  const emit = (event: LoopEvent): void => {
+    if (persistenceEnabled) {
+      try { appendLoopLog(opts.workspace, loopId, event); } catch { /* observability only */ }
+    }
+    opts.onEvent?.(event);
+  };
   const lease = acquireLoopLease(opts.workspace, loopId, persistenceEnabled);
   try {
     return await runAutoLoopWithLease(deps, opts, emit, persistenceEnabled, loopId);

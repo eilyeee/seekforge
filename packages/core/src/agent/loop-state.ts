@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { LoopStatus } from "./auto-loop.js";
+import type { LoopEvent, LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
 
@@ -61,6 +61,25 @@ const loopsRoot = (workspace: string): string =>
 function loopFile(workspace: string, loopId: string): string {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
   return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.json`));
+}
+function loopLogFile(workspace: string, loopId: string): string {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  return resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.log`));
+}
+
+/**
+ * Append one loop event to `.seekforge/loops/<id>.log` as a timestamped JSONL
+ * line. Unlike the state JSON (a snapshot, overwritten each save) this is an
+ * append-only history of the run, so a resumed loop keeps accumulating into the
+ * same file. Best-effort observability: callers swallow failures because losing
+ * a log line must never abort the loop, and a broken `.seekforge/loops` write is
+ * already surfaced through the state-persistence warning.
+ */
+export function appendLoopLog(workspace: string, loopId: string, event: LoopEvent): void {
+  const target = loopLogFile(workspace, loopId);
+  mkdirSync(dirname(target), { recursive: true });
+  const line = `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`;
+  appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
 }
 
 const activeLeases = new Set<string>();
@@ -312,9 +331,11 @@ export function removeLoopState(workspace: string, loopId: string): boolean {
   if (isLoopLeaseActive(workspace, loopId)) {
     throw new Error(`Cannot remove running loop: ${loopId}`);
   }
-  try { rmSync(loopFile(workspace, loopId)); return true; }
+  try { rmSync(loopFile(workspace, loopId)); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+  rmSync(loopLogFile(workspace, loopId), { force: true });
+  return true;
 }

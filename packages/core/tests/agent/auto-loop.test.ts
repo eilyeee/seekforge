@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -92,6 +92,29 @@ describe("runAutoLoop", () => {
     expect(result.costUsd).toBeCloseTo(0.002, 6);
     expect(events.some((e) => e.type === "loop.done")).toBe(true);
     expect(events.filter((e) => e.type === "iteration.start")).toHaveLength(2);
+  });
+
+  it("writes an append-only JSONL log of the event stream", async () => {
+    const { deps } = mkDeps();
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, failNTimes(2)),
+      onEvent: (e) => events.push(e),
+    });
+    const logPath = join(workspace, ".seekforge", "loops", `${result.loopId}.log`);
+    expect(existsSync(logPath)).toBe(true);
+    const logged = readFileSync(logPath, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+    // One line per emitted event, each timestamped and carrying the event type.
+    expect(logged).toHaveLength(events.length);
+    expect(logged.every((l) => typeof l.ts === "string" && typeof l.type === "string")).toBe(true);
+    expect(logged.map((l) => l.type)).toEqual(events.map((e) => e.type));
+    expect(logged.at(-1)?.type).toBe("loop.done");
+  });
+
+  it("does not write a log when persistence is disabled", async () => {
+    const { deps } = mkDeps();
+    const result = await runAutoLoop(deps, { ...baseOpts(workspace, failNTimes(1)), persist: false });
+    expect(existsSync(join(workspace, ".seekforge", "loops", `${result.loopId}.log`))).toBe(false);
   });
 
   it("ignores invalid limits: maxIterations<=0 falls back to default, budget<=0 is no cap", async () => {
