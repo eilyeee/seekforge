@@ -25,7 +25,8 @@ CLI).
 - **Transcript**: user prompts, streamed assistant markdown with
   syntax-highlighted code blocks, tool rows, an in-place plan checklist
   (☐ ◐ ☑), inline colored diffs for every `apply_patch`/`write_file`, nested
-  `↳ [agent] tool` rows for dispatched subagents, and a final report block.
+  structured dispatched-subagent cards with running/done/failed/cancelled
+  states and recent tool steps, and a final report block.
   PageUp/PageDown scroll the managed viewport; Esc jumps back to latest.
 - **Composer**: multiline (trailing `\` or Ctrl+J inserts a newline), ↑/↓
   history persisted across sessions, Ctrl+U clears, Ctrl+G (or `/editor`)
@@ -81,7 +82,8 @@ CLI).
 `/diff` `/review` `/model` (picker) `/think [on|off|high|max]`
 `/remember <fact>` `/memory [edit]` `/config [edit]`
 `/todo [add|done|rm]` `/add-dir [path]`
-`/tasks [kill <id>]` `/agents` `/skills` `/mcp` (incl. resources) `/init`
+`/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
+`/agent-cancel <dispatch-id>` `/skills` `/mcp` (incl. resources) `/init`
 `/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
 `/export [path]` `/copy` `/editor` `/quit` — plus custom commands from
 `.seekforge/commands/`.

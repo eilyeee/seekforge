@@ -20,6 +20,19 @@ export {
   type TaskResult,
 } from "./task-runner.js";
 export { compare, toJson, toMarkdown, writeReport, type WrittenReport } from "./report.js";
+export { aggregateResults, type AggregateMetrics, type RunAggregate, type TaskAggregate } from "./aggregate.js";
+export { parseBaseline } from "./baseline.js";
+export { evaluateGates, type GateCheck, type GateResult } from "./gates.js";
+export { toJunit, writeJunit } from "./junit.js";
+export { createRunMetadata, hashDataset, type RunMetadata } from "./run-metadata.js";
+export {
+  loadSuiteConfig,
+  parseSuiteConfig,
+  selectSuite,
+  type EvalSuiteConfig,
+  type GateConfig,
+  type SuiteConfig,
+} from "./suite-config.js";
 export {
   getVariant,
   listVariants,

@@ -234,7 +234,14 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
 
     case "error":
       return updateTab(state, tabId, (tab) => {
-        const nonfatal = frame.code === "busy" || frame.code === "unknown_request";
+        const nonfatal = [
+          "busy",
+          "unknown_request",
+          "unknown_dispatch",
+          "dispatch_not_running",
+          "invalid_steering",
+          "steering_queue_full",
+        ].includes(frame.code);
         return {
           wsError: `${frame.code}: ${frame.message}`,
           chat: nonfatal ? tab.chat : { ...tab.chat, running: false },

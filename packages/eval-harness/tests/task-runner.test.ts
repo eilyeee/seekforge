@@ -181,10 +181,56 @@ describe("runTask", () => {
     expect(result.metrics.toolCalls).toBe(2);
     expect(result.metrics.failedToolCalls).toBe(1);
     expect(result.metrics.costUsd).toBeCloseTo(FAKE_USAGE.costUsd);
+    expect(result.metrics.promptTokens).toBe(100);
+    expect(result.metrics.completionTokens).toBe(50);
+    expect(result.metrics.cacheHitTokens).toBe(0);
+    expect(result.metrics.totalTokens).toBe(150);
     expect(result.metrics.durationMs).toBeGreaterThanOrEqual(0);
     // No trace files written by the fake agent: score/turns are absent.
     expect(result.metrics.score).toBeUndefined();
     expect(result.metrics.turns).toBeUndefined();
+  });
+
+  it("records thrown streams and missing terminal events as session errors", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const thrown = await runTask(makeTask(), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: () => ({
+        agent: {
+          async *runTask() {
+            throw new Error("transport closed");
+          },
+        },
+      }),
+    });
+    expect(thrown.success).toBe(false);
+    expect(thrown.error).toBe("transport closed");
+
+    const missing = await runTask(makeTask(), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent(() => [{ type: "session.created", sessionId: "s1" }]),
+    });
+    expect(missing.error).toMatch(/without session\.completed/);
+  });
+
+  it("keeps the latest usage metrics when a session fails", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const result = await runTask(makeTask(), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent(() => [
+        { type: "session.created", sessionId: "s1" },
+        { type: "usage.updated", usage: FAKE_USAGE },
+        { type: "session.failed", error: { code: "timeout", message: "late failure" } },
+      ]),
+    });
+    expect(result.success).toBe(false);
+    expect(result.metrics).toMatchObject({
+      costUsd: FAKE_USAGE.costUsd,
+      promptTokens: FAKE_USAGE.promptTokens,
+      completionTokens: FAKE_USAGE.completionTokens,
+      cacheHitTokens: FAKE_USAGE.cacheHitTokens,
+      totalTokens: FAKE_USAGE.promptTokens + FAKE_USAGE.completionTokens,
+    });
   });
 
   it("captures skill usage written by the agent into the workspace before cleanup", async () => {

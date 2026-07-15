@@ -48,6 +48,11 @@ export type TaskMetrics = {
   toolCalls: number;
   failedToolCalls: number;
   costUsd: number;
+  /** Token fields are absent in reports produced before continuous eval v2. */
+  promptTokens?: number;
+  completionTokens?: number;
+  cacheHitTokens?: number;
+  totalTokens?: number;
   durationMs: number;
   /** Heuristic 0-100 session score from core (absent if scoring failed). */
   score?: number;
@@ -55,6 +60,8 @@ export type TaskMetrics = {
 
 export type TaskResult = {
   taskId: string;
+  /** One-based sample index when a task is repeated. Omitted for legacy/single runs. */
+  sample?: number;
   /** All checks passed AND the session completed. */
   success: boolean;
   checks: CheckResult[];
@@ -164,17 +171,21 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
       "commit", "-q", "-m", "fixture baseline",
     ]);
 
-    const created = await opts.createAgent();
+    let created: CreatedAgent | undefined;
     let sessionId: string | undefined;
     let completed = false;
     let summary = "";
     let costUsd = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let cacheHitTokens = 0;
     let toolCalls = 0;
     let failedToolCalls = 0;
     let error: string | undefined;
 
     const startedAt = Date.now();
     try {
+      created = await opts.createAgent();
       const events = created.agent.runTask({
         projectPath: dir,
         task: opts.taskSuffix ? `${task.task}${opts.taskSuffix}` : task.task,
@@ -192,10 +203,13 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
           case "tool.completed":
             if (!event.result.ok) failedToolCalls++;
             break;
+          case "usage.updated":
+            ({ costUsd, promptTokens, completionTokens, cacheHitTokens } = event.usage);
+            break;
           case "session.completed":
             completed = true;
             summary = event.report.summary;
-            costUsd = event.report.usage.costUsd;
+            ({ costUsd, promptTokens, completionTokens, cacheHitTokens } = event.report.usage);
             break;
           case "session.failed":
             error = `${event.error.code}: ${event.error.message}`;
@@ -204,9 +218,12 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
             break;
         }
       }
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
     } finally {
-      created.dispose?.();
+      created?.dispose?.();
     }
+    if (!completed && error === undefined) error = "session ended without session.completed";
     const durationMs = Date.now() - startedAt;
 
     let turns: number | undefined;
@@ -231,9 +248,20 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
 
     const result: TaskResult = {
       taskId: task.id,
-      success: completed && checks.every((c) => c.passed),
+      success: completed && error === undefined && checks.every((c) => c.passed),
       checks,
-      metrics: { turns, toolCalls, failedToolCalls, costUsd, durationMs, score },
+      metrics: {
+        turns,
+        toolCalls,
+        failedToolCalls,
+        costUsd,
+        promptTokens,
+        completionTokens,
+        cacheHitTokens,
+        totalTokens: promptTokens + completionTokens,
+        durationMs,
+        score,
+      },
       skills,
     };
     if (opts.keepDir) result.workspaceDir = dir;

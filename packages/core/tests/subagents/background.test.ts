@@ -107,6 +107,17 @@ describe("background dispatch + agent_result", () => {
 
     // Nested tool activity still surfaced as parent step events.
     expect(events.some((e) => e.type === "step.started" && e.title === "[worker] read_file")).toBe(true);
+    expect(events).toContainEqual({
+      type: "subagent.started",
+      dispatchId: "ag-1",
+      agentId: "worker",
+      task: "long job",
+      status: "running",
+    });
+    expect(events.some((e) => e.type === "subagent.step" && e.dispatchId === "ag-1" && e.toolName === "read_file"))
+      .toBe(true);
+    expect(events.some((e) => e.type === "subagent.completed" && e.dispatchId === "ag-1" && e.status === "done"))
+      .toBe(true);
     expect(events.some((e) => e.type === "session.completed")).toBe(true);
   });
 
@@ -160,12 +171,11 @@ describe("background dispatch + agent_result", () => {
     expect(events.some((e) => e.type === "session.completed")).toBe(true);
     expect(nestedStarted).toBe(true);
 
-    // ... and session end (disposeAll) aborted it: the dispatch signal was
-    // received and the run was marked failed even though the provider never resolved.
+    // ... and session end (disposeAll) aborted it as a distinct cancellation.
     await settle();
     const snap = manager.get("ag-1")!;
-    expect(snap.status).toBe("failed");
-    expect(snap.result!.error!.message).toBe("dispatch aborted");
+    expect(snap.status).toBe("cancelled");
+    expect(snap.result!.error!.code).toBe("subagent_cancelled");
   });
 
   it("keeps usage billed before a background dispatch is aborted", async () => {

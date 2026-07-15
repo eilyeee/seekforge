@@ -225,6 +225,11 @@ describe("routeFrame", () => {
     const stale = routeFrame(base, "t1", { type: "error", code: "unknown_request", message: "stale operation" });
     expect(stale.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
     expect(stale.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).not.toBeNull();
+    for (const code of ["unknown_dispatch", "dispatch_not_running", "invalid_steering", "steering_queue_full"] as const) {
+      const controlError = routeFrame(base, "t1", { type: "error", code, message: "control rejected" });
+      expect(controlError.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
+      expect(controlError.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).not.toBeNull();
+    }
     const stopped = routeFrame(base, "t1", { type: "error", code: "not_running", message: "stale operation" });
     expect(stopped.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(false);
     expect(stopped.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).toBeNull();

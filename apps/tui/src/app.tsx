@@ -636,6 +636,11 @@ export function App({
             dispatchRun(a);
           },
           getSessionId: () => ownSessionId.current,
+          onDispatchManager: (manager) => {
+            if (!ownsRun(runsByTabRef.current, reservation)) return;
+            if (manager) reservation.dispatchManager = manager;
+            else delete reservation.dispatchManager;
+          },
           confirm: (req) =>
             new Promise<ConfirmResult>((resolve) => {
               if (detached()) {
@@ -1384,6 +1389,39 @@ export function App({
         case "agents":
           for (const line of formatAgentLines(loadAgentDefinitions(projectPath))) notice(line);
           break;
+        case "agent-cancel": {
+          const parts = command.arg?.trim().split(/\s+/).filter(Boolean) ?? [];
+          if (parts.length !== 1) {
+            notice("usage: /agent-cancel <dispatch-id>", "error");
+            break;
+          }
+          const manager = runsByTabRef.current.get(activeIdRef.current)?.dispatchManager;
+          if (!manager) {
+            notice("no controllable agent run is active in this tab", "error");
+            break;
+          }
+          const result = manager.cancel(parts[0]!);
+          notice(result.ok ? `cancelled ${parts[0]}` : result.message, result.ok ? "dim" : "error");
+          break;
+        }
+        case "agent-steer": {
+          const arg = command.arg?.trim() ?? "";
+          const split = arg.search(/\s/);
+          const dispatchId = split < 0 ? arg : arg.slice(0, split);
+          const message = split < 0 ? "" : arg.slice(split).trim();
+          if (!dispatchId || !message) {
+            notice("usage: /agent-steer <dispatch-id> <message>", "error");
+            break;
+          }
+          const manager = runsByTabRef.current.get(activeIdRef.current)?.dispatchManager;
+          if (!manager) {
+            notice("no controllable agent run is active in this tab", "error");
+            break;
+          }
+          const result = manager.steer(dispatchId, message);
+          notice(result.ok ? `guidance queued for ${dispatchId}` : result.message, result.ok ? "dim" : "error");
+          break;
+        }
         case "skills":
           for (const line of formatSkillLines(loadSkillsWithStatus(projectPath))) notice(line);
           break;

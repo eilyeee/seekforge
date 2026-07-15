@@ -2,7 +2,7 @@
  * Pure chat-state reducer: turns the server event stream into renderable
  * chat items. No DOM, no store — unit-tested in events.test.ts.
  */
-import type { AgentError, AgentEvent, FinalReport, TokenUsage, ToolResult } from "@seekforge/shared";
+import type { AgentError, AgentEvent, FinalReport, SubagentStatus, TokenUsage, ToolResult } from "@seekforge/shared";
 import { addUsage, emptyUsage } from "./usage";
 
 /** update_plan checklist item (mirrors @seekforge/core tools/builtins/plan.ts). */
@@ -20,6 +20,7 @@ export type StreamEvent =
 
 /** Max live-output lines kept on a running command row (command.output). */
 export const COMMAND_TAIL_LINES = 5;
+export const SUBAGENT_STEP_LIMIT = 50;
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string }
@@ -38,6 +39,18 @@ export type ChatItem =
     }
   | { kind: "plan"; id: number; items: PlanItem[] }
   | { kind: "substep"; id: number; agentId: string; steps: string[] }
+  | {
+      kind: "subagent";
+      id: number;
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: SubagentStatus;
+      steps: string[];
+      subSessionId?: string;
+      resultSummary?: string;
+      error?: { code: string; message: string };
+    }
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
   | { kind: "microcompacted"; id: number; clearedResults: number }
@@ -135,6 +148,13 @@ export function upsertPlan(state: ChatState, items: PlanItem[]): ChatState {
 /** Nested subagent activity arrives as step.started "[agentId] toolName". */
 const SUBSTEP_RE = /^\[([a-z0-9-]+)\]\s+(.+)$/;
 
+function activeSubagentIndex(items: ChatItem[], dispatchId: string): number {
+  return findLastIndex(
+    items,
+    (item) => item.kind === "subagent" && item.dispatchId === dispatchId && item.status === "running",
+  );
+}
+
 /** Ends the streaming thinking block (any later event = the answer started). */
 function finishThinking(state: ChatState): ChatState {
   const idx = findLastIndex(state.items, (i) => i.kind === "thinking" && i.streaming);
@@ -167,6 +187,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       const m = SUBSTEP_RE.exec(ev.title);
       if (!m) return state;
       const [, agentId, toolName] = m as unknown as [string, string, string];
+      if (state.items.some((item) => item.kind === "subagent" && item.agentId === agentId && item.status === "running")) {
+        return state;
+      }
       // Accumulate consecutive steps of the same agent into one card.
       const last = state.items[state.items.length - 1];
       if (last && last.kind === "substep" && last.agentId === agentId) {
@@ -175,6 +198,64 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         return { ...state, items: next };
       }
       return push(state, { kind: "substep", agentId, steps: [toolName] });
+    }
+
+    case "subagent.started":
+      return push(state, {
+        kind: "subagent",
+        dispatchId: ev.dispatchId,
+        agentId: ev.agentId,
+        task: ev.task,
+        status: "running",
+        steps: [],
+      });
+
+    case "subagent.step": {
+      const idx = activeSubagentIndex(state.items, ev.dispatchId);
+      if (idx < 0) {
+        return push(state, {
+          kind: "subagent",
+          dispatchId: ev.dispatchId,
+          agentId: ev.agentId,
+          task: ev.task,
+          status: "running",
+          steps: [ev.toolName],
+          ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
+        });
+      }
+      const item = state.items[idx] as Extract<ChatItem, { kind: "subagent" }>;
+      const items = [...state.items];
+      items[idx] = {
+        ...item,
+        steps: [...item.steps, ev.toolName].slice(-SUBAGENT_STEP_LIMIT),
+        ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
+      };
+      return { ...state, items };
+    }
+
+    case "subagent.completed":
+    case "subagent.failed":
+    case "subagent.cancelled": {
+      const idx = activeSubagentIndex(state.items, ev.dispatchId);
+      const base: Omit<Extract<ChatItem, { kind: "subagent" }>, "id"> = {
+        kind: "subagent",
+        dispatchId: ev.dispatchId,
+        agentId: ev.agentId,
+        task: ev.task,
+        status: ev.status,
+        steps: idx >= 0
+          ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>).steps
+          : [],
+        ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
+        ...(ev.type === "subagent.cancelled"
+          ? { resultSummary: ev.reason }
+          : { resultSummary: ev.resultSummary }),
+        ...(ev.type === "subagent.failed" ? { error: ev.error } : {}),
+      };
+      if (idx < 0) return push(state, base);
+      const items = [...state.items];
+      items[idx] = { ...base, id: state.items[idx]!.id };
+      return { ...state, items };
     }
 
     case "model.delta": {

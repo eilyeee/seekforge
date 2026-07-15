@@ -5,6 +5,9 @@
 
 export type CliArgs = {
   taskId?: string;
+  suite?: string;
+  repeat?: number;
+  junit?: string;
   baseline?: string;
   keep: boolean;
   variants: string[];
@@ -12,7 +15,19 @@ export type CliArgs = {
   skillRanking: boolean;
   listVariants: boolean;
   failOnRegression: boolean;
+  requireApiKey: boolean;
 };
+
+export const MAX_REPEAT = 20;
+
+function positiveInteger(raw: string | undefined, flag: string): number {
+  if (raw === undefined) throw new Error(`${flag} requires an integer from 1 to ${MAX_REPEAT}`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_REPEAT) {
+    throw new Error(`${flag} requires an integer from 1 to ${MAX_REPEAT}`);
+  }
+  return value;
+}
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
@@ -21,6 +36,7 @@ export function parseArgs(argv: string[]): CliArgs {
     skillRanking: false,
     listVariants: false,
     failOnRegression: false,
+    requireApiKey: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -32,8 +48,23 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--task": {
         const val = argv[++i];
-        if (val === undefined) throw new Error("--task requires a task id");
+        if (val === undefined || val.trim().length === 0) throw new Error("--task requires a task id");
         args.taskId = val;
+        break;
+      }
+      case "--suite": {
+        const val = argv[++i];
+        if (val === undefined || val.length === 0) throw new Error("--suite requires a name");
+        args.suite = val;
+        break;
+      }
+      case "--repeat":
+        args.repeat = positiveInteger(argv[++i], "--repeat");
+        break;
+      case "--junit": {
+        const val = argv[++i];
+        if (val === undefined || val.length === 0) throw new Error("--junit requires a file path");
+        args.junit = val;
         break;
       }
       case "--baseline": {
@@ -63,12 +94,20 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--fail-on-regression":
         args.failOnRegression = true;
         break;
+      case "--require-api-key":
+        args.requireApiKey = true;
+        break;
       case "--list-variants":
         args.listVariants = true;
         break;
       default:
         throw new Error(`unknown argument: ${arg}`);
     }
+  }
+  if (args.variants.length > 1) throw new Error("--variant may be specified only once; use --ab to compare variants");
+  if (args.ab !== undefined && args.variants.length > 0) throw new Error("--variant cannot be combined with --ab");
+  if (args.failOnRegression && args.baseline === undefined) {
+    throw new Error("--fail-on-regression requires --baseline <file>");
   }
   return args;
 }

@@ -1,4 +1,10 @@
-import { loadAgentDefinitions, type BackgroundTasks, type ToolSpec } from "@seekforge/core";
+import {
+  createDispatchManager,
+  loadAgentDefinitions,
+  type BackgroundTasks,
+  type DispatchManager,
+  type ToolSpec,
+} from "@seekforge/core";
 import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { TuiConfig } from "../config.js";
 import { expandFileRefs } from "@seekforge/shared/file-refs";
@@ -31,6 +37,8 @@ export type RunSessionDeps = {
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   /** Resolves the current session id for resume chaining. */
   getSessionId: () => string | undefined;
+  /** Binds controls to this exact run; undefined clears them during cleanup. */
+  onDispatchManager?: (manager: DispatchManager | undefined) => void;
 };
 
 /**
@@ -46,6 +54,7 @@ export async function runSession(
   // Coalesce per-token deltas and live output into ~20fps dispatches so the
   // transcript doesn't repaint on every chunk (anti-flicker).
   const buffered = createBufferedDispatch(deps.dispatch);
+  const dispatchManager = createDispatchManager();
 
   const { agent, dispose } = createTuiAgent({
     config: deps.config,
@@ -58,10 +67,12 @@ export async function runSession(
     mcpToolSpecs: deps.mcpToolSpecs,
     background: deps.background,
     askUser: deps.askUser,
+    dispatchManager,
   });
 
   // One capture per run: snapshots files around write tools to render diffs.
   const capture = createDiffCapture(deps.projectPath);
+  deps.onDispatchManager?.(dispatchManager);
 
   try {
     for await (const event of agent.runTask({
@@ -79,6 +90,7 @@ export async function runSession(
     }
   } finally {
     buffered.flush();
+    deps.onDispatchManager?.(undefined);
     dispose();
   }
 }

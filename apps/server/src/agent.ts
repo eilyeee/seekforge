@@ -12,6 +12,7 @@ import {
   createAgentCore,
   createDefaultDispatcher,
   createRuntimeClient,
+  loadAgentDefinitions,
   runAutoLoop,
   resumeAutoLoop,
   type AgentCore,
@@ -19,6 +20,7 @@ import {
   type LoopOptions,
   type LoopResult,
   type RuntimeClient,
+  type DispatchManager,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
@@ -48,6 +50,8 @@ export type CreateAgentOptions = {
   extractMemory: boolean;
   /** Per-run model/thinking overrides (frame fields win over config). */
   overrides?: RunOverrides;
+  /** Run-bound subagent controls owned by the current WS connection. */
+  dispatchManager?: DispatchManager;
 };
 
 export type AgentHandle = {
@@ -121,6 +125,8 @@ export function buildAgentDeps(opts: CreateAgentOptions): AgentCoreDeps & { runt
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
+    subagents: loadAgentDefinitions(opts.workspace),
+    ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     runtime,
     ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
     ...(config.hooks ? { hooks: config.hooks } : {}),

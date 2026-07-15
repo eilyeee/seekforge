@@ -39,6 +39,10 @@ export {
 export { createEventQueue, type EventQueue } from "./events.js";
 export {
   createDispatchManager,
+  MAX_STEER_MESSAGE_LENGTH,
+  MAX_STEER_QUEUE_LENGTH,
+  type DispatchControlError,
+  type DispatchControlResult,
   type DispatchHooks,
   type DispatchManager,
   type DispatchRunner,

@@ -156,4 +156,24 @@ describe("regressions", () => {
   it("returns [] when nothing regressed", () => {
     expect(regressions([result({ taskId: "a", success: true })], baseline)).toEqual([]);
   });
+
+  it("deduplicates a regressed task across repeated samples", () => {
+    expect(regressions([
+      result({ taskId: "a", success: false, sample: 1 }),
+      result({ taskId: "a", success: false, sample: 2 }),
+    ], baseline)).toEqual(["a"]);
+  });
+
+  it("uses the task-level sample majority for repeated runs", () => {
+    expect(regressions([
+      result({ taskId: "a", success: true, sample: 1 }),
+      result({ taskId: "a", success: false, sample: 2 }),
+      result({ taskId: "a", success: true, sample: 3 }),
+    ], baseline)).toEqual([]);
+    expect(regressions([
+      result({ taskId: "a", success: false, sample: 1 }),
+      result({ taskId: "a", success: false, sample: 2 }),
+      result({ taskId: "a", success: true, sample: 3 }),
+    ], baseline)).toEqual(["a"]);
+  });
 });

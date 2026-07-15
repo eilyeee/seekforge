@@ -195,6 +195,10 @@ type AppStore = {
   resumeLoop: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
   executePlan: () => void;
   cancel: () => void;
+  /** Queue guidance for one running subagent at its next model-turn boundary. */
+  steerSubagent: (dispatchId: string, message: string) => void;
+  /** Stop one running subagent without cancelling its parent task. */
+  cancelSubagent: (dispatchId: string) => void;
   newSession: () => void;
   respondPermission: (approved: boolean, remember?: "session", selectedHunks?: number[]) => void;
   /** Answers the pending ask_user question on the active tab. */
@@ -591,6 +595,16 @@ export const useStore = create<AppStore>()((set, get) => {
 
     cancel: () => {
       wsByTab.get(get().tabs.activeTabId)?.send({ type: "cancel" });
+    },
+
+    steerSubagent: (dispatchId, message) => {
+      const trimmed = message.trim();
+      if (!trimmed || trimmed.length > 4000) return;
+      wsByTab.get(get().tabs.activeTabId)?.send({ type: "subagent.steer", dispatchId, message: trimmed });
+    },
+
+    cancelSubagent: (dispatchId) => {
+      wsByTab.get(get().tabs.activeTabId)?.send({ type: "subagent.cancel", dispatchId });
     },
 
     newSession: () => {

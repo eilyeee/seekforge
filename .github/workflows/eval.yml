@@ -1,9 +1,8 @@
 name: Eval (regression gate)
 
-# Evals call the real DeepSeek API (cost + non-determinism), so this is NOT on
-# the PR gate. Run it on demand; it fails ONLY on a pass→fail vs evals/baseline.json
-# (known-red/flaky tasks stay non-blocking). Without the DEEPSEEK_API_KEY secret
-# the harness skips and the job passes.
+# Evals call the real provider API (cost + non-determinism), so this is not a PR
+# gate. The weekly nightly suite samples every task three times and enforces the
+# configured quality, cost, token, tool-failure, and session-error thresholds.
 on:
   workflow_dispatch:
   schedule:
@@ -20,7 +19,7 @@ jobs:
   eval:
     name: eval vs baseline
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -31,10 +30,29 @@ jobs:
           node-version: "22"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Mark eval start
+        run: touch "$RUNNER_TEMP/eval-start"
       - name: Run evals against the baseline
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-        run: pnpm --filter @seekforge/eval-harness eval -- --baseline evals/baseline.json --fail-on-regression
+        run: >-
+          pnpm --filter @seekforge/eval-harness eval --
+          --suite nightly
+          --repeat 3
+          --baseline evals/baseline.json
+          --fail-on-regression
+          --require-api-key
+          --junit evals/reports/junit.xml
+      - name: Publish eval summary
+        if: always()
+        shell: bash
+        run: |
+          report=$(find evals/reports -maxdepth 1 -name '*.md' -type f -newer "$RUNNER_TEMP/eval-start" -print | sort | tail -n 1)
+          if [[ -n "$report" ]]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No eval report was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4

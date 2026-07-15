@@ -157,3 +157,26 @@ the interactive TUI exposes the same workflow through `/loop`.
 `seekforge loop-list`, `loop-show`, and `loop-delete` manage persisted records.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;
 dirty worktrees require explicit `--force` because their changes are discarded.
+
+## Repository security
+
+`seekforge security` maintains an append-only Finding queue under
+`.seekforge/security/events.jsonl`. Agent scan output is accepted only after
+strict schema, repository-relative path, line-range, and exact-excerpt
+validation.
+
+| Command | Description |
+| --- | --- |
+| `security scan [--max-findings N] [--json]` | Run a repository-wide read-only Agent security scan. |
+| `security list [--status S] [--severity S] [--json]` | List current Findings. |
+| `security show <id> [--json]` | Show evidence and remediation for one Finding. |
+| `security status <id> <status> [--reason TEXT]` | Record a lifecycle transition. |
+| `security fix <id> --max-cost USD [-y]` | Run an Agent fix, project checks, and verification rescan. |
+| `security verify <id>` | Run project checks and rescan without editing. |
+| `security threat-model [--json]` | Generate an evidence-backed threat model. |
+| `security export --format json\|markdown\|sarif [-o PATH]` | Export a redacted evidence package. |
+
+The lifecycle is `open`, `triaged`, `fixing`, `resolved`, `accepted_risk`,
+`dismissed`, or `reopened`. Verification is tracked separately as `unverified`,
+`verified`, `failed`, or `stale`. See [Security scanning](security-scanning.md)
+for verification rules and compliance limitations.

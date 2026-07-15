@@ -73,6 +73,12 @@ first one's answer.
   from every response-affecting provider setting.
 - **Also caught:** normalized MCP prompt names can collide (`foo_bar`/`foo-bar`);
   assign deterministic unique command names and use the same mapping for lookup.
+- **Also caught:** subagent dispatch ids restart within a new manager/run. A
+  transcript must update only the latest active matching dispatch, not an older
+  completed card that happens to reuse the same local id.
+- **Also caught:** Finding ids that include source line numbers duplicate the
+  same vulnerability after unrelated lines are inserted. Prefer stable rule,
+  path, and normalized evidence identity while keeping line numbers as location.
 
 ## 4. Serialize and deserialize must be exact inverses
 
@@ -137,6 +143,9 @@ path leaves every other path exposed.
 - **Also caught:** tool-call ids are not guaranteed unique across a whole
   session. Pair results within each assistant turn; a global responded-id set
   can make an interrupted call look complete when an earlier turn reused its id.
+- **Also caught:** session-audit exports paired tool results through a global
+  id map, so a later turn reusing an id rewrote the earlier call's evidence.
+  Audit/report code must preserve the same per-assistant-turn pairing boundary.
 - **Also caught:** an optional security field that is present but malformed must
   reject the request. Invalid WebSocket `selectedHunks` previously widened a
   partial permission response into approval of the complete patch.

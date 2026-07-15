@@ -146,6 +146,28 @@ describe("buildSessionAudit / renderSessionAuditMarkdown", () => {
     expect(md).not.toContain("✓ run_command(");
   });
 
+  it("pairs reused tool-call ids within their assistant turn", () => {
+    const trace = createSessionTrace(ws, "reused-id");
+    trace.message({ role: "user", content: "first" });
+    trace.message({
+      role: "assistant",
+      content: "First call.",
+      toolCalls: [{ id: "same", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+    });
+    trace.message({ role: "tool", content: '{"ok":true,"data":"a"}', toolCallId: "same" });
+    trace.message({ role: "user", content: "second" });
+    trace.message({
+      role: "assistant",
+      content: "Second call.",
+      toolCalls: [{ id: "same", name: "run_command", argumentsJson: '{"command":"false"}' }],
+    });
+    trace.message({ role: "tool", content: '{"ok":false,"error":"exit 1"}', toolCallId: "same" });
+
+    const audit = buildSessionAudit(ws, "reused-id")!;
+    expect(audit.turns[0]!.toolCalls[0]).toMatchObject({ name: "read_file", ok: true });
+    expect(audit.turns[1]!.toolCalls[0]).toMatchObject({ name: "run_command", ok: false });
+  });
+
   it("returns null for an unknown session id", () => {
     expect(buildSessionAudit(ws, "does-not-exist")).toBeNull();
   });

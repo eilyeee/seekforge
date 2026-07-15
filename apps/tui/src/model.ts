@@ -77,6 +77,18 @@ export type ChatItem =
   | { kind: "thinking"; id: string; text: string; streaming: boolean; startedAt: number; endedAt?: number }
   | { kind: "step"; id: string; title: string; agentId?: string }
   | {
+      kind: "subagent";
+      id: string;
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "running" | "done" | "failed" | "cancelled";
+      subSessionId?: string;
+      steps: string[];
+      resultSummary?: string;
+      error?: { code: string; message: string };
+    }
+  | {
       kind: "tool";
       id: string;
       toolName: string;
@@ -265,6 +277,15 @@ function closeStreamingThinking(items: ChatItem[]): ChatItem[] {
 
 /** Matches nested-subagent step titles emitted by the loop: "[agentId] tool". */
 const NESTED_STEP = /^\[([A-Za-z0-9_-]+)\] (.+)$/;
+const SUBAGENT_STEP_LIMIT = 100;
+
+function subagentIndex(items: ChatItem[], dispatchId: string): number {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]!;
+    if (item.kind === "subagent" && item.dispatchId === dispatchId && item.status === "running") return index;
+  }
+  return -1;
+}
 
 /**
  * Pure reducer. Wraps the inner switch to keep the scrollback anchored: when
@@ -470,10 +491,91 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
     case "step.started": {
       // Nested subagent activity is forwarded as "[agentId] tool" titles.
       const nested = NESTED_STEP.exec(e.title);
+      // Structured subagent events create the thread row before legacy step
+      // events arrive. Ignore that compatibility duplicate when possible.
+      if (
+        nested &&
+        state.items.some((item) => item.kind === "subagent" && item.agentId === nested[1] && item.status === "running")
+      ) {
+        return state;
+      }
       const step: ChatItem = nested
         ? { kind: "step", id: nextId("s"), title: nested[2] ?? e.title, agentId: nested[1] }
         : { kind: "step", id: nextId("s"), title: e.title };
       return { ...state, items: [...state.items, step] };
+    }
+
+    case "subagent.started": {
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          {
+            kind: "subagent",
+            id: nextId("sa"),
+            dispatchId: e.dispatchId,
+            agentId: e.agentId,
+            task: e.task,
+            status: "running",
+            steps: [],
+          },
+        ],
+      };
+    }
+
+    case "subagent.step": {
+      const idx = subagentIndex(state.items, e.dispatchId);
+      if (idx < 0) {
+        return {
+          ...state,
+          items: [
+            ...state.items,
+            {
+              kind: "subagent",
+              id: nextId("sa"),
+              dispatchId: e.dispatchId,
+              agentId: e.agentId,
+              task: e.task,
+              status: "running",
+              ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
+              steps: [e.toolName],
+            },
+          ],
+        };
+      }
+      const items = state.items.slice();
+      const prior = items[idx] as Extract<ChatItem, { kind: "subagent" }>;
+      items[idx] = {
+        ...prior,
+        ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
+        steps: [...prior.steps, e.toolName].slice(-SUBAGENT_STEP_LIMIT),
+      };
+      return { ...state, items };
+    }
+
+    case "subagent.completed":
+    case "subagent.failed":
+    case "subagent.cancelled": {
+      const idx = subagentIndex(state.items, e.dispatchId);
+      const existing = idx >= 0 ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>) : undefined;
+      const item: Extract<ChatItem, { kind: "subagent" }> = {
+        kind: "subagent",
+        id: existing?.id ?? nextId("sa"),
+        dispatchId: e.dispatchId,
+        agentId: e.agentId,
+        task: e.task,
+        status: e.status,
+        steps: existing?.steps ?? [],
+        ...(e.subSessionId !== undefined ? { subSessionId: e.subSessionId } : {}),
+        ...(e.type === "subagent.completed" || e.type === "subagent.failed"
+          ? { resultSummary: e.resultSummary }
+          : { resultSummary: e.reason }),
+        ...(e.type === "subagent.failed" ? { error: e.error } : {}),
+      };
+      if (idx < 0) return { ...state, items: [...state.items, item] };
+      const items = state.items.slice();
+      items[idx] = item;
+      return { ...state, items };
     }
 
     case "model.message": {

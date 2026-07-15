@@ -32,7 +32,7 @@ must not reimplement those rules.
 | `apps/tui` | Ink rendering, keyboard routing, tabs, overlays, terminal lifecycle | TUI reducer and per-tab run reservations |
 | `apps/server` | REST/WS validation and transport, workspace-scoped service facade | Server session and repository coordinators |
 | `apps/desktop` | Tauri/web UI and workspace-bound request presentation | View state guarded by workspace/request identity |
-| `packages/core` | Agent execution, providers, tools, permissions, sessions, memory, autonomous Loop | JSONL sessions and `.seekforge` stores |
+| `packages/core` | Agent execution, providers, tools, permissions, sessions, memory, autonomous Loop, security scanning | JSONL sessions and `.seekforge` stores |
 | `packages/shared` | Dependency-free types and constants | None |
 | `crates/runtime` | Optional native execution backend | Native child process/request state |
 
@@ -61,6 +61,20 @@ defined by the CLI reference, server API, configuration docs, and SDK notes.
 Session traces are append-only JSONL and remain the source of truth for agent
 runs. Autonomous Loop state is a separate orchestration checkpoint that points
 to a session; see [Loop engineering](loop-engineering.md).
+
+Security scans use a separate append-only event source at
+`.seekforge/security/events.jsonl`. `packages/core/src/security` owns strict
+Agent-output validation, Finding and verification lifecycles, threat models,
+fix evidence, and JSON/Markdown/SARIF rendering. CLI code only wires Agent and
+project-check execution into that domain. Scanner output is untrusted until its
+source paths, line ranges, and exact excerpts resolve inside the repository.
+
+Each parent Agent run owns one Core dispatch manager for subagents. It emits a
+structured lifecycle (`started`, `step`, and one terminal event), isolates
+cancellation to the selected child, and drains queued steering only at a model
+turn boundary. Server WS frames expose those controls; TUI and Desktop render
+the same shared event contract and retain completed cards when a later run
+reuses a run-local dispatch id.
 
 Workspace mutations from Agent, REST, Git, worktree, and desktop surfaces must
 use the relevant shared session or repository coordination guard. UI requests

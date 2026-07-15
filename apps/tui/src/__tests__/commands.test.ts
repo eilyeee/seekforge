@@ -53,6 +53,17 @@ describe("parseInput v2.1 additions", () => {
     expect(parseInput("/tasks kill bg-1")).toEqual({ kind: "slash", command: { name: "tasks", arg: "kill bg-1" } });
   });
 
+  it("parses subagent control commands without dropping steering text", () => {
+    expect(parseInput("/agent-cancel ag-2")).toEqual({
+      kind: "slash",
+      command: { name: "agent-cancel", arg: "ag-2" },
+    });
+    expect(parseInput("/agent-steer ag-2 focus on the failing parser test")).toEqual({
+      kind: "slash",
+      command: { name: "agent-steer", arg: "ag-2 focus on the failing parser test" },
+    });
+  });
+
   it("parses /memory, /export, /clear and /diff", () => {
     expect(parseInput("/memory")).toEqual({ kind: "slash", command: { name: "memory" } });
     expect(parseInput("/memory edit")).toEqual({ kind: "slash", command: { name: "memory", arg: "edit" } });

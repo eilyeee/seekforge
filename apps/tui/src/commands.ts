@@ -55,6 +55,8 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "memory", args: "[candidates | edit <file>]", summary: "list project memory facts (candidates reviews pending; edit opens a memory file)" , group: "context" },
   { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" , group: "tools" },
   { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
+  { name: "agent-steer", args: "<dispatch-id> <message>", summary: "guide a running subagent at its next turn", group: "tools" },
+  { name: "agent-cancel", args: "<dispatch-id>", summary: "cancel one running subagent", group: "tools" },
   { name: "skills", summary: "list installed skills and their status" , group: "tools" },
   { name: "mcp", summary: "list configured MCP servers and their tools" , group: "tools" },
   { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)" , group: "tools" },
@@ -117,6 +119,8 @@ export type SlashCommand =
   | { name: "memory"; arg?: string }
   | { name: "tasks"; arg?: string }
   | { name: "agents" }
+  | { name: "agent-steer"; arg?: string }
+  | { name: "agent-cancel"; arg?: string }
   | { name: "skills" }
   | { name: "mcp" }
   | { name: "prompts" }
@@ -245,7 +249,19 @@ const NO_ARG = new Set([
   "quit",
 ]);
 /** Commands whose argument is the whole rest of the line (free text). */
-const REST_ARG = new Set(["plan", "remember", "tasks", "todo", "add-dir", "clear", "compact", "memory", "worktree"]);
+const REST_ARG = new Set([
+  "plan",
+  "remember",
+  "tasks",
+  "todo",
+  "add-dir",
+  "clear",
+  "compact",
+  "memory",
+  "worktree",
+  "agent-steer",
+  "agent-cancel",
+]);
 /** Commands taking a single word argument. */
 const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "audit", "config", "tab", "theme", "handoff", "stash"]);
 

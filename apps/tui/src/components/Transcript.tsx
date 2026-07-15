@@ -78,6 +78,28 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
         );
       }
       return <Text dimColor>· {item.title}</Text>;
+    case "subagent": {
+      const color = item.status === "done" ? "green" : item.status === "running" ? "yellow" : "red";
+      const shownSteps = verbose ? item.steps : item.steps.slice(-8);
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text>
+            <Text color={color}>●</Text>{" "}
+            <Text color={ACCENT} bold>[{item.dispatchId}] {item.agentId}</Text>{" "}
+            <Text color={color}>{item.status}</Text>
+          </Text>
+          <Text dimColor>{"  "}{item.task}</Text>
+          {item.subSessionId ? <Text dimColor>{"  session "}{item.subSessionId}</Text> : null}
+          {shownSteps.map((step, index) => (
+            <Text key={`${index}-${step}`} dimColor>{"    • "}{step}</Text>
+          ))}
+          {!verbose && item.steps.length > shownSteps.length ? (
+            <Text dimColor>{"    … "}{item.steps.length - shownSteps.length} earlier steps</Text>
+          ) : null}
+          {item.resultSummary ? <Text color={item.status === "done" ? undefined : "red"}>{"  "}{item.resultSummary}</Text> : null}
+        </Box>
+      );
+    }
     case "tool":
       return (
         <ToolRow

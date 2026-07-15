@@ -1,7 +1,11 @@
+import type { DispatchManager } from "@seekforge/core";
+
 export type RunEntry = {
   controller: AbortController;
   runId: number;
   sigintCount: number;
+  /** Present only while this exact run owns a live subagent manager. */
+  dispatchManager?: DispatchManager;
 };
 
 export type RunReservation = RunEntry & { tabId: number };

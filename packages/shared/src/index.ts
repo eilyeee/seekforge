@@ -261,6 +261,54 @@ export type FinalReport = {
   usage: TokenUsage;
 };
 
+export type SubagentStatus = "running" | "done" | "failed" | "cancelled";
+
+export type SubagentEvent =
+  | {
+      type: "subagent.started";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "running";
+    }
+  | {
+      type: "subagent.step";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "running";
+      toolName: string;
+      subSessionId?: string;
+    }
+  | {
+      type: "subagent.completed";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "done";
+      resultSummary: string;
+      subSessionId?: string;
+    }
+  | {
+      type: "subagent.failed";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "failed";
+      error: { code: string; message: string };
+      resultSummary: string;
+      subSessionId?: string;
+    }
+  | {
+      type: "subagent.cancelled";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      status: "cancelled";
+      reason: string;
+      subSessionId?: string;
+    };
+
 export type AgentEvent =
   | { type: "session.created"; sessionId: string }
   | { type: "step.started"; title: string }
@@ -285,6 +333,7 @@ export type AgentEvent =
   | { type: "command.output"; stream: "stdout" | "stderr"; chunk: string }
   /** A user-facing message from a hook (its JSON `systemMessage`); not model output. */
   | { type: "notice"; level: "info" | "warn"; message: string }
+  | SubagentEvent
   | { type: "session.completed"; report: FinalReport }
   | { type: "session.failed"; error: AgentError };
 
@@ -744,7 +793,11 @@ export type ApiErrorCode =
   | "unknown_request"
   | "not_running"
   | "agent_error"
-  | "loop_error";
+  | "loop_error"
+  | "unknown_dispatch"
+  | "dispatch_not_running"
+  | "invalid_steering"
+  | "steering_queue_full";
 
 /** Per-run model/thinking overrides (win over server config for that run only). */
 export type RunOverrides = {
@@ -813,6 +866,8 @@ export type ClientFrame =
       addedBudget?: number;
       ws?: string;
     } & RunOverrides)
+  | { type: "subagent.cancel"; dispatchId: string }
+  | { type: "subagent.steer"; dispatchId: string; message: string }
   | { type: "cancel" };
 
 /** WS server → client frames (path /ws). */

@@ -10,7 +10,17 @@
  */
 
 import type { RawData, WebSocket } from "ws";
-import { MAX_LOOP_ITERATIONS, detectThinkingKeyword, isValidLoopId, readSessionMeta, resolveOutputStyle, type LoopEvent } from "@seekforge/core";
+import {
+  MAX_LOOP_ITERATIONS,
+  MAX_STEER_MESSAGE_LENGTH,
+  createDispatchManager,
+  detectThinkingKeyword,
+  isValidLoopId,
+  readSessionMeta,
+  resolveOutputStyle,
+  type DispatchManager,
+  type LoopEvent,
+} from "@seekforge/core";
 import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
@@ -98,6 +108,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let closed = false;
   let running = false;
   let controller: AbortController | undefined;
+  let activeDispatchManager: DispatchManager | undefined;
   let requestCounter = 0;
   // requestId -> settle(result); settling clears its timeout and unregisters.
   // The result is the core ConfirmResult so "allow for session" can grow the
@@ -214,6 +225,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   const run = async (input: RunInput): Promise<void> => {
     running = true;
     controller = new AbortController();
+    const dispatchManager = createDispatchManager();
+    activeDispatchManager = dispatchManager;
     let sessionId = input.resumeSessionId ?? "";
     // createAgent is built INSIDE the try: if it (or resolveOutputStyle) throws,
     // the finally still resets `running`, drains pending prompts, and sends idle
@@ -233,6 +246,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         onModelDelta: (chunk) => bufferDelta("model.delta", sessionId, chunk),
         onReasoningDelta: (chunk) => bufferDelta("reasoning.delta", sessionId, chunk),
         extractMemory: input.mode === "edit",
+        dispatchManager,
         ...(overrides ? { overrides } : {}),
       });
       // An output-style override resolves to a system-prompt addendum; an unknown
@@ -273,6 +287,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         flushDeltas(); // don't lose a trailing chunk; also clears the timer
         running = false;
         controller = undefined;
+        if (activeDispatchManager === dispatchManager) activeDispatchManager = undefined;
         denyAllPending();
         if (!closed) send({ type: "idle" });
       }
@@ -557,6 +572,44 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         return;
       }
 
+      case "subagent.cancel": {
+        if (Object.keys(frame).some((key) => key !== "type" && key !== "dispatchId")) {
+          return fail("bad_frame", "subagent.cancel accepts only dispatchId");
+        }
+        const { dispatchId } = frame;
+        if (typeof dispatchId !== "string" || !/^ag-[1-9]\d*$/.test(dispatchId) || dispatchId.length > 64) {
+          return fail("bad_frame", "subagent.cancel.dispatchId must be a valid dispatch id");
+        }
+        if (!running || !activeDispatchManager) {
+          return fail("not_running", "no controllable agent run is active");
+        }
+        const result = activeDispatchManager.cancel(dispatchId);
+        if (!result.ok) return fail(result.code, result.message);
+        return;
+      }
+
+      case "subagent.steer": {
+        if (Object.keys(frame).some((key) => key !== "type" && key !== "dispatchId" && key !== "message")) {
+          return fail("bad_frame", "subagent.steer accepts only dispatchId and message");
+        }
+        const { dispatchId, message } = frame;
+        if (typeof dispatchId !== "string" || !/^ag-[1-9]\d*$/.test(dispatchId) || dispatchId.length > 64) {
+          return fail("bad_frame", "subagent.steer.dispatchId must be a valid dispatch id");
+        }
+        if (typeof message !== "string" || message.trim().length === 0 || message.length > MAX_STEER_MESSAGE_LENGTH) {
+          return fail(
+            "bad_frame",
+            `subagent.steer.message must contain 1-${MAX_STEER_MESSAGE_LENGTH} characters`,
+          );
+        }
+        if (!running || !activeDispatchManager) {
+          return fail("not_running", "no controllable agent run is active");
+        }
+        const result = activeDispatchManager.steer(dispatchId, message);
+        if (!result.ok) return fail(result.code, result.message);
+        return;
+      }
+
       case "cancel": {
         if (!running || !controller) return fail("not_running", "no session is running");
         // Unblock a run paused on a permission prompt so it observes the abort.
@@ -578,6 +631,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     pendingDeltaType = undefined;
     pendingDeltaChunk = "";
     denyAllPending();
+    activeDispatchManager?.disposeAll();
     controller?.abort();
   });
 }

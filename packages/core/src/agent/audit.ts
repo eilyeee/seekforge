@@ -128,22 +128,19 @@ export function buildSessionAudit(workspace: string, sessionId: string): Session
   }
   if (messages.length === 0) return null;
 
-  // Tool results are keyed by the id of the call they answer.
-  const resultsById = new Map<string, { ok: boolean; preview: string }>();
-  for (const m of messages) {
-    if (m.role === "tool" && m.toolCallId) {
-      resultsById.set(m.toolCallId, { ok: !isErrorResult(m.content), preview: truncate(m.content) });
-    }
-  }
-
   const turns: AuditTurn[] = [];
   let current: AuditTurn | null = null;
+  // Tool-call ids are scoped to one assistant response by the provider. Keep
+  // only that response's unanswered calls here so a later turn reusing an id
+  // cannot rewrite an earlier audit result.
+  let pendingCalls = new Map<string, AuditToolCall[]>();
   let assistantMessages = 0;
   let toolCallCount = 0;
 
   for (const m of messages) {
     if (m.role === "system") continue; // chrome, not part of the visible run
     if (m.role === "user") {
+      pendingCalls = new Map();
       current = { index: turns.length, user: m.content, assistant: "", toolCalls: [] };
       turns.push(current);
       continue;
@@ -158,20 +155,32 @@ export function buildSessionAudit(workspace: string, sessionId: string): Session
       if (m.content.trim()) {
         current.assistant = current.assistant ? `${current.assistant}\n\n${m.content}` : m.content;
       }
+      pendingCalls = new Map();
       for (const call of m.toolCalls ?? []) {
         toolCallCount += 1;
-        const result = resultsById.get(call.id);
-        current.toolCalls.push({
+        const auditCall: AuditToolCall = {
           id: call.id,
           name: call.name,
           argsSummary: summarizeArgs(call.argumentsJson),
-          // No recorded result → null (interrupted turn), not a bogus success.
-          ok: result ? result.ok : null,
-          resultPreview: result ? result.preview : "",
-        });
+          ok: null,
+          resultPreview: "",
+        };
+        current.toolCalls.push(auditCall);
+        const sameId = pendingCalls.get(call.id) ?? [];
+        sameId.push(auditCall);
+        pendingCalls.set(call.id, sameId);
+      }
+      continue;
+    }
+    if (m.role === "tool" && m.toolCallId) {
+      const sameId = pendingCalls.get(m.toolCallId);
+      const call = sameId?.shift();
+      if (call) {
+        call.ok = !isErrorResult(m.content);
+        call.resultPreview = truncate(m.content);
+        if (sameId?.length === 0) pendingCalls.delete(m.toolCallId);
       }
     }
-    // role:"tool" already folded into resultsById above.
   }
 
   // Dedupe checkpoint paths → created flag + the turns that wrote each path.

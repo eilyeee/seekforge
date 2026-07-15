@@ -43,7 +43,7 @@ export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
-  const { sendTask, cancel, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
+  const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
   const { setModel, setThinking, setReasoningEffort, setOutputStyle, truncateAtItem, startLoop, resumeLoop } =
@@ -388,6 +388,8 @@ export function ChatView() {
           ) : (
             <ChatItems
               items={tab.chat.items}
+              onSubagentSteer={steerSubagent}
+              onSubagentCancel={cancelSubagent}
               onBacktrack={
                 tab.chat.sessionId && !tab.chat.running
                   ? (itemId) => {

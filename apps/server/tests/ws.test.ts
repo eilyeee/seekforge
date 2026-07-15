@@ -161,6 +161,80 @@ describe("start -> events -> idle", () => {
   });
 });
 
+describe("subagent controls", () => {
+  it("binds steer/cancel to the active run and fails closed for invalid dispatches", async () => {
+    let releaseRun!: () => void;
+    const runGate = new Promise<void>((resolve) => { releaseRun = resolve; });
+    let takeSteering: (() => string[]) | undefined;
+    let manager: NonNullable<Parameters<CreateAgentFn>[0]["dispatchManager"]> | undefined;
+    const { server } = await boot((opts) => {
+      manager = opts.dispatchManager;
+      manager!.start({
+        agentId: "worker",
+        task: "inspect",
+        run: async (signal, hooks) => {
+          takeSteering = hooks.takeSteering;
+          await new Promise<void>((resolve) => {
+            const done = () => resolve();
+            signal.addEventListener("abort", done, { once: true });
+            if (signal.aborted) done();
+          });
+          return { ok: false, error: { code: "aborted", message: "aborted" } };
+        },
+      });
+      return {
+        agent: {
+          runTask: async function* () {
+            yield { type: "session.created" as const, sessionId: "sub-controls" };
+            await runGate;
+            yield { type: "session.completed" as const, report: emptyReport() };
+          },
+        },
+        dispose: () => {},
+      };
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "start", task: "run", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "event");
+
+    sendFrame(ws, { type: "subagent.steer", dispatchId: "ag-1", message: "focus", extra: true });
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("bad_frame");
+    sendFrame(ws, { type: "subagent.steer", dispatchId: "ag-99", message: "focus" });
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("unknown_dispatch");
+
+    sendFrame(ws, { type: "subagent.steer", dispatchId: "ag-1", message: "focus on parser tests" });
+    let guidance: string[] = [];
+    await waitUntil(() => {
+      guidance = takeSteering?.() ?? [];
+      return guidance.length > 0;
+    });
+    expect(guidance).toEqual(["focus on parser tests"]);
+
+    sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    await waitUntil(() => manager?.get("ag-1")?.status === "cancelled");
+    expect(manager?.get("ag-1")?.status).toBe("cancelled");
+
+    releaseRun();
+    await rx.waitFor((f) => f.type === "idle");
+    sendFrame(ws, { type: "subagent.cancel", dispatchId: "ag-1" });
+    expect((await rx.waitFor((f) => f.type === "error")).code).toBe("not_running");
+  });
+
+  it("rejects malformed subagent frames before consulting run state", async () => {
+    const { server } = await boot(fakeAgentFactory(async function* () {}));
+    const { ws, rx } = await open(server.port);
+    const frames = [
+      { type: "subagent.cancel", dispatchId: "../ag-1" },
+      { type: "subagent.steer", dispatchId: "ag-1", message: "" },
+      { type: "subagent.steer", dispatchId: "ag-1", message: 42 },
+    ];
+    for (const frame of frames) {
+      sendFrame(ws, frame);
+      expect((await rx.waitFor((f) => f.type === "error")).code).toBe("bad_frame");
+    }
+  });
+});
+
 describe("server shutdown", () => {
   it("aborts and awaits active WebSocket run cleanup before close resolves", async () => {
     let cleanupStarted = false;

@@ -43,15 +43,45 @@ Supported checks (see `packages/eval-harness/src/tasks.ts`):
 pnpm --filter @seekforge/eval-harness test   # harness + dataset tests (offline)
 pnpm --filter @seekforge/eval-harness eval   # real run; needs DEEPSEEK_API_KEY
 pnpm --filter @seekforge/eval-harness eval -- --task <id> --baseline evals/baseline.json
+pnpm --filter @seekforge/eval-harness eval -- --suite smoke
+pnpm --filter @seekforge/eval-harness eval -- --suite nightly --junit evals/reports/junit.xml
 ```
+
+## Continuous suites
+
+`config.json` defines three strictly validated suites:
+
+| Suite | Tasks | Default samples | Intended use |
+| --- | ---: | ---: | --- |
+| `smoke` | 10 representative tasks | 1 | quick model/config check |
+| `nightly` | all 55 tasks | 3 | weekly regression and efficiency gate |
+| `release` | all 55 tasks | 5 | release qualification with tighter gates |
+
+Use `--repeat <n>` (1 to 20) to override the sample count and `--task a,b` to narrow the
+chosen suite. `--require-api-key` turns a missing provider key into a non-zero
+infrastructure failure; without it, local runs retain the historical skip.
+
+Each result sample includes prompt/completion/cache-hit/total tokens, cost,
+duration, tool failures, and session errors. JSON reports add run metadata,
+per-task and whole-run aggregates, and gate outcomes while retaining the old
+`generatedAt` and `results` fields. `--junit <path>` emits one testcase per
+sample for CI consumers.
+`--ab` remains a single-sample experiment; combining it with a repeat count
+greater than one is rejected rather than silently discarding samples.
+
+Suite gates cover success rate, cost per success, tokens per success, tool
+failure rate, and session error rate. When a baseline is supplied, they also
+bound success-rate drop and cost/token/tool-failure regressions. Historical
+baselines without token metrics are accepted, but malformed shapes, empty
+samples, negative values, and non-finite numeric values are rejected.
 
 ## baseline.json
 
-`baseline.json` records **real run results** (checks + cost/turn metrics),
-so it is only updated from an actual `eval` run, never by hand. Tasks added
-after the last recorded run (currently the 10 tasks beyond the original 4)
-are intentionally absent until the next real run; copy the freshly written
-`evals/reports/<timestamp>.json` over `baseline.json` to record them.
+`baseline.json` records **real run results** (checks + execution metrics), so it
+is only updated from an actual eval run, never by hand. A baseline may lag the
+55-task dataset; newly added tasks do not count as pass→fail regressions. Copy a
+reviewed, representative report over `baseline.json` only when intentionally
+refreshing the comparison point.
 
 ## Prompt A/B variants
 

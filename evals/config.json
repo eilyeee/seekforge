@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "suites": {
+    "smoke": {
+      "tasks": [
+        "add-function",
+        "ask-codebase",
+        "cross-module-bug",
+        "failing-test-fix",
+        "guarded-no-delete",
+        "json-config-edit",
+        "loop-verify-green",
+        "multi-root-shared-util",
+        "ts-generic-inference",
+        "ts-typing-fix"
+      ],
+      "repeat": 1,
+      "gates": {
+        "minSuccessRate": 0.8,
+        "maxSuccessRateDrop": 0.05,
+        "maxCostPerSuccessUsd": 0.05,
+        "maxCostPerSuccessIncreaseRatio": 0.3,
+        "maxTokensPerSuccess": 100000,
+        "maxTokensPerSuccessIncreaseRatio": 0.3,
+        "maxToolFailureRate": 0.2,
+        "maxToolFailureRateIncrease": 0.05,
+        "maxSessionErrorRate": 0.05
+      }
+    },
+    "nightly": {
+      "tasks": "*",
+      "repeat": 3,
+      "gates": {
+        "minSuccessRate": 0.8,
+        "maxSuccessRateDrop": 0.05,
+        "maxCostPerSuccessUsd": 0.05,
+        "maxCostPerSuccessIncreaseRatio": 0.3,
+        "maxTokensPerSuccess": 100000,
+        "maxTokensPerSuccessIncreaseRatio": 0.3,
+        "maxToolFailureRate": 0.2,
+        "maxToolFailureRateIncrease": 0.05,
+        "maxSessionErrorRate": 0.05
+      }
+    },
+    "release": {
+      "tasks": "*",
+      "repeat": 5,
+      "gates": {
+        "minSuccessRate": 0.85,
+        "maxSuccessRateDrop": 0.03,
+        "maxCostPerSuccessUsd": 0.05,
+        "maxCostPerSuccessIncreaseRatio": 0.2,
+        "maxTokensPerSuccess": 100000,
+        "maxTokensPerSuccessIncreaseRatio": 0.2,
+        "maxToolFailureRate": 0.15,
+        "maxToolFailureRateIncrease": 0.03,
+        "maxSessionErrorRate": 0.02
+      }
+    }
+  }
+}

@@ -81,6 +81,7 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge schedule add\|list\|run` | manage local cost-bounded scheduled agent jobs — see [Scheduling](docs/scheduling.md) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
+| `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | deep repository security review, Finding queue/lifecycle, verified remediation, threat modeling, and JSON/Markdown/SARIF evidence export — see [Security scanning](docs/security-scanning.md) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |
 | `seekforge mcp-serve [--allow-write]` | run SeekForge as an MCP server on stdio (read-only tool set by default); `--allow-write` exposes write tools (TRUSTED callers only) |
@@ -111,7 +112,8 @@ the **same** agent/API as the CLI, in a light, Codex-style UI (dark mode opt-in;
 language follows en / zh-CN), with every surface in one window:
 
 - **Chat** — multi-tab sessions with a home screen (quick-action starters +
-  recent sessions/skills/agents), streaming tool-run cards, per-hunk diff
+  recent sessions/skills/agents), streaming tool-run and subagent cards with
+  targeted guidance/cancellation, per-hunk diff
   approval, plan execution, and a composer with `@` file mentions, `/` commands,
   image attach/paste, and a thinking toggle.
 - **Sessions · Changes · Skills · Subagents · Memory · Evolution · Settings** —
@@ -129,6 +131,14 @@ The bundled DMG app is self-contained — it embeds the server as a sidecar, so 
 user who installs only the bundle needs **no** system `seekforge`. In `tauri dev`
 (no bundle) it falls back to a `seekforge` on PATH or the repo's tsx runner. See
 [apps/desktop/src-tauri/README.md](apps/desktop/src-tauri/README.md).
+
+## Continuous Agent Eval
+
+The eval harness supports versioned smoke/nightly/release suites, bounded
+multi-sample runs, deterministic task checks, task-level regression comparison,
+quality/cost/token/reliability gates, run metadata, and Markdown/JSON/JUnit
+reports. The weekly workflow runs the nightly suite against the committed
+baseline; see [Evals and the regression gate](docs/EVALS.md).
 
 ## How it works
 

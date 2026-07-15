@@ -154,6 +154,11 @@ export type AgentCoreDeps = {
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
+   * Run-scoped subagent controller supplied by an interactive frontend. The
+   * caller may steer/cancel dispatches only while the owning run is active.
+   */
+  dispatchManager?: DispatchManager;
+  /**
    * Shared background-task manager. When provided, the CALLER owns its
    * lifecycle: tasks survive across runs (a TUI/REPL session spanning many
    * turns) and are not killed when one run ends. Unset, each run gets its
@@ -268,6 +273,8 @@ export type AgentCoreDeps = {
   _depth?: number;
   /** Internal: dispatch-manager override (test seam). */
   _dispatchManager?: DispatchManager;
+  /** Internal: safe-point steering queue for a nested subagent run. */
+  _takeSubagentSteering?: () => string[];
 };
 
 const OUTPUT_RESERVE_TOKENS = 8192;
@@ -711,7 +718,59 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           reason: info.reason,
         });
       const dispatchManager: DispatchManager | undefined =
-        roster.length > 0 ? (deps._dispatchManager ?? createDispatchManager()) : undefined;
+        roster.length > 0 ? (deps.dispatchManager ?? deps._dispatchManager ?? createDispatchManager()) : undefined;
+      const terminalDispatches = new Set<string>();
+
+      function resultSummary(result: ToolResult): string {
+        if (!result.ok) return (result.error?.message ?? "subagent failed").slice(0, 500);
+        const data = result.data as { report?: unknown } | undefined;
+        if (typeof data?.report === "string") return data.report.replace(/\s+/g, " ").trim().slice(0, 500);
+        return "completed";
+      }
+
+      function emitDispatchTerminal(dispatchId: string, result: ToolResult): void {
+        if (terminalDispatches.has(dispatchId)) return;
+        const rec = dispatchManager?.get(dispatchId);
+        if (!rec || rec.status === "running") return;
+        terminalDispatches.add(dispatchId);
+        const base = {
+          dispatchId,
+          agentId: rec.agentId,
+          task: rec.task,
+          ...(rec.subSessionId !== undefined ? { subSessionId: rec.subSessionId } : {}),
+        };
+        if (rec.status === "cancelled") {
+          pushEvent({
+            type: "subagent.cancelled",
+            ...base,
+            status: "cancelled",
+            reason: rec.cancelReason ?? result.error?.message ?? "dispatch cancelled",
+          });
+        } else if (rec.status === "failed") {
+          pushEvent({
+            type: "subagent.failed",
+            ...base,
+            status: "failed",
+            error: {
+              code: result.error?.code ?? "subagent_failed",
+              message: result.error?.message ?? "subagent failed",
+            },
+            resultSummary: resultSummary(result),
+          });
+        } else {
+          pushEvent({
+            type: "subagent.completed",
+            ...base,
+            status: "done",
+            resultSummary: resultSummary(result),
+          });
+        }
+      }
+
+      function observeDispatch(dispatchId: string, promise: Promise<ToolResult>): void {
+        terminalDispatches.delete(dispatchId);
+        void promise.then((result) => emitDispatchTerminal(dispatchId, result));
+      }
 
       /**
        * Runs a subagent as a nested agent core (depth+1, no further
@@ -727,6 +786,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         task: string,
         signal: AbortSignal,
         hooks: DispatchHooks,
+        dispatchId: string,
         resumeSessionId?: string,
       ): Promise<ToolResult> {
         const nested = createAgentCore({
@@ -734,8 +794,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           provider:
             def.model !== undefined && deps.providerForModel ? deps.providerForModel(def.model) : deps.provider,
           subagents: undefined,
+          dispatchManager: undefined,
           _depth: depth + 1,
           _dispatchManager: undefined,
+          _takeSubagentSteering: hooks.takeSteering,
           dispatcher: def.tools ? whitelistDispatcher(deps.dispatcher, def.tools) : deps.dispatcher,
           onModelDelta: undefined,
           extractMemory: false,
@@ -777,7 +839,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               // own cooperative cancellation will stop it where possible.
               const ret = events.return?.();
               if (ret) void ret.then(undefined, () => {});
-              return { ok: false, error: { code: "subagent_failed", message: "dispatch aborted" } };
+              return { ok: false, error: { code: "subagent_cancelled", message: "dispatch aborted" } };
             }
             if (step.done) break;
             const ev = step.value;
@@ -787,9 +849,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 hooks.onSubSession(ev.sessionId);
                 break;
               case "tool.started":
-                // Cheap visibility into the nested run without new event types.
                 hooks.onStep(ev.toolName);
+                // Keep the legacy step title for older clients while new
+                // frontends consume the structured dispatch event below.
                 pushEvent({ type: "step.started", title: `[${def.id}] ${ev.toolName}` });
+                pushEvent({
+                  type: "subagent.step",
+                  dispatchId,
+                  agentId: def.id,
+                  task,
+                  status: "running",
+                  toolName: ev.toolName,
+                  ...(subSessionId !== undefined ? { subSessionId } : {}),
+                });
                 break;
               case "file.changed":
                 changedFiles.add(ev.path);
@@ -905,16 +977,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
         }
 
-        const { id: dispatchId, promise } = dispatchManager!.start({
+        let dispatchId = "";
+        const started = dispatchManager!.start({
           agentId: def.id,
           task,
           signal: input.signal,
-          run: (signal, hooks) => executeNestedRun(def, task, signal, hooks),
+          run: (signal, hooks) => executeNestedRun(def, task, signal, hooks, dispatchId),
         });
+        dispatchId = started.id;
+        pushEvent({ type: "subagent.started", dispatchId, agentId: def.id, task, status: "running" });
+        observeDispatch(dispatchId, started.promise);
         if (a?.background === true) {
           return { ok: true, data: { dispatchId, agentId: def.id, status: "running" } };
         }
-        return promise;
+        return started.promise;
       }
 
       /** Handles an agent_result tool call (synchronous status poll). */
@@ -938,6 +1014,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           return {
             ok: false,
             error: { code: "subagent_failed", message: rec.result?.error?.message ?? "subagent run failed" },
+          };
+        }
+        if (rec.status === "cancelled") {
+          return {
+            ok: false,
+            error: { code: "subagent_cancelled", message: rec.cancelReason ?? "subagent was cancelled" },
           };
         }
         const data = rec.result?.data as
@@ -996,7 +1078,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             },
           };
         }
-        if (rec.status === "failed" || rec.subSessionId === undefined) {
+        if (rec.status !== "done" || rec.subSessionId === undefined) {
           return {
             ok: false,
             error: {
@@ -1019,12 +1101,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
         }
         const resumeSessionId = rec.subSessionId;
-        return dispatchManager!.resume({
+        const promise = dispatchManager!.resume({
           id: dispatchId,
           task,
           signal: input.signal,
-          run: (signal, hooks) => executeNestedRun(def, task, signal, hooks, resumeSessionId),
+          run: (signal, hooks) => executeNestedRun(def, task, signal, hooks, dispatchId, resumeSessionId),
         });
+        pushEvent({ type: "subagent.started", dispatchId, agentId: def.id, task, status: "running" });
+        observeDispatch(dispatchId, promise);
+        return promise;
       }
 
       try {
@@ -1060,6 +1145,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           throwIfCancelled();
           // Surface events from background dispatches between turns.
           for (const ev of queue.drainNow()) yield ev;
+
+          // A running subagent receives steering only at this safe point,
+          // between provider turns. These messages are transient and therefore
+          // do not violate the trace's one-user-message-per-run invariant.
+          const steering = deps._takeSubagentSteering?.() ?? [];
+          if (steering.length > 0) {
+            messages.push({
+              role: "user",
+              content: `[parent steering]\n${steering.map((message) => `- ${message}`).join("\n")}`,
+            });
+          }
 
           // Turn-budget wrap-up nudge: once per threshold, transient (not
           // traced — see WRAPUP_THRESHOLDS for why), before the provider
@@ -1569,8 +1665,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           },
         });
       } finally {
-        queue.end();
         dispatchManager?.disposeAll();
+        for (const rec of dispatchManager?.list() ?? []) {
+          if (rec.status === "cancelled") {
+            emitDispatchTerminal(
+              rec.id,
+              rec.result ?? {
+                ok: false,
+                error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
+              },
+            );
+          }
+        }
+        for (const ev of queue.drainNow()) yield ev;
+        queue.end();
         // A caller-provided manager outlives the run (multi-turn sessions).
         if (!deps.background) ctx.background?.disposeAll();
         // sessionEnd hooks fire once per top-level session, after cleanup.

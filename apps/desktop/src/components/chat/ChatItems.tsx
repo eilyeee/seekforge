@@ -7,7 +7,7 @@ import { formatTokens, formatUsd } from "../../lib/usage";
 import { Markdown } from "../Markdown";
 import { PlanCard } from "./PlanCard";
 import { ToolRow } from "./ToolRow";
-import { IconSparkle, IconChevron, IconCornerDownRight } from "../ui";
+import { Badge, Button, IconArrowRight, IconSparkle, IconChevron, IconCornerDownRight, Input } from "../ui";
 
 /** The styled fallback chip shown for non-image markers or when an <img> fails. */
 function ImageChipFallback({ label, path }: { label: string; path: string }) {
@@ -132,7 +132,98 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
   );
 }
 
-function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId: number) => void }) {
+function SubagentBlock({
+  item,
+  onSteer,
+  onCancel,
+}: {
+  item: Extract<ChatItem, { kind: "subagent" }>;
+  onSteer?: (dispatchId: string, message: string) => void;
+  onCancel?: (dispatchId: string) => void;
+}) {
+  const t = useT();
+  const [message, setMessage] = useState("");
+  const running = item.status === "running";
+  const send = () => {
+    const trimmed = message.trim();
+    if (!trimmed || !onSteer) return;
+    onSteer(item.dispatchId, trimmed);
+    setMessage("");
+  };
+  const tone = item.status === "done" ? "ok" : item.status === "failed" ? "danger" : item.status === "cancelled" ? "warn" : "accent";
+  return (
+    <div className="rounded-lg border border-subtle bg-surface-raised px-3 py-2.5 text-xs">
+      <div className="flex min-w-0 items-center gap-2">
+        <IconCornerDownRight size={14} className="shrink-0 text-tertiary" />
+        <span className="truncate font-mono font-semibold text-secondary">{item.agentId}</span>
+        <span className="font-mono text-2xs text-tertiary">{item.dispatchId}</span>
+        <Badge tone={tone}>{t(`chat.subagent.status.${item.status}`)}</Badge>
+        {running && onCancel && (
+          <Button
+            variant="danger"
+            size="sm"
+            className="ml-auto shrink-0"
+            onClick={() => onCancel(item.dispatchId)}
+            title={t("chat.subagent.cancelTitle")}
+          >
+            {t("chat.subagent.cancel")}
+          </Button>
+        )}
+      </div>
+      <p className="mt-1.5 break-words text-secondary">{item.task}</p>
+      {item.subSessionId && <div className="mt-1 font-mono text-2xs text-tertiary">{item.subSessionId}</div>}
+      {item.steps.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {item.steps.map((step, index) => (
+            <span key={`${index}-${step}`} className="rounded border border-subtle bg-surface px-1.5 py-0.5 font-mono text-2xs text-tertiary">
+              {step}
+            </span>
+          ))}
+        </div>
+      )}
+      {item.resultSummary && (
+        <div className={`mt-2 whitespace-pre-wrap border-l-2 pl-2 ${item.status === "failed" ? "border-danger text-danger" : "border-strong text-secondary"}`}>
+          {item.resultSummary}
+        </div>
+      )}
+      {item.error && <div className="mt-1 font-mono text-2xs text-danger">[{item.error.code}] {item.error.message}</div>}
+      {running && onSteer && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <Input
+            value={message}
+            maxLength={4000}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                send();
+              }
+            }}
+            placeholder={t("chat.subagent.steerPlaceholder")}
+            aria-label={t("chat.subagent.steerPlaceholder")}
+            className="h-8 min-w-0 text-xs"
+          />
+          <Button size="sm" onClick={send} disabled={!message.trim()} title={t("chat.subagent.steerTitle")}>
+            <IconArrowRight size={14} />
+            {t("chat.subagent.steer")}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ItemView({
+  item,
+  onBacktrack,
+  onSubagentSteer,
+  onSubagentCancel,
+}: {
+  item: ChatItem;
+  onBacktrack?: (itemId: number) => void;
+  onSubagentSteer?: (dispatchId: string, message: string) => void;
+  onSubagentCancel?: (dispatchId: string) => void;
+}) {
   const t = useT();
   switch (item.kind) {
     case "user":
@@ -182,6 +273,8 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
           </ul>
         </div>
       );
+    case "subagent":
+      return <SubagentBlock item={item} onSteer={onSubagentSteer} onCancel={onSubagentCancel} />;
     case "file": {
       const isImage = isImagePath(item.path) && item.path.includes(".seekforge/uploads/");
       if (isImage) return <ImageFileChip path={item.path} />;
@@ -262,9 +355,13 @@ function ItemView({ item, onBacktrack }: { item: ChatItem; onBacktrack?: (itemId
 export function ChatItems({
   items,
   onBacktrack,
+  onSubagentSteer,
+  onSubagentCancel,
 }: {
   items: ChatItem[];
   onBacktrack?: (itemId: number) => void;
+  onSubagentSteer?: (dispatchId: string, message: string) => void;
+  onSubagentCancel?: (dispatchId: string) => void;
 }) {
   const firstUserId = items.find((i) => i.kind === "user")?.id;
   return (
@@ -274,6 +371,8 @@ export function ChatItems({
           key={item.id}
           item={item}
           onBacktrack={item.kind === "user" && item.id !== firstUserId ? onBacktrack : undefined}
+          onSubagentSteer={onSubagentSteer}
+          onSubagentCancel={onSubagentCancel}
         />
       ))}
     </div>

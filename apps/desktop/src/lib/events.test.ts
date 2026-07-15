@@ -198,6 +198,70 @@ describe("reduceEvent", () => {
     expect(s.items[1]).toMatchObject({ kind: "substep", agentId: "meta-scout", steps: ["web_fetch"] });
   });
 
+  it("tracks a structured subagent lifecycle and caps its step history", () => {
+    const steps: StreamEvent[] = Array.from({ length: 55 }, (_, index) => ({
+      type: "subagent.step",
+      dispatchId: "ag-1",
+      agentId: "reviewer",
+      task: "review security",
+      status: "running",
+      toolName: `tool-${index}`,
+      subSessionId: "sub-1",
+    }));
+    const s = play([
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review security", status: "running" },
+      ...steps,
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review security",
+        status: "done",
+        resultSummary: "no findings",
+        subSessionId: "sub-1",
+      },
+    ]);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({
+      kind: "subagent",
+      dispatchId: "ag-1",
+      status: "done",
+      subSessionId: "sub-1",
+      resultSummary: "no findings",
+    });
+    const item = s.items[0] as Extract<(typeof s.items)[number], { kind: "subagent" }>;
+    expect(item.steps).toHaveLength(50);
+    expect(item.steps[0]).toBe("tool-5");
+  });
+
+  it("keeps completed cards when a later run reuses a dispatch id", () => {
+    const terminal: StreamEvent = {
+      type: "subagent.completed",
+      dispatchId: "ag-1",
+      agentId: "reviewer",
+      task: "first run",
+      status: "done",
+      resultSummary: "first done",
+    };
+    const s = play([
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "first run", status: "running" },
+      terminal,
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "second run", status: "running" },
+    ]);
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ kind: "subagent", task: "first run", status: "done" });
+    expect(s.items[1]).toMatchObject({ kind: "subagent", task: "second run", status: "running" });
+  });
+
+  it("ignores legacy subagent steps after the structured lifecycle starts", () => {
+    const s = play([
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "running" },
+      { type: "step.started", title: "[reviewer] read_file" },
+    ]);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ kind: "subagent", steps: [] });
+  });
+
   it("accumulates reasoning.delta chunks into one streaming thinking item", () => {
     const s = play([
       { type: "reasoning.delta", chunk: "let me " },

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ToolResult } from "@seekforge/shared";
-import { createDispatchManager } from "../../src/subagents/manager.js";
+import {
+  MAX_STEER_MESSAGE_LENGTH,
+  MAX_STEER_QUEUE_LENGTH,
+  createDispatchManager,
+} from "../../src/subagents/manager.js";
 import { createEventQueue } from "../../src/subagents/events.js";
 import { deferred, settle } from "./helpers.js";
 
@@ -76,7 +80,7 @@ describe("createDispatchManager", () => {
     manager.disposeAll();
     expect(received!.aborted).toBe(true);
     await promise;
-    expect(manager.get("ag-1")!.status).toBe("failed");
+    expect(manager.get("ag-1")!.status).toBe("cancelled");
     expect(manager.get("ag-2")!.status).toBe("done"); // finished runs are untouched
   });
 
@@ -100,7 +104,8 @@ describe("createDispatchManager", () => {
     parent.abort();
     expect(received!.aborted).toBe(true);
     await promise;
-    expect(manager.get("ag-1")!.status).toBe("failed");
+    expect(manager.get("ag-1")!.status).toBe("cancelled");
+    expect(manager.get("ag-1")!.result?.error?.code).toBe("subagent_cancelled");
   });
 
   it("resume re-runs a completed dispatch and refuses running/unknown ones", async () => {
@@ -136,6 +141,64 @@ describe("createDispatchManager", () => {
     expect(snap.subSessionId).toBe("sess-1"); // kept from the first run
     expect(snap.steps).toEqual(["read_file", "search_text"]); // append-only
     expect((snap.result!.data as { report: string }).report).toBe("second report");
+  });
+
+  it("queues bounded steering and drains it only when the runner asks", async () => {
+    const manager = createDispatchManager();
+    const gate = deferred<void>();
+    let takeSteering: (() => string[]) | undefined;
+    const { promise } = manager.start({
+      agentId: "a",
+      task: "first",
+      run: async (_signal, hooks) => {
+        takeSteering = hooks.takeSteering;
+        await gate.promise;
+        return okResult("done");
+      },
+    });
+    await settle();
+
+    expect(manager.steer("ag-1", "  focus on tests  ")).toEqual({ ok: true });
+    expect(takeSteering!()).toEqual(["focus on tests"]);
+    expect(takeSteering!()).toEqual([]);
+    expect(manager.steer("ag-1", "x".repeat(MAX_STEER_MESSAGE_LENGTH + 1))).toMatchObject({
+      ok: false,
+      code: "invalid_steering",
+    });
+    for (let i = 0; i < MAX_STEER_QUEUE_LENGTH; i += 1) {
+      expect(manager.steer("ag-1", `message ${i}`)).toEqual({ ok: true });
+    }
+    expect(manager.steer("ag-1", "overflow")).toMatchObject({ ok: false, code: "steering_queue_full" });
+
+    gate.resolve();
+    await promise;
+    expect(manager.steer("ag-1", "too late")).toMatchObject({ ok: false, code: "dispatch_not_running" });
+  });
+
+  it("cancels one dispatch without failing or aborting its sibling", async () => {
+    const manager = createDispatchManager();
+    const run = (signal: AbortSignal) =>
+      new Promise<ToolResult>((resolve) => {
+        signal.addEventListener(
+          "abort",
+          () => resolve({ ok: false, error: { code: "aborted", message: "aborted" } }),
+          { once: true },
+        );
+      });
+    const first = manager.start({ agentId: "a", task: "first", run });
+    const second = manager.start({ agentId: "b", task: "second", run });
+    await settle();
+
+    expect(manager.cancel("ag-1")).toEqual({ ok: true });
+    expect(manager.get("ag-1")?.status).toBe("cancelled");
+    expect(manager.get("ag-2")?.status).toBe("running");
+    expect(manager.cancel("ag-1")).toMatchObject({ ok: false, code: "dispatch_not_running" });
+    expect(manager.cancel("ag-99")).toMatchObject({ ok: false, code: "unknown_dispatch" });
+
+    await first.promise;
+    expect(manager.get("ag-1")?.result?.error?.code).toBe("subagent_cancelled");
+    manager.disposeAll();
+    await second.promise;
   });
 });
 

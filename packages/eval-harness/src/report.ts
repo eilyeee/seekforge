@@ -6,6 +6,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { reportsDir as defaultReportsDir } from "./paths.js";
+import { aggregateResults, type RunAggregate } from "./aggregate.js";
+import { parseBaseline } from "./baseline.js";
+import type { GateResult } from "./gates.js";
+import type { RunMetadata } from "./run-metadata.js";
 import type { TaskResult } from "./task-runner.js";
 
 const PASS = "✓";
@@ -58,8 +62,9 @@ export function toMarkdown(results: TaskResult[]): string {
   ];
   for (const r of results) {
     const passed = r.checks.filter((c) => c.passed).length;
+    const taskLabel = r.sample === undefined ? r.taskId : `${r.taskId}#${r.sample}`;
     lines.push(
-      `| ${r.taskId} | ${mark(r.success)} | ${passed}/${r.checks.length} | ${fmtOpt(r.metrics.score)} | ` +
+      `| ${taskLabel} | ${mark(r.success)} | ${passed}/${r.checks.length} | ${fmtOpt(r.metrics.score)} | ` +
         `${fmtOpt(r.metrics.turns)} | ${r.metrics.toolCalls} | ${fmtCost(r.metrics.costUsd)} |`,
     );
   }
@@ -69,20 +74,24 @@ export function toMarkdown(results: TaskResult[]): string {
   lines.push(`Success rate: ${passed}/${total} (${rate}%)`);
   lines.push(`Total cost: ${fmtCost(totalCostUsd)} USD`);
   lines.push(`Cost per success: ${costPerSuccess(passed, totalCostUsd)}`);
+  const aggregate = aggregateResults(results);
+  lines.push(`Tokens: ${aggregate.totalTokens} total, ${aggregate.tokensPerSuccess?.toFixed(0) ?? "n/a"} per success`);
+  lines.push(`Tool failure rate: ${(aggregate.toolFailureRate * 100).toFixed(2)}%`);
+  lines.push(`Session error rate: ${(aggregate.sessionErrorRate * 100).toFixed(2)}%`);
+  lines.push(`Duration: ${(aggregate.durationMs / 1000).toFixed(1)}s`);
   return lines.join("\n");
 }
 
-export function toJson(results: TaskResult[]): string {
-  return `${JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2)}\n`;
-}
+export type ReportOptions = { metadata?: RunMetadata; aggregate?: RunAggregate; gates?: GateResult };
 
-function parseBaseline(baselineJson: string): TaskResult[] {
-  const parsed: unknown = JSON.parse(baselineJson);
-  if (Array.isArray(parsed)) return parsed as TaskResult[];
-  if (typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { results?: unknown }).results)) {
-    return (parsed as { results: TaskResult[] }).results;
-  }
-  throw new Error("baseline JSON must be a report file ({results: [...]}) or an array of task results");
+export function toJson(results: TaskResult[], options: ReportOptions = {}): string {
+  return `${JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    ...(options.metadata ? { metadata: options.metadata } : {}),
+    results,
+    ...(options.aggregate ? { aggregate: options.aggregate } : {}),
+    ...(options.gates ? { gates: options.gates } : {}),
+  }, null, 2)}\n`;
 }
 
 function signed(value: number, digits: number): string {
@@ -124,19 +133,42 @@ export function compare(current: TaskResult[], baselineJson: string): string {
  * trips the gate; only a genuine pass→fail does. Used by `--fail-on-regression`.
  */
 export function regressions(current: TaskResult[], baselineJson: string): string[] {
-  const base = new Map(parseBaseline(baselineJson).map((r) => [r.taskId, r]));
-  return current.filter((r) => base.get(r.taskId)?.success && !r.success).map((r) => r.taskId);
+  const passByTask = (results: TaskResult[]): Map<string, boolean> => {
+    const counts = new Map<string, { passed: number; total: number }>();
+    for (const result of results) {
+      const count = counts.get(result.taskId) ?? { passed: 0, total: 0 };
+      count.total++;
+      if (result.success) count.passed++;
+      counts.set(result.taskId, count);
+    }
+    return new Map([...counts].map(([taskId, count]) => [taskId, count.passed / count.total > 0.5]));
+  };
+  const baseline = passByTask(parseBaseline(baselineJson));
+  const currentByTask = passByTask(current);
+  return [...currentByTask]
+    .filter(([taskId, passed]) => baseline.get(taskId) === true && !passed)
+    .map(([taskId]) => taskId);
 }
 
 export type WrittenReport = { markdownPath: string; jsonPath: string };
 
 /** Writes <ISO-timestamp>.md and .json under dir; returns both paths. */
-export function writeReport(results: TaskResult[], dir: string = defaultReportsDir): WrittenReport {
+export function writeReport(
+  results: TaskResult[],
+  dir: string = defaultReportsDir,
+  options: ReportOptions = {},
+): WrittenReport {
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const markdownPath = join(dir, `${stamp}.md`);
   const jsonPath = join(dir, `${stamp}.json`);
-  writeFileSync(markdownPath, `# SeekForge eval report\n\n${toMarkdown(results)}\n`);
-  writeFileSync(jsonPath, toJson(results));
+  const metadata = options.metadata
+    ? `\n\n## Run metadata\n\n${Object.entries(options.metadata).map(([key, value]) => `- ${key}: ${value}`).join("\n")}`
+    : "";
+  const gates = options.gates
+    ? `\n\n## Gates\n\n${options.gates.checks.map((gate) => `- ${gate.passed ? "PASS" : "FAIL"}: ${gate.message}`).join("\n")}`
+    : "";
+  writeFileSync(markdownPath, `# SeekForge eval report\n\n${toMarkdown(results)}${metadata}${gates}\n`);
+  writeFileSync(jsonPath, toJson(results, options));
   return { markdownPath, jsonPath };
 }

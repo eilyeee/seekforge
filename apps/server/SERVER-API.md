@@ -175,6 +175,8 @@ All frames are JSON objects with a `type` field.
 {"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "ws": "<id>"?,
                  "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?}
                  // auto-loop: run → verify → continue until verifyCommand exits 0 (acceptEdits; guardrails)
+{"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
+{"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
 {"type": "cancel"}                                            // cancel the running session OR loop
 ```
 
@@ -191,6 +193,15 @@ positive integer and `budget` a finite positive number when present (else
 executes in that workspace's path; `send` looks the session up in that
 workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 
+`subagent.steer` queues guidance for a running child and injects it only at the
+next model-turn boundary; it does not cancel or resume the child session. Messages
+are trimmed, limited to 4000 characters, and each dispatch has a bounded queue.
+`subagent.cancel` gives that child the distinct `cancelled` terminal state. Both
+frames are bound to the normal Agent run currently owned by this connection;
+unknown, completed, or stale dispatch ids fail closed. They are unavailable for
+an idle connection or an auto-loop run. Extra fields and malformed ids/messages
+return `bad_frame`.
+
 ### server → client
 
 ```jsonc
@@ -201,6 +212,20 @@ workspace. An unknown `ws` id → `{"type":"error","code":"unknown_workspace"}`.
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```
+
+Dispatched children are observable through structured `AgentEvent` variants:
+
+```jsonc
+{"type":"subagent.started",   "dispatchId":"ag-1", "agentId":"reviewer", "task":"...", "status":"running"}
+{"type":"subagent.step",      "dispatchId":"ag-1", "agentId":"reviewer", "task":"...", "status":"running", "toolName":"read_file", "subSessionId":"..."?}
+{"type":"subagent.completed", "dispatchId":"ag-1", "agentId":"reviewer", "task":"...", "status":"done", "resultSummary":"...", "subSessionId":"..."?}
+{"type":"subagent.failed",    "dispatchId":"ag-1", "agentId":"reviewer", "task":"...", "status":"failed", "error":{"code":"...","message":"..."}, "resultSummary":"..."}
+{"type":"subagent.cancelled", "dispatchId":"ag-1", "agentId":"reviewer", "task":"...", "status":"cancelled", "reason":"..."}
+```
+
+The legacy `step.started` title (`[agentId] toolName`) is still emitted for old
+clients, but new clients should use the structured events and identify a child by
+the parent run/session plus `dispatchId`.
 
 Rules:
 - `start`/`send` while a run is active → `{"type":"error","code":"busy"}`.
@@ -228,6 +253,8 @@ Rules:
 - `context.microcompacted` AgentEvents (`{"type":"context.microcompacted","clearedResults":n}`)
   forward unchanged: old tool outputs were blanked to save context.
 - Socket close while running → the run is cancelled (AbortController).
+- Socket close or parent completion cancels remaining child dispatches and clears
+  their steering queues/listeners.
 
 ## Implementation notes (binding)
 

@@ -6,9 +6,11 @@ Two layers protect against regressions:
    `pnpm -r typecheck`, `pnpm -r build`, `pnpm -r test`, plus `cargo check`/`test`
    (the desktop shell crate is excluded — it needs a built frontend). This covers
    all unit/contract/security tests; it needs no API key and is the everyday net.
-2. **Eval gate** (`.github/workflows/eval.yml`, manual) — runs the agent against
-   real tasks via the DeepSeek API and fails on a regression vs the baseline.
-   Because it costs money and is non-deterministic, it is **not** on the PR gate.
+2. **Continuous Agent Eval** (`.github/workflows/eval.yml`, manual + weekly) —
+   runs the agent against real tasks via the configured provider API. The weekly
+   `nightly` suite samples every task three times and gates quality, cost, token
+   use, tool failures, session errors, and pass→fail regressions. Because it costs
+   money and is non-deterministic, it is **not** on the PR gate.
 
 The deterministic gate also runs `pnpm test:coverage:critical`. Its deliberately
 scoped thresholds cover the highest-risk URL, browser, command-classification,
@@ -23,12 +25,40 @@ export DEEPSEEK_API_KEY=sk-...
 pnpm --filter @seekforge/eval-harness eval                          # full task set
 pnpm --filter @seekforge/eval-harness eval -- --task add-function   # one task
 pnpm --filter @seekforge/eval-harness eval -- --task a,b,c          # a subset (comma list)
+pnpm --filter @seekforge/eval-harness eval -- --suite smoke         # fast representative set
+pnpm --filter @seekforge/eval-harness eval -- --suite nightly       # all tasks, 3 samples each
+pnpm --filter @seekforge/eval-harness eval -- --suite release       # all tasks, 5 samples each
 ```
 
 Useful flags (see `src/cli.ts`): `--task <id|id,id,...>` (one id or a
 comma-separated subset), `--baseline <file>`, `--fail-on-regression`,
-`--variant <name>`, `--ab <a,b>`, `--skill-ranking`, `--keep`, `--list-variants`.
-Each run writes a timestamped `.md` + `.json` under `evals/reports/`.
+`--suite <name>`, `--repeat <n>`, `--junit <file>`, `--require-api-key`,
+`--variant <name>`, `--ab <a,b>`, `--skill-ranking`, `--keep`, and
+`--list-variants`. `--repeat` accepts 1 to 20 samples and overrides the suite default; `--task` narrows the
+selected suite. Each run writes timestamped Markdown and JSON under
+`evals/reports/`; `--junit` additionally writes JUnit XML.
+Multi-sample runs are intentionally rejected with `--ab`; run each variant
+separately so all samples remain visible instead of reducing them to one winner.
+
+### Suites and metrics
+
+`evals/config.json` is the versioned suite definition and gate policy:
+
+- `smoke`: ten representative navigation, editing, verification, policy, and
+  TypeScript tasks; one sample by default.
+- `nightly`: all 55 tasks; three samples by default.
+- `release`: all 55 tasks; five samples and tighter gates.
+
+Every sample records prompt, completion, cache-hit, and total tokens, including
+the latest cumulative usage emitted before a failed session; tool calls
+and failed tool calls; session errors; duration; cost; deterministic checks; and
+the existing heuristic session score. The report aggregates success rate, tool
+failure rate, session error rate, cost per success, and tokens per success.
+
+JSON reports retain the historical `{ generatedAt, results }` fields and add
+`metadata`, `aggregate`, and `gates`. Metadata identifies provider, model,
+variant, suite, repeat count, Git SHA, dataset SHA-256, Node version, and platform.
+This keeps old report readers working while making a run reproducible.
 
 ### Variants (for `--variant` / `--ab`)
 
@@ -108,11 +138,23 @@ cp evals/reports/<ts>.json evals/baseline.json    # commit with a note on what c
 pnpm --filter @seekforge/eval-harness eval -- --baseline evals/baseline.json --fail-on-regression
 ```
 
-`--fail-on-regression` exits non-zero **only** when a task the baseline recorded
-as a success now fails (a pass→fail). Newly-added tasks, removed tasks, and
-tasks already red in the baseline never trip the gate — so a known-flaky case
-doesn't block, but a genuine behavior regression does. (Without the flag, any
-absolute failure exits non-zero — the convenient default for local runs.)
+Without `--suite`, `--fail-on-regression` preserves its historical behavior: it
+exits non-zero only for baseline pass→fail tasks. Repeated samples are compared
+at task level by majority outcome, so one stochastic failure does not by itself
+trip the regression gate. With a suite selected it also
+enforces that suite's absolute and baseline-relative thresholds:
+
+- minimum success rate and maximum success-rate drop;
+- maximum cost per success and relative cost increase;
+- maximum tokens per success and relative token increase;
+- maximum tool failure rate and relative increase;
+- maximum session error rate.
+
+Legacy baselines without token fields remain valid; only the relative token
+comparison is skipped for them. Baseline shape and all numeric fields are
+strictly validated, including finite/non-negative constraints. Empty baselines
+are rejected. Without `--fail-on-regression`, any failed sample still exits
+non-zero, which remains convenient for local runs.
 
 ## Importing an external benchmark
 
@@ -235,10 +277,12 @@ fixture as small as the bug allows.
 
 ## CI
 
-The eval workflow is `workflow_dispatch` (run it from the Actions tab) and reads
-`DEEPSEEK_API_KEY` from repo secrets; it runs the set with
-`--baseline evals/baseline.json --fail-on-regression` and uploads the report.
-Add a `schedule:` cron in `eval.yml` if you want it to run periodically. Adding
-new scenarios? Drop a task + fixture under `evals/` and register the id in
-`packages/eval-harness/tests/dataset.test.ts` (the deterministic gate enforces
-fixtures exist).
+The eval workflow is both `workflow_dispatch` and a Monday weekly schedule. It
+reads `DEEPSEEK_API_KEY` from repository secrets and runs `nightly` with three
+samples, the committed baseline, all suite gates, `--require-api-key`, and JUnit
+output. A missing key is an infrastructure failure, not a successful skip. It
+uploads all reports and appends the Markdown report to GitHub Step Summary.
+
+Adding scenarios requires a task + fixture under `evals/` and registration in
+`packages/eval-harness/tests/dataset.test.ts`; the deterministic dataset gate
+enforces fixture existence and hermeticity.

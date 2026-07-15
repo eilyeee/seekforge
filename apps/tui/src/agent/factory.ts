@@ -12,6 +12,7 @@ import {
   type AgentCoreDeps,
   type AgentDefinition,
   type BackgroundTasks,
+  type DispatchManager,
   type McpClientEntry,
   type RuntimeClient,
   type ToolSpec,
@@ -35,6 +36,8 @@ export type TuiAgentOptions = {
   background?: BackgroundTasks;
   /** ask_user channel (TUI question overlay). */
   askUser?: (q: { question: string; options: string[] }) => Promise<string>;
+  /** Run-bound controls for observing and steering dispatched subagents. */
+  dispatchManager?: DispatchManager;
 };
 
 export type TuiAgent = {
@@ -102,6 +105,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     runtime,
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
+    ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     hooks: config.hooks,
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),

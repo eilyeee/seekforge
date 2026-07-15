@@ -24,6 +24,8 @@ and quick start; this folder holds the reference docs.
   definitions/references/diagnostics vs. the lexical `repo_map`/`find_definition`.
 - [Loop engineering](loop-engineering.md) — the autonomous run→verify→continue
   loop and its guardrails.
+- [Loop tutorial](loop-tutorial.md) — practical CLI, TUI, Desktop, recovery,
+  worktree, and Core API usage for autonomous Loop runs.
 - [Scheduled jobs](scheduling.md) — register local cron/interval jobs
   (`seekforge schedule`), the mandatory per-run cost budget, headless safety,
   and wiring the tick into cron/launchd/systemd.
@@ -36,6 +38,9 @@ and quick start; this folder holds the reference docs.
 - [Remote / isolated execution](remote.md) — the agent-runner contract and the
   Docker reference runner (`seekforge sandbox-run`): single-workspace mount,
   key-via-env, the network tradeoff, and auditing containerized runs.
+- [Security scanning](security-scanning.md) — repository-wide Agent scans,
+  Finding lifecycle, threat models, automatic fix verification, and
+  JSON/Markdown/SARIF evidence exports.
 
 ## Surfaces
 - [Internal embedding API (`@seekforge/core`)](sdk.md) — use the private

@@ -26,6 +26,15 @@ export const chat = {
     "chat.resumeInfo.prefix": "→ resume with",
     "chat.resumeInfo.suffix": "(your file changes and completed steps are preserved; checkpoints intact)",
     "chat.rewindTitle": "Rewind the conversation to just before this message",
+    "chat.subagent.status.running": "running",
+    "chat.subagent.status.done": "done",
+    "chat.subagent.status.failed": "failed",
+    "chat.subagent.status.cancelled": "cancelled",
+    "chat.subagent.steerPlaceholder": "Guide this subagent",
+    "chat.subagent.steerTitle": "Send guidance at the next safe point",
+    "chat.subagent.steer": "Send",
+    "chat.subagent.cancelTitle": "Cancel this subagent",
+    "chat.subagent.cancel": "Cancel",
 
     // ToolRow
     "chat.tool.args": "args",
@@ -154,6 +163,15 @@ export const chat = {
     "chat.resumeInfo.prefix": "→ 使用",
     "chat.resumeInfo.suffix": "（文件改动和已完成步骤均已保留，检查点完好）",
     "chat.rewindTitle": "将对话回退到本条消息之前",
+    "chat.subagent.status.running": "运行中",
+    "chat.subagent.status.done": "已完成",
+    "chat.subagent.status.failed": "失败",
+    "chat.subagent.status.cancelled": "已取消",
+    "chat.subagent.steerPlaceholder": "引导这个子 Agent",
+    "chat.subagent.steerTitle": "在下一个安全点发送引导",
+    "chat.subagent.steer": "发送",
+    "chat.subagent.cancelTitle": "中止这个子 Agent",
+    "chat.subagent.cancel": "中止",
 
     // ToolRow
     "chat.tool.args": "参数",

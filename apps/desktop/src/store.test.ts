@@ -203,6 +203,30 @@ describe("store: approval mode selector → start frame", () => {
   });
 });
 
+describe("store: subagent controls", () => {
+  beforeEach(() => {
+    resetStore();
+    useStore.getState().connect();
+  });
+
+  it("sends trimmed steering and targeted cancellation frames", () => {
+    useStore.getState().steerSubagent("ag-7", "  inspect the parser boundary  ");
+    useStore.getState().cancelSubagent("ag-7");
+    expect(sent).toContainEqual({
+      type: "subagent.steer",
+      dispatchId: "ag-7",
+      message: "inspect the parser boundary",
+    });
+    expect(sent).toContainEqual({ type: "subagent.cancel", dispatchId: "ag-7" });
+  });
+
+  it("drops empty and oversized steering before it reaches the socket", () => {
+    useStore.getState().steerSubagent("ag-7", "   ");
+    useStore.getState().steerSubagent("ag-7", "x".repeat(4001));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 describe("store: respondPermission carries the remember flag", () => {
   beforeEach(() => {
     resetStore();

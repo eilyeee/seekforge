@@ -9,7 +9,10 @@ import type { ToolResult } from "@seekforge/shared";
  * everything still running when the session ends.
  */
 
-export type DispatchStatus = "running" | "done" | "failed";
+export const MAX_STEER_MESSAGE_LENGTH = 4_000;
+export const MAX_STEER_QUEUE_LENGTH = 16;
+
+export type DispatchStatus = "running" | "done" | "failed" | "cancelled";
 
 export type DispatchSnapshot = {
   /** Dispatch id, "ag-1", "ag-2", … in start order. */
@@ -25,11 +28,15 @@ export type DispatchSnapshot = {
   subSessionId?: string;
   /** Final dispatch-shaped tool result, set once status leaves "running". */
   result?: ToolResult;
+  /** Human-readable reason when the dispatch was cancelled. */
+  cancelReason?: string;
 };
 
 export type DispatchHooks = {
   onStep(toolName: string): void;
   onSubSession(sessionId: string): void;
+  /** Drains queued steering messages at a model-turn boundary. */
+  takeSteering(): string[];
 };
 
 /** Executes one nested subagent run; resolves with the dispatch tool result. */
@@ -52,9 +59,21 @@ export type DispatchManager = {
   resume(input: { id: string; task: string; signal?: AbortSignal; run: DispatchRunner }): Promise<ToolResult>;
   get(id: string): DispatchSnapshot | undefined;
   list(): DispatchSnapshot[];
+  cancel(id: string): DispatchControlResult;
+  steer(id: string, message: string): DispatchControlResult;
   /** Abort every still-running dispatch. Called when the session ends. */
   disposeAll(): void;
 };
+
+export type DispatchControlError =
+  | "unknown_dispatch"
+  | "dispatch_not_running"
+  | "invalid_steering"
+  | "steering_queue_full";
+
+export type DispatchControlResult =
+  | { ok: true }
+  | { ok: false; code: DispatchControlError; message: string };
 
 type DispatchRecord = {
   id: string;
@@ -66,6 +85,8 @@ type DispatchRecord = {
   subSessionId?: string;
   result?: ToolResult;
   controller?: AbortController;
+  steering: string[];
+  cancelReason?: string;
 };
 
 function snapshot(rec: DispatchRecord): DispatchSnapshot {
@@ -78,6 +99,7 @@ function snapshot(rec: DispatchRecord): DispatchSnapshot {
     steps: [...rec.steps],
     ...(rec.subSessionId !== undefined ? { subSessionId: rec.subSessionId } : {}),
     ...(rec.result !== undefined ? { result: rec.result } : {}),
+    ...(rec.cancelReason !== undefined ? { cancelReason: rec.cancelReason } : {}),
   };
 }
 
@@ -85,41 +107,74 @@ export function createDispatchManager(): DispatchManager {
   const records = new Map<string, DispatchRecord>();
   let nextId = 0;
 
+  function cancelRecord(rec: DispatchRecord, reason: string): void {
+    if (rec.status !== "running") return;
+    rec.status = "cancelled";
+    rec.cancelReason = reason;
+    rec.steering.length = 0;
+    rec.controller?.abort();
+  }
+
   function execute(rec: DispatchRecord, parentSignal: AbortSignal | undefined, run: DispatchRunner): Promise<ToolResult> {
     const controller = new AbortController();
+    rec.controller = controller;
+    rec.status = "running";
+    delete rec.result;
+    delete rec.cancelReason;
+    rec.steering.length = 0;
     // Bridge parent abort → this dispatch's controller. The listener sits on the
     // long-lived parentSignal, so it must be removed once this dispatch settles;
     // { once: true } only fires-and-removes on abort, leaking one listener per
     // dispatch across a session otherwise.
     let unbindParent: (() => void) | undefined;
     if (parentSignal) {
-      if (parentSignal.aborted) controller.abort();
+      if (parentSignal.aborted) cancelRecord(rec, "parent run cancelled");
       else {
-        const onAbort = (): void => controller.abort();
+        const onAbort = (): void => cancelRecord(rec, "parent run cancelled");
         parentSignal.addEventListener("abort", onAbort, { once: true });
         unbindParent = () => parentSignal.removeEventListener("abort", onAbort);
       }
     }
-    rec.controller = controller;
-    rec.status = "running";
-    delete rec.result;
     const hooks: DispatchHooks = {
       onStep: (toolName) => rec.steps.push(toolName),
       onSubSession: (sessionId) => {
         rec.subSessionId = sessionId;
       },
+      takeSteering: () => rec.steering.splice(0),
     };
     return Promise.resolve()
       .then(() => run(controller.signal, hooks))
       .then(
         (result) => {
           unbindParent?.();
+          rec.controller = undefined;
+          rec.steering.length = 0;
+          if (rec.status === "cancelled" || controller.signal.aborted) {
+            const cancelled: ToolResult = {
+              ok: false,
+              error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
+            };
+            rec.status = "cancelled";
+            rec.result = cancelled;
+            return cancelled;
+          }
           rec.status = result.ok ? "done" : "failed";
           rec.result = result;
           return result;
         },
         (err: unknown): ToolResult => {
           unbindParent?.();
+          rec.controller = undefined;
+          rec.steering.length = 0;
+          if (rec.status === "cancelled" || controller.signal.aborted) {
+            const cancelled: ToolResult = {
+              ok: false,
+              error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
+            };
+            rec.status = "cancelled";
+            rec.result = cancelled;
+            return cancelled;
+          }
           const result: ToolResult = {
             ok: false,
             error: { code: "subagent_failed", message: err instanceof Error ? err.message : String(err) },
@@ -141,6 +196,7 @@ export function createDispatchManager(): DispatchManager {
         status: "running",
         startedAt: new Date().toISOString(),
         steps: [],
+        steering: [],
       };
       records.set(id, rec);
       return { id, promise: execute(rec, signal, run) };
@@ -163,9 +219,44 @@ export function createDispatchManager(): DispatchManager {
       return [...records.values()].map(snapshot);
     },
 
+    cancel(id) {
+      const rec = records.get(id);
+      if (!rec) {
+        return { ok: false, code: "unknown_dispatch", message: `unknown dispatch "${id}"` };
+      }
+      if (rec.status !== "running") {
+        return { ok: false, code: "dispatch_not_running", message: `dispatch "${id}" is not running` };
+      }
+      cancelRecord(rec, "cancelled by user");
+      return { ok: true };
+    },
+
+    steer(id, message) {
+      const rec = records.get(id);
+      if (!rec) {
+        return { ok: false, code: "unknown_dispatch", message: `unknown dispatch "${id}"` };
+      }
+      if (rec.status !== "running") {
+        return { ok: false, code: "dispatch_not_running", message: `dispatch "${id}" is not running` };
+      }
+      const steering = message.trim();
+      if (steering.length === 0 || steering.length > MAX_STEER_MESSAGE_LENGTH) {
+        return {
+          ok: false,
+          code: "invalid_steering",
+          message: `steering must contain 1-${MAX_STEER_MESSAGE_LENGTH} characters`,
+        };
+      }
+      if (rec.steering.length >= MAX_STEER_QUEUE_LENGTH) {
+        return { ok: false, code: "steering_queue_full", message: `dispatch "${id}" steering queue is full` };
+      }
+      rec.steering.push(steering);
+      return { ok: true };
+    },
+
     disposeAll() {
       for (const rec of records.values()) {
-        if (rec.status === "running") rec.controller?.abort();
+        cancelRecord(rec, "parent run ended");
       }
     },
   };

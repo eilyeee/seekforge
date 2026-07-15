@@ -178,6 +178,76 @@ describe("chatReducer context + report", () => {
 });
 
 describe("chatReducer v2 state", () => {
+  it("tracks a structured subagent thread through completion", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review auth", status: "running" },
+      { type: "step.started", title: "[reviewer] read_file" },
+      {
+        type: "subagent.step",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review auth",
+        status: "running",
+        toolName: "read_file",
+        subSessionId: "sub-1",
+      },
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review auth",
+        status: "done",
+        subSessionId: "sub-1",
+        resultSummary: "No issue found",
+      },
+    );
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({
+      kind: "subagent",
+      dispatchId: "ag-1",
+      status: "done",
+      subSessionId: "sub-1",
+      steps: ["read_file"],
+      resultSummary: "No issue found",
+    });
+  });
+
+  it("keeps cancelled subagents distinct from failures", () => {
+    let s = base();
+    s = reduce(s, {
+      type: "subagent.cancelled",
+      dispatchId: "ag-3",
+      agentId: "worker",
+      task: "long job",
+      status: "cancelled",
+      reason: "cancelled by user",
+    });
+    expect(s.items[0]).toMatchObject({ kind: "subagent", status: "cancelled", resultSummary: "cancelled by user" });
+    expect((s.items[0] as { error?: unknown }).error).toBeUndefined();
+  });
+
+  it("does not overwrite history when a later run reuses a dispatch id", () => {
+    let s = base();
+    s = reduce(
+      s,
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "first", status: "running" },
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "first",
+        status: "done",
+        resultSummary: "first done",
+      },
+      { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "second", status: "running" },
+    );
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ kind: "subagent", task: "first", status: "done" });
+    expect(s.items[1]).toMatchObject({ kind: "subagent", task: "second", status: "running" });
+  });
+
   it("parses nested subagent step titles into agentId + title", () => {
     let s = base();
     s = reduce(s, { type: "step.started", title: "[explorer] read_file" });
