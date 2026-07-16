@@ -127,18 +127,25 @@ describe("fetchWithRetry timeout", () => {
   });
 
   it("does NOT abort the body after headers arrive (TTFB-only; streaming is safe)", async () => {
-    let captured: AbortSignal | undefined;
-    globalThis.fetch = ((_url: string, init: RequestInit) => {
-      captured = init.signal ?? undefined;
-      return Promise.resolve(res(200, "ok")); // response/headers resolve immediately
-    }) as unknown as typeof fetch;
+    // Fake timers make "the timeout window elapsed" deterministic instead of
+    // racing a real 20ms timer against a wall-clock sleep on a loaded runner.
+    vi.useFakeTimers();
+    try {
+      let captured: AbortSignal | undefined;
+      globalThis.fetch = ((_url: string, init: RequestInit) => {
+        captured = init.signal ?? undefined;
+        return Promise.resolve(res(200, "ok")); // response/headers resolve immediately
+      }) as unknown as typeof fetch;
 
-    const r = await fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: 20 });
-    expect(r.status).toBe(200);
-    // Past the timeout window: the timer was cleared on success, so the signal a
-    // streaming body would read from is still live (never aborted).
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(captured?.aborted).toBe(false);
+      const r = await fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: 20 });
+      expect(r.status).toBe(200);
+      // Past the timeout window: the timer was cleared on success, so the signal a
+      // streaming body would read from is still live (never aborted).
+      await vi.advanceTimersByTimeAsync(50);
+      expect(captured?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains the timeout while a successful non-streaming body is stalled", async () => {
