@@ -1,25 +1,12 @@
 // Regression tests for the permission-flag → ApprovalMode mapping (the pure
-// helper extracted from run.ts). No vitest in apps/cli, so — matching the other
-// tests here — this is a dependency-free runner (run via `tsx`): each case
-// asserts with node:assert and exits non-zero on the first failure.
+// helper extracted from run.ts).
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import {
   resolvePermissionMode,
   UnknownPermissionModeError,
 } from "../permission-mode.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 // --- boolean flags (no --permission-mode) -----------------------------------
 test("no flags → confirm", () => {
@@ -100,5 +87,3 @@ test("unknown --permission-mode throws UnknownPermissionModeError carrying the m
 test("an unknown mode is rejected even when -y is set (no silent fallback to auto)", () => {
   assert.throws(() => resolvePermissionMode({ yes: true, permissionMode: "nope" }));
 });
-
-console.log(`${passed} permission-mode tests passed`);

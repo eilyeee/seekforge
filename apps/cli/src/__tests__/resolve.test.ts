@@ -1,10 +1,9 @@
 // Regression tests for the PURE builders behind `seekforge resolve` (the
 // autonomous GitHub issue→PR resolver). No live agent, no `gh`, no `git`, no
-// push: the argv/prompt construction IS the verification. Dependency-free
-// runner (via `tsx`): each case asserts with node:assert and exits non-zero on
-// the first failure.
+// push: the argv/prompt construction IS the verification.
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import {
   BRANCH_PREFIX,
   DEFAULT_BASE_BRANCH,
@@ -37,18 +36,6 @@ import {
   parseIssueNumber,
   type IssueRef,
 } from "../resolve.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 /** Return the value token that follows `flag` in argv, or undefined. */
 function valueAfter(args: string[], flag: string): string | undefined {
@@ -265,9 +252,12 @@ async function expectMaxCostRequired(badCost: unknown): Promise<void> {
   process.exitCode = prevExit; // don't leak the fail()'s exit code into the runner
 }
 
-await expectMaxCostRequired(undefined);
-await expectMaxCostRequired(0);
-await expectMaxCostRequired(-1);
-passed += 3;
-
-console.log(`resolve: ${passed} assertions passed`);
+test("resolveCommand fails fast when --max-cost is missing", async () => {
+  await expectMaxCostRequired(undefined);
+});
+test("resolveCommand fails fast when --max-cost is zero", async () => {
+  await expectMaxCostRequired(0);
+});
+test("resolveCommand fails fast when --max-cost is negative", async () => {
+  await expectMaxCostRequired(-1);
+});

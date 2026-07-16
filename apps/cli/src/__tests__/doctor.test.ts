@@ -1,7 +1,7 @@
-// Tests for the `seekforge doctor` provider/api-key diagnostics. Uses the same
-// tsx runner + node:assert pattern as config.test.ts.
+// Tests for the `seekforge doctor` provider/api-key diagnostics.
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import {
   configKeysCheck,
   configParseCheck,
@@ -9,18 +9,6 @@ import {
   type DoctorCheck,
   type DoctorProbes,
 } from "../commands/doctor.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 /** Probes for a healthy darwin env, not inside the monorepo (desktop checks skip). */
 function healthyProbes(over: Partial<DoctorProbes> = {}): DoctorProbes {
@@ -141,5 +129,3 @@ test("doctor warns instead of crashing when tauri config is null", () => {
   assert.equal(check.warn, true);
   assert.ok(check.detail.includes("must contain an object"));
 });
-
-console.log(`${passed} doctor tests passed`);

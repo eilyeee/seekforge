@@ -38,7 +38,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/__tests__/helpers.test.ts && tsx src/__tests__/stream-input.test.ts && tsx src/__tests__/output-style.test.ts && tsx src/__tests__/config.test.ts && tsx src/__tests__/loop.test.ts && tsx src/__tests__/permission-mode.test.ts && tsx src/__tests__/agent-deps.test.ts && tsx src/__tests__/authorized-dirs.test.ts && tsx src/__tests__/doctor.test.ts && tsx src/__tests__/audit.test.ts && tsx src/__tests__/schedule.test.ts && tsx src/__tests__/docker-runner.test.ts && tsx src/__tests__/resolve.test.ts && tsx src/__tests__/security.test.ts",
+    "test": "vitest run",
     "build:sidecar": "bun build --compile src/index.ts --outfile ../desktop/src-tauri/binaries/seekforge-server-${SIDECAR_TARGET:-$(rustc -vV | sed -n 's/host: //p')}",
     "prepublishOnly": "pnpm --filter @seekforge/desktop build && pnpm build"
   },
@@ -57,6 +57,7 @@
     "@types/node": "^22.10.0",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.0"
   }
 }

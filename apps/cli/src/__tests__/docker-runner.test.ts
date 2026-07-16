@@ -1,10 +1,9 @@
 // Regression tests for the PURE Docker runner core (buildDockerRunArgs) and the
 // sandbox-run --check dry-run. No Docker, no spend, no real agent run: the
-// command construction IS the verification. Matching the other tests here, this
-// is a dependency-free runner (run via `tsx`): each case asserts with
-// node:assert and exits non-zero on the first failure.
+// command construction IS the verification.
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import {
   buildDockerRunArgs,
   DEFAULT_RUNNER_IMAGE,
@@ -12,29 +11,6 @@ import {
   DEFAULT_RUNNER_WORKDIR,
   formatDockerCommand,
 } from "../docker-runner.js";
-
-let passed = 0;
-function test(name: string, fn: () => void | Promise<void>): void {
-  try {
-    const r = fn();
-    if (r instanceof Promise) {
-      r.then(
-        () => passed++,
-        (err) => {
-          console.error(`✗ ${name}`);
-          console.error(err instanceof Error ? err.stack : String(err));
-          process.exit(1);
-        },
-      );
-      return;
-    }
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 const WS = "/home/me/project";
 
@@ -187,10 +163,4 @@ test("sandbox-run --check prints the argv and returns without spawning docker", 
   assert.ok(logs[0]!.includes('"hello world"'));
   // --check must not fail the process (no docker interaction happened).
   assert.equal(process.exitCode, exitCodeBefore);
-});
-
-process.on("exit", () => {
-  // process.on("exit") fires once the loop is drained, after the async test
-  // above has resolved (node stays alive on its pending promise).
-  console.log(`docker-runner: ${passed} assertions passed`);
 });

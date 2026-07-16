@@ -1,10 +1,10 @@
-// Tests for the `seekforge loop` formatting helpers. Matching the other CLI
-// tests (helpers/output-style/config), this is a dependency-free runner (run
-// via `tsx`): each case asserts with node:assert and exits non-zero on the
-// first failure so `pnpm test` fails. No model/core calls — we feed synthetic
-// LoopEvent/LoopResult values into the pure formatters.
+// Tests for the `seekforge loop` formatting helpers. No model/core calls — we
+// feed synthetic LoopEvent/LoopResult values into the pure formatters. The
+// worktree/CLI-spawning cases at the bottom exercise real git repos in temp
+// dirs and get generous timeouts (tsx has to compile the CLI per spawn).
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,27 +29,6 @@ import {
 import { setLocale } from "../i18n.js";
 
 setLocale("en"); // deterministic strings
-
-let passed = 0;
-const asyncTests: Array<Promise<void>> = [];
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
-
-function asyncTest(name: string, fn: () => Promise<void>): void {
-  asyncTests.push(fn().then(() => { passed++; }).catch((err) => {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exitCode = 1;
-  }));
-}
 
 // --- outputTail -------------------------------------------------------------
 test("outputTail returns the last N non-trailing-blank lines", () => {
@@ -198,7 +177,7 @@ test("cleanup safety accepts only seekforge branches inside retained root", () =
   }), false);
 });
 
-asyncTest("worktree operations resolve the base checkout from a subdirectory", async () => {
+test("worktree operations resolve the base checkout from a subdirectory", { timeout: 120_000 }, async () => {
   const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-test-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: repo });
@@ -244,7 +223,7 @@ asyncTest("worktree operations resolve the base checkout from a subdirectory", a
   }
 });
 
-asyncTest("repository resolution preserves a newline-containing checkout path", async () => {
+test("repository resolution preserves a newline-containing checkout path", { timeout: 60_000 }, async () => {
   const parent = mkdtempSync(resolve(tmpdir(), "seekforge-loop-newline-"));
   const repo = resolve(parent, "repo\ncheckout");
   try {
@@ -268,7 +247,7 @@ asyncTest("repository resolution preserves a newline-containing checkout path", 
   }
 });
 
-asyncTest("loop state management still works outside a git repository", async () => {
+test("loop state management still works outside a git repository", { timeout: 120_000 }, async () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-nongit-"));
   try {
     createLoopState({
@@ -293,7 +272,7 @@ asyncTest("loop state management still works outside a git repository", async ()
   }
 });
 
-test("CLI numeric parsers reject trailing junk and non-finite values globally", () => {
+test("CLI numeric parsers reject trailing junk and non-finite values globally", { timeout: 120_000 }, () => {
   const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const cli = resolve(cliDir, "src/index.ts");
   for (const args of [
@@ -310,7 +289,3 @@ test("CLI numeric parsers reject trailing junk and non-finite values globally", 
     assert.match(`${result.stdout}${result.stderr}`, /positive (?:integer|number)/);
   }
 });
-
-await Promise.all(asyncTests);
-if (process.exitCode) process.exit(process.exitCode);
-console.log(`${passed} loop tests passed`);

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { format } from "node:util";
+import { test } from "vitest";
 import { Command } from "commander";
 import { appendSecurityEvent, newSecurityEventId, type Finding } from "@seekforge/core";
 import { registerSecurityCommands } from "../commands/register-security.js";
@@ -12,31 +14,26 @@ import {
   securityStatusCommand,
 } from "../commands/security.js";
 
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (error) {
-    console.error(`FAIL ${name}`);
-    console.error(error instanceof Error ? error.stack : String(error));
-    process.exit(1);
-  }
-}
-
 function capture(workspace: string, fn: () => void): string {
   const cwd = process.cwd();
   const original = process.stdout.write.bind(process.stdout);
+  // vitest intercepts console.log (it does not go through process.stdout.write
+  // under the vitest runner), so capture it directly as well.
+  const originalLog = console.log;
   let output = "";
   process.chdir(workspace);
   (process.stdout.write as unknown) = (chunk: string | Uint8Array): boolean => {
     output += typeof chunk === "string" ? chunk : chunk.toString();
     return true;
   };
+  console.log = (...args: unknown[]): void => {
+    output += `${format(...args)}\n`;
+  };
   try {
     fn();
   } finally {
     (process.stdout.write as unknown) = original;
+    console.log = originalLog;
     process.chdir(cwd);
   }
   return output;
@@ -115,5 +112,3 @@ test("exports JSON, Markdown, and SARIF evidence and writes mode 0600", () => {
   assert.match(readFileSync(target, "utf8"), /seekforgeFindingId/);
   rmSync(workspace, { recursive: true, force: true });
 });
-
-console.log(`${passed} security CLI tests passed`);

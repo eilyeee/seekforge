@@ -1,7 +1,5 @@
-// Tests for the pure scheduled-job module (apps/cli/src/schedule.ts). Like the
-// other CLI tests this is a dependency-free runner (via `tsx`): each case
-// asserts with node:assert and exits non-zero on the first failure so
-// `pnpm test` fails. No model/core calls and no real API spend — we only
+// Tests for the pure scheduled-job module (apps/cli/src/schedule.ts).
+// No model/core calls and no real API spend — we only
 // exercise parsing, due-calculation, validation, and the on-disk registry
 // round-trip in a temp dir.
 
@@ -9,6 +7,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "vitest";
 import { scheduleAddCommand, scheduleRemoveCommand, scheduleSetEnabledCommand } from "../commands/schedule.js";
 import {
   addJob,
@@ -30,18 +29,6 @@ import {
   validateJobInput,
   type Job,
 } from "../schedule.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 const baseJob = (over: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -460,5 +447,3 @@ test("schedule lease recovers an abandoned recovery directory after the grace pe
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-console.log(`${passed} schedule tests passed`);

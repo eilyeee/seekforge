@@ -1,22 +1,11 @@
 // Contract test: CLI config -> AgentCoreDeps passthrough. Guards the cross-entry
 // parameters (sandbox, permission, planModel, compaction, hooks, limits) that
-// have silently dropped before. tsx/node:assert runner, like the other tests.
+// have silently dropped before.
 
 import assert from "node:assert/strict";
+import { test } from "vitest";
 import { createCliAgentDeps } from "../agent-factory.js";
 import type { CliConfig } from "../config.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 const base: CliConfig = { apiKey: "sk-test", model: "deepseek-v4-flash" };
 const deps = (config: CliConfig, extra: Partial<Parameters<typeof createCliAgentDeps>[0]> = {}) =>
@@ -68,5 +57,3 @@ test("maxTurns opt becomes limits.maxAgentTurns (and only when > 0)", () => {
   assert.equal(deps(base, { maxTurns: 0 }).limits, undefined);
   assert.equal(deps(base).limits, undefined);
 });
-
-console.log(`${passed} agent-deps contract tests passed`);

@@ -1,24 +1,12 @@
-// Tests for loadConfig settings-file layering. Uses the same pattern as
-// helpers.test.ts: tsx runner, node:assert, first failure exits non-zero.
+// Tests for loadConfig settings-file layering.
 
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { test } from "vitest";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 import { configSetCommand } from "../commands/config.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 /**
  * Create a temporary project directory with an optional .seekforge/config.json.
@@ -538,5 +526,3 @@ test("configParseErrors reports a non-object project config", () => {
   assert.ok(configParseErrors(projectPath).includes(broken));
   cleanup();
 });
-
-console.log(`${passed} config tests passed`);

@@ -1,7 +1,4 @@
-// Pure-logic tests for the new CLI helpers. The CLI has no vitest infra and
-// vitest is not resolvable from apps/cli, so this is a dependency-free runner
-// (run via `tsx`): each case asserts with node:assert; a non-zero exit on the
-// first failure is enough signal for `pnpm test`.
+// Pure-logic tests for the new CLI helpers, asserted with node:assert.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -9,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { test } from "vitest";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
 import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
 import type { AgentEvent } from "@seekforge/shared";
@@ -30,18 +28,6 @@ import { parseIndexList, parseNumberedChoice } from "../input-selection.js";
 // whole point of the color-gating tests, so the control char is intentional.
 const ANSI = new RegExp("\\x1b\\[");
 
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
-
 test("version cache rejects non-finite timestamps and intervals", () => {
   const entry = { checkedAt: 100, latest: "1.2.3" };
   assert.equal(isCacheFresh(entry, 150, 100), true);
@@ -50,7 +36,9 @@ test("version cache rejects non-finite timestamps and intervals", () => {
   assert.equal(isCacheFresh(entry, 150, Infinity), false);
 });
 
-test("memory compact rejects an invalid --prune-unused value before executing", () => {
+// Timeout raised: this spawns the full CLI through the tsx loader, which can
+// take well over vitest's default 5s on a cold cache.
+test("memory compact rejects an invalid --prune-unused value before executing", { timeout: 60_000 }, () => {
   const workspace = mkdtempSync(join(tmpdir(), "seekforge-cli-prune-"));
   try {
     const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -450,5 +438,3 @@ test("fail: writes error: to STDERR (not stdout) and sets exit code", () => {
   assert.equal(process.exitCode, 3);
   process.exitCode = prevExit; // restore so the runner can still exit 0
 });
-
-console.log(`${passed} CLI helper tests passed`);

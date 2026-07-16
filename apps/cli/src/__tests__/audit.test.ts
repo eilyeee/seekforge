@@ -1,24 +1,12 @@
-// Tests for the `seekforge audit` command. Same tsx runner + node:assert
-// pattern as the other CLI tests (vitest is not resolvable from apps/cli).
+// Tests for the `seekforge audit` command.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "vitest";
 import { appendCheckpoint, createSessionTrace, writeSessionMeta } from "@seekforge/core";
 import { auditCommand } from "../commands/audit.js";
-
-let passed = 0;
-function test(name: string, fn: () => void): void {
-  try {
-    fn();
-    passed++;
-  } catch (err) {
-    console.error(`✗ ${name}`);
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exit(1);
-  }
-}
 
 /** Run `fn` with cwd set to `dir` and process.stdout.write captured. */
 function capture(dir: string, fn: () => void): string {
@@ -123,5 +111,3 @@ test("unknown session id fails with a non-zero exit code", () => {
   process.exitCode = 0; // reset so this test file exits clean
   rmSync(ws, { recursive: true, force: true });
 });
-
-console.log(`${passed} audit tests passed`);
