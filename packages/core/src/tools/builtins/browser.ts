@@ -48,11 +48,33 @@ export function checkBrowserUrl(raw: string): URL {
   return checkFetchUrl(raw);
 }
 
-// Loosely-typed Playwright surface — the dependency may be absent at type-check
-// time, so we describe only what we use and treat everything as `any`.
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// Minimal structural types for the Playwright surface this file touches. The
+// dependency is optional and may be absent at type-check time, so these mirror
+// exactly the members we call instead of importing playwright's own types.
+type PlaywrightRequest = { url(): string; failure(): { errorText: string } | null };
+type PlaywrightRoute = {
+  request(): PlaywrightRequest;
+  continue(): Promise<void>;
+  abort(errorCode?: string): Promise<void>;
+};
+type PlaywrightConsoleMessage = { type(): string; text(): string };
+type PlaywrightResponse = { status(): number };
+type PlaywrightPage = {
+  on(event: "console", cb: (msg: PlaywrightConsoleMessage) => void): void;
+  on(event: "pageerror", cb: (err: Error) => void): void;
+  on(event: "requestfailed", cb: (req: PlaywrightRequest) => void): void;
+  goto(url: string, opts?: { waitUntil?: "load"; timeout?: number }): Promise<PlaywrightResponse | null>;
+  title(): Promise<string>;
+  url(): string;
+  screenshot(opts?: { path?: string; fullPage?: boolean; timeout?: number }): Promise<unknown>;
+  evaluate<Arg, R>(fn: (arg: Arg) => R, arg: Arg): Promise<R>;
+};
+type PlaywrightContext = {
+  newPage(): Promise<PlaywrightPage>;
+  route(pattern: string, handler: (route: PlaywrightRoute) => Promise<void>): Promise<void>;
+};
 type PlaywrightBrowser = {
-  newContext(opts?: unknown): Promise<any>;
+  newContext(opts?: unknown): Promise<PlaywrightContext>;
   close(): Promise<void>;
 };
 type PlaywrightModule = {
@@ -63,8 +85,8 @@ type ConsoleEntry = { type: string; text: string };
 type FailedRequest = { url: string; failure: string };
 
 let browser: PlaywrightBrowser | null = null;
-let context: any = null;
-let page: any = null;
+let context: PlaywrightContext | null = null;
+let page: PlaywrightPage | null = null;
 const browserLeases = new Set<symbol>();
 
 // Capture buffers, reset on every navigate so `browser_console` reports only
@@ -72,7 +94,6 @@ const browserLeases = new Set<symbol>();
 let consoleMessages: ConsoleEntry[] = [];
 let pageErrors: string[] = [];
 let failedRequests: FailedRequest[] = [];
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Dynamically import `playwright-core`. The specifier is held in a variable so
@@ -89,7 +110,7 @@ async function loadPlaywright(): Promise<PlaywrightModule> {
 }
 
 /** Launch (or reuse) the shared headless browser + page, attaching listeners. */
-async function getPage(): Promise<any> {
+async function getPage(): Promise<PlaywrightPage> {
   const pw = await loadPlaywright();
   if (!browser) {
     browser = await pw.chromium.launch({ headless: true });
@@ -99,7 +120,7 @@ async function getPage(): Promise<any> {
     context = await browser.newContext();
     // Re-check every navigation/subresource so a public URL cannot redirect the
     // browser into an unapproved private network target.
-    await context.route("**/*", async (route: any) => {
+    await context.route("**/*", async (route) => {
       try {
         checkBrowserUrl(String(route.request().url()));
         await route.continue();
@@ -111,15 +132,15 @@ async function getPage(): Promise<any> {
   if (!page) {
     page = await context.newPage();
     // Attach capture listeners once per page; buffers are reset on navigate.
-    page.on("console", (msg: any) => {
+    page.on("console", (msg) => {
       if (consoleMessages.length < MAX_CAPTURED) {
         consoleMessages.push({ type: String(msg.type?.() ?? "log"), text: String(msg.text?.() ?? "") });
       }
     });
-    page.on("pageerror", (err: any) => {
+    page.on("pageerror", (err) => {
       if (pageErrors.length < MAX_CAPTURED) pageErrors.push(err?.message ? String(err.message) : String(err));
     });
-    page.on("requestfailed", (req: any) => {
+    page.on("requestfailed", (req) => {
       if (failedRequests.length < MAX_CAPTURED) {
         failedRequests.push({ url: String(req.url?.() ?? ""), failure: String(req.failure?.()?.errorText ?? "failed") });
       }
@@ -129,7 +150,7 @@ async function getPage(): Promise<any> {
 }
 
 /** True once a page has been navigated (the inspect tools need a live page). */
-function requirePage(): any {
+function requirePage(): PlaywrightPage {
   if (!page) {
     throw new ToolError("no_page", "No page loaded — call browser_navigate first.");
   }
@@ -226,7 +247,7 @@ const browserNavigate = defineTool({
     consoleMessages = [];
     pageErrors = [];
     failedRequests = [];
-    let resp: any;
+    let resp: PlaywrightResponse | null;
     try {
       resp = await p.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
     } catch (err) {
