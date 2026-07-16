@@ -7,7 +7,7 @@ import { collectFrames, connectWs, emptyReport, fakeAgentFactory, makeWorkspace,
 
 const TOKEN = "run-test-token";
 let server: RunningServer | undefined;
-let sockets: WebSocket[] = [];
+const sockets: WebSocket[] = [];
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.terminate();
@@ -49,22 +49,28 @@ describe("append-only run ledger", () => {
     const manager = new RunManager();
     const run = manager.create({ workspace, source: "ws" });
     manager.appendFrame(workspace, run.runId, { type: "one" });
-    appendFileSync(join(workspace, ".seekforge/runs.jsonl"), [
-      "null",
-      "[]",
-      JSON.stringify({ ...run, status: "succeeded", costUsd: "free" }),
-      '{"torn":',
-      JSON.stringify({ ...run, status: "succeeded", updatedAt: new Date().toISOString() }),
-      "",
-    ].join("\n"));
+    appendFileSync(
+      join(workspace, ".seekforge/runs.jsonl"),
+      [
+        "null",
+        "[]",
+        JSON.stringify({ ...run, status: "succeeded", costUsd: "free" }),
+        '{"torn":',
+        JSON.stringify({ ...run, status: "succeeded", updatedAt: new Date().toISOString() }),
+        "",
+      ].join("\n"),
+    );
     const eventPath = join(workspace, ".seekforge/run-events", `${run.runId}.jsonl`);
-    appendFileSync(eventPath, [
-      JSON.stringify({ runId: run.runId, seq: 1, ts: new Date().toISOString(), frame: { type: "duplicate" } }),
-      JSON.stringify({ runId: run.runId, seq: 0, ts: new Date().toISOString(), frame: { type: "zero" } }),
-      JSON.stringify({ runId: run.runId, seq: 2, ts: "not-a-date", frame: { type: "bad-time" } }),
-      "42",
-      "",
-    ].join("\n"));
+    appendFileSync(
+      eventPath,
+      [
+        JSON.stringify({ runId: run.runId, seq: 1, ts: new Date().toISOString(), frame: { type: "duplicate" } }),
+        JSON.stringify({ runId: run.runId, seq: 0, ts: new Date().toISOString(), frame: { type: "zero" } }),
+        JSON.stringify({ runId: run.runId, seq: 2, ts: "not-a-date", frame: { type: "bad-time" } }),
+        "42",
+        "",
+      ].join("\n"),
+    );
     expect(manager.get(workspace, run.runId)).toMatchObject({ status: "queued" });
     expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual([1]);
 
@@ -104,7 +110,7 @@ describe("run API and WS replay", () => {
     const queried = await fetch(`http://127.0.0.1:${server.port}/api/runs/${id}`, { headers });
     expect(await queried.json()).toMatchObject({ runId: id, status: "succeeded", sessionId: "ledger-session" });
     const events = await fetch(`http://127.0.0.1:${server.port}/api/runs/${id}/events?afterSeq=1`, { headers });
-    const body = await events.json() as { events: Array<{ seq: number }> };
+    const body = (await events.json()) as { events: Array<{ seq: number }> };
     expect(body.events.every((event) => event.seq > 1)).toBe(true);
 
     const reconnect = await connectWs(server.port, TOKEN);
@@ -151,7 +157,9 @@ describe("run API and WS replay", () => {
   it("starts a headless background agent that survives subscriber disconnect and replays events", async () => {
     const workspace = makeWorkspace();
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     server = await startServer({
       workspace,
       port: 0,
@@ -170,7 +178,7 @@ describe("run API and WS replay", () => {
       body: JSON.stringify({ task: "background", mode: "ask", maxCostUsd: 0.5 }),
     });
     expect(started.status).toBe(202);
-    const run = await started.json() as { runId: string; status: string };
+    const run = (await started.json()) as { runId: string; status: string };
     expect(run).toMatchObject({ status: "running" });
 
     const subscriber = await connectWs(server.port, TOKEN);
@@ -182,12 +190,12 @@ describe("run API and WS replay", () => {
 
     for (let attempt = 0; attempt < 100; attempt++) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}`, { headers });
-      if ((await response.json() as { status: string }).status === "succeeded") break;
+      if (((await response.json()) as { status: string }).status === "succeeded") break;
       if (attempt === 99) throw new Error("background run did not complete");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const events = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}/events?afterSeq=1`, { headers });
-    const eventBody = await events.json() as { events: Array<{ seq: number; frame: { type: string } }> };
+    const eventBody = (await events.json()) as { events: Array<{ seq: number; frame: { type: string } }> };
     expect(eventBody.events.some((event) => event.frame.type === "event" && event.seq > 1)).toBe(true);
   });
 
@@ -203,11 +211,20 @@ describe("run API and WS replay", () => {
       runLoop: async (_deps, opts) => {
         opts.onEvent?.({ type: "iteration.start", iteration: 1 });
         await new Promise<void>((resolve) => {
-          const done = () => { observedAbort = true; resolve(); };
+          const done = () => {
+            observedAbort = true;
+            resolve();
+          };
           opts.signal?.addEventListener("abort", done, { once: true });
           if (opts.signal?.aborted) done();
         });
-        const result = { status: "cancelled" as const, iterations: 1, costUsd: 0, sessionId: "loop-session", finalVerify: { code: 1, output: "cancelled" } };
+        const result = {
+          status: "cancelled" as const,
+          iterations: 1,
+          costUsd: 0,
+          sessionId: "loop-session",
+          finalVerify: { code: 1, output: "cancelled" },
+        };
         opts.onEvent?.({ type: "loop.done", result });
         return result;
       },
@@ -218,11 +235,14 @@ describe("run API and WS replay", () => {
       headers,
       body: JSON.stringify({ kind: "loop", task: "loop", verifyCommand: "pnpm test", maxCostUsd: 1 }),
     });
-    const run = await response.json() as { runId: string };
-    const cancelled = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}`, { method: "DELETE", headers });
+    const run = (await response.json()) as { runId: string };
+    const cancelled = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}`, {
+      method: "DELETE",
+      headers,
+    });
     expect(await cancelled.json()).toMatchObject({ status: "cancelled" });
     await waitUntil(() => observedAbort);
     const events = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}/events?afterSeq=0`, { headers });
-    expect((await events.json() as { events: unknown[] }).events.length).toBeGreaterThan(0);
+    expect(((await events.json()) as { events: unknown[] }).events.length).toBeGreaterThan(0);
   });
 });

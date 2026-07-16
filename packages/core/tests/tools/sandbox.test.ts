@@ -1,12 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  ToolError,
-  resolveForRead,
-  resolveForWrite,
-  resolveInsideWorkspace,
-} from "../../src/tools/index.js";
+import { ToolError, resolveForRead, resolveForWrite, resolveInsideWorkspace } from "../../src/tools/index.js";
 import { makeWorkspace } from "./helpers.js";
 
 function codeOf(fn: () => unknown): string {
@@ -29,9 +24,7 @@ describe("resolveInsideWorkspace", () => {
   it("rejects .. escapes", () => {
     const ws = makeWorkspace();
     expect(codeOf(() => resolveInsideWorkspace(ws, "../outside.txt"))).toBe("outside_workspace");
-    expect(codeOf(() => resolveInsideWorkspace(ws, "a/../../outside.txt"))).toBe(
-      "outside_workspace",
-    );
+    expect(codeOf(() => resolveInsideWorkspace(ws, "a/../../outside.txt"))).toBe("outside_workspace");
   });
 
   it("rejects absolute paths outside the workspace", () => {
@@ -55,9 +48,7 @@ describe("resolveInsideWorkspace", () => {
     const outside = makeWorkspace();
     fs.symlinkSync(outside, path.join(ws, "evil"));
     // evil/ exists (symlink out), deeper path does not exist yet -> still rejected.
-    expect(codeOf(() => resolveInsideWorkspace(ws, "evil/new/file.txt"))).toBe(
-      "outside_workspace",
-    );
+    expect(codeOf(() => resolveInsideWorkspace(ws, "evil/new/file.txt"))).toBe("outside_workspace");
     // A clean non-existing path stays allowed.
     expect(() => resolveInsideWorkspace(ws, "new/dir/file.txt")).not.toThrow();
   });
@@ -67,7 +58,10 @@ describe("sensitive paths", () => {
   it("denies reading secret-looking files", () => {
     const ws = makeWorkspace();
     for (const p of [".env", ".env.local", "certs/server.pem", "keys/private.key", "id_rsa", ".ssh/id_ed25519.pub"]) {
-      expect(codeOf(() => resolveForRead(ws, p)), p).toBe("sensitive_path");
+      expect(
+        codeOf(() => resolveForRead(ws, p)),
+        p,
+      ).toBe("sensitive_path");
     }
   });
 

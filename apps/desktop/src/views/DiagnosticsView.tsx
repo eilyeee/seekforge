@@ -39,10 +39,7 @@ function toChecks(t: ReturnType<typeof useT>, r: DoctorReport): Check[] {
     },
     {
       label: t("diagnostics.models"),
-      value:
-        r.modelCount > 0
-          ? t("diagnostics.modelsCount", { count: r.modelCount })
-          : t("diagnostics.modelsNone"),
+      value: r.modelCount > 0 ? t("diagnostics.modelsCount", { count: r.modelCount }) : t("diagnostics.modelsNone"),
       ok: r.modelCount > 0,
     },
     { label: t("diagnostics.workspace"), value: r.workspace, ok: true },

@@ -75,9 +75,11 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 10_000
         return;
       }
       const detail = Buffer.concat(stderr).toString("utf8").trim();
-      finish(new Error(
-        `shell command failed (${signal ? `signal ${signal}` : `exit ${String(code)}`})${detail ? `: ${detail}` : ""}`,
-      ));
+      finish(
+        new Error(
+          `shell command failed (${signal ? `signal ${signal}` : `exit ${String(code)}`})${detail ? `: ${detail}` : ""}`,
+        ),
+      );
     });
 
     const timeoutTimer = setTimeout(() => {

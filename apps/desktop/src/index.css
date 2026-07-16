@@ -62,8 +62,7 @@
     @apply bg-surface font-sans text-sm text-primary antialiased;
     /* Codex-like system stack: SF Pro on macOS, segoe/system elsewhere. */
     font-family:
-      -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue",
-      Arial, sans-serif;
+      -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
   }
   ::selection {
     @apply bg-accent/30;

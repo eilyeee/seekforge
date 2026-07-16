@@ -11,11 +11,14 @@ function markdownText(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replace(/([\\`*_{}[\]()#+.!|\-])/g, "\\$1");
+    .replace(/([\\`*_{}[\]()#+.!|-])/g, "\\$1");
 }
 
 function indentedCode(value: string): string {
-  return value.split("\n").map((line) => `    ${line}`).join("\n");
+  return value
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
 }
 
 export function buildSecurityEvidencePackage(workspace: string): SecurityEvidencePackage {
@@ -35,7 +38,10 @@ export function buildSecurityEvidencePackage(workspace: string): SecurityEvidenc
 
 function findingMarkdown(finding: Finding): string {
   const evidence = finding.evidence
-    .map((item) => `- \`${item.path.replace(/`/g, "\\`")}:${item.lineStart}-${item.lineEnd}\`\n\n${indentedCode(item.excerpt)}`)
+    .map(
+      (item) =>
+        `- \`${item.path.replace(/`/g, "\\`")}:${item.lineStart}-${item.lineEnd}\`\n\n${indentedCode(item.excerpt)}`,
+    )
     .join("\n");
   return [
     `### ${markdownText(finding.id)}: ${markdownText(finding.title)}`,
@@ -54,14 +60,19 @@ function findingMarkdown(finding: Finding): string {
 }
 
 function fixMarkdown(fix: FixAttempt): string {
-  const commands = fix.commands.length === 0
-    ? "- No project checks recorded."
-    : fix.commands.map((command) => [
-      `- ${markdownText(command.kind)}: \`${command.command.replace(/`/g, "\\`")}\``,
-      `  - Exit: ${command.exitCode}; timeout: ${command.timedOut}; duration: ${command.durationMs} ms`,
-      ...(command.stdout ? ["", indentedCode(command.stdout)] : []),
-      ...(command.stderr ? ["", indentedCode(command.stderr)] : []),
-    ].join("\n")).join("\n");
+  const commands =
+    fix.commands.length === 0
+      ? "- No project checks recorded."
+      : fix.commands
+          .map((command) =>
+            [
+              `- ${markdownText(command.kind)}: \`${command.command.replace(/`/g, "\\`")}\``,
+              `  - Exit: ${command.exitCode}; timeout: ${command.timedOut}; duration: ${command.durationMs} ms`,
+              ...(command.stdout ? ["", indentedCode(command.stdout)] : []),
+              ...(command.stderr ? ["", indentedCode(command.stderr)] : []),
+            ].join("\n"),
+          )
+          .join("\n");
   return [
     `### ${markdownText(fix.id)}: ${markdownText(fix.findingId)}`,
     `- Status: ${markdownText(fix.status)}`,
@@ -75,21 +86,29 @@ function fixMarkdown(fix: FixAttempt): string {
 
 function threatModelMarkdown(model: ThreatModel): string {
   const names = (items: ThreatModel["assets"]): string => items.map((item) => markdownText(item.name)).join(", ");
-  const threats = model.threats.map((threat) => [
-    `#### ${markdownText(threat.id)}: ${markdownText(threat.title)}`,
-    `- Severity: ${markdownText(threat.severity)}`,
-    `- Affected assets: ${threat.affectedAssets.map(markdownText).join(", ")}`,
-    `- Entry points: ${threat.entryPoints.map(markdownText).join(", ")}`,
-    `- Trust boundaries: ${threat.trustBoundaries.map(markdownText).join(", ")}`,
-    "",
-    markdownText(threat.scenario),
-    "",
-    "Evidence:",
-    ...threat.evidence.map((evidence) => `- \`${evidence.path.replace(/`/g, "\\`")}:${evidence.lineStart}-${evidence.lineEnd}\``),
-    "",
-    "Mitigations:",
-    ...(threat.mitigations.length > 0 ? threat.mitigations.map((value) => `- ${markdownText(value)}`) : ["- None recorded."]),
-  ].join("\n")).join("\n\n");
+  const threats = model.threats
+    .map((threat) =>
+      [
+        `#### ${markdownText(threat.id)}: ${markdownText(threat.title)}`,
+        `- Severity: ${markdownText(threat.severity)}`,
+        `- Affected assets: ${threat.affectedAssets.map(markdownText).join(", ")}`,
+        `- Entry points: ${threat.entryPoints.map(markdownText).join(", ")}`,
+        `- Trust boundaries: ${threat.trustBoundaries.map(markdownText).join(", ")}`,
+        "",
+        markdownText(threat.scenario),
+        "",
+        "Evidence:",
+        ...threat.evidence.map(
+          (evidence) => `- \`${evidence.path.replace(/`/g, "\\`")}:${evidence.lineStart}-${evidence.lineEnd}\``,
+        ),
+        "",
+        "Mitigations:",
+        ...(threat.mitigations.length > 0
+          ? threat.mitigations.map((value) => `- ${markdownText(value)}`)
+          : ["- None recorded."]),
+      ].join("\n"),
+    )
+    .join("\n\n");
   return [
     `### ${markdownText(model.id)}`,
     `- Created: ${model.createdAt}`,
@@ -136,15 +155,17 @@ export function renderSecurityMarkdown(pkg: SecurityEvidencePackage): string {
 }
 
 export function renderSecuritySarif(pkg: SecurityEvidencePackage): string {
-  const rules = [...new Map(pkg.findings.map((finding) => [finding.source.ruleId, finding])).values()].map((finding) => ({
-    id: finding.source.ruleId,
-    name: finding.category.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 128) || "security_finding",
-    shortDescription: { text: finding.title },
-    fullDescription: { text: finding.description },
-    help: { text: finding.recommendation },
-    defaultConfiguration: { level: sarifLevel(finding.severity) },
-    properties: { tags: [finding.category, ...(finding.cwe ? [finding.cwe] : [])] },
-  }));
+  const rules = [...new Map(pkg.findings.map((finding) => [finding.source.ruleId, finding])).values()].map(
+    (finding) => ({
+      id: finding.source.ruleId,
+      name: finding.category.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 128) || "security_finding",
+      shortDescription: { text: finding.title },
+      fullDescription: { text: finding.description },
+      help: { text: finding.recommendation },
+      defaultConfiguration: { level: sarifLevel(finding.severity) },
+      properties: { tags: [finding.category, ...(finding.cwe ? [finding.cwe] : [])] },
+    }),
+  );
   const results = pkg.findings.map((finding) => ({
     ruleId: finding.source.ruleId,
     level: sarifLevel(finding.severity),
@@ -163,24 +184,30 @@ export function renderSecuritySarif(pkg: SecurityEvidencePackage): string {
       scanRunId: finding.scanRunId,
     },
   }));
-  return `${JSON.stringify({
-    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
-    version: "2.1.0",
-    runs: [{
-      tool: {
-        driver: {
-          name: "SeekForge Security",
-          informationUri: "https://github.com/eilyeee/seekforge",
-          semanticVersion: "1.0.0",
-          rules,
+  return `${JSON.stringify(
+    {
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+      version: "2.1.0",
+      runs: [
+        {
+          tool: {
+            driver: {
+              name: "SeekForge Security",
+              informationUri: "https://github.com/eilyeee/seekforge",
+              semanticVersion: "1.0.0",
+              rules,
+            },
+          },
+          originalUriBaseIds: { "%SRCROOT%": { uri: "./" } },
+          automationDetails: { id: `seekforge-security/${pkg.repository}` },
+          results,
+          properties: { generatedAt: pkg.generatedAt, disclaimer: pkg.disclaimer },
         },
-      },
-      originalUriBaseIds: { "%SRCROOT%": { uri: "./" } },
-      automationDetails: { id: `seekforge-security/${pkg.repository}` },
-      results,
-      properties: { generatedAt: pkg.generatedAt, disclaimer: pkg.disclaimer },
-    }],
-  }, null, 2)}\n`;
+      ],
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function sarifLevel(severity: Finding["severity"]): "error" | "warning" | "note" | "none" {
@@ -198,11 +225,7 @@ export function renderSecurityExport(workspace: string, format: SecurityExportFo
   throw new Error(`unknown security export format: ${String(format)}`);
 }
 
-export function writeSecurityExport(
-  workspace: string,
-  outputPath: string,
-  format: SecurityExportFormat,
-): string {
+export function writeSecurityExport(workspace: string, outputPath: string, format: SecurityExportFormat): string {
   const target = resolveForWrite(workspace, outputPath);
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   writeFileSync(target, renderSecurityExport(workspace, format), { mode: 0o600 });

@@ -85,7 +85,9 @@ export function formatMcpLines(
     const preview = tools.slice(0, 5).join(", ") + (tools.length > 5 ? ", …" : "");
     return `${name}  ${count} (${preview})`;
   });
-  lines.push(`total: ${total} ${total === 1 ? "tool" : "tools"} from ${names.length} ${names.length === 1 ? "server" : "servers"}`);
+  lines.push(
+    `total: ${total} ${total === 1 ? "tool" : "tools"} from ${names.length} ${names.length === 1 ? "server" : "servers"}`,
+  );
   return lines;
 }
 

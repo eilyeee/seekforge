@@ -27,21 +27,34 @@ const isFiniteNonnegative = (value: unknown): value is number =>
 function parseChatResponse(value: unknown): ChatResponse | null {
   if (!isRecord(value) || typeof value["content"] !== "string") return null;
   const toolCalls = value["toolCalls"];
-  if (!Array.isArray(toolCalls) || !toolCalls.every((call) =>
-    isRecord(call) && typeof call["id"] === "string" && call["id"].length > 0 &&
-    typeof call["name"] === "string" && call["name"].length > 0 &&
-    typeof call["argumentsJson"] === "string")) {
+  if (
+    !Array.isArray(toolCalls) ||
+    !toolCalls.every(
+      (call) =>
+        isRecord(call) &&
+        typeof call["id"] === "string" &&
+        call["id"].length > 0 &&
+        typeof call["name"] === "string" &&
+        call["name"].length > 0 &&
+        typeof call["argumentsJson"] === "string",
+    )
+  ) {
     return null;
   }
   const usage = value["usage"];
-  if (!isRecord(usage) ||
-      !["promptTokens", "completionTokens", "cacheHitTokens"].every((key) => isTokenCount(usage[key])) ||
-      !isFiniteNonnegative(usage["costUsd"]) ||
-      (usage["cacheHitTokens"] as number) > (usage["promptTokens"] as number)) {
+  if (
+    !isRecord(usage) ||
+    !["promptTokens", "completionTokens", "cacheHitTokens"].every((key) => isTokenCount(usage[key])) ||
+    !isFiniteNonnegative(usage["costUsd"]) ||
+    (usage["cacheHitTokens"] as number) > (usage["promptTokens"] as number)
+  ) {
     return null;
   }
-  if (typeof value["finishReason"] !== "string" || !FINISH_REASONS.has(value["finishReason"]) ||
-      (value["reasoningContent"] !== undefined && typeof value["reasoningContent"] !== "string")) {
+  if (
+    typeof value["finishReason"] !== "string" ||
+    !FINISH_REASONS.has(value["finishReason"]) ||
+    (value["reasoningContent"] !== undefined && typeof value["reasoningContent"] !== "string")
+  ) {
     return null;
   }
   return value as ChatResponse;
@@ -90,11 +103,7 @@ function zeroedUsage(res: ChatResponse): ChatResponse {
  * would either skip them or fake incremental delivery, so streaming runs
  * (interactive TUI sessions) intentionally bypass the cache.
  */
-export function wrapProviderWithCache(
-  provider: ChatProvider,
-  dir: string,
-  opts?: ProviderCacheOptions,
-): ChatProvider {
+export function wrapProviderWithCache(provider: ChatProvider, dir: string, opts?: ProviderCacheOptions): ChatProvider {
   const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
 
   function read(key: string): ChatResponse | null {

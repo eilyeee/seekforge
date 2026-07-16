@@ -93,9 +93,7 @@ describe("atToken / insertAtPath", () => {
 describe("image markers", () => {
   it("numbers markers sequentially from the existing maximum", () => {
     expect(imageMarker("", "a.png")).toBe("[image #1: a.png]");
-    expect(imageMarker("see [image #1: a.png] and [image #3: b.png]", "c.png")).toBe(
-      "[image #4: c.png]",
-    );
+    expect(imageMarker("see [image #1: a.png] and [image #3: b.png]", "c.png")).toBe("[image #4: c.png]");
   });
 
   it("insertImageMarker pads with spaces only where needed", () => {

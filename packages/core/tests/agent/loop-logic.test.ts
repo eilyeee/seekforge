@@ -62,33 +62,36 @@ describe("verify/lint gate decisions", () => {
   });
 
   it("selects enabled non-blank auto gates", () => {
-    expect(selectAutoGate("verify", {
-      verifyCommand: " pnpm test ", autoVerify: true, autoLint: true,
-    })).toEqual({ kind: "verify", command: "pnpm test", notice: "Auto-verifying changes: pnpm test" });
-    expect(selectAutoGate("lint", {
-      lintCommand: "pnpm lint", autoVerify: true, autoLint: false,
-    })).toBeNull();
+    expect(
+      selectAutoGate("verify", {
+        verifyCommand: " pnpm test ",
+        autoVerify: true,
+        autoLint: true,
+      }),
+    ).toEqual({ kind: "verify", command: "pnpm test", notice: "Auto-verifying changes: pnpm test" });
+    expect(
+      selectAutoGate("lint", {
+        lintCommand: "pnpm lint",
+        autoVerify: true,
+        autoLint: false,
+      }),
+    ).toBeNull();
     expect(selectAutoGate("review", { autoVerify: true, autoLint: true })).toBeNull();
   });
 
   it("classifies pass, failure, and execution errors with gate-specific followups", () => {
-    expect(classifyAutoGateResult(
-      { kind: "verify", command: "pnpm test" },
-      { exitCode: 0, output: "" },
-    )).toMatchObject({ ranSinceEdit: true, retryAfterEdit: false, followup: expect.stringContaining("PASSED") });
-
-    const failed = classifyAutoGateResult(
-      { kind: "lint", command: "pnpm lint" },
-      { exitCode: 2, output: "bad lint" },
+    expect(classifyAutoGateResult({ kind: "verify", command: "pnpm test" }, { exitCode: 0, output: "" })).toMatchObject(
+      { ranSinceEdit: true, retryAfterEdit: false, followup: expect.stringContaining("PASSED") },
     );
+
+    const failed = classifyAutoGateResult({ kind: "lint", command: "pnpm lint" }, { exitCode: 2, output: "bad lint" });
     expect(failed).toMatchObject({ ranSinceEdit: true, retryAfterEdit: true });
     expect(failed.followup).toContain("Auto-lint `pnpm lint` FAILED (exit 2)");
     expect(failed.followup).toContain("bad lint");
 
-    expect(classifyAutoGateResult(
-      { kind: "verify", command: "pnpm test" },
-      { error: new Error("spawn failed") },
-    )).toEqual({
+    expect(
+      classifyAutoGateResult({ kind: "verify", command: "pnpm test" }, { error: new Error("spawn failed") }),
+    ).toEqual({
       ranSinceEdit: false,
       retryAfterEdit: false,
       followup:

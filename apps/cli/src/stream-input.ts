@@ -26,16 +26,12 @@ interface Envelope {
 
 /** Build the standard "invalid JSON" error for line `lineNo` (1-based). */
 function invalidJson(lineNo: number, line: string): Error {
-  return new Error(
-    `stream-json input: invalid JSON on line ${lineNo}: ${snippet(line)}`,
-  );
+  return new Error(`stream-json input: invalid JSON on line ${lineNo}: ${snippet(line)}`);
 }
 
 /** Build the "no extractable text" error for line `lineNo` (1-based). */
 function noText(lineNo: number, line: string): Error {
-  return new Error(
-    `stream-json input: no extractable text in user envelope on line ${lineNo}: ${snippet(line)}`,
-  );
+  return new Error(`stream-json input: no extractable text in user envelope on line ${lineNo}: ${snippet(line)}`);
 }
 
 /** A short, single-line snippet of an offending line for error messages. */
@@ -87,9 +83,7 @@ function extractUserText(value: unknown): string | null {
  * Yields the text of each user turn parsed from a Claude-style stream-json
  * input stream.
  */
-export async function* readStreamJsonInput(
-  stream: NodeJS.ReadableStream,
-): AsyncIterable<string> {
+export async function* readStreamJsonInput(stream: NodeJS.ReadableStream): AsyncIterable<string> {
   stream.setEncoding("utf8");
 
   let buffer = "";

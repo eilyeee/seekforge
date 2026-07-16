@@ -69,11 +69,31 @@ function seedWorkspace(ws: string, mcpServerPath: string): void {
     ws,
     ".seekforge/sessions/s1/events.jsonl",
     [
-      { type: "tool.started", toolName: "dispatch_team", args: { members: [{ id: "review", agentId: "reviewer", task: "review", dependsOn: [] }] } },
+      {
+        type: "tool.started",
+        toolName: "dispatch_team",
+        args: { members: [{ id: "review", agentId: "reviewer", task: "review", dependsOn: [] }] },
+      },
       { type: "subagent.started", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "running" },
-      { type: "subagent.completed", dispatchId: "ag-1", agentId: "reviewer", task: "review", status: "done", resultSummary: "clean" },
-      { type: "tool.completed", toolName: "dispatch_team", result: { ok: true, data: { status: "done", members: [{ id: "review", agentId: "reviewer", status: "done" }] } } },
-    ].map((event) => `${JSON.stringify(event)}\n`).join(""),
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review",
+        status: "done",
+        resultSummary: "clean",
+      },
+      {
+        type: "tool.completed",
+        toolName: "dispatch_team",
+        result: {
+          ok: true,
+          data: { status: "done", members: [{ id: "review", agentId: "reviewer", status: "done" }] },
+        },
+      },
+    ]
+      .map((event) => `${JSON.stringify(event)}\n`)
+      .join(""),
   );
   writeFileIn(
     ws,

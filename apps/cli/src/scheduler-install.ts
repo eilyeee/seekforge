@@ -17,12 +17,9 @@ function plan(projectPath: string): SchedulerInstallPlan {
   const workspace = realpathSync(projectPath);
   const id = createHash("sha256").update(workspace).digest("hex").slice(0, 12);
   const argv1 = process.argv[1];
-  const executable = argv1
-    ? [process.execPath, ...(argv1.endsWith(".ts") ? process.execArgv : []), argv1]
-    : [];
-  const invoke = executable.length > 0
-    ? `${executable.map(quote).join(" ")} schedule run --json`
-    : "seekforge schedule run --json";
+  const executable = argv1 ? [process.execPath, ...(argv1.endsWith(".ts") ? process.execArgv : []), argv1] : [];
+  const invoke =
+    executable.length > 0 ? `${executable.map(quote).join(" ")} schedule run --json` : "seekforge schedule run --json";
   const command = `* * * * * cd ${quote(workspace)} && ${invoke}`;
   return { id, workspace, command, installed: false };
 }
@@ -36,7 +33,7 @@ function readCrontab(missingOk = false): string {
   if (result.status !== 0 && !/no crontab/i.test(result.stderr ?? "")) {
     throw new Error((result.stderr ?? "could not read crontab").trim());
   }
-  return result.status === 0 ? result.stdout ?? "" : "";
+  return result.status === 0 ? (result.stdout ?? "") : "";
 }
 
 function markers(id: string): { begin: string; end: string } {

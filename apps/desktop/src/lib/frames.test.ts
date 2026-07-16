@@ -68,9 +68,7 @@ describe("buildExecutePlanFrame", () => {
 describe("overridesOf (header controls -> frame fields)", () => {
   it("untouched controls produce no fields (server config decides)", () => {
     expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "" })).toEqual({});
-    expect(overridesOf({ model: "   ", thinking: null, reasoningEffort: "max", outputStyle: "default" })).toEqual(
-      {},
-    );
+    expect(overridesOf({ model: "   ", thinking: null, reasoningEffort: "max", outputStyle: "default" })).toEqual({});
   });
 
   it("a non-empty model is trimmed and sent", () => {
@@ -92,22 +90,29 @@ describe("overridesOf (header controls -> frame fields)", () => {
   });
 
   it("a non-default output style is sent; default/empty is omitted", () => {
-    expect(
-      overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "concise" }),
-    ).toEqual({ outputStyle: "concise" });
-    expect(
-      overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "default" }),
-    ).toEqual({});
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "concise" })).toEqual({
+      outputStyle: "concise",
+    });
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "default" })).toEqual({});
   });
 
   it("sends a run-local sandbox only when explicitly selected", () => {
-    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: null })).toEqual({});
-    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: "read-only" })).toEqual({ sandbox: "read-only" });
+    expect(overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: null })).toEqual(
+      {},
+    );
+    expect(
+      overridesOf({ model: "", thinking: null, reasoningEffort: "high", outputStyle: "", sandbox: "read-only" }),
+    ).toEqual({ sandbox: "read-only" });
   });
 });
 
 describe("frame builders carry per-run overrides", () => {
-  const overrides = { model: "deepseek-v4-pro", thinking: true, reasoningEffort: "max", sandbox: "restricted" } as const;
+  const overrides = {
+    model: "deepseek-v4-pro",
+    thinking: true,
+    reasoningEffort: "max",
+    sandbox: "restricted",
+  } as const;
 
   it("buildStartFrame spreads overrides into the frame (plan mode too)", () => {
     expect(buildStartFrame("go", "edit", "confirm", "", overrides)).toMatchObject(overrides);

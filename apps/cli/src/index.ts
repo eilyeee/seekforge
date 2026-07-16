@@ -78,9 +78,7 @@ function argvWantsMachineFormat(argv: string[]): boolean {
   return argv.some((a) => {
     const v = a.toLowerCase();
     return (
-      v === "--output-format=json" ||
-      v === "--output-format=stream-json" ||
-      v === "--output-format=stream-json-raw"
+      v === "--output-format=json" || v === "--output-format=stream-json" || v === "--output-format=stream-json-raw"
     );
   });
 }
@@ -169,7 +167,11 @@ program
   .option("--ask", "with -p: read-only Q&A mode (no writes/commands)")
   .option("-y, --yes", "with -p: auto-approve write/execute permissions")
   .option("-m, --model <model>", "with -p: override model")
-  .option("--max-cost <usd>", "with -p: stop the run once cumulative cost reaches this budget (USD)", parsePositiveFloat)
+  .option(
+    "--max-cost <usd>",
+    "with -p: stop the run once cumulative cost reaches this budget (USD)",
+    parsePositiveFloat,
+  )
   .option(
     "--output-format <fmt>",
     "with -p: text | json (Claude-style result) | stream-json (Claude-style envelopes) | stream-json-raw (raw events)",
@@ -190,15 +192,24 @@ program
   )
   .option("--fallback-model <model>", "with -p: model to retry with if the primary is overloaded")
   .option("--output-style <style>", "with -p: default | concise | explanatory | learning")
-  .option("--settings <file>", "with -p: path to JSON settings file (layered over project config but below env/CLI flags)")
+  .option(
+    "--settings <file>",
+    "with -p: path to JSON settings file (layered over project config but below env/CLI flags)",
+  )
   .option("--input-format <fmt>", "with -p: text (default) | stream-json (line-delimited user turns on stdin)")
   .option(
     "--dangerously-skip-permissions",
     "with -p: alias for -y — auto-approve write/execute (dangerous still refused; env still asks)",
   )
-  .option("--mcp-config <file>", "with -p: load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)")
+  .option(
+    "--mcp-config <file>",
+    "with -p: load MCP servers from a JSON file (merged over config, unless --strict-mcp-config)",
+  )
   .option("--strict-mcp-config", "with -p: use only --mcp-config servers, ignore config-file MCP servers")
-  .option("--replay-user-messages", "with -p + --input-format stream-json: echo each user turn back as a stream-json event")
+  .option(
+    "--replay-user-messages",
+    "with -p + --input-format stream-json: echo each user turn back as a stream-json event",
+  )
   .option("--include-partial-messages", "with -p + --output-format stream-json: emit partial assistant text deltas");
 
 type SharedRunOpts = {
@@ -247,10 +258,7 @@ program
   .option("--append-system-prompt <text>", "append to the system prompt")
   .option("--allowedTools <list>", "only allow these tools (comma-separated)")
   .option("--disallowedTools <list>", "deny these tools (comma-separated)")
-  .option(
-    "--permission-mode <mode>",
-    "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)",
-  )
+  .option("--permission-mode <mode>", "default | acceptEdits | plan | bypassPermissions (also: confirm | auto)")
   .option("--fallback-model <model>", "model to retry with if the primary is overloaded")
   .option("--output-style <style>", "default | concise | explanatory | learning")
   .option("--settings <file>", "path to JSON settings file (layered over project config but below env/CLI flags)")
@@ -299,8 +307,14 @@ program
 program
   .command("sandbox-run")
   .argument("<task>", "development task to perform inside an isolated container")
-  .option("--image <img>", "runner image tag (default seekforge-runner; build with `docker build -t seekforge-runner .`)")
-  .option("--network <mode>", "container network: none | bridge | host (default bridge — the provider API needs egress)")
+  .option(
+    "--image <img>",
+    "runner image tag (default seekforge-runner; build with `docker build -t seekforge-runner .`)",
+  )
+  .option(
+    "--network <mode>",
+    "container network: none | bridge | host (default bridge — the provider API needs egress)",
+  )
   .option("--memory <m>", "container memory limit (e.g. 2g, 512m)")
   .option("--cpus <n>", "container CPU limit (e.g. 1.5)")
   .option("-m, --model <model>", "override model inside the container")
@@ -344,7 +358,11 @@ program
 program
   .command("resolve")
   .argument("<issue>", "GitHub issue number or URL to resolve (e.g. 42 or https://github.com/o/r/issues/42)")
-  .requiredOption("--max-cost <usd>", "REQUIRED per-run cost cap in USD (an autonomous fix must be bounded)", parsePositiveFloat)
+  .requiredOption(
+    "--max-cost <usd>",
+    "REQUIRED per-run cost cap in USD (an autonomous fix must be bounded)",
+    parsePositiveFloat,
+  )
   .option("--base <branch>", "base branch to open the PR against (default: main)")
   .option("-m, --model <model>", "override the model for the headless fix run")
   .option("--no-draft", "open a ready-for-review PR instead of a draft")
@@ -352,17 +370,30 @@ program
   .option("--wait-ci", "wait for PR checks and fail when a check fails")
   .option("--dry-run", "fetch + branch + fix + verify, but print (don't run) the push/PR")
   .description("autonomously fix a GitHub issue on a work branch and open a PR (agent fixes; the command pushes/PRs)")
-  .action(async (issue: string, opts: { maxCost: number; base?: string; model?: string; draft?: boolean; dryRun?: boolean; worktree?: boolean; waitCi?: boolean }) => {
-    await resolveCommand(issue, {
-      maxCost: opts.maxCost,
-      base: opts.base,
-      model: opts.model,
-      draft: opts.draft,
-      dryRun: opts.dryRun,
-      worktree: opts.worktree,
-      waitCi: opts.waitCi,
-    });
-  });
+  .action(
+    async (
+      issue: string,
+      opts: {
+        maxCost: number;
+        base?: string;
+        model?: string;
+        draft?: boolean;
+        dryRun?: boolean;
+        worktree?: boolean;
+        waitCi?: boolean;
+      },
+    ) => {
+      await resolveCommand(issue, {
+        maxCost: opts.maxCost,
+        base: opts.base,
+        model: opts.model,
+        draft: opts.draft,
+        dryRun: opts.dryRun,
+        worktree: opts.worktree,
+        waitCi: opts.waitCi,
+      });
+    },
+  );
 
 program
   .command("resolve-review")
@@ -373,9 +404,14 @@ program
   .option("--wait-ci", "wait for PR checks after pushing")
   .option("--dry-run", "fix + verify, but print (don't run) commit/push")
   .description("address actionable review feedback on an existing PR and push the fixes")
-  .action(async (pr: string, opts: { maxCost: number; model?: string; dryRun?: boolean; worktree?: boolean; waitCi?: boolean }) => {
-    await resolveReviewCommand(pr, opts);
-  });
+  .action(
+    async (
+      pr: string,
+      opts: { maxCost: number; model?: string; dryRun?: boolean; worktree?: boolean; waitCi?: boolean },
+    ) => {
+      await resolveReviewCommand(pr, opts);
+    },
+  );
 
 program
   .command("loop")
@@ -391,7 +427,15 @@ program
   .action(
     async (
       task: string,
-      opts: { verify: string; maxIters?: number; budget?: number; yes?: boolean; model?: string; profile?: string; worktree?: boolean | string },
+      opts: {
+        verify: string;
+        maxIters?: number;
+        budget?: number;
+        yes?: boolean;
+        model?: string;
+        profile?: string;
+        worktree?: boolean | string;
+      },
     ) => {
       await loopCommand(task, {
         verify: opts.verify,
@@ -414,19 +458,31 @@ program
   .option("--add-budget <usd>", "add USD to the persisted cost budget", parsePositiveFloat)
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("resume a persisted autonomous loop with its remaining limits and verification state")
-  .action(async (loopId: string, opts: { yes?: boolean; model?: string; addIters?: number; addBudget?: number; profile?: string }) => {
-    await loopResumeCommand(loopId, {
-      yes: opts.yes,
-      model: opts.model,
-      addIters: opts.addIters,
-      addBudget: opts.addBudget,
-      profile: opts.profile ?? rootProfile(),
-    });
-  });
+  .action(
+    async (
+      loopId: string,
+      opts: { yes?: boolean; model?: string; addIters?: number; addBudget?: number; profile?: string },
+    ) => {
+      await loopResumeCommand(loopId, {
+        yes: opts.yes,
+        model: opts.model,
+        addIters: opts.addIters,
+        addBudget: opts.addBudget,
+        profile: opts.profile ?? rootProfile(),
+      });
+    },
+  );
 
-program.command("loop-list").description("list persisted loops in the base checkout and retained loop worktrees").action(loopListCommand);
+program
+  .command("loop-list")
+  .description("list persisted loops in the base checkout and retained loop worktrees")
+  .action(loopListCommand);
 program.command("loop-show").argument("<loop-id>").description("show a persisted loop").action(loopShowCommand);
-program.command("loop-delete").argument("<loop-id>").description("delete a persisted loop record").action(loopDeleteCommand);
+program
+  .command("loop-delete")
+  .argument("<loop-id>")
+  .description("delete a persisted loop record")
+  .action(loopDeleteCommand);
 program
   .command("loop-cleanup")
   .argument("<name>", "retained loop worktree name, branch, or path")
@@ -438,13 +494,19 @@ program
 // interval or cron; `schedule run` is the tick the OS scheduler invokes. Every
 // run is headless + cost-bounded (maxCostUsd is required) and produces a normal
 // auditable session. See docs/scheduling.md.
-const schedule = program.command("schedule").description("local scheduled agent jobs (cron/launchd wire `schedule run`)");
+const schedule = program
+  .command("schedule")
+  .description("local scheduled agent jobs (cron/launchd wire `schedule run`)");
 schedule
   .command("add")
   .requiredOption("--task <prompt>", "the prompt the agent runs each tick")
   .option("--every <interval>", "run on an interval: 30m | 2h | 1d (seconds/minutes/hours/days/weeks)")
-  .option("--cron <expr>", "run on a 5-field cron schedule (e.g. \"0 9 * * 1-5\")")
-  .requiredOption("--max-cost <usd>", "REQUIRED per-run cost cap in USD (a scheduled run must be bounded)", parsePositiveFloat)
+  .option("--cron <expr>", 'run on a 5-field cron schedule (e.g. "0 9 * * 1-5")')
+  .requiredOption(
+    "--max-cost <usd>",
+    "REQUIRED per-run cost cap in USD (a scheduled run must be bounded)",
+    parsePositiveFloat,
+  )
   .option("--mode <mode>", "ask (read-only) | edit (may modify files)", "ask")
   .option("--id <name>", "explicit job id (default: derived from the task)")
   .description("register a scheduled job in .seekforge/schedules.json")
@@ -510,7 +572,9 @@ schedule
   .option("--id <id>", "filter by job id")
   .option("--json", "emit JSON")
   .description("show append-only scheduled run history")
-  .action((opts: { id?: string; json?: boolean }) => scheduleHistoryCommand(process.cwd(), opts.id, opts.json === true));
+  .action((opts: { id?: string; json?: boolean }) =>
+    scheduleHistoryCommand(process.cwd(), opts.id, opts.json === true),
+  );
 for (const action of ["install", "uninstall", "status"] as const) {
   schedule
     .command(action)
@@ -774,10 +838,7 @@ program
 // machine output (json/stream-json), headless print mode, and non-TTY stderr
 // so machine consumers see nothing but their data.
 const quietUpdate =
-  machineMode ||
-  process.argv.includes("-p") ||
-  process.argv.includes("--print") ||
-  !process.stderr.isTTY;
+  machineMode || process.argv.includes("-p") || process.argv.includes("--print") || !process.stderr.isTTY;
 const updatePromise = quietUpdate ? Promise.resolve(null) : checkForUpdate(version);
 
 /** True for the shape carried by core's AgentError (code + message + optional hint). */

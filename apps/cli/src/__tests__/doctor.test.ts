@@ -123,7 +123,7 @@ test("configParseCheck fails and lists the unparseable files", () => {
 test("doctor warns instead of crashing when tauri config is null", () => {
   const probes = healthyProbes({
     findRepoRoot: () => "/repo",
-    readText: (path) => path.endsWith("tauri.conf.json") ? "null" : null,
+    readText: (path) => (path.endsWith("tauri.conf.json") ? "null" : null),
   });
   const check = byName(runDoctor("/proj", { apiKey: "sk" }, probes), "updater");
   assert.equal(check.warn, true);

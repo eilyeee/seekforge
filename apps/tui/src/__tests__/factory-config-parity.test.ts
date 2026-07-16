@@ -30,16 +30,12 @@ afterEach(() => createAgentCore.mockClear());
 describe("createTuiAgent config parity", () => {
   it("forwards the flat documented planModel key", () => {
     createTuiAgent({ ...baseOpts, config: { planModel: "deepseek-v4-pro" } } as never);
-    expect(createAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({ planModel: "deepseek-v4-pro" }),
-    );
+    expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ planModel: "deepseek-v4-pro" }));
   });
 
   it("keeps the nested routing.planModel working for back-compat", () => {
     createTuiAgent({ ...baseOpts, config: { routing: { planModel: "nested-model" } } } as never);
-    expect(createAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({ planModel: "nested-model" }),
-    );
+    expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ planModel: "nested-model" }));
   });
 
   it("lets the flat planModel take precedence over the nested one", () => {
@@ -47,16 +43,12 @@ describe("createTuiAgent config parity", () => {
       ...baseOpts,
       config: { planModel: "flat-model", routing: { planModel: "nested-model" } },
     } as never);
-    expect(createAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({ planModel: "flat-model" }),
-    );
+    expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ planModel: "flat-model" }));
   });
 
   it("forwards memoryAutoApproveConfidence when set", () => {
     createTuiAgent({ ...baseOpts, config: { memoryAutoApproveConfidence: 0.9 } } as never);
-    expect(createAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({ memoryAutoApproveConfidence: 0.9 }),
-    );
+    expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ memoryAutoApproveConfidence: 0.9 }));
   });
 
   it("omits planModel and memoryAutoApproveConfidence when unset", () => {

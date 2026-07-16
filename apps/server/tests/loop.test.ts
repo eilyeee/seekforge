@@ -6,7 +6,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import type { LoopOptions, LoopResult } from "@seekforge/core";
-import { startServer, type CreateAgentFn, type ResumeLoopFn, type RunLoopFn, type RunningServer } from "../src/index.js";
+import {
+  startServer,
+  type CreateAgentFn,
+  type ResumeLoopFn,
+  type RunLoopFn,
+  type RunningServer,
+} from "../src/index.js";
 import {
   collectFrames,
   connectWs,
@@ -23,9 +29,12 @@ import {
 const TOKEN = "test-token-loop";
 
 let server: RunningServer | undefined;
-let sockets: WebSocket[] = [];
+const sockets: WebSocket[] = [];
 
-async function boot(opts: { createAgent?: CreateAgentFn; runLoop?: RunLoopFn; resumeLoop?: ResumeLoopFn }, workspace = makeWorkspace()) {
+async function boot(
+  opts: { createAgent?: CreateAgentFn; runLoop?: RunLoopFn; resumeLoop?: ResumeLoopFn },
+  workspace = makeWorkspace(),
+) {
   server = await startServer({
     workspace,
     port: 0,
@@ -83,7 +92,12 @@ describe("loop.resume", () => {
     await rx.waitFor((f) => f.type === "loop.event");
     await rx.waitFor((f) => f.type === "idle");
     expect(seenId).toBe("loop-abc");
-    expect(seen).toMatchObject({ workspace, additionalIterations: 3, additionalCostBudgetUsd: 0.75, approvalMode: "acceptEdits" });
+    expect(seen).toMatchObject({
+      workspace,
+      additionalIterations: 3,
+      additionalCostBudgetUsd: 0.75,
+      approvalMode: "acceptEdits",
+    });
   });
 
   it("rejects unsafe ids and invalid additive limits", async () => {
@@ -134,12 +148,8 @@ describe("loop -> loop.event -> idle", () => {
       (f) => f.type === "loop.event" && (f.event as { type: string }).type === "verify.output",
     );
     expect(output.event).toMatchObject({ type: "verify.output", stream: "stdout", chunk: "running\n" });
-    await rx.waitFor(
-      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "verify",
-    );
-    const done = await rx.waitFor(
-      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "loop.done",
-    );
+    await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "verify");
+    const done = await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "loop.done");
     expect(done.event).toMatchObject({ type: "loop.done", result: { status: "passed" } });
     await rx.waitFor((f) => f.type === "idle");
 
@@ -223,9 +233,7 @@ describe("loop busy rule", () => {
     const { ws, rx } = await open(server.port);
 
     sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x" });
-    await rx.waitFor(
-      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "iteration.start",
-    );
+    await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "iteration.start");
 
     sendFrame(ws, { type: "loop", task: "again", verifyCommand: "x" });
     let busy = await rx.waitFor((f) => f.type === "error");
@@ -259,14 +267,10 @@ describe("loop cancel", () => {
     const { ws, rx } = await open(server.port);
 
     sendFrame(ws, { type: "loop", task: "long job", verifyCommand: "x" });
-    await rx.waitFor(
-      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "iteration.start",
-    );
+    await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "iteration.start");
 
     sendFrame(ws, { type: "cancel" });
-    const done = await rx.waitFor(
-      (f) => f.type === "loop.event" && (f.event as { type: string }).type === "loop.done",
-    );
+    const done = await rx.waitFor((f) => f.type === "loop.event" && (f.event as { type: string }).type === "loop.done");
     expect(done.event).toMatchObject({ type: "loop.done", result: { status: "cancelled" } });
     await rx.waitFor((f) => f.type === "idle");
     await waitUntil(() => abortedSeen);

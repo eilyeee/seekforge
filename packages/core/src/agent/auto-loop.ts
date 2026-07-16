@@ -105,8 +105,11 @@ function diagnosticAggregate(value: string): string {
 }
 
 async function captureVerify(
-  verify: NonNullable<LoopOptions["verify"]>, workspace: string, command: string,
-  signal: AbortSignal | undefined, onOutput: (stream: "stdout" | "stderr", chunk: string) => void,
+  verify: NonNullable<LoopOptions["verify"]>,
+  workspace: string,
+  command: string,
+  signal: AbortSignal | undefined,
+  onOutput: (stream: "stdout" | "stderr", chunk: string) => void,
 ): Promise<{ result: { code: number; output: string }; diagnostics: string }> {
   let streamed = "";
   const capture = (stream: "stdout" | "stderr", chunk: string): void => {
@@ -128,12 +131,14 @@ function workspaceFingerprint(workspace: string): string | null {
     }
     if (stat.isDirectory()) {
       try {
-        hash.update(execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
-          cwd: absolute,
-          encoding: "utf8",
-          maxBuffer: 8 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "ignore"],
-        }));
+        hash.update(
+          execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
+            cwd: absolute,
+            encoding: "utf8",
+            maxBuffer: 8 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "ignore"],
+          }),
+        );
       } catch {
         hash.update("<unreadable-directory>");
       }
@@ -167,24 +172,35 @@ function workspaceFingerprint(workspace: string): string | null {
       ["diff", "--cached", "--name-only", "-z"],
       ["ls-files", "--others", "--exclude-standard", "-z"],
     ];
-    const paths = [...new Set(pathCommands.flatMap((args) =>
-      execFileSync("git", args, {
-        cwd: workspace,
-        encoding: "utf8",
-        maxBuffer: 32 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "ignore"],
-      }).split("\0"),
-    ).filter((path) =>
-      Boolean(path) &&
-      !path.startsWith(".seekforge/loops/") &&
-      !path.startsWith(".seekforge/sessions/") &&
-      !path.startsWith(".seekforge/uploads/"),
-    ))].sort();
-    const relevantStatus = status.split("\0").filter((record) =>
-      !record.includes(" .seekforge/loops/") &&
-      !record.includes(" .seekforge/sessions/") &&
-      !record.includes(" .seekforge/uploads/"),
-    ).join("\0");
+    const paths = [
+      ...new Set(
+        pathCommands
+          .flatMap((args) =>
+            execFileSync("git", args, {
+              cwd: workspace,
+              encoding: "utf8",
+              maxBuffer: 32 * 1024 * 1024,
+              stdio: ["ignore", "pipe", "ignore"],
+            }).split("\0"),
+          )
+          .filter(
+            (path) =>
+              Boolean(path) &&
+              !path.startsWith(".seekforge/loops/") &&
+              !path.startsWith(".seekforge/sessions/") &&
+              !path.startsWith(".seekforge/uploads/"),
+          ),
+      ),
+    ].sort();
+    const relevantStatus = status
+      .split("\0")
+      .filter(
+        (record) =>
+          !record.includes(" .seekforge/loops/") &&
+          !record.includes(" .seekforge/sessions/") &&
+          !record.includes(" .seekforge/uploads/"),
+      )
+      .join("\0");
     hash.update(relevantStatus);
     for (const path of paths) {
       try {
@@ -198,11 +214,18 @@ function workspaceFingerprint(workspace: string): string | null {
     try {
       const hash = createHash("sha256");
       const visit = (directory: string, relative = ""): void => {
-        for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+          a.name.localeCompare(b.name),
+        )) {
           const path = relative ? `${relative}/${entry.name}` : entry.name;
-          if (path === ".git" || path.startsWith(".git/") ||
-              path.startsWith(".seekforge/loops/") || path.startsWith(".seekforge/sessions/") ||
-              path.startsWith(".seekforge/uploads/")) continue;
+          if (
+            path === ".git" ||
+            path.startsWith(".git/") ||
+            path.startsWith(".seekforge/loops/") ||
+            path.startsWith(".seekforge/sessions/") ||
+            path.startsWith(".seekforge/uploads/")
+          )
+            continue;
           const absolute = join(workspace, path);
           if (entry.isDirectory()) visit(absolute, path);
           else if (entry.isFile() || entry.isSymbolicLink()) {
@@ -220,13 +243,16 @@ function workspaceFingerprint(workspace: string): string | null {
 
 function diagnosticPrompt(diagnostics: VerifyDiagnostics, fallback: string): string {
   if (diagnostics.framework === "unknown") return fallback;
-  const tests = diagnostics.failedTests.length > 0
-    ? `Failed tests:\n${diagnostics.failedTests.map((test) => `- ${test}`).join("\n")}\n\n`
-    : "";
-  const locations = diagnostics.diagnostics.length > 0
-    ? `Diagnostics:\n${diagnostics.diagnostics.map((d) =>
-        `- ${d.file ?? "unknown"}${d.line ? `:${d.line}` : ""}: ${d.message}`).join("\n")}\n\n`
-    : "";
+  const tests =
+    diagnostics.failedTests.length > 0
+      ? `Failed tests:\n${diagnostics.failedTests.map((test) => `- ${test}`).join("\n")}\n\n`
+      : "";
+  const locations =
+    diagnostics.diagnostics.length > 0
+      ? `Diagnostics:\n${diagnostics.diagnostics
+          .map((d) => `- ${d.file ?? "unknown"}${d.line ? `:${d.line}` : ""}: ${d.message}`)
+          .join("\n")}\n\n`
+      : "";
   return `${tests}${locations}Output tail:\n${fallback}`;
 }
 
@@ -289,7 +315,11 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   // directory still surfaces via the state-persistence warning below.
   const emit = (event: LoopEvent): void => {
     if (persistenceEnabled) {
-      try { appendLoopLog(opts.workspace, loopId, event); } catch { /* observability only */ }
+      try {
+        appendLoopLog(opts.workspace, loopId, event);
+      } catch {
+        /* observability only */
+      }
     }
     opts.onEvent?.(event);
   };
@@ -308,14 +338,15 @@ async function runAutoLoopWithLease(
   persistenceEnabled: boolean,
   loopId: string,
 ): Promise<LoopResult> {
-  const verify = opts.verify ?? ((workspace, command, signal, onOutput) =>
-    defaultVerify(deps, workspace, command, signal, onOutput));
+  const verify =
+    opts.verify ??
+    ((workspace, command, signal, onOutput) => defaultVerify(deps, workspace, command, signal, onOutput));
   // Defensive: ignore non-positive / non-integer / non-finite limits (the WS
   // entry validates too, but core may be called directly).
   const requestedIterations =
     Number.isInteger(opts.maxIterations ?? opts.resumeState?.maxIterations) &&
     (opts.maxIterations ?? opts.resumeState?.maxIterations ?? 0) > 0
-      ? (opts.maxIterations ?? opts.resumeState?.maxIterations as number)
+      ? (opts.maxIterations ?? (opts.resumeState?.maxIterations as number))
       : 8;
   const maxIterations = Math.min(requestedIterations, MAX_LOOP_ITERATIONS);
   const costBudgetUsd =
@@ -404,7 +435,8 @@ async function runAutoLoopWithLease(
     return finish("cancelled", cancelledVerify);
   }
   try {
-    const captured = await captureVerify(verify,
+    const captured = await captureVerify(
+      verify,
       opts.workspace,
       opts.verifyCommand,
       opts.signal,
@@ -428,9 +460,7 @@ async function runAutoLoopWithLease(
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousWorkspace = workspaceFingerprint(opts.workspace);
-  const progressFingerprints = [
-    `${previousDiagnostics.fingerprint}:${previousWorkspace ?? "unknown-workspace"}`,
-  ];
+  const progressFingerprints = [`${previousDiagnostics.fingerprint}:${previousWorkspace ?? "unknown-workspace"}`];
 
   for (let i = iterations + 1; i <= maxIterations; i++) {
     if (opts.signal?.aborted) {
@@ -448,9 +478,7 @@ async function runAutoLoopWithLease(
 
     let runCost = 0;
     const budgetController = new AbortController();
-    const runSignal = opts.signal
-      ? AbortSignal.any([opts.signal, budgetController.signal])
-      : budgetController.signal;
+    const runSignal = opts.signal ? AbortSignal.any([opts.signal, budgetController.signal]) : budgetController.signal;
     const events = agent.runTask({
       task: continuation,
       projectPath: opts.workspace,
@@ -487,7 +515,8 @@ async function runAutoLoopWithLease(
     let v: { code: number; output: string };
     let verifyDiagnostics = "";
     try {
-      const captured = await captureVerify(verify,
+      const captured = await captureVerify(
+        verify,
         opts.workspace,
         opts.verifyCommand,
         opts.signal,
@@ -521,8 +550,8 @@ async function runAutoLoopWithLease(
     // Structured diagnostics ignore incidental timing/format noise. Pair them
     // with repository content so repeated edits still count as progress.
     const sameFailure = diagnostics.fingerprint === previousDiagnostics.fingerprint;
-    const sameWorkspace = currentWorkspace !== null && previousWorkspace !== null &&
-      currentWorkspace === previousWorkspace;
+    const sameWorkspace =
+      currentWorkspace !== null && previousWorkspace !== null && currentWorkspace === previousWorkspace;
     progressFingerprints.push(`${diagnostics.fingerprint}:${currentWorkspace ?? "unknown-workspace"}`);
     if (progressFingerprints.length > 8) progressFingerprints.shift();
     const cyclePeriod = detectActionCycle(progressFingerprints);
@@ -547,20 +576,22 @@ export async function resumeAutoLoop(
 ): Promise<LoopResult> {
   const state = loadLoopState(opts.workspace, loopId);
   if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
-  if (opts.additionalIterations !== undefined &&
-      (!Number.isSafeInteger(opts.additionalIterations) || opts.additionalIterations <= 0)) {
+  if (
+    opts.additionalIterations !== undefined &&
+    (!Number.isSafeInteger(opts.additionalIterations) || opts.additionalIterations <= 0)
+  ) {
     throw new Error("additionalIterations must be a positive safe integer");
   }
-  if (opts.additionalCostBudgetUsd !== undefined &&
-      (!Number.isFinite(opts.additionalCostBudgetUsd) || opts.additionalCostBudgetUsd <= 0)) {
+  if (
+    opts.additionalCostBudgetUsd !== undefined &&
+    (!Number.isFinite(opts.additionalCostBudgetUsd) || opts.additionalCostBudgetUsd <= 0)
+  ) {
     throw new Error("additionalCostBudgetUsd must be a finite positive number");
   }
   const addedIterations = opts.additionalIterations ?? 0;
   const addedBudget = opts.additionalCostBudgetUsd ?? 0;
   const maxIterations = Math.min(MAX_LOOP_ITERATIONS, state.maxIterations + addedIterations);
-  const costBudgetUsd = addedBudget > 0
-    ? (state.costBudgetUsd ?? state.costUsd) + addedBudget
-    : state.costBudgetUsd;
+  const costBudgetUsd = addedBudget > 0 ? (state.costBudgetUsd ?? state.costUsd) + addedBudget : state.costBudgetUsd;
   if (costBudgetUsd !== null && !Number.isFinite(costBudgetUsd)) {
     throw new Error("resulting cost budget must be finite");
   }

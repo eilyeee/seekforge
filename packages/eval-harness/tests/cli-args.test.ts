@@ -31,9 +31,7 @@ describe("parseArgs", () => {
   });
 
   it("parses continuous-eval options", () => {
-    const args = parseArgs([
-      "--suite", "nightly", "--repeat", "3", "--junit", "out/junit.xml", "--require-api-key",
-    ]);
+    const args = parseArgs(["--suite", "nightly", "--repeat", "3", "--junit", "out/junit.xml", "--require-api-key"]);
     expect(args.suite).toBe("nightly");
     expect(args.repeat).toBe(3);
     expect(args.junit).toBe("out/junit.xml");

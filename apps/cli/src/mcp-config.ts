@@ -25,12 +25,7 @@ export function mcpConfigPath(projectPath: string, global: boolean): string {
  * server with that name already exists (callers can offer --force later) or if
  * the command is empty. Pure — does not touch disk.
  */
-export function addMcpServer(
-  doc: ConfigDoc,
-  name: string,
-  command: string,
-  args: string[],
-): ConfigDoc {
+export function addMcpServer(doc: ConfigDoc, name: string, command: string, args: string[]): ConfigDoc {
   if (!name.trim()) throw new Error("server name must not be empty");
   if (!command.trim()) throw new Error("command must not be empty");
   const servers = doc.mcpServers ?? {};

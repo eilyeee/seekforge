@@ -146,7 +146,10 @@ export function buildAgentDeps(
   };
 }
 
-async function prepareAgentDeps(opts: CreateAgentOptions, signal: AbortSignal | undefined = opts.signal): Promise<{
+async function prepareAgentDeps(
+  opts: CreateAgentOptions,
+  signal: AbortSignal | undefined = opts.signal,
+): Promise<{
   deps: AgentCoreDeps & { runtime?: RuntimeClient };
   entries: McpClientEntry[];
   disposeMcp: () => void;
@@ -191,7 +194,10 @@ export const createDefaultAgent: CreateAgentFn = async (opts) => {
   return {
     agent,
     expandTask: (task, signal) => expandMcpResources(task, entries, signal),
-    dispose: () => { deps.runtime?.dispose(); disposeMcp(); },
+    dispose: () => {
+      deps.runtime?.dispose();
+      disposeMcp();
+    },
   };
 };
 
@@ -203,10 +209,16 @@ export const createDefaultAgent: CreateAgentFn = async (opts) => {
 export const runDefaultLoop: RunLoopFn = async (opts, loopOpts) => {
   const { deps, entries, disposeMcp } = await prepareAgentDeps(opts, loopOpts.signal);
   const task = await expandMcpResources(loopOpts.task, entries, loopOpts.signal);
-  return runAutoLoop(deps, { ...loopOpts, task }).finally(() => { deps.runtime?.dispose(); disposeMcp(); });
+  return runAutoLoop(deps, { ...loopOpts, task }).finally(() => {
+    deps.runtime?.dispose();
+    disposeMcp();
+  });
 };
 
 export const resumeDefaultLoop: ResumeLoopFn = async (opts, loopId, loopOpts) => {
   const { deps, disposeMcp } = await prepareAgentDeps(opts, loopOpts.signal);
-  return resumeAutoLoop(deps, loopId, loopOpts).finally(() => { deps.runtime?.dispose(); disposeMcp(); });
+  return resumeAutoLoop(deps, loopId, loopOpts).finally(() => {
+    deps.runtime?.dispose();
+    disposeMcp();
+  });
 };

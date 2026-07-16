@@ -10,7 +10,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
-import { createDefaultAgent, resumeDefaultLoop, runDefaultLoop, type CreateAgentFn, type ResumeLoopFn, type RunLoopFn } from "./agent.js";
+import {
+  createDefaultAgent,
+  resumeDefaultLoop,
+  runDefaultLoop,
+  type CreateAgentFn,
+  type ResumeLoopFn,
+  type RunLoopFn,
+} from "./agent.js";
 import { handleApi, sendApiError } from "./rest.js";
 import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
@@ -152,14 +159,16 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, {
-      registry,
-      createAgent,
-      runLoop,
-      resumeLoop,
-      runManager,
-      trackOperation: (operation) => coordinator.track(operation),
-    }));
+    wss.handleUpgrade(req, socket, head, (ws) =>
+      handleConnection(ws, {
+        registry,
+        createAgent,
+        runLoop,
+        resumeLoop,
+        runManager,
+        trackOperation: (operation) => coordinator.track(operation),
+      }),
+    );
   });
 
   await new Promise<void>((resolveListen, rejectListen) => {
@@ -201,9 +210,12 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
 /** Signed GitHub trigger calls authenticate in the trigger route using its per-trigger secret. */
 function isGitHubTriggerRequest(req: IncomingMessage, url: URL): boolean {
-  return req.method === "POST" && /^\/api\/triggers\/[^/]+$/.test(url.pathname) &&
+  return (
+    req.method === "POST" &&
+    /^\/api\/triggers\/[^/]+$/.test(url.pathname) &&
     typeof req.headers["x-hub-signature-256"] === "string" &&
-    typeof req.headers["x-github-delivery"] === "string";
+    typeof req.headers["x-github-delivery"] === "string"
+  );
 }
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {

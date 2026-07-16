@@ -16,12 +16,7 @@ import { seekforgeHome } from "../memory/store.js";
 export type OutputStyle = "default" | "concise" | "explanatory" | "learning";
 
 /** All built-in styles, in canonical order (default first). */
-export const OUTPUT_STYLES: readonly OutputStyle[] = [
-  "default",
-  "concise",
-  "explanatory",
-  "learning",
-] as const;
+export const OUTPUT_STYLES: readonly OutputStyle[] = ["default", "concise", "explanatory", "learning"] as const;
 
 /** Type guard: is `s` a built-in output style? */
 export function isOutputStyle(s: string): s is OutputStyle {
@@ -37,7 +32,7 @@ const ADDENDA: Readonly<Record<Exclude<OutputStyle, "default">, string>> = {
     "Be maximally terse. Hard rules:",
     "- Lead with the answer on the FIRST line, then stop. No preamble, no restating the question, no closing summary.",
     "- Default to ONE to THREE sentences. Use a one-line answer whenever it is correct and complete.",
-    "- No filler (\"Great question\", \"Sure\", \"I'll help…\"). No reasoning narration — give the conclusion, not the path to it.",
+    '- No filler ("Great question", "Sure", "I\'ll help…"). No reasoning narration — give the conclusion, not the path to it.',
     "- Use a bullet list only when the answer is inherently a list; otherwise plain sentences.",
   ].join("\n"),
 
@@ -47,7 +42,7 @@ const ADDENDA: Readonly<Record<Exclude<OutputStyle, "default">, string>> = {
     "Teach as you answer — the user wants the WHY, not just the what. Hard rules:",
     "- Give the answer, then ALWAYS explain the reasoning behind it: why this and not the alternatives.",
     "- Explicitly call out non-obvious decisions, trade-offs, and insights about how the codebase works.",
-    "- When relevant, add a short \"Why this works\" or \"Trade-off\" note. Aim noticeably richer than a bare answer.",
+    '- When relevant, add a short "Why this works" or "Trade-off" note. Aim noticeably richer than a bare answer.',
     "- Keep it structured and readable; do not pad with filler, but do not under-explain either.",
   ].join("\n"),
 
@@ -68,9 +63,7 @@ const ADDENDA: Readonly<Record<Exclude<OutputStyle, "default">, string>> = {
  */
 export function outputStylePrompt(style: string): string | undefined {
   if (!isOutputStyle(style)) {
-    throw new Error(
-      `Unknown output style: ${JSON.stringify(style)}. Expected one of: ${OUTPUT_STYLES.join(", ")}.`,
-    );
+    throw new Error(`Unknown output style: ${JSON.stringify(style)}. Expected one of: ${OUTPUT_STYLES.join(", ")}.`);
   }
   if (style === "default") return undefined;
   return ADDENDA[style];
@@ -84,10 +77,7 @@ function stripFrontmatter(md: string): string {
 
 /** The two directories custom output styles are read from (project wins). */
 function outputStyleDirs(projectPath: string): string[] {
-  return [
-    join(projectPath, ".seekforge", "output-styles"),
-    join(seekforgeHome(), ".seekforge", "output-styles"),
-  ];
+  return [join(projectPath, ".seekforge", "output-styles"), join(seekforgeHome(), ".seekforge", "output-styles")];
 }
 
 /**

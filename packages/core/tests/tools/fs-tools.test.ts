@@ -10,10 +10,7 @@ const dispatcher = createDefaultDispatcher();
 describe("write_file", () => {
   it("creates a file with parent directories", async () => {
     const ws = makeWorkspace();
-    const res = await dispatcher.execute(
-      call("write_file", { path: "deep/dir/a.txt", content: "hello" }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("write_file", { path: "deep/dir/a.txt", content: "hello" }), makeCtx(ws));
     expect(res.ok).toBe(true);
     expect(fs.readFileSync(path.join(ws, "deep/dir/a.txt"), "utf8")).toBe("hello");
   });
@@ -21,10 +18,7 @@ describe("write_file", () => {
   it("fails with 'exists' when the file exists and overwrite is not set", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "a.txt"), "old");
-    const res = await dispatcher.execute(
-      call("write_file", { path: "a.txt", content: "new" }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "new" }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("exists");
     expect(fs.readFileSync(path.join(ws, "a.txt"), "utf8")).toBe("old");
@@ -57,9 +51,7 @@ describe("search_text", () => {
     const res = await dispatcher.execute(call("search_text", { pattern: "needle" }), makeCtx(ws));
     expect(res.ok).toBe(true);
     const data = res.data as { matches: Array<{ file: string; line: number; text: string }> };
-    expect(data.matches).toEqual([
-      { file: "src/a.ts", line: 1, text: "const needle = 1;" },
-    ]);
+    expect(data.matches).toEqual([{ file: "src/a.ts", line: 1, text: "const needle = 1;" }]);
   });
 
   it("respects the default ignore list", async () => {
@@ -90,10 +82,7 @@ describe("search_text (grep parity)", () => {
   function setup(): string {
     const ws = makeWorkspace();
     fs.mkdirSync(path.join(ws, "src"));
-    fs.writeFileSync(
-      path.join(ws, "src/a.ts"),
-      "line1\nline2\nneedle here\nline4\nline5\n",
-    );
+    fs.writeFileSync(path.join(ws, "src/a.ts"), "line1\nline2\nneedle here\nline4\nline5\n");
     fs.writeFileSync(path.join(ws, "src/b.js"), "another needle\n");
     fs.writeFileSync(path.join(ws, "notes.md"), "no match here\n");
     return ws;
@@ -118,10 +107,7 @@ describe("search_text (grep parity)", () => {
 
   it("glob filter restricts which files are searched", async () => {
     const ws = setup();
-    const res = await dispatcher.execute(
-      call("search_text", { pattern: "needle", glob: "*.ts" }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("search_text", { pattern: "needle", glob: "*.ts" }), makeCtx(ws));
     const data = res.data as { matches: Array<{ file: string }> };
     expect(data.matches.map((m) => m.file)).toEqual(["src/a.ts"]);
   });
@@ -140,10 +126,7 @@ describe("search_text (grep parity)", () => {
   it("multiline lets the pattern span newlines", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "f.ts"), "start\nfoo\nbar\nend\n");
-    const single = await dispatcher.execute(
-      call("search_text", { pattern: "foo\\nbar", path: "f.ts" }),
-      makeCtx(ws),
-    );
+    const single = await dispatcher.execute(call("search_text", { pattern: "foo\\nbar", path: "f.ts" }), makeCtx(ws));
     expect((single.data as { matches: unknown[] }).matches).toEqual([]);
     const multi = await dispatcher.execute(
       call("search_text", { pattern: "foo\\nbar", path: "f.ts", multiline: true }),
@@ -158,10 +141,7 @@ describe("search_text (grep parity)", () => {
     const ws = makeWorkspace();
     const lines = Array.from({ length: 10 }, () => "needle").join("\n");
     fs.writeFileSync(path.join(ws, "many.txt"), lines + "\n");
-    const res = await dispatcher.execute(
-      call("search_text", { pattern: "needle", maxMatches: 3 }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("search_text", { pattern: "needle", maxMatches: 3 }), makeCtx(ws));
     const data = res.data as { matches: unknown[]; truncated: boolean };
     expect(data.matches).toHaveLength(3);
     expect(data.truncated).toBe(true);
@@ -187,10 +167,7 @@ describe("read_file", () => {
   it("reads a line range", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "f.txt"), "l1\nl2\nl3\nl4\n");
-    const res = await dispatcher.execute(
-      call("read_file", { path: "f.txt", offset: 2, limit: 2 }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("read_file", { path: "f.txt", offset: 2, limit: 2 }), makeCtx(ws));
     expect(res.ok).toBe(true);
     expect((res.data as { content: string }).content).toBe("l2\nl3");
   });
@@ -205,8 +182,7 @@ describe("read_file", () => {
 
   it("appends a symbol outline when a code file is truncated", async () => {
     const ws = makeWorkspace();
-    const big =
-      "export function head() {}\n" + "// filler line padding\n".repeat(3000) + "export function tail() {}\n";
+    const big = "export function head() {}\n" + "// filler line padding\n".repeat(3000) + "export function tail() {}\n";
     fs.writeFileSync(path.join(ws, "big.ts"), big);
     const res = await dispatcher.execute(call("read_file", { path: "big.ts" }), makeCtx(ws));
     expect(res.ok).toBe(true);
@@ -461,7 +437,10 @@ describe("unifiedDiff prefix/suffix trimming (must stay byte-identical to the na
     const after = `${Array.from({ length: 4001 }, (_, i) => (i === 7 ? "EDIT" : `l${i}`)).join("\n")}\n`;
     const diff = unifiedDiff(before, after, "f.txt");
     // header(2) + hunk(1); the preview cap appends a "@@ … truncated @@" marker.
-    const bodyLines = diff.split("\n").slice(3).filter((l) => !l.startsWith("@@"));
+    const bodyLines = diff
+      .split("\n")
+      .slice(3)
+      .filter((l) => !l.startsWith("@@"));
     // Untrimmed behavior preserved: everything deleted then re-added, no context lines.
     expect(bodyLines.length).toBeGreaterThan(0);
     expect(bodyLines.every((l) => l.startsWith("-") || l.startsWith("+"))).toBe(true);

@@ -27,7 +27,9 @@ export function PlanCard({ items }: { items: PlanItem[] }) {
         {items.map((item, i) => (
           <li key={i} className="flex items-start gap-2 text-xs leading-5">
             <span className={`select-none ${STATUS_CLASS[item.status]}`}>{STATUS_GLYPH[item.status]}</span>
-            <span className={item.status === "done" ? "text-tertiary line-through decoration-current/40" : "text-secondary"}>
+            <span
+              className={item.status === "done" ? "text-tertiary line-through decoration-current/40" : "text-secondary"}
+            >
               {item.step}
             </span>
           </li>

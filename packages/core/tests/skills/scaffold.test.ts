@@ -38,9 +38,7 @@ describe("createSkillScaffold", () => {
   it("produces a scaffold that loadSkillsFromDirs accepts", () => {
     const ws = makeTempDir();
     createSkillScaffold(ws, "fresh");
-    const skills = loadSkillsFromDirs([
-      { scope: "project", path: path.join(ws, ".seekforge", "skills") },
-    ]);
+    const skills = loadSkillsFromDirs([{ scope: "project", path: path.join(ws, ".seekforge", "skills") }]);
     const fresh = skills.find((s) => s.id === "fresh");
     expect(fresh).toMatchObject({ scope: "project", priority: 50, risk: "medium" });
   });
@@ -51,12 +49,9 @@ describe("createSkillScaffold", () => {
     expect(() => createSkillScaffold(ws, "dup")).toThrow(/already exists/);
   });
 
-  it.each(["", "Bad", "-leading", "has space", "中文", "a_b"])(
-    "rejects invalid id %j",
-    (id) => {
-      const ws = makeTempDir();
-      expect(() => createSkillScaffold(ws, id)).toThrow(/invalid skill id/);
-      expect(fs.existsSync(path.join(ws, ".seekforge"))).toBe(false);
-    },
-  );
+  it.each(["", "Bad", "-leading", "has space", "中文", "a_b"])("rejects invalid id %j", (id) => {
+    const ws = makeTempDir();
+    expect(() => createSkillScaffold(ws, id)).toThrow(/invalid skill id/);
+    expect(fs.existsSync(path.join(ws, ".seekforge"))).toBe(false);
+  });
 });

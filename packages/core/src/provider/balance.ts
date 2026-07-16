@@ -19,10 +19,7 @@ export type AccountBalance = {
  * unexpected shape) — callers should treat null as "balance unknown" and
  * keep showing the previous value, never fail the session over it.
  */
-export async function fetchBalance(
-  apiKey: string,
-  baseUrl?: string,
-): Promise<AccountBalance | null> {
+export async function fetchBalance(apiKey: string, baseUrl?: string): Promise<AccountBalance | null> {
   const base = (baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), BALANCE_TIMEOUT_MS);

@@ -24,7 +24,12 @@ describe("mcpPromptCommandSpecs", () => {
   it("emits one tools-group spec per prompt, with [args] only when arguments are declared", () => {
     const specs = mcpPromptCommandSpecs(PROMPTS);
     expect(specs).toEqual([
-      { name: "mcp:fake-server:greet-user", args: "[args]", summary: "(mcp fake-server) Greets a user.", group: "tools" },
+      {
+        name: "mcp:fake-server:greet-user",
+        args: "[args]",
+        summary: "(mcp fake-server) Greets a user.",
+        group: "tools",
+      },
       { name: "mcp:fake:summarize", summary: "(mcp fake) summarize", group: "tools" },
     ]);
   });
@@ -97,8 +102,6 @@ describe("formatMcpPromptLines", () => {
   });
 
   it("returns a single notice when there are no prompts", () => {
-    expect(formatMcpPromptLines([])).toEqual([
-      "no MCP prompts available (no servers, or none expose prompts)",
-    ]);
+    expect(formatMcpPromptLines([])).toEqual(["no MCP prompts available (no servers, or none expose prompts)"]);
   });
 });

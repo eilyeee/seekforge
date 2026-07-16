@@ -74,7 +74,10 @@ describe("append-only security store", () => {
     seed();
     expect(() => changeFindingStatus(workspace, "sf-test", "reopened", "bad transition")).toThrow(/invalid/);
     const target = securityEventsPath(workspace);
-    writeFileSync(target, `${readFileSync(target, "utf8")}{"version":1,"id":"x","at":"2026-01-01T00:00:00.000Z","type":"finding.detected","finding":null}\n`);
+    writeFileSync(
+      target,
+      `${readFileSync(target, "utf8")}{"version":1,"id":"x","at":"2026-01-01T00:00:00.000Z","type":"finding.detected","finding":null}\n`,
+    );
     expect(() => readSecurityEvents(workspace)).toThrow(/invalid security event/);
   });
 });

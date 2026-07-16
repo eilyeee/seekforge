@@ -56,10 +56,7 @@ describe("ask_user tool", () => {
       },
       policy: { approvalMode: "manual", mode: "ask" },
     });
-    const res = await dispatcher.execute(
-      call("ask_user", { question: "a or b?", options: ["a", "b"] }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("ask_user", { question: "a or b?", options: ["a", "b"] }), ctx);
     expect(res.ok).toBe(true);
     expect(res.meta?.permission).toBe("readonly");
   });

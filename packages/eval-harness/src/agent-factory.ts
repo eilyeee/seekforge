@@ -11,10 +11,7 @@ import type { EvalConfig } from "./config.js";
 import type { CreateAgentFn } from "./task-runner.js";
 import type { AgentBuildOptions } from "./variants.js";
 
-export function createDefaultAgentFactory(
-  config: EvalConfig,
-  options: AgentBuildOptions = {},
-): CreateAgentFn {
+export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuildOptions = {}): CreateAgentFn {
   return () => {
     if (!config.apiKey) {
       throw new Error("no DeepSeek API key configured (env DEEPSEEK_API_KEY or .seekforge/config.json)");
@@ -41,9 +38,7 @@ export function createDefaultAgentFactory(
       // Never pollute fixtures (or anything else) with extracted memory.
       extractMemory: false,
       ...(options.compaction !== undefined ? { compaction: options.compaction } : {}),
-      ...(options.contextWindowTokens !== undefined
-        ? { contextWindowTokens: options.contextWindowTokens }
-        : {}),
+      ...(options.contextWindowTokens !== undefined ? { contextWindowTokens: options.contextWindowTokens } : {}),
       ...(options.escalateOnFailure ? { escalateOnFailure: true } : {}),
       ...(options.injectMemory === false ? { injectMemory: false } : {}),
       ...(options.verifyCommand ? { verifyCommand: options.verifyCommand } : {}),
@@ -56,9 +51,7 @@ export function createDefaultAgentFactory(
       ...(options.guardNoProgress ? { guardNoProgress: true } : {}),
       ...(options.planModel ? { planModel: options.planModel } : {}),
       // Same key/endpoint, different model — needed for plan/escalation.
-      ...(options.planModel
-        ? { providerForModel: (m: string) => buildProvider(providerInput, m) }
-        : {}),
+      ...(options.planModel ? { providerForModel: (m: string) => buildProvider(providerInput, m) } : {}),
     };
     return { agent: createAgentCore(deps), deps };
   };

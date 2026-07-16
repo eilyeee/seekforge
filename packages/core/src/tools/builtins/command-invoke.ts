@@ -4,7 +4,7 @@ import { ToolError } from "../errors.js";
 import { expandUserCommand, loadUserCommands, type UserCommand } from "../../agent/commands.js";
 
 const runUserCommandSchema = z.object({
-  name: z.string().min(1).describe("The user-defined command name to invoke (e.g. \"review\" or \"frontend:build\")."),
+  name: z.string().min(1).describe('The user-defined command name to invoke (e.g. "review" or "frontend:build").'),
   arguments: z
     .string()
     .optional()

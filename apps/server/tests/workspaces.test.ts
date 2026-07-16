@@ -16,7 +16,7 @@ import {
 const TOKEN = "test-token-ws-registry";
 
 let server: RunningServer | undefined;
-let sockets: WebSocket[] = [];
+const sockets: WebSocket[] = [];
 
 afterEach(async () => {
   for (const ws of sockets.splice(0)) ws.terminate();

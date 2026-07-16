@@ -17,8 +17,7 @@ export default defineConfig({
         // Split the rarely-changing React runtime into its own chunk so app
         // edits don't bust its cache. (CodeMirror is already split out via the
         // lazily-imported editor.) Rolldown only accepts the function form.
-        manualChunks: (id: string) =>
-          /node_modules\/(react|react-dom|scheduler)\//.test(id) ? "react" : undefined,
+        manualChunks: (id: string) => (/node_modules\/(react|react-dom|scheduler)\//.test(id) ? "react" : undefined),
       },
     },
   },

@@ -15,10 +15,7 @@ import type { ChatItem, ChatState } from "./events";
  * Ordinal of a user chat item among ALL user items (0-based), plus the
  * total user-item count. Null when itemId is not a user item.
  */
-export function userTurnOf(
-  items: readonly ChatItem[],
-  itemId: number,
-): { turn: number; count: number } | null {
+export function userTurnOf(items: readonly ChatItem[], itemId: number): { turn: number; count: number } | null {
   let turn = -1;
   let count = 0;
   for (const item of items) {

@@ -29,8 +29,7 @@ const MAX_CAPTURED = 200;
 const MAX_SNAPSHOT_CHARS = 12_000;
 const MAX_ELEMENTS = 100;
 
-const INSTALL_HINT =
-  "browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium";
+const INSTALL_HINT = "browser tools need Playwright: pnpm add -w playwright-core && npx playwright install chromium";
 
 /** Browser verification may target a developer's loopback server, but no other private network. */
 export function checkBrowserUrl(raw: string): URL {
@@ -142,7 +141,10 @@ async function getPage(): Promise<PlaywrightPage> {
     });
     page.on("requestfailed", (req) => {
       if (failedRequests.length < MAX_CAPTURED) {
-        failedRequests.push({ url: String(req.url?.() ?? ""), failure: String(req.failure?.()?.errorText ?? "failed") });
+        failedRequests.push({
+          url: String(req.url?.() ?? ""),
+          failure: String(req.failure?.()?.errorText ?? "failed"),
+        });
       }
     });
   }
@@ -271,9 +273,7 @@ const screenshotSchema = z.object({
   path: z
     .string()
     .optional()
-    .describe(
-      "Optional workspace-relative path for the PNG (default: .seekforge/uploads/screenshot-<ts>.png).",
-    ),
+    .describe("Optional workspace-relative path for the PNG (default: .seekforge/uploads/screenshot-<ts>.png)."),
 });
 
 const browserScreenshot = defineTool({
@@ -338,9 +338,7 @@ const browserSnapshot = defineTool({
         .map((el) => textOf(el) || el.value || "")
         .filter(Boolean);
       const inputs = take(Array.from(doc.querySelectorAll("input, textarea, select"))).map((el) =>
-        [el.getAttribute("name"), el.getAttribute("type"), el.getAttribute("placeholder")]
-          .filter(Boolean)
-          .join(" "),
+        [el.getAttribute("name"), el.getAttribute("type"), el.getAttribute("placeholder")].filter(Boolean).join(" "),
       );
       const text = (doc.body?.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
       return { title: doc.title, url: g.location.href, headings, links, buttons, inputs, text };
@@ -354,9 +352,7 @@ const browserSnapshot = defineTool({
       text: string;
     };
     const text =
-      snap.text.length > MAX_SNAPSHOT_CHARS
-        ? snap.text.slice(0, MAX_SNAPSHOT_CHARS) + "\n… [truncated]"
-        : snap.text;
+      snap.text.length > MAX_SNAPSHOT_CHARS ? snap.text.slice(0, MAX_SNAPSHOT_CHARS) + "\n… [truncated]" : snap.text;
     return { data: { ...snap, text } };
   },
 });
@@ -381,9 +377,4 @@ const browserConsole = defineTool({
   },
 });
 
-export const browserTools: ToolSpec[] = [
-  browserNavigate,
-  browserScreenshot,
-  browserSnapshot,
-  browserConsole,
-];
+export const browserTools: ToolSpec[] = [browserNavigate, browserScreenshot, browserSnapshot, browserConsole];

@@ -99,12 +99,7 @@ describe("compactProjectMemory", () => {
     const ws = makeWorkspace();
     writeProjectMemory(
       ws,
-      [
-        "# Project Memory",
-        "- [command] run the test suite",
-        "- [convention] run the test suite",
-        "",
-      ].join("\n"),
+      ["# Project Memory", "- [command] run the test suite", "- [convention] run the test suite", ""].join("\n"),
     );
     const res = compactProjectMemory(ws);
     expect(res.after).toBe(2);

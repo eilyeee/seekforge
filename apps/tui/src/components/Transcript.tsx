@@ -85,18 +85,39 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
         <Box flexDirection="column" marginTop={1}>
           <Text>
             <Text color={color}>●</Text>{" "}
-            <Text color={ACCENT} bold>[{item.dispatchId}] {item.agentId}</Text>{" "}
+            <Text color={ACCENT} bold>
+              [{item.dispatchId}] {item.agentId}
+            </Text>{" "}
             <Text color={color}>{item.status}</Text>
           </Text>
-          <Text dimColor>{"  "}{item.task}</Text>
-          {item.subSessionId ? <Text dimColor>{"  session "}{item.subSessionId}</Text> : null}
+          <Text dimColor>
+            {"  "}
+            {item.task}
+          </Text>
+          {item.subSessionId ? (
+            <Text dimColor>
+              {"  session "}
+              {item.subSessionId}
+            </Text>
+          ) : null}
           {shownSteps.map((step, index) => (
-            <Text key={`${index}-${step}`} dimColor>{"    • "}{step}</Text>
+            <Text key={`${index}-${step}`} dimColor>
+              {"    • "}
+              {step}
+            </Text>
           ))}
           {!verbose && item.steps.length > shownSteps.length ? (
-            <Text dimColor>{"    … "}{item.steps.length - shownSteps.length} earlier steps</Text>
+            <Text dimColor>
+              {"    … "}
+              {item.steps.length - shownSteps.length} earlier steps
+            </Text>
           ) : null}
-          {item.resultSummary ? <Text color={item.status === "done" ? undefined : "red"}>{"  "}{item.resultSummary}</Text> : null}
+          {item.resultSummary ? (
+            <Text color={item.status === "done" ? undefined : "red"}>
+              {"  "}
+              {item.resultSummary}
+            </Text>
+          ) : null}
         </Box>
       );
     }
@@ -122,7 +143,9 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
         </Text>
       );
     case "diff":
-      return <DiffCard path={item.path} lines={item.lines} {...(verbose ? { maxLines: Number.MAX_SAFE_INTEGER } : {})} />;
+      return (
+        <DiffCard path={item.path} lines={item.lines} {...(verbose ? { maxLines: Number.MAX_SAFE_INTEGER } : {})} />
+      );
     case "shell": {
       const lines = item.output.trimEnd().split("\n");
       const shown = verbose ? lines : lines.slice(0, 30);
@@ -133,7 +156,7 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
               ${" "}
             </Text>
             <Text bold>{item.command}</Text>
-            {item.exitCode !== 0 ? <Text color="red">  (exit {item.exitCode})</Text> : null}
+            {item.exitCode !== 0 ? <Text color="red"> (exit {item.exitCode})</Text> : null}
           </Text>
           {shown.map((l, i) => (
             <Text key={i} dimColor>
@@ -141,12 +164,16 @@ function Item({ item, verbose }: { item: ChatItem; verbose: boolean }): React.Re
               {l}
             </Text>
           ))}
-          {lines.length > shown.length ? <Text dimColor>  … {lines.length - shown.length} more lines</Text> : null}
+          {lines.length > shown.length ? <Text dimColor> … {lines.length - shown.length} more lines</Text> : null}
         </Box>
       );
     }
     case "notice":
-      return <Text color={item.tone === "error" ? "red" : undefined} dimColor={item.tone === "dim"}>{item.text}</Text>;
+      return (
+        <Text color={item.tone === "error" ? "red" : undefined} dimColor={item.tone === "dim"}>
+          {item.text}
+        </Text>
+      );
     case "report":
       return <ReportCard report={item.report} />;
     default:

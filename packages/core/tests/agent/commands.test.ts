@@ -106,11 +106,7 @@ describe("loadUserCommands", () => {
   });
 
   it("parses disable-model-invocation: true and omits it otherwise", () => {
-    writeCmd(
-      workspace,
-      "private.md",
-      ["---", "disable-model-invocation: true", "---", "secret workflow"].join("\n"),
-    );
+    writeCmd(workspace, "private.md", ["---", "disable-model-invocation: true", "---", "secret workflow"].join("\n"));
     writeCmd(workspace, "open.md", ["---", "description: open", "---", "do it"].join("\n"));
     const cmds = loadUserCommands(workspace);
     expect(cmds.find((c) => c.name === "private")?.disableModelInvocation).toBe(true);
@@ -137,7 +133,9 @@ describe("loadUserCommands", () => {
     mkdirSync(sub, { recursive: true });
     writeFileSync(join(sub, "build.md"), "Build the frontend");
     writeCmd(workspace, "top.md", "Top-level");
-    const names = loadUserCommands(workspace).map((c) => c.name).sort();
+    const names = loadUserCommands(workspace)
+      .map((c) => c.name)
+      .sort();
     expect(names).toEqual(["frontend:build", "top"]);
   });
 });
@@ -189,15 +187,11 @@ describe("expandUserCommand", () => {
   });
 
   it("fills positional $1..$9 from whitespace-split args", () => {
-    expect(expandUserCommand({ body: "Compare $1 with $2" }, "main feature")).toBe(
-      "Compare main with feature",
-    );
+    expect(expandUserCommand({ body: "Compare $1 with $2" }, "main feature")).toBe("Compare main with feature");
   });
 
   it("leaves missing positionals empty and supports $1 + $ARGUMENTS together", () => {
-    expect(expandUserCommand({ body: "First $1; all: $ARGUMENTS" }, "a b c")).toBe(
-      "First a; all: a b c",
-    );
+    expect(expandUserCommand({ body: "First $1; all: $ARGUMENTS" }, "a b c")).toBe("First a; all: a b c");
     expect(expandUserCommand({ body: "Compare $1 with $2" }, "only")).toBe("Compare only with ");
   });
 });

@@ -1,10 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  constants,
-  mkdirSync,
-  readSync,
-  writeSync,
-} from "node:fs";
+import { constants, mkdirSync, readSync, writeSync } from "node:fs";
 import { extname } from "node:path";
 import {
   closeVerifiedFile,

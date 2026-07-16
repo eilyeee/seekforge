@@ -98,12 +98,7 @@ function extOf(rel: string): string {
   return rel.slice(rel.lastIndexOf(".") + 1).toLowerCase();
 }
 
-const DECLARATOR_NAME_TYPES = new Set([
-  "identifier",
-  "field_identifier",
-  "type_identifier",
-  "qualified_identifier",
-]);
+const DECLARATOR_NAME_TYPES = new Set(["identifier", "field_identifier", "type_identifier", "qualified_identifier"]);
 
 function nameOf(node: TsNode): string | undefined {
   // Most grammars expose the name directly.

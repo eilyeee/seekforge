@@ -18,8 +18,20 @@ function run(variant: string, results: TaskResult[]): VariantRun {
 
 describe("compareVariants", () => {
   it("success beats failure regardless of score/turns/cost", () => {
-    const a = run("control", [res({ taskId: "t1", success: true, metrics: { turns: 99, toolCalls: 0, failedToolCalls: 0, costUsd: 9, durationMs: 1, score: 0 } })]);
-    const b = run("terse", [res({ taskId: "t1", success: false, metrics: { turns: 1, toolCalls: 0, failedToolCalls: 0, costUsd: 0, durationMs: 1, score: 100 } })]);
+    const a = run("control", [
+      res({
+        taskId: "t1",
+        success: true,
+        metrics: { turns: 99, toolCalls: 0, failedToolCalls: 0, costUsd: 9, durationMs: 1, score: 0 },
+      }),
+    ]);
+    const b = run("terse", [
+      res({
+        taskId: "t1",
+        success: false,
+        metrics: { turns: 1, toolCalls: 0, failedToolCalls: 0, costUsd: 0, durationMs: 1, score: 100 },
+      }),
+    ]);
     const summary = compareVariants(a, b);
     expect(summary.tasks[0]?.winner).toBe("a");
     expect(summary.aWins).toBe(1);
@@ -31,22 +43,52 @@ describe("compareVariants", () => {
     // higher score
     expect(
       compareVariants(
-        run("a", [res({ taskId: "t", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 80 } })]),
-        run("b", [res({ taskId: "t", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 95 } })]),
+        run("a", [
+          res({
+            taskId: "t",
+            metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 80 },
+          }),
+        ]),
+        run("b", [
+          res({
+            taskId: "t",
+            metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 95 },
+          }),
+        ]),
       ).tasks[0]?.winner,
     ).toBe("b");
     // equal score -> fewer turns
     expect(
       compareVariants(
-        run("a", [res({ taskId: "t", metrics: { turns: 3, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 90 } })]),
-        run("b", [res({ taskId: "t", metrics: { turns: 7, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 90 } })]),
+        run("a", [
+          res({
+            taskId: "t",
+            metrics: { turns: 3, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 90 },
+          }),
+        ]),
+        run("b", [
+          res({
+            taskId: "t",
+            metrics: { turns: 7, toolCalls: 0, failedToolCalls: 0, costUsd: 1, durationMs: 1, score: 90 },
+          }),
+        ]),
       ).tasks[0]?.winner,
     ).toBe("a");
     // equal score+turns -> cheaper
     expect(
       compareVariants(
-        run("a", [res({ taskId: "t", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.05, durationMs: 1, score: 90 } })]),
-        run("b", [res({ taskId: "t", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 } })]),
+        run("a", [
+          res({
+            taskId: "t",
+            metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.05, durationMs: 1, score: 90 },
+          }),
+        ]),
+        run("b", [
+          res({
+            taskId: "t",
+            metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 },
+          }),
+        ]),
       ).tasks[0]?.winner,
     ).toBe("b");
   });
@@ -61,14 +103,36 @@ describe("compareVariants", () => {
 
   it("aggregates win/loss/tie across multiple tasks and totals cost", () => {
     const a = run("control", [
-      res({ taskId: "t1", success: true, metrics: { turns: 4, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 } }),
-      res({ taskId: "t2", success: false, metrics: { turns: 8, toolCalls: 0, failedToolCalls: 0, costUsd: 0.03, durationMs: 1, score: 50 } }),
-      res({ taskId: "t3", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.01, durationMs: 1, score: 70 } }),
+      res({
+        taskId: "t1",
+        success: true,
+        metrics: { turns: 4, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 },
+      }),
+      res({
+        taskId: "t2",
+        success: false,
+        metrics: { turns: 8, toolCalls: 0, failedToolCalls: 0, costUsd: 0.03, durationMs: 1, score: 50 },
+      }),
+      res({
+        taskId: "t3",
+        metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.01, durationMs: 1, score: 70 },
+      }),
     ]);
     const b = run("terse", [
-      res({ taskId: "t1", success: true, metrics: { turns: 6, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 } }), // a fewer turns -> a
-      res({ taskId: "t2", success: true, metrics: { turns: 8, toolCalls: 0, failedToolCalls: 0, costUsd: 0.03, durationMs: 1, score: 50 } }), // b success -> b
-      res({ taskId: "t3", metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.01, durationMs: 1, score: 70 } }), // tie
+      res({
+        taskId: "t1",
+        success: true,
+        metrics: { turns: 6, toolCalls: 0, failedToolCalls: 0, costUsd: 0.02, durationMs: 1, score: 90 },
+      }), // a fewer turns -> a
+      res({
+        taskId: "t2",
+        success: true,
+        metrics: { turns: 8, toolCalls: 0, failedToolCalls: 0, costUsd: 0.03, durationMs: 1, score: 50 },
+      }), // b success -> b
+      res({
+        taskId: "t3",
+        metrics: { turns: 5, toolCalls: 0, failedToolCalls: 0, costUsd: 0.01, durationMs: 1, score: 70 },
+      }), // tie
     ]);
     const summary = compareVariants(a, b);
     expect(summary.aWins).toBe(1);
@@ -128,12 +192,14 @@ describe("compareVariants", () => {
   });
 
   it("rejects duplicate paired sample keys and alternates execution order", () => {
-    expect(() => compareVariants(
-      run("a", [res({ taskId: "t", sample: 1 }), res({ taskId: "t", sample: 1 })]),
-      run("b", []),
-    )).toThrow(/duplicate A result/);
+    expect(() =>
+      compareVariants(run("a", [res({ taskId: "t", sample: 1 }), res({ taskId: "t", sample: 1 })]), run("b", [])),
+    ).toThrow(/duplicate A result/);
     expect([0, 1, 2, 3].map(alternatingArmOrder)).toEqual([
-      ["a", "b"], ["b", "a"], ["a", "b"], ["b", "a"],
+      ["a", "b"],
+      ["b", "a"],
+      ["a", "b"],
+      ["b", "a"],
     ]);
   });
 

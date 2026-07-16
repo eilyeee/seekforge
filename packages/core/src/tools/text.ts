@@ -59,7 +59,8 @@ export function truncateHeadTail(
 }
 
 /** Lines that signal a failure in test/build output (used to bias the digest). */
-const FAILURE_LINE = /\b(?:fail(?:ed|ing|ure|ures)?|errors?|exception|assert|expected|not ok|panic|traceback)\b|[✕✗✘✖×]/iu;
+const FAILURE_LINE =
+  /\b(?:fail(?:ed|ing|ure|ures)?|errors?|exception|assert|expected|not ok|panic|traceback)\b|[✕✗✘✖×]/iu;
 
 /**
  * Condense captured command output (e.g. a verify run) for feeding back to the

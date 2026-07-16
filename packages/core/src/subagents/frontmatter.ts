@@ -29,7 +29,10 @@ export function parseFrontmatter(markdown: string): ParsedFrontmatter {
       // Block scalar (incl. chomping indicators |-, |+, >-, >+): consume the
       // indented lines that follow.
       const block: string[] = [];
-      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")) {
+      while (
+        i + 1 < lines.length &&
+        (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")
+      ) {
         i++;
         block.push((lines[i] as string).trim());
       }

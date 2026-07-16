@@ -5,7 +5,9 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::protocol::{codes, RtError, RtResult};
-use crate::sandbox::{is_ignored_dir, resolve_for_write, resolve_inside_workspace, resolve_for_read};
+use crate::sandbox::{
+    is_ignored_dir, resolve_for_read, resolve_for_write, resolve_inside_workspace,
+};
 
 /// PROTOCOL.md: files over 5 MB are rejected with `too_large`.
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
@@ -24,7 +26,10 @@ pub fn read_file(workspace: &str, path: &str) -> RtResult<Value> {
     if meta.len() > MAX_FILE_BYTES {
         return Err(RtError::new(
             codes::TOO_LARGE,
-            format!("file {path} is {} bytes (limit {MAX_FILE_BYTES})", meta.len()),
+            format!(
+                "file {path} is {} bytes (limit {MAX_FILE_BYTES})",
+                meta.len()
+            ),
         ));
     }
     let bytes =
@@ -36,7 +41,10 @@ pub fn read_file(workspace: &str, path: &str) -> RtResult<Value> {
         ));
     }
     let content = String::from_utf8(bytes).map_err(|_| {
-        RtError::new(codes::BINARY_FILE, format!("file {path} is not valid UTF-8"))
+        RtError::new(
+            codes::BINARY_FILE,
+            format!("file {path} is not valid UTF-8"),
+        )
     })?;
     Ok(json!({ "content": content }))
 }
@@ -89,7 +97,14 @@ fn walk(
         }
         if is_dir {
             entries.push(format!("{child_rel}/"));
-            walk(&d.path(), &child_rel, depth + 1, max_depth, entries, truncated);
+            walk(
+                &d.path(),
+                &child_rel,
+                depth + 1,
+                max_depth,
+                entries,
+                truncated,
+            );
         } else {
             entries.push(child_rel);
         }
@@ -133,9 +148,15 @@ mod tests {
         let ws = tmpdir("read");
         let ws_s = ws.to_str().unwrap();
         std::fs::write(ws.join("bin.dat"), [b'a', 0u8, b'b']).unwrap();
-        assert_eq!(read_file(ws_s, "bin.dat").unwrap_err().code, codes::BINARY_FILE);
+        assert_eq!(
+            read_file(ws_s, "bin.dat").unwrap_err().code,
+            codes::BINARY_FILE
+        );
         std::fs::write(ws.join("bad.txt"), [0xffu8, 0xfe, 0xfd]).unwrap();
-        assert_eq!(read_file(ws_s, "bad.txt").unwrap_err().code, codes::BINARY_FILE);
+        assert_eq!(
+            read_file(ws_s, "bad.txt").unwrap_err().code,
+            codes::BINARY_FILE
+        );
         std::fs::write(ws.join("ok.txt"), "hello").unwrap();
         let data = read_file(ws_s, "ok.txt").unwrap();
         assert_eq!(data["content"], "hello");
@@ -149,7 +170,9 @@ mod tests {
         write_file(ws_s, "a/b/c.txt", "one", false).unwrap();
         assert_eq!(read_file(ws_s, "a/b/c.txt").unwrap()["content"], "one");
         assert_eq!(
-            write_file(ws_s, "a/b/c.txt", "two", false).unwrap_err().code,
+            write_file(ws_s, "a/b/c.txt", "two", false)
+                .unwrap_err()
+                .code,
             codes::EXISTS
         );
         write_file(ws_s, "a/b/c.txt", "two", true).unwrap();

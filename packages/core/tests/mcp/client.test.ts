@@ -123,10 +123,7 @@ describe("mcp client", () => {
     const client = makeClient();
     try {
       const resources = await client.listResources();
-      expect(resources).toEqual([
-        { uri: "mem://notes", name: "Notes", mimeType: "text/plain" },
-        { uri: "mem://logo" },
-      ]);
+      expect(resources).toEqual([{ uri: "mem://notes", name: "Notes", mimeType: "text/plain" }, { uri: "mem://logo" }]);
     } finally {
       client.dispose();
     }
@@ -185,9 +182,7 @@ describe("mcp client", () => {
   it("gets a prompt and renders messages to a single string", async () => {
     const client = makeClient();
     try {
-      expect(await client.getPrompt("greet", { name: "Ada" })).toBe(
-        "system: Be friendly.\n\nuser: Hello Ada",
-      );
+      expect(await client.getPrompt("greet", { name: "Ada" })).toBe("system: Be friendly.\n\nuser: Hello Ada");
     } finally {
       client.dispose();
     }
@@ -234,9 +229,7 @@ describe("mcp client", () => {
       };
       expect(seen.protocolVersion).toBe("2025-06-18");
       expect(seen.capabilities.roots).toEqual({ listChanged: true });
-      expect(seen.rootsAnswer.roots).toEqual([
-        { uri: `file://${root}`, name: "workspace" },
-      ]);
+      expect(seen.rootsAnswer.roots).toEqual([{ uri: `file://${root}`, name: "workspace" }]);
     } finally {
       client.dispose();
     }

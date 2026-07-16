@@ -153,10 +153,26 @@ export type ThreatModel = {
   createdAt: string;
   repository: string;
   summary: string;
-  assets: Array<{ name: string; description: string; evidence: Array<{ path: string; lineStart: number; lineEnd: number }> }>;
-  entryPoints: Array<{ name: string; description: string; evidence: Array<{ path: string; lineStart: number; lineEnd: number }> }>;
-  trustBoundaries: Array<{ name: string; description: string; evidence: Array<{ path: string; lineStart: number; lineEnd: number }> }>;
-  dataFlows: Array<{ name: string; description: string; evidence: Array<{ path: string; lineStart: number; lineEnd: number }> }>;
+  assets: Array<{
+    name: string;
+    description: string;
+    evidence: Array<{ path: string; lineStart: number; lineEnd: number }>;
+  }>;
+  entryPoints: Array<{
+    name: string;
+    description: string;
+    evidence: Array<{ path: string; lineStart: number; lineEnd: number }>;
+  }>;
+  trustBoundaries: Array<{
+    name: string;
+    description: string;
+    evidence: Array<{ path: string; lineStart: number; lineEnd: number }>;
+  }>;
+  dataFlows: Array<{
+    name: string;
+    description: string;
+    evidence: Array<{ path: string; lineStart: number; lineEnd: number }>;
+  }>;
   threats: Array<{
     id: string;
     title: string;

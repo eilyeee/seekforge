@@ -30,9 +30,7 @@ type ColorName = keyof typeof CODES;
  * Inputs are injectable so the logic is unit-testable without touching the
  * real process.
  */
-export function useColor(
-  opts: { isTTY?: boolean; noColor?: boolean; machine?: boolean } = {},
-): boolean {
+export function useColor(opts: { isTTY?: boolean; noColor?: boolean; machine?: boolean } = {}): boolean {
   const isTTY = opts.isTTY ?? Boolean(process.stdout.isTTY);
   const noColor = opts.noColor ?? Boolean(process.env.NO_COLOR);
   const machine = opts.machine ?? false;

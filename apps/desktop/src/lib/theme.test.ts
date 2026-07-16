@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  dataThemeAttr,
-  nextThemeChoice,
-  readThemeChoice,
-  resolveTheme,
-  type ThemeChoice,
-} from "./theme";
+import { dataThemeAttr, nextThemeChoice, readThemeChoice, resolveTheme, type ThemeChoice } from "./theme";
 
 describe("readThemeChoice", () => {
   it("passes through valid stored choices", () => {

@@ -3,10 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import {
-  resolvePermissionMode,
-  UnknownPermissionModeError,
-} from "../permission-mode.js";
+import { resolvePermissionMode, UnknownPermissionModeError } from "../permission-mode.js";
 
 // --- boolean flags (no --permission-mode) -----------------------------------
 test("no flags → confirm", () => {
@@ -79,8 +76,7 @@ test("--permission-mode plan overrides -y → confirm + plan-first", () => {
 test("unknown --permission-mode throws UnknownPermissionModeError carrying the mode", () => {
   assert.throws(
     () => resolvePermissionMode({ permissionMode: "bogus" }),
-    (err: unknown) =>
-      err instanceof UnknownPermissionModeError && err.mode === "bogus",
+    (err: unknown) => err instanceof UnknownPermissionModeError && err.mode === "bogus",
   );
 });
 

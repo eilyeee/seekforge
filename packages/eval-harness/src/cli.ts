@@ -48,10 +48,7 @@ type VariantExecutor = {
   createAgent: ReturnType<typeof createDefaultAgentFactory>;
 };
 
-function variantExecutor(
-  name: string,
-  config: ReturnType<typeof loadEvalConfig>,
-): VariantExecutor {
+function variantExecutor(name: string, config: ReturnType<typeof loadEvalConfig>): VariantExecutor {
   const options = getVariant(name).apply({});
   return { name, options, createAgent: createDefaultAgentFactory(config, options) };
 }
@@ -79,7 +76,7 @@ async function runOne(
   if (!result.execution?.passed) {
     console.log(
       `    terminal: ${result.execution?.status ?? "unknown"} ` +
-      `(expected ${result.execution?.expectedStatus ?? "completed"})`,
+        `(expected ${result.execution?.expectedStatus ?? "completed"})`,
     );
   }
   if (result.error) console.log(`    session error: ${result.error}`);
@@ -120,7 +117,7 @@ async function runAbVariants(
   let pairIndex = 0;
   for (let sample = 1; sample <= repeat; sample++) {
     for (const task of tasks) {
-      const order = alternatingArmOrder(pairIndex++).map((arm) => arm === "a" ? a : b);
+      const order = alternatingArmOrder(pairIndex++).map((arm) => (arm === "a" ? a : b));
       for (const executor of order) {
         const result = await runOne(executor, task, keepDir, sample, repeat);
         (executor === a ? resultsA : resultsB).push(result);
@@ -170,7 +167,12 @@ async function main(): Promise<void> {
   }
   if (args.taskId !== undefined) {
     // --task accepts one id or a comma-separated list (run a chosen subset).
-    const ids = new Set(args.taskId.split(",").map((s) => s.trim()).filter(Boolean));
+    const ids = new Set(
+      args.taskId
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
     const known = new Set(tasks.map((task) => task.id));
     const missing = [...ids].filter((id) => !known.has(id));
     if (ids.size === 0 || missing.length > 0) {
@@ -203,7 +205,9 @@ async function main(): Promise<void> {
     }
     const { jsonPath, markdownPath } = writeAbReport(runs, summary);
     const trends = writeTrendReport(reportsDir);
-    console.log(`\nA/B report written:\n  ${markdownPath}\n  ${jsonPath}\n  ${trends.markdownPath}\n  ${trends.jsonPath}`);
+    console.log(
+      `\nA/B report written:\n  ${markdownPath}\n  ${jsonPath}\n  ${trends.markdownPath}\n  ${trends.jsonPath}`,
+    );
     if ([...resultsA, ...resultsB].some((r) => !r.success)) process.exitCode = 1;
     return;
   }

@@ -26,9 +26,7 @@ export function detectTerminal(
  * Concrete, copy-pasteable setup steps per terminal. Pure strings — this
  * never touches the terminal's own config files (see module JSDoc).
  */
-export function terminalSetupInstructions(
-  terminal: ReturnType<typeof detectTerminal>,
-): string[] {
+export function terminalSetupInstructions(terminal: ReturnType<typeof detectTerminal>): string[] {
   switch (terminal) {
     case "iterm2":
       return [
@@ -40,7 +38,7 @@ export function terminalSetupInstructions(
       ];
     case "vscode":
       return [
-        "VS Code terminal detected — add this to keybindings.json (Cmd/Ctrl+Shift+P → \"Open Keyboard Shortcuts (JSON)\"):",
+        'VS Code terminal detected — add this to keybindings.json (Cmd/Ctrl+Shift+P → "Open Keyboard Shortcuts (JSON)"):',
         "  {",
         '    "key": "shift+enter",',
         '    "command": "workbench.action.terminal.sendSequence",',

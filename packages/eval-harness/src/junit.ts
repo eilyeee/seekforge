@@ -27,8 +27,11 @@ export function toJunit(results: TaskResult[], name = "SeekForge Agent Eval"): s
     if (result.error !== undefined) {
       lines.push(`    <error message="${xml(result.error)}">${xml(result.error)}</error>`);
     } else if (!result.success) {
-      const detail = result.checks.filter((check) => !check.passed)
-        .map((check) => check.detail ?? check.check.type).join("\n") || "task did not pass";
+      const detail =
+        result.checks
+          .filter((check) => !check.passed)
+          .map((check) => check.detail ?? check.check.type)
+          .join("\n") || "task did not pass";
       lines.push(`    <failure message="task failed">${xml(detail)}</failure>`);
     }
     lines.push("  </testcase>");

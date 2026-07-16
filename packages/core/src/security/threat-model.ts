@@ -7,37 +7,45 @@ import { parseExactJsonObject, validateEvidenceLocation } from "./validation.js"
 import { sanitizeSecurityText } from "./redact.js";
 import { appendSecurityEvent, newSecurityEventId } from "./store.js";
 
-const locationSchema = z.object({
-  path: z.string().min(1).max(1_000),
-  lineStart: z.number().int().positive(),
-  lineEnd: z.number().int().positive(),
-}).strict();
+const locationSchema = z
+  .object({
+    path: z.string().min(1).max(1_000),
+    lineStart: z.number().int().positive(),
+    lineEnd: z.number().int().positive(),
+  })
+  .strict();
 
-const itemSchema = z.object({
-  name: z.string().min(1).max(300),
-  description: z.string().min(1).max(4_000),
-  evidence: z.array(locationSchema).min(1).max(10),
-}).strict();
+const itemSchema = z
+  .object({
+    name: z.string().min(1).max(300),
+    description: z.string().min(1).max(4_000),
+    evidence: z.array(locationSchema).min(1).max(10),
+  })
+  .strict();
 
-const threatSchema = z.object({
-  title: z.string().min(1).max(300),
-  scenario: z.string().min(1).max(6_000),
-  affectedAssets: z.array(z.string().min(1).max(300)).min(1).max(20),
-  entryPoints: z.array(z.string().min(1).max(300)).min(1).max(20),
-  trustBoundaries: z.array(z.string().min(1).max(300)).min(1).max(20),
-  mitigations: z.array(z.string().min(1).max(2_000)).max(30),
-  severity: z.enum(FINDING_SEVERITIES),
-  evidence: z.array(locationSchema).min(1).max(10),
-}).strict();
+const threatSchema = z
+  .object({
+    title: z.string().min(1).max(300),
+    scenario: z.string().min(1).max(6_000),
+    affectedAssets: z.array(z.string().min(1).max(300)).min(1).max(20),
+    entryPoints: z.array(z.string().min(1).max(300)).min(1).max(20),
+    trustBoundaries: z.array(z.string().min(1).max(300)).min(1).max(20),
+    mitigations: z.array(z.string().min(1).max(2_000)).max(30),
+    severity: z.enum(FINDING_SEVERITIES),
+    evidence: z.array(locationSchema).min(1).max(10),
+  })
+  .strict();
 
-const threatModelSchema = z.object({
-  summary: z.string().min(1).max(8_000),
-  assets: z.array(itemSchema).min(1).max(50),
-  entryPoints: z.array(itemSchema).min(1).max(50),
-  trustBoundaries: z.array(itemSchema).min(1).max(50),
-  dataFlows: z.array(itemSchema).min(1).max(50),
-  threats: z.array(threatSchema).min(1).max(100),
-}).strict();
+const threatModelSchema = z
+  .object({
+    summary: z.string().min(1).max(8_000),
+    assets: z.array(itemSchema).min(1).max(50),
+    entryPoints: z.array(itemSchema).min(1).max(50),
+    trustBoundaries: z.array(itemSchema).min(1).max(50),
+    dataFlows: z.array(itemSchema).min(1).max(50),
+    threats: z.array(threatSchema).min(1).max(100),
+  })
+  .strict();
 
 function buildThreatModelPrompt(): string {
   return [
@@ -75,7 +83,9 @@ export async function generateThreatModel(options: {
   agent: AgentCore;
   signal?: AbortSignal;
 }): Promise<ThreatModel> {
-  const parsed = threatModelSchema.parse(parseExactJsonObject(await collect(options.agent, options.workspace, options.signal)));
+  const parsed = threatModelSchema.parse(
+    parseExactJsonObject(await collect(options.agent, options.workspace, options.signal)),
+  );
   const location = (value: z.infer<typeof locationSchema>) => validateEvidenceLocation(options.workspace, value);
   const item = (value: z.infer<typeof itemSchema>): ThreatModelItem => ({
     name: sanitizeSecurityText(value.name, 300),

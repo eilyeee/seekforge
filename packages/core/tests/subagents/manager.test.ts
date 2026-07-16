@@ -179,11 +179,9 @@ describe("createDispatchManager", () => {
     const manager = createDispatchManager();
     const run = (signal: AbortSignal) =>
       new Promise<ToolResult>((resolve) => {
-        signal.addEventListener(
-          "abort",
-          () => resolve({ ok: false, error: { code: "aborted", message: "aborted" } }),
-          { once: true },
-        );
+        signal.addEventListener("abort", () => resolve({ ok: false, error: { code: "aborted", message: "aborted" } }), {
+          once: true,
+        });
       });
     const first = manager.start({ agentId: "a", task: "first", run });
     const second = manager.start({ agentId: "b", task: "second", run });

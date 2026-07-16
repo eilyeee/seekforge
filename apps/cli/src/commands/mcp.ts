@@ -2,13 +2,7 @@ import { createMcpClient } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
 import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
-import {
-  addMcpServer,
-  mcpConfigPath,
-  readConfigDoc,
-  removeMcpServer,
-  writeConfigDoc,
-} from "../mcp-config.js";
+import { addMcpServer, mcpConfigPath, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
 
 /**
  * `seekforge mcp list` — spawn each configured server, handshake, and list
@@ -39,7 +33,12 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
       }
     } catch (err) {
       console.error(
-        t("cmd.mcp.serverError", { name, cmd: commandLine, trust: trustLabel, error: err instanceof Error ? err.message : String(err) }),
+        t("cmd.mcp.serverError", {
+          name,
+          cmd: commandLine,
+          trust: trustLabel,
+          error: err instanceof Error ? err.message : String(err),
+        }),
       );
     } finally {
       client.dispose();
@@ -52,11 +51,7 @@ export async function mcpListCommand(opts: { tools?: boolean }): Promise<void> {
  * mcpServers in .seekforge/config.json (or ~/.seekforge with --global).
  * The first token after <name> is the command, the rest are its args.
  */
-export function mcpAddCommand(
-  name: string,
-  commandTokens: string[],
-  opts: { global?: boolean },
-): void {
+export function mcpAddCommand(name: string, commandTokens: string[], opts: { global?: boolean }): void {
   if (commandTokens.length === 0) {
     fail(t("err.missingCommandMcp"), {
       hint: t("err.missingCommandMcpHint"),

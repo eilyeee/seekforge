@@ -42,10 +42,21 @@ describe("continuous eval aggregation", () => {
   it("aggregates repeated samples without NaN on zero denominators", () => {
     const aggregate = aggregateResults([
       result({ sample: 1 }),
-      result({ sample: 2, success: false, error: "failed", metrics: {
-        toolCalls: 0, failedToolCalls: 0, costUsd: 0.01, promptTokens: 20,
-        completionTokens: 10, cacheHitTokens: 0, totalTokens: 30, durationMs: 500,
-      } }),
+      result({
+        sample: 2,
+        success: false,
+        error: "failed",
+        metrics: {
+          toolCalls: 0,
+          failedToolCalls: 0,
+          costUsd: 0.01,
+          promptTokens: 20,
+          completionTokens: 10,
+          cacheHitTokens: 0,
+          totalTokens: 30,
+          durationMs: 500,
+        },
+      }),
     ]);
     expect(aggregate.samples).toBe(2);
     expect(aggregate.successRate).toBe(0.5);
@@ -54,7 +65,11 @@ describe("continuous eval aggregation", () => {
     expect(aggregate.totalTokens).toBe(180);
     expect(aggregate.costPerSuccessUsd).toBeCloseTo(0.03);
     expect(aggregateResults([])).toMatchObject({
-      samples: 0, successRate: 0, toolFailureRate: 0, costPerSuccessUsd: null, tokensPerSuccess: null,
+      samples: 0,
+      successRate: 0,
+      toolFailureRate: 0,
+      costPerSuccessUsd: null,
+      tokensPerSuccess: null,
     });
   });
 });
@@ -69,19 +84,48 @@ describe("baseline validation and gates", () => {
     expect(parseBaseline(JSON.stringify({ results: [legacy] }))).toHaveLength(1);
     expect(() => parseBaseline('{"results":[]}')).toThrow(/must not be empty/);
     expect(() => parseBaseline('{"results":[{"taskId":"x"}]}')).toThrow(/success/);
-    expect(() => parseBaseline(JSON.stringify({ results: [result({
-      metrics: { ...result().metrics, costUsd: -1 },
-    })] }))).toThrow(/costUsd/);
-    expect(() => parseBaseline('{"results":[{"taskId":"x","success":true,"checks":[],"metrics":{"toolCalls":1,"failedToolCalls":0,"costUsd":1e999,"durationMs":1}}]}')).toThrow(/costUsd/);
-    expect(() => parseBaseline(JSON.stringify({ results: [result({
-      metrics: { ...result().metrics, totalTokens: 999 },
-    })] }))).toThrow(/totalTokens/);
+    expect(() =>
+      parseBaseline(
+        JSON.stringify({
+          results: [
+            result({
+              metrics: { ...result().metrics, costUsd: -1 },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow(/costUsd/);
+    expect(() =>
+      parseBaseline(
+        '{"results":[{"taskId":"x","success":true,"checks":[],"metrics":{"toolCalls":1,"failedToolCalls":0,"costUsd":1e999,"durationMs":1}}]}',
+      ),
+    ).toThrow(/costUsd/);
+    expect(() =>
+      parseBaseline(
+        JSON.stringify({
+          results: [
+            result({
+              metrics: { ...result().metrics, totalTokens: 999 },
+            }),
+          ],
+        }),
+      ),
+    ).toThrow(/totalTokens/);
     const partialTokens = result();
     delete partialTokens.metrics.totalTokens;
     expect(() => parseBaseline(JSON.stringify({ results: [partialTokens] }))).toThrow(/all present or all absent/);
-    expect(() => parseBaseline(JSON.stringify({ results: [{
-      ...result(), execution: { runner: "unknown", status: "done", expectedStatus: "done", passed: true, sessionIds: [] },
-    }] }))).toThrow(/orchestration shape/);
+    expect(() =>
+      parseBaseline(
+        JSON.stringify({
+          results: [
+            {
+              ...result(),
+              execution: { runner: "unknown", status: "done", expectedStatus: "done", passed: true, sessionIds: [] },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/orchestration shape/);
   });
 
   it("fails quality, efficiency, and reliability gates including empty samples", () => {
@@ -94,7 +138,13 @@ describe("baseline validation and gates", () => {
     const evaluated = evaluateGates([bad], gates);
     expect(evaluated.passed).toBe(false);
     expect(evaluated.checks.filter((check) => !check.passed).map((check) => check.name)).toEqual(
-      expect.arrayContaining(["success rate", "cost per success", "tokens per success", "tool failure rate", "session error rate"]),
+      expect.arrayContaining([
+        "success rate",
+        "cost per success",
+        "tokens per success",
+        "tool failure rate",
+        "session error rate",
+      ]),
     );
     expect(evaluateGates([], gates).passed).toBe(false);
   });
@@ -137,19 +187,31 @@ describe("suite config and JUnit", () => {
     const parsed = parseSuiteConfig({ version: 1, suites: { smoke: { tasks: ["a", "a"], repeat: 1, gates } } });
     expect(parsed.suites["smoke"]?.tasks).toEqual(["a"]);
     expect(() => parseSuiteConfig({ version: 1, suites: { bad: { tasks: [], repeat: 0, gates } } })).toThrow();
-    expect(() => parseSuiteConfig({ version: 1, suites: { bad: { tasks: "*", repeat: 21, gates } } })).toThrow(/1 to 20/);
-    expect(() => parseSuiteConfig({
-      version: 1,
-      suites: { bad: { tasks: "*", repeat: 1, gates: { ...gates, maxTokensPerSuccess: Number.NaN } } },
-    })).toThrow(/finite/);
+    expect(() => parseSuiteConfig({ version: 1, suites: { bad: { tasks: "*", repeat: 21, gates } } })).toThrow(
+      /1 to 20/,
+    );
+    expect(() =>
+      parseSuiteConfig({
+        version: 1,
+        suites: { bad: { tasks: "*", repeat: 1, gates: { ...gates, maxTokensPerSuccess: Number.NaN } } },
+      }),
+    ).toThrow(/finite/);
   });
 
   it("writes failures, errors, timings, and escaped task names to JUnit", () => {
     const xml = toJunit([
       result({ taskId: "a<&", sample: 1 }),
-      result({ taskId: "failed", success: false, checks: [{
-        check: { type: "answer_matches", pattern: "x" }, passed: false, detail: "bad < output",
-      }] }),
+      result({
+        taskId: "failed",
+        success: false,
+        checks: [
+          {
+            check: { type: "answer_matches", pattern: "x" },
+            passed: false,
+            detail: "bad < output",
+          },
+        ],
+      }),
       result({ taskId: "error", success: false, error: "API & timeout" }),
     ]);
     expect(xml).toContain('tests="3" failures="1" errors="1"');

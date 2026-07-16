@@ -52,9 +52,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
     }
     const targetRoot =
-      global === true
-        ? join(homedir(), ".seekforge", "skills")
-        : join(workspace, ".seekforge", "skills");
+      global === true ? join(homedir(), ".seekforge", "skills") : join(workspace, ".seekforge", "skills");
     try {
       const { dir, skill } = importExternalSkill(src, { targetRoot });
       return sendJson(res, 200, { ok: true, dir, skill });
@@ -92,7 +90,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (body === undefined) return;
     const { enabled, scope } = (body ?? {}) as { enabled?: unknown; scope?: unknown };
     if (typeof enabled !== "boolean") {
-      return sendApiError(res, 400, "bad_request", "body must be {enabled: boolean, scope?: \"project\"|\"global\"}");
+      return sendApiError(res, 400, "bad_request", 'body must be {enabled: boolean, scope?: "project"|"global"}');
     }
     if (scope !== undefined && scope !== "project" && scope !== "global") {
       return sendApiError(res, 400, "bad_request", 'scope must be "project" or "global"');
@@ -147,9 +145,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
     }
     const targetRoot =
-      global === true
-        ? join(homedir(), ".seekforge", "agents")
-        : join(workspace, ".seekforge", "agents");
+      global === true ? join(homedir(), ".seekforge", "agents") : join(workspace, ".seekforge", "agents");
     try {
       const { dir, agent, droppedTools } = importExternalAgent(src, { targetRoot });
       return sendJson(res, 200, { ok: true, dir, agent, droppedTools });
@@ -186,11 +182,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
         // applyProposal returns {proposal, changedPath} (the file it wrote).
         return sendJson(res, 200, applyProposal(workspace, id));
       }
-      const proposal = setEvolutionProposalStatus(
-        workspace,
-        id,
-        segs[3] === "accept" ? "accepted" : "rejected",
-      );
+      const proposal = setEvolutionProposalStatus(workspace, id, segs[3] === "accept" ? "accepted" : "rejected");
       return sendJson(res, 200, proposal);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

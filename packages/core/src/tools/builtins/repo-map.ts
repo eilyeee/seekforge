@@ -17,7 +17,7 @@ const repoMapSchema = z.object({
 const repoMap = defineTool({
   name: "repo_map",
   description:
-    "Get a compact structural overview of the codebase WITHOUT reading every file: a directory tree with per-directory file counts, plus a one-line symbol outline (exports / component names) for the most relevant files. Use this FIRST to orient in an unfamiliar or large repo, then drill in with `path` (e.g. \"src/views\") before reading specific files. Heuristic outlines — confirm details by reading the file.",
+    'Get a compact structural overview of the codebase WITHOUT reading every file: a directory tree with per-directory file counts, plus a one-line symbol outline (exports / component names) for the most relevant files. Use this FIRST to orient in an unfamiliar or large repo, then drill in with `path` (e.g. "src/views") before reading specific files. Heuristic outlines — confirm details by reading the file.',
   schema: repoMapSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -41,16 +41,14 @@ const repoMap = defineTool({
 });
 
 const findDefinitionSchema = z.object({
-  symbol: z
-    .string()
-    .describe("Identifier whose DEFINITION to locate (function/class/const/method/component name)."),
+  symbol: z.string().describe("Identifier whose DEFINITION to locate (function/class/const/method/component name)."),
   path: z.string().optional().describe("Subtree to search, relative to the workspace root (default '.')."),
 });
 
 const findDefinition = defineTool({
   name: "find_definition",
   description:
-    "Find where a symbol is DEFINED/exported across the repo — declarations of functions, classes, consts, methods, components — NOT every mention. Use this for \"where is X defined?\" instead of search_text (which returns all usages). Heuristic (identifier-only regex); confirm by reading the returned file:line.",
+    'Find where a symbol is DEFINED/exported across the repo — declarations of functions, classes, consts, methods, components — NOT every mention. Use this for "where is X defined?" instead of search_text (which returns all usages). Heuristic (identifier-only regex); confirm by reading the returned file:line.',
   schema: findDefinitionSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -63,11 +61,7 @@ const findDefinition = defineTool({
     }
     await ensureAstBackend(); // best-effort: tree-sitter when available, else regex
     resolveInsideWorkspace(ctx.workspace, args.path ?? ".");
-    const definitions = findDefinitions(
-      ctx.workspace,
-      args.symbol,
-      args.path !== undefined ? { path: args.path } : {},
-    );
+    const definitions = findDefinitions(ctx.workspace, args.symbol, args.path !== undefined ? { path: args.path } : {});
     return { data: { symbol: args.symbol, definitions, count: definitions.length }, meta: {} };
   },
 });

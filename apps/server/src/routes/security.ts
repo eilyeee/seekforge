@@ -40,11 +40,7 @@ function agentOptions(workspace: string) {
   };
 }
 
-function introducedBlockingFindings(
-  before: ReadonlySet<string>,
-  target: Finding,
-  after: Finding[],
-): string[] {
+function introducedBlockingFindings(before: ReadonlySet<string>, target: Finding, after: Finding[]): string[] {
   return after
     .filter((finding) => !before.has(finding.id) && SEVERITY_RANK[finding.severity] >= SEVERITY_RANK[target.severity])
     .map((finding) => finding.id);
@@ -104,7 +100,13 @@ async function routes(ctx: RouteCtx): Promise<void> {
     }
   }
 
-  if (method === "POST" && segs.length === 5 && segs[1] === "security" && segs[2] === "findings" && segs[4] === "status") {
+  if (
+    method === "POST" &&
+    segs.length === 5 &&
+    segs[1] === "security" &&
+    segs[2] === "findings" &&
+    segs[4] === "status"
+  ) {
     const findingId = segs[3]!;
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
@@ -120,7 +122,12 @@ async function routes(ctx: RouteCtx): Promise<void> {
     }
     try {
       const finding = await rest.coordinator.withRepository(workspace, async () =>
-        changeFindingStatus(workspace, findingId, status as (typeof FINDING_STATUSES)[number], reason?.trim() || "status changed in Security Center"),
+        changeFindingStatus(
+          workspace,
+          findingId,
+          status as (typeof FINDING_STATUSES)[number],
+          reason?.trim() || "status changed in Security Center",
+        ),
       );
       return sendJson(res, 200, finding);
     } catch (error) {

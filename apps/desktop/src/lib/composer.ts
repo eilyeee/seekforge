@@ -38,7 +38,8 @@ export function fuzzyScore(query: string, text: string): number | null {
     if (idx === -1) return null;
     score += 1;
     if (idx === prevMatch + 1 && prevMatch >= 0) score += 2; // consecutive run
-    if (idx === 0) score += 3; // match at the very start
+    if (idx === 0)
+      score += 3; // match at the very start
     else if (SEPARATORS.has(t[idx - 1] ?? "")) score += 2; // boundary match
     prevMatch = idx;
     ti = idx + 1;
@@ -141,9 +142,7 @@ export type ImageMarker = { n: number; path: string };
  * A text segment for marker-aware rendering: either a literal text run or an
  * image marker. The concatenation of `text`/`raw` reproduces the input exactly.
  */
-export type ImageSegment =
-  | { kind: "text"; text: string }
-  | { kind: "image"; marker: ImageMarker; raw: string };
+export type ImageSegment = { kind: "text"; text: string } | { kind: "image"; marker: ImageMarker; raw: string };
 
 /**
  * Splits text into literal runs and `[image #N: path]` markers, in order. Used

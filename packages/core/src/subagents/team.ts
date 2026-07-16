@@ -19,9 +19,7 @@ export type AgentTeamPlan = {
   failurePolicy: "stop" | "continue";
 };
 
-export type TeamPlanValidation =
-  | { ok: true; plan: AgentTeamPlan }
-  | { ok: false; message: string };
+export type TeamPlanValidation = { ok: true; plan: AgentTeamPlan } | { ok: false; message: string };
 
 /** Parses and validates the complete dependency graph before any agent starts. */
 export function validateAgentTeam(raw: unknown, agents: AgentDefinition[]): TeamPlanValidation {
@@ -44,7 +42,8 @@ export function validateAgentTeam(raw: unknown, agents: AgentDefinition[]): Team
       return { ok: false, message: "member id must be 1-64 letters, digits, underscores, or hyphens" };
     }
     if (ids.has(id)) return { ok: false, message: `duplicate member id ${JSON.stringify(id)}` };
-    if (!available.has(agentId)) return { ok: false, message: `unknown agent ${JSON.stringify(agentId)} for member ${id}` };
+    if (!available.has(agentId))
+      return { ok: false, message: `unknown agent ${JSON.stringify(agentId)} for member ${id}` };
     if (!task) return { ok: false, message: `member ${id} requires a non-empty task` };
     const rawDeps = value["dependsOn"] ?? [];
     if (!Array.isArray(rawDeps) || !rawDeps.every((dep) => typeof dep === "string")) {

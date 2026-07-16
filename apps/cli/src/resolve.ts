@@ -253,11 +253,7 @@ export interface ReviewContext {
 
 /** PURE: turn GitHub's review payload into an explicit, bounded agent task. */
 export function buildReviewTaskPrompt(review: ReviewContext): string {
-  const context = JSON.stringify(
-    { comments: review.comments ?? [], reviews: review.reviews ?? [] },
-    null,
-    2,
-  );
+  const context = JSON.stringify({ comments: review.comments ?? [], reviews: review.reviews ?? [] }, null, 2);
   const boundedContext = context.length <= 20_000 ? context : `${context.slice(0, 20_000)}\n[truncated]`;
   return [
     `Address review feedback on PR #${review.number}: ${review.title.trim()}`,

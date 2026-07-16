@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { createRequire } from "node:module";
 import { render } from "ink";
 import { configureVision, listSessions } from "@seekforge/core";
@@ -47,7 +47,11 @@ async function main(): Promise<void> {
   setLocale(config.locale ?? detectLocale());
   configureVision(
     config.visionModel?.baseUrl
-      ? { model: config.visionModel.model, baseUrl: config.visionModel.baseUrl, ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}) }
+      ? {
+          model: config.visionModel.model,
+          baseUrl: config.visionModel.baseUrl,
+          ...(config.visionModel.apiKey ? { apiKey: config.visionModel.apiKey } : {}),
+        }
       : null,
   );
 
@@ -117,6 +121,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
   process.exitCode = 1;
 });

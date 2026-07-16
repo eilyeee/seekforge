@@ -59,7 +59,10 @@ export function transcriptToMarkdown(items: readonly ChatItem[], opts?: { title?
         break;
     }
   }
-  return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  return `${out
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd()}\n`;
 }
 
 /** Default export path: .seekforge/exports/tui-<timestamp>.md */

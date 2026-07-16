@@ -92,7 +92,9 @@ test("lists, shows, and transitions a Finding", () => {
   assert.match(shown, /Use a parser/);
   const status = capture(workspace, () => securityStatusCommand("sf-cli-test", "triaged", { reason: "confirmed" }));
   assert.match(status, /triaged/);
-  const json = JSON.parse(capture(workspace, () => securityListCommand({ status: "triaged", json: true }))) as Finding[];
+  const json = JSON.parse(
+    capture(workspace, () => securityListCommand({ status: "triaged", json: true })),
+  ) as Finding[];
   assert.equal(json.length, 1);
   assert.equal(json[0]?.status, "triaged");
   rmSync(workspace, { recursive: true, force: true });
@@ -101,9 +103,14 @@ test("lists, shows, and transitions a Finding", () => {
 test("exports JSON, Markdown, and SARIF evidence and writes mode 0600", () => {
   const workspace = mkdtempSync(join(tmpdir(), "seekforge-security-cli-"));
   seed(workspace);
-  const json = JSON.parse(capture(workspace, () => securityExportCommand({ format: "json" }))) as { findings: Finding[] };
+  const json = JSON.parse(capture(workspace, () => securityExportCommand({ format: "json" }))) as {
+    findings: Finding[];
+  };
   assert.equal(json.findings[0]?.id, "sf-cli-test");
-  assert.match(capture(workspace, () => securityExportCommand({ format: "markdown" })), /Security Evidence Report/);
+  assert.match(
+    capture(workspace, () => securityExportCommand({ format: "markdown" })),
+    /Security Evidence Report/,
+  );
   const sarif = JSON.parse(capture(workspace, () => securityExportCommand({ format: "sarif" }))) as { version: string };
   assert.equal(sarif.version, "2.1.0");
   capture(workspace, () => securityExportCommand({ format: "sarif", output: "reports/security.sarif" }));

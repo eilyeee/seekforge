@@ -47,7 +47,9 @@ function plainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function validStatus(value: unknown): value is RunStatus {
-  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+  return (
+    value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled"
+  );
 }
 
 function validTimestamp(value: unknown): value is string {
@@ -59,21 +61,27 @@ function validTimestamp(value: unknown): value is string {
 function parseRecord(value: unknown): RunRecord | undefined {
   if (!plainObject(value)) return undefined;
   if (
-    typeof value["runId"] !== "string" || !/^run-[A-Za-z0-9-]+$/.test(value["runId"]) ||
+    typeof value["runId"] !== "string" ||
+    !/^run-[A-Za-z0-9-]+$/.test(value["runId"]) ||
     !["ws", "loop", "schedule", "trigger", "background"].includes(String(value["source"])) ||
     !validStatus(value["status"]) ||
-    !Number.isSafeInteger(value["attempt"]) || (value["attempt"] as number) <= 0 ||
-    typeof value["workspace"] !== "string" || value["workspace"] === "" ||
+    !Number.isSafeInteger(value["attempt"]) ||
+    (value["attempt"] as number) <= 0 ||
+    typeof value["workspace"] !== "string" ||
+    value["workspace"] === "" ||
     !validTimestamp(value["createdAt"]) ||
     !validTimestamp(value["updatedAt"]) ||
     (value["sessionId"] !== undefined && typeof value["sessionId"] !== "string") ||
     (value["costUsd"] !== undefined &&
       (typeof value["costUsd"] !== "number" || !Number.isFinite(value["costUsd"]) || value["costUsd"] < 0)) ||
     (value["error"] !== undefined &&
-      (!plainObject(value["error"]) || typeof value["error"]["code"] !== "string" || typeof value["error"]["message"] !== "string")) ||
+      (!plainObject(value["error"]) ||
+        typeof value["error"]["code"] !== "string" ||
+        typeof value["error"]["message"] !== "string")) ||
     (value["labels"] !== undefined &&
       (!plainObject(value["labels"]) || Object.values(value["labels"]).some((entry) => typeof entry !== "string")))
-  ) return undefined;
+  )
+    return undefined;
   return value as RunRecord;
 }
 
@@ -94,11 +102,7 @@ function readJsonLines(workspace: string, rel: string): unknown[] {
   return values;
 }
 
-function repairJsonLines(
-  workspace: string,
-  rel: string,
-  valid: (value: unknown, index: number) => boolean,
-): void {
+function repairJsonLines(workspace: string, rel: string, valid: (value: unknown, index: number) => boolean): void {
   const raw = readProjectFile(workspace, rel);
   if (raw === undefined) return;
   const kept: string[] = [];
@@ -140,9 +144,7 @@ export function readRunEvents(workspace: string, id: string, afterSeq = 0): RunE
   for (const value of readJsonLines(workspace, `.seekforge/run-events/${id}.jsonl`)) {
     if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) break;
     const seq = value["seq"] as number;
-    if (
-      seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])
-    ) break;
+    if (seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) break;
     lastSeq = seq;
     if (seq > afterSeq) events.push(value as RunEvent);
   }
@@ -160,7 +162,12 @@ export class RunManager {
   private httpErrors = 0;
   private httpDurationMs = 0;
 
-  create(input: { workspace: string; source: RunSource; attempt?: number; labels?: Record<string, string> }): RunRecord {
+  create(input: {
+    workspace: string;
+    source: RunSource;
+    attempt?: number;
+    labels?: Record<string, string>;
+  }): RunRecord {
     const now = new Date().toISOString();
     const record: RunRecord = {
       runId: runId(),
@@ -182,7 +189,11 @@ export class RunManager {
     return this.update(workspace, id, { status: "running" });
   }
 
-  update(workspace: string, id: string, patch: Partial<Pick<RunRecord, "status" | "sessionId" | "costUsd" | "error">>): RunRecord | undefined {
+  update(
+    workspace: string,
+    id: string,
+    patch: Partial<Pick<RunRecord, "status" | "sessionId" | "costUsd" | "error">>,
+  ): RunRecord | undefined {
     const current = this.get(workspace, id);
     if (!current) return undefined;
     const terminal = current.status === "succeeded" || current.status === "failed" || current.status === "cancelled";

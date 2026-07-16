@@ -4,16 +4,7 @@ import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useT } from "../lib/i18n";
-import {
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  IconChevron,
-  IconSkills,
-  Input,
-  type BadgeTone,
-} from "../components/ui";
+import { Badge, Button, Card, EmptyState, IconChevron, IconSkills, Input, type BadgeTone } from "../components/ui";
 import type { Skill, SkillScope } from "../types";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
@@ -151,9 +142,7 @@ export function SkillsView() {
       if (filter !== "all" && s.scope !== filter) return false;
       if (!q) return true;
       return (
-        s.id.toLowerCase().includes(q) ||
-        s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q)
+        s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
       );
     });
   }, [skills, filter, query]);
@@ -248,9 +237,7 @@ export function SkillsView() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {error && (
-          <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
-        )}
+        {error && <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>}
         {skills === null ? (
           <p className="text-tertiary">{t("skills.loading")}</p>
         ) : skills.length === 0 ? (
@@ -270,16 +257,12 @@ export function SkillsView() {
                 onClick={() => openSkill(skill.id)}
                 className="group flex cursor-pointer items-center gap-4 p-4 transition-colors hover:border-strong hover:bg-surface-overlay"
               >
-                <span
-                  className={`grid size-10 shrink-0 place-items-center rounded-xl ${iconTone(skill.id)}`}
-                >
+                <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${iconTone(skill.id)}`}>
                   <IconSkills size={18} />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate font-mono text-sm font-medium text-primary">
-                      {skill.id}
-                    </span>
+                    <span className="truncate font-mono text-sm font-medium text-primary">{skill.id}</span>
                     {!skill.enabled && <Badge tone="danger">{t("skills.disabled")}</Badge>}
                   </div>
                   <p className="mt-1 truncate text-xs text-secondary">{skill.description}</p>
@@ -313,10 +296,7 @@ export function SkillsView() {
                     </>
                   )}
                   <ScopeChip scope={skill.scope} />
-                  <IconChevron
-                    size={16}
-                    className="text-tertiary transition-colors group-hover:text-secondary"
-                  />
+                  <IconChevron size={16} className="text-tertiary transition-colors group-hover:text-secondary" />
                 </div>
               </Card>
             ))}
@@ -367,13 +347,7 @@ export function SkillsView() {
   );
 }
 
-function NewSkillDialog({
-  onClose,
-  onCreate,
-}: {
-  onClose: () => void;
-  onCreate: (id: string) => Promise<unknown>;
-}) {
+function NewSkillDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (id: string) => Promise<unknown> }) {
   const t = useT();
   const [id, setId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -384,11 +358,10 @@ function NewSkillDialog({
     if (trimmed === "" || busy) return;
     setBusy(true);
     setError(null);
-    onCreate(trimmed)
-      .catch((e: unknown) => {
-        setError(t("skills.actionError", { error: String(e) }));
-        setBusy(false);
-      });
+    onCreate(trimmed).catch((e: unknown) => {
+      setError(t("skills.actionError", { error: String(e) }));
+      setBusy(false);
+    });
   };
 
   return (

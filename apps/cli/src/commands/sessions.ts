@@ -69,12 +69,16 @@ export function statusCommand(): void {
   const last = sessions[0];
 
   console.log(t("cmd.status.project", { path: projectPath }));
-  console.log(t("cmd.status.config", {
-    path: existsSync(join(projectPath, ".seekforge"))
-      ? t("cmd.status.configInitialized")
-      : t("cmd.status.configNotInit"),
-  }));
-  console.log(t("cmd.status.apiKey", { key: config.apiKey ? `${config.apiKey.slice(0, 6)}**** ` : t("cmd.status.apiKeyMasked") }));
+  console.log(
+    t("cmd.status.config", {
+      path: existsSync(join(projectPath, ".seekforge"))
+        ? t("cmd.status.configInitialized")
+        : t("cmd.status.configNotInit"),
+    }),
+  );
+  console.log(
+    t("cmd.status.apiKey", { key: config.apiKey ? `${config.apiKey.slice(0, 6)}**** ` : t("cmd.status.apiKeyMasked") }),
+  );
   console.log(t("cmd.status.model", { model: config.model ?? t("cmd.status.modelDefault") }));
   console.log(t("cmd.status.global", { path: join(homedir(), ".seekforge", "config.json") }));
   console.log(t("cmd.status.sessions", { count: sessions.length }));

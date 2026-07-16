@@ -9,8 +9,7 @@ import {
   writeWorkspaceFile,
 } from "./helpers.js";
 
-const STALE_WARNING =
-  "Remembered facts from earlier sessions — may be stale; verify before relying on them.";
+const STALE_WARNING = "Remembered facts from earlier sessions — may be stale; verify before relying on them.";
 
 /** Bullet lines of a brief (header stripped). */
 function bullets(brief: string | undefined): string[] {
@@ -59,9 +58,7 @@ describe("buildMemoryBrief", () => {
     );
     const brief = buildMemoryBrief(ws, "fix the bug in src/login.ts");
     // The path fact shares "src/login.ts" with the task: highest relevance.
-    expect(bullets(brief)[0]).toBe(
-      "- [path] src/login.ts contains the login form and its submit handler",
-    );
+    expect(bullets(brief)[0]).toBe("- [path] src/login.ts contains the login form and its submit handler");
   });
 
   it("boosts adjacent-word bigram phrase matches over bare unigram overlap", () => {
@@ -79,9 +76,7 @@ describe("buildMemoryBrief", () => {
     const lines = bullets(brief);
     // Both contain "login" + "validation", but only one has the exact phrase.
     expect(lines[0]).toBe("- [convention] login validation uses zod schemas shared with the API");
-    expect(lines[1]).toBe(
-      "- [convention] validation of login forms happens in separate middleware modules",
-    );
+    expect(lines[1]).toBe("- [convention] validation of login forms happens in separate middleware modules");
   });
 
   it("breaks score ties by recency: later project.md lines first", () => {
@@ -223,13 +218,8 @@ describe("buildMemoryBrief: global (cross-project) memory merge", () => {
 
   it("merges global facts with project facts in the brief", () => {
     const ws = makeWorkspace();
-    writeProjectMemory(
-      ws,
-      "# Project Memory\n- [path] login form lives in src/login.ts\n",
-    );
-    writeGlobalMemory(
-      "# Global Memory\n- [convention] always run login validation through shared zod schemas\n",
-    );
+    writeProjectMemory(ws, "# Project Memory\n- [path] login form lives in src/login.ts\n");
+    writeGlobalMemory("# Global Memory\n- [convention] always run login validation through shared zod schemas\n");
     const brief = buildMemoryBrief(ws, "fix login validation in src/login.ts");
     expect(brief).toBeDefined();
     expect(brief).toContain("src/login.ts");
@@ -273,16 +263,9 @@ describe("buildMemoryBrief: global (cross-project) memory merge", () => {
     );
     writeProjectMemory(
       ws,
-      [
-        "# Project Memory",
-        "- [command] verify with pnpm typecheck && pnpm test",
-        ...filler,
-        "",
-      ].join("\n"),
+      ["# Project Memory", "- [command] verify with pnpm typecheck && pnpm test", ...filler, ""].join("\n"),
     );
-    writeGlobalMemory(
-      "# Global Memory\n- [command] some unrelated global deploy command for another repo\n",
-    );
+    writeGlobalMemory("# Global Memory\n- [command] some unrelated global deploy command for another repo\n");
     const brief = buildMemoryBrief(ws, "完全不相关的任务");
     expect(brief).toBeDefined();
     // Project command is always-included...
@@ -302,11 +285,7 @@ describe("buildMemoryBrief: subdirectory memory cascade (monorepo per-package fa
       (_, i) => `- [convention] filler convention ${i} about kebab-case filenames`,
     );
     writeProjectMemory(ws, `# Project Memory\n${filler.join("\n")}\n`);
-    writeSubdirMemory(
-      ws,
-      "packages/api",
-      "# API Memory\n- [path] the api server bootstrap lives in main entry\n",
-    );
+    writeSubdirMemory(ws, "packages/api", "# API Memory\n- [path] the api server bootstrap lives in main entry\n");
     const brief = buildMemoryBrief(ws, "fix a bug in packages/api startup");
     expect(brief).toBeDefined();
     // The task path "packages/api" matches the subdir's relDir (path-token boost),
@@ -317,11 +296,7 @@ describe("buildMemoryBrief: subdirectory memory cascade (monorepo per-package fa
   it("merges subdir facts into a small corpus alongside root + global", () => {
     const ws = makeWorkspace();
     writeProjectMemory(ws, "# Project Memory\n- [tech] root uses pnpm workspaces\n");
-    writeSubdirMemory(
-      ws,
-      "packages/web",
-      "# Web Memory\n- [convention] web package uses tailwind for styling\n",
-    );
+    writeSubdirMemory(ws, "packages/web", "# Web Memory\n- [convention] web package uses tailwind for styling\n");
     const brief = buildMemoryBrief(ws, "anything at all");
     expect(brief).toBeDefined();
     expect(brief).toContain("root uses pnpm workspaces");
@@ -337,11 +312,7 @@ describe("buildMemoryBrief: subdirectory memory cascade (monorepo per-package fa
       "node_modules/somedep/.seekforge/memory/project.md",
       "# Dep Memory\n- [tech] poisoned node_modules fact\n",
     );
-    writeWorkspaceFile(
-      ws,
-      ".git/hooks/.seekforge/memory/project.md",
-      "# Git Memory\n- [tech] poisoned git fact\n",
-    );
+    writeWorkspaceFile(ws, ".git/hooks/.seekforge/memory/project.md", "# Git Memory\n- [tech] poisoned git fact\n");
     const brief = buildMemoryBrief(ws, "anything at all");
     expect(brief).toBeDefined();
     expect(brief).toContain("root fact");
@@ -363,11 +334,7 @@ describe("buildMemoryBrief: subdirectory memory cascade (monorepo per-package fa
   it("ranks a root project fact above a subdir fact on equal score", () => {
     const ws = makeWorkspace();
     writeProjectMemory(ws, "# Project Memory\n- [convention] login validation in root\n");
-    writeSubdirMemory(
-      ws,
-      "packages/api",
-      "# API Memory\n- [convention] login validation in subdir\n",
-    );
+    writeSubdirMemory(ws, "packages/api", "# API Memory\n- [convention] login validation in subdir\n");
     const lines = bullets(buildMemoryBrief(ws, "improve login validation"));
     // Equal lexical score → root project precedence (root > subdir > global).
     expect(lines[0]).toBe("- [convention] login validation in root");
@@ -375,11 +342,7 @@ describe("buildMemoryBrief: subdirectory memory cascade (monorepo per-package fa
 
   it("builds a brief from a subdir fact even when root + global are empty", () => {
     const ws = makeWorkspace(); // no root project.md, no global
-    writeSubdirMemory(
-      ws,
-      "packages/api",
-      "# API Memory\n- [convention] api uses fastify\n",
-    );
+    writeSubdirMemory(ws, "packages/api", "# API Memory\n- [convention] api uses fastify\n");
     const brief = buildMemoryBrief(ws, "anything at all");
     expect(brief).toBeDefined();
     expect(brief).toContain("api uses fastify");

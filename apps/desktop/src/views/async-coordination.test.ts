@@ -110,7 +110,9 @@ describe("createSerialQueue", () => {
     const enqueue = createSerialQueue();
     const events: string[] = [];
     let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
     const first = enqueue(async () => {
       events.push("first:start");
       await firstGate;

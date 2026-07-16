@@ -94,10 +94,12 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         p.resolve(parsed["data"]);
       } else {
         const error = isRecord(parsed["error"]) ? parsed["error"] : undefined;
-        p.reject(new RuntimeError(
-          typeof error?.["code"] === "string" ? error["code"] : "runtime_error",
-          typeof error?.["message"] === "string" ? error["message"] : "runtime error",
-        ));
+        p.reject(
+          new RuntimeError(
+            typeof error?.["code"] === "string" ? error["code"] : "runtime_error",
+            typeof error?.["message"] === "string" ? error["message"] : "runtime error",
+          ),
+        );
       }
     });
 
@@ -136,9 +138,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
           const request = takePending(id);
           if (!request) return;
           sendCancellation(proc, id);
-          request.reject(
-            new RuntimeError("runtime_timeout", `runtime did not answer ${method} within ${timeoutMs}ms`),
-          );
+          request.reject(new RuntimeError("runtime_timeout", `runtime did not answer ${method} within ${timeoutMs}ms`));
         }, timeoutMs);
         const onAbort = () => {
           const request = takePending(id);

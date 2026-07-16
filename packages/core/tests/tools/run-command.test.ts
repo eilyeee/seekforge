@@ -364,10 +364,7 @@ describe("run_command", () => {
   it("kills the command on timeout", async () => {
     const ws = makeWorkspace();
     const started = Date.now();
-    const res = await dispatcher.execute(
-      call("run_command", { command: "sleep 10", timeoutMs: 300 }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "sleep 10", timeoutMs: 300 }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("timeout");
     expect(Date.now() - started).toBeLessThan(5_000);
@@ -375,10 +372,7 @@ describe("run_command", () => {
 
   it("truncates long output head+tail", async () => {
     const ws = makeWorkspace();
-    const res = await dispatcher.execute(
-      call("run_command", { command: "seq 1 20000" }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "seq 1 20000" }), makeCtx(ws));
     expect(res.ok).toBe(true);
     const data = res.data as { stdout: string };
     expect(res.meta?.truncated).toBe(true);
@@ -403,20 +397,14 @@ describe("run_command", () => {
     const ws = makeWorkspace();
     fs.mkdirSync(path.join(ws, "sub"));
     fs.writeFileSync(path.join(ws, "sub/marker.txt"), "x");
-    const res = await dispatcher.execute(
-      call("run_command", { command: "ls", cwd: "sub" }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "ls", cwd: "sub" }), makeCtx(ws));
     expect(res.ok).toBe(true);
     expect((res.data as { stdout: string }).stdout).toContain("marker.txt");
   });
 
   it("rejects a cwd that escapes the workspace", async () => {
     const ws = makeWorkspace();
-    const res = await dispatcher.execute(
-      call("run_command", { command: "ls", cwd: "../.." }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "ls", cwd: "../.." }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("outside_workspace");
   });
@@ -444,12 +432,9 @@ describe("runShellCommand onOutput", () => {
   it("streams decoded chunks per stream, in order, matching the captured output", async () => {
     const ws = makeWorkspace();
     const chunks: Array<{ stream: "stdout" | "stderr"; chunk: string }> = [];
-    const res = await runShellCommand(
-      "printf 'one\\n'; sleep 0.1; printf 'two\\n'",
-      ws,
-      10_000,
-      { onOutput: (stream, chunk) => chunks.push({ stream, chunk }) },
-    );
+    const res = await runShellCommand("printf 'one\\n'; sleep 0.1; printf 'two\\n'", ws, 10_000, {
+      onOutput: (stream, chunk) => chunks.push({ stream, chunk }),
+    });
     expect(res.exitCode).toBe(0);
     expect(chunks.length).toBeGreaterThanOrEqual(2);
     expect(chunks.every((c) => c.stream === "stdout")).toBe(true);

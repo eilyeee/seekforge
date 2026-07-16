@@ -6,15 +6,17 @@ vi.mock("@seekforge/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@seekforge/core")>();
   return {
     ...actual,
-    runProjectSecurityChecks: async ({ verifyCommand }: { verifyCommand: string }) => [{
-      kind: "verify" as const,
-      command: verifyCommand,
-      exitCode: 0,
-      stdout: "ok",
-      stderr: "",
-      durationMs: 1,
-      timedOut: false,
-    }],
+    runProjectSecurityChecks: async ({ verifyCommand }: { verifyCommand: string }) => [
+      {
+        kind: "verify" as const,
+        command: verifyCommand,
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+        durationMs: 1,
+        timedOut: false,
+      },
+    ],
   };
 });
 
@@ -26,40 +28,70 @@ let base: string;
 let scanCount = 0;
 
 const findingEnvelope = JSON.stringify({
-  findings: [{
-    title: "Query parameter is used as a password",
-    description: "Credentials supplied in query strings can leak through logs and browser history.",
-    severity: "high",
-    confidence: "high",
-    category: "credential-exposure",
-    cwe: "CWE-598",
-    ruleId: "credentials-in-query",
-    recommendation: "Read credentials from an authorization header and reject query-string credentials.",
-    evidence: [{
-      path: "src/server.ts",
-      lineStart: 1,
-      lineEnd: 1,
-      excerpt: "const password = request.query.password;",
-    }],
-  }],
+  findings: [
+    {
+      title: "Query parameter is used as a password",
+      description: "Credentials supplied in query strings can leak through logs and browser history.",
+      severity: "high",
+      confidence: "high",
+      category: "credential-exposure",
+      cwe: "CWE-598",
+      ruleId: "credentials-in-query",
+      recommendation: "Read credentials from an authorization header and reject query-string credentials.",
+      evidence: [
+        {
+          path: "src/server.ts",
+          lineStart: 1,
+          lineEnd: 1,
+          excerpt: "const password = request.query.password;",
+        },
+      ],
+    },
+  ],
 });
 
 const threatModelEnvelope = JSON.stringify({
   summary: "The HTTP boundary accepts credentials and reaches application state.",
-  assets: [{ name: "Credentials", description: "User authentication secrets.", evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }] }],
-  entryPoints: [{ name: "HTTP request", description: "Public request input.", evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }] }],
-  trustBoundaries: [{ name: "Network boundary", description: "Untrusted requests enter the process.", evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }] }],
-  dataFlows: [{ name: "Credential lookup", description: "Request data is read by the handler.", evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }] }],
-  threats: [{
-    title: "Credential disclosure",
-    scenario: "A query string is retained in logs and exposes the password.",
-    affectedAssets: ["Credentials"],
-    entryPoints: ["HTTP request"],
-    trustBoundaries: ["Network boundary"],
-    mitigations: ["Use an authorization header"],
-    severity: "high",
-    evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
-  }],
+  assets: [
+    {
+      name: "Credentials",
+      description: "User authentication secrets.",
+      evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
+    },
+  ],
+  entryPoints: [
+    {
+      name: "HTTP request",
+      description: "Public request input.",
+      evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
+    },
+  ],
+  trustBoundaries: [
+    {
+      name: "Network boundary",
+      description: "Untrusted requests enter the process.",
+      evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
+    },
+  ],
+  dataFlows: [
+    {
+      name: "Credential lookup",
+      description: "Request data is read by the handler.",
+      evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
+    },
+  ],
+  threats: [
+    {
+      title: "Credential disclosure",
+      scenario: "A query string is retained in logs and exposes the password.",
+      affectedAssets: ["Credentials"],
+      entryPoints: ["HTTP request"],
+      trustBoundaries: ["Network boundary"],
+      mitigations: ["Use an authorization header"],
+      severity: "high",
+      evidence: [{ path: "src/server.ts", lineStart: 1, lineEnd: 1 }],
+    },
+  ],
 });
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -103,7 +135,7 @@ describe("Security Center routes", () => {
       body: JSON.stringify({ maxFindings: 10 }),
     });
     expect(scanRes.status).toBe(200);
-    const scan = await scanRes.json() as { findings: Array<{ id: string; status: string }> };
+    const scan = (await scanRes.json()) as { findings: Array<{ id: string; status: string }> };
     expect(scan.findings).toHaveLength(1);
     expect(scan.findings[0]!.status).toBe("open");
     const findingId = scan.findings[0]!.id;
@@ -129,18 +161,20 @@ describe("Security Center routes", () => {
       finding: { id: findingId, status: "resolved", verificationStatus: "verified" },
     });
 
-    const state = await (await request("/api/security")).json() as {
+    const state = (await (await request("/api/security")).json()) as {
       findings: Array<{ id: string; status: string; verificationStatus: string }>;
       scans: unknown[];
       fixes: unknown[];
       threatModels: unknown[];
       disclaimer: string;
     };
-    expect(state.findings).toContainEqual(expect.objectContaining({
-      id: findingId,
-      status: "resolved",
-      verificationStatus: "verified",
-    }));
+    expect(state.findings).toContainEqual(
+      expect.objectContaining({
+        id: findingId,
+        status: "resolved",
+        verificationStatus: "verified",
+      }),
+    );
     expect(state.scans).toHaveLength(2);
     expect(state.fixes).toHaveLength(1);
     expect(state.threatModels).toHaveLength(1);
@@ -149,7 +183,7 @@ describe("Security Center routes", () => {
     for (const format of ["json", "markdown", "sarif"]) {
       const exportRes = await request(`/api/security/export?format=${format}`);
       expect(exportRes.status).toBe(200);
-      const report = await exportRes.json() as { filename: string; content: string; disclaimer: string };
+      const report = (await exportRes.json()) as { filename: string; content: string; disclaimer: string };
       expect(report.filename).toContain("seekforge-security-report");
       expect(report.content.length).toBeGreaterThan(20);
       expect(report.disclaimer).toContain("not a certification");
@@ -157,18 +191,26 @@ describe("Security Center routes", () => {
   });
 
   it("rejects invalid scan limits and lifecycle transitions", async () => {
-    expect((await request("/api/security/scan", {
-      method: "POST",
-      body: JSON.stringify({ maxFindings: 0 }),
-    })).status).toBe(400);
+    expect(
+      (
+        await request("/api/security/scan", {
+          method: "POST",
+          body: JSON.stringify({ maxFindings: 0 }),
+        })
+      ).status,
+    ).toBe(400);
 
-    const stateBeforeFix = await (await request("/api/security")).json() as { findings: Array<{ id: string }> };
-    expect((await request(`/api/security/findings/${stateBeforeFix.findings[0]!.id}/fix`, {
-      method: "POST",
-      body: JSON.stringify({ verifyCommand: "true" }),
-    })).status).toBe(400);
+    const stateBeforeFix = (await (await request("/api/security")).json()) as { findings: Array<{ id: string }> };
+    expect(
+      (
+        await request(`/api/security/findings/${stateBeforeFix.findings[0]!.id}/fix`, {
+          method: "POST",
+          body: JSON.stringify({ verifyCommand: "true" }),
+        })
+      ).status,
+    ).toBe(400);
 
-    const state = await (await request("/api/security")).json() as { findings: Array<{ id: string }> };
+    const state = (await (await request("/api/security")).json()) as { findings: Array<{ id: string }> };
     const invalid = await request(`/api/security/findings/${state.findings[0]!.id}/status`, {
       method: "POST",
       body: JSON.stringify({ status: "open" }),

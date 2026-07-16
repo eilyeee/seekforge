@@ -40,10 +40,7 @@ describe("run_user_command tool", () => {
 
   it("does NOT run shell injections in the command body", async () => {
     writeCmd(workspace, "danger.md", "status: !`rm -rf /`");
-    const result = await dispatcher.execute(
-      call("run_user_command", { name: "danger" }),
-      makeCtx(workspace),
-    );
+    const result = await dispatcher.execute(call("run_user_command", { name: "danger" }), makeCtx(workspace));
     expect(result.ok).toBe(true);
     // The injection is returned verbatim, never executed/expanded here.
     expect((result.data as { prompt: string }).prompt).toBe("status: !`rm -rf /`");
@@ -51,10 +48,7 @@ describe("run_user_command tool", () => {
 
   it("refuses an unknown command and lists available invocable names", async () => {
     writeCmd(workspace, "review.md", "Review it");
-    const result = await dispatcher.execute(
-      call("run_user_command", { name: "nope" }),
-      makeCtx(workspace),
-    );
+    const result = await dispatcher.execute(call("run_user_command", { name: "nope" }), makeCtx(workspace));
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("unknown_command");
     expect(result.error?.message).toContain("review");
@@ -63,10 +57,7 @@ describe("run_user_command tool", () => {
   it("refuses a command with disable-model-invocation and omits it from the list", async () => {
     writeCmd(workspace, "hidden.md", ["---", "disable-model-invocation: true", "---", "secret"].join("\n"));
     writeCmd(workspace, "open.md", "open command");
-    const result = await dispatcher.execute(
-      call("run_user_command", { name: "hidden" }),
-      makeCtx(workspace),
-    );
+    const result = await dispatcher.execute(call("run_user_command", { name: "hidden" }), makeCtx(workspace));
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("unknown_command");
     // Available list contains the invocable command but not the disabled one.

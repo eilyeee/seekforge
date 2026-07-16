@@ -209,9 +209,7 @@ describe("apply_patch", () => {
       const res = await dispatcher.execute(
         call("apply_patch", {
           path: "math.js",
-          edits: [
-            { oldString: "  return a + b;", newString: "  return a + b + 0;" },
-          ],
+          edits: [{ oldString: "  return a + b;", newString: "  return a + b + 0;" }],
         }),
         makeCtx(ws, { policy: { approvalMode: "confirm" }, confirm }),
       );

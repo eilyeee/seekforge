@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { cancelRun, interruptRun, ownsRun, releaseRun, reserveRun, takeRunOwned, type RunEntry } from "../run-identity.js";
+import {
+  cancelRun,
+  interruptRun,
+  ownsRun,
+  releaseRun,
+  reserveRun,
+  takeRunOwned,
+  type RunEntry,
+} from "../run-identity.js";
 
 describe("run identity", () => {
   it("reserves the originating tab across an async prompt and rejects another run there", () => {
@@ -46,7 +54,17 @@ describe("run identity", () => {
     const runs = new Map<number, RunEntry>();
     const run = reserveRun(runs, 1, 10)!;
     let permissionResult: boolean | undefined;
-    const permissions = new Map([[1, { runId: 10, resolve: (result: false) => { permissionResult = result; } }]]);
+    const permissions = new Map([
+      [
+        1,
+        {
+          runId: 10,
+          resolve: (result: false) => {
+            permissionResult = result;
+          },
+        },
+      ],
+    ]);
 
     const result = cancelRun(runs, permissions, new Map(), 1);
 
@@ -60,7 +78,17 @@ describe("run identity", () => {
     const runs = new Map<number, RunEntry>();
     reserveRun(runs, 1, 11);
     let resolved = false;
-    const permissions = new Map([[1, { runId: 10, resolve: () => { resolved = true; } }]]);
+    const permissions = new Map([
+      [
+        1,
+        {
+          runId: 10,
+          resolve: () => {
+            resolved = true;
+          },
+        },
+      ],
+    ]);
 
     cancelRun(runs, permissions, new Map(), 1);
 

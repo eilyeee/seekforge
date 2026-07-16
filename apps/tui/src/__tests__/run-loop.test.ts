@@ -85,20 +85,38 @@ describe("resumeLoop", () => {
     const signal = new AbortController().signal;
     const onEvent = vi.fn();
     await resumeLoop("loop-1", signal, {
-      config: {}, model: "test-model", projectPath: "/workspace", mcpToolSpecs: [],
-      addedIterations: 3, addedCostBudgetUsd: 0.5, onEvent,
+      config: {},
+      model: "test-model",
+      projectPath: "/workspace",
+      mcpToolSpecs: [],
+      addedIterations: 3,
+      addedCostBudgetUsd: 0.5,
+      onEvent,
     });
     expect(resumeAutoLoop).toHaveBeenCalledWith(
-      { marker: "agent-deps" }, "loop-1",
-      expect.objectContaining({ workspace: "/workspace", additionalIterations: 3, additionalCostBudgetUsd: 0.5, signal, onEvent }),
+      { marker: "agent-deps" },
+      "loop-1",
+      expect.objectContaining({
+        workspace: "/workspace",
+        additionalIterations: 3,
+        additionalCostBudgetUsd: 0.5,
+        signal,
+        onEvent,
+      }),
     );
     expect(dispose).toHaveBeenCalled();
   });
 
   it("rejects invalid loop IDs before constructing agent dependencies", async () => {
-    await expect(resumeLoop("../escape", new AbortController().signal, {
-      config: {}, model: "test-model", projectPath: "/workspace", mcpToolSpecs: [], onEvent: vi.fn(),
-    })).rejects.toThrow("Invalid loop id");
+    await expect(
+      resumeLoop("../escape", new AbortController().signal, {
+        config: {},
+        model: "test-model",
+        projectPath: "/workspace",
+        mcpToolSpecs: [],
+        onEvent: vi.fn(),
+      }),
+    ).rejects.toThrow("Invalid loop id");
     expect(resumeAutoLoop).not.toHaveBeenCalled();
     expect(dispose).not.toHaveBeenCalled();
   });

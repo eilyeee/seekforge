@@ -29,9 +29,7 @@ describe("ghostSuggestion", () => {
   });
 
   it("skips an identical newest entry but still finds an older extension", () => {
-    expect(ghostSuggestion("run the tests", ["run the tests --watch", "run the tests"])).toBe(
-      " --watch",
-    );
+    expect(ghostSuggestion("run the tests", ["run the tests --watch", "run the tests"])).toBe(" --watch");
   });
 
   it("matches strictly by prefix (case-sensitive)", () => {

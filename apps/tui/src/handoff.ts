@@ -25,7 +25,10 @@ export type BuildHandoffInput = {
 export function buildHandoff(input: BuildHandoffInput): string {
   const { items } = input;
 
-  const tasks = items.filter((i) => i.kind === "user").map((i) => i.text.trim()).filter(Boolean);
+  const tasks = items
+    .filter((i) => i.kind === "user")
+    .map((i) => i.text.trim())
+    .filter(Boolean);
 
   // Files touched: file + diff items, deduped in first-seen order.
   const files: string[] = [];
@@ -50,10 +53,20 @@ export function buildHandoff(input: BuildHandoffInput): string {
   pushCapped(out, tasks, HANDOFF_CAPS.tasks, "(no user messages this session)");
 
   out.push("## Files touched", "");
-  pushCapped(out, files.map((f) => `\`${f}\``), HANDOFF_CAPS.files, "(none)");
+  pushCapped(
+    out,
+    files.map((f) => `\`${f}\``),
+    HANDOFF_CAPS.files,
+    "(none)",
+  );
 
   out.push("## Commands run", "");
-  pushCapped(out, commands.map((c) => `\`${c}\``), HANDOFF_CAPS.commands, "(none)");
+  pushCapped(
+    out,
+    commands.map((c) => `\`${c}\``),
+    HANDOFF_CAPS.commands,
+    "(none)",
+  );
 
   out.push("## Open questions", "");
   const open = trailingBullets(lastAssistantText(items));

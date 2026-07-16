@@ -24,7 +24,8 @@ export function fuzzyScore(query: string, text: string): number | null {
     if (idx === -1) return null;
     score += 1;
     if (idx === prevMatch + 1 && prevMatch >= 0) score += 2; // consecutive run
-    if (idx === 0) score += 3; // match at the very start
+    if (idx === 0)
+      score += 3; // match at the very start
     else if (SEPARATORS.has(t[idx - 1] ?? "")) score += 2; // boundary match
     prevMatch = idx;
     ti = idx + 1;
@@ -33,12 +34,7 @@ export function fuzzyScore(query: string, text: string): number | null {
 }
 
 /** Ranks `items` by fuzzy score (descending), dropping misses; stable for equal scores. */
-export function fuzzyRank<T>(
-  query: string,
-  items: readonly T[],
-  key: (t: T) => string,
-  limit?: number,
-): T[] {
+export function fuzzyRank<T>(query: string, items: readonly T[], key: (t: T) => string, limit?: number): T[] {
   const scored: Array<{ item: T; score: number; order: number }> = [];
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i] as T;

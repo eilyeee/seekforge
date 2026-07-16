@@ -38,13 +38,11 @@ function fallbackBoundaries(text: string): number[] {
   const boundaries = [0];
   let regionalCount = 0;
   let joinNext = false;
-  for (let i = 0; i < text.length;) {
+  for (let i = 0; i < text.length; ) {
     const cp = text.codePointAt(i)!;
     const width = cp > 0xffff ? 2 : 1;
     const combining =
-      /\p{Mark}/u.test(String.fromCodePoint(cp)) ||
-      (cp >= 0xfe00 && cp <= 0xfe0f) ||
-      (cp >= 0x1f3fb && cp <= 0x1f3ff);
+      /\p{Mark}/u.test(String.fromCodePoint(cp)) || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x1f3fb && cp <= 0x1f3ff);
     const regional = cp >= 0x1f1e6 && cp <= 0x1f1ff;
     const joinsPrevious = combining || joinNext || cp === 0x200d || (regional && regionalCount % 2 === 1);
     i += width;

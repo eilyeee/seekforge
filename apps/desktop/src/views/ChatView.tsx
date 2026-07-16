@@ -43,11 +43,20 @@ export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
-  const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, respondPermission, respondQuestion, connect } = useStore.getState();
+  const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, respondPermission, respondQuestion, connect } =
+    useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
-  const { setModel, setThinking, setReasoningEffort, setOutputStyle, setSandbox, truncateAtItem, startLoop, resumeLoop } =
-    useStore.getState();
+  const {
+    setModel,
+    setThinking,
+    setReasoningEffort,
+    setOutputStyle,
+    setSandbox,
+    truncateAtItem,
+    startLoop,
+    resumeLoop,
+  } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -104,9 +113,15 @@ export function ChatView() {
     let alive = true;
     api
       .config(tab.ws)
-      .then((value) => { if (alive) setConfigState({ workspaceId: tab.ws, value }); })
-      .catch(() => { if (alive) setConfigState({ workspaceId: tab.ws, value: null }); });
-    return () => { alive = false; };
+      .then((value) => {
+        if (alive) setConfigState({ workspaceId: tab.ws, value });
+      })
+      .catch(() => {
+        if (alive) setConfigState({ workspaceId: tab.ws, value: null });
+      });
+    return () => {
+      alive = false;
+    };
   }, [tab.ws]);
 
   /** Account balance chip: fetched on mount and again after each run ends. */
@@ -138,9 +153,15 @@ export function ChatView() {
     let alive = true;
     api
       .commands(tab.ws)
-      .then((r) => { if (alive) setCustomCommands(r.commands); })
-      .catch(() => { if (alive) setCustomCommands([]); });
-    return () => { alive = false; };
+      .then((r) => {
+        if (alive) setCustomCommands(r.commands);
+      })
+      .catch(() => {
+        if (alive) setCustomCommands([]);
+      });
+    return () => {
+      alive = false;
+    };
   }, [tab.ws]);
 
   /** Available output styles (GET /api/output-styles) for the ModelBar picker. */
@@ -149,9 +170,15 @@ export function ChatView() {
     let alive = true;
     api
       .outputStyles(tab.ws)
-      .then((r) => { if (alive) setOutputStyles(r.styles); })
-      .catch(() => { if (alive) setOutputStyles([]); });
-    return () => { alive = false; };
+      .then((r) => {
+        if (alive) setOutputStyles(r.styles);
+      })
+      .catch(() => {
+        if (alive) setOutputStyles([]);
+      });
+    return () => {
+      alive = false;
+    };
   }, [tab.ws]);
 
   /** Manual /compact: POST the active tab's session, then refresh on success. */
@@ -384,11 +411,7 @@ export function ChatView() {
         {/* Codex-style centered conversation column. */}
         <div className="mx-auto w-full max-w-3xl">
           {tab.chat.items.length === 0 ? (
-            <HomeWelcome
-              onQuickAction={setDraft}
-              onNavigate={setView}
-              workspaceId={tab.ws}
-            />
+            <HomeWelcome onQuickAction={setDraft} onNavigate={setView} workspaceId={tab.ws} />
           ) : (
             <ChatItems
               items={tab.chat.items}
@@ -432,43 +455,45 @@ export function ChatView() {
       )}
 
       {tab.wsError && (
-        <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 font-mono text-xs text-warn">
-          {tab.wsError}
-        </div>
+        <div className="border-t border-warn/40 bg-warn/10 px-4 py-1.5 font-mono text-xs text-warn">{tab.wsError}</div>
       )}
 
       {/* Codex-style centered input column under a full-width divider:
           model+thinking, composer, then the run-context controls. */}
       <div className="border-t border-subtle">
         <div className="mx-auto w-full max-w-3xl">
-        <ModelBar
-          tab={tab}
-          config={config}
-          outputStyles={outputStyles}
-          onSetModel={setModel}
-          onSetThinking={setThinking}
-          onSetReasoningEffort={setReasoningEffort}
-          onSetOutputStyle={setOutputStyle}
-        />
+          <ModelBar
+            tab={tab}
+            config={config}
+            outputStyles={outputStyles}
+            onSetModel={setModel}
+            onSetThinking={setThinking}
+            onSetReasoningEffort={setReasoningEffort}
+            onSetOutputStyle={setOutputStyle}
+          />
 
-        <Composer
-          key={tab.tabId}
-          value={draft}
-          onChange={setDraft}
-          onSend={submit}
-          disabled={tab.chat.running}
-          placeholder={tab.chat.running ? t("chat.composerRunningPlaceholder") : t("chat.composerPlaceholder", { slash: "/", at: "@" })}
-          commands={composerCommands}
-          workspaceId={tab.ws ?? ""}
-        />
+          <Composer
+            key={tab.tabId}
+            value={draft}
+            onChange={setDraft}
+            onSend={submit}
+            disabled={tab.chat.running}
+            placeholder={
+              tab.chat.running
+                ? t("chat.composerRunningPlaceholder")
+                : t("chat.composerPlaceholder", { slash: "/", at: "@" })
+            }
+            commands={composerCommands}
+            workspaceId={tab.ws ?? ""}
+          />
 
-        <RunControls
-          tab={tab}
-          config={config}
-          onSetMode={setMode}
-          onSetApprovalMode={setApprovalMode}
-          onSetSandbox={setSandbox}
-        />
+          <RunControls
+            tab={tab}
+            config={config}
+            onSetMode={setMode}
+            onSetApprovalMode={setApprovalMode}
+            onSetSandbox={setSandbox}
+          />
         </div>
       </div>
 
@@ -494,9 +519,7 @@ export function ChatView() {
           onConfirm={() => void confirmBacktrack()}
           onCancel={() => setBacktrackTarget(null)}
         >
-          <p>
-            {t("chat.backtrackBody")}
-          </p>
+          <p>{t("chat.backtrackBody")}</p>
           <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-secondary">
             <input
               type="checkbox"
@@ -566,17 +589,13 @@ export function ChatView() {
           onConfirm={() => setWorktreeDialog(null)}
           onCancel={() => setWorktreeDialog(null)}
         >
-          <p className="mb-2">
-            {t("chat.conflictBody")}
-          </p>
+          <p className="mb-2">{t("chat.conflictBody")}</p>
           <ul className="max-h-48 list-inside list-disc overflow-y-auto font-mono text-xs text-warn">
             {worktreeDialog.files.map((f) => (
               <li key={f}>{f}</li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-secondary">
-            {t("chat.conflictHint")}
-          </p>
+          <p className="mt-2 text-xs text-secondary">{t("chat.conflictHint")}</p>
         </ConfirmDialog>
       )}
 

@@ -27,8 +27,29 @@ export type RepoMapOptions = {
 };
 
 const CODE_EXTS = new Set([
-  "js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte", "py", "go", "rs", "java", "rb", "php",
-  "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "cs",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "mjs",
+  "cjs",
+  "vue",
+  "svelte",
+  "py",
+  "go",
+  "rs",
+  "java",
+  "rb",
+  "php",
+  "c",
+  "h",
+  "cc",
+  "cpp",
+  "cxx",
+  "hpp",
+  "hh",
+  "hxx",
+  "cs",
 ]);
 /** Files this large are summarized by size only (avoid pathological reads). */
 const MAX_READ_BYTES = 512 * 1024;
@@ -108,7 +129,10 @@ function regexOutline(rel: string, content: string): string {
   }
   for (const m of content.matchAll(/export\s*\{([^}]*)\}/g)) {
     for (const part of m[1]!.split(",")) {
-      const n = part.trim().split(/\s+as\s+/)[0]!.trim();
+      const n = part
+        .trim()
+        .split(/\s+as\s+/)[0]!
+        .trim();
       if (/^[A-Za-z0-9_$]+$/.test(n)) names.add(n);
     }
   }
@@ -546,15 +570,12 @@ export function buildRelevantFiles(
     for (const v of pr.values()) if (v > prMax) prMax = v;
   }
   const PR_WEIGHT = 4; // a maximally-central-to-task file earns ~a path-token hit
-  const prBoost = (rel: string): number =>
-    pr && prMax > 0 ? PR_WEIGHT * ((pr.get(rel) ?? 0) / prMax) : 0;
+  const prBoost = (rel: string): number => (pr && prMax > 0 ? PR_WEIGHT * ((pr.get(rel) ?? 0) / prMax) : 0);
 
   // Candidate set: the strongest path-matches, plus the most central files by
   // personalized PageRank (so a central-but-unnamed file gets a chance to clear
   // the floor). Bounded by maxCandidates on each side.
-  const byPath = pathScored
-    .sort((a, b) => b.score - a.score || a.f.rel.localeCompare(b.f.rel))
-    .slice(0, maxCandidates);
+  const byPath = pathScored.sort((a, b) => b.score - a.score || a.f.rel.localeCompare(b.f.rel)).slice(0, maxCandidates);
   const chosen = new Map<string, { f: CodeFile; pathScore: number }>();
   for (const { f, score } of byPath) chosen.set(f.rel, { f, pathScore: score });
   if (pr && prMax > 0) {

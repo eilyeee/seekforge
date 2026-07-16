@@ -73,11 +73,21 @@ describe("memoryStats", () => {
     writeCandidatesRaw(
       ws,
       [
-        JSON.stringify(makeCandidate({ id: "mc-a-1", content: "fact one", type: "tech", sourceSessionId: "a", confidence: 0.9 })),
-        JSON.stringify(makeCandidate({ id: "mc-a-2", content: "fact two", type: "tech", sourceSessionId: "a", confidence: 0.4 })),
-        JSON.stringify(makeCandidate({ id: "mc-a-3", content: "rej", type: "tech", sourceSessionId: "a", status: "rejected" })),
-        JSON.stringify(makeCandidate({ id: "mc-a-4", content: "pend", type: "tech", sourceSessionId: "a", status: "pending" })),
-      ].map((l) => `${l}\n`).join(""),
+        JSON.stringify(
+          makeCandidate({ id: "mc-a-1", content: "fact one", type: "tech", sourceSessionId: "a", confidence: 0.9 }),
+        ),
+        JSON.stringify(
+          makeCandidate({ id: "mc-a-2", content: "fact two", type: "tech", sourceSessionId: "a", confidence: 0.4 }),
+        ),
+        JSON.stringify(
+          makeCandidate({ id: "mc-a-3", content: "rej", type: "tech", sourceSessionId: "a", status: "rejected" }),
+        ),
+        JSON.stringify(
+          makeCandidate({ id: "mc-a-4", content: "pend", type: "tech", sourceSessionId: "a", status: "pending" }),
+        ),
+      ]
+        .map((l) => `${l}\n`)
+        .join(""),
     );
     approveMemoryCandidate(ws, "mc-a-1");
     approveMemoryCandidate(ws, "mc-a-2");
@@ -100,9 +110,15 @@ describe("memoryStats", () => {
     writeCandidatesRaw(
       ws,
       [
-        JSON.stringify(makeCandidate({ id: "mc-c-1", content: "used fact", type: "tech", sourceSessionId: "c", confidence: 0.9 })),
-        JSON.stringify(makeCandidate({ id: "mc-c-2", content: "unused fact", type: "tech", sourceSessionId: "c", confidence: 0.3 })),
-      ].map((l) => `${l}\n`).join(""),
+        JSON.stringify(
+          makeCandidate({ id: "mc-c-1", content: "used fact", type: "tech", sourceSessionId: "c", confidence: 0.9 }),
+        ),
+        JSON.stringify(
+          makeCandidate({ id: "mc-c-2", content: "unused fact", type: "tech", sourceSessionId: "c", confidence: 0.3 }),
+        ),
+      ]
+        .map((l) => `${l}\n`)
+        .join(""),
     );
     approveMemoryCandidate(ws, "mc-c-1");
     approveMemoryCandidate(ws, "mc-c-2");

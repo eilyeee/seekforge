@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { TokenUsage } from "@seekforge/shared";
 import { formatUsage, kfmt } from "../format.js";
@@ -51,22 +51,22 @@ export function ContextInspector({
         Context
       </Text>
       <Text>
-        <Text dimColor>model    </Text>
+        <Text dimColor>model </Text>
         {model}
       </Text>
       <Text>
-        <Text dimColor>session  </Text>
+        <Text dimColor>session </Text>
         {sessionId ?? "(new)"}
       </Text>
       {context ? (
         <Text>
-          <Text dimColor>window   </Text>
+          <Text dimColor>window </Text>
           {gauge(context.percent)}
-          <Text dimColor>  {gaugeCaption(context.usedTokens, context.budgetTokens)}</Text>
+          <Text dimColor> {gaugeCaption(context.usedTokens, context.budgetTokens)}</Text>
         </Text>
       ) : (
         <Text>
-          <Text dimColor>window   no turn run yet</Text>
+          <Text dimColor>window no turn run yet</Text>
         </Text>
       )}
       {breakdown.length > 0 ? (
@@ -74,7 +74,7 @@ export function ContextInspector({
           <Text dimColor>breakdown (chars/4 estimate)</Text>
           {breakdown.map((row) => (
             <Text key={row.label}>
-              <Text dimColor>  {row.label.padEnd(labelWidth)}  </Text>
+              <Text dimColor> {row.label.padEnd(labelWidth)} </Text>
               {gauge(row.percent, MINI_GAUGE_WIDTH)}
               <Text dimColor>
                 {"  "}~{kfmt(row.tokens)} tok · {row.count} item{row.count === 1 ? "" : "s"}
@@ -85,22 +85,22 @@ export function ContextInspector({
       ) : null}
       {freeTokens !== undefined && context ? (
         <Text>
-          <Text dimColor>free     </Text>
+          <Text dimColor>free </Text>
           {kfmt(freeTokens)} tokens
-          <Text dimColor>  until auto-compaction at {kfmt(context.budgetTokens)}</Text>
+          <Text dimColor> until auto-compaction at {kfmt(context.budgetTokens)}</Text>
         </Text>
       ) : null}
       <Text>
-        <Text dimColor>usage    </Text>
+        <Text dimColor>usage </Text>
         {formatUsage(usage)}
       </Text>
       <Text>
-        <Text dimColor>items    </Text>
+        <Text dimColor>items </Text>
         {itemCount} transcript item{itemCount === 1 ? "" : "s"}
       </Text>
       {runningBg > 0 ? (
         <Text>
-          <Text dimColor>tasks    </Text>⚙ {runningBg} background task{runningBg === 1 ? "" : "s"} running
+          <Text dimColor>tasks </Text>⚙ {runningBg} background task{runningBg === 1 ? "" : "s"} running
         </Text>
       ) : null}
       <Text dimColor>older turns auto-compact past the budget · Esc to close</Text>

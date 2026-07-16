@@ -4,7 +4,17 @@
 // round-trip in a temp dir.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -167,7 +177,11 @@ test("validateJobInput accepts a well-formed job and defaults enabled=true", () 
 test("validateJobInput REJECTS a missing maxCostUsd (safety-critical)", () => {
   const r = validateJobInput({ id: "x", task: "t", schedule: "1h", mode: "ask" });
   assert.equal(r.ok, false);
-  if (!r.ok) assert.ok(r.errors.some((e) => e.includes("maxCostUsd")), r.errors.join(","));
+  if (!r.ok)
+    assert.ok(
+      r.errors.some((e) => e.includes("maxCostUsd")),
+      r.errors.join(","),
+    );
 });
 test("validateJobInput rejects a non-positive maxCostUsd", () => {
   for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -177,10 +191,7 @@ test("validateJobInput rejects a non-positive maxCostUsd", () => {
 });
 test("validateJobInput rejects a bad schedule, bad mode, empty id/task", () => {
   assert.equal(validateJobInput({ id: "x", task: "t", schedule: "nope", mode: "ask", maxCostUsd: 1 }).ok, false);
-  assert.equal(
-    validateJobInput({ id: "x", task: "t", schedule: "1h", mode: "run" as never, maxCostUsd: 1 }).ok,
-    false,
-  );
+  assert.equal(validateJobInput({ id: "x", task: "t", schedule: "1h", mode: "run" as never, maxCostUsd: 1 }).ok, false);
   assert.equal(validateJobInput({ id: "", task: "t", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
   assert.equal(validateJobInput({ id: "x", task: "", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
   assert.equal(validateJobInput({ id: "bad id", task: "t", schedule: "1h", mode: "ask", maxCostUsd: 1 }).ok, false);
@@ -204,17 +215,17 @@ test("failed runs back off exponentially and success clears retry state", () => 
 test("nextRunAt handles intervals, cron, disabled jobs, and retry floors", () => {
   const from = new Date(2026, 0, 1, 10, 0, 30);
   const intervalLast = new Date(from.getTime() - 15 * 60_000);
-  assert.equal(nextRunAt(baseJob({ lastRunAt: intervalLast.toISOString() }), from)?.getTime(), from.getTime() + 15 * 60_000);
+  assert.equal(
+    nextRunAt(baseJob({ lastRunAt: intervalLast.toISOString() }), from)?.getTime(),
+    from.getTime() + 15 * 60_000,
+  );
   const cronNext = nextRunAt(baseJob({ schedule: "5 10 * * *" }), from)!;
   assert.equal(cronNext.getHours(), 10);
   assert.equal(cronNext.getMinutes(), 5);
   assert.equal(cronNext.getDate(), from.getDate());
   assert.equal(nextRunAt(baseJob({ enabled: false }), from), undefined);
   const retryAt = new Date(from.getTime() + 60 * 60_000);
-  assert.equal(
-    nextRunAt(baseJob({ nextRetryAt: retryAt.toISOString() }), from)?.getTime(),
-    retryAt.getTime(),
-  );
+  assert.equal(nextRunAt(baseJob({ nextRetryAt: retryAt.toISOString() }), from)?.getTime(), retryAt.getTime());
 });
 
 // --- pure registry operations -----------------------------------------------
@@ -227,7 +238,10 @@ test("removeJob reports whether something was removed", () => {
   const jobs = [baseJob({ id: "a" }), baseJob({ id: "b" })];
   const r1 = removeJob(jobs, "a");
   assert.equal(r1.removed, true);
-  assert.deepEqual(r1.jobs.map((j) => j.id), ["b"]);
+  assert.deepEqual(
+    r1.jobs.map((j) => j.id),
+    ["b"],
+  );
   const r2 = removeJob(jobs, "zzz");
   assert.equal(r2.removed, false);
 });
@@ -263,7 +277,10 @@ test("saveRegistry/loadRegistry round-trip through a temp .seekforge dir", () =>
     reg = { jobs: addJob(reg.jobs, baseJob({ id: "nightly", schedule: "1d", maxCostUsd: 0.5 })) };
     saveRegistry(dir, reg);
     assert.equal(statSync(join(dir, ".seekforge", "schedules.json")).mode & 0o777, 0o600);
-    assert.deepEqual(loadRegistry(dir).jobs.map((j) => j.id), ["nightly"]);
+    assert.deepEqual(
+      loadRegistry(dir).jobs.map((j) => j.id),
+      ["nightly"],
+    );
 
     // enable/disable persists
     saveRegistry(dir, { jobs: setEnabled(loadRegistry(dir).jobs, "nightly", false).jobs });
@@ -322,7 +339,10 @@ test("loadRegistry rejects persisted non-finite or non-positive budgets", () => 
     const file = join(dir, ".seekforge", "schedules.json");
     saveRegistry(dir, { jobs: [] });
     for (const budget of ["1e999", "0", "-1"]) {
-      writeFileSync(file, `{"jobs":[{"id":"x","task":"t","schedule":"1h","mode":"ask","maxCostUsd":${budget},"enabled":true}]}`);
+      writeFileSync(
+        file,
+        `{"jobs":[{"id":"x","task":"t","schedule":"1h","mode":"ask","maxCostUsd":${budget},"enabled":true}]}`,
+      );
       assert.deepEqual(loadRegistry(dir), { jobs: [] });
     }
   } finally {
@@ -374,11 +394,14 @@ test("schedule lease recovers a lock owned by a dead process", () => {
   try {
     const lock = join(dir, ".seekforge", "schedules.lock");
     mkdirSync(lock, { recursive: true });
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({
-      pid: 2_147_483_647,
-      token: "dead-owner",
-      acquiredAt: new Date(0).toISOString(),
-    }));
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({
+        pid: 2_147_483_647,
+        token: "dead-owner",
+        acquiredAt: new Date(0).toISOString(),
+      }),
+    );
     const release = acquireScheduleLease(dir);
     assert.equal(typeof release, "function");
     release!();
@@ -392,12 +415,15 @@ test("schedule lease recovers when a PID was reused by another process identity"
   try {
     const lock = join(dir, ".seekforge", "schedules.lock");
     mkdirSync(lock, { recursive: true });
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({
-      pid: process.pid,
-      token: "previous-process",
-      acquiredAt: new Date(0).toISOString(),
-      processIdentity: "not-the-current-process",
-    }));
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        token: "previous-process",
+        acquiredAt: new Date(0).toISOString(),
+        processIdentity: "not-the-current-process",
+      }),
+    );
     const release = acquireScheduleLease(dir);
     assert.equal(typeof release, "function");
     release!();
@@ -411,11 +437,14 @@ test("schedule lease does not race another stale-lock recovery", () => {
   try {
     const lock = join(dir, ".seekforge", "schedules.lock");
     mkdirSync(lock, { recursive: true });
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({
-      pid: 2_147_483_647,
-      token: "dead-owner",
-      acquiredAt: new Date(0).toISOString(),
-    }));
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({
+        pid: 2_147_483_647,
+        token: "dead-owner",
+        acquiredAt: new Date(0).toISOString(),
+      }),
+    );
     mkdirSync(`${lock}.recovery`);
 
     assert.equal(acquireScheduleLease(dir), null);
@@ -430,11 +459,14 @@ test("schedule lease recovers an abandoned recovery directory after the grace pe
   try {
     const lock = join(dir, ".seekforge", "schedules.lock");
     mkdirSync(lock, { recursive: true });
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({
-      pid: 2_147_483_647,
-      token: "dead-owner",
-      acquiredAt: new Date(0).toISOString(),
-    }));
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({
+        pid: 2_147_483_647,
+        token: "dead-owner",
+        acquiredAt: new Date(0).toISOString(),
+      }),
+    );
     const recovery = `${lock}.recovery`;
     mkdirSync(recovery);
     const old = new Date(Date.now() - 60_000);

@@ -12,8 +12,9 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   return <input ref={ref} className={`${FIELD} ${className}`} {...rest} />;
 });
 
-export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function TextArea({ className = "", ...rest }, ref) {
-    return <textarea ref={ref} className={`${FIELD} resize-none ${className}`} {...rest} />;
-  },
-);
+export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function TextArea(
+  { className = "", ...rest },
+  ref,
+) {
+  return <textarea ref={ref} className={`${FIELD} resize-none ${className}`} {...rest} />;
+});

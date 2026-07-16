@@ -95,9 +95,7 @@ describe("nextFinalizeNudge", () => {
   });
 
   it("does not nudge lint when it already ran since the last edit", () => {
-    expect(
-      nextFinalizeNudge(state({ changedFiles: 2, lintCommand: "pnpm lint", lintRanSinceEdit: true })),
-    ).toBeNull();
+    expect(nextFinalizeNudge(state({ changedFiles: 2, lintCommand: "pnpm lint", lintRanSinceEdit: true }))).toBeNull();
   });
 
   it("ignores a blank lint command", () => {
@@ -107,9 +105,7 @@ describe("nextFinalizeNudge", () => {
   it("prioritises verify over lint, and lint over review", () => {
     // verify + lint both pending -> verify wins
     expect(
-      nextFinalizeNudge(
-        state({ changedFiles: 1, verifyCommand: "pnpm test", lintCommand: "pnpm lint" }),
-      )?.kind,
+      nextFinalizeNudge(state({ changedFiles: 1, verifyCommand: "pnpm test", lintCommand: "pnpm lint" }))?.kind,
     ).toBe("verify");
     // verify done (ran since edit) -> lint wins over review
     expect(

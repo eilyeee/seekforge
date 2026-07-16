@@ -30,9 +30,7 @@ export function completedEvents(summary = "done"): AgentEvent[] {
  * A CreateAgentFn whose agent runs `script` (which may write files into
  * input.projectPath) and yields the returned events.
  */
-export function fakeAgent(
-  script: (input: RunAgentTaskInput) => AgentEvent[] | Promise<AgentEvent[]>,
-): CreateAgentFn {
+export function fakeAgent(script: (input: RunAgentTaskInput) => AgentEvent[] | Promise<AgentEvent[]>): CreateAgentFn {
   return () => ({
     agent: {
       async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {

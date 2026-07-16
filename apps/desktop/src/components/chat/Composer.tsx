@@ -55,9 +55,7 @@ const PILL =
 /** Maps a pasted blob without a usable filename to an upload name by MIME. */
 function uploadName(file: File): string | null {
   if (/\.(png|jpe?g|gif|webp)$/i.test(file.name)) return file.name;
-  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }[
-    file.type
-  ];
+  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }[file.type];
   return ext ? `pasted.${ext}` : null;
 }
 
@@ -507,7 +505,9 @@ export function Composer({
           {(uploading > 0 || uploadError) && (
             <span className="ml-1 truncate text-2xs">
               {uploading > 0 && <span className="text-tertiary">{t("chat.composer.uploading")}</span>}
-              {uploadError && <span className="text-danger">{t("chat.composer.uploadFailed", { error: uploadError })}</span>}
+              {uploadError && (
+                <span className="text-danger">{t("chat.composer.uploadFailed", { error: uploadError })}</span>
+              )}
             </span>
           )}
 
@@ -520,7 +520,16 @@ export function Composer({
             aria-label={t("chat.composer.attach")}
             className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg border border-subtle text-tertiary hover:bg-surface-overlay hover:text-secondary disabled:opacity-50"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
           </button>
@@ -532,7 +541,16 @@ export function Composer({
             aria-label={t("chat.composer.send")}
             className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="M12 19V5M5 12l7-7 7 7" />
             </svg>
           </button>

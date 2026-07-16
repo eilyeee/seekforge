@@ -11,8 +11,7 @@ import {
 } from "./loop";
 import type { LoopEvent } from "../types";
 
-const feed = (events: LoopEvent[]): LoopProgress =>
-  events.reduce(reduceLoopEvent, emptyLoopProgress());
+const feed = (events: LoopEvent[]): LoopProgress => events.reduce(reduceLoopEvent, emptyLoopProgress());
 
 describe("reduceLoopEvent", () => {
   it("retains persistence warnings for separate rendering", () => {
@@ -64,7 +63,13 @@ describe("loopRows", () => {
       { type: "verify", iteration: 2, code: 0, passed: true, output: "PASS" },
       {
         type: "loop.done",
-        result: { status: "passed", iterations: 2, costUsd: 0.009, sessionId: "s", finalVerify: { code: 0, output: "PASS" } },
+        result: {
+          status: "passed",
+          iterations: 2,
+          costUsd: 0.009,
+          sessionId: "s",
+          finalVerify: { code: 0, output: "PASS" },
+        },
       },
     ]);
     expect(rows).toHaveLength(2);
@@ -83,9 +88,7 @@ describe("loopRows", () => {
   });
 
   it("shows live verify output before the final result", () => {
-    const rows = loopRows([
-      { type: "verify.output", iteration: 1, stream: "stdout", chunk: "running test\ncase 3" },
-    ]);
+    const rows = loopRows([{ type: "verify.output", iteration: 1, stream: "stdout", chunk: "running test\ncase 3" }]);
     expect(rows[0]?.liveTail).toBe("case 3");
   });
 });

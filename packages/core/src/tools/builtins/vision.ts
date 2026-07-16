@@ -56,7 +56,7 @@ const imageAnalyzeSchema = z.object({
   question: z
     .string()
     .optional()
-    .describe("Specific question about the image, e.g. \"What error is shown?\" (default: a detailed description)."),
+    .describe('Specific question about the image, e.g. "What error is shown?" (default: a detailed description).'),
 });
 
 const DEFAULT_QUESTION = "Describe this image in detail for a coding agent.";
@@ -103,10 +103,7 @@ const imageAnalyze = defineTool({
       );
     }
     if (bytes.length > MAX_IMAGE_BYTES) {
-      throw new ToolError(
-        "too_large",
-        `Image is ${bytes.length} bytes; max is ${MAX_IMAGE_BYTES} (4MB)`,
-      );
+      throw new ToolError("too_large", `Image is ${bytes.length} bytes; max is ${MAX_IMAGE_BYTES} (4MB)`);
     }
 
     const question = args.question ?? DEFAULT_QUESTION;

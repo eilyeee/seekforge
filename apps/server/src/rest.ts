@@ -12,12 +12,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  DEFAULT_MODEL,
-  DEPRECATED_MODELS,
-  MODEL_PRICING,
-  resolveProviderPreset,
-} from "@seekforge/core";
+import { DEFAULT_MODEL, DEPRECATED_MODELS, MODEL_PRICING, resolveProviderPreset } from "@seekforge/core";
 import { ConfigValueError, loadConfig } from "./config.js";
 import { FileBrowseError, RawFileError, UploadError } from "./files.js";
 import { sendApiError, sendJson } from "./http.js";
@@ -60,12 +55,7 @@ const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   settingsRoutes.handle,
 ];
 
-export async function handleApi(
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-  ctx: RestContext,
-): Promise<void> {
+export async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL, ctx: RestContext): Promise<void> {
   const method = req.method ?? "GET";
   const path = url.pathname;
   // ["api", ...rest] — path params are URL-decoded per segment. Malformed
@@ -98,7 +88,11 @@ export async function handleApi(
     if (method === "GET" && path === "/api/metrics") {
       const metrics = ctx.runManager.metrics();
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
-      res.end(`${Object.entries(metrics).map(([name, value]) => `${name} ${value}`).join("\n")}\n`);
+      res.end(
+        `${Object.entries(metrics)
+          .map(([name, value]) => `${name} ${value}`)
+          .join("\n")}\n`,
+      );
       return;
     }
 

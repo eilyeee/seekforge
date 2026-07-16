@@ -19,8 +19,13 @@ type JsonRpcResponse = {
 };
 
 function isJsonRpcResponse(value: unknown, id: number): value is JsonRpcResponse {
-  return typeof value === "object" && value !== null && !Array.isArray(value) &&
-    (value as { id?: unknown }).id === id && ("result" in value || "error" in value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as { id?: unknown }).id === id &&
+    ("result" in value || "error" in value)
+  );
 }
 
 /**
@@ -166,9 +171,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         grant_type: "refresh_token",
         refresh_token: expandEnvRefs(oauth.refreshToken),
         client_id: expandEnvRefs(oauth.clientId),
-        ...(oauth.clientSecret !== undefined
-          ? { client_secret: expandEnvRefs(oauth.clientSecret) }
-          : {}),
+        ...(oauth.clientSecret !== undefined ? { client_secret: expandEnvRefs(oauth.clientSecret) } : {}),
         ...(oauth.scope !== undefined ? { scope: expandEnvRefs(oauth.scope) } : {}),
       });
       let response: Response;
@@ -231,12 +234,13 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     try {
       let res: Response;
       try {
-        const send = (): Promise<Response> => fetch(url!, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ jsonrpc: "2.0", ...(id !== undefined ? { id } : {}), method, params }),
-          signal: controller.signal,
-        });
+        const send = (): Promise<Response> =>
+          fetch(url!, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ jsonrpc: "2.0", ...(id !== undefined ? { id } : {}), method, params }),
+            signal: controller.signal,
+          });
         res = await send();
         if (res.status === 401 && options.config.oauth) {
           await res.body?.cancel().catch(() => {});
@@ -249,9 +253,15 @@ export function createMcpHttpTransport(options: McpClientOptions): {
             ? new McpError("disposed", `MCP client "${options.name}" disposed`)
             : signal?.aborted
               ? new McpError("mcp_cancelled", `MCP ${method} request was cancelled`)
-            : new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`);
+              : new McpError(
+                  "mcp_timeout",
+                  `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`,
+                );
         }
-        throw new McpError("mcp_http_error", `MCP server "${options.name}" unreachable: ${err instanceof Error ? err.message : String(err)}`);
+        throw new McpError(
+          "mcp_http_error",
+          `MCP server "${options.name}" unreachable: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       const newSession = res.headers.get("mcp-session-id");
       if (newSession) sessionId = newSession;
@@ -290,9 +300,15 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
         }
         if (controller.signal.aborted && !disposed) {
-          throw new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`);
+          throw new McpError(
+            "mcp_timeout",
+            `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`,
+          );
         }
-        throw new McpError("mcp_parse_error", `MCP server "${options.name}" sent an unparseable ${method} response: ${err instanceof Error ? err.message : String(err)}`);
+        throw new McpError(
+          "mcp_parse_error",
+          `MCP server "${options.name}" sent an unparseable ${method} response: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     } finally {
       clearTimeout(timer);

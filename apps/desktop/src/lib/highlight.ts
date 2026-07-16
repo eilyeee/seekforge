@@ -25,27 +25,44 @@ type LangDef = {
 const words = (s: string): Set<string> => new Set(s.split(" "));
 
 const ALIASES: Record<string, string> = {
-  ts: "ts", tsx: "ts", typescript: "ts",
-  js: "ts", jsx: "ts", javascript: "ts", mjs: "ts", cjs: "ts",
-  py: "py", python: "py",
-  rs: "rs", rust: "rs",
-  go: "go", golang: "go",
-  sh: "sh", bash: "sh", zsh: "sh", shell: "sh",
-  json: "json", jsonc: "json",
-  css: "css", scss: "css",
-  html: "html", xml: "html",
-  yaml: "yaml", yml: "yaml",
+  ts: "ts",
+  tsx: "ts",
+  typescript: "ts",
+  js: "ts",
+  jsx: "ts",
+  javascript: "ts",
+  mjs: "ts",
+  cjs: "ts",
+  py: "py",
+  python: "py",
+  rs: "rs",
+  rust: "rs",
+  go: "go",
+  golang: "go",
+  sh: "sh",
+  bash: "sh",
+  zsh: "sh",
+  shell: "sh",
+  json: "json",
+  jsonc: "json",
+  css: "css",
+  scss: "css",
+  html: "html",
+  xml: "html",
+  yaml: "yaml",
+  yml: "yaml",
 };
 
 const DEFS: Record<string, LangDef> = {
   ts: {
-    lineComment: "//", blockComment: true,
+    lineComment: "//",
+    blockComment: true,
     keywords: words(
       "const let var function return if else for while class extends new " +
-      "import export from default async await try catch finally throw " +
-      "typeof instanceof interface type switch case break continue of in " +
-      "this super static get set public private protected readonly enum " +
-      "implements namespace declare as satisfies keyof",
+        "import export from default async await try catch finally throw " +
+        "typeof instanceof interface type switch case break continue of in " +
+        "this super static get set public private protected readonly enum " +
+        "implements namespace declare as satisfies keyof",
     ),
     literals: words("true false null undefined void NaN Infinity"),
   },
@@ -53,26 +70,28 @@ const DEFS: Record<string, LangDef> = {
     lineComment: "#",
     keywords: words(
       "def return if elif else for while class import from as with try " +
-      "except finally raise lambda pass break continue yield global " +
-      "nonlocal async await not and or in is del assert",
+        "except finally raise lambda pass break continue yield global " +
+        "nonlocal async await not and or in is del assert",
     ),
     literals: words("True False None"),
   },
   rs: {
-    lineComment: "//", blockComment: true,
+    lineComment: "//",
+    blockComment: true,
     keywords: words(
       "fn let mut pub use mod struct enum impl trait return if else for " +
-      "while loop match break continue const static ref move async await " +
-      "dyn where unsafe as in crate self super type",
+        "while loop match break continue const static ref move async await " +
+        "dyn where unsafe as in crate self super type",
     ),
     literals: words("true false None Some Ok Err"),
   },
   go: {
-    lineComment: "//", blockComment: true,
+    lineComment: "//",
+    blockComment: true,
     keywords: words(
       "func var const type struct interface map chan return if else for " +
-      "range switch case break continue default go defer select package " +
-      "import goto fallthrough",
+        "range switch case break continue default go defer select package " +
+        "import goto fallthrough",
     ),
     literals: words("true false nil iota"),
   },
@@ -80,7 +99,7 @@ const DEFS: Record<string, LangDef> = {
     lineComment: "#",
     keywords: words(
       "if then else elif fi for while until do done case esac function in " +
-      "return local export exit break continue select echo cd source",
+        "return local export exit break continue select echo cd source",
     ),
     literals: words("true false"),
   },
@@ -107,11 +126,7 @@ export function isKnownLang(lang?: string): boolean {
  * Tokenize one line of code. `inBlock` carries an open C-family block comment
  * across lines; the returned `inBlock` feeds the next line. Pure, never throws.
  */
-export function highlightLine(
-  line: string,
-  lang?: string,
-  inBlock = false,
-): { tokens: CodeToken[]; inBlock: boolean } {
+export function highlightLine(line: string, lang?: string, inBlock = false): { tokens: CodeToken[]; inBlock: boolean } {
   const def = resolveDef(lang);
   if (!def) return { tokens: [{ text: line }], inBlock: false };
   return tokenizeLine(line, def, inBlock);
@@ -133,11 +148,7 @@ export function highlightLines(code: string, lang?: string): CodeToken[][] {
   });
 }
 
-function tokenizeLine(
-  line: string,
-  def: LangDef,
-  inBlock: boolean,
-): { tokens: CodeToken[]; inBlock: boolean } {
+function tokenizeLine(line: string, def: LangDef, inBlock: boolean): { tokens: CodeToken[]; inBlock: boolean } {
   const tokens: CodeToken[] = [];
   let plain = "";
   const flush = (): void => {

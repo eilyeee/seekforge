@@ -108,11 +108,7 @@ export function loadTriggers(workspace: string): Trigger[] {
 
 /** Writes the registry back, owner-only (0o600) — the file holds shared secrets. */
 export function saveTriggers(workspace: string, triggers: Trigger[]): void {
-  writeProjectFileAtomic(
-    workspace,
-    ".seekforge/triggers.json",
-    `${JSON.stringify(triggers, null, 2)}\n`,
-  );
+  writeProjectFileAtomic(workspace, ".seekforge/triggers.json", `${JSON.stringify(triggers, null, 2)}\n`);
 }
 
 export function getTrigger(workspace: string, id: string): Trigger | undefined {
@@ -120,10 +116,7 @@ export function getTrigger(workspace: string, id: string): Trigger | undefined {
 }
 
 /** Appends a trigger; rejects a duplicate id (409 at the endpoint). */
-export function addTrigger(
-  workspace: string,
-  trigger: Trigger,
-): { trigger: Trigger } | { error: string } {
+export function addTrigger(workspace: string, trigger: Trigger): { trigger: Trigger } | { error: string } {
   const triggers = loadTriggers(workspace);
   if (triggers.some((t) => t.id === trigger.id)) {
     return { error: `trigger already exists: ${trigger.id}` };
@@ -156,7 +149,11 @@ export function checkTriggerSecret(expected: string, presented: string | null | 
 }
 
 /** Verify GitHub's native `X-Hub-Signature-256` over the exact request bytes. */
-export function checkGitHubSignature(secret: string, rawBody: string, presented: string | string[] | undefined): boolean {
+export function checkGitHubSignature(
+  secret: string,
+  rawBody: string,
+  presented: string | string[] | undefined,
+): boolean {
   if (typeof presented !== "string" || !presented.startsWith("sha256=")) return false;
   const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
   const a = Buffer.from(expected);
@@ -177,9 +174,7 @@ function str(obj: Record<string, unknown>, key: string): string | undefined {
 
 /** Narrows an unknown to a plain object (not null, not an array). */
 function asObject(v: unknown): Record<string, unknown> | undefined {
-  return v !== null && typeof v === "object" && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : undefined;
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 }
 
 /** Keep the appended payload summary small so a huge webhook body can't bloat the prompt. */
@@ -197,7 +192,10 @@ function cap(s: string): string {
 const FIELD_CAP = 200;
 function sanitizeField(s: string): string {
   // eslint-disable-next-line no-control-regex
-  const cleaned = s.replace(/[\x00-\x1F\x7F]+/g, " ").replace(/\s+/g, " ").trim();
+  const cleaned = s
+    .replace(/[\x00-\x1F\x7F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return cleaned.length <= FIELD_CAP ? cleaned : `${cleaned.slice(0, FIELD_CAP)}…`;
 }
 

@@ -32,9 +32,7 @@ const TODO_VERBS: readonly ArgCandidate[] = [
 
 function todoCandidates(argSoFar: string, ctx: ArgContext): ArgCandidate[] {
   if (argSoFar.startsWith("done ")) {
-    return ctx.todos
-      .filter((t) => !t.done)
-      .map((t) => ({ value: `done ${t.index}`, hint: `☐ ${cap(t.text, 40)}` }));
+    return ctx.todos.filter((t) => !t.done).map((t) => ({ value: `done ${t.index}`, hint: `☐ ${cap(t.text, 40)}` }));
   }
   if (argSoFar.startsWith("rm ")) {
     return ctx.todos.map((t) => ({

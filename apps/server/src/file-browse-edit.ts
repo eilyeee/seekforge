@@ -1,12 +1,4 @@
-import {
-  constants,
-  ftruncateSync,
-  mkdirSync,
-  readdirSync,
-  readSync,
-  writeSync,
-  type Dirent,
-} from "node:fs";
+import { constants, ftruncateSync, mkdirSync, readdirSync, readSync, writeSync, type Dirent } from "node:fs";
 import { basename, dirname } from "node:path";
 import { DEFAULT_IGNORE_DIRS, isSensitiveBasename } from "@seekforge/core";
 import {
@@ -44,9 +36,7 @@ function resolveBrowsePath(workspace: string, rel: string): ResolvedWorkspacePat
     resolved = resolveWorkspacePath(workspace, rel, true);
   } catch (error) {
     const message =
-      error instanceof FilePathChangedError
-        ? "path contains a symbolic link"
-        : "path escapes the workspace";
+      error instanceof FilePathChangedError ? "path contains a symbolic link" : "path escapes the workspace";
     throw new FileBrowseError(400, "bad_request", message);
   }
 
@@ -104,8 +94,7 @@ export function listTree(workspace: string, rel: string): Tree {
         files.push({ name: ent.name, path: childRel, type: "file" });
       }
     }
-    const byName = (a: TreeEntry, b: TreeEntry) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    const byName = (a: TreeEntry, b: TreeEntry) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     dirs.sort(byName);
     files.sort(byName);
     return { path: resolved.relative, entries: [...dirs, ...files] };

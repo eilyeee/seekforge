@@ -127,8 +127,7 @@ test("final line without trailing newline is parsed", async () => {
 // --- error cases ------------------------------------------------------------
 
 test("malformed JSON throws with 1-based line number", async () => {
-  const input =
-    JSON.stringify({ type: "user", text: "ok" }) + "\n" + "{not valid json\n";
+  const input = JSON.stringify({ type: "user", text: "ok" }) + "\n" + "{not valid json\n";
   await assert.rejects(collect([input]), (err: unknown) => {
     assert.ok(err instanceof Error);
     assert.match(err.message, /stream-json input: invalid JSON on line 2/);

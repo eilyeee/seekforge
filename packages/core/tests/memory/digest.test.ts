@@ -68,7 +68,10 @@ describe("buildTranscriptDigest", () => {
   it("is deterministic (same input -> identical output)", () => {
     const messages: ChatMessage[] = [];
     for (let i = 0; i < 300; i++) {
-      messages.push({ role: "assistant", content: `line ${i} ${i % 7 === 0 ? "error here" : "filler"} ${"q".repeat(120)}` });
+      messages.push({
+        role: "assistant",
+        content: `line ${i} ${i % 7 === 0 ? "error here" : "filler"} ${"q".repeat(120)}`,
+      });
     }
     expect(buildTranscriptDigest(messages)).toBe(buildTranscriptDigest(messages));
   });

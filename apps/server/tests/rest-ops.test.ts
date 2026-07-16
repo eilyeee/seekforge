@@ -39,11 +39,7 @@ beforeAll(async () => {
   writeSession(workspace, "s2", "2026-01-02T00:00:00.000Z");
   writeSession(workspace, "s3", "2026-01-03T00:00:00.000Z");
   writeSession(workspace, "doomed", "2026-01-04T00:00:00.000Z");
-  writeFileIn(
-    workspace,
-    ".seekforge/config.json",
-    JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }),
-  );
+  writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }));
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
   base = `http://127.0.0.1:${server.port}`;
 });

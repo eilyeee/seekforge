@@ -8,13 +8,7 @@
  * on the turn loop itself. `createCore` is injected (rather than importing
  * createAgentCore) so this module has no runtime dependency back on loop.ts.
  */
-import type {
-  AgentEvent,
-  FinalReport,
-  PermissionRequest,
-  TokenUsage,
-  ToolResult,
-} from "@seekforge/shared";
+import type { AgentEvent, FinalReport, PermissionRequest, TokenUsage, ToolResult } from "@seekforge/shared";
 import type { ToolContext } from "../tools/index.js";
 import {
   AGENT_SEND_TOOL,
@@ -137,8 +131,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
   ): Promise<ToolResult> {
     const nested = rt.createCore({
       ...deps,
-      provider:
-        def.model !== undefined && deps.providerForModel ? deps.providerForModel(def.model) : deps.provider,
+      provider: def.model !== undefined && deps.providerForModel ? deps.providerForModel(def.model) : deps.provider,
       subagents: undefined,
       dispatchManager: undefined,
       _depth: rt.depth + 1,
@@ -356,7 +349,10 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       reason?: string;
     };
     const outcomes = new Map<string, MemberOutcome>(
-      validated.plan.members.map((member) => [member.id, { id: member.id, agentId: member.agentId, status: "pending" }]),
+      validated.plan.members.map((member) => [
+        member.id,
+        { id: member.id, agentId: member.agentId, status: "pending" },
+      ]),
     );
     const running = new Map<string, Promise<{ member: TeamMemberPlan; result: ToolResult }>>();
     let stopped = false;
@@ -365,7 +361,9 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         const outcome = outcomes.get(member.id)!;
         if (outcome.status !== "pending") continue;
         const dependencies = member.dependsOn.map((id) => outcomes.get(id)!);
-        if (dependencies.some((dep) => dep.status === "failed" || dep.status === "cancelled" || dep.status === "skipped")) {
+        if (
+          dependencies.some((dep) => dep.status === "failed" || dep.status === "cancelled" || dep.status === "skipped")
+        ) {
           outcome.status = "skipped";
           outcome.reason = "dependency failed";
         }
@@ -424,11 +422,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       const { member, result } = await Promise.race(running.values());
       running.delete(member.id);
       const outcome = outcomes.get(member.id)!;
-      outcome.status = result.ok
-        ? "done"
-        : result.error?.code === "subagent_cancelled"
-          ? "cancelled"
-          : "failed";
+      outcome.status = result.ok ? "done" : result.error?.code === "subagent_cancelled" ? "cancelled" : "failed";
       outcome.result = result;
       if (!result.ok && validated.plan.failurePolicy === "stop") {
         stopped = true;
@@ -483,9 +477,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         error: { code: "subagent_cancelled", message: rec.cancelReason ?? "subagent was cancelled" },
       };
     }
-    const data = rec.result?.data as
-      | { report?: string; changedFiles?: string[]; commandsRun?: string[] }
-      | undefined;
+    const data = rec.result?.data as { report?: string; changedFiles?: string[]; commandsRun?: string[] } | undefined;
     return {
       ok: true,
       data: {

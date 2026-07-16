@@ -227,9 +227,7 @@ describe("todos endpoints", () => {
     ]);
 
     const file = readFileSync(join(workspace, ".seekforge", "todos.md"), "utf8");
-    expect(file).toBe(
-      "# Project todos\n\nKeep shipping. This prose line must survive.\n- [x] first\n- [ ] third\n",
-    );
+    expect(file).toBe("# Project todos\n\nKeep shipping. This prose line must survive.\n- [x] first\n- [ ] third\n");
   });
 
   it("validates op and index", async () => {
@@ -369,14 +367,12 @@ describe("GET /api/mcp/prompts", () => {
     expect(await jsonOf(res)).toEqual({ text: "user: Hello Ada" });
   });
 
-  it.each([
-    42,
-    [],
-    { arguments: [] },
-    { arguments: { who: 42 } },
-  ])("rejects malformed prompt arguments locally: %j", async (body) => {
-    const res = await post("/api/mcp/prompts/fake/greet", body);
-    expect(res.status).toBe(400);
-    expect((await jsonOf(res)).error.code).toBe("bad_request");
-  });
+  it.each([42, [], { arguments: [] }, { arguments: { who: 42 } }])(
+    "rejects malformed prompt arguments locally: %j",
+    async (body) => {
+      const res = await post("/api/mcp/prompts/fake/greet", body);
+      expect(res.status).toBe(400);
+      expect((await jsonOf(res)).error.code).toBe("bad_request");
+    },
+  );
 });

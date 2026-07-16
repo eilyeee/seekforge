@@ -3,13 +3,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { resolveForRead } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
-import {
-  lspDefinition,
-  lspReferences,
-  lspDiagnostics,
-  severityLabel,
-  type LspLocation,
-} from "../lsp/client.js";
+import { lspDefinition, lspReferences, lspDiagnostics, severityLabel, type LspLocation } from "../lsp/client.js";
 
 /**
  * Language Server Protocol tools: PRECISE symbol information from a real
@@ -46,7 +40,10 @@ const diagnosticsSchema = z.object({
 });
 
 /** Render an LSP location as a workspace-relative `file:line:character` triple. */
-function formatLocation(workspace: string, loc: LspLocation): {
+function formatLocation(
+  workspace: string,
+  loc: LspLocation,
+): {
   path: string;
   line: number;
   character: number;
@@ -87,10 +84,15 @@ const lspDefinitionTool = defineTool({
   }),
   async run(args, ctx) {
     const abs = resolveForRead(ctx.workspace, args.path);
-    const locations = await lspDefinition(ctx.workspace, abs, {
-      line: args.line - 1,
-      character: args.character ?? 0,
-    }, ctx.signal);
+    const locations = await lspDefinition(
+      ctx.workspace,
+      abs,
+      {
+        line: args.line - 1,
+        character: args.character ?? 0,
+      },
+      ctx.signal,
+    );
     const definitions = locations.map((l) => formatLocation(ctx.workspace, l));
     return { data: { definitions, count: definitions.length } };
   },
@@ -109,10 +111,15 @@ const lspReferencesTool = defineTool({
   }),
   async run(args, ctx) {
     const abs = resolveForRead(ctx.workspace, args.path);
-    const locations = await lspReferences(ctx.workspace, abs, {
-      line: args.line - 1,
-      character: args.character ?? 0,
-    }, ctx.signal);
+    const locations = await lspReferences(
+      ctx.workspace,
+      abs,
+      {
+        line: args.line - 1,
+        character: args.character ?? 0,
+      },
+      ctx.signal,
+    );
     const references = locations.map((l) => formatLocation(ctx.workspace, l));
     return { data: { references, count: references.length } };
   },

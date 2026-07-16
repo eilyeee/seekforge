@@ -36,10 +36,7 @@ export function agentShowCommand(id: string): void {
   }
 }
 
-export function agentImportCommand(
-  sourcePath: string,
-  opts: { global?: boolean; force?: boolean },
-): void {
+export function agentImportCommand(sourcePath: string, opts: { global?: boolean; force?: boolean }): void {
   const targetRoot = opts.global
     ? join(homedir(), ".seekforge", "agents")
     : join(process.cwd(), ".seekforge", "agents");

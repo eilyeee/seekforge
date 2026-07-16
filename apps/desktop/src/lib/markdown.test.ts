@@ -5,11 +5,7 @@ const t = (text: string) => ({ kind: "text" as const, text });
 
 describe("parseInline", () => {
   it("splits inline code spans", () => {
-    expect(parseInline("run `pnpm test` now")).toEqual([
-      t("run "),
-      { kind: "code", text: "pnpm test" },
-      t(" now"),
-    ]);
+    expect(parseInline("run `pnpm test` now")).toEqual([t("run "), { kind: "code", text: "pnpm test" }, t(" now")]);
   });
 
   it("keeps an unterminated backtick literal", () => {
@@ -30,9 +26,7 @@ describe("parseInline", () => {
   });
 
   it("parses bold-italic", () => {
-    expect(parseInline("***wow***")).toEqual([
-      { kind: "strong", children: [{ kind: "em", children: [t("wow")] }] },
-    ]);
+    expect(parseInline("***wow***")).toEqual([{ kind: "strong", children: [{ kind: "em", children: [t("wow")] }] }]);
   });
 
   it("parses underscore emphasis", () => {
@@ -134,9 +128,7 @@ describe("parseMarkdown", () => {
 
   it("parses fenced code blocks verbatim with the info-string language", () => {
     const blocks = parseMarkdown("```ts\nconst a = `tpl`;\n# not a heading\n```");
-    expect(blocks).toEqual([
-      { kind: "code", lang: "ts", code: "const a = `tpl`;\n# not a heading" },
-    ]);
+    expect(blocks).toEqual([{ kind: "code", lang: "ts", code: "const a = `tpl`;\n# not a heading" }]);
   });
 
   it("parses a GFM table", () => {
@@ -178,11 +170,7 @@ describe("parseMarkdown", () => {
 
   it("parses horizontal rules", () => {
     const blocks = parseMarkdown("a\n\n---\n\nb");
-    expect(blocks).toEqual([
-      { kind: "para", inlines: [t("a")] },
-      { kind: "hr" },
-      { kind: "para", inlines: [t("b")] },
-    ]);
+    expect(blocks).toEqual([{ kind: "para", inlines: [t("a")] }, { kind: "hr" }, { kind: "para", inlines: [t("b")] }]);
   });
 
   it("merges consecutive lines into one paragraph and splits on blanks", () => {

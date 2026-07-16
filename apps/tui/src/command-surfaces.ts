@@ -168,10 +168,7 @@ function configValue(key: keyof TuiConfig, config: TuiConfig): string {
  * redacted and object fields summarized, followed by footer lines naming
  * both config paths and the /config edit hint.
  */
-export function formatConfigLines(
-  config: TuiConfig,
-  paths: { global: string; project: string },
-): string[] {
+export function formatConfigLines(config: TuiConfig, paths: { global: string; project: string }): string[] {
   const lines = CONFIG_KEY_ORDER.filter((key) => config[key] !== undefined).map(
     (key) => `${key} = ${configValue(key, config)}`,
   );
@@ -199,9 +196,7 @@ export type PermissionSurfaceInput = {
 
 /** "deny run_command(rm *)" — action tool(match), match omitted when absent. */
 function formatRule(rule: { action: string; tool: string; match?: string }): string {
-  return rule.match !== undefined
-    ? `${rule.action} ${rule.tool}(${rule.match})`
-    : `${rule.action} ${rule.tool}`;
+  return rule.match !== undefined ? `${rule.action} ${rule.tool}(${rule.match})` : `${rule.action} ${rule.tool}`;
 }
 
 const BUILTIN_PREVIEW = 10;

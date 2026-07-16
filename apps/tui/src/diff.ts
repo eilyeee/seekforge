@@ -53,9 +53,7 @@ function diffOps(a: string[], b: string[]): Op[] {
   for (let i = n - 1; i >= 0; i -= 1) {
     for (let j = m - 1; j >= 0; j -= 1) {
       dp[i * width + j] =
-        a[i] === b[j]
-          ? dp[(i + 1) * width + j + 1]! + 1
-          : Math.max(dp[(i + 1) * width + j]!, dp[i * width + j + 1]!);
+        a[i] === b[j] ? dp[(i + 1) * width + j + 1]! + 1 : Math.max(dp[(i + 1) * width + j]!, dp[i * width + j + 1]!);
     }
   }
 

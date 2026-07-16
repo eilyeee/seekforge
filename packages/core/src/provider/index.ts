@@ -44,11 +44,7 @@ export {
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /** Read one chunk, rejecting if the stream sends nothing for `idleMs` (a stall). */
-async function readWithIdleTimeout<T>(
-  reader: ReadableStreamDefaultReader<T>,
-  idleMs: number,
-  signal?: AbortSignal,
-) {
+async function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, idleMs: number, signal?: AbortSignal) {
   if (signal?.aborted) throw signal.reason;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
@@ -89,20 +85,21 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
   const retryOpts = config.onRetry ? { onRetry: config.onRetry } : {};
   // Fallback only engages when configured AND it names a different model than
   // the active primary; otherwise the request path is byte-for-byte unchanged.
-  const fallbackModel =
-    config.fallbackModel && config.fallbackModel !== model ? config.fallbackModel : undefined;
+  const fallbackModel = config.fallbackModel && config.fallbackModel !== model ? config.fallbackModel : undefined;
   const cacheIdentity = crypto
     .createHash("sha256")
-    .update(JSON.stringify({
-      baseUrl,
-      apiKey: config.apiKey,
-      model,
-      capabilities,
-      thinking: config.thinking ?? null,
-      reasoningEffort: config.reasoningEffort ?? null,
-      fallbackModel: fallbackModel ?? null,
-      modelPricing: config.modelPricing ?? null,
-    }))
+    .update(
+      JSON.stringify({
+        baseUrl,
+        apiKey: config.apiKey,
+        model,
+        capabilities,
+        thinking: config.thinking ?? null,
+        reasoningEffort: config.reasoningEffort ?? null,
+        fallbackModel: fallbackModel ?? null,
+        modelPricing: config.modelPricing ?? null,
+      }),
+    )
     .digest("hex");
 
   /**
@@ -139,9 +136,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
       } catch {
         // A misbehaving frontend callback must never break the request path.
       }
-      const fallbackBody = JSON.stringify(
-        buildRequestBody(fallbackModel, req, stream, thinking, capabilities),
-      );
+      const fallbackBody = JSON.stringify(buildRequestBody(fallbackModel, req, stream, thinking, capabilities));
       try {
         // maxRetries: 0 → exactly one fallback attempt, no retry storm.
         const result = await fetchWithRetry(
@@ -172,11 +167,7 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
     onDelta: (chunk: string) => void,
     onReasoningDelta?: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    const { result: res, effectiveModel } = await fetchWithFallback(
-      req,
-      true,
-      async (response) => response,
-    );
+    const { result: res, effectiveModel } = await fetchWithFallback(req, true, async (response) => response);
     if (!res.body) {
       throw new DeepSeekApiError("DeepSeek API returned an empty streaming body");
     }

@@ -3,16 +3,12 @@ import { formatSkillLines } from "../skills-surface.js";
 
 describe("formatSkillLines", () => {
   it("renders id, scope, and description", () => {
-    const lines = formatSkillLines([
-      { id: "tdd", scope: "project", description: "Red-green-refactor loop" },
-    ]);
+    const lines = formatSkillLines([{ id: "tdd", scope: "project", description: "Red-green-refactor loop" }]);
     expect(lines).toEqual(["tdd  (project)  Red-green-refactor loop"]);
   });
 
   it("appends [builtin] for builtin scope", () => {
-    const [line] = formatSkillLines([
-      { id: "commit-style", scope: "builtin", description: "Conventional commits" },
-    ]);
+    const [line] = formatSkillLines([{ id: "commit-style", scope: "builtin", description: "Conventional commits" }]);
     expect(line).toBe("commit-style  (builtin)  Conventional commits  [builtin]");
   });
 
@@ -37,8 +33,6 @@ describe("formatSkillLines", () => {
   });
 
   it("hints at skill import when no skills exist", () => {
-    expect(formatSkillLines([])).toEqual([
-      "no skills installed — seekforge skill import <path> adds one",
-    ]);
+    expect(formatSkillLines([])).toEqual(["no skills installed — seekforge skill import <path> adds one"]);
   });
 });

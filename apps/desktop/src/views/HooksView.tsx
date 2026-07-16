@@ -27,8 +27,7 @@ function newDraftId(): string {
 
 function toDraft(cfg: HooksConfig): Draft {
   const d = {} as Draft;
-  for (const stage of HOOK_STAGES)
-    d[stage] = cfg[stage] ? cfg[stage]!.map((e) => ({ ...e, id: newDraftId() })) : [];
+  for (const stage of HOOK_STAGES) d[stage] = cfg[stage] ? cfg[stage]!.map((e) => ({ ...e, id: newDraftId() })) : [];
   return d;
 }
 
@@ -79,8 +78,7 @@ export function HooksView() {
     setDraft((d) => (d ? { ...d, [stage]: fn(d[stage]) } : d));
 
   const addEntry = (stage: HookStage) => update(stage, (es) => [...es, { command: "", id: newDraftId() }]);
-  const removeEntry = (stage: HookStage, i: number) =>
-    update(stage, (es) => es.filter((_, idx) => idx !== i));
+  const removeEntry = (stage: HookStage, i: number) => update(stage, (es) => es.filter((_, idx) => idx !== i));
   const editEntry = (stage: HookStage, i: number, patch: Partial<HookEntry>) =>
     update(stage, (es) => es.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
 
@@ -120,9 +118,7 @@ export function HooksView() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {error && (
-          <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
-        )}
+        {error && <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>}
         {note && <p className="mb-3 text-2xs text-ok">{note}</p>}
         {draft === null ? (
           <p className="text-sm text-tertiary">{t("hooks.loading")}</p>

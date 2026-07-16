@@ -36,9 +36,7 @@ async function gitDiff(
   try {
     const { stdout } = await execFileAsync("git", args, GIT_EXEC(workspace));
     const MAX = 2_000_000;
-    return stdout.length > MAX
-      ? { diff: stdout.slice(0, MAX), truncated: true }
-      : { diff: stdout, truncated: false };
+    return stdout.length > MAX ? { diff: stdout.slice(0, MAX), truncated: true } : { diff: stdout, truncated: false };
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
     const stderr = e.stderr ?? e.message ?? "";
@@ -149,10 +147,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   return ctx.res.headersSent;
 }
 
-async function runGitMutation(
-  ctx: RouteCtx,
-  operation: () => Promise<void>,
-): Promise<void> {
+async function runGitMutation(ctx: RouteCtx, operation: () => Promise<void>): Promise<void> {
   try {
     await ctx.rest.coordinator.withRepository(ctx.workspace, async () => {
       const guard = acquireWorkspaceSessionGuard(ctx.workspace);
@@ -164,12 +159,7 @@ async function runGitMutation(
     });
   } catch (error) {
     if (!(error instanceof SessionBusyError)) throw error;
-    sendApiError(
-      ctx.res,
-      409,
-      "session_busy",
-      "cannot modify Git state while the workspace has an active session",
-    );
+    sendApiError(ctx.res, 409, "session_busy", "cannot modify Git state while the workspace has an active session");
   }
 }
 
@@ -216,16 +206,7 @@ async function routes(ctx: RouteCtx): Promise<void> {
           // Determine which of the given paths are untracked, then handle both.
           const { stdout } = await execFileAsync(
             "git",
-            [
-              LITERAL_PATHSPECS,
-              "-c",
-              "core.quotepath=false",
-              "status",
-              "--porcelain=v1",
-              "-z",
-              "--",
-              ...relPaths,
-            ],
+            [LITERAL_PATHSPECS, "-c", "core.quotepath=false", "status", "--porcelain=v1", "-z", "--", ...relPaths],
             GIT_EXEC(workspace),
           );
           const untracked = new Set<string>();
@@ -234,11 +215,7 @@ async function routes(ctx: RouteCtx): Promise<void> {
           }
           const tracked = relPaths.filter((p) => !untracked.has(p));
           if (tracked.length > 0) {
-            await execFileAsync(
-              "git",
-              [LITERAL_PATHSPECS, "restore", "--", ...tracked],
-              GIT_EXEC(workspace),
-            );
+            await execFileAsync("git", [LITERAL_PATHSPECS, "restore", "--", ...tracked], GIT_EXEC(workspace));
           }
           for (const p of relPaths) {
             if (!untracked.has(p)) continue;

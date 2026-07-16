@@ -66,7 +66,11 @@ describe("stuck detection + failure escalation", () => {
   const base = { task: "do it", approvalMode: "auto" as const };
 
   it("injects a reflection nudge when an identical tool call fails again (always on)", async () => {
-    const provider = scripted("flash", [call("read_file", { path: "x" }), call("read_file", { path: "x" }), text("stop")]);
+    const provider = scripted("flash", [
+      call("read_file", { path: "x" }),
+      call("read_file", { path: "x" }),
+      text("stop"),
+    ]);
     const deps: AgentCoreDeps = { provider, dispatcher: failing, confirm: async () => true };
     await collect(createAgentCore(deps).runTask({ ...base, projectPath: workspace, mode: "edit" }));
     expect(hasText(provider.seen, "you are looping")).toBe(true);
@@ -79,9 +83,7 @@ describe("stuck detection + failure escalation", () => {
       text("stop"),
     ]);
     const deps: AgentCoreDeps = { provider, dispatcher: failing, confirm: async () => true };
-    const events = await collect(
-      createAgentCore(deps).runTask({ ...base, projectPath: workspace, mode: "edit" }),
-    );
+    const events = await collect(createAgentCore(deps).runTask({ ...base, projectPath: workspace, mode: "edit" }));
     // The model received the nudge transiently...
     expect(hasText(provider.seen, "you are looping")).toBe(true);
     const created = events.find((e) => e.type === "session.created");
@@ -103,9 +105,7 @@ describe("stuck detection + failure escalation", () => {
       providerForModel: () => pro,
       escalateOnFailure: true,
     };
-    const events = await collect(
-      createAgentCore(deps).runTask({ ...base, projectPath: workspace, mode: "edit" }),
-    );
+    const events = await collect(createAgentCore(deps).runTask({ ...base, projectPath: workspace, mode: "edit" }));
     // The escalation note reached the (stronger) provider transiently...
     expect(hasText(pro.seen, "Escalated to pro")).toBe(true);
     const created = events.find((e) => e.type === "session.created");

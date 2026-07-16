@@ -23,11 +23,14 @@ export type ClassifiedAgentError = { kind: AgentErrorKind; hint: string };
 
 const HINTS: Record<AgentErrorKind, string> = {
   auth: "Check your DeepSeek API key: `seekforge config set apiKey <key>` (or set DEEPSEEK_API_KEY) and verify the account is active.",
-  rate_limit: "Provider rate limit hit — wait a moment and retry; reduce parallel runs or batch requests if this recurs.",
+  rate_limit:
+    "Provider rate limit hit — wait a moment and retry; reduce parallel runs or batch requests if this recurs.",
   network: "Could not reach the API — check your network/proxy (HTTPS_PROXY) and the configured baseUrl.",
   timeout: "The request timed out — retry; if it persists, check provider status or your connection.",
-  context_overflow: "Context window exceeded — run /compact (or start a fresh session) to shrink the conversation before retrying.",
-  sandbox: "The OS sandbox is unavailable or denied the operation — install the sandbox helper (sandbox-exec/bwrap) or rerun with sandbox off.",
+  context_overflow:
+    "Context window exceeded — run /compact (or start a fresh session) to shrink the conversation before retrying.",
+  sandbox:
+    "The OS sandbox is unavailable or denied the operation — install the sandbox helper (sandbox-exec/bwrap) or rerun with sandbox off.",
   blocked: "A configured hook blocked this action — review your hooks in .seekforge/config.json.",
   tool: "A tool call failed — inspect the last tool error in the session trace (`seekforge sessions`) and adjust the task or arguments.",
   unknown: "Retry the task; inspect the session trace (`seekforge sessions`) for details.",
@@ -43,15 +46,19 @@ export function classifyAgentError(err: unknown): ClassifiedAgentError {
   const e = err as { code?: unknown; status?: unknown; message?: unknown } | null | undefined;
   const code = typeof e?.code === "string" ? e.code : "";
   const status = typeof e?.status === "number" ? e.status : undefined;
-  const message =
-    err instanceof Error ? err.message : typeof e?.message === "string" ? e.message : String(err ?? "");
+  const message = err instanceof Error ? err.message : typeof e?.message === "string" ? e.message : String(err ?? "");
   const text = `${code} ${message}`.toLowerCase();
 
   const pick = (kind: AgentErrorKind): ClassifiedAgentError => ({ kind, hint: HINTS[kind] });
 
   // Explicit codes from our own subsystems first.
   if (code === "blocked_by_hook" || code === "hook_blocked") return pick("blocked");
-  if (code === "sandbox_unavailable" || text.includes("sandbox") || text.includes("seatbelt") || text.includes("bwrap")) {
+  if (
+    code === "sandbox_unavailable" ||
+    text.includes("sandbox") ||
+    text.includes("seatbelt") ||
+    text.includes("bwrap")
+  ) {
     return pick("sandbox");
   }
 
@@ -66,7 +73,13 @@ export function classifyAgentError(err: unknown): ClassifiedAgentError {
     return pick("context_overflow");
   }
 
-  if (status === 429 || text.includes("429") || text.includes("rate limit") || text.includes("too many requests") || text.includes("quota")) {
+  if (
+    status === 429 ||
+    text.includes("429") ||
+    text.includes("rate limit") ||
+    text.includes("too many requests") ||
+    text.includes("quota")
+  ) {
     return pick("rate_limit");
   }
 

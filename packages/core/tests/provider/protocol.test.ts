@@ -21,8 +21,9 @@ describe("provider protocol validation", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const provider = createDeepSeekProvider({ apiKey: "tenant-key" });
 
-    await expect(provider.chat({ messages: [{ role: "user", content: "hello" }] }))
-      .rejects.toBeInstanceOf(ProviderProtocolError);
+    await expect(provider.chat({ messages: [{ role: "user", content: "hello" }] })).rejects.toBeInstanceOf(
+      ProviderProtocolError,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

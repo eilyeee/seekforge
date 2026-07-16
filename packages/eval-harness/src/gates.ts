@@ -20,8 +20,10 @@ function atMost(name: string, actual: number | null, limit: number, unit = ""): 
     passed,
     actual,
     limit,
-    message: actual === null ? `${name}: unavailable (no successful samples)` :
-      `${name}: ${actual.toFixed(4)}${unit} <= ${limit.toFixed(4)}${unit}`,
+    message:
+      actual === null
+        ? `${name}: unavailable (no successful samples)`
+        : `${name}: ${actual.toFixed(4)}${unit} <= ${limit.toFixed(4)}${unit}`,
   };
 }
 
@@ -42,40 +44,40 @@ function increase(actual: number, baseline: number): number {
 
 function baselineChecks(current: RunAggregate, baseline: RunAggregate, gates: GateConfig): GateCheck[] {
   const checks: GateCheck[] = [];
-  checks.push(atMost(
-    "success-rate drop",
-    Math.max(0, baseline.successRate - current.successRate),
-    gates.maxSuccessRateDrop,
-  ));
+  checks.push(
+    atMost("success-rate drop", Math.max(0, baseline.successRate - current.successRate), gates.maxSuccessRateDrop),
+  );
   if (current.costPerSuccessUsd !== null && baseline.costPerSuccessUsd !== null) {
-    checks.push(atMost(
-      "cost-per-success increase",
-      increase(current.costPerSuccessUsd, baseline.costPerSuccessUsd),
-      gates.maxCostPerSuccessIncreaseRatio,
-    ));
+    checks.push(
+      atMost(
+        "cost-per-success increase",
+        increase(current.costPerSuccessUsd, baseline.costPerSuccessUsd),
+        gates.maxCostPerSuccessIncreaseRatio,
+      ),
+    );
   }
   // Legacy reports have no token fields. Skip the relative token check rather
   // than comparing a real run against an invented zero-token baseline.
   if (baseline.totalTokens > 0 && current.tokensPerSuccess !== null && baseline.tokensPerSuccess !== null) {
-    checks.push(atMost(
-      "tokens-per-success increase",
-      increase(current.tokensPerSuccess, baseline.tokensPerSuccess),
-      gates.maxTokensPerSuccessIncreaseRatio,
-    ));
+    checks.push(
+      atMost(
+        "tokens-per-success increase",
+        increase(current.tokensPerSuccess, baseline.tokensPerSuccess),
+        gates.maxTokensPerSuccessIncreaseRatio,
+      ),
+    );
   }
-  checks.push(atMost(
-    "tool-failure-rate increase",
-    Math.max(0, current.toolFailureRate - baseline.toolFailureRate),
-    gates.maxToolFailureRateIncrease,
-  ));
+  checks.push(
+    atMost(
+      "tool-failure-rate increase",
+      Math.max(0, current.toolFailureRate - baseline.toolFailureRate),
+      gates.maxToolFailureRateIncrease,
+    ),
+  );
   return checks;
 }
 
-export function evaluateGates(
-  results: TaskResult[],
-  gates: GateConfig,
-  baselineJson?: string,
-): GateResult {
+export function evaluateGates(results: TaskResult[], gates: GateConfig, baselineJson?: string): GateResult {
   const current = aggregateResults(results);
   const checks = [
     atLeast("success rate", current.successRate, gates.minSuccessRate),
@@ -90,11 +92,13 @@ export function evaluateGates(
     const baselineIds = new Set(baseline.map((result) => result.taskId));
     const commonIds = new Set([...currentIds].filter((id) => baselineIds.has(id)));
     if (commonIds.size > 0) {
-      checks.push(...baselineChecks(
-        aggregateResults(results.filter((result) => commonIds.has(result.taskId))),
-        aggregateResults(baseline.filter((result) => commonIds.has(result.taskId))),
-        gates,
-      ));
+      checks.push(
+        ...baselineChecks(
+          aggregateResults(results.filter((result) => commonIds.has(result.taskId))),
+          aggregateResults(baseline.filter((result) => commonIds.has(result.taskId))),
+          gates,
+        ),
+      );
     }
   }
   return { passed: checks.every((check) => check.passed), checks };

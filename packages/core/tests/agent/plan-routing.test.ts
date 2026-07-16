@@ -85,9 +85,7 @@ describe("plan-model routing", () => {
 
   it("keeps the default provider when plan is false/unset", async () => {
     const { deps, defaultProvider, planProvider, requestedModels } = makeDeps();
-    await collect(
-      createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "edit" }),
-    );
+    await collect(createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "edit" }));
     expect(requestedModels).toEqual([]);
     expect(defaultProvider.chats).toBe(1);
     expect(planProvider.chats).toBe(0);
@@ -96,9 +94,7 @@ describe("plan-model routing", () => {
   it("keeps the default provider on plan:true when planModel is unset", async () => {
     const { deps, defaultProvider, planProvider, requestedModels } = makeDeps();
     delete deps.planModel;
-    await collect(
-      createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }),
-    );
+    await collect(createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }));
     expect(requestedModels).toEqual([]);
     expect(defaultProvider.chats).toBe(1);
     expect(planProvider.chats).toBe(0);
@@ -107,9 +103,7 @@ describe("plan-model routing", () => {
   it("falls back to the default provider when providerForModel is unset", async () => {
     const { deps, defaultProvider } = makeDeps();
     delete deps.providerForModel;
-    await collect(
-      createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }),
-    );
+    await collect(createAgentCore(deps).runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }));
     expect(defaultProvider.chats).toBe(1);
   });
 });

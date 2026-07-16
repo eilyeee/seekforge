@@ -73,13 +73,15 @@ describe("loadEvalConfig", () => {
   });
 
   it("keeps only finite non-negative model pricing entries", () => {
-    const config = loadEvalConfig(projectWithConfig({
-      modelPricing: {
-        valid: { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0, outputPer1M: 2 },
-        negative: { inputCacheMissPer1M: -1, inputCacheHitPer1M: 0, outputPer1M: 2 },
-        missing: { inputCacheMissPer1M: 1, outputPer1M: 2 },
-      },
-    }));
+    const config = loadEvalConfig(
+      projectWithConfig({
+        modelPricing: {
+          valid: { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0, outputPer1M: 2 },
+          negative: { inputCacheMissPer1M: -1, inputCacheHitPer1M: 0, outputPer1M: 2 },
+          missing: { inputCacheMissPer1M: 1, outputPer1M: 2 },
+        },
+      }),
+    );
     expect(config.modelPricing).toEqual({
       valid: { inputCacheMissPer1M: 1, inputCacheHitPer1M: 0, outputPer1M: 2 },
     });

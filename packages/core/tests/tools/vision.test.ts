@@ -85,10 +85,7 @@ describe("image_analyze tool (through dispatcher)", () => {
     configureVision(CONFIG);
     const ws = makeWorkspace();
     writeImage(ws, "vector.svg");
-    const res = await createDefaultDispatcher().execute(
-      call("image_analyze", { path: "vector.svg" }),
-      makeCtx(ws),
-    );
+    const res = await createDefaultDispatcher().execute(call("image_analyze", { path: "vector.svg" }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("unsupported_image");
   });
@@ -107,10 +104,7 @@ describe("image_analyze tool (through dispatcher)", () => {
     configureVision(CONFIG);
     const ws = makeWorkspace();
     writeImage(ws, "huge.png", 4 * 1024 * 1024 + 1);
-    const res = await createDefaultDispatcher().execute(
-      call("image_analyze", { path: "huge.png" }),
-      makeCtx(ws),
-    );
+    const res = await createDefaultDispatcher().execute(call("image_analyze", { path: "huge.png" }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("too_large");
   });
@@ -148,10 +142,7 @@ describe("image_analyze tool (through dispatcher)", () => {
     const spy = fetchReturningCompletion("desc");
     const ws = makeWorkspace();
     const abs = writeImage(ws, "shot.webp");
-    const res = await createDefaultDispatcher().execute(
-      call("image_analyze", { path: abs }),
-      makeCtx(ws),
-    );
+    const res = await createDefaultDispatcher().execute(call("image_analyze", { path: abs }), makeCtx(ws));
     expect(res.ok).toBe(true);
     const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(init.body as string) as {
@@ -168,10 +159,7 @@ describe("image_analyze tool (through dispatcher)", () => {
     );
     const ws = makeWorkspace();
     writeImage(ws, "shot.gif");
-    const res = await createDefaultDispatcher().execute(
-      call("image_analyze", { path: "shot.gif" }),
-      makeCtx(ws),
-    );
+    const res = await createDefaultDispatcher().execute(call("image_analyze", { path: "shot.gif" }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("vision_failed");
   });

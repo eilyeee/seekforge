@@ -105,10 +105,7 @@ describe("auto mode: env-changing actions STILL require confirmation", () => {
     const ws = makeWorkspace();
     const deny = scriptedConfirm(false);
     const ctx = makeCtx(ws, { policy: { approvalMode: "auto" }, confirm: deny.confirm });
-    const res = await dispatcher.execute(
-      call("run_command", { command: "pnpm install left-pad" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "pnpm install left-pad" }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_by_user");
     expect(deny.requests).toHaveLength(1);
@@ -122,10 +119,7 @@ describe("auto mode: env-changing actions STILL require confirmation", () => {
     const ctx = makeCtx(ws, { policy: { approvalMode: "auto" }, confirm: deny.confirm });
     // No network is reached: the env gate prompts BEFORE run(), and the user's
     // refusal blocks the fetch — so the test stays deterministic.
-    const res = await dispatcher.execute(
-      call("web_fetch", { url: "https://example.com/docs" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("web_fetch", { url: "https://example.com/docs" }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_by_user");
     expect(deny.requests).toHaveLength(1);

@@ -101,9 +101,7 @@ describe("rankSkills", () => {
   });
 
   it("renders a row per skill with signed deltas", () => {
-    const md = toSkillRankingMarkdown(
-      rankSkills([res("t1", true, 100, 4, ["bugfix"]), res("t2", false, 40, 8, [])]),
-    );
+    const md = toSkillRankingMarkdown(rankSkills([res("t1", true, 100, 4, ["bugfix"]), res("t2", false, 40, 8, [])]));
     expect(md).toContain("| bugfix |");
     expect(md).toMatch(/\+\d+%/); // a signed success-rate delta is present
   });

@@ -43,18 +43,24 @@ describe("trend reports", () => {
 
   it("collects standard and A/B JSON reports and writes durable markdown/json artifacts", () => {
     dir = mkdtempSync(join(tmpdir(), "seekforge-trends-"));
-    writeFileSync(join(dir, "2026-01-01.json"), JSON.stringify({
-      generatedAt: "2026-01-01T00:00:00.000Z",
-      metadata: { variant: "control" },
-      results: [result("a", true, 0.01), result("b", false, 0.03)],
-    }));
-    writeFileSync(join(dir, "ab-2026-01-02.json"), JSON.stringify({
-      generatedAt: "2026-01-02T00:00:00.000Z",
-      variants: [
-        { variant: "control", results: [result("a", true, 0.01)] },
-        { variant: "candidate", results: [result("a", true, 0.02)] },
-      ],
-    }));
+    writeFileSync(
+      join(dir, "2026-01-01.json"),
+      JSON.stringify({
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        metadata: { variant: "control" },
+        results: [result("a", true, 0.01), result("b", false, 0.03)],
+      }),
+    );
+    writeFileSync(
+      join(dir, "ab-2026-01-02.json"),
+      JSON.stringify({
+        generatedAt: "2026-01-02T00:00:00.000Z",
+        variants: [
+          { variant: "control", results: [result("a", true, 0.01)] },
+          { variant: "candidate", results: [result("a", true, 0.02)] },
+        ],
+      }),
+    );
     writeFileSync(join(dir, "broken.json"), "{not json");
 
     const entries = collectTrends(dir);
@@ -72,11 +78,14 @@ describe("trend reports", () => {
     // CI restores the previous aggregate under a different filename. Its
     // entries merge with current reports without duplicating the overlap.
     writeFileSync(join(dir, "history-previous.json"), readFileSync(written.jsonPath, "utf8"));
-    writeFileSync(join(dir, "2026-01-03.json"), JSON.stringify({
-      generatedAt: "2026-01-03T00:00:00.000Z",
-      metadata: { variant: "control" },
-      results: [result("c", true, 0.04)],
-    }));
+    writeFileSync(
+      join(dir, "2026-01-03.json"),
+      JSON.stringify({
+        generatedAt: "2026-01-03T00:00:00.000Z",
+        metadata: { variant: "control" },
+        results: [result("c", true, 0.04)],
+      }),
+    );
     expect(collectTrends(dir)).toHaveLength(4);
   });
 });

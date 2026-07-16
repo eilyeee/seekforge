@@ -11,7 +11,7 @@ const FINAL_TEXT =
   "Done. I added the `--json` flag to the run command and verified it:\n\n" +
   "- `apps/cli/src/index.ts`: new flag wired into the renderer\n" +
   "- `pnpm typecheck` passes\n\n" +
-  "```bash\nseekforge run \"fix the bug\" --json | jq .type\n```";
+  '```bash\nseekforge run "fix the bug" --json | jq .type\n```';
 
 const PLAN_TEXT =
   "Here is the plan:\n\n" +
@@ -128,7 +128,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       ev({
         type: "tool.completed",
         toolName: "read_file",
-        result: { ok: true, data: { content: "#!/usr/bin/env node\nimport { program } from \"commander\";\n// …" } },
+        result: { ok: true, data: { content: '#!/usr/bin/env node\nimport { program } from "commander";\n// …' } },
       });
 
       plan("done", "in_progress", "pending");

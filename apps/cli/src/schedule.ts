@@ -17,7 +17,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { projectStateDirectory, projectStateFilePath, readProjectStateFile, writeProjectStateFile } from "./project-state.js";
+import {
+  projectStateDirectory,
+  projectStateFilePath,
+  readProjectStateFile,
+  writeProjectStateFile,
+} from "./project-state.js";
 
 /** ask = read-only Q&A; edit = may modify files (edits auto-approved headless). */
 export type ScheduleMode = "ask" | "edit";
@@ -234,10 +239,13 @@ function isJob(v: unknown): v is Job {
     typeof j["task"] === "string" &&
     typeof j["schedule"] === "string" &&
     (j["mode"] === "ask" || j["mode"] === "edit") &&
-    typeof j["maxCostUsd"] === "number" && Number.isFinite(j["maxCostUsd"]) && j["maxCostUsd"] > 0 &&
-    typeof j["enabled"] === "boolean"
-    && (j["failureCount"] === undefined || (Number.isSafeInteger(j["failureCount"]) && (j["failureCount"] as number) >= 0))
-    && (j["nextRetryAt"] === undefined || typeof j["nextRetryAt"] === "string")
+    typeof j["maxCostUsd"] === "number" &&
+    Number.isFinite(j["maxCostUsd"]) &&
+    j["maxCostUsd"] > 0 &&
+    typeof j["enabled"] === "boolean" &&
+    (j["failureCount"] === undefined ||
+      (Number.isSafeInteger(j["failureCount"]) && (j["failureCount"] as number) >= 0)) &&
+    (j["nextRetryAt"] === undefined || typeof j["nextRetryAt"] === "string")
   );
 }
 
@@ -528,7 +536,7 @@ export function markRunResult(jobs: Job[], id: string, at: Date, succeeded: bool
       return { ...rest, lastRunAt: at.toISOString() };
     }
     const failureCount = (job.failureCount ?? 0) + 1;
-    const delay = Math.min(MAX_RETRY_BACKOFF_MS, 60_000 * (2 ** Math.min(failureCount - 1, 10)));
+    const delay = Math.min(MAX_RETRY_BACKOFF_MS, 60_000 * 2 ** Math.min(failureCount - 1, 10));
     return {
       ...job,
       lastRunAt: at.toISOString(),

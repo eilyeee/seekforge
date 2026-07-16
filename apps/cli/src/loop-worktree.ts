@@ -28,11 +28,13 @@ export type LoopRepository = {
 export async function resolveLoopRepository(path: string): Promise<LoopRepository> {
   const entries = await listGitWorktrees(path).catch(async (error: unknown) => {
     // Classify by probing rather than matching git's (localized) error text.
-    const insideRepo = await execFileAsync(
-      "git",
-      ["rev-parse", "--is-inside-work-tree"],
-      { cwd: path, timeout: 60_000 },
-    ).then(() => true, () => false);
+    const insideRepo = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: path,
+      timeout: 60_000,
+    }).then(
+      () => true,
+      () => false,
+    );
     if (!insideRepo) {
       throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
     }
@@ -43,9 +45,7 @@ export async function resolveLoopRepository(path: string): Promise<LoopRepositor
   if (!base) throw new WorktreeGitError("git_error", `git returned no worktrees for: ${path}`);
   const workspaces = [
     base,
-    ...entries
-      .filter((entry) => isRetainedLoopWorktree(base, entry))
-      .map((entry) => entry.path),
+    ...entries.filter((entry) => isRetainedLoopWorktree(base, entry)).map((entry) => entry.path),
   ];
   return { basePath: base, workspaces: [...new Set(workspaces)] };
 }
@@ -71,20 +71,26 @@ export function formatLoopWorktree(worktree: LoopWorktree): string {
 export function isRetainedLoopWorktree(basePath: string, worktree: LoopWorktree): boolean {
   const root = resolve(basePath, ".seekforge", "worktrees");
   const rel = relative(root, resolve(worktree.path));
-  return worktree.branch.startsWith("seekforge/loop-") && rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  return (
+    worktree.branch.startsWith("seekforge/loop-") &&
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
 }
 
-export async function cleanupLoopWorktree(
-  basePath: string,
-  name: string,
-  force = false,
-): Promise<LoopWorktree> {
+export async function cleanupLoopWorktree(basePath: string, name: string, force = false): Promise<LoopWorktree> {
   basePath = (await resolveLoopRepository(basePath)).basePath;
   const resolvedName = resolve(basePath, name);
   const entries = await listGitWorktrees(basePath);
-  const entry = entries.find((candidate) =>
-    candidate.path === resolvedName || candidate.path === name || candidate.branch === name ||
-    candidate.branch === `seekforge/${name}` || candidate.path.endsWith(`${sep}${name}`),
+  const entry = entries.find(
+    (candidate) =>
+      candidate.path === resolvedName ||
+      candidate.path === name ||
+      candidate.branch === name ||
+      candidate.branch === `seekforge/${name}` ||
+      candidate.path.endsWith(`${sep}${name}`),
   );
   if (!entry || !isRetainedLoopWorktree(basePath, entry)) {
     throw new Error(`Retained loop worktree not found: ${name}`);
@@ -92,18 +98,19 @@ export async function cleanupLoopWorktree(
   if (hasActiveLoopLease(entry.path)) {
     throw new Error(`Loop worktree has an active loop and cannot be removed: ${entry.path}`);
   }
-  if (!force && await isWorktreeDirty(entry.path)) {
+  if (!force && (await isWorktreeDirty(entry.path))) {
     throw new Error(`Loop worktree has uncommitted changes: ${entry.path}\nRe-run with --force to discard them.`);
   }
-  await execFileAsync(
-    "git",
-    ["worktree", "remove", ...(force ? ["--force"] : []), entry.path],
-    { cwd: basePath, timeout: 60_000 },
+  await execFileAsync("git", ["worktree", "remove", ...(force ? ["--force"] : []), entry.path], {
+    cwd: basePath,
+    timeout: 60_000,
+  });
+  const branchRemoved = await execFileAsync("git", ["branch", "-D", entry.branch], {
+    cwd: basePath,
+    timeout: 60_000,
+  }).then(
+    () => true,
+    () => false,
   );
-  const branchRemoved = await execFileAsync(
-    "git",
-    ["branch", "-D", entry.branch],
-    { cwd: basePath, timeout: 60_000 },
-  ).then(() => true, () => false);
   return { path: entry.path, branch: entry.branch, branchRemoved };
 }

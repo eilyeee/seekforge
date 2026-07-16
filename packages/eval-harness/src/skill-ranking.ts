@@ -54,14 +54,9 @@ export type SkillRanking = {
  */
 export function rankSkills(results: TaskResult[]): SkillRanking {
   const totalTasks = results.length;
-  const baselineSuccess =
-    totalTasks === 0 ? 0 : results.filter((r) => r.success).length / totalTasks;
-  const baselineScore = mean(
-    results.map((r) => r.metrics.score).filter((s): s is number => s !== undefined),
-  );
-  const baselineTurns = mean(
-    results.map((r) => r.metrics.turns).filter((t): t is number => t !== undefined),
-  );
+  const baselineSuccess = totalTasks === 0 ? 0 : results.filter((r) => r.success).length / totalTasks;
+  const baselineScore = mean(results.map((r) => r.metrics.score).filter((s): s is number => s !== undefined));
+  const baselineTurns = mean(results.map((r) => r.metrics.turns).filter((t): t is number => t !== undefined));
 
   // skillId -> the task results where it fired (dedup per task: a skill counts
   // once per task even if logged twice).
@@ -82,12 +77,8 @@ export function rankSkills(results: TaskResult[]): SkillRanking {
   const skills: SkillStats[] = [];
   for (const [skillId, firing] of bySkill) {
     const successRate = firing.filter((r) => r.success).length / firing.length;
-    const avgScore = mean(
-      firing.map((r) => r.metrics.score).filter((s): s is number => s !== undefined),
-    );
-    const avgTurns = mean(
-      firing.map((r) => r.metrics.turns).filter((t): t is number => t !== undefined),
-    );
+    const avgScore = mean(firing.map((r) => r.metrics.score).filter((s): s is number => s !== undefined));
+    const avgTurns = mean(firing.map((r) => r.metrics.turns).filter((t): t is number => t !== undefined));
     skills.push({
       skillId,
       timesUsed: firing.length,
@@ -95,18 +86,13 @@ export function rankSkills(results: TaskResult[]): SkillRanking {
       successRate,
       ...(avgScore !== undefined ? { avgScore } : {}),
       ...(avgTurns !== undefined ? { avgTurns } : {}),
-      ...(avgTurns !== undefined && baselineTurns !== undefined
-        ? { avgTurnsDelta: avgTurns - baselineTurns }
-        : {}),
+      ...(avgTurns !== undefined && baselineTurns !== undefined ? { avgTurnsDelta: avgTurns - baselineTurns } : {}),
       successRateDelta: successRate - baselineSuccess,
     });
   }
 
   skills.sort(
-    (a, b) =>
-      b.timesUsed - a.timesUsed ||
-      b.successRate - a.successRate ||
-      a.skillId.localeCompare(b.skillId),
+    (a, b) => b.timesUsed - a.timesUsed || b.successRate - a.successRate || a.skillId.localeCompare(b.skillId),
   );
 
   return {

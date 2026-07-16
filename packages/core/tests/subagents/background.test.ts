@@ -114,10 +114,12 @@ describe("background dispatch + agent_result", () => {
       task: "long job",
       status: "running",
     });
-    expect(events.some((e) => e.type === "subagent.step" && e.dispatchId === "ag-1" && e.toolName === "read_file"))
-      .toBe(true);
-    expect(events.some((e) => e.type === "subagent.completed" && e.dispatchId === "ag-1" && e.status === "done"))
-      .toBe(true);
+    expect(
+      events.some((e) => e.type === "subagent.step" && e.dispatchId === "ag-1" && e.toolName === "read_file"),
+    ).toBe(true);
+    expect(events.some((e) => e.type === "subagent.completed" && e.dispatchId === "ag-1" && e.status === "done")).toBe(
+      true,
+    );
     expect(events.some((e) => e.type === "session.completed")).toBe(true);
   });
 
@@ -218,7 +220,9 @@ describe("background dispatch + agent_result", () => {
     const provider = routedProvider(async () => {
       parentRequests++;
       return parentRequests === 1
-        ? toolCallsResponse(toolCall("d1", "dispatch_agent", { agentId: "fixer", task: "edit stuff", background: true }))
+        ? toolCallsResponse(
+            toolCall("d1", "dispatch_agent", { agentId: "fixer", task: "edit stuff", background: true }),
+          )
         : response({ content: "ok" });
     });
     let confirmCalls = 0;

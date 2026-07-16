@@ -213,7 +213,9 @@ describe("mcp server", () => {
     });
     const ping = await Promise.race([
       c.request("ping"),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("ping was serialized behind tool call")), 500)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("ping was serialized behind tool call")), 500),
+      ),
     ]);
     expect(ping.result).toEqual({});
 

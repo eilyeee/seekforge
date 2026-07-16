@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -33,7 +42,11 @@ describe("sessions list + prune", () => {
     writeSessionMeta(ws, meta("s1", 1));
     writeSessionMeta(ws, meta("sub1", 1, { parentAgentId: "meta-prism" }));
     expect(listSessions(ws).map((s) => s.id)).toEqual(["s1"]);
-    expect(listSessions(ws, { includeSubagents: true }).map((s) => s.id).sort()).toEqual(["s1", "sub1"]);
+    expect(
+      listSessions(ws, { includeSubagents: true })
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(["s1", "sub1"]);
   });
 
   it("atomically replaces metadata without leaving temporary files", () => {
@@ -103,9 +116,7 @@ describe("compactSessionNow", () => {
   });
 
   it("compacts a long session in place and the rewrite is replayable", async () => {
-    const { createSessionTrace, loadSessionMessages, compactSessionNow } = await import(
-      "../../src/agent/trace.js"
-    );
+    const { createSessionTrace, loadSessionMessages, compactSessionNow } = await import("../../src/agent/trace.js");
     const trace = createSessionTrace(ws, "s1");
     trace.message({ role: "system", content: "system prompt" });
     trace.message({ role: "user", content: "the task" });
@@ -167,11 +178,14 @@ describe("loadSessionMessages robustness", () => {
     (invalid) => {
       const dir = join(ws, ".seekforge", "sessions", "s2");
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "messages.jsonl"), [
-        JSON.stringify({ role: "user", content: "before" }),
-        invalid,
-        JSON.stringify({ role: "assistant", content: "after" }),
-      ].join("\n"));
+      writeFileSync(
+        join(dir, "messages.jsonl"),
+        [
+          JSON.stringify({ role: "user", content: "before" }),
+          invalid,
+          JSON.stringify({ role: "assistant", content: "after" }),
+        ].join("\n"),
+      );
       expect(loadSessionMessages(ws, "s2")).toEqual([{ role: "user", content: "before" }]);
     },
   );
@@ -208,13 +222,7 @@ describe("truncateSessionAtUserTurn", () => {
     // 9 messages total; turn 2 is "follow-up 2" at index 5 → keep 5, drop 4.
     expect(result).toEqual({ removedMessages: 4, keptMessages: 5 });
     const after = loadSessionMessages(ws, "s1");
-    expect(after.map((m) => m.content)).toEqual([
-      "system prompt",
-      "the task",
-      "answer 0",
-      "follow-up 1",
-      "answer 1",
-    ]);
+    expect(after.map((m) => m.content)).toEqual(["system prompt", "the task", "answer 0", "follow-up 1", "answer 1"]);
   });
 
   it("refuses turn 0 and out-of-range turns", async () => {

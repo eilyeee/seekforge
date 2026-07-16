@@ -19,9 +19,7 @@ describe("prepareMcp workspace roots passthrough", () => {
 
   it("forwards the workspace path as the roots argument", async () => {
     await prepareMcp(config, "/abs/workspace");
-    expect(loadMcpToolSpecs).toHaveBeenCalledWith({ fake: { command: "node", args: ["x.js"] } }, [
-      "/abs/workspace",
-    ]);
+    expect(loadMcpToolSpecs).toHaveBeenCalledWith({ fake: { command: "node", args: ["x.js"] } }, ["/abs/workspace"]);
   });
 
   it("passes undefined roots when no workspace path is given", async () => {

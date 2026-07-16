@@ -7,7 +7,13 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import { MAX_LOOP_ITERATIONS, MEMORY_CANDIDATE_TYPES, type LoopStatus, type MemoryCandidateType, type MemoryStats } from "@seekforge/core";
+import {
+  MAX_LOOP_ITERATIONS,
+  MEMORY_CANDIDATE_TYPES,
+  type LoopStatus,
+  type MemoryCandidateType,
+  type MemoryStats,
+} from "@seekforge/core";
 
 export const TASK_RUNNERS = ["agent", "loop", "session_scenario"] as const;
 export type TaskRunner = (typeof TASK_RUNNERS)[number];
@@ -208,7 +214,9 @@ export function validateCheck(value: unknown, where: string): Check {
       if (expected === null) {
         if (!NULLABLE_MEMORY_STATS.has(field)) throw new Error(`${where}: "equals" cannot be null for ${field}`);
       } else if (
-        typeof expected !== "number" || !Number.isFinite(expected) || expected < 0 ||
+        typeof expected !== "number" ||
+        !Number.isFinite(expected) ||
+        expected < 0 ||
         (FRACTION_MEMORY_STATS.has(field) && expected > 1) ||
         (!FRACTION_MEMORY_STATS.has(field) && !Number.isSafeInteger(expected))
       ) {
@@ -246,7 +254,8 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
     maxIterations,
     expectedStatus: loopStatus(value.expectedStatus, `${where}.expectedStatus`),
   };
-  if (value.costBudgetUsd !== undefined) loop.costBudgetUsd = positiveNumber(value.costBudgetUsd, `${where}.costBudgetUsd`);
+  if (value.costBudgetUsd !== undefined)
+    loop.costBudgetUsd = positiveNumber(value.costBudgetUsd, `${where}.costBudgetUsd`);
   if (value.resume !== undefined) {
     if (!isRecord(value.resume)) throw new Error(`${where}.resume must be an object`);
     const resume: LoopResumeConfig = {
@@ -312,7 +321,10 @@ function parseScenario(value: unknown, where: string): SessionScenarioConfig {
           content: requireString(raw, "content", stepWhere),
         };
         if (raw.memoryType !== undefined) {
-          if (typeof raw.memoryType !== "string" || !MEMORY_CANDIDATE_TYPES.includes(raw.memoryType as MemoryCandidateType)) {
+          if (
+            typeof raw.memoryType !== "string" ||
+            !MEMORY_CANDIDATE_TYPES.includes(raw.memoryType as MemoryCandidateType)
+          ) {
             throw new Error(`${stepWhere}.memoryType must be a valid memory candidate type`);
           }
           step.memoryType = raw.memoryType as MemoryCandidateType;

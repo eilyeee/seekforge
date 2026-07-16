@@ -46,9 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [
-        "https://github.com/eilyeee/seekforge/releases/latest/download/latest.json"
-      ],
+      "endpoints": ["https://github.com/eilyeee/seekforge/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IHVwZGF0ZXIgZGlzYWJsZWQ="
     }
   }

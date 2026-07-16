@@ -29,9 +29,7 @@ import {
 const MAX_RESULTS = 15;
 
 const searchMemorySchema = z.object({
-  query: z
-    .string()
-    .describe("What to look up in project memory (a topic, command, path, or question)."),
+  query: z.string().describe("What to look up in project memory (a topic, command, path, or question)."),
 });
 
 /** A candidate bullet plus a human-readable source tag for the output. */
@@ -66,7 +64,7 @@ function collectAllBullets(workspace: string): SourcedBullet[] {
 const searchMemory = defineTool({
   name: "search_memory",
   description:
-    "Look up project memory ON DEMAND by query — project conventions, commands, paths, or gotchas BEYOND what the auto-injected memory brief already showed (e.g. \"how are tests run here\", \"model config convention\", \"where do migrations live\"). Merges project + global + monorepo subdir memory, returns the top matching remembered facts tagged with their source. Read-only; do NOT use it to re-fetch the brief.",
+    'Look up project memory ON DEMAND by query — project conventions, commands, paths, or gotchas BEYOND what the auto-injected memory brief already showed (e.g. "how are tests run here", "model config convention", "where do migrations live"). Merges project + global + monorepo subdir memory, returns the top matching remembered facts tagged with their source. Read-only; do NOT use it to re-fetch the brief.',
   schema: searchMemorySchema,
   classify: () => ({ permission: "readonly", description: "Search project memory" }),
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -113,7 +111,10 @@ const searchMemory = defineTool({
     // Only root project facts have this workspace's fact-meta sidecar.
     recordFactRetrieval(
       ctx.workspace,
-      chosen.filter((b) => b.source === "project").map((b) => b.line).join("\n"),
+      chosen
+        .filter((b) => b.source === "project")
+        .map((b) => b.line)
+        .join("\n"),
     );
     return { data: { text: [header, ...lines].join("\n") } };
   },

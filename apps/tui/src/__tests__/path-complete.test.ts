@@ -92,12 +92,7 @@ describe("startCompletion — ranking", () => {
     // "editor.ts", and "editor-notes.md"; add a file that full-path-prefixes.
     const files = ["edit.log", ...FILES];
     const c = startCompletion(end("edit"), files);
-    expect(c?.candidates).toEqual([
-      "edit.log",
-      "src/edit-helpers.ts",
-      "src/editor.ts",
-      "docs/editor-notes.md",
-    ]);
+    expect(c?.candidates).toEqual(["edit.log", "src/edit-helpers.ts", "src/editor.ts", "docs/editor-notes.md"]);
   });
 
   it("prefers prefix matches over fuzzy (fuzzy-only files excluded when prefixes exist)", () => {

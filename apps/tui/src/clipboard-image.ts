@@ -95,8 +95,7 @@ export function captureClipboardImage(workspace: string, platform?: string): Cap
     fs.mkdirSync(dir, { recursive: true });
     const name = uploadName();
     const dest = path.join(dir, name);
-    const ok =
-      plat === "darwin" ? captureDarwin(dest) : plat === "linux" ? captureLinux(dest) : false;
+    const ok = plat === "darwin" ? captureDarwin(dest) : plat === "linux" ? captureLinux(dest) : false;
     if (!ok) {
       tryUnlink(dest);
       return null;

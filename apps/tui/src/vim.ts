@@ -176,10 +176,7 @@ function deleteLine(vim: VimState, editor: EditorState): VimResult {
   const ls = moveHome(editor).cursor;
   const le = moveEnd(editor).cursor;
   const register = "\n" + text.slice(ls, le);
-  const newText =
-    le < text.length
-      ? text.slice(0, ls) + text.slice(le + 1)
-      : text.slice(0, Math.max(0, ls - 1));
+  const newText = le < text.length ? text.slice(0, ls) + text.slice(le + 1) : text.slice(0, Math.max(0, ls - 1));
   const landing = Math.min(ls, newText.length);
   const cursor = moveHome({ text: newText, cursor: landing }).cursor;
   return mutate(vim, editor, { text: newText, cursor }, { register });

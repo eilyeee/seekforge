@@ -351,17 +351,11 @@ export function turnSummaryLine(p: { durationMs: number; costUsd: number; totalT
  * for callers/tests that need the full set. pickTip resolves through t() so
  * the active locale applies.
  */
-export const TIPS: readonly string[] = Array.from(
-  { length: TIP_COUNT },
-  (_, i) => STRINGS.en[`tips.${i}`] as string,
-);
+export const TIPS: readonly string[] = Array.from({ length: TIP_COUNT }, (_, i) => STRINGS.en[`tips.${i}`] as string);
 
 /** Pick a tip; a seed makes the choice deterministic (tests, per-session). */
 export function pickTip(seed?: number): string {
-  const i =
-    seed === undefined
-      ? Math.floor(Math.random() * TIPS.length)
-      : Math.abs(Math.trunc(seed)) % TIPS.length;
+  const i = seed === undefined ? Math.floor(Math.random() * TIPS.length) : Math.abs(Math.trunc(seed)) % TIPS.length;
   return t(`tips.${i}`);
 }
 
@@ -392,11 +386,7 @@ export function supportsHyperlinks(env: Record<string, string | undefined> = pro
  * terminal-link ecosystem, so Ink's string-width sees zero-width escapes and
  * layout stays correct. Unsupporting terminals ignore the escapes entirely.
  */
-export function osc8Link(
-  text: string,
-  url: string,
-  env: Record<string, string | undefined> = process.env,
-): string {
+export function osc8Link(text: string, url: string, env: Record<string, string | undefined> = process.env): string {
   if (!supportsHyperlinks(env)) return text;
   return `\u001B]8;;${url}\u0007${text}\u001B]8;;\u0007`;
 }

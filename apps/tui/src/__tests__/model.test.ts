@@ -128,7 +128,15 @@ describe("chatReducer plan upsert", () => {
     s = reduce(s, {
       type: "tool.completed",
       toolName: "update_plan",
-      result: { ok: true, data: { items: [{ step: "a", status: "done" }, { step: "b", status: "in_progress" }] } },
+      result: {
+        ok: true,
+        data: {
+          items: [
+            { step: "a", status: "done" },
+            { step: "b", status: "in_progress" },
+          ],
+        },
+      },
     });
     plans = s.items.filter((i) => i.kind === "plan");
     expect(plans).toHaveLength(1);
@@ -384,7 +392,10 @@ describe("chatReducer thinking blocks (V4)", () => {
   it("tracks live turn tokens from usage.updated and resets on run-start", () => {
     let s = base();
     s = chatReducer(s, { type: "run-start" });
-    s = reduce(s, { type: "usage.updated", usage: { promptTokens: 100, completionTokens: 50, cacheHitTokens: 0, costUsd: 0 } });
+    s = reduce(s, {
+      type: "usage.updated",
+      usage: { promptTokens: 100, completionTokens: 50, cacheHitTokens: 0, costUsd: 0 },
+    });
     expect(s.turnTokens).toBe(150);
     s = chatReducer(s, { type: "run-start" });
     expect(s.turnTokens).toBe(0);

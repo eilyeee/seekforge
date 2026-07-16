@@ -29,7 +29,5 @@ export function modelsCommand(): void {
     );
   }
 
-  console.log(
-    `\n${dim(t("cmd.models.footer"))}`,
-  );
+  console.log(`\n${dim(t("cmd.models.footer"))}`);
 }

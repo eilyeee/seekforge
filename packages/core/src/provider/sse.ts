@@ -88,7 +88,7 @@ function processLine(
   const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
   if (!line.startsWith("data:")) return; // blank lines, comments, other fields
   const payload = line.slice("data:".length).trim();
-  if (payload === "" ) return;
+  if (payload === "") return;
   if (payload === "[DONE]") {
     acc.done = true;
     return;
@@ -118,9 +118,7 @@ function processLine(
   const toolCalls = Array.isArray(delta["tool_calls"]) ? delta["tool_calls"] : [];
   for (const tc of toolCalls) {
     if (!isRecord(tc)) continue;
-    const index = Number.isSafeInteger(tc["index"]) && (tc["index"] as number) >= 0
-      ? tc["index"] as number
-      : 0;
+    const index = Number.isSafeInteger(tc["index"]) && (tc["index"] as number) >= 0 ? (tc["index"] as number) : 0;
     let entry = acc.toolCallsByIndex.get(index);
     if (!entry) {
       entry = { id: "", name: "", argumentsJson: "" };

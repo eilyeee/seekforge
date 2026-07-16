@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildTree,
-  moveCursor,
-  toggleDir,
-  visibleNodes,
-  type TreeState,
-} from "../file-tree.js";
+import { buildTree, moveCursor, toggleDir, visibleNodes, type TreeState } from "../file-tree.js";
 
 const FILES = [
   "README.md",
@@ -58,11 +52,7 @@ describe("buildTree", () => {
 describe("visibleNodes", () => {
   it("shows only top-level entries when nothing is expanded", () => {
     const nodes = buildTree(FILES);
-    expect(visibleNodes(nodes, new Set()).map((n) => n.path)).toEqual([
-      "assets",
-      "src",
-      "README.md",
-    ]);
+    expect(visibleNodes(nodes, new Set()).map((n) => n.path)).toEqual(["assets", "src", "README.md"]);
   });
 
   it("expanding a dir reveals its children but keeps nested dirs collapsed", () => {
@@ -80,11 +70,7 @@ describe("visibleNodes", () => {
   it("a nested expansion only counts when every ancestor is expanded", () => {
     const nodes = buildTree(FILES);
     // src/components expanded but src collapsed → nothing under src shows.
-    expect(visibleNodes(nodes, new Set(["src/components"])).map((n) => n.path)).toEqual([
-      "assets",
-      "src",
-      "README.md",
-    ]);
+    expect(visibleNodes(nodes, new Set(["src/components"])).map((n) => n.path)).toEqual(["assets", "src", "README.md"]);
     expect(visibleNodes(nodes, new Set(["src", "src/components"])).map((n) => n.path)).toEqual([
       "assets",
       "src",

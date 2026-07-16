@@ -45,7 +45,7 @@ export function hasShellControlSyntax(command: string): boolean {
       continue;
     }
     if (char === "`" || (char === "$" && command[i + 1] === "(")) return true;
-    if (quote === undefined && (";&|<>\n\r".includes(char))) return true;
+    if (quote === undefined && ";&|<>\n\r".includes(char)) return true;
   }
   return false;
 }
@@ -294,7 +294,9 @@ function classifyGit(tokens: string[]): CommandPermission {
     const args = tokens.slice(2);
     const listOnly =
       args.length === 0 ||
-      args.every((a) => a === "-v" || a === "-vv" || a === "-a" || a === "-r" || a === "-l" || a === "--list" || a === "list");
+      args.every(
+        (a) => a === "-v" || a === "-vv" || a === "-a" || a === "-r" || a === "-l" || a === "--list" || a === "list",
+      );
     return listOnly ? "readonly" : "execute";
   }
   // `git stash` is special: bare `git stash` is `git stash push` — it MUTATES the
@@ -309,10 +311,7 @@ function classifyGit(tokens: string[]): CommandPermission {
   return "execute"; // commit, merge, rebase, checkout, add, … → confirm
 }
 
-export function classifyCommand(
-  command: string,
-  extraAllowlist: readonly string[] = [],
-): CommandClassification {
+export function classifyCommand(command: string, extraAllowlist: readonly string[] = []): CommandClassification {
   const normalized = normalizeCommand(command);
 
   for (const { re, reason } of DENYLIST) {
@@ -443,10 +442,7 @@ export function runShellCommand(
   }
   if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
     return Promise.reject(
-      new ToolError(
-        "sandbox_unavailable",
-        "sandbox requested but sandbox-exec/bwrap not found on this system",
-      ),
+      new ToolError("sandbox_unavailable", "sandbox requested but sandbox-exec/bwrap not found on this system"),
     );
   }
   const shell = sandboxedShell(command, sandbox, workspace);
@@ -521,17 +517,20 @@ export function runShellCommand(
       fn();
     };
 
-    const settleTerminalError = (kind: "cancelled" | "timeout"): void => settle(() => {
-      if (kind === "cancelled") {
-        reject(new ToolError("cancelled", "Command cancelled", { stdout, stderr }));
-      } else {
-        reject(new ToolError("timeout", `Command timed out after ${timeoutMs}ms`, {
-          timeoutMs,
-          stdout,
-          stderr,
-        }));
-      }
-    });
+    const settleTerminalError = (kind: "cancelled" | "timeout"): void =>
+      settle(() => {
+        if (kind === "cancelled") {
+          reject(new ToolError("cancelled", "Command cancelled", { stdout, stderr }));
+        } else {
+          reject(
+            new ToolError("timeout", `Command timed out after ${timeoutMs}ms`, {
+              timeoutMs,
+              stdout,
+              stderr,
+            }),
+          );
+        }
+      });
 
     timer = setTimeout(() => {
       killTree();

@@ -258,9 +258,7 @@ describe("findChangelogSection / formatReleaseNotes", () => {
     expect(formatReleaseNotes(null, "0.7.0")).toEqual([
       "version 0.7.0 — see github.com/eilyeee/seekforge/blob/main/CHANGELOG.md",
     ]);
-    expect(formatReleaseNotes(null)).toEqual([
-      "SeekForge — see github.com/eilyeee/seekforge/blob/main/CHANGELOG.md",
-    ]);
+    expect(formatReleaseNotes(null)).toEqual(["SeekForge — see github.com/eilyeee/seekforge/blob/main/CHANGELOG.md"]);
   });
 });
 

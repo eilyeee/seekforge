@@ -31,7 +31,9 @@ const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
 
 function ModeChip({ mode }: { mode: AgentInfo["mode"] }) {
   const t = useT();
-  return <Badge tone={mode === "ask" ? "accent" : "warn"}>{mode === "ask" ? t("chat.mode.ask") : t("chat.mode.edit")}</Badge>;
+  return (
+    <Badge tone={mode === "ask" ? "accent" : "warn"}>{mode === "ask" ? t("chat.mode.ask") : t("chat.mode.edit")}</Badge>
+  );
 }
 
 function ScopeChip({ scope }: { scope: AgentScope }) {
@@ -120,9 +122,7 @@ export function AgentsView() {
     if (!q) return agents;
     return agents.filter(
       (a) =>
-        a.id.toLowerCase().includes(q) ||
-        a.name.toLowerCase().includes(q) ||
-        a.description.toLowerCase().includes(q),
+        a.id.toLowerCase().includes(q) || a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q),
     );
   }, [agents, query]);
 
@@ -150,7 +150,9 @@ export function AgentsView() {
                 <Field label={t("agents.fieldTriggers")} value={detail.triggers.join("  ·  ") || "—"} />
                 <Field label={t("agents.fieldTools")} value={detail.tools?.join("  ·  ") ?? t("agents.allTools")} />
                 {detail.own && <Field label={t("agents.fieldOwns")} value={detail.own} mono={false} />}
-                {detail.doNotTouch && <Field label={t("agents.fieldDoNotTouch")} value={detail.doNotTouch} mono={false} />}
+                {detail.doNotTouch && (
+                  <Field label={t("agents.fieldDoNotTouch")} value={detail.doNotTouch} mono={false} />
+                )}
                 {detail.boundary && <Field label={t("agents.fieldBoundary")} value={detail.boundary} mono={false} />}
               </div>
             </Card>
@@ -206,9 +208,7 @@ export function AgentsView() {
         {note && <p className="mt-2 text-2xs text-ok">{note}</p>}
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {error && (
-          <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>
-        )}
+        {error && <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>}
         {filtered === null ? (
           <p className="text-sm text-tertiary">{t("agents.loading")}</p>
         ) : agents && agents.length === 0 ? (
@@ -267,18 +267,21 @@ export function AgentsView() {
           onImport={(path, global, onError) => {
             const operation = coordinator.capture(ws);
             if (!operation) return;
-            void api.agentImport(path, global, operation.workspaceId).then((result) => {
-              if (!coordinator.isCurrent(operation)) return;
-              setImportOpen(false);
-              setNote(
-                result.droppedTools.length > 0
-                  ? t("agents.importDoneDropped", { id: result.agent.id, tools: result.droppedTools.join(", ") })
-                  : t("agents.importDone", { id: result.agent.id }),
-              );
-              void refresh(operation.workspaceId);
-            }).catch((e: unknown) => {
-              if (coordinator.isCurrent(operation)) onError(e);
-            });
+            void api
+              .agentImport(path, global, operation.workspaceId)
+              .then((result) => {
+                if (!coordinator.isCurrent(operation)) return;
+                setImportOpen(false);
+                setNote(
+                  result.droppedTools.length > 0
+                    ? t("agents.importDoneDropped", { id: result.agent.id, tools: result.droppedTools.join(", ") })
+                    : t("agents.importDone", { id: result.agent.id }),
+                );
+                void refresh(operation.workspaceId);
+              })
+              .catch((e: unknown) => {
+                if (coordinator.isCurrent(operation)) onError(e);
+              });
           }}
         />
       )}
@@ -297,7 +300,11 @@ export function AgentsView() {
   );
 }
 
-export function TeamPlanDialog({ agents, onClose, onSubmit }: {
+export function TeamPlanDialog({
+  agents,
+  onClose,
+  onSubmit,
+}: {
   agents: AgentInfo[];
   onClose: () => void;
   onSubmit: (task: string) => void;
@@ -312,7 +319,7 @@ export function TeamPlanDialog({ agents, onClose, onSubmit }: {
   const [error, setError] = useState<string | null>(null);
 
   const update = (index: number, patch: Partial<TeamMemberPlan>) =>
-    setMembers((current) => current.map((member, at) => at === index ? { ...member, ...patch } : member));
+    setMembers((current) => current.map((member, at) => (at === index ? { ...member, ...patch } : member)));
 
   const submit = () => {
     const result = validateTeamPlan(
@@ -338,14 +345,26 @@ export function TeamPlanDialog({ agents, onClose, onSubmit }: {
         <div className="grid grid-cols-2 gap-2">
           <label>
             <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamConcurrency")}</span>
-            <Input type="number" min={1} max={6} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} className="mt-1 font-mono" />
+            <Input
+              type="number"
+              min={1}
+              max={6}
+              value={maxConcurrency}
+              onChange={(event) => setMaxConcurrency(Number(event.target.value))}
+              className="mt-1 font-mono"
+            />
           </label>
           <label>
             <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamFailurePolicy")}</span>
-            <Select value={failurePolicy} onChange={(value) => setFailurePolicy(value as "stop" | "continue")} className="mt-1 w-full" options={[
-              { value: "stop", label: t("agents.teamStop") },
-              { value: "continue", label: t("agents.teamContinue") },
-            ]} />
+            <Select
+              value={failurePolicy}
+              onChange={(value) => setFailurePolicy(value as "stop" | "continue")}
+              className="mt-1 w-full"
+              options={[
+                { value: "stop", label: t("agents.teamStop") },
+                { value: "continue", label: t("agents.teamContinue") },
+              ]}
+            />
           </label>
         </div>
         {members.map((member, index) => (
@@ -353,30 +372,73 @@ export function TeamPlanDialog({ agents, onClose, onSubmit }: {
             <div className="grid grid-cols-2 gap-2">
               <label>
                 <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamMemberId")}</span>
-                <Input value={member.id} onChange={(event) => update(index, { id: event.target.value })} className="mt-1 font-mono" />
+                <Input
+                  value={member.id}
+                  onChange={(event) => update(index, { id: event.target.value })}
+                  className="mt-1 font-mono"
+                />
               </label>
               <label>
                 <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamAgent")}</span>
-                <Select value={member.agentId} onChange={(value) => update(index, { agentId: value })} className="mt-1 w-full" options={agents.map((agent) => ({ value: agent.id, label: `${agent.name} (${agent.id})` }))} />
+                <Select
+                  value={member.agentId}
+                  onChange={(value) => update(index, { agentId: value })}
+                  className="mt-1 w-full"
+                  options={agents.map((agent) => ({ value: agent.id, label: `${agent.name} (${agent.id})` }))}
+                />
               </label>
             </div>
             <label className="block">
               <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamTask")}</span>
-              <TextArea value={member.task} onChange={(event) => update(index, { task: event.target.value })} rows={3} className="mt-1" />
+              <TextArea
+                value={member.task}
+                onChange={(event) => update(index, { task: event.target.value })}
+                rows={3}
+                className="mt-1"
+              />
             </label>
             <label className="block">
               <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamDepends")}</span>
-              <Input value={member.dependsOn.join(", ")} onChange={(event) => update(index, { dependsOn: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })} placeholder={t("agents.teamDependsPlaceholder")} className="mt-1 font-mono" />
+              <Input
+                value={member.dependsOn.join(", ")}
+                onChange={(event) =>
+                  update(index, {
+                    dependsOn: event.target.value
+                      .split(",")
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder={t("agents.teamDependsPlaceholder")}
+                className="mt-1 font-mono"
+              />
             </label>
             {members.length > 1 && (
-              <Button size="sm" variant="ghost" className="text-danger" onClick={() => setMembers((current) => current.filter((_, at) => at !== index))}>
-                <span aria-hidden>×</span>{t("agents.teamRemoveMember")}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-danger"
+                onClick={() => setMembers((current) => current.filter((_, at) => at !== index))}
+              >
+                <span aria-hidden>×</span>
+                {t("agents.teamRemoveMember")}
               </Button>
             )}
           </div>
         ))}
-        <Button size="sm" variant="ghost" disabled={members.length >= 12} onClick={() => setMembers((current) => [...current, { id: `member-${current.length + 1}`, agentId: firstAgent, task: "", dependsOn: [] }])}>
-          <span aria-hidden>+</span>{t("agents.teamAddMember")}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={members.length >= 12}
+          onClick={() =>
+            setMembers((current) => [
+              ...current,
+              { id: `member-${current.length + 1}`, agentId: firstAgent, task: "", dependsOn: [] },
+            ])
+          }
+        >
+          <span aria-hidden>+</span>
+          {t("agents.teamAddMember")}
         </Button>
         {error && <p className="font-mono text-xs text-danger">{error}</p>}
       </div>

@@ -61,9 +61,7 @@ export function App() {
         <div className="min-h-0 flex-1">
           <Suspense
             fallback={
-              <div className="flex h-full items-center justify-center text-sm text-tertiary">
-                {t("common.loading")}
-              </div>
+              <div className="flex h-full items-center justify-center text-sm text-tertiary">{t("common.loading")}</div>
             }
           >
             {view === "chat" && <ChatView />}

@@ -14,11 +14,7 @@ import * as path from "node:path";
 import type { ChatProvider } from "../provider/index.js";
 import { readSessionMeta } from "../agent/index.js";
 import { readToolCallLog, scoreSession, type SessionScore } from "./score.js";
-import {
-  appendEvolutionProposals,
-  readEvolutionProposals,
-  sessionReflectionPath,
-} from "./store.js";
+import { appendEvolutionProposals, readEvolutionProposals, sessionReflectionPath } from "./store.js";
 import {
   EVOLUTION_PROPOSAL_TYPES,
   type EvolutionProposal,
@@ -101,11 +97,7 @@ function readMessageLines(workspace: string, sessionId: string): MessageLine[] {
 }
 
 /** Digest: score + metrics + notes, task, final answer, recent tool calls. */
-export function buildReflectionDigest(
-  workspace: string,
-  sessionId: string,
-  score: SessionScore,
-): string {
+export function buildReflectionDigest(workspace: string, sessionId: string, score: SessionScore): string {
   const meta = readSessionMeta(workspace, sessionId);
   const task = meta?.task ?? "(unknown)";
   const m = score.metrics;
@@ -113,10 +105,7 @@ export function buildReflectionDigest(
   const lastAssistant = [...readMessageLines(workspace, sessionId)]
     .reverse()
     .find((line) => line.role === "assistant" && typeof line.content === "string" && line.content.trim());
-  const finalAnswer = (lastAssistant?.content ?? "(none)")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, FINAL_ANSWER_MAX_CHARS);
+  const finalAnswer = (lastAssistant?.content ?? "(none)").replace(/\s+/g, " ").trim().slice(0, FINAL_ANSWER_MAX_CHARS);
 
   const toolLog = readToolCallLog(workspace, sessionId)
     .slice(-MAX_TOOL_LOG_ENTRIES)
@@ -192,9 +181,7 @@ function parseReflection(content: string): ParsedReflection | undefined {
       const risk: EvolutionProposalRisk =
         p.risk === "low" || p.risk === "medium" || p.risk === "high" ? p.risk : "medium";
       const evidenceRaw =
-        typeof p.evidence === "object" && p.evidence !== null
-          ? (p.evidence as Record<string, unknown>)
-          : {};
+        typeof p.evidence === "object" && p.evidence !== null ? (p.evidence as Record<string, unknown>) : {};
       const evidence: ParsedProposal["evidence"] = {};
       const files = stringArray(evidenceRaw.files);
       const commands = stringArray(evidenceRaw.commands);
@@ -217,8 +204,7 @@ function parseReflection(content: string): ParsedReflection | undefined {
 }
 
 function buildMinimalReflection(score: SessionScore): string {
-  const friction =
-    score.notes.length > 0 ? score.notes.map((n) => `- ${n}`).join("\n") : "- (none)";
+  const friction = score.notes.length > 0 ? score.notes.map((n) => `- ${n}`).join("\n") : "- (none)";
   return [
     "## What happened",
     `Session ${score.sessionId} finished with status ${score.metrics.status} and score ${score.score}/100.`,

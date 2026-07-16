@@ -77,14 +77,9 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
   }, [doOpen]);
 
   return (
-    <div
-      className={compact ? "relative" : "relative px-3 pb-3"}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
+    <div className={compact ? "relative" : "relative px-3 pb-3"} onMouseDown={(e) => e.stopPropagation()}>
       {!compact && (
-        <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">
-          {t("nav.workspace")}
-        </label>
+        <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">{t("nav.workspace")}</label>
       )}
       <button
         type="button"
@@ -148,9 +143,7 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
             {/* Recent (not currently hosted) */}
             {recents.length > 0 && (
               <div className="mt-1 border-t border-subtle pt-1">
-                <div className="px-2 py-1 text-2xs uppercase tracking-wider text-tertiary">
-                  {t("workspace.recent")}
-                </div>
+                <div className="px-2 py-1 text-2xs uppercase tracking-wider text-tertiary">{t("workspace.recent")}</div>
                 {recents.map((r) => (
                   <div
                     key={r.path}

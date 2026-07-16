@@ -20,9 +20,7 @@ function requireSkillId(id: string): void {
 }
 
 function skillsRoot(workspace: string, global: boolean): string {
-  return global
-    ? path.join(seekforgeHome(), ".seekforge", "skills")
-    : path.join(workspace, ".seekforge", "skills");
+  return global ? path.join(seekforgeHome(), ".seekforge", "skills") : path.join(workspace, ".seekforge", "skills");
 }
 
 function isBuiltin(id: string): boolean {
@@ -90,9 +88,10 @@ export function setSkillEnabled(
     let parsed: Record<string, unknown>;
     try {
       const value = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as unknown;
-      parsed = typeof value === "object" && value !== null && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : { id };
+      parsed =
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : { id };
     } catch {
       parsed = { id };
     }
@@ -126,11 +125,7 @@ export type RemoveSkillResult = { id: string; path: string };
  * Deletes a project (default) or global skill directory. Builtins cannot be
  * removed — they are disabled instead. Unknown ids throw.
  */
-export function removeSkill(
-  workspace: string,
-  id: string,
-  opts: ManageSkillOptions = {},
-): RemoveSkillResult {
+export function removeSkill(workspace: string, id: string, opts: ManageSkillOptions = {}): RemoveSkillResult {
   requireSkillId(id);
   const root = skillsRoot(workspace, opts.global ?? false);
   const dir = path.join(root, id);

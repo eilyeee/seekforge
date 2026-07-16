@@ -225,7 +225,12 @@ describe("routeFrame", () => {
     const stale = routeFrame(base, "t1", { type: "error", code: "unknown_request", message: "stale operation" });
     expect(stale.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
     expect(stale.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).not.toBeNull();
-    for (const code of ["unknown_dispatch", "dispatch_not_running", "invalid_steering", "steering_queue_full"] as const) {
+    for (const code of [
+      "unknown_dispatch",
+      "dispatch_not_running",
+      "invalid_steering",
+      "steering_queue_full",
+    ] as const) {
       const controlError = routeFrame(base, "t1", { type: "error", code, message: "control rejected" });
       expect(controlError.tabs.find((t) => t.tabId === "t1")!.chat.running).toBe(true);
       expect(controlError.tabs.find((t) => t.tabId === "t1")!.pendingQuestion).not.toBeNull();
@@ -264,13 +269,17 @@ describe("routeFrame", () => {
 
 describe("subagent control acknowledgements", () => {
   it("attaches steer/cancel acceptance to the active dispatch card", () => {
-    let state = routeFrame(initialTabsState(), "t1", event({
-      type: "subagent.started",
-      dispatchId: "ag-1",
-      agentId: "reviewer",
-      task: "review",
-      status: "running",
-    }));
+    let state = routeFrame(
+      initialTabsState(),
+      "t1",
+      event({
+        type: "subagent.started",
+        dispatchId: "ag-1",
+        agentId: "reviewer",
+        task: "review",
+        status: "running",
+      }),
+    );
     state = routeFrame(state, "t1", {
       type: "subagent.control",
       dispatchId: "ag-1",

@@ -36,13 +36,7 @@ import {
   type McpClientEntry,
   type McpServerConfig,
 } from "@seekforge/core";
-import {
-  loadConfig,
-  maskedConfig,
-  readProjectFile,
-  setConfigValue,
-  writeProjectFileAtomic,
-} from "../config.js";
+import { loadConfig, maskedConfig, readProjectFile, setConfigValue, writeProjectFileAtomic } from "../config.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
@@ -87,9 +81,10 @@ function mutateMcpServers(
 /** Reads one config layer (raw); returns {} on missing/invalid. */
 function readConfigDoc(workspace: string, scope: McpScope = "project"): ConfigDoc {
   try {
-    const raw = scope === "project"
-      ? readProjectFile(workspace, ".seekforge/config.json")
-      : readFileSync(join(homedir(), ".seekforge", "config.json"), "utf8");
+    const raw =
+      scope === "project"
+        ? readProjectFile(workspace, ".seekforge/config.json")
+        : readFileSync(join(homedir(), ".seekforge", "config.json"), "utf8");
     return raw === undefined ? {} : parseConfigDoc(raw);
   } catch {
     return {};
@@ -128,7 +123,11 @@ function mcpServersAt(workspace: string, scope: McpScope): Record<string, McpSer
 }
 
 function maskedMap(values: Record<string, string> | undefined): Record<string, string> {
-  return Object.fromEntries(Object.keys(values ?? {}).sort().map((key) => [key, MASKED_SECRET]));
+  return Object.fromEntries(
+    Object.keys(values ?? {})
+      .sort()
+      .map((key) => [key, MASKED_SECRET]),
+  );
 }
 
 function preserveMaskedValues(
@@ -158,7 +157,7 @@ function sanitizedOauth(oauth: McpServerConfig["oauth"]): Record<string, string>
 function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope, shadowedGlobal = false) {
   return {
     name,
-    transport: cfg.url ? "http" as const : "stdio" as const,
+    transport: cfg.url ? ("http" as const) : ("stdio" as const),
     ...(cfg.command ? { command: cfg.command } : {}),
     args: cfg.args ?? [],
     ...(cfg.url ? { url: cfg.url } : {}),
@@ -294,8 +293,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     const config = loadConfig(workspace);
     const preset = resolveProviderPreset((config.provider ?? "deepseek").toLowerCase());
     const balanceSupported = preset?.capabilities.balance !== false;
-    const balance =
-      balanceSupported && config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
+    const balance = balanceSupported && config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
     return sendJson(res, 200, { balance });
   }
 
@@ -303,7 +301,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand like POST /api/mcp/:name/tools. A server that fails or lacks
   // resource support contributes zero entries (listMcpResources never throws).
   if (method === "GET" && path === "/api/mcp/resources") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) => isMcpServerConfig(entry[1]));
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) =>
+      isMcpServerConfig(entry[1]),
+    );
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
@@ -320,7 +320,9 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand. Mirrors /api/mcp/resources: a server that fails or lacks prompt
   // support contributes zero entries (listMcpPrompts never throws).
   if (method === "GET" && path === "/api/mcp/prompts") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) => isMcpServerConfig(entry[1]));
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) =>
+      isMcpServerConfig(entry[1]),
+    );
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
@@ -337,7 +339,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     const serverName = segs[3]!;
     const promptName = segs[4]!;
     const config = (loadConfig(workspace).mcpServers ?? {})[serverName];
-    if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
+    if (!isMcpServerConfig(config))
+      return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -347,18 +350,16 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
       return sendApiError(res, 400, "bad_request", "arguments must be an object when present");
     }
-    if (rawArgs !== undefined && Object.values(rawArgs as Record<string, unknown>).some((value) => typeof value !== "string")) {
+    if (
+      rawArgs !== undefined &&
+      Object.values(rawArgs as Record<string, unknown>).some((value) => typeof value !== "string")
+    ) {
       return sendApiError(res, 400, "bad_request", "argument values must be strings");
     }
     const client = createMcpClient({ name: serverName, config, workspaceRoots: [workspace] });
     const entries: McpClientEntry[] = [{ serverName, client, trusted: config.trusted === true }];
     try {
-      const text = await getMcpPrompt(
-        serverName,
-        promptName,
-        rawArgs as Record<string, unknown> | undefined,
-        entries,
-      );
+      const text = await getMcpPrompt(serverName, promptName, rawArgs as Record<string, unknown> | undefined, entries);
       return sendJson(res, 200, { text });
     } catch (err) {
       return sendApiError(res, 502, "mcp_error", err instanceof Error ? err.message : String(err));
@@ -377,9 +378,11 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     return sendJson(
       res,
       200,
-      names.map((name) => projectServers[name]
-        ? sanitizedMcpServer(name, projectServers[name], "project", globalServers[name] !== undefined)
-        : sanitizedMcpServer(name, globalServers[name]!, "global")),
+      names.map((name) =>
+        projectServers[name]
+          ? sanitizedMcpServer(name, projectServers[name], "project", globalServers[name] !== undefined)
+          : sanitizedMcpServer(name, globalServers[name]!, "global"),
+      ),
     );
   }
 
@@ -387,7 +390,17 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "POST" && path === "/api/mcp") {
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
-    const { name, scope: rawScope, command, args, env, url: serverUrl, headers, oauth, trusted } = (body ?? {}) as {
+    const {
+      name,
+      scope: rawScope,
+      command,
+      args,
+      env,
+      url: serverUrl,
+      headers,
+      oauth,
+      trusted,
+    } = (body ?? {}) as {
       name?: unknown;
       scope?: unknown;
       command?: unknown;
@@ -420,14 +433,18 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     }
     if (
       env !== undefined &&
-      (typeof env !== "object" || env === null || Array.isArray(env) ||
+      (typeof env !== "object" ||
+        env === null ||
+        Array.isArray(env) ||
         !Object.values(env as Record<string, unknown>).every((value) => typeof value === "string"))
     ) {
       return sendApiError(res, 400, "bad_request", "env must be an object with string values");
     }
     if (
       headers !== undefined &&
-      (typeof headers !== "object" || headers === null || Array.isArray(headers) ||
+      (typeof headers !== "object" ||
+        headers === null ||
+        Array.isArray(headers) ||
         !Object.values(headers as Record<string, unknown>).every((value) => typeof value === "string"))
     ) {
       return sendApiError(res, 400, "bad_request", "headers must be an object with string values");
@@ -438,13 +455,21 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       }
       const value = oauth as Record<string, unknown>;
       if (
-        typeof value.tokenEndpoint !== "string" || value.tokenEndpoint.trim() === "" ||
-        typeof value.clientId !== "string" || value.clientId.trim() === "" ||
-        typeof value.refreshToken !== "string" || value.refreshToken === "" ||
+        typeof value.tokenEndpoint !== "string" ||
+        value.tokenEndpoint.trim() === "" ||
+        typeof value.clientId !== "string" ||
+        value.clientId.trim() === "" ||
+        typeof value.refreshToken !== "string" ||
+        value.refreshToken === "" ||
         (value.clientSecret !== undefined && typeof value.clientSecret !== "string") ||
         (value.scope !== undefined && typeof value.scope !== "string")
       ) {
-        return sendApiError(res, 400, "bad_request", "oauth needs tokenEndpoint, clientId and refreshToken strings; clientSecret and scope are optional strings");
+        return sendApiError(
+          res,
+          400,
+          "bad_request",
+          "oauth needs tokenEndpoint, clientId and refreshToken strings; clientSecret and scope are optional strings",
+        );
       }
     }
     const hasCommand = typeof command === "string" && command.trim() !== "";
@@ -475,12 +500,14 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       if (incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret === undefined) {
         return sendApiError(res, 400, "bad_request", "oauth clientSecret placeholder has no existing value");
       }
-      const refreshToken = incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken !== undefined
-        ? previous.oauth.refreshToken
-        : incoming.refreshToken;
-      const clientSecret = incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret !== undefined
-        ? previous.oauth.clientSecret
-        : incoming.clientSecret;
+      const refreshToken =
+        incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken !== undefined
+          ? previous.oauth.refreshToken
+          : incoming.refreshToken;
+      const clientSecret =
+        incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret !== undefined
+          ? previous.oauth.clientSecret
+          : incoming.clientSecret;
       nextOauth = {
         tokenEndpoint: incoming.tokenEndpoint.trim(),
         clientId: incoming.clientId.trim(),
@@ -513,7 +540,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     }
     const scope: McpScope = rawScope === "global" ? "global" : "project";
     const config = mcpServersAt(workspace, scope);
-    if (!config[name]) return sendApiError(res, 404, "not_found", `MCP server not configured in ${scope} scope: ${name}`);
+    if (!config[name])
+      return sendApiError(res, 404, "not_found", `MCP server not configured in ${scope} scope: ${name}`);
     mutateMcpServers(workspace, scope, (servers) => {
       delete servers[name];
     });
@@ -591,8 +619,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   if (method === "PUT" && path === "/api/hooks") {
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
-    const hooksInput =
-      body !== null && typeof body === "object" ? (body as { hooks?: unknown }).hooks : undefined;
+    const hooksInput = body !== null && typeof body === "object" ? (body as { hooks?: unknown }).hooks : undefined;
     const result = validateHooks(hooksInput);
     if ("error" in result) {
       return sendApiError(res, 400, "bad_request", result.error);

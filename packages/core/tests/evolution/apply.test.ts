@@ -114,9 +114,7 @@ describe("applyProposal project_memory", () => {
 
     const file = path.join(ws, ".seekforge", "memory", "project.md");
     expect(changedPath).toBe(file);
-    expect(fs.readFileSync(file, "utf8")).toBe(
-      "# Project Memory\n- [convention] Tests are run with `pnpm test`.\n",
-    );
+    expect(fs.readFileSync(file, "utf8")).toBe("# Project Memory\n- [convention] Tests are run with `pnpm test`.\n");
   });
 
   it("appends to an existing project.md and dedupes identical bullets", () => {

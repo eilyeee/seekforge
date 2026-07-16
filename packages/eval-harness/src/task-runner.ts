@@ -226,9 +226,10 @@ export async function evaluateCheck(check: Check, ctx: { dir: string; answer: st
     case "memory_stats": {
       const actual = memoryStats(ctx.dir)[check.field];
       const tolerance = check.tolerance ?? 0;
-      const passed = actual === null || check.equals === null
-        ? actual === check.equals
-        : Math.abs(actual - check.equals) <= tolerance;
+      const passed =
+        actual === null || check.equals === null
+          ? actual === check.equals
+          : Math.abs(actual - check.equals) <= tolerance;
       return passed
         ? { check, passed: true }
         : { check, passed: false, detail: `memoryStats.${check.field}: expected ${check.equals}, got ${actual}` };
@@ -287,7 +288,15 @@ async function observeAgent(agent: AgentCore, input: RunAgentTaskInput): Promise
     error = caught instanceof Error ? caught.message : String(caught);
   }
   if (status === "incomplete") error = "session ended without session.completed or session.failed";
-  return { status, summary, usage, toolCalls, failedToolCalls, ...(sessionId ? { sessionId } : {}), ...(error ? { error } : {}) };
+  return {
+    status,
+    summary,
+    usage,
+    toolCalls,
+    failedToolCalls,
+    ...(sessionId ? { sessionId } : {}),
+    ...(error ? { error } : {}),
+  };
 }
 
 function mergeObservation(metrics: MutableMetrics, observation: RunObservation): void {
@@ -385,9 +394,10 @@ async function runLoopTaskMode(
     },
     ...(!statePassed
       ? {
-          error: config.resume && initial.status !== config.resume.expectedInitialStatus
-            ? `expected initial loop status ${config.resume.expectedInitialStatus}, got ${initial.status}`
-            : `expected loop status ${config.expectedStatus}, got ${final.status}`,
+          error:
+            config.resume && initial.status !== config.resume.expectedInitialStatus
+              ? `expected initial loop status ${config.resume.expectedInitialStatus}, got ${initial.status}`
+              : `expected loop status ${config.expectedStatus}, got ${final.status}`,
         }
       : {}),
   };
@@ -470,7 +480,8 @@ async function runSessionScenarioMode(
     }
   }
 
-  const passed = error === undefined && steps.length === task.scenario.steps.length && steps.every((step) => step.passed);
+  const passed =
+    error === undefined && steps.length === task.scenario.steps.length && steps.every((step) => step.passed);
   const finalStep = steps.at(-1);
   return {
     answer,
@@ -487,7 +498,11 @@ async function runSessionScenarioMode(
   };
 }
 
-function enrichMetricsFromTrace(dir: string, sessionIds: string[], metrics: MutableMetrics): Pick<TaskMetrics, "turns" | "score"> {
+function enrichMetricsFromTrace(
+  dir: string,
+  sessionIds: string[],
+  metrics: MutableMetrics,
+): Pick<TaskMetrics, "turns" | "score"> {
   const lastSessionId = sessionIds.at(-1);
   if (!lastSessionId) return {};
   try {
@@ -516,10 +531,16 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     await git(dir, ["init", "-q"]);
     await git(dir, ["add", "-A"]);
     await git(dir, [
-      "-c", "user.email=eval@seekforge.local",
-      "-c", "user.name=seekforge-eval",
-      "-c", "commit.gpgsign=false",
-      "commit", "-q", "-m", "fixture baseline",
+      "-c",
+      "user.email=eval@seekforge.local",
+      "-c",
+      "user.name=seekforge-eval",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "fixture baseline",
     ]);
 
     const startedAt = Date.now();
@@ -543,11 +564,12 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     let error: string | undefined;
     try {
       created = await opts.createAgent();
-      const outcome = runner === "loop"
-        ? await runLoopTaskMode(task, created, dir, opts.taskSuffix, opts, metrics)
-        : runner === "session_scenario"
-          ? await runSessionScenarioMode(task, created, dir, opts.taskSuffix, metrics)
-          : await runAgentTaskMode(task, created, dir, opts.taskSuffix, metrics);
+      const outcome =
+        runner === "loop"
+          ? await runLoopTaskMode(task, created, dir, opts.taskSuffix, opts, metrics)
+          : runner === "session_scenario"
+            ? await runSessionScenarioMode(task, created, dir, opts.taskSuffix, metrics)
+            : await runAgentTaskMode(task, created, dir, opts.taskSuffix, metrics);
       answer = outcome.answer;
       execution = outcome.execution;
       error = outcome.error;

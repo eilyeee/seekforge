@@ -132,14 +132,7 @@ export type PermissionPolicy = {
  * re-exports it, so `import { isSensitiveBasename } from "@seekforge/core"`
  * keeps working.
  */
-const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [
-  /^\.env$/,
-  /^\.env\..+$/,
-  /\.pem$/,
-  /\.key$/,
-  /^id_rsa/,
-  /^id_ed25519/,
-];
+const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [/^\.env$/, /^\.env\..+$/, /\.pem$/, /\.key$/, /^id_rsa/, /^id_ed25519/];
 
 export function isSensitiveBasename(basename: string): boolean {
   return SENSITIVE_BASENAME_PATTERNS.some((re) => re.test(basename));
@@ -228,13 +221,7 @@ export type ChatResponse = {
 // Agent events (docs/04-agent-harness.md §8)
 // ---------------------------------------------------------------------------
 
-export type SessionStatus =
-  | "idle"
-  | "running"
-  | "waiting_approval"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type SessionStatus = "idle" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
 export type AgentError = {
   code: string;

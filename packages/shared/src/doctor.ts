@@ -110,7 +110,12 @@ export function nodeCheck(probes: DoctorProbes): DoctorCheck {
   const major = Number.parseInt(version.replace(/^v/, ""), 10);
   return Number.isFinite(major) && major >= 20
     ? { name: "node", ok: true, detail: `${version} (>= 20)` }
-    : { name: "node", ok: false, detail: `${version} — SeekForge requires node >= 20`, fixHint: "nvm install 22 && nvm use 22" };
+    : {
+        name: "node",
+        ok: false,
+        detail: `${version} — SeekForge requires node >= 20`,
+        fixHint: "nvm install 22 && nvm use 22",
+      };
 }
 
 export function platformCheck(probes: DoctorProbes): DoctorCheck {
@@ -121,7 +126,12 @@ export function platformCheck(probes: DoctorProbes): DoctorCheck {
 export function gitRepoCheck(projectPath: string, probes: DoctorProbes, diffLabel: string): DoctorCheck {
   return probes.fileExists(join(projectPath, ".git"))
     ? { name: "git repo", ok: true, detail: ".git present" }
-    : { name: "git repo", ok: false, detail: `not a git repository — checkpoints and ${diffLabel} are limited`, fixHint: "git init" };
+    : {
+        name: "git repo",
+        ok: false,
+        detail: `not a git repository — checkpoints and ${diffLabel} are limited`,
+        fixHint: "git init",
+      };
 }
 
 export function projectConfigCheck(projectPath: string, probes: DoctorProbes): DoctorCheck {
@@ -134,7 +144,12 @@ export function rustRuntimeCheck(runtimeBin: string | undefined, probes: DoctorP
   if (!runtimeBin) return { name: "rust runtime", ok: true, detail: "not configured (TS fallback)" };
   return probes.fileExists(runtimeBin)
     ? { name: "rust runtime", ok: true, detail: runtimeBin }
-    : { name: "rust runtime", ok: false, detail: `${runtimeBin} not found`, fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)" };
+    : {
+        name: "rust runtime",
+        ok: false,
+        detail: `${runtimeBin} not found`,
+        fixHint: "fix runtimeBin in config.json or remove it (TS fallback works)",
+      };
 }
 
 export function mcpServersCheck(mcpServers: Record<string, unknown> | undefined): DoctorCheck {
@@ -150,9 +165,7 @@ export function sessionsCheck(projectPath: string, probes: DoctorProbes): Doctor
 /** `missingDetail` differs per app ("ctrl-e external edit" vs "external edit"). */
 export function editorCheck(probes: DoctorProbes, missingDetail: string): DoctorCheck {
   const editor = probes.env("EDITOR") ?? probes.env("VISUAL");
-  return editor
-    ? { name: "editor", ok: true, detail: editor }
-    : { name: "editor", ok: false, detail: missingDetail };
+  return editor ? { name: "editor", ok: true, detail: editor } : { name: "editor", ok: false, detail: missingDetail };
 }
 
 export function clipboardCheck(probes: DoctorProbes): DoctorCheck {

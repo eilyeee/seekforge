@@ -26,7 +26,9 @@ function positiveFloat(value: string): number {
 }
 
 export function registerSecurityCommands(program: Command): void {
-  const security = program.command("security").description("scan, triage, fix, verify, and export repository security findings");
+  const security = program
+    .command("security")
+    .description("scan, triage, fix, verify, and export repository security findings");
   security
     .command("scan")
     .option("-m, --model <model>", "override model")
@@ -61,7 +63,10 @@ export function registerSecurityCommands(program: Command): void {
     .option("-m, --model <model>", "override model")
     .option("-y, --yes", "auto-approve Agent permissions")
     .description("fix a Finding, run project checks, and rescan")
-    .action(async (id: string, opts: { maxCost: number; model?: string; yes?: boolean }) => await securityFixCommand(id, opts));
+    .action(
+      async (id: string, opts: { maxCost: number; model?: string; yes?: boolean }) =>
+        await securityFixCommand(id, opts),
+    );
   security
     .command("verify")
     .argument("<finding-id>")

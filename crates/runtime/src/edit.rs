@@ -17,7 +17,10 @@ pub fn apply_patch(workspace: &str, path: &str, edits: &[EditSpec]) -> RtResult<
     let bytes =
         std::fs::read(&resolved).map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
     let content = String::from_utf8(bytes).map_err(|_| {
-        RtError::new(codes::BINARY_FILE, format!("file {path} is not valid UTF-8"))
+        RtError::new(
+            codes::BINARY_FILE,
+            format!("file {path} is not valid UTF-8"),
+        )
     })?;
 
     // All edits are applied in memory; any failure means nothing is written.
@@ -127,8 +130,11 @@ mod tests {
 
     #[test]
     fn single_edit() {
-        let out = apply_edits("let a = 1;\nlet b = 2;\n", &[edit("let a = 1;", "let a = 10;")])
-            .unwrap();
+        let out = apply_edits(
+            "let a = 1;\nlet b = 2;\n",
+            &[edit("let a = 1;", "let a = 10;")],
+        )
+        .unwrap();
         assert_eq!(out, "let a = 10;\nlet b = 2;\n");
     }
 
@@ -147,7 +153,11 @@ mod tests {
         let content = "fn alpha() {\n}\n\nfn foobar() {\n}\n";
         let err = apply_edits(content, &[edit("fn foobaz() {", "fn x() {")]).unwrap_err();
         assert_eq!(err.code, codes::NO_MATCH);
-        assert!(err.message.contains("nearest line 4: fn foobar() {"), "{}", err.message);
+        assert!(
+            err.message.contains("nearest line 4: fn foobar() {"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

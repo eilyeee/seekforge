@@ -39,9 +39,15 @@ function readModelPricing(value: unknown): Record<string, ModelPricing> | undefi
     const inputCacheHitPer1M = candidate["inputCacheHitPer1M"];
     const outputPer1M = candidate["outputPer1M"];
     if (
-      typeof inputCacheMissPer1M !== "number" || !Number.isFinite(inputCacheMissPer1M) || inputCacheMissPer1M < 0 ||
-      typeof inputCacheHitPer1M !== "number" || !Number.isFinite(inputCacheHitPer1M) || inputCacheHitPer1M < 0 ||
-      typeof outputPer1M !== "number" || !Number.isFinite(outputPer1M) || outputPer1M < 0
+      typeof inputCacheMissPer1M !== "number" ||
+      !Number.isFinite(inputCacheMissPer1M) ||
+      inputCacheMissPer1M < 0 ||
+      typeof inputCacheHitPer1M !== "number" ||
+      !Number.isFinite(inputCacheHitPer1M) ||
+      inputCacheHitPer1M < 0 ||
+      typeof outputPer1M !== "number" ||
+      !Number.isFinite(outputPer1M) ||
+      outputPer1M < 0
     ) {
       continue;
     }

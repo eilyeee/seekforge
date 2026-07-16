@@ -38,12 +38,15 @@ const fixer: AgentDefinition = {
 
 describe("validateAgentTeam", () => {
   it("normalizes a valid dependency graph and defaults", () => {
-    const result = validateAgentTeam({
-      members: [
-        { id: "review", agentId: "reviewer", task: "Review the change" },
-        { id: "verify", agentId: "tester", task: "Run focused tests", dependsOn: ["review", "review"] },
-      ],
-    }, agents);
+    const result = validateAgentTeam(
+      {
+        members: [
+          { id: "review", agentId: "reviewer", task: "Review the change" },
+          { id: "verify", agentId: "tester", task: "Run focused tests", dependsOn: ["review", "review"] },
+        ],
+      },
+      agents,
+    );
     expect(result).toEqual({
       ok: true,
       plan: {
@@ -58,23 +61,38 @@ describe("validateAgentTeam", () => {
   });
 
   it("rejects duplicate ids, unknown agents, and missing dependencies", () => {
-    expect(validateAgentTeam({ members: [
-      { id: "a", agentId: "reviewer", task: "one" },
-      { id: "a", agentId: "tester", task: "two" },
-    ] }, agents)).toMatchObject({ ok: false, message: expect.stringContaining("duplicate") });
-    expect(validateAgentTeam({ members: [
-      { id: "a", agentId: "missing", task: "one" },
-    ] }, agents)).toMatchObject({ ok: false, message: expect.stringContaining("unknown agent") });
-    expect(validateAgentTeam({ members: [
-      { id: "a", agentId: "reviewer", task: "one", dependsOn: ["missing"] },
-    ] }, agents)).toMatchObject({ ok: false, message: expect.stringContaining("unknown member") });
+    expect(
+      validateAgentTeam(
+        {
+          members: [
+            { id: "a", agentId: "reviewer", task: "one" },
+            { id: "a", agentId: "tester", task: "two" },
+          ],
+        },
+        agents,
+      ),
+    ).toMatchObject({ ok: false, message: expect.stringContaining("duplicate") });
+    expect(validateAgentTeam({ members: [{ id: "a", agentId: "missing", task: "one" }] }, agents)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("unknown agent"),
+    });
+    expect(
+      validateAgentTeam({ members: [{ id: "a", agentId: "reviewer", task: "one", dependsOn: ["missing"] }] }, agents),
+    ).toMatchObject({ ok: false, message: expect.stringContaining("unknown member") });
   });
 
   it("rejects cycles before any execution can begin", () => {
-    expect(validateAgentTeam({ members: [
-      { id: "a", agentId: "reviewer", task: "one", dependsOn: ["b"] },
-      { id: "b", agentId: "tester", task: "two", dependsOn: ["a"] },
-    ] }, agents)).toEqual({ ok: false, message: "team dependencies contain a cycle" });
+    expect(
+      validateAgentTeam(
+        {
+          members: [
+            { id: "a", agentId: "reviewer", task: "one", dependsOn: ["b"] },
+            { id: "b", agentId: "tester", task: "two", dependsOn: ["a"] },
+          ],
+        },
+        agents,
+      ),
+    ).toEqual({ ok: false, message: "team dependencies contain a cycle" });
   });
 
   it("bounds concurrency and validates failure policy", () => {
@@ -91,14 +109,16 @@ describe("validateAgentTeam", () => {
       if (isParentRequest(request)) {
         parentTurns++;
         return parentTurns === 1
-          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
-              members: [
-                { id: "review", agentId: "reviewer", task: "review first" },
-                { id: "test", agentId: "tester", task: "test first" },
-                { id: "synthesize", agentId: "reviewer", task: "synthesize", dependsOn: ["review", "test"] },
-              ],
-              maxConcurrency: 2,
-            }))
+          ? toolCallsResponse(
+              toolCall("team-1", "dispatch_team", {
+                members: [
+                  { id: "review", agentId: "reviewer", task: "review first" },
+                  { id: "test", agentId: "tester", task: "test first" },
+                  { id: "synthesize", agentId: "reviewer", task: "synthesize", dependsOn: ["review", "test"] },
+                ],
+                maxConcurrency: 2,
+              }),
+            )
           : response({ content: "done" });
       }
       const agentId = request.messages[0]!.content.includes("You are reviewer") ? "reviewer" : "tester";
@@ -107,12 +127,14 @@ describe("validateAgentTeam", () => {
     });
 
     try {
-      const events = await collect(createAgentCore({
-        provider,
-        dispatcher: fakeDispatcher(),
-        confirm: async () => true,
-        subagents: agents,
-      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+      const events = await collect(
+        createAgentCore({
+          provider,
+          dispatcher: fakeDispatcher(),
+          confirm: async () => true,
+          subagents: agents,
+        }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }),
+      );
 
       expect(started).toEqual(["reviewer", "tester", "reviewer"]);
       const [completed] = toolCompleted(events, "dispatch_team");
@@ -140,24 +162,28 @@ describe("validateAgentTeam", () => {
       if (!isParentRequest(request)) throw new Error("a denied team member must not start");
       parentTurns++;
       return parentTurns === 1
-        ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
-            members: [
-              { id: "fix", agentId: "fixer", task: "edit files" },
-              { id: "review", agentId: "reviewer", task: "review independently" },
-            ],
-            maxConcurrency: 1,
-            failurePolicy: "stop",
-          }))
+        ? toolCallsResponse(
+            toolCall("team-1", "dispatch_team", {
+              members: [
+                { id: "fix", agentId: "fixer", task: "edit files" },
+                { id: "review", agentId: "reviewer", task: "review independently" },
+              ],
+              maxConcurrency: 1,
+              failurePolicy: "stop",
+            }),
+          )
         : response({ content: "done" });
     });
 
     try {
-      const events = await collect(createAgentCore({
-        provider,
-        dispatcher: fakeDispatcher(),
-        confirm: async () => false,
-        subagents: [...agents, fixer],
-      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+      const events = await collect(
+        createAgentCore({
+          provider,
+          dispatcher: fakeDispatcher(),
+          confirm: async () => false,
+          subagents: [...agents, fixer],
+        }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }),
+      );
 
       const [completed] = toolCompleted(events, "dispatch_team");
       expect(completed!.result).toMatchObject({
@@ -185,13 +211,15 @@ describe("validateAgentTeam", () => {
       if (isParentRequest(request)) {
         parentTurns++;
         return parentTurns === 1
-          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
-              members: [
-                { id: "fix-a", agentId: "fixer", task: "edit a" },
-                { id: "fix-b", agentId: "fixer", task: "edit b" },
-              ],
-              maxConcurrency: 2,
-            }))
+          ? toolCallsResponse(
+              toolCall("team-1", "dispatch_team", {
+                members: [
+                  { id: "fix-a", agentId: "fixer", task: "edit a" },
+                  { id: "fix-b", agentId: "fixer", task: "edit b" },
+                ],
+                maxConcurrency: 2,
+              }),
+            )
           : response({ content: "done" });
       }
       return request.messages.some((message) => message.role === "tool")
@@ -200,18 +228,20 @@ describe("validateAgentTeam", () => {
     });
 
     try {
-      const events = await collect(createAgentCore({
-        provider,
-        dispatcher: fakeDispatcher(),
-        confirm: async () => {
-          confirming++;
-          maxConfirming = Math.max(maxConfirming, confirming);
-          await Promise.resolve();
-          confirming--;
-          return true;
-        },
-        subagents: [fixer],
-      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+      const events = await collect(
+        createAgentCore({
+          provider,
+          dispatcher: fakeDispatcher(),
+          confirm: async () => {
+            confirming++;
+            maxConfirming = Math.max(maxConfirming, confirming);
+            await Promise.resolve();
+            confirming--;
+            return true;
+          },
+          subagents: [fixer],
+        }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }),
+      );
 
       expect(maxConfirming).toBe(1);
       expect(confirming).toBe(0);
@@ -231,17 +261,22 @@ describe("validateAgentTeam", () => {
       if (isParentRequest(request)) {
         parentTurns++;
         return parentTurns === 1
-          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
-              members: [
-                { id: "slow", agentId: "reviewer", task: "slow branch" },
-                { id: "fast", agentId: "tester", task: "fast branch" },
-                { id: "synthesis", agentId: "tester", task: "synthesize fast", dependsOn: ["fast"] },
-              ],
-              maxConcurrency: 2,
-            }))
+          ? toolCallsResponse(
+              toolCall("team-1", "dispatch_team", {
+                members: [
+                  { id: "slow", agentId: "reviewer", task: "slow branch" },
+                  { id: "fast", agentId: "tester", task: "fast branch" },
+                  { id: "synthesis", agentId: "tester", task: "synthesize fast", dependsOn: ["fast"] },
+                ],
+                maxConcurrency: 2,
+              }),
+            )
           : response({ content: "done" });
       }
-      const userText = request.messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
+      const userText = request.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content)
+        .join("\n");
       if (userText.includes("slow branch")) {
         await slowGate.promise;
         return response({ content: "slow done" });
@@ -255,12 +290,14 @@ describe("validateAgentTeam", () => {
     });
 
     try {
-      const events = await collect(createAgentCore({
-        provider,
-        dispatcher: fakeDispatcher(),
-        confirm: async () => true,
-        subagents: agents,
-      }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }));
+      const events = await collect(
+        createAgentCore({
+          provider,
+          dispatcher: fakeDispatcher(),
+          confirm: async () => true,
+          subagents: agents,
+        }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace }),
+      );
 
       expect(synthesisStarted).toBe(true);
       expect(toolCompleted(events, "dispatch_team")[0]!.result.ok).toBe(true);
@@ -279,9 +316,11 @@ describe("validateAgentTeam", () => {
       if (isParentRequest(request)) {
         parentTurns++;
         return parentTurns === 1
-          ? toolCallsResponse(toolCall("team-1", "dispatch_team", {
-              members: [{ id: "review", agentId: "reviewer", task: "wait for cancellation" }],
-            }))
+          ? toolCallsResponse(
+              toolCall("team-1", "dispatch_team", {
+                members: [{ id: "review", agentId: "reviewer", task: "wait for cancellation" }],
+              }),
+            )
           : response({ content: "done" });
       }
       await nestedGate.promise;

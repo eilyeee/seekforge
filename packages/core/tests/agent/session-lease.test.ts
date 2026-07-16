@@ -96,13 +96,16 @@ describe("session leases", () => {
     const workspace = makeWorkspace();
     const lock = join(initializeLeaseRoot(workspace), "reused.lock");
     mkdirSync(lock, { mode: 0o700 });
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      token: "stale-token",
-      processIdentity: "not-this-process",
-      createdAt: new Date().toISOString(),
-    }));
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        token: "stale-token",
+        processIdentity: "not-this-process",
+        createdAt: new Date().toISOString(),
+      }),
+    );
 
     expect(isSessionRunActive(workspace, "reused")).toBe(false);
     const lease = acquireSessionLease(workspace, "reused");
@@ -113,13 +116,16 @@ describe("session leases", () => {
     const workspace = makeWorkspace();
     const recovery = join(initializeLeaseRoot(workspace), "recoverable.lock.recovery");
     mkdirSync(recovery, { mode: 0o700 });
-    writeFileSync(join(recovery, "owner.json"), JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      token: "abandoned-recovery",
-      processIdentity: "not-this-process",
-      createdAt: new Date().toISOString(),
-    }));
+    writeFileSync(
+      join(recovery, "owner.json"),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        token: "abandoned-recovery",
+        processIdentity: "not-this-process",
+        createdAt: new Date().toISOString(),
+      }),
+    );
 
     const lease = acquireSessionLease(workspace, "recoverable");
     expect(isSessionRunActive(workspace, "recoverable")).toBe(true);

@@ -32,9 +32,12 @@ export function rewindCommand(sessionId: string | undefined, opts: RewindOptions
   const prefix = opts.dryRun ? "[dry-run] " : "";
   for (const p of result.restored) console.log(`${prefix}${t("status.restoredFile", { path: p })}`);
   for (const p of result.deleted) console.log(`${prefix}${t("status.deletedFile", { path: p })}`);
-  for (const s of result.skipped) console.log(`${prefix}${t("status.skippedFile", { path: s.path, reason: s.reason })}`);
+  for (const s of result.skipped)
+    console.log(`${prefix}${t("status.skippedFile", { path: s.path, reason: s.reason })}`);
 
   const tKey = opts.dryRun ? "status.dryRunRewound" : "status.rewound";
-  console.log(t(tKey, { id, restored: result.restored.length, deleted: result.deleted.length, skipped: result.skipped.length }));
+  console.log(
+    t(tKey, { id, restored: result.restored.length, deleted: result.deleted.length, skipped: result.skipped.length }),
+  );
   console.log(t("status.reviewDiff"));
 }

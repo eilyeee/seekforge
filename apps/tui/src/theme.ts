@@ -13,10 +13,24 @@ export type ThemePreset = { accent: string; dim?: string; description: string };
 
 /** Valid ink color names an accent may take. */
 export const INK_COLORS: readonly string[] = [
-  "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-  "gray", "grey",
-  "blackBright", "redBright", "greenBright", "yellowBright", "blueBright",
-  "magentaBright", "cyanBright", "whiteBright",
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+  "gray",
+  "grey",
+  "blackBright",
+  "redBright",
+  "greenBright",
+  "yellowBright",
+  "blueBright",
+  "magentaBright",
+  "cyanBright",
+  "whiteBright",
 ];
 
 /**

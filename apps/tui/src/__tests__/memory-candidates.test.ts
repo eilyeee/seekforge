@@ -91,15 +91,15 @@ describe("removeCandidateAt", () => {
 
 describe("formatCandidateLine", () => {
   it("renders type, text, and a rounded confidence percentage", () => {
-    expect(
-      formatCandidateLine({ type: "command", content: "run pnpm test", confidence: 0.82 }),
-    ).toBe("[command] run pnpm test (82%)");
+    expect(formatCandidateLine({ type: "command", content: "run pnpm test", confidence: 0.82 })).toBe(
+      "[command] run pnpm test (82%)",
+    );
   });
 
   it("collapses whitespace and clamps confidence into 0..100", () => {
-    expect(
-      formatCandidateLine({ type: "path", content: "  src/\n  index.ts ", confidence: 1.5 }),
-    ).toBe("[path] src/ index.ts (100%)");
+    expect(formatCandidateLine({ type: "path", content: "  src/\n  index.ts ", confidence: 1.5 })).toBe(
+      "[path] src/ index.ts (100%)",
+    );
     expect(formatCandidateLine({ type: "tech", content: "x", confidence: -1 })).toBe("[tech] x (0%)");
   });
 

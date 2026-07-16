@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  MOUSE_DISABLE,
-  MOUSE_ENABLE,
-  buildTitleSequence,
-  parseMouseWheel,
-} from "../terminal.js";
+import { MOUSE_DISABLE, MOUSE_ENABLE, buildTitleSequence, parseMouseWheel } from "../terminal.js";
 
 describe("mouse sequences", () => {
   it("enables button tracking + SGR, and disables in reverse order", () => {
@@ -57,8 +52,8 @@ describe("mouse sequences without the leading ESC (Ink strips it)", () => {
   it("isMouseEvent matches any SGR mouse event so clicks are swallowed too", async () => {
     const { isMouseEvent } = await import("../terminal.js");
     expect(isMouseEvent("[<65;60;39M")).toBe(true);
-    expect(isMouseEvent("[<0;12;3M")).toBe(true);   // left press
-    expect(isMouseEvent("[<0;12;3m")).toBe(true);   // release
+    expect(isMouseEvent("[<0;12;3M")).toBe(true); // left press
+    expect(isMouseEvent("[<0;12;3m")).toBe(true); // release
     expect(isMouseEvent("\x1b[<32;8;2M")).toBe(true); // drag
     expect(isMouseEvent("hello [<not a mouse")).toBe(false);
     expect(isMouseEvent("plain text")).toBe(false);

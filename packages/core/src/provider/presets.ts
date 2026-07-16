@@ -7,12 +7,7 @@
  */
 
 import { DEFAULT_BASE_URL, type ModelPricing } from "./constants.js";
-import {
-  DEEPSEEK_CAPABILITIES,
-  type ProviderCapabilities,
-  type ProviderConfig,
-  type RetryInfo,
-} from "./types.js";
+import { DEEPSEEK_CAPABILITIES, type ProviderCapabilities, type ProviderConfig, type RetryInfo } from "./types.js";
 
 export type ProviderPreset = {
   baseUrl: string;
@@ -111,9 +106,7 @@ export function resolveProviderConfig(input: {
     ...(input.modelPricing !== undefined ? { modelPricing: input.modelPricing } : {}),
     ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
-    ...(input.streamIdleTimeoutMs !== undefined
-      ? { streamIdleTimeoutMs: input.streamIdleTimeoutMs }
-      : {}),
+    ...(input.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: input.streamIdleTimeoutMs } : {}),
     ...(input.onRetry !== undefined ? { onRetry: input.onRetry } : {}),
     ...(input.fallbackModel !== undefined ? { fallbackModel: input.fallbackModel } : {}),
   };

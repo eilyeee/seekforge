@@ -18,7 +18,7 @@ import {
 const TOKEN = "test-token-ws";
 
 let server: RunningServer | undefined;
-let sockets: WebSocket[] = [];
+const sockets: WebSocket[] = [];
 
 async function boot(createAgent: CreateAgentFn, workspace = makeWorkspace()) {
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent });
@@ -78,9 +78,7 @@ describe("start -> events -> idle", () => {
     });
     // Deltas are coalesced server-side: "hel" + "lo" arrive as ONE model.delta
     // frame whose chunk is the concatenation (flushed before model.message).
-    await rx.waitFor(
-      (f) => f.type === "event" && (f.event as { type: string; chunk?: string }).chunk === "hello",
-    );
+    await rx.waitFor((f) => f.type === "event" && (f.event as { type: string; chunk?: string }).chunk === "hello");
     await rx.waitFor((f) => f.type === "event" && (f.event as { type: string }).type === "model.message");
     const completed = await rx.waitFor(
       (f) => f.type === "event" && (f.event as { type: string }).type === "session.completed",
@@ -96,9 +94,7 @@ describe("start -> events -> idle", () => {
     });
 
     // The model.delta frames are server-level events carrying the session id.
-    const delta = rx.frames.find(
-      (f) => f.type === "event" && (f.event as { type: string }).type === "model.delta",
-    );
+    const delta = rx.frames.find((f) => f.type === "event" && (f.event as { type: string }).type === "model.delta");
     expect(delta).toMatchObject({ sessionId: "fake-1", event: { type: "model.delta", chunk: "hello" } });
   });
 
@@ -146,15 +142,16 @@ describe("start -> events -> idle", () => {
           yield { type: "session.completed" as const, report: emptyReport() };
         },
       },
-      dispose: () => { throw new Error("dispose failed"); },
+      dispose: () => {
+        throw new Error("dispose failed");
+      },
     }));
     const { ws, rx } = await open(server.port);
 
     sendFrame(ws, { type: "start", task: "first", mode: "edit", approvalMode: "auto" });
     await rx.waitFor((f) => f.type === "idle");
     sendFrame(ws, { type: "start", task: "second", mode: "edit", approvalMode: "auto" });
-    await rx.waitFor((f) =>
-      f.type === "event" && (f.event as { sessionId?: string }).sessionId === "dispose-2");
+    await rx.waitFor((f) => f.type === "event" && (f.event as { sessionId?: string }).sessionId === "dispose-2");
     await rx.waitFor((f) => f.type === "idle" && runs === 2);
 
     expect(rx.frames.some((f) => f.type === "error" && f.code === "busy")).toBe(false);
@@ -164,7 +161,9 @@ describe("start -> events -> idle", () => {
 describe("subagent controls", () => {
   it("binds steer/cancel to the active run and fails closed for invalid dispatches", async () => {
     let releaseRun!: () => void;
-    const runGate = new Promise<void>((resolve) => { releaseRun = resolve; });
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
     let takeSteering: (() => string[]) | undefined;
     let manager: NonNullable<Parameters<CreateAgentFn>[0]["dispatchManager"]> | undefined;
     const { server } = await boot((opts) => {
@@ -252,7 +251,9 @@ describe("server shutdown", () => {
     let cleanupStarted = false;
     let disposed = false;
     let releaseCleanup!: () => void;
-    const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
     const { server } = await boot(() => ({
       agent: {
         runTask: async function* (input) {
@@ -269,14 +270,18 @@ describe("server shutdown", () => {
           }
         },
       },
-      dispose: () => { disposed = true; },
+      dispose: () => {
+        disposed = true;
+      },
     }));
     const { ws, rx } = await open(server.port);
     sendFrame(ws, { type: "start", task: "wait", mode: "edit", approvalMode: "auto" });
     await rx.waitFor((f) => f.type === "event");
 
     let resolved = false;
-    const closing = server.close().then(() => { resolved = true; });
+    const closing = server.close().then(() => {
+      resolved = true;
+    });
     try {
       await waitUntil(() => cleanupStarted);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -708,7 +713,7 @@ describe("permission bridge", () => {
   });
 
   it("permission.request forwards hunks when present", async () => {
-    let seenRequest: (import("@seekforge/shared").PermissionRequest) | undefined;
+    let seenRequest: import("@seekforge/shared").PermissionRequest | undefined;
     const { server } = await boot(
       fakeAgentFactory(async function* (opts) {
         yield { type: "session.created", sessionId: "perm-hunks" };
@@ -729,9 +734,11 @@ describe("permission bridge", () => {
     const { ws, rx } = await open(server.port);
 
     sendFrame(ws, { type: "start", task: "edit it", mode: "edit", approvalMode: "confirm" });
-    const req = (await rx.waitFor(
-      (f) => f.type === "permission.request",
-    )) as { type: "permission.request"; requestId: string; request: import("@seekforge/shared").PermissionRequest };
+    const req = (await rx.waitFor((f) => f.type === "permission.request")) as {
+      type: "permission.request";
+      requestId: string;
+      request: import("@seekforge/shared").PermissionRequest;
+    };
     expect(req.request.hunks!).toHaveLength(3);
     expect(req.request.hunks![0]).toEqual({ index: 0, preview: "@@ -1,5 +1,6 @@\n+new" });
     expect(req.request.hunks![2]).toEqual({ index: 2, preview: "@@ -20,2 +21,3 @@\n+another" });

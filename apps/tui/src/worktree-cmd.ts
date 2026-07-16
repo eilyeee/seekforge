@@ -70,10 +70,7 @@ export async function pickFreeSlug(
  * result. Matches when `arg` equals the slug, the full `seekforge/<slug>`
  * branch, or the branch's last path segment. Returns undefined if no match.
  */
-export function resolveWorktreeTarget(
-  entries: GitWorktreeEntry[],
-  arg: string,
-): GitWorktreeEntry | undefined {
+export function resolveWorktreeTarget(entries: GitWorktreeEntry[], arg: string): GitWorktreeEntry | undefined {
   const wanted = arg.trim();
   if (wanted === "") return undefined;
   return seekforgeWorktrees(entries).find((e) => {

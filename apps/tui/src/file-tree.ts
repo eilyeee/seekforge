@@ -87,10 +87,7 @@ export function buildTree(files: readonly string[]): TreeNode[] {
  * Collapse-aware flatten: top-level nodes are always visible; children only
  * appear when every ancestor directory is in `expanded`.
  */
-export function visibleNodes(
-  nodes: readonly TreeNode[],
-  expanded: ReadonlySet<string>,
-): TreeNode[] {
+export function visibleNodes(nodes: readonly TreeNode[], expanded: ReadonlySet<string>): TreeNode[] {
   const out: TreeNode[] = [];
   let skipBelow: number | null = null; // hide nodes deeper than this depth
   for (const node of nodes) {

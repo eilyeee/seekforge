@@ -124,9 +124,7 @@ describe("runtime client", () => {
       await expect(client.call("slow", { workspace: "/w" })).rejects.toMatchObject({
         code: "runtime_timeout",
       });
-      await expect(
-        client.call<{ count: number }>("cancellation_count", {}, { timeoutMs: 2_000 }),
-      ).resolves.toEqual({
+      await expect(client.call<{ count: number }>("cancellation_count", {}, { timeoutMs: 2_000 })).resolves.toEqual({
         count: 1,
       });
       expect(new RuntimeError("x", "y")).toBeInstanceOf(Error);

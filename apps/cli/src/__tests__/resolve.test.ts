@@ -76,16 +76,31 @@ test("rejects zero, negatives, non-numeric, empty, and non-issue URLs", () => {
 
 test("builds existing-branch reuse argv", () => {
   assert.deepEqual(buildBranchExistsArgs("seekforge/issue-42"), [
-    "show-ref", "--verify", "--quiet", "refs/heads/seekforge/issue-42",
+    "show-ref",
+    "--verify",
+    "--quiet",
+    "refs/heads/seekforge/issue-42",
   ]);
   assert.deepEqual(buildWorktreeReuseArgs("/tmp/wt", "seekforge/issue-42"), [
-    "worktree", "add", "/tmp/wt", "seekforge/issue-42",
+    "worktree",
+    "add",
+    "/tmp/wt",
+    "seekforge/issue-42",
   ]);
 });
 
 test("bounds CI feedback and fetches only failed logs", () => {
   assert.deepEqual(buildFailedRunListArgs("seekforge/issue-42"), [
-    "run", "list", "--branch", "seekforge/issue-42", "--status", "failure", "--limit", "1", "--json", "databaseId",
+    "run",
+    "list",
+    "--branch",
+    "seekforge/issue-42",
+    "--status",
+    "failure",
+    "--limit",
+    "1",
+    "--json",
+    "databaseId",
   ]);
   assert.deepEqual(buildFailedRunLogArgs(123), ["run", "view", "123", "--log-failed"]);
   const prompt = buildCiRepairPrompt("x".repeat(30_000));
@@ -106,7 +121,12 @@ test("git checkout -b uses the derived branch", () => {
 
 test("isolated worktree args create a branch from the requested base", () => {
   assert.deepEqual(buildWorktreeAddArgs("/tmp/work", "seekforge/issue-42", "develop"), [
-    "worktree", "add", "-b", "seekforge/issue-42", "/tmp/work", "develop",
+    "worktree",
+    "add",
+    "-b",
+    "seekforge/issue-42",
+    "/tmp/work",
+    "develop",
   ]);
   assert.deepEqual(buildDetachedWorktreeArgs("/tmp/review"), ["worktree", "add", "--detach", "/tmp/review"]);
   assert.deepEqual(buildWorktreeRemoveArgs("/tmp/work"), ["worktree", "remove", "/tmp/work"]);
@@ -183,13 +203,21 @@ test("pr title matches the commit subject", () => {
 
 test("CI checks use watch and fail-fast", () => {
   assert.deepEqual(buildPrChecksArgs("https://github.com/o/r/pull/42"), [
-    "pr", "checks", "https://github.com/o/r/pull/42", "--watch", "--fail-fast",
+    "pr",
+    "checks",
+    "https://github.com/o/r/pull/42",
+    "--watch",
+    "--fail-fast",
   ]);
 });
 
 test("review mode fetches context and checks out the requested PR", () => {
   assert.deepEqual(buildPrViewArgs("42"), [
-    "pr", "view", "42", "--json", "number,title,body,comments,reviews,headRefName",
+    "pr",
+    "view",
+    "42",
+    "--json",
+    "number,title,body,comments,reviews,headRefName",
   ]);
   assert.deepEqual(buildPrCheckoutArgs("42"), ["pr", "checkout", "42"]);
 });

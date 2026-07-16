@@ -6,12 +6,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function finiteNonnegative(value: unknown, where: string, integer = false): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < 0 ||
-    (integer && !Number.isSafeInteger(value))
-  ) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (integer && !Number.isSafeInteger(value))) {
     throw new Error(`${where} must be a finite non-negative${integer ? " integer" : " number"}`);
   }
   return value;
@@ -85,10 +80,13 @@ function validateResult(value: unknown, where: string): TaskResult {
   if (value["execution"] !== undefined) {
     const execution = value["execution"];
     if (
-      !isRecord(execution) || typeof execution["runner"] !== "string" ||
+      !isRecord(execution) ||
+      typeof execution["runner"] !== "string" ||
       !TASK_RUNNERS.includes(execution["runner"] as (typeof TASK_RUNNERS)[number]) ||
-      typeof execution["status"] !== "string" || execution["status"].length === 0 ||
-      typeof execution["expectedStatus"] !== "string" || execution["expectedStatus"].length === 0 ||
+      typeof execution["status"] !== "string" ||
+      execution["status"].length === 0 ||
+      typeof execution["expectedStatus"] !== "string" ||
+      execution["expectedStatus"].length === 0 ||
       typeof execution["passed"] !== "boolean" ||
       !Array.isArray(execution["sessionIds"]) ||
       !execution["sessionIds"].every((id) => typeof id === "string" && id.length > 0)
@@ -108,9 +106,11 @@ function validateResult(value: unknown, where: string): TaskResult {
     if (!Array.isArray(value["skills"])) throw new Error(`${where}.skills must be an array`);
     for (const [index, skill] of value["skills"].entries()) {
       if (
-        !isRecord(skill) || typeof skill["skillId"] !== "string" ||
+        !isRecord(skill) ||
+        typeof skill["skillId"] !== "string" ||
         typeof skill["scope"] !== "string" ||
-        typeof skill["score"] !== "number" || !Number.isFinite(skill["score"])
+        typeof skill["score"] !== "number" ||
+        !Number.isFinite(skill["score"])
       ) {
         throw new Error(`${where}.skills[${index}] has an invalid shape`);
       }

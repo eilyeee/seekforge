@@ -85,13 +85,17 @@ export function toMarkdown(results: TaskResult[]): string {
 export type ReportOptions = { metadata?: RunMetadata; aggregate?: RunAggregate; gates?: GateResult };
 
 export function toJson(results: TaskResult[], options: ReportOptions = {}): string {
-  return `${JSON.stringify({
-    generatedAt: new Date().toISOString(),
-    ...(options.metadata ? { metadata: options.metadata } : {}),
-    results,
-    ...(options.aggregate ? { aggregate: options.aggregate } : {}),
-    ...(options.gates ? { gates: options.gates } : {}),
-  }, null, 2)}\n`;
+  return `${JSON.stringify(
+    {
+      generatedAt: new Date().toISOString(),
+      ...(options.metadata ? { metadata: options.metadata } : {}),
+      results,
+      ...(options.aggregate ? { aggregate: options.aggregate } : {}),
+      ...(options.gates ? { gates: options.gates } : {}),
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function signed(value: number, digits: number): string {
@@ -105,10 +109,7 @@ function signed(value: number, digits: number): string {
 /** Per-task delta table (current vs a previous toJson report) for regression tracking. */
 export function compare(current: TaskResult[], baselineJson: string): string {
   const baseline = new Map(parseBaseline(baselineJson).map((r) => [r.taskId, r]));
-  const lines: string[] = [
-    "| Task | Success | Score Δ | Cost Δ (USD) |",
-    "| --- | --- | --- | --- |",
-  ];
+  const lines: string[] = ["| Task | Success | Score Δ | Cost Δ (USD) |", "| --- | --- | --- | --- |"];
   for (const r of current) {
     const base = baseline.get(r.taskId);
     if (!base) {
@@ -163,7 +164,9 @@ export function writeReport(
   const markdownPath = join(dir, `${stamp}.md`);
   const jsonPath = join(dir, `${stamp}.json`);
   const metadata = options.metadata
-    ? `\n\n## Run metadata\n\n${Object.entries(options.metadata).map(([key, value]) => `- ${key}: ${value}`).join("\n")}`
+    ? `\n\n## Run metadata\n\n${Object.entries(options.metadata)
+        .map(([key, value]) => `- ${key}: ${value}`)
+        .join("\n")}`
     : "";
   const gates = options.gates
     ? `\n\n## Gates\n\n${options.gates.checks.map((gate) => `- ${gate.passed ? "PASS" : "FAIL"}: ${gate.message}`).join("\n")}`

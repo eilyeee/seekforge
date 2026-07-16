@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { FinalReport } from "@seekforge/shared";
 import { formatUsage } from "../format.js";

@@ -51,7 +51,11 @@ describe("recents store", () => {
     rememberRecent("/tmp/a");
     rememberRecent("/tmp/b");
     rememberRecent("/tmp/a"); // re-open moves it to the front
-    expect(loadRecents().map((r) => r.path).slice(0, 2)).toEqual(["/tmp/a", "/tmp/b"]);
+    expect(
+      loadRecents()
+        .map((r) => r.path)
+        .slice(0, 2),
+    ).toEqual(["/tmp/a", "/tmp/b"]);
     forgetRecent("/tmp/a");
     expect(loadRecents().some((r) => r.path === "/tmp/a")).toBe(false);
   });
@@ -124,7 +128,7 @@ describe("workspace open/remove endpoints", () => {
     try {
       const res = await authed(`/api/workspaces/${target.id}`, { method: "DELETE" });
       expect(res.status).toBe(409);
-      expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe("session_busy");
       expect((await jsonOf(await authed("/api/workspaces"))).workspaces.some((w) => w.id === target.id)).toBe(true);
     } finally {
       lease.release();

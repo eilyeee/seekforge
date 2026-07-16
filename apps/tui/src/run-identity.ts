@@ -10,11 +10,7 @@ export type RunEntry = {
 
 export type RunReservation = RunEntry & { tabId: number };
 
-export function reserveRun(
-  runs: Map<number, RunEntry>,
-  tabId: number,
-  runId: number,
-): RunReservation | null {
+export function reserveRun(runs: Map<number, RunEntry>, tabId: number, runId: number): RunReservation | null {
   if (runs.has(tabId)) return null;
   const reservation = { tabId, runId, controller: new AbortController(), sigintCount: 0 };
   runs.set(tabId, reservation);

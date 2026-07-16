@@ -41,8 +41,7 @@ const EN: Record<string, string> = {
   "picker.rewind": "↑↓ select · Enter rewind conversation+files · c conversation only · Esc dismiss",
   "picker.model": "↑↓ select · Enter switch · Esc dismiss",
   "picker.history": "↑↓ select · Tab fill · Enter run · Esc dismiss",
-  "picker.slash":
-    "↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval",
+  "picker.slash": "↑↓ select · Enter insert · Esc close — @ files · # remember · ! shell · Shift+Tab approval",
   "picker.theme": "↑↓ select · Enter apply · Esc dismiss",
   "picker.candidates": "↑↓ select · a approve · r reject · s scope · Esc dismiss",
   "picker.emptyCommands": "no matching commands",

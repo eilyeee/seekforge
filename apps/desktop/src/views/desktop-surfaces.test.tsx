@@ -29,17 +29,19 @@ describe("Desktop operational surfaces", () => {
       source: "project",
       shadowedGlobal: false,
     };
-    const html = renderToStaticMarkup(createElement(McpEditorDialog, {
-      initial,
-      ws: "workspace-1",
-      onClose: () => {},
-      onSaved: () => {},
-    }));
+    const html = renderToStaticMarkup(
+      createElement(McpEditorDialog, {
+        initial,
+        ws: "workspace-1",
+        onClose: () => {},
+        onSaved: () => {},
+      }),
+    );
 
     expect(html).toContain("OAuth refresh token");
     expect(html).toContain("OAuth client secret");
     expect(html.match(/type="password"/g)).toHaveLength(2);
-    expect(html).toContain("value=\"********\"");
+    expect(html).toContain('value="********"');
     expect(html).not.toContain("refresh-secret");
     expect(html).not.toContain("client-secret");
   });
@@ -53,18 +55,22 @@ describe("Desktop operational surfaces", () => {
   });
 
   it("renders team plan submission controls for concurrency and dependencies", () => {
-    const html = renderToStaticMarkup(createElement(TeamPlanDialog, {
-      agents: [{
-        id: "reviewer",
-        name: "Reviewer",
-        description: "Reviews changes",
-        triggers: [],
-        mode: "ask",
-        scope: "builtin",
-      }],
-      onClose: () => {},
-      onSubmit: () => {},
-    }));
+    const html = renderToStaticMarkup(
+      createElement(TeamPlanDialog, {
+        agents: [
+          {
+            id: "reviewer",
+            name: "Reviewer",
+            description: "Reviews changes",
+            triggers: [],
+            mode: "ask",
+            scope: "builtin",
+          },
+        ],
+        onClose: () => {},
+        onSubmit: () => {},
+      }),
+    );
     expect(html).toContain("Run agent team");
     expect(html).toContain("Max concurrency");
     expect(html).toContain("Depends on member IDs");

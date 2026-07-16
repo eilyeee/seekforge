@@ -83,7 +83,10 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       }
       case "--ab": {
-        const pair = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        const pair = (argv[++i] ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
         if (pair.length !== 2) throw new Error("--ab expects exactly two comma-separated variant names");
         args.ab = [pair[0]!, pair[1]!];
         break;

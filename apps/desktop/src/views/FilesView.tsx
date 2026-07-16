@@ -98,7 +98,6 @@ export function FilesView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesTarget?.nonce]);
 
-
   const toggleDir = (path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -124,11 +123,7 @@ export function FilesView() {
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-72 shrink-0 flex-col border-r border-subtle">
           <div className="flex items-center gap-1 border-b border-subtle px-2 py-1.5">
-            <Button
-              size="sm"
-              variant={leftMode === "tree" ? "primary" : "ghost"}
-              onClick={() => setLeftMode("tree")}
-            >
+            <Button size="sm" variant={leftMode === "tree" ? "primary" : "ghost"} onClick={() => setLeftMode("tree")}>
               {t("files.tabTree")}
             </Button>
             <Button
@@ -274,10 +269,20 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => voi
       <div className="space-y-1.5 p-2">
         <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("files.searchPlaceholder")} />
         <div className="flex items-center gap-1">
-          <Button size="sm" variant={caseSensitive ? "primary" : "ghost"} onClick={() => setCaseSensitive((v) => !v)} title={t("files.searchCaseTitle")}>
+          <Button
+            size="sm"
+            variant={caseSensitive ? "primary" : "ghost"}
+            onClick={() => setCaseSensitive((v) => !v)}
+            title={t("files.searchCaseTitle")}
+          >
             Aa
           </Button>
-          <Button size="sm" variant={regex ? "primary" : "ghost"} onClick={() => setRegex((v) => !v)} title={t("files.searchRegexTitle")}>
+          <Button
+            size="sm"
+            variant={regex ? "primary" : "ghost"}
+            onClick={() => setRegex((v) => !v)}
+            title={t("files.searchRegexTitle")}
+          >
             .*
           </Button>
           {res && res.hits.length > 0 && (
@@ -509,17 +514,11 @@ function TreeNode({
               {t("files.treeLoading")}
             </li>
           ) : child.error ? (
-            <li
-              style={{ paddingLeft: `${(depth + 1) * 14 + 12}px` }}
-              className="py-1 text-2xs text-danger"
-            >
+            <li style={{ paddingLeft: `${(depth + 1) * 14 + 12}px` }} className="py-1 text-2xs text-danger">
               {t("files.treeError", { error: child.error })}
             </li>
           ) : child.entries.length === 0 ? (
-            <li
-              style={{ paddingLeft: `${(depth + 1) * 14 + 12}px` }}
-              className="py-1 text-2xs text-tertiary"
-            >
+            <li style={{ paddingLeft: `${(depth + 1) * 14 + 12}px` }} className="py-1 text-2xs text-tertiary">
               {t("files.treeEmpty")}
             </li>
           ) : (
@@ -625,9 +624,17 @@ function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | nul
     setCopied(which);
     window.setTimeout(() => setCopied((c) => (c === which ? null : c)), 1500);
   };
-  const copyRel = () => void navigator.clipboard.writeText(path).then(() => flashCopied("rel"), () => {});
+  const copyRel = () =>
+    void navigator.clipboard.writeText(path).then(
+      () => flashCopied("rel"),
+      () => {},
+    );
   const absPath = wsPath ? `${wsPath.replace(/\/$/, "")}/${path}` : path;
-  const copyAbs = () => void navigator.clipboard.writeText(absPath).then(() => flashCopied("abs"), () => {});
+  const copyAbs = () =>
+    void navigator.clipboard.writeText(absPath).then(
+      () => flashCopied("abs"),
+      () => {},
+    );
 
   return (
     <div className="flex h-full flex-col">
@@ -665,12 +672,22 @@ function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | nul
           </Button>
         )}
         {editorShown && (
-          <Button size="sm" variant="ghost" onClick={() => editorRef.current?.goToLine()} title={t("files.gotoLineTitle")}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => editorRef.current?.goToLine()}
+            title={t("files.gotoLineTitle")}
+          >
             {t("files.gotoLine")}
           </Button>
         )}
         {editorShown && (
-          <Button size="sm" variant="ghost" onClick={() => editorRef.current?.openSearch()} title={t("files.findTitle")}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => editorRef.current?.openSearch()}
+            title={t("files.findTitle")}
+          >
             <IconSearch size={13} />
             {t("files.find")}
           </Button>

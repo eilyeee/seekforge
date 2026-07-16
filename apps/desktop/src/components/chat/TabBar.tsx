@@ -62,102 +62,109 @@ export function TabBar({
           floats over the content instead of being clipped by overflow-x. */}
       <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => {
-        const active = tab.tabId === activeTabId;
-        return (
-          <div
-            key={tab.tabId}
-            onClick={() => onSelect(tab.tabId)}
-            className={`group relative flex max-w-56 cursor-pointer items-center gap-1.5 rounded-t border-x border-t px-2.5 py-1 text-xs ${
-              active
-                ? "border-strong bg-surface text-primary"
-                : "border-transparent text-tertiary hover:bg-surface-overlay/60 hover:text-secondary"
-            }`}
-          >
-            {tab.pendingPermission ? (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" title={t("chat.tab.waitingApproval")} />
-            ) : tab.chat.running ? (
-              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn" title={t("chat.tab.running")} />
-            ) : (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-surface-overlay" />
-            )}
-            <span className="truncate" title={tab.title}>
-              {tab.title}
-            </span>
-            {tab.worktree && (
-              <span
-                className="flex shrink-0 items-center gap-1 rounded bg-surface-overlay px-1 text-2xs text-secondary"
-                title={tab.worktree.dirty ? t("chat.tab.worktreeBranchDirty", { branch: tab.worktree.branch }) : t("chat.tab.worktreeBranch", { branch: tab.worktree.branch })}
-              >
-                ⎇ {worktreeLabel(tab.worktree)}
-                {tab.worktree.dirty && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-warn" title={t("chat.tab.uncommitted")} />
-                )}
+          const active = tab.tabId === activeTabId;
+          return (
+            <div
+              key={tab.tabId}
+              onClick={() => onSelect(tab.tabId)}
+              className={`group relative flex max-w-56 cursor-pointer items-center gap-1.5 rounded-t border-x border-t px-2.5 py-1 text-xs ${
+                active
+                  ? "border-strong bg-surface text-primary"
+                  : "border-transparent text-tertiary hover:bg-surface-overlay/60 hover:text-secondary"
+              }`}
+            >
+              {tab.pendingPermission ? (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" title={t("chat.tab.waitingApproval")} />
+              ) : tab.chat.running ? (
+                <span
+                  className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn"
+                  title={t("chat.tab.running")}
+                />
+              ) : (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-surface-overlay" />
+              )}
+              <span className="truncate" title={tab.title}>
+                {tab.title}
               </span>
-            )}
-            {showWs && tab.ws && !tab.worktree && (
-              <span
-                className="shrink-0 rounded bg-surface-overlay px-1 text-2xs uppercase tracking-wide text-secondary"
-                title={t("chat.tab.workspace", { name: workspaceName?.(tab.ws) ?? tab.ws })}
-              >
-                {workspaceName?.(tab.ws) ?? tab.ws}
-              </span>
-            )}
-            {tab.worktree && (
-              <button
-                type="button"
-                aria-label={t("chat.tab.worktreeMenuLabel", { title: tab.title })}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenu(menu === tab.tabId ? null : tab.tabId);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                className="focus-ring rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
-              >
-                <IconChevron size={12} className="rotate-90" />
-              </button>
-            )}
-            {tabs.length > 1 && (
-              <button
-                type="button"
-                aria-label={t("chat.tab.closeLabel", { title: tab.title })}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClose(tab.tabId);
-                }}
-                className="focus-ring ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
-              >
-                ×
-              </button>
-            )}
-            {menu === tab.tabId && tab.worktree && (
-              <div
-                className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-strong bg-surface-raised py-1 shadow-lg"
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
+              {tab.worktree && (
+                <span
+                  className="flex shrink-0 items-center gap-1 rounded bg-surface-overlay px-1 text-2xs text-secondary"
+                  title={
+                    tab.worktree.dirty
+                      ? t("chat.tab.worktreeBranchDirty", { branch: tab.worktree.branch })
+                      : t("chat.tab.worktreeBranch", { branch: tab.worktree.branch })
+                  }
+                >
+                  ⎇ {worktreeLabel(tab.worktree)}
+                  {tab.worktree.dirty && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-warn" title={t("chat.tab.uncommitted")} />
+                  )}
+                </span>
+              )}
+              {showWs && tab.ws && !tab.worktree && (
+                <span
+                  className="shrink-0 rounded bg-surface-overlay px-1 text-2xs uppercase tracking-wide text-secondary"
+                  title={t("chat.tab.workspace", { name: workspaceName?.(tab.ws) ?? tab.ws })}
+                >
+                  {workspaceName?.(tab.ws) ?? tab.ws}
+                </span>
+              )}
+              {tab.worktree && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setMenu(null);
-                    onMergeWorktree(tab.tabId);
+                  aria-label={t("chat.tab.worktreeMenuLabel", { title: tab.title })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenu(menu === tab.tabId ? null : tab.tabId);
                   }}
-                  className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="focus-ring rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
                 >
-                  {t("chat.tab.mergeBack")}
+                  <IconChevron size={12} className="rotate-90" />
                 </button>
+              )}
+              {tabs.length > 1 && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setMenu(null);
-                    onDiscardWorktree(tab.tabId);
+                  aria-label={t("chat.tab.closeLabel", { title: tab.title })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose(tab.tabId);
                   }}
-                  className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
+                  className="focus-ring ml-0.5 rounded px-0.5 text-tertiary hover:bg-surface-overlay hover:text-primary"
                 >
-                  {t("chat.tab.discard")}
+                  ×
                 </button>
-              </div>
-            )}
-          </div>
+              )}
+              {menu === tab.tabId && tab.worktree && (
+                <div
+                  className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-strong bg-surface-raised py-1 shadow-lg"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenu(null);
+                      onMergeWorktree(tab.tabId);
+                    }}
+                    className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-surface-overlay"
+                  >
+                    {t("chat.tab.mergeBack")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenu(null);
+                      onDiscardWorktree(tab.tabId);
+                    }}
+                    className="focus-ring block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-surface-overlay"
+                  >
+                    {t("chat.tab.discard")}
+                  </button>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>

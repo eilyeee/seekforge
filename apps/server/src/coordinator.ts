@@ -40,17 +40,19 @@ export class ServerCoordinator {
   }
 
   withRepository<T>(workspace: string, operation: () => Promise<T>): Promise<T> {
-    return this.track((async () => {
-      const key = await canonicalRepositoryKey(workspace);
-      const previous = this.repositoryLocks.get(key) ?? Promise.resolve();
-      const result = previous.then(operation, operation);
-      const tail = result.catch(() => {});
-      this.repositoryLocks.set(key, tail);
-      void tail.then(() => {
-        if (this.repositoryLocks.get(key) === tail) this.repositoryLocks.delete(key);
-      });
-      return result;
-    })());
+    return this.track(
+      (async () => {
+        const key = await canonicalRepositoryKey(workspace);
+        const previous = this.repositoryLocks.get(key) ?? Promise.resolve();
+        const result = previous.then(operation, operation);
+        const tail = result.catch(() => {});
+        this.repositoryLocks.set(key, tail);
+        void tail.then(() => {
+          if (this.repositoryLocks.get(key) === tail) this.repositoryLocks.delete(key);
+        });
+        return result;
+      })(),
+    );
   }
 
   async drain(): Promise<void> {

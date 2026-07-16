@@ -76,13 +76,12 @@ export async function runSecurityCommand(options: {
     });
     ({ exitCode, stdout, stderr } = result);
   } catch (error) {
-    const detail = error instanceof ToolError && typeof error.detail === "object" && error.detail !== null
-      ? error.detail as { stdout?: unknown; stderr?: unknown }
-      : {};
+    const detail =
+      error instanceof ToolError && typeof error.detail === "object" && error.detail !== null
+        ? (error.detail as { stdout?: unknown; stderr?: unknown })
+        : {};
     stdout = typeof detail.stdout === "string" ? detail.stdout : "";
-    stderr = typeof detail.stderr === "string"
-      ? detail.stderr
-      : error instanceof Error ? error.message : String(error);
+    stderr = typeof detail.stderr === "string" ? detail.stderr : error instanceof Error ? error.message : String(error);
     timedOut = error instanceof ToolError && error.code === "timeout";
     exitCode = timedOut ? 124 : error instanceof ToolError && error.code === "cancelled" ? 130 : 127;
   }
@@ -109,12 +108,14 @@ export async function runProjectSecurityChecks(options: {
   if (options.lintCommand?.trim()) commands.push({ kind: "lint", command: options.lintCommand.trim() });
   const results: VerificationCommandResult[] = [];
   for (const command of commands) {
-    results.push(await runSecurityCommand({
-      ...command,
-      workspace: options.workspace,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.sandbox ? { sandbox: options.sandbox } : {}),
-    }));
+    results.push(
+      await runSecurityCommand({
+        ...command,
+        workspace: options.workspace,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+      }),
+    );
   }
   return results;
 }
@@ -128,9 +129,11 @@ export function completeFixAttempt(options: {
   findingStillPresent?: boolean;
   introducedBlockingFindings?: string[];
 }): FixAttempt {
-  const checksPassed = options.commands.length > 0 && options.commands.every((command) => command.exitCode === 0 && !command.timedOut);
+  const checksPassed =
+    options.commands.length > 0 && options.commands.every((command) => command.exitCode === 0 && !command.timedOut);
   const introduced = options.introducedBlockingFindings ?? [];
-  const scanPassed = options.verificationScan !== undefined && options.findingStillPresent === false && introduced.length === 0;
+  const scanPassed =
+    options.verificationScan !== undefined && options.findingStillPresent === false && introduced.length === 0;
   const verified = options.agentCompleted && checksPassed && scanPassed;
   const status: FixAttempt["status"] = !options.agentCompleted
     ? "agent_failed"
@@ -169,7 +172,12 @@ export function completeFixAttempt(options: {
   });
 
   if (verified) {
-    changeFindingStatus(options.workspace, options.fix.findingId, "resolved", "automatic fix passed project checks and rescan");
+    changeFindingStatus(
+      options.workspace,
+      options.fix.findingId,
+      "resolved",
+      "automatic fix passed project checks and rescan",
+    );
     changeFindingVerification(
       options.workspace,
       options.fix.findingId,
@@ -187,13 +195,7 @@ export function completeFixAttempt(options: {
         notes,
       );
     }
-    changeFindingVerification(
-      options.workspace,
-      options.fix.findingId,
-      "failed",
-      notes,
-      options.verificationScan?.id,
-    );
+    changeFindingVerification(options.workspace, options.fix.findingId, "failed", notes, options.verificationScan?.id);
   }
   return completed;
 }

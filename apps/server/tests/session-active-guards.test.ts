@@ -46,7 +46,7 @@ function authed(path: string, init: RequestInit = {}): Promise<Response> {
 async function expectSessionBusy(response: Promise<Response>): Promise<void> {
   const res = await response;
   expect(res.status).toBe(409);
-  expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe("session_busy");
 }
 
 beforeAll(async () => {
@@ -68,7 +68,9 @@ beforeAll(async () => {
       { ts: "2026-01-02T00:00:00.000Z", role: "user", content: "start" },
       { ts: "2026-01-02T00:00:01.000Z", role: "assistant", content: "working" },
       { ts: "2026-01-02T00:00:02.000Z", role: "user", content: "continue" },
-    ].map((message) => `${JSON.stringify(message)}\n`).join(""),
+    ]
+      .map((message) => `${JSON.stringify(message)}\n`)
+      .join(""),
   );
   writeFileIn(
     workspace,
@@ -131,7 +133,9 @@ describe("active-session REST guards", () => {
       req.on("response", (res) => {
         let body = "";
         res.setEncoding("utf8");
-        res.on("data", (chunk) => { body += chunk; });
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
         res.on("end", () => resolveResponse({ status: res.statusCode ?? 0, body }));
       });
       req.on("error", reject);
@@ -173,10 +177,12 @@ describe("active-session REST guards", () => {
   it("rejects rewind without restoring files", async () => {
     activeState.sessionIds.add("active");
 
-    await expectSessionBusy(authed("/api/rewind", {
-      method: "POST",
-      body: JSON.stringify({ sessionId: "active" }),
-    }));
+    await expectSessionBusy(
+      authed("/api/rewind", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: "active" }),
+      }),
+    );
 
     expect(readFileSync(join(workspace, "src/active.txt"), "utf8")).toBe("during\n");
   });
@@ -186,10 +192,12 @@ describe("active-session REST guards", () => {
     const sessionsDir = join(workspace, ".seekforge/sessions");
     const before = readdirSync(sessionsDir).sort();
 
-    await expectSessionBusy(authed("/api/sessions/prune", {
-      method: "POST",
-      body: JSON.stringify({ keepLast: 0 }),
-    }));
+    await expectSessionBusy(
+      authed("/api/sessions/prune", {
+        method: "POST",
+        body: JSON.stringify({ keepLast: 0 }),
+      }),
+    );
 
     expect(readdirSync(sessionsDir).sort()).toEqual(before);
   });

@@ -2,12 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  customCommandSpecs,
-  expandCustomCommand,
-  loadCustomCommands,
-  type CustomCommand,
-} from "../custom-commands.js";
+import { customCommandSpecs, expandCustomCommand, loadCustomCommands, type CustomCommand } from "../custom-commands.js";
 
 let workspace: string;
 let home: string;
@@ -84,9 +79,7 @@ describe("expandCustomCommand", () => {
   const plain: CustomCommand = { name: "go", description: "go", body: "Just go.", scope: "global" };
 
   it("replaces every $ARGUMENTS occurrence", () => {
-    expect(expandCustomCommand(withPlaceholder, "issue #7")).toBe(
-      "Fix issue #7 now. Again: issue #7",
-    );
+    expect(expandCustomCommand(withPlaceholder, "issue #7")).toBe("Fix issue #7 now. Again: issue #7");
   });
 
   it("replaces $ARGUMENTS with empty string when no args given", () => {

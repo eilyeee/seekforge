@@ -1,5 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopEvent, LoopStatus } from "./auto-loop.js";
@@ -33,13 +46,17 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LOOP_STATUSES = new Set<PersistedLoopStatus>([
-  "running", "passed", "exhausted", "no_progress", "budget", "cancelled", "verify_error",
+  "running",
+  "passed",
+  "exhausted",
+  "no_progress",
+  "budget",
+  "cancelled",
+  "verify_error",
 ]);
 
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-const isIsoDate = (value: unknown): value is string =>
-  typeof value === "string" && Number.isFinite(Date.parse(value));
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isIsoDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
 
 export function isValidLoopId(loopId: string): boolean {
   return LOOP_ID_RE.test(loopId);
@@ -85,8 +102,7 @@ const activeLeases = new Set<string>();
 
 export type LoopLease = { release: () => void };
 
-const leaseKey = (workspace: string, loopId: string): string =>
-  `${requireWorkspace(workspace)}\0${loopId}`;
+const leaseKey = (workspace: string, loopId: string): string => `${requireWorkspace(workspace)}\0${loopId}`;
 
 function leaseFile(workspace: string, loopId: string): string {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
@@ -126,7 +142,9 @@ function readLockSnapshot(target: string): LockSnapshot {
     return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
   }
   if (
-    !Number.isInteger(owner.pid) || (owner.pid as number) <= 0 || typeof owner.token !== "string" ||
+    !Number.isInteger(owner.pid) ||
+    (owner.pid as number) <= 0 ||
+    typeof owner.token !== "string" ||
     (owner.createdAt !== undefined &&
       (typeof owner.createdAt !== "string" || !Number.isFinite(Date.parse(owner.createdAt))))
   ) {
@@ -202,14 +220,22 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
   const key = leaseKey(workspace, loopId);
   if (activeLeases.has(key)) throw new Error(`Loop is already running: ${loopId}`);
   activeLeases.add(key);
-  if (!persist) return { release: () => { activeLeases.delete(key); } };
+  if (!persist)
+    return {
+      release: () => {
+        activeLeases.delete(key);
+      },
+    };
 
   try {
     const target = leaseFile(workspace, loopId);
     mkdirSync(dirname(target), { recursive: true });
     const token = randomUUID();
     const payload = JSON.stringify({
-      version: 1, pid: process.pid, token, createdAt: new Date().toISOString(),
+      version: 1,
+      pid: process.pid,
+      token,
+      createdAt: new Date().toISOString(),
       ...(selfProcessIdentity ? { processIdentity: selfProcessIdentity } : {}),
     });
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -218,7 +244,11 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
         try {
           writeFileSync(fd, payload, "utf8");
         } catch (error) {
-          try { closeSync(fd); } finally { rmSync(target, { force: true }); }
+          try {
+            closeSync(fd);
+          } finally {
+            rmSync(target, { force: true });
+          }
           throw error;
         }
         closeSync(fd);
@@ -228,7 +258,9 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
             try {
               const owner = JSON.parse(readFileSync(target, "utf8")) as { token?: unknown };
               if (owner.token === token) rmSync(target);
-            } catch { /* A missing/replaced lock no longer belongs to this lease. */ }
+            } catch {
+              /* A missing/replaced lock no longer belongs to this lease. */
+            }
           },
         };
       } catch (error) {
@@ -250,28 +282,52 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const budget = value.costBudgetUsd;
   const verify = value.lastVerify;
   if (
-    typeof value.loopId !== "string" || !isValidLoopId(value.loopId) ||
-    typeof value.task !== "string" || typeof value.workspace !== "string" || !isAbsolute(value.workspace) ||
-    typeof value.verifyCommand !== "string" || !Number.isInteger(value.maxIterations) ||
-    !isFiniteNumber(value.maxIterations) || value.maxIterations <= 0 || value.maxIterations > MAX_LOOP_ITERATIONS ||
+    typeof value.loopId !== "string" ||
+    !isValidLoopId(value.loopId) ||
+    typeof value.task !== "string" ||
+    typeof value.workspace !== "string" ||
+    !isAbsolute(value.workspace) ||
+    typeof value.verifyCommand !== "string" ||
+    !Number.isInteger(value.maxIterations) ||
+    !isFiniteNumber(value.maxIterations) ||
+    value.maxIterations <= 0 ||
+    value.maxIterations > MAX_LOOP_ITERATIONS ||
     (budget !== null && (!isFiniteNumber(budget) || budget <= 0)) ||
-    !Number.isInteger(value.iterations) || !isFiniteNumber(value.iterations) || value.iterations < 0 ||
-    value.iterations > value.maxIterations || !isFiniteNumber(value.costUsd) || value.costUsd < 0 ||
+    !Number.isInteger(value.iterations) ||
+    !isFiniteNumber(value.iterations) ||
+    value.iterations < 0 ||
+    value.iterations > value.maxIterations ||
+    !isFiniteNumber(value.costUsd) ||
+    value.costUsd < 0 ||
     typeof value.sessionId !== "string" ||
-    (verify !== null && (!isRecord(verify) || !Number.isInteger(verify.code) ||
-      !isFiniteNumber(verify.code) || typeof verify.output !== "string")) ||
-    typeof value.status !== "string" || !LOOP_STATUSES.has(value.status as PersistedLoopStatus) ||
-    !isIsoDate(value.createdAt) || !isIsoDate(value.updatedAt)
-  ) return null;
+    (verify !== null &&
+      (!isRecord(verify) ||
+        !Number.isInteger(verify.code) ||
+        !isFiniteNumber(verify.code) ||
+        typeof verify.output !== "string")) ||
+    typeof value.status !== "string" ||
+    !LOOP_STATUSES.has(value.status as PersistedLoopStatus) ||
+    !isIsoDate(value.createdAt) ||
+    !isIsoDate(value.updatedAt)
+  )
+    return null;
 
   const workspace = requireWorkspace(value.workspace);
   if (expectedWorkspace !== undefined && workspace !== requireWorkspace(expectedWorkspace)) return null;
   return {
-    loopId: value.loopId, task: value.task, workspace, verifyCommand: value.verifyCommand,
-    maxIterations: value.maxIterations, costBudgetUsd: budget, iterations: value.iterations,
-    costUsd: value.costUsd, sessionId: value.sessionId,
+    loopId: value.loopId,
+    task: value.task,
+    workspace,
+    verifyCommand: value.verifyCommand,
+    maxIterations: value.maxIterations,
+    costBudgetUsd: budget,
+    iterations: value.iterations,
+    costUsd: value.costUsd,
+    sessionId: value.sessionId,
     lastVerify: verify === null ? null : { code: verify.code as number, output: verify.output as string },
-    status: value.status as PersistedLoopStatus, createdAt: value.createdAt, updatedAt: value.updatedAt,
+    status: value.status as PersistedLoopStatus,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
   };
 }
 
@@ -285,11 +341,19 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     throw new Error(`Loop state already exists: ${id}`);
   }
   const state: LoopState = {
-    loopId: id, task: input.task,
-    workspace: requireWorkspace(input.workspace), verifyCommand: input.verifyCommand,
-    maxIterations: input.maxIterations, costBudgetUsd: input.costBudgetUsd ?? null,
-    iterations: 0, costUsd: 0, sessionId: input.sessionId ?? "",
-    lastVerify: input.lastVerify ?? null, status: "running", createdAt: now, updatedAt: now,
+    loopId: id,
+    task: input.task,
+    workspace: requireWorkspace(input.workspace),
+    verifyCommand: input.verifyCommand,
+    maxIterations: input.maxIterations,
+    costBudgetUsd: input.costBudgetUsd ?? null,
+    iterations: 0,
+    costUsd: 0,
+    sessionId: input.sessionId ?? "",
+    lastVerify: input.lastVerify ?? null,
+    status: "running",
+    createdAt: now,
+    updatedAt: now,
   };
   saveLoopState(state.workspace, state);
   return state;
@@ -314,13 +378,20 @@ export function loadLoopState(workspace: string, loopId: string): LoopState | nu
   const file = loopFile(workspace, loopId);
   try {
     return parseLoopState(JSON.parse(readFileSync(file, "utf8")) as unknown, workspace);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 export function listLoopStates(workspace: string): LoopState[] {
   let names: string[];
-  try { names = readdirSync(loopsRoot(workspace)); } catch { return []; }
-  return names.filter((name) => name.endsWith(".json"))
+  try {
+    names = readdirSync(loopsRoot(workspace));
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith(".json"))
     .map((name) => loadLoopState(workspace, name.slice(0, -5)))
     .filter((state): state is LoopState => state !== null)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -330,8 +401,9 @@ export function removeLoopState(workspace: string, loopId: string): boolean {
   if (isLoopLeaseActive(workspace, loopId)) {
     throw new Error(`Cannot remove running loop: ${loopId}`);
   }
-  try { rmSync(loopFile(workspace, loopId)); }
-  catch (error) {
+  try {
+    rmSync(loopFile(workspace, loopId));
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }

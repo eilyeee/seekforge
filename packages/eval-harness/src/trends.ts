@@ -30,10 +30,17 @@ function validGeneratedAt(value: unknown): value is string {
 }
 
 function parseConfidence(value: unknown): ConfidenceInterval | undefined {
-  if (!isRecord(value) || value.confidence !== 0.95 ||
-      typeof value.lower !== "number" || !Number.isFinite(value.lower) ||
-      typeof value.upper !== "number" || !Number.isFinite(value.upper) ||
-      value.lower < 0 || value.upper < value.lower) return undefined;
+  if (
+    !isRecord(value) ||
+    value.confidence !== 0.95 ||
+    typeof value.lower !== "number" ||
+    !Number.isFinite(value.lower) ||
+    typeof value.upper !== "number" ||
+    !Number.isFinite(value.upper) ||
+    value.lower < 0 ||
+    value.upper < value.lower
+  )
+    return undefined;
   return value as ConfidenceInterval;
 }
 
@@ -48,16 +55,25 @@ function parseCosts(value: unknown): CostDistribution | undefined {
 }
 
 function parseTrendEntry(value: unknown): TrendEntry | undefined {
-  if (!isRecord(value) || !validGeneratedAt(value.generatedAt) ||
-      typeof value.report !== "string" ||
-      (value.kind !== "eval" && value.kind !== "ab") ||
-      typeof value.label !== "string" ||
-      !Number.isSafeInteger(value.samples) || (value.samples as number) < 0 ||
-      !Number.isSafeInteger(value.successes) || (value.successes as number) < 0 ||
-      (value.successes as number) > (value.samples as number) ||
-      typeof value.successRate !== "number" || !Number.isFinite(value.successRate) ||
-      value.successRate < 0 || value.successRate > 1 ||
-      typeof value.totalCostUsd !== "number" || !Number.isFinite(value.totalCostUsd) || value.totalCostUsd < 0) {
+  if (
+    !isRecord(value) ||
+    !validGeneratedAt(value.generatedAt) ||
+    typeof value.report !== "string" ||
+    (value.kind !== "eval" && value.kind !== "ab") ||
+    typeof value.label !== "string" ||
+    !Number.isSafeInteger(value.samples) ||
+    (value.samples as number) < 0 ||
+    !Number.isSafeInteger(value.successes) ||
+    (value.successes as number) < 0 ||
+    (value.successes as number) > (value.samples as number) ||
+    typeof value.successRate !== "number" ||
+    !Number.isFinite(value.successRate) ||
+    value.successRate < 0 ||
+    value.successRate > 1 ||
+    typeof value.totalCostUsd !== "number" ||
+    !Number.isFinite(value.totalCostUsd) ||
+    value.totalCostUsd < 0
+  ) {
     return undefined;
   }
   const successRateCi95 = parseConfidence(value.successRateCi95);
@@ -105,9 +121,7 @@ function entriesFromFile(path: string): TrendEntry[] {
   }
   if (!isRecord(parsed) || !validGeneratedAt(parsed.generatedAt)) return [];
   if (Array.isArray(parsed.entries)) {
-    return parsed.entries
-      .map(parseTrendEntry)
-      .filter((item): item is TrendEntry => item !== undefined);
+    return parsed.entries.map(parseTrendEntry).filter((item): item is TrendEntry => item !== undefined);
   }
   const report = basename(path);
   const standard = parseResults(parsed.results);
@@ -139,8 +153,9 @@ export function collectTrends(dir: string): TrendEntry[] {
   for (const item of files.flatMap(entriesFromFile)) {
     unique.set(`${item.generatedAt}\0${item.kind}\0${item.label}\0${item.report}`, item);
   }
-  return [...unique.values()]
-    .sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt) || a.label.localeCompare(b.label));
+  return [...unique.values()].sort(
+    (a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt) || a.label.localeCompare(b.label),
+  );
 }
 
 function percent(value: number): string {

@@ -41,10 +41,7 @@ describe("git_commit", () => {
   it("reports nothing_to_commit on a clean tree", async () => {
     writeFileSync(join(workspace, "a.txt"), "x");
     await dispatcher.execute({ id: "1", name: "git_commit", arguments: { message: "init" } }, ctx());
-    const res = await dispatcher.execute(
-      { id: "2", name: "git_commit", arguments: { message: "empty" } },
-      ctx(),
-    );
+    const res = await dispatcher.execute({ id: "2", name: "git_commit", arguments: { message: "empty" } }, ctx());
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("nothing_to_commit");
   });
@@ -52,10 +49,7 @@ describe("git_commit", () => {
   it("is blocked in ask mode", async () => {
     writeFileSync(join(workspace, "a.txt"), "x");
     const askCtx: ToolContext = { ...ctx(), policy: { ...policy, mode: "ask" } };
-    const res = await dispatcher.execute(
-      { id: "1", name: "git_commit", arguments: { message: "nope" } },
-      askCtx,
-    );
+    const res = await dispatcher.execute({ id: "1", name: "git_commit", arguments: { message: "nope" } }, askCtx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("forbidden_in_ask_mode");
   });

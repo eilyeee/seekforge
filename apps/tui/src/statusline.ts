@@ -47,11 +47,7 @@ function statusLineEnv(input: StatusLineInput): Record<string, string> {
  * stdout (cap 80 chars), or null on non-zero exit, timeout (default 1.5s),
  * or empty output. Never throws.
  */
-export function runStatusLine(
-  command: string,
-  input: StatusLineInput,
-  opts?: { timeoutMs?: number },
-): string | null {
+export function runStatusLine(command: string, input: StatusLineInput, opts?: { timeoutMs?: number }): string | null {
   try {
     const result = spawnSync("/bin/sh", ["-c", command], {
       input: JSON.stringify(input),

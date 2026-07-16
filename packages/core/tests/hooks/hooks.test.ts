@@ -55,12 +55,9 @@ describe("runHooks", () => {
 
   it("kills a hook that exceeds the timeout and reports it", async () => {
     const started = Date.now();
-    const outcomes = await runHooks(
-      "preToolUse",
-      [{ command: "sleep 30" }],
-      payload({ toolName: "run_command" }),
-      { timeoutMs: 300 },
-    );
+    const outcomes = await runHooks("preToolUse", [{ command: "sleep 30" }], payload({ toolName: "run_command" }), {
+      timeoutMs: 300,
+    });
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(outcomes[0]!.ok).toBe(false);
     expect(outcomes[0]!.timedOut).toBe(true);
@@ -70,10 +67,7 @@ describe("runHooks", () => {
   it("a non-zero preToolUse hook fails with its output tail and stops later hooks", async () => {
     const outcomes = await runHooks(
       "preToolUse",
-      [
-        { command: "echo nope; echo really 1>&2; exit 1" },
-        { command: "touch should-not-exist" },
-      ],
+      [{ command: "echo nope; echo really 1>&2; exit 1" }, { command: "touch should-not-exist" }],
       payload({ toolName: "run_command" }),
     );
     expect(outcomes).toHaveLength(1); // second hook skipped after the block
@@ -116,19 +110,11 @@ describe("runHooks", () => {
 
   it("filters by pattern: prefix on the classified command or path", async () => {
     const hooks = [{ match: "run_command", pattern: "npm", command: "touch pattern-hit" }];
-    let outcomes = await runHooks(
-      "preToolUse",
-      hooks,
-      payload({ toolName: "run_command", command: "pnpm test" }),
-    );
+    let outcomes = await runHooks("preToolUse", hooks, payload({ toolName: "run_command", command: "pnpm test" }));
     expect(outcomes).toHaveLength(0);
     expect(existsSync(join(workspace, "pattern-hit"))).toBe(false);
 
-    outcomes = await runHooks(
-      "preToolUse",
-      hooks,
-      payload({ toolName: "run_command", command: "npm run build" }),
-    );
+    outcomes = await runHooks("preToolUse", hooks, payload({ toolName: "run_command", command: "npm run build" }));
     expect(outcomes).toHaveLength(1);
     expect(existsSync(join(workspace, "pattern-hit"))).toBe(true);
   });
@@ -155,11 +141,7 @@ describe("runHooks", () => {
 
   it("matches pattern against the path for fs tools", async () => {
     const hooks = [{ pattern: "src/", command: "touch path-hit" }];
-    const outcomes = await runHooks(
-      "postToolUse",
-      hooks,
-      payload({ toolName: "apply_patch", path: "src/index.ts" }),
-    );
+    const outcomes = await runHooks("postToolUse", hooks, payload({ toolName: "apply_patch", path: "src/index.ts" }));
     expect(outcomes).toHaveLength(1);
     expect(existsSync(join(workspace, "path-hit"))).toBe(true);
   });
@@ -167,19 +149,11 @@ describe("runHooks", () => {
   it("matches path patterns on a path boundary, not a sibling prefix", async () => {
     const hooks = [{ pattern: "src/foo", command: "touch path-boundary-hit" }];
 
-    let outcomes = await runHooks(
-      "postToolUse",
-      hooks,
-      payload({ toolName: "apply_patch", path: "src/foobar.ts" }),
-    );
+    let outcomes = await runHooks("postToolUse", hooks, payload({ toolName: "apply_patch", path: "src/foobar.ts" }));
     expect(outcomes).toHaveLength(0);
     expect(existsSync(join(workspace, "path-boundary-hit"))).toBe(false);
 
-    outcomes = await runHooks(
-      "postToolUse",
-      hooks,
-      payload({ toolName: "apply_patch", path: "src/foo/index.ts" }),
-    );
+    outcomes = await runHooks("postToolUse", hooks, payload({ toolName: "apply_patch", path: "src/foo/index.ts" }));
     expect(outcomes).toHaveLength(1);
     expect(existsSync(join(workspace, "path-boundary-hit"))).toBe(true);
   });
@@ -240,10 +214,7 @@ describe("runHooks", () => {
   it("userPromptSubmit continue:false blocks (exit 0) with systemMessage as the reason", async () => {
     const outcomes = await runHooks(
       "userPromptSubmit",
-      [
-        { command: `echo '{"continue":false,"systemMessage":"stop here"}'` },
-        { command: "touch should-not-exist-cf" },
-      ],
+      [{ command: `echo '{"continue":false,"systemMessage":"stop here"}'` }, { command: "touch should-not-exist-cf" }],
       payload({ task: "do it" }),
     );
     expect(outcomes).toHaveLength(1);
@@ -291,10 +262,7 @@ describe("runHooks", () => {
   it('preToolUse stdout {"decision":"deny"} blocks with the reason despite exit 0', async () => {
     const outcomes = await runHooks(
       "preToolUse",
-      [
-        { command: `echo '{"decision":"deny","reason":"forbidden path"}'` },
-        { command: "touch deny-should-skip" },
-      ],
+      [{ command: `echo '{"decision":"deny","reason":"forbidden path"}'` }, { command: "touch deny-should-skip" }],
       payload({ toolName: "apply_patch", path: "src/a.ts" }),
     );
     expect(outcomes).toHaveLength(1); // later hooks skipped after the block
@@ -461,11 +429,7 @@ describe("runHooks", () => {
   });
 
   it("sessionEnd entries run without a toolName and receive the status", async () => {
-    const outcomes = await runHooks(
-      "sessionEnd",
-      [{ command: "cat > end.json" }],
-      payload({ status: "completed" }),
-    );
+    const outcomes = await runHooks("sessionEnd", [{ command: "cat > end.json" }], payload({ status: "completed" }));
     expect(outcomes[0]!.ok).toBe(true);
     const written = JSON.parse(readFileSync(join(workspace, "end.json"), "utf8"));
     expect(written).toMatchObject({ stage: "sessionEnd", status: "completed", sessionId: "s-test" });
@@ -484,13 +448,9 @@ describe("buildHookContext", () => {
   });
 
   it("wraps each successful hook's trimmed stdout in its own <hook-context> block", () => {
-    const suffix = buildHookContext([
-      outcome({ stdout: "  first context\n" }),
-      outcome({ stdout: "second context" }),
-    ]);
+    const suffix = buildHookContext([outcome({ stdout: "  first context\n" }), outcome({ stdout: "second context" })]);
     expect(suffix).toBe(
-      "\n\n<hook-context>\nfirst context\n</hook-context>" +
-        "\n\n<hook-context>\nsecond context\n</hook-context>",
+      "\n\n<hook-context>\nfirst context\n</hook-context>" + "\n\n<hook-context>\nsecond context\n</hook-context>",
     );
   });
 
@@ -498,11 +458,9 @@ describe("buildHookContext", () => {
     expect(buildHookContext([outcome({ stdout: `{"additionalContext":"from json"}` })])).toBe(
       "\n\n<hook-context>\nfrom json\n</hook-context>",
     );
-    expect(
-      buildHookContext([
-        outcome({ stdout: `{"hookSpecificOutput":{"additionalContext":"nested ctx"}}` }),
-      ]),
-    ).toBe("\n\n<hook-context>\nnested ctx\n</hook-context>");
+    expect(buildHookContext([outcome({ stdout: `{"hookSpecificOutput":{"additionalContext":"nested ctx"}}` })])).toBe(
+      "\n\n<hook-context>\nnested ctx\n</hook-context>",
+    );
   });
 
   it("falls back to raw stdout when JSON has no additionalContext", () => {

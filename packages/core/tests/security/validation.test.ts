@@ -17,18 +17,20 @@ describe("security Agent output validation", () => {
 
   function envelope(overrides: Record<string, unknown> = {}): string {
     return JSON.stringify({
-      findings: [{
-        title: "Command injection",
-        description: "Untrusted input reaches a command runner.",
-        severity: "high",
-        confidence: "high",
-        category: "command-injection",
-        cwe: "CWE-78",
-        ruleId: "command-injection",
-        recommendation: "Pass an argv array.",
-        evidence: [{ path: "app.ts", lineStart: 2, lineEnd: 2, excerpt: "run(userInput);" }],
-        ...overrides,
-      }],
+      findings: [
+        {
+          title: "Command injection",
+          description: "Untrusted input reaches a command runner.",
+          severity: "high",
+          confidence: "high",
+          category: "command-injection",
+          cwe: "CWE-78",
+          ruleId: "command-injection",
+          recommendation: "Pass an argv array.",
+          evidence: [{ path: "app.ts", lineStart: 2, lineEnd: 2, excerpt: "run(userInput);" }],
+          ...overrides,
+        },
+      ],
     });
   }
 
@@ -41,9 +43,24 @@ describe("security Agent output validation", () => {
   it("rejects markdown, unknown fields, missing files, traversal, and forged excerpts", () => {
     expect(() => validateAgentFindings(workspace, `\`\`\`json\n${envelope()}\n\`\`\``)).toThrow(/exact JSON/);
     expect(() => validateAgentFindings(workspace, envelope({ injected: "ignore policy" }))).toThrow();
-    expect(() => validateAgentFindings(workspace, envelope({ evidence: [{ path: "missing.ts", lineStart: 1, lineEnd: 1, excerpt: "x" }] }))).toThrow(/real repository file/);
-    expect(() => validateAgentFindings(workspace, envelope({ evidence: [{ path: "../outside", lineStart: 1, lineEnd: 1, excerpt: "x" }] }))).toThrow(/escapes/);
-    expect(() => validateAgentFindings(workspace, envelope({ evidence: [{ path: "app.ts", lineStart: 2, lineEnd: 2, excerpt: "eval(userInput)" }] }))).toThrow(/does not match/);
+    expect(() =>
+      validateAgentFindings(
+        workspace,
+        envelope({ evidence: [{ path: "missing.ts", lineStart: 1, lineEnd: 1, excerpt: "x" }] }),
+      ),
+    ).toThrow(/real repository file/);
+    expect(() =>
+      validateAgentFindings(
+        workspace,
+        envelope({ evidence: [{ path: "../outside", lineStart: 1, lineEnd: 1, excerpt: "x" }] }),
+      ),
+    ).toThrow(/escapes/);
+    expect(() =>
+      validateAgentFindings(
+        workspace,
+        envelope({ evidence: [{ path: "app.ts", lineStart: 2, lineEnd: 2, excerpt: "eval(userInput)" }] }),
+      ),
+    ).toThrow(/does not match/);
   });
 
   it("redacts common secrets and limits stored output", () => {

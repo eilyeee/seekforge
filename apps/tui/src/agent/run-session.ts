@@ -46,11 +46,7 @@ export type RunSessionDeps = {
  * into the reducer, and routes streamed model deltas to the live assistant
  * item. Cancellation is cooperative via the AbortSignal.
  */
-export async function runSession(
-  task: string,
-  signal: AbortSignal,
-  deps: RunSessionDeps,
-): Promise<void> {
+export async function runSession(task: string, signal: AbortSignal, deps: RunSessionDeps): Promise<void> {
   // Coalesce per-token deltas and live output into ~20fps dispatches so the
   // transcript doesn't repaint on every chunk (anti-flicker).
   const buffered = createBufferedDispatch(deps.dispatch);

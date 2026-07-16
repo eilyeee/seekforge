@@ -1,20 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildFallbackToolPrompt,
-  parseFallbackToolCalls,
-} from "../../src/provider/fallback.js";
+import { buildFallbackToolPrompt, parseFallbackToolCalls } from "../../src/provider/fallback.js";
 
 describe("parseFallbackToolCalls", () => {
   it("parses a single valid block", () => {
-    const text = [
-      "```tool_call",
-      '{"name": "read_file", "arguments": {"path": "src/App.tsx"}}',
-      "```",
-    ].join("\n");
+    const text = ["```tool_call", '{"name": "read_file", "arguments": {"path": "src/App.tsx"}}', "```"].join("\n");
     const calls = parseFallbackToolCalls(text);
-    expect(calls).toEqual([
-      { id: "fallback-1", name: "read_file", argumentsJson: '{"path":"src/App.tsx"}' },
-    ]);
+    expect(calls).toEqual([{ id: "fallback-1", name: "read_file", argumentsJson: '{"path":"src/App.tsx"}' }]);
   });
 
   it("parses multiple blocks with surrounding prose", () => {
@@ -40,7 +31,7 @@ describe("parseFallbackToolCalls", () => {
   });
 
   it("tolerates whitespace around the language tag and CRLF", () => {
-    const text = "```  tool_call \r\n{\"name\": \"ls\", \"arguments\": {}}\r\n```";
+    const text = '```  tool_call \r\n{"name": "ls", "arguments": {}}\r\n```';
     const calls = parseFallbackToolCalls(text);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.name).toBe("ls");

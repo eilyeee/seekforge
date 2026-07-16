@@ -49,9 +49,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
           </h1>
         </div>
 
-        <p className="mb-5 text-sm leading-relaxed text-secondary">
-          {t("onboarding.description")}
-        </p>
+        <p className="mb-5 text-sm leading-relaxed text-secondary">{t("onboarding.description")}</p>
 
         <label className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">
           {t("onboarding.apiKeyLabel")}

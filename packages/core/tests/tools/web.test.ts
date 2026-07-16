@@ -1,25 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { ToolError } from "../../src/tools/errors.js";
-import {
-  checkFetchUrl,
-  extractRelevant,
-  htmlToText,
-  normalizeNumericIpv4,
-} from "../../src/tools/builtins/web.js";
+import { checkFetchUrl, extractRelevant, htmlToText, normalizeNumericIpv4 } from "../../src/tools/builtins/web.js";
 
 describe("checkFetchUrl", () => {
   it("accepts public http(s) urls", () => {
-    expect(checkFetchUrl("https://api-docs.deepseek.com/pricing").hostname).toBe(
-      "api-docs.deepseek.com",
-    );
+    expect(checkFetchUrl("https://api-docs.deepseek.com/pricing").hostname).toBe("api-docs.deepseek.com");
     expect(checkFetchUrl("http://example.com/a?b=c").protocol).toBe("http:");
   });
 
-  it.each([
-    "ftp://example.com/file",
-    "file:///etc/passwd",
-    "not a url",
-  ])("rejects non-http(s): %s", (url) => {
+  it.each(["ftp://example.com/file", "file:///etc/passwd", "not a url"])("rejects non-http(s): %s", (url) => {
     expect(() => checkFetchUrl(url)).toThrowError(ToolError);
   });
 

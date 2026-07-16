@@ -59,11 +59,13 @@ export type ChatItem =
       status: "running" | "done" | "failed" | "cancelled";
       maxConcurrency: number;
       failurePolicy: "stop" | "continue";
-      members: Array<TeamMemberPlan & {
-        status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
-        dispatchId?: string;
-        reason?: string;
-      }>;
+      members: Array<
+        TeamMemberPlan & {
+          status: "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
+          dispatchId?: string;
+          reason?: string;
+        }
+      >;
     }
   | { kind: "file"; id: number; path: string }
   | { kind: "compacted"; id: number; droppedTurns: number; summaryTokens: number }
@@ -254,7 +256,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
       const m = SUBSTEP_RE.exec(ev.title);
       if (!m) return state;
       const [, agentId, toolName] = m as unknown as [string, string, string];
-      if (state.items.some((item) => item.kind === "subagent" && item.agentId === agentId && item.status === "running")) {
+      if (
+        state.items.some((item) => item.kind === "subagent" && item.agentId === agentId && item.status === "running")
+      ) {
         return state;
       }
       // Accumulate consecutive steps of the same agent into one card.
@@ -312,13 +316,9 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         agentId: ev.agentId,
         task: ev.task,
         status: ev.status,
-        steps: idx >= 0
-          ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>).steps
-          : [],
+        steps: idx >= 0 ? (state.items[idx] as Extract<ChatItem, { kind: "subagent" }>).steps : [],
         ...(ev.subSessionId ? { subSessionId: ev.subSessionId } : {}),
-        ...(ev.type === "subagent.cancelled"
-          ? { resultSummary: ev.reason }
-          : { resultSummary: ev.resultSummary }),
+        ...(ev.type === "subagent.cancelled" ? { resultSummary: ev.reason } : { resultSummary: ev.resultSummary }),
         ...(ev.type === "subagent.failed" ? { error: ev.error } : {}),
       };
       if (idx < 0) return push(state, base);
@@ -376,26 +376,38 @@ export function reduceEvent(state: ChatState, ev: StreamEvent): ChatState {
         if (index < 0) return state;
         const team = state.items[index] as Extract<ChatItem, { kind: "team" }>;
         const data = ev.result.data;
-        const record = typeof data === "object" && data !== null && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+        const record =
+          typeof data === "object" && data !== null && !Array.isArray(data)
+            ? (data as Record<string, unknown>)
+            : undefined;
         const outcomes = Array.isArray(record?.members) ? record.members : [];
         const byId = new Map<string, Record<string, unknown>>();
         for (const outcome of outcomes) {
-          if (typeof outcome === "object" && outcome !== null && !Array.isArray(outcome) && typeof (outcome as { id?: unknown }).id === "string") {
+          if (
+            typeof outcome === "object" &&
+            outcome !== null &&
+            !Array.isArray(outcome) &&
+            typeof (outcome as { id?: unknown }).id === "string"
+          ) {
             byId.set((outcome as { id: string }).id, outcome as Record<string, unknown>);
           }
         }
         const statuses = new Set(["pending", "running", "done", "failed", "cancelled", "skipped"]);
         const members = team.members.map((member) => {
           const outcome = byId.get(member.id);
-          const status = outcome && typeof outcome.status === "string" && statuses.has(outcome.status)
-            ? outcome.status as typeof member.status
-            : member.status;
+          const status =
+            outcome && typeof outcome.status === "string" && statuses.has(outcome.status)
+              ? (outcome.status as typeof member.status)
+              : member.status;
           return { ...member, status, ...(typeof outcome?.reason === "string" ? { reason: outcome.reason } : {}) };
         });
         const reportedStatus = record?.status;
-        const status = reportedStatus === "done" || reportedStatus === "failed" || reportedStatus === "cancelled"
-          ? reportedStatus
-          : ev.result.ok ? "done" : "failed";
+        const status =
+          reportedStatus === "done" || reportedStatus === "failed" || reportedStatus === "cancelled"
+            ? reportedStatus
+            : ev.result.ok
+              ? "done"
+              : "failed";
         const items = [...state.items];
         items[index] = { ...team, status, members };
         return { ...state, items };

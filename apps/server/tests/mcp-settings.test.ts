@@ -101,26 +101,30 @@ describe("MCP settings scopes and secret preservation", () => {
 
     const removed = await request("/api/mcp/shared?scope=project", { method: "DELETE" });
     expect(await removed.json()).toEqual({ ok: true, scope: "project" });
-    const fallback = await (await request("/api/mcp")).json() as Array<Record<string, unknown>>;
+    const fallback = (await (await request("/api/mcp")).json()) as Array<Record<string, unknown>>;
     expect(fallback).toEqual([
       expect.objectContaining({ name: "shared", transport: "stdio", source: "global", shadowedGlobal: false }),
     ]);
   });
 
   it("retains masked header, env, and OAuth values without echoing plaintext", async () => {
-    expect((await save({
-      name: "oauth-http",
-      scope: "project",
-      url: "https://old.example.test/rpc",
-      headers: { Authorization: "old-header", "X-New": "old-x" },
-      env: { API_TOKEN: "old-env" },
-      oauth: {
-        tokenEndpoint: "https://auth.example.test/token",
-        clientId: "client-one",
-        clientSecret: "old-client-secret",
-        refreshToken: "old-refresh-token",
-      },
-    })).status).toBe(200);
+    expect(
+      (
+        await save({
+          name: "oauth-http",
+          scope: "project",
+          url: "https://old.example.test/rpc",
+          headers: { Authorization: "old-header", "X-New": "old-x" },
+          env: { API_TOKEN: "old-env" },
+          oauth: {
+            tokenEndpoint: "https://auth.example.test/token",
+            clientId: "client-one",
+            clientSecret: "old-client-secret",
+            refreshToken: "old-refresh-token",
+          },
+        })
+      ).status,
+    ).toBe(200);
 
     const updated = await save({
       name: "oauth-http",

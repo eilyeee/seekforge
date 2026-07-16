@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { highlightLines, type CodeToken } from "../highlight.js";
 
-const rejoin = (rows: CodeToken[][]): string =>
-  rows.map((row) => row.map((t) => t.text).join("")).join("\n");
+const rejoin = (rows: CodeToken[][]): string => rows.map((row) => row.map((t) => t.text).join("")).join("\n");
 
-const find = (row: CodeToken[], text: string): CodeToken | undefined =>
-  row.find((t) => t.text === text);
+const find = (row: CodeToken[], text: string): CodeToken | undefined => row.find((t) => t.text === text);
 
 describe("highlightLines", () => {
   it("colors ts keywords, strings, and line comments", () => {

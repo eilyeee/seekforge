@@ -160,7 +160,8 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
       layer.sandbox === "read-only" ||
       layer.sandbox === "workspace-write" ||
       layer.sandbox === "restricted"
-    ) sandbox = layer.sandbox;
+    )
+      sandbox = layer.sandbox;
   }
 
   // Env overrides (final step). The provider is resolved with ??-semantics
@@ -169,13 +170,10 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
   let envOverrides: Record<string, unknown> = {};
   if (opts.envOverrides !== false) {
     const mergedProvider = (provider ?? "deepseek").toLowerCase();
-    const envKey =
-      mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
+    const envKey = mergedProvider === "ark" ? process.env["ARK_API_KEY"] : process.env["DEEPSEEK_API_KEY"];
     envOverrides = {
       ...(envKey ? { apiKey: envKey } : {}),
-      ...(process.env["SEEKFORGE_RUNTIME_BIN"]
-        ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] }
-        : {}),
+      ...(process.env["SEEKFORGE_RUNTIME_BIN"] ? { runtimeBin: process.env["SEEKFORGE_RUNTIME_BIN"] } : {}),
     };
   }
 
@@ -203,10 +201,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
  * "x" / [...]) to {} — JSON.parse accepts those and spreading them downstream
  * misbehaves. All application config loaders enable this guard.
  */
-export function readJsonConfigLayer<T extends object>(
-  path: string,
-  opts: { requireObject?: boolean } = {},
-): T {
+export function readJsonConfigLayer<T extends object>(path: string, opts: { requireObject?: boolean } = {}): T {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     if (opts.requireObject && !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))) {

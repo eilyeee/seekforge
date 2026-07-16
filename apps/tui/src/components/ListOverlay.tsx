@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import { t } from "../strings.js";
 import { ACCENT } from "./Header.js";

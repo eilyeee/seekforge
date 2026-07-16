@@ -1,9 +1,4 @@
-import type {
-  AgentEvent,
-  FinalReport,
-  PermissionRequest,
-  TokenUsage,
-} from "@seekforge/shared";
+import type { AgentEvent, FinalReport, PermissionRequest, TokenUsage } from "@seekforge/shared";
 import type { MemoryCandidate } from "@seekforge/core";
 import type { CandidateScope } from "./memory-candidates.js";
 
@@ -181,9 +176,7 @@ export function approvalModeFor(setting: ApprovalSetting): "auto" | "acceptEdits
  * that grows CORE's session allowlist), anything else denies. Pure so the
  * return shape is unit-testable without rendering Ink.
  */
-export function permissionResultForKey(
-  key: string,
-): boolean | { allow: true; remember: "session" } {
+export function permissionResultForKey(key: string): boolean | { allow: true; remember: "session" } {
   const choice = key.toLowerCase();
   if (choice === "y") return true;
   if (choice === "a") return { allow: true, remember: "session" };
@@ -426,7 +419,13 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         items: [
           ...state.items,
-          { kind: "shell", id: nextId("sh"), command: action.command, output: action.output, exitCode: action.exitCode },
+          {
+            kind: "shell",
+            id: nextId("sh"),
+            command: action.command,
+            output: action.output,
+            exitCode: action.exitCode,
+          },
         ],
       };
 
@@ -627,7 +626,9 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       next[idx] = {
         ...rest,
         status: e.result.ok ? "ok" : "error",
-        error: e.result.ok ? undefined : { code: e.result.error?.code ?? "error", message: e.result.error?.message ?? "" },
+        error: e.result.ok
+          ? undefined
+          : { code: e.result.error?.code ?? "error", message: e.result.error?.message ?? "" },
         ...(e.result.ok && e.result.data !== undefined ? { resultPreview: previewData(e.result.data) } : {}),
       };
       return applyBgEvent({ ...state, items: next }, e.toolName, e.result.ok, e.result.data, row.args);
@@ -650,7 +651,12 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
         ...state,
         items: [
           ...state.items,
-          { kind: "notice", id: nextId("n"), tone: "dim", text: `context compacted: dropped ${e.droppedTurns} earlier messages` },
+          {
+            kind: "notice",
+            id: nextId("n"),
+            tone: "dim",
+            text: `context compacted: dropped ${e.droppedTurns} earlier messages`,
+          },
         ],
       };
 
@@ -746,13 +752,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
  * Tracks background tasks from tool completions: run_command background:true
  * returns { taskId }, task_kill/task_output report { taskId, status }.
  */
-function applyBgEvent(
-  state: ChatState,
-  toolName: string,
-  ok: boolean,
-  data: unknown,
-  args: unknown,
-): ChatState {
+function applyBgEvent(state: ChatState, toolName: string, ok: boolean, data: unknown, args: unknown): ChatState {
   if (!ok || typeof data !== "object" || data === null) return state;
   const taskId = (data as { taskId?: unknown }).taskId;
   if (typeof taskId !== "string") return state;
@@ -760,7 +760,7 @@ function applyBgEvent(
   if (toolName === "run_command") {
     const command =
       typeof (args as { command?: unknown })?.command === "string"
-        ? ((args as { command: string }).command)
+        ? (args as { command: string }).command
         : "(unknown command)";
     if (state.bgTasks.some((t) => t.id === taskId)) return state;
     return { ...state, bgTasks: [...state.bgTasks, { id: taskId, command, status: "running" }] };
@@ -791,7 +791,7 @@ const RESULT_PREVIEW_CHARS = 1500;
 function previewData(data: unknown): string {
   let text: string;
   try {
-    text = typeof data === "string" ? data : JSON.stringify(data, null, 1) ?? "";
+    text = typeof data === "string" ? data : (JSON.stringify(data, null, 1) ?? "");
   } catch {
     text = String(data);
   }

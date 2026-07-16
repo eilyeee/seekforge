@@ -125,10 +125,7 @@ describe("run_command background:true via dispatcher", () => {
     const ctx = makeCtx(ws, { background: bg });
     try {
       const started = Date.now();
-      const res = await dispatcher.execute(
-        call("run_command", { command: "sleep 5", background: true }),
-        ctx,
-      );
+      const res = await dispatcher.execute(call("run_command", { command: "sleep 5", background: true }), ctx);
       expect(Date.now() - started).toBeLessThan(2_000); // well under the sleep 5
       expect(res.ok).toBe(true);
       const data = res.data as { taskId: string; command: string; note: string };
@@ -145,10 +142,7 @@ describe("run_command background:true via dispatcher", () => {
     const ws = makeWorkspace();
     const bg = createBackgroundTasks();
     const ctx = makeCtx(ws, { background: bg });
-    const res = await dispatcher.execute(
-      call("run_command", { command: "rm -rf /", background: true }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "rm -rf /", background: true }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_dangerous");
     expect(bg.list()).toHaveLength(0);
@@ -156,10 +150,7 @@ describe("run_command background:true via dispatcher", () => {
 
   it("fails with background_unavailable when the context has no manager", async () => {
     const ws = makeWorkspace();
-    const res = await dispatcher.execute(
-      call("run_command", { command: "sleep 5", background: true }),
-      makeCtx(ws),
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "sleep 5", background: true }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("background_unavailable");
   });
@@ -228,10 +219,7 @@ describe("task_output / task_kill via dispatcher", () => {
   it("task_kill is unknown_task for missing ids and blocked in ask mode", async () => {
     const ws = makeWorkspace();
     const bg = createBackgroundTasks();
-    const missing = await dispatcher.execute(
-      call("task_kill", { taskId: "bg-7" }),
-      makeCtx(ws, { background: bg }),
-    );
+    const missing = await dispatcher.execute(call("task_kill", { taskId: "bg-7" }), makeCtx(ws, { background: bg }));
     expect(missing.ok).toBe(false);
     expect(missing.error?.code).toBe("unknown_task");
 

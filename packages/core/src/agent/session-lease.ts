@@ -172,8 +172,11 @@ function snapshot(dir: string): LeaseSnapshot {
     return { signature: content, alive: Date.now() - mtime < MALFORMED_LEASE_GRACE_MS };
   }
   if (
-    !Number.isInteger(owner.pid) || (owner.pid as number) <= 0 || typeof owner.token !== "string" ||
-    typeof owner.processIdentity !== "string" || typeof owner.createdAt !== "string" ||
+    !Number.isInteger(owner.pid) ||
+    (owner.pid as number) <= 0 ||
+    typeof owner.token !== "string" ||
+    typeof owner.processIdentity !== "string" ||
+    typeof owner.createdAt !== "string" ||
     !Number.isFinite(Date.parse(owner.createdAt))
   ) {
     const mtime = statSync(join(dir, "owner.json")).mtimeMs;
@@ -313,7 +316,8 @@ export function acquireSessionLease(workspace: string, sessionId: string): Sessi
 
 export function assertSessionLease(lease: SessionLease, workspace: string, sessionId: string): void {
   if (
-    lease.workspace !== workspaceRoot(workspace) || lease.sessionId !== sessionId ||
+    lease.workspace !== workspaceRoot(workspace) ||
+    lease.sessionId !== sessionId ||
     localLeases.get(leaseKey(workspace, sessionId)) !== lease.token
   ) {
     throw new Error(`Invalid session lease: ${sessionId}`);
@@ -344,8 +348,8 @@ export function hasActiveSessionRuns(workspace: string): boolean {
 
 function hasActiveSessionRunsExcept(workspace: string, excludedSessionId?: string): boolean {
   const prefix = `${workspaceRoot(workspace)}\0`;
-  if ([...localLeases.keys()].some((key) =>
-    key.startsWith(prefix) && key.slice(prefix.length) !== excludedSessionId)) return true;
+  if ([...localLeases.keys()].some((key) => key.startsWith(prefix) && key.slice(prefix.length) !== excludedSessionId))
+    return true;
   let names: string[];
   try {
     const root = validateLeasesRoot(workspace, false);
@@ -357,10 +361,8 @@ function hasActiveSessionRunsExcept(workspace: string, excludedSessionId?: strin
   }
   for (const name of names) {
     const match = /^(.+)\.lock(?:\.recovery)?$/.exec(name);
-    if (
-      !match?.[1] ||
-      (match[1] !== WORKSPACE_GUARD_ID && (!SESSION_ID_RE.test(match[1]) || match[1].includes("..")))
-    ) return true;
+    if (!match?.[1] || (match[1] !== WORKSPACE_GUARD_ID && (!SESSION_ID_RE.test(match[1]) || match[1].includes(".."))))
+      return true;
     if (match[1] === excludedSessionId) continue;
     if (isSessionRunActive(workspace, match[1])) return true;
   }

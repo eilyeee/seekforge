@@ -85,7 +85,7 @@ export function parseInline(text: string): MdInline[] {
     }
 
     // Bare http(s) autolink.
-    if ((ch === "h") && (text.startsWith("http://", i) || text.startsWith("https://", i))) {
+    if (ch === "h" && (text.startsWith("http://", i) || text.startsWith("https://", i))) {
       const m = URL_RE.exec(text.slice(i));
       if (m && m.index === 0) {
         out.push({ kind: "link", href: m[0], children: [{ kind: "text", text: m[0] }] });
@@ -338,9 +338,7 @@ function listIndent(line: string): number {
   return (m?.[1] ?? "").length;
 }
 
-function matchListItem(
-  line: string,
-): { indent: number; ordered: boolean; content: string } | null {
+function matchListItem(line: string): { indent: number; ordered: boolean; content: string } | null {
   const ul = UL_RE.exec(line);
   if (ul) return { indent: (ul[1] ?? "").length, ordered: false, content: ul[2] ?? "" };
   const ol = OL_RE.exec(line);

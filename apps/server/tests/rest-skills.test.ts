@@ -31,7 +31,16 @@ beforeAll(async () => {
   writeFileIn(
     workspace,
     ".seekforge/skills/demo-skill/skill.json",
-    JSON.stringify({ id: "demo-skill", name: "Demo", description: "", tags: [], triggers: [], priority: 50, enabled: true, risk: "medium" }),
+    JSON.stringify({
+      id: "demo-skill",
+      name: "Demo",
+      description: "",
+      tags: [],
+      triggers: [],
+      priority: 50,
+      enabled: true,
+      risk: "medium",
+    }),
   );
   writeFileIn(workspace, ".seekforge/skills/demo-skill/SKILL.md", "# Demo\nbody\n");
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });

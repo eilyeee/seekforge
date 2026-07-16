@@ -155,7 +155,8 @@ export const api = {
       : { workspaces: res.workspaces ?? [], recents: res.recents ?? [] };
   },
   /** Open a folder as a workspace: registers it (idempotent) and remembers it. */
-  openWorkspace: (path: string) => request<{ workspace: Workspace } & WorkspacesResponse>("POST", "/api/workspaces", { path }),
+  openWorkspace: (path: string) =>
+    request<{ workspace: Workspace } & WorkspacesResponse>("POST", "/api/workspaces", { path }),
   /** Stop hosting a workspace (the launch/default workspace cannot be removed). */
   unhostWorkspace: (id: string) => request<WorkspacesResponse>("DELETE", `/api/workspaces/${encodeURIComponent(id)}`),
   /** Forget a recent path (does not affect hosting). */
@@ -189,12 +190,15 @@ export const api = {
   memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user", ws?: string) =>
     request<MemoryCandidate>(
       "POST",
-      withWorkspace(
-        `/api/memory/${encodeURIComponent(id)}/${action}${scope === "user" ? "?scope=user" : ""}`,
-        ws,
-      ),
+      withWorkspace(`/api/memory/${encodeURIComponent(id)}/${action}${scope === "user" ? "?scope=user" : ""}`, ws),
     ),
-  memoryAddFact: (content: string, type: MemoryCandidateType, pending?: boolean, scope?: "project" | "user", ws?: string) =>
+  memoryAddFact: (
+    content: string,
+    type: MemoryCandidateType,
+    pending?: boolean,
+    scope?: "project" | "user",
+    ws?: string,
+  ) =>
     request<MemoryCandidate>("POST", withWorkspace("/api/memory/fact", ws), {
       content,
       type,
@@ -216,7 +220,8 @@ export const api = {
       ...(global ? { global: true } : {}),
     }),
   agents: (ws?: string) => request<AgentInfo[]>("GET", withWorkspace("/api/agents", ws)),
-  agent: (id: string, ws?: string) => request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws)),
+  agent: (id: string, ws?: string) =>
+    request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws)),
   evolution: () => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution")),
   evolutionAction: (id: string, action: "accept" | "reject") =>
     request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`)),
@@ -227,7 +232,9 @@ export const api = {
     ),
   mcp: (ws?: string) => request<McpServer[]>("GET", withWorkspace("/api/mcp", ws)),
   mcpTools: (name: string, ws?: string) =>
-    request<{ tools: McpTool[] }>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`, ws)).then((result) => result.tools),
+    request<{ tools: McpTool[] }>("POST", withWorkspace(`/api/mcp/${encodeURIComponent(name)}/tools`, ws)).then(
+      (result) => result.tools,
+    ),
   // Worktree sessions. Create/list are scoped to the base workspace via `ws`;
   // merge/delete identify the worktree by id (any valid `ws` works, so we pass
   // the worktree's own workspace id — the server resolves the base itself).
@@ -235,10 +242,7 @@ export const api = {
     request<WorktreeCreated>("POST", withWorkspace("/api/worktrees", ws), name ? { name } : {}),
   worktrees: (ws: string) => request<WorktreeStatus[]>("GET", withWorkspace("/api/worktrees", ws)),
   worktreeMerge: (id: string) =>
-    request<WorktreeMergeResult>(
-      "POST",
-      withWorkspace(`/api/worktrees/${encodeURIComponent(id)}/merge`, id),
-    ),
+    request<WorktreeMergeResult>("POST", withWorkspace(`/api/worktrees/${encodeURIComponent(id)}/merge`, id)),
   worktreeDelete: (id: string) =>
     request<{ deleted: true }>("DELETE", withWorkspace(`/api/worktrees/${encodeURIComponent(id)}`, id)),
   rewind: (sessionId: string, dryRun?: boolean, ws?: string) =>
@@ -315,26 +319,32 @@ export const api = {
 
   // Agents import (workspace-scoped).
   agentImport: (path: string, global?: boolean, ws?: string) =>
-    request<AgentImportResult>("POST", withWorkspace("/api/agents/import", ws), { path, ...(global ? { global: true } : {}) }),
+    request<AgentImportResult>("POST", withWorkspace("/api/agents/import", ws), {
+      path,
+      ...(global ? { global: true } : {}),
+    }),
 
   // MCP server management (workspace-scoped).
-  mcpAdd: (cfg: {
-    name: string;
-    command?: string;
-    args?: string[];
-    env?: Record<string, string>;
-    url?: string;
-    headers?: Record<string, string>;
-    oauth?: {
-      tokenEndpoint: string;
-      clientId: string;
-      clientSecret?: string;
-      refreshToken: string;
-      scope?: string;
-    };
-    trusted?: boolean;
-    scope?: McpScope;
-  }, ws?: string) => request<{ ok: true; server: McpServer }>("POST", withWorkspace("/api/mcp", ws), cfg),
+  mcpAdd: (
+    cfg: {
+      name: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+      oauth?: {
+        tokenEndpoint: string;
+        clientId: string;
+        clientSecret?: string;
+        refreshToken: string;
+        scope?: string;
+      };
+      trusted?: boolean;
+      scope?: McpScope;
+    },
+    ws?: string,
+  ) => request<{ ok: true; server: McpServer }>("POST", withWorkspace("/api/mcp", ws), cfg),
   mcpRemove: (name: string, scope: McpScope, ws?: string) =>
     request<{ ok: true; scope: McpScope }>(
       "DELETE",
@@ -355,19 +365,17 @@ export const api = {
       { maxFindings },
     ),
   securityFindingStatus: (id: string, status: SecurityFinding["status"], reason: string, ws?: string) =>
-    request<SecurityFinding>(
-      "POST",
-      withWorkspace(`/api/security/findings/${encodeURIComponent(id)}/status`, ws),
-      { status, reason },
-    ),
+    request<SecurityFinding>("POST", withWorkspace(`/api/security/findings/${encodeURIComponent(id)}/status`, ws), {
+      status,
+      reason,
+    }),
   securityFix: (id: string, maxCostUsd: number, verifyCommand: string, lintCommand?: string, ws?: string) =>
     request<{ fix: SecurityFix; finding?: SecurityFinding }>(
       "POST",
       withWorkspace(`/api/security/findings/${encodeURIComponent(id)}/fix`, ws),
       { maxCostUsd, verifyCommand, ...(lintCommand?.trim() ? { lintCommand } : {}) },
     ),
-  securityThreatModel: (ws?: string) =>
-    request<ThreatModel>("POST", withWorkspace("/api/security/threat-model", ws)),
+  securityThreatModel: (ws?: string) => request<ThreatModel>("POST", withWorkspace("/api/security/threat-model", ws)),
   securityExport: (format: "json" | "markdown" | "sarif", ws?: string) =>
     request<{ format: string; filename: string; content: string; disclaimer: string }>(
       "GET",
@@ -380,8 +388,7 @@ export const api = {
   // Files browser + editor (workspace-scoped). `path` is workspace-relative.
   tree: (path?: string) =>
     request<TreeResponse>("GET", withWorkspace(`/api/tree${path ? `?path=${encodeURIComponent(path)}` : ""}`)),
-  readFile: (path: string) =>
-    request<FileContent>("GET", withWorkspace(`/api/file?path=${encodeURIComponent(path)}`)),
+  readFile: (path: string) => request<FileContent>("GET", withWorkspace(`/api/file?path=${encodeURIComponent(path)}`)),
   writeFile: (path: string, content: string) =>
     request<{ ok: true }>("PUT", withWorkspace("/api/file"), { path, content }),
 
@@ -400,14 +407,10 @@ export const api = {
     request<{ text: string }>("POST", withWorkspace("/api/commands/expand", ws), { name, args }),
   /** Available output styles (built-ins + custom .seekforge/output-styles/*.md). */
   outputStyles: (ws?: string) =>
-    request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>(
-      "GET",
-      withWorkspace("/api/output-styles", ws),
-    ),
+    request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>("GET", withWorkspace("/api/output-styles", ws)),
   /** Project hooks config (the editable .seekforge/config.json layer). */
   hooks: () => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks")),
-  saveHooks: (hooks: HooksConfig) =>
-    request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks"), { hooks }),
+  saveHooks: (hooks: HooksConfig) => request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks"), { hooks }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string, ws?: string) =>

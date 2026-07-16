@@ -84,8 +84,8 @@ export function createDefaultProbes(): DoctorProbes {
         const star = pattern.indexOf("*");
         const prefix = star >= 0 ? pattern.slice(0, star) : pattern;
         const suffix = star >= 0 ? pattern.slice(star + 1) : "";
-        return readdirSync(dir).filter(
-          (name) => (star < 0 ? name === pattern : name.startsWith(prefix) && name.endsWith(suffix)),
+        return readdirSync(dir).filter((name) =>
+          star < 0 ? name === pattern : name.startsWith(prefix) && name.endsWith(suffix),
         );
       } catch {
         return null;

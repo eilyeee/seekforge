@@ -154,10 +154,7 @@ describe("checkpoint hooks in fs tools", () => {
     writeFileSync(join(ws, "a.txt"), "original");
     const seen: Array<[string, string | null]> = [];
     const ctx = makeCtx(ws, { checkpoint: (p, b) => seen.push([p, b]) });
-    const res = await dispatcher.execute(
-      call("write_file", { path: "a.txt", content: "new", overwrite: true }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "new", overwrite: true }), ctx);
     expect(res.ok).toBe(true);
     expect(seen).toEqual([["a.txt", "original"]]);
   });
@@ -276,9 +273,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
       }),
       response({ content: "run2 done" }),
     ]);
-    await collect(
-      second.runTask({ ...baseInput, projectPath: ws, task: "continue", resumeSessionId: sessionId }),
-    );
+    await collect(second.runTask({ ...baseInput, projectPath: ws, task: "continue", resumeSessionId: sessionId }));
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("v-run2");
 
     // Per-run dedup: the resumed run records its own pre-write snapshot,
@@ -313,9 +308,7 @@ describe("checkpoint + rewind (agent loop integration)", () => {
       }),
       response({ content: "run2 done" }),
     ]);
-    await collect(
-      second.runTask({ ...baseInput, projectPath: ws, task: "continue", resumeSessionId: sessionId }),
-    );
+    await collect(second.runTask({ ...baseInput, projectPath: ws, task: "continue", resumeSessionId: sessionId }));
 
     const res = rewindSessionToTurn(ws, sessionId, 1);
     expect(res.restored).toEqual(["a.txt"]);

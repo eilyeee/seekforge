@@ -98,8 +98,7 @@ function readSkillDir(scope: SkillScope, dir: string, allowedRootReal: string): 
   let content: string;
   try {
     const physical = fs.realpathSync(skillFile);
-    const inside =
-      physical === allowedRootReal || physical.startsWith(`${allowedRootReal}${path.sep}`);
+    const inside = physical === allowedRootReal || physical.startsWith(`${allowedRootReal}${path.sep}`);
     if (!inside) return undefined;
     content = fs.readFileSync(physical, "utf8");
   } catch {

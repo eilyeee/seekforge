@@ -34,25 +34,31 @@ export function UsageFooter({
   const t = useT();
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-subtle bg-surface-raised/40 px-4 py-1.5 font-mono text-2xs text-tertiary">
-      <span title={t("chat.usage.promptTitle")}>{t("chat.usage.prompt", { tokens: formatTokens(usage.promptTokens) })}</span>
-      <span title={t("chat.usage.cacheHitTitle")}>{t("chat.usage.cacheHit", { tokens: formatTokens(usage.cacheHitTokens) })}</span>
-      <span title={t("chat.usage.completionTitle")}>{t("chat.usage.completion", { tokens: formatTokens(usage.completionTokens) })}</span>
+      <span title={t("chat.usage.promptTitle")}>
+        {t("chat.usage.prompt", { tokens: formatTokens(usage.promptTokens) })}
+      </span>
+      <span title={t("chat.usage.cacheHitTitle")}>
+        {t("chat.usage.cacheHit", { tokens: formatTokens(usage.cacheHitTokens) })}
+      </span>
+      <span title={t("chat.usage.completionTitle")}>
+        {t("chat.usage.completion", { tokens: formatTokens(usage.completionTokens) })}
+      </span>
       <span className="text-secondary" title={t("chat.usage.costTitle")}>
         {formatUsd(usage.costUsd)}
       </span>
       {context && (
         <span
           className={ctxColor(context.percent)}
-          title={t("chat.usage.ctxTitle", { used: formatTokens(context.usedTokens), budget: formatTokens(context.budgetTokens) })}
+          title={t("chat.usage.ctxTitle", {
+            used: formatTokens(context.usedTokens),
+            budget: formatTokens(context.budgetTokens),
+          })}
         >
           {t("chat.usage.ctx", { percent: context.percent })}
         </span>
       )}
       {balance && (
-        <span
-          className="rounded bg-surface-overlay px-1.5 py-0.5 text-secondary"
-          title={t("chat.usage.balanceTitle")}
-        >
+        <span className="rounded bg-surface-overlay px-1.5 py-0.5 text-secondary" title={t("chat.usage.balanceTitle")}>
           {balance.currency === "USD" ? "$" : ""}
           {balance.totalBalance}
           {balance.currency === "USD" ? "" : ` ${balance.currency}`} {t("chat.usage.balanceLeft")}

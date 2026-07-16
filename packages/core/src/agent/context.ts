@@ -1,9 +1,4 @@
-import type {
-  ChatMessage,
-  ProviderToolCall,
-  TokenUsage,
-  ToolDefinitionForModel,
-} from "@seekforge/shared";
+import type { ChatMessage, ProviderToolCall, TokenUsage, ToolDefinitionForModel } from "@seekforge/shared";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 import { acquireSessionLease } from "./session-lease.js";
 
@@ -150,15 +145,12 @@ export function selectToolDefinitionsForBudget(
     .toLowerCase();
 
   const ranked = tools.map((tool, index) => {
-    const nameParts = tool.name.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part.length >= 3);
+    const nameParts = tool.name
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((part) => part.length >= 3);
     const relevant = nameParts.some((part) => userText.includes(part));
-    const priority = ESSENTIAL_TOOL_NAMES.has(tool.name)
-      ? 3
-      : recentNames.has(tool.name)
-        ? 2
-        : relevant
-          ? 1
-          : 0;
+    const priority = ESSENTIAL_TOOL_NAMES.has(tool.name) ? 3 : recentNames.has(tool.name) ? 2 : relevant ? 1 : 0;
     return { tool, index, priority, tokens: estimateToolDefinitionTokens(tool) };
   });
   ranked.sort((a, b) => b.priority - a.priority || a.index - b.index);
@@ -173,10 +165,7 @@ export function selectToolDefinitionsForBudget(
   return selected.sort((a, b) => a.index - b.index).map((entry) => entry.tool);
 }
 
-export function estimateRequestTokens(
-  messages: ChatMessage[],
-  tools?: ToolDefinitionForModel[],
-): number {
+export function estimateRequestTokens(messages: ChatMessage[], tools?: ToolDefinitionForModel[]): number {
   return estimateMessagesTokens(messages) + estimateToolDefinitionsTokens(tools);
 }
 
@@ -543,12 +532,7 @@ export async function llmCompactSessionNow(
     const beforeTokens = estimateMessagesTokens(messages);
     // Budget 0 forces compaction whenever the message shape allows it; null on
     // a too-short session OR any provider failure/empty summary.
-    const compacted = await llmCompactMessages(
-      provider,
-      messages,
-      0,
-      focus !== undefined ? { focus } : undefined,
-    );
+    const compacted = await llmCompactMessages(provider, messages, 0, focus !== undefined ? { focus } : undefined);
     if (!compacted) return null;
 
     rewriteSessionMessages(workspace, sessionId, compacted.messages, lease);

@@ -17,9 +17,7 @@ describe("toWireMessages", () => {
       {
         role: "assistant",
         content: "",
-        toolCalls: [
-          { id: "call_1", name: "get_weather", argumentsJson: '{"city":"Tokyo"}' },
-        ],
+        toolCalls: [{ id: "call_1", name: "get_weather", argumentsJson: '{"city":"Tokyo"}' }],
       },
       { role: "tool", content: '{"temp": 21}', toolCallId: "call_1" },
     ];
@@ -120,9 +118,7 @@ describe("toWireMessages", () => {
 
 describe("toWireTools", () => {
   it("wraps definitions in type:function envelopes", () => {
-    const tools = toWireTools([
-      { name: "read_file", description: "Read a file.", parameters: { type: "object" } },
-    ]);
+    const tools = toWireTools([{ name: "read_file", description: "Read a file.", parameters: { type: "object" } }]);
     expect(tools).toEqual([
       {
         type: "function",
@@ -183,10 +179,7 @@ describe("mapUsage", () => {
     expect(usage.promptTokens).toBe(1000);
     expect(usage.completionTokens).toBe(500);
     expect(usage.cacheHitTokens).toBe(600);
-    expect(usage.costUsd).toBeCloseTo(
-      (400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000,
-      12,
-    );
+    expect(usage.costUsd).toBeCloseTo((400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000, 12);
   });
 
   it("defaults cacheHitTokens to 0 when absent and tolerates missing usage", () => {
@@ -200,11 +193,16 @@ describe("mapUsage", () => {
   });
 
   it("normalizes invalid wire token counts before cost accounting", () => {
-    expect(mapUsage({
-      prompt_tokens: Number.POSITIVE_INFINITY,
-      completion_tokens: -5,
-      prompt_cache_hit_tokens: 2.9,
-    }, "deepseek-chat")).toEqual({
+    expect(
+      mapUsage(
+        {
+          prompt_tokens: Number.POSITIVE_INFINITY,
+          completion_tokens: -5,
+          prompt_cache_hit_tokens: 2.9,
+        },
+        "deepseek-chat",
+      ),
+    ).toEqual({
       promptTokens: 0,
       completionTokens: 0,
       cacheHitTokens: 0,
@@ -213,8 +211,7 @@ describe("mapUsage", () => {
   });
 
   it("clamps cache-hit tokens to prompt tokens", () => {
-    expect(mapUsage({ prompt_tokens: 10, prompt_cache_hit_tokens: 30 }, "deepseek-chat").cacheHitTokens)
-      .toBe(10);
+    expect(mapUsage({ prompt_tokens: 10, prompt_cache_hit_tokens: 30 }, "deepseek-chat").cacheHitTokens).toBe(10);
   });
 });
 
@@ -243,9 +240,7 @@ describe("mapChatResponse", () => {
     );
     expect(response.content).toBe("");
     expect(response.finishReason).toBe("tool_calls");
-    expect(response.toolCalls).toEqual([
-      { id: "call_1", name: "read_file", argumentsJson: '{"path":"a.txt"}' },
-    ]);
+    expect(response.toolCalls).toEqual([{ id: "call_1", name: "read_file", argumentsJson: '{"path":"a.txt"}' }]);
     expect(response.usage.promptTokens).toBe(50);
   });
 
@@ -263,17 +258,21 @@ describe("mapChatResponse", () => {
   });
 
   it("rejects a successful response with an error or no choices", () => {
-    expect(() => mapChatResponse({ error: { message: "tenant denied" } }, "deepseek-chat"))
-      .toThrow(/protocol error.*tenant denied/i);
+    expect(() => mapChatResponse({ error: { message: "tenant denied" } }, "deepseek-chat")).toThrow(
+      /protocol error.*tenant denied/i,
+    );
     expect(() => mapChatResponse({}, "deepseek-chat")).toThrow(/no choices/i);
     expect(() => mapChatResponse({ choices: [] }, "deepseek-chat")).toThrow(/no choices/i);
   });
 
   it("rejects valid JSON non-objects but tolerates malformed tool calls", () => {
     expect(() => mapChatResponse(null, "deepseek-chat")).toThrow(/must be an object/i);
-    const response = mapChatResponse({
-      choices: [{ message: { content: "ok", tool_calls: [null, 42] as never } }],
-    }, "deepseek-chat");
+    const response = mapChatResponse(
+      {
+        choices: [{ message: { content: "ok", tool_calls: [null, 42] as never } }],
+      },
+      "deepseek-chat",
+    );
     expect(response.content).toBe("ok");
     expect(response.toolCalls).toEqual([]);
   });
@@ -301,7 +300,10 @@ describe("V4 thinking mode", () => {
     );
     expect(res.reasoningContent).toBe("let me think");
     expect(res.content).toBe("answer");
-    const none = mapChatResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }, "deepseek-v4-pro");
+    const none = mapChatResponse(
+      { choices: [{ message: { content: "x" }, finish_reason: "stop" }] },
+      "deepseek-v4-pro",
+    );
     expect(none.reasoningContent).toBeUndefined();
   });
 });
@@ -377,24 +379,14 @@ describe("user-supplied modelPricing (cost on non-DeepSeek providers)", () => {
   };
 
   it("computes a real cost for a priced model even when costAccounting is false", () => {
-    const usage = mapUsage(
-      { prompt_tokens: 1000, completion_tokens: 500 },
-      "ark-model-x",
-      arkCaps,
-      pricing,
-    );
+    const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500 }, "ark-model-x", arkCaps, pricing);
     // cacheHitTokens is off for this provider, so all 1000 prompt tokens are miss.
     expect(usage.costUsd).toBeCloseTo((1000 * 2 + 500 * 6) / 1_000_000, 12);
     expect(usage.costUsd).toBeGreaterThan(0);
   });
 
   it("stays 0 for an unpriced model on a costAccounting:false provider", () => {
-    const usage = mapUsage(
-      { prompt_tokens: 1000, completion_tokens: 500 },
-      "ark-model-unpriced",
-      arkCaps,
-      pricing,
-    );
+    const usage = mapUsage({ prompt_tokens: 1000, completion_tokens: 500 }, "ark-model-unpriced", arkCaps, pricing);
     expect(usage.costUsd).toBe(0);
   });
 

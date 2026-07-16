@@ -1,21 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  BUILTIN_SKILLS,
-  loadSkillsFromDirs,
-  removeSkill,
-  setSkillEnabled,
-} from "../../src/skills/index.js";
+import { BUILTIN_SKILLS, loadSkillsFromDirs, removeSkill, setSkillEnabled } from "../../src/skills/index.js";
 import { makeTempDir, skillJson, writeSkillDir } from "./helpers.js";
 
 const MD = "# Skill\n\n## Procedure\n\n1. do it\n";
 
 /** loadSkillsFromDirs reading only the project layer under <ws>/.seekforge/skills. */
 function loadProject(workspace: string) {
-  return loadSkillsFromDirs([
-    { scope: "project", path: path.join(workspace, ".seekforge", "skills") },
-  ]);
+  return loadSkillsFromDirs([{ scope: "project", path: path.join(workspace, ".seekforge", "skills") }]);
 }
 
 describe("setSkillEnabled — builtins via override marker", () => {

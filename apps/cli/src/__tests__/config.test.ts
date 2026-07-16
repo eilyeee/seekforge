@@ -26,11 +26,7 @@ function setupProject(projectConfig: Record<string, unknown> = {}): {
 }
 
 /** Write a settings file in the project dir and return its absolute path. */
-function writeSettings(
-  projectPath: string,
-  name: string,
-  content: Record<string, unknown>,
-): string {
+function writeSettings(projectPath: string, name: string, content: Record<string, unknown>): string {
   const abs = join(projectPath, name);
   writeFileSync(abs, JSON.stringify(content));
   return abs;

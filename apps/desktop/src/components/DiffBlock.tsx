@@ -27,10 +27,7 @@ const TOKEN_CLASS: Record<TokenClass, string> = {
  */
 export function DiffBlock({ diff, lang }: { diff: string; lang?: string }) {
   const lines = useMemo(() => splitDiff(diff), [diff]);
-  const resolvedLang = useMemo(
-    () => lang ?? langFromPath(diffFilePath(diff)),
-    [diff, lang],
-  );
+  const resolvedLang = useMemo(() => lang ?? langFromPath(diffFilePath(diff)), [diff, lang]);
   const highlight = isKnownLang(resolvedLang);
 
   return (

@@ -5,8 +5,7 @@ import type { TuiConfig } from "../config.js";
 // Contract: TUI config -> AgentCoreDeps passthrough (its own mapping, separate
 // from the CLI's). Guards the cross-entry params that have dropped before.
 const base = { apiKey: "sk-test", model: "deepseek-v4-flash" } as TuiConfig;
-const deps = (config: TuiConfig) =>
-  buildTuiDeps({ config, confirm: async () => true, extractMemory: false }).deps;
+const deps = (config: TuiConfig) => buildTuiDeps({ config, confirm: async () => true, extractMemory: false }).deps;
 
 describe("buildTuiDeps (config -> deps contract)", () => {
   it("sandbox passes through; 'off' is dropped", () => {
@@ -17,9 +16,7 @@ describe("buildTuiDeps (config -> deps contract)", () => {
 
   it("planModel uses config.planModel, falling back to routing.planModel", () => {
     expect(deps({ ...base, planModel: "deepseek-v4-pro" } as TuiConfig).planModel).toBe("deepseek-v4-pro");
-    expect(deps({ ...base, routing: { planModel: "deepseek-v4-pro" } } as TuiConfig).planModel).toBe(
-      "deepseek-v4-pro",
-    );
+    expect(deps({ ...base, routing: { planModel: "deepseek-v4-pro" } } as TuiConfig).planModel).toBe("deepseek-v4-pro");
     expect(deps(base).planModel).toBeUndefined();
   });
 

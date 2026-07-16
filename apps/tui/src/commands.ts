@@ -31,52 +31,117 @@ export const COMMAND_GROUPS: ReadonlyArray<[CommandGroup, string]> = [
 ];
 
 export const COMMANDS: ReadonlyArray<CommandSpec> = [
-  { name: "help", summary: "show all commands" , group: "info" },
-  { name: "new", summary: "start a fresh session (next message opens it)" , group: "session" },
-  { name: "clear", args: "[name]", summary: "clear the transcript (name labels the old session)" , group: "session" },
-  { name: "sessions", summary: "pick a session to resume (interactive)" , group: "session" },
-  { name: "resume", args: "<id>", summary: "continue an existing session" , group: "session" },
-  { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute" , group: "run" },
-  { name: "loop", args: "[--max-iterations N] [--budget USD] <verify command>", summary: "auto-loop: run→verify until the command passes (task = composer lines below)" , group: "run" },
-  { name: "loop-resume", args: "[--add-iterations N] [--add-budget USD] <loop-id>", summary: "resume a persisted loop with optional added limits", group: "run" },
-  { name: "approve", args: "[auto|confirm|plan]", summary: "show or set the approval mode (Shift+Tab cycles)" , group: "run" },
-  { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)" , group: "review" },
-  { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)" , group: "review" },
-  { name: "fork", summary: "fork the current session (continue without touching the original)" , group: "session" },
-  { name: "tab", args: "[new|close|next|<n>]", summary: "tabs: parallel sessions (Ctrl+N new, Ctrl+T cycle)", group: "session" },
-  { name: "worktree", args: "[list | new [name] | remove <slug>]", summary: "git worktree sessions: isolated checkouts under .seekforge/worktrees", group: "tools" },
-  { name: "diff", summary: "git diff of the working tree" , group: "review" },
-  { name: "review", summary: "review the uncommitted changes (read-only)" , group: "review" },
-  { name: "todo", args: "[add <text> | done <n> | rm <n>]", summary: "cross-session todo list (.seekforge/todos.md)" , group: "context" },
-  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references" , group: "tools" },
-  { name: "model", args: "<name>", summary: "switch model for subsequent messages" , group: "run" },
-  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort" , group: "run" },
-  { name: "remember", args: "<fact>", summary: "save a fact to project memory (# <fact> also works)" , group: "context" },
-  { name: "memory", args: "[candidates | edit <file>]", summary: "list project memory facts (candidates reviews pending; edit opens a memory file)" , group: "context" },
-  { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)" , group: "tools" },
-  { name: "agents", summary: "list dispatchable subagents" , group: "tools" },
-  { name: "agent-steer", args: "<dispatch-id> <message>", summary: "guide a running subagent at its next turn", group: "tools" },
+  { name: "help", summary: "show all commands", group: "info" },
+  { name: "new", summary: "start a fresh session (next message opens it)", group: "session" },
+  { name: "clear", args: "[name]", summary: "clear the transcript (name labels the old session)", group: "session" },
+  { name: "sessions", summary: "pick a session to resume (interactive)", group: "session" },
+  { name: "resume", args: "<id>", summary: "continue an existing session", group: "session" },
+  { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute", group: "run" },
+  {
+    name: "loop",
+    args: "[--max-iterations N] [--budget USD] <verify command>",
+    summary: "auto-loop: run→verify until the command passes (task = composer lines below)",
+    group: "run",
+  },
+  {
+    name: "loop-resume",
+    args: "[--add-iterations N] [--add-budget USD] <loop-id>",
+    summary: "resume a persisted loop with optional added limits",
+    group: "run",
+  },
+  {
+    name: "approve",
+    args: "[auto|confirm|plan]",
+    summary: "show or set the approval mode (Shift+Tab cycles)",
+    group: "run",
+  },
+  { name: "rewind", args: "[yes]", summary: "undo this session's file changes (dry-run first)", group: "review" },
+  { name: "backtrack", summary: "rewind the conversation to an earlier message (Esc Esc)", group: "review" },
+  { name: "fork", summary: "fork the current session (continue without touching the original)", group: "session" },
+  {
+    name: "tab",
+    args: "[new|close|next|<n>]",
+    summary: "tabs: parallel sessions (Ctrl+N new, Ctrl+T cycle)",
+    group: "session",
+  },
+  {
+    name: "worktree",
+    args: "[list | new [name] | remove <slug>]",
+    summary: "git worktree sessions: isolated checkouts under .seekforge/worktrees",
+    group: "tools",
+  },
+  { name: "diff", summary: "git diff of the working tree", group: "review" },
+  { name: "review", summary: "review the uncommitted changes (read-only)", group: "review" },
+  {
+    name: "todo",
+    args: "[add <text> | done <n> | rm <n>]",
+    summary: "cross-session todo list (.seekforge/todos.md)",
+    group: "context",
+  },
+  { name: "add-dir", args: "[path]", summary: "add a read-only directory for @ references", group: "tools" },
+  { name: "model", args: "<name>", summary: "switch model for subsequent messages", group: "run" },
+  { name: "think", args: "[on|off|high|max]", summary: "V4 thinking mode and reasoning effort", group: "run" },
+  {
+    name: "remember",
+    args: "<fact>",
+    summary: "save a fact to project memory (# <fact> also works)",
+    group: "context",
+  },
+  {
+    name: "memory",
+    args: "[candidates | edit <file>]",
+    summary: "list project memory facts (candidates reviews pending; edit opens a memory file)",
+    group: "context",
+  },
+  { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)", group: "tools" },
+  { name: "agents", summary: "list dispatchable subagents", group: "tools" },
+  {
+    name: "agent-steer",
+    args: "<dispatch-id> <message>",
+    summary: "guide a running subagent at its next turn",
+    group: "tools",
+  },
   { name: "agent-cancel", args: "<dispatch-id>", summary: "cancel one running subagent", group: "tools" },
-  { name: "skills", summary: "list installed skills and their status" , group: "tools" },
-  { name: "mcp", summary: "list configured MCP servers and their tools" , group: "tools" },
-  { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)" , group: "tools" },
-  { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md" , group: "tools" },
-  { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)" , group: "info" },
-  { name: "vim", summary: "toggle vim mode for the composer" , group: "settings" },
+  { name: "skills", summary: "list installed skills and their status", group: "tools" },
+  { name: "mcp", summary: "list configured MCP servers and their tools", group: "tools" },
+  { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)", group: "tools" },
+  { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md", group: "tools" },
+  { name: "doctor", summary: "diagnose the environment (key, node, git, runtime, mcp…)", group: "info" },
+  { name: "vim", summary: "toggle vim mode for the composer", group: "settings" },
   { name: "mouse", summary: "toggle mouse-wheel scroll (off = native text selection)", group: "settings" },
-  { name: "theme", args: "[preset]", summary: "switch the color theme (deepseek/mono/solarized/matrix…)", group: "settings" },
-  { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal" , group: "settings" },
-  { name: "context", summary: "open the context inspector" , group: "context" },
-  { name: "compact", args: "[focus]", summary: "compact the session now (focus steers the LLM summary)" , group: "context" },
-  { name: "usage", summary: "cumulative token usage and cost" , group: "context" },
+  {
+    name: "theme",
+    args: "[preset]",
+    summary: "switch the color theme (deepseek/mono/solarized/matrix…)",
+    group: "settings",
+  },
+  { name: "terminal-setup", summary: "how to make Shift+Enter insert a newline in your terminal", group: "settings" },
+  { name: "context", summary: "open the context inspector", group: "context" },
+  {
+    name: "compact",
+    args: "[focus]",
+    summary: "compact the session now (focus steers the LLM summary)",
+    group: "context",
+  },
+  { name: "usage", summary: "cumulative token usage and cost", group: "context" },
   { name: "balance", summary: "DeepSeek account balance", group: "info" },
-  { name: "export", args: "[path]", summary: "export the transcript as markdown" , group: "review" },
-  { name: "audit", args: "[sessionId]", summary: "write a reviewable audit of a session (timeline, tool calls, files, cost)" , group: "review" },
-  { name: "handoff", args: "[list]", summary: "write a session handoff document for the next session", group: "review" },
+  { name: "export", args: "[path]", summary: "export the transcript as markdown", group: "review" },
+  {
+    name: "audit",
+    args: "[sessionId]",
+    summary: "write a reviewable audit of a session (timeline, tool calls, files, cost)",
+    group: "review",
+  },
+  {
+    name: "handoff",
+    args: "[list]",
+    summary: "write a session handoff document for the next session",
+    group: "review",
+  },
   { name: "stash", args: "[pop|list]", summary: "stash / restore the composer draft", group: "session" },
-  { name: "copy", summary: "copy the last assistant message to the clipboard" , group: "review" },
-  { name: "editor", summary: "edit the prompt in $EDITOR (Ctrl+G)" , group: "settings" },
-  { name: "quit", summary: "exit (Ctrl+C twice also works)" , group: "session" },
+  { name: "copy", summary: "copy the last assistant message to the clipboard", group: "review" },
+  { name: "editor", summary: "edit the prompt in $EDITOR (Ctrl+G)", group: "settings" },
+  { name: "quit", summary: "exit (Ctrl+C twice also works)", group: "session" },
 ];
 
 export type SlashCommand =
@@ -161,7 +226,10 @@ export function commandRequiresIdle(command: SlashCommand): boolean {
 
 const LOOP_MAX_ITERATIONS = 100;
 
-function parseLoopFirstLine(input: string, resume = false): {
+function parseLoopFirstLine(
+  input: string,
+  resume = false,
+): {
   verify?: string;
   maxIterations?: number;
   costBudgetUsd?: number;
@@ -196,7 +264,8 @@ function parseLoopFirstLine(input: string, resume = false): {
       maxIterations = value;
     } else {
       if (costBudgetUsd !== undefined) return { error: `${budgetFlag} may only be specified once` };
-      if (!Number.isFinite(value) || value <= 0) return { error: `${budgetFlag} must be a finite number greater than 0` };
+      if (!Number.isFinite(value) || value <= 0)
+        return { error: `${budgetFlag} must be a finite number greater than 0` };
       costBudgetUsd = value;
     }
     rest = rest.slice(match[0].length).trimStart();
@@ -263,7 +332,20 @@ const REST_ARG = new Set([
   "agent-cancel",
 ]);
 /** Commands taking a single word argument. */
-const WORD_ARG = new Set(["resume", "approve", "rewind", "model", "think", "export", "audit", "config", "tab", "theme", "handoff", "stash"]);
+const WORD_ARG = new Set([
+  "resume",
+  "approve",
+  "rewind",
+  "model",
+  "think",
+  "export",
+  "audit",
+  "config",
+  "tab",
+  "theme",
+  "handoff",
+  "stash",
+]);
 
 export function parseInput(line: string): ParsedInput {
   const trimmed = line.trim();

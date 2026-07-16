@@ -25,12 +25,9 @@ describe("parseKeySpec", () => {
     expect(parseKeySpec(spec)).toEqual(expected);
   });
 
-  it.each(["", "+", "ctrl+", "ctrl", "ctrl+ctrl+j", "ctrl+j+k", "notakey", "ctrl+foo"])(
-    "rejects %j",
-    (spec) => {
-      expect(parseKeySpec(spec)).toBeNull();
-    },
-  );
+  it.each(["", "+", "ctrl+", "ctrl", "ctrl+ctrl+j", "ctrl+j+k", "notakey", "ctrl+foo"])("rejects %j", (spec) => {
+    expect(parseKeySpec(spec)).toBeNull();
+  });
 });
 
 describe("loadKeybindings", () => {
@@ -108,13 +105,9 @@ describe("mergeKeymap", () => {
   });
 
   it("replaces every base binding with the same scope+action", () => {
-    const merged = mergeKeymap(base, [
-      { scope: "composer", action: "delete-back", key: { input: "h", ctrl: true } },
-    ]);
+    const merged = mergeKeymap(base, [{ scope: "composer", action: "delete-back", key: { input: "h", ctrl: true } }]);
     const deleteBack = merged.filter((b) => b.action === "delete-back");
-    expect(deleteBack).toEqual([
-      { scope: "composer", action: "delete-back", key: { input: "h", ctrl: true } },
-    ]);
+    expect(deleteBack).toEqual([{ scope: "composer", action: "delete-back", key: { input: "h", ctrl: true } }]);
     // Order otherwise preserved: submit first, cancel-or-quit last.
     expect(merged[0]?.action).toBe("submit");
     expect(merged[merged.length - 1]?.action).toBe("cancel-or-quit");

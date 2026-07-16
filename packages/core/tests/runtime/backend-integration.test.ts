@@ -11,9 +11,7 @@ import { createRuntimeClient, type RuntimeClient } from "../../src/runtime/clien
  * delegating execution to the real Rust seekforge-runtime binary.
  * Skipped when the binary has not been built (cargo build --release).
  */
-const BIN =
-  process.env["SEEKFORGE_RUNTIME_BIN"] ??
-  resolve(__dirname, "../../../../target/release/seekforge-runtime");
+const BIN = process.env["SEEKFORGE_RUNTIME_BIN"] ?? resolve(__dirname, "../../../../target/release/seekforge-runtime");
 
 const hasBinary = existsSync(BIN);
 
@@ -42,8 +40,7 @@ describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
   });
 
   const dispatcher = createDefaultDispatcher();
-  const exec = (name: string, args: unknown) =>
-    dispatcher.execute({ id: "t", name, arguments: args }, ctx());
+  const exec = (name: string, args: unknown) => dispatcher.execute({ id: "t", name, arguments: args }, ctx());
 
   it("write_file → read_file round trip through the runtime", async () => {
     const w = await exec("write_file", { path: "src/a.txt", content: "hello runtime\n" });

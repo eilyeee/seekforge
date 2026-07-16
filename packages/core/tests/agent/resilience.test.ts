@@ -162,9 +162,7 @@ describe("agent loop resilience UX", () => {
       dispatcher: fakeDispatcher({ ok: true }),
       confirm: async () => true,
     });
-    const events = await collect(
-      agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }),
-    );
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
     const failed = events.find((e) => e.type === "session.failed");
     expect(failed && failed.type === "session.failed" && failed.error.code).toBe("cancelled");
     if (failed && failed.type === "session.failed") {

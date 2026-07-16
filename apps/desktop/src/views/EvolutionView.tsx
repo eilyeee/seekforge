@@ -125,9 +125,7 @@ export function EvolutionView() {
   const applied = all.filter((p) => p.status === "applied");
   const accepted = all.filter((p) => p.status === "accepted");
   const reviewed = all.filter((p) => p.status !== "pending");
-  const adoptionRate = reviewed.length
-    ? Math.round(((accepted.length + applied.length) / reviewed.length) * 100)
-    : 0;
+  const adoptionRate = reviewed.length ? Math.round(((accepted.length + applied.length) / reviewed.length) * 100) : 0;
 
   return (
     <div className="flex h-full flex-col bg-surface">
@@ -141,9 +139,7 @@ export function EvolutionView() {
         </div>
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {error && (
-          <Card className="mb-4 border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</Card>
-        )}
+        {error && <Card className="mb-4 border-danger/40 bg-danger/10 p-3 text-xs text-danger">{error}</Card>}
         {proposals === null ? (
           <p className="text-tertiary">{t("evolution.loading")}</p>
         ) : proposals.length === 0 ? (
@@ -165,11 +161,7 @@ export function EvolutionView() {
                 label={t("evolution.acceptBtn")}
                 value={accepted.length}
               />
-              <MetricCard
-                icon={<IconArrowRight size={14} />}
-                label={t("evolution.applyBtn")}
-                value={applied.length}
-              />
+              <MetricCard icon={<IconArrowRight size={14} />} label={t("evolution.applyBtn")} value={applied.length} />
               <MetricCard
                 icon={<IconEvolution size={14} />}
                 label={t("evolution.historySection")}
@@ -228,15 +220,15 @@ export function EvolutionView() {
               ) : (
                 <Card flush className="divide-y divide-subtle overflow-hidden">
                   {history.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-xs"
-                    >
+                    <div key={p.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-xs">
                       <Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge>
                       <Badge tone={TYPE_TONE[p.type]}>{p.type}</Badge>
                       <span className="text-secondary">{p.title}</span>
                       {p.status === "applied" && changedPaths[p.id] && (
-                        <span className="inline-flex items-center gap-0.5 font-mono text-2xs text-accent"><IconArrowRight size={10} />{changedPaths[p.id]}</span>
+                        <span className="inline-flex items-center gap-0.5 font-mono text-2xs text-accent">
+                          <IconArrowRight size={10} />
+                          {changedPaths[p.id]}
+                        </span>
                       )}
                       {p.status === "accepted" && (
                         <Button

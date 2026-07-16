@@ -35,8 +35,24 @@ beforeAll(async () => {
     workspace,
     ".seekforge/memory/candidates.jsonl",
     [
-      { id: "c1", content: "uses pnpm workspaces", type: "tech", confidence: 0.9, sourceSessionId: "s1", createdAt: "2026-01-02T00:00:00.000Z", status: "approved" },
-      { id: "c2", content: "rejected fact", type: "tech", confidence: 0.4, sourceSessionId: "s1", createdAt: "2026-01-02T00:00:00.000Z", status: "rejected" },
+      {
+        id: "c1",
+        content: "uses pnpm workspaces",
+        type: "tech",
+        confidence: 0.9,
+        sourceSessionId: "s1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        status: "approved",
+      },
+      {
+        id: "c2",
+        content: "rejected fact",
+        type: "tech",
+        confidence: 0.4,
+        sourceSessionId: "s1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        status: "rejected",
+      },
     ]
       .map((c) => `${JSON.stringify(c)}\n`)
       .join(""),

@@ -37,18 +37,14 @@ const SERVER_PROMPTS = [
   {
     name: "security-review",
     description: "Threat-model and audit a workspace area supplied as the focus argument.",
-    arguments: [{ name: "focus", description: "Optional path, feature, or trust boundary to prioritize.", required: false }],
+    arguments: [
+      { name: "focus", description: "Optional path, feature, or trust boundary to prioritize.", required: false },
+    ],
   },
 ] as const;
 
 /** Tools exposed in read-only mode (all classify as L0 readonly). */
-export const MCP_READONLY_TOOLS = [
-  "read_file",
-  "list_files",
-  "search_text",
-  "git_status",
-  "git_diff",
-] as const;
+export const MCP_READONLY_TOOLS = ["read_file", "list_files", "search_text", "git_status", "git_diff"] as const;
 
 export type ServeMcpOptions = {
   /** Absolute path of the workspace all tool calls are sandboxed to. */
@@ -98,8 +94,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
       mode: readOnly ? "ask" : "edit",
       commandAllowlist: [],
     },
-    confirm: async (req) =>
-      !readOnly && (req.permission === "write" || req.permission === "execute"),
+    confirm: async (req) => !readOnly && (req.permission === "write" || req.permission === "execute"),
   };
 
   let closed = false;
@@ -142,7 +137,9 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     const uri = params["uri"];
     if (uri === WORKSPACE_OVERVIEW_URI) {
       respond(id, {
-        contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ workspace: opts.workspace, readOnly }) }],
+        contents: [
+          { uri, mimeType: "application/json", text: JSON.stringify({ workspace: opts.workspace, readOnly }) },
+        ],
       });
       return;
     }
@@ -165,16 +162,38 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
 
   function getPrompt(id: JsonRpcMessage["id"], params: Record<string, unknown>): void {
     const name = params["name"];
-    const args = typeof params["arguments"] === "object" && params["arguments"] !== null && !Array.isArray(params["arguments"])
-      ? params["arguments"] as Record<string, unknown>
-      : {};
+    const args =
+      typeof params["arguments"] === "object" && params["arguments"] !== null && !Array.isArray(params["arguments"])
+        ? (params["arguments"] as Record<string, unknown>)
+        : {};
     if (name === "review-changes") {
-      respond(id, { messages: [{ role: "user", content: { type: "text", text: "Review all current workspace changes. Prioritize correctness, security regressions, boundary cases, and missing tests. Report findings by severity with file references." } }] });
+      respond(id, {
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Review all current workspace changes. Prioritize correctness, security regressions, boundary cases, and missing tests. Report findings by severity with file references.",
+            },
+          },
+        ],
+      });
       return;
     }
     if (name === "security-review") {
-      const focus = typeof args["focus"] === "string" && args["focus"].trim() ? ` Focus on: ${args["focus"].trim()}.` : "";
-      respond(id, { messages: [{ role: "user", content: { type: "text", text: `Threat-model and audit this workspace. Identify assets, trust boundaries, attack paths, concrete vulnerabilities, and mitigations.${focus}` } }] });
+      const focus =
+        typeof args["focus"] === "string" && args["focus"].trim() ? ` Focus on: ${args["focus"].trim()}.` : "";
+      respond(id, {
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: `Threat-model and audit this workspace. Identify assets, trust boundaries, attack paths, concrete vulnerabilities, and mitigations.${focus}`,
+            },
+          },
+        ],
+      });
       return;
     }
     respondError(id, -32602, `Unknown prompt: ${String(name)}`);

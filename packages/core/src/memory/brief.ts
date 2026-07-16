@@ -41,8 +41,7 @@ const RELEVANCE_FLOOR = 2;
 /** Bullets of these types are cheap and broadly useful — always included. */
 const ALWAYS_INCLUDE_TYPES = new Set(["command", "tech"]);
 
-const STALE_WARNING =
-  "Remembered facts from earlier sessions — may be stale; verify before relying on them.";
+const STALE_WARNING = "Remembered facts from earlier sessions — may be stale; verify before relying on them.";
 
 const CJK_RUN = /\p{Script=Han}+/gu;
 const HAS_CJK = /\p{Script=Han}/u;
@@ -121,12 +120,7 @@ function parseBullet(line: string): { type: string; text: string } | undefined {
   return { type: match[1], text: match[2] };
 }
 
-function scoreBullet(
-  haystack: string,
-  keywords: string[],
-  bigrams: string[],
-  pathTokens: string[],
-): number {
+function scoreBullet(haystack: string, keywords: string[], bigrams: string[], pathTokens: string[]): number {
   let score = 0;
   for (const kw of keywords) {
     if (haystack.includes(kw)) score += 1;
@@ -177,9 +171,7 @@ export function rankMemoryBullets<T extends MemoryCandidateBullet>(
   const bigrams = taskBigrams(query);
   const pathTokens = taskPathTokens(query);
   const scored = candidates.map((c) => {
-    const haystack = c.pathContext
-      ? `${c.pathContext} ${c.line}`
-      : c.line;
+    const haystack = c.pathContext ? `${c.pathContext} ${c.line}` : c.line;
     return { ...c, score: scoreBullet(haystack.toLowerCase(), keywords, bigrams, pathTokens) };
   });
   // Stable sort by score (highest first); ties keep input order.
@@ -217,8 +209,7 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
   const bigrams = taskBigrams(task);
   const pathTokens = taskPathTokens(task);
 
-  const scoreOf = (haystack: string): number =>
-    scoreBullet(haystack.toLowerCase(), keywords, bigrams, pathTokens);
+  const scoreOf = (haystack: string): number => scoreBullet(haystack.toLowerCase(), keywords, bigrams, pathTokens);
 
   // Build the candidate bullet set from ALL sources, deduping identical bullets.
   // Sources are collected in precedence order (root project, then subdir, then
@@ -273,20 +264,12 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
   const smallCorpus = all.length <= SMALL_CORPUS;
   const selected = smallCorpus
     ? all
-    : all.filter(
-        (b) =>
-          b.score >= RELEVANCE_FLOOR || (b.isProject && ALWAYS_INCLUDE_TYPES.has(b.type)),
-      );
+    : all.filter((b) => b.score >= RELEVANCE_FLOOR || (b.isProject && ALWAYS_INCLUDE_TYPES.has(b.type)));
   if (selected.length === 0) return undefined;
 
   // Highest score first; on equal score precedence is root project > subdir >
   // global, then recency (later line in its source file) breaks the remaining tie.
-  selected.sort(
-    (a, b) =>
-      b.score - a.score ||
-      SOURCE_RANK[b.source] - SOURCE_RANK[a.source] ||
-      b.index - a.index,
-  );
+  selected.sort((a, b) => b.score - a.score || SOURCE_RANK[b.source] - SOURCE_RANK[a.source] || b.index - a.index);
 
   const lines: string[] = [STALE_WARNING];
   let chars = STALE_WARNING.length;

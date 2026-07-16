@@ -8,9 +8,6 @@ type Props = HTMLAttributes<HTMLDivElement> & {
 /** Raised panel: soft border, xl radius. The base building block for grouped content. */
 export function Card({ flush, className = "", ...rest }: Props) {
   return (
-    <div
-      className={`rounded-xl border border-subtle bg-surface-raised ${flush ? "" : "p-4"} ${className}`}
-      {...rest}
-    />
+    <div className={`rounded-xl border border-subtle bg-surface-raised ${flush ? "" : "p-4"} ${className}`} {...rest} />
   );
 }

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  PROVIDER_PRESETS,
-  resolveProviderPreset,
-  resolveProviderConfig,
-} from "../../src/provider/presets.js";
+import { PROVIDER_PRESETS, resolveProviderPreset, resolveProviderConfig } from "../../src/provider/presets.js";
 import { DEEPSEEK_CAPABILITIES } from "../../src/provider/types.js";
 import { DEFAULT_BASE_URL } from "../../src/provider/constants.js";
 
@@ -81,13 +77,7 @@ describe("resolveProviderPreset", () => {
   });
 
   it("exposes all presets on PROVIDER_PRESETS", () => {
-    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual([
-      "ark",
-      "deepseek",
-      "ollama",
-      "openai",
-      "openrouter",
-    ]);
+    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(["ark", "deepseek", "ollama", "openai", "openrouter"]);
   });
 });
 

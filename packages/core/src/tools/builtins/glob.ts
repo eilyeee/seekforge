@@ -136,10 +136,7 @@ const globSchema = z.object({
     .describe(
       'Glob pattern matched against workspace-relative paths, e.g. "**/*.test.ts", "src/**/*.{ts,tsx}". "**" crosses directories, "*" does not cross "/".',
     ),
-  path: z
-    .string()
-    .optional()
-    .describe("Base directory to search under, relative to the workspace root (default '.')."),
+  path: z.string().optional().describe("Base directory to search under, relative to the workspace root (default '.')."),
 });
 
 /**
@@ -148,10 +145,7 @@ const globSchema = z.object({
  * are skipped, symlinked directories are not followed. Path-only — no file
  * contents are read, so this stays synchronous like list_files.
  */
-function walkGlob(
-  root: string,
-  re: RegExp,
-): { matches: Array<{ rel: string; mtimeMs: number }>; truncated: boolean } {
+function walkGlob(root: string, re: RegExp): { matches: Array<{ rel: string; mtimeMs: number }>; truncated: boolean } {
   const matches: Array<{ rel: string; mtimeMs: number }> = [];
   let truncated = false;
 

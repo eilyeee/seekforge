@@ -26,7 +26,7 @@ import { parseIndexList, parseNumberedChoice } from "../input-selection.js";
 
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
 // whole point of the color-gating tests, so the control char is intentional.
-const ANSI = new RegExp("\\x1b\\[");
+const ANSI = /\x1b\[/;
 
 test("version cache rejects non-finite timestamps and intervals", () => {
   const entry = { checkedAt: 100, latest: "1.2.3" };
@@ -178,7 +178,12 @@ test("buildResultEnvelope: max_turns subtype", () => {
   assert.deepEqual(r.usage, {});
 });
 test("buildResultEnvelope: error subtype puts message in result", () => {
-  const r = buildResultEnvelope({ sessionId: "s", numTurns: 1, durationMs: 9, outcome: { kind: "error", message: "boom" } });
+  const r = buildResultEnvelope({
+    sessionId: "s",
+    numTurns: 1,
+    durationMs: 9,
+    outcome: { kind: "error", message: "boom" },
+  });
   assert.equal(r.subtype, "error");
   assert.equal(r.is_error, true);
   assert.equal(r.result, "boom");
@@ -241,11 +246,7 @@ test("stream mapper: result() reuses tracked turn count", () => {
 
 // --- tool gating (--allowedTools / --disallowedTools) -----------------------
 test("parseToolList: splits commas and trims", () => {
-  assert.deepEqual(parseToolList("read_file, search_text ,, run_command"), [
-    "read_file",
-    "search_text",
-    "run_command",
-  ]);
+  assert.deepEqual(parseToolList("read_file, search_text ,, run_command"), ["read_file", "search_text", "run_command"]);
   assert.deepEqual(parseToolList(undefined), []);
 });
 test("buildToolGatingRules: neither flag → undefined (config passes through)", () => {
@@ -259,7 +260,10 @@ test("buildToolGatingRules: --disallowedTools → one deny per tool", () => {
   ]);
 });
 test("buildToolGatingRules: --allowedTools denies every other known tool", () => {
-  const rules = buildToolGatingRules({ allowedTools: "read_file,search_text", knownTools: ["read_file", "search_text", "run_command", "write_file"] });
+  const rules = buildToolGatingRules({
+    allowedTools: "read_file,search_text",
+    knownTools: ["read_file", "search_text", "run_command", "write_file"],
+  });
   assert.ok(rules);
   // listed tools get NO rule; the rest are denied
   assert.deepEqual(rules, [

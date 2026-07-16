@@ -136,20 +136,22 @@ export function MemoryView() {
         candidate.id === id ? { ...candidate, status: optimisticStatus } : candidate,
       ),
     });
-    api.memoryAction(id, action, action === "approve" ? scope : undefined, operation.workspaceId).catch((e: unknown) => {
-      if (!coordinator.isCurrent(operation)) return;
-      setError(String(e));
-      setMemory((current) =>
-        current
-          ? {
-              ...current,
-              candidates: current.candidates.map((candidate) =>
-                candidate.id === id && candidate.status === optimisticStatus ? previous : candidate,
-              ),
-            }
-          : current,
-      );
-    });
+    api
+      .memoryAction(id, action, action === "approve" ? scope : undefined, operation.workspaceId)
+      .catch((e: unknown) => {
+        if (!coordinator.isCurrent(operation)) return;
+        setError(String(e));
+        setMemory((current) =>
+          current
+            ? {
+                ...current,
+                candidates: current.candidates.map((candidate) =>
+                  candidate.id === id && candidate.status === optimisticStatus ? previous : candidate,
+                ),
+              }
+            : current,
+        );
+      });
   };
 
   const deleteFact = (fact: MemoryFact) => {
@@ -190,11 +192,7 @@ export function MemoryView() {
   const resolved = (memory?.candidates.filter((c) => c.status !== "pending") ?? []).filter((c) => hit(c.content));
   const facts = (memory?.facts ?? []).filter((f) => hit(f.content));
   // Empty state reflects the workspace, not the current filter.
-  const isEmpty =
-    memory !== null &&
-    memory.candidates.length === 0 &&
-    memory.facts.length === 0 &&
-    !memory.projectMd;
+  const isEmpty = memory !== null && memory.candidates.length === 0 && memory.facts.length === 0 && !memory.projectMd;
 
   return (
     <div className="flex h-full flex-col">
@@ -203,7 +201,11 @@ export function MemoryView() {
           <h1 className="text-lg font-semibold text-primary">{t("memory.title")}</h1>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-tertiary">{t("memory.description")}</p>
           <div className="mt-2 max-w-xs">
-            <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("memory.filterPlaceholder")} />
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={t("memory.filterPlaceholder")}
+            />
           </div>
         </div>
         <div className="shrink-0">
@@ -269,9 +271,7 @@ export function MemoryView() {
               {resolved.length > 0 && (
                 <section>
                   <div className="mb-3 flex items-center gap-2">
-                    <h2 className="text-2xs uppercase tracking-wider text-tertiary">
-                      {t("memory.resolvedSection")}
-                    </h2>
+                    <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("memory.resolvedSection")}</h2>
                     <span className="h-px flex-1 border-t border-subtle" />
                   </div>
                   <div className="space-y-3 opacity-60">
@@ -312,17 +312,13 @@ export function MemoryView() {
 
               <section>
                 <div className="mb-3 flex items-center gap-2">
-                  <h2 className="text-2xs uppercase tracking-wider text-tertiary">
-                    {t("memory.projectMdSection")}
-                  </h2>
+                  <h2 className="text-2xs uppercase tracking-wider text-tertiary">{t("memory.projectMdSection")}</h2>
                 </div>
                 {memory.projectMd ? (
                   <Card className="border-accent/30 bg-accent/[0.04] p-5">
                     <div className="mb-3 flex items-center gap-2 text-accent-hover">
                       <IconSparkle size={14} />
-                      <span className="font-mono text-2xs uppercase tracking-wide">
-                        {t("memory.projectMdSection")}
-                      </span>
+                      <span className="font-mono text-2xs uppercase tracking-wide">{t("memory.projectMdSection")}</span>
                     </div>
                     <div className="text-sm leading-relaxed text-secondary">
                       <Markdown source={memory.projectMd} />
@@ -355,9 +351,7 @@ function CandidateCard({
     <Card className="p-4 transition-colors hover:border-strong">
       <div className="flex items-center gap-2">
         <Badge tone={TYPE_TONE[candidate.type]}>[{candidate.type}]</Badge>
-        <span className="font-mono text-2xs text-tertiary">
-          {t("memory.confidence", { pct })}
-        </span>
+        <span className="font-mono text-2xs text-tertiary">{t("memory.confidence", { pct })}</span>
         {candidate.status !== "pending" && (
           <span
             className={`ml-auto font-mono text-2xs uppercase tracking-wide ${
@@ -456,8 +450,7 @@ function StatsPanel({ stats }: { stats: MemoryStats | null }) {
             <p className="font-mono text-2xs text-tertiary">
               {t("memory.stats.avgConfidence", {
                 used: stats.avgConfidenceUsed === null ? t("memory.stats.na") : pct(stats.avgConfidenceUsed),
-                unused:
-                  stats.avgConfidenceUnused === null ? t("memory.stats.na") : pct(stats.avgConfidenceUnused),
+                unused: stats.avgConfidenceUnused === null ? t("memory.stats.na") : pct(stats.avgConfidenceUnused),
               })}
             </p>
           </dl>
@@ -519,8 +512,7 @@ function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApp
   };
 
   const hasChanges =
-    preview !== null &&
-    (preview.removed.length > 0 || preview.merged.length > 0 || preview.archived.length > 0);
+    preview !== null && (preview.removed.length > 0 || preview.merged.length > 0 || preview.archived.length > 0);
 
   return (
     <section>
@@ -543,13 +535,7 @@ function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApp
         />
 
         {preview === null ? (
-          <Button
-            variant="primary"
-            size="sm"
-            className="mt-3"
-            onClick={runPreview}
-            disabled={busy !== null}
-          >
+          <Button variant="primary" size="sm" className="mt-3" onClick={runPreview} disabled={busy !== null}>
             {busy === "preview" ? t("memory.compact.previewing") : t("memory.compact.previewBtn")}
           </Button>
         ) : (
@@ -566,12 +552,7 @@ function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApp
             />
             <CompactList title={t("memory.compact.archived")} items={preview.archived} tone="text-tertiary" />
             <div className="flex gap-2 pt-1">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={apply}
-                disabled={busy !== null || !hasChanges}
-              >
+              <Button variant="primary" size="sm" onClick={apply} disabled={busy !== null || !hasChanges}>
                 {busy === "apply" ? t("memory.compact.applying") : t("memory.compact.applyBtn")}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setPreview(null)} disabled={busy !== null}>
@@ -603,11 +584,7 @@ function CompactList({ title, items, tone }: { title: string; items: string[]; t
   );
 }
 
-function AddFactForm({
-  onAdd,
-}: {
-  onAdd: (content: string, type: MemoryCandidateType) => Promise<void>;
-}) {
+function AddFactForm({ onAdd }: { onAdd: (content: string, type: MemoryCandidateType) => Promise<void> }) {
   const t = useT();
   const [content, setContent] = useState("");
   const [type, setType] = useState<MemoryCandidateType>("convention");

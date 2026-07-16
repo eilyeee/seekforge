@@ -150,7 +150,7 @@ test("sandbox-run --check prints the argv and returns without spawning docker", 
   console.log = (...a: unknown[]) => {
     logs.push(a.join(" "));
   };
-  let exitCodeBefore = process.exitCode;
+  const exitCodeBefore = process.exitCode;
   try {
     const { sandboxRunCommand } = await import("../commands/sandbox.js");
     await sandboxRunCommand("hello world", { check: true, network: "none" });

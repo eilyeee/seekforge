@@ -98,12 +98,7 @@ function pairKey(result: TaskResult): string {
   return `${result.taskId}\0${result.sample ?? 1}`;
 }
 
-function addArm(
-  rows: Map<string, AbTaskComparison>,
-  order: string[],
-  result: TaskResult,
-  arm: "a" | "b",
-): void {
+function addArm(rows: Map<string, AbTaskComparison>, order: string[], result: TaskResult, arm: "a" | "b"): void {
   const key = pairKey(result);
   let row = rows.get(key);
   if (!row) {

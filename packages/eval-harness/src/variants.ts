@@ -197,9 +197,7 @@ const BY_NAME = new Map(VARIANTS.map((v) => [v.name, v]));
 export function getVariant(name: string): Variant {
   const variant = BY_NAME.get(name);
   if (!variant) {
-    throw new Error(
-      `unknown variant "${name}"; known: ${VARIANTS.map((v) => v.name).join(", ")}`,
-    );
+    throw new Error(`unknown variant "${name}"; known: ${VARIANTS.map((v) => v.name).join(", ")}`);
   }
   return variant;
 }

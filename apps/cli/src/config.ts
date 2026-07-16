@@ -270,7 +270,7 @@ function readSettingsFile(settingsPath: string): CliConfig {
   }
   if (!isPlainObject(parsed)) {
     throw Object.assign(new Error(`invalid settings file ${absPath}: expected a JSON object`), {
-      hint: "the top-level value must be an object, e.g. { \"mcpServers\": {} }",
+      hint: 'the top-level value must be an object, e.g. { "mcpServers": {} }',
     });
   }
   return parsed as CliConfig;

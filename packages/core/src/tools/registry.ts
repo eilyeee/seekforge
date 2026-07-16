@@ -1,10 +1,5 @@
 import type { z } from "zod";
-import type {
-  PermissionName,
-  ToolCall,
-  ToolDefinitionForModel,
-  ToolResult,
-} from "@seekforge/shared";
+import type { PermissionName, ToolCall, ToolDefinitionForModel, ToolResult } from "@seekforge/shared";
 import type { ToolContext, ToolDispatcher } from "./index.js";
 import { ToolError } from "./errors.js";
 import { zodToJsonSchema } from "./json-schema.js";

@@ -81,7 +81,8 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
     appendGlobalFact(candidate); // Dedupes identical lines.
     return candidate;
   }
-  if (approve) appendProjectFact(workspace, candidate); // Dedupes identical lines.
+  if (approve)
+    appendProjectFact(workspace, candidate); // Dedupes identical lines.
   else candidate.status = "pending";
   appendCandidates(workspace, [candidate]);
   return candidate;

@@ -41,9 +41,12 @@ function summarizeSamples(results: TaskResult[]): AggregateMetrics {
   const cacheHitTokens = results.reduce((sum, result) => sum + metric(result.metrics.cacheHitTokens), 0);
   const totalTokens = results.reduce((sum, result) => {
     const reported = result.metrics.totalTokens;
-    return sum + (reported === undefined
-      ? metric(result.metrics.promptTokens) + metric(result.metrics.completionTokens)
-      : metric(reported));
+    return (
+      sum +
+      (reported === undefined
+        ? metric(result.metrics.promptTokens) + metric(result.metrics.completionTokens)
+        : metric(reported))
+    );
   }, 0);
   const costUsd = results.reduce((sum, result) => sum + metric(result.metrics.costUsd), 0);
   return {

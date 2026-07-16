@@ -28,7 +28,7 @@ function unquoteGitPath(quoted: string): string {
       i += 3;
     } else {
       const map: Record<string, string> = { t: "\t", n: "\n", '"': '"', "\\": "\\" };
-      bytes.push(...new TextEncoder().encode(map[next ?? ""] ?? (next ?? "")));
+      bytes.push(...new TextEncoder().encode(map[next ?? ""] ?? next ?? ""));
       i += 1;
     }
   }

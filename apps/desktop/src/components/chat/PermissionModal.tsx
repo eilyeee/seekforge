@@ -60,13 +60,21 @@ export function PermissionModal({ request, onRespond }: Props) {
         if (e.key === "a") {
           // Select all hunks and apply.
           setSelectedHunks(new Set(hunks!.map((h) => h.index)));
-          onRespond(true, undefined, hunks!.map((h) => h.index));
+          onRespond(
+            true,
+            undefined,
+            hunks!.map((h) => h.index),
+          );
         }
         if (e.key === "n") onRespond(false);
         if (e.key === "y") {
           const selected = selectedHunks ?? new Set();
           if (selected.size > 0) {
-            onRespond(true, undefined, [...selected].sort((a, b) => a - b));
+            onRespond(
+              true,
+              undefined,
+              [...selected].sort((a, b) => a - b),
+            );
           }
         }
       } else {
@@ -94,7 +102,11 @@ export function PermissionModal({ request, onRespond }: Props) {
   const handleApplySelected = () => {
     const selected = selectedHunks ?? new Set();
     if (selected.size > 0) {
-      onRespond(true, undefined, [...selected].sort((a, b) => a - b));
+      onRespond(
+        true,
+        undefined,
+        [...selected].sort((a, b) => a - b),
+      );
     }
   };
 
@@ -109,7 +121,12 @@ export function PermissionModal({ request, onRespond }: Props) {
         onDismiss={() => onRespond(false)}
         title={
           <>
-            <span>{tModal("chat.permission.reviewEdits", { count: hunks!.length, path: preview?.path ?? request.path ?? tModal("chat.permission.reviewEditsFallback") })}</span>
+            <span>
+              {tModal("chat.permission.reviewEdits", {
+                count: hunks!.length,
+                path: preview?.path ?? request.path ?? tModal("chat.permission.reviewEditsFallback"),
+              })}
+            </span>
             <Badge tone={PERMISSION_TONE[request.permission] ?? "neutral"}>{request.permission}</Badge>
             <span className="ml-auto font-mono text-xs font-normal text-tertiary">{request.toolName}</span>
           </>
@@ -120,20 +137,19 @@ export function PermissionModal({ request, onRespond }: Props) {
               {tModal("chat.permission.skipAll")}
               <kbd className="rounded bg-surface-overlay px-1 font-mono text-2xs text-tertiary">n</kbd>
             </Button>
-            <Button
-              onClick={handleApplySelected}
-              disabled={selectedCount === 0}
-              variant="primary"
-              autoFocus
-            >
+            <Button onClick={handleApplySelected} disabled={selectedCount === 0} variant="primary" autoFocus>
               {tModal("chat.permission.applySelected", { selected: selectedCount, total: hunks!.length })}
-              {selectedCount > 0 && (
-                <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>
-              )}
+              {selectedCount > 0 && <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">y</kbd>}
             </Button>
             <Button
               variant="primary"
-              onClick={() => onRespond(true, undefined, hunks!.map((h) => h.index))}
+              onClick={() =>
+                onRespond(
+                  true,
+                  undefined,
+                  hunks!.map((h) => h.index),
+                )
+              }
             >
               {tModal("chat.permission.applyAll")}
               <kbd className="rounded bg-white/20 px-1 font-mono text-2xs">a</kbd>
@@ -254,7 +270,9 @@ export function PermissionModal({ request, onRespond }: Props) {
 
       {request.command !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{tModal("chat.permission.rawCommand")}</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">
+            {tModal("chat.permission.rawCommand")}
+          </div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-warn">
             {request.command}
           </pre>
@@ -262,7 +280,9 @@ export function PermissionModal({ request, onRespond }: Props) {
       )}
       {request.path !== undefined && (
         <div className="mb-3">
-          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{tModal("chat.permission.rawPath")}</div>
+          <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">
+            {tModal("chat.permission.rawPath")}
+          </div>
           <pre className="overflow-x-auto rounded-lg border border-subtle bg-surface p-2.5 font-mono text-xs text-accent-hover">
             {request.path}
           </pre>

@@ -82,9 +82,7 @@ export function readFactMeta(workspace: string): Record<string, FactMeta> {
   if (!raw) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, FactMeta>)
-      : {};
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, FactMeta>) : {};
   } catch {
     return {};
   }
@@ -153,8 +151,7 @@ function recordFactActivity(workspace: string, briefText: string, activity: Fact
     // A hand-edited/corrupt fact-meta.json may hold a non-object (or a missing
     // numeric `uses`) at this key; coerce rather than throw mid-run.
     const prev = meta[key];
-    const entry: FactMeta =
-      prev !== null && typeof prev === "object" ? prev : { addedAt: now, uses: 0 };
+    const entry: FactMeta = prev !== null && typeof prev === "object" ? prev : { addedAt: now, uses: 0 };
     entry.uses = typeof entry.uses === "number" && Number.isFinite(entry.uses) ? entry.uses : 0;
     if (activity === "exposure") {
       entry.exposures =
@@ -294,15 +291,7 @@ export function readRawProjectMemory(workspace: string): string | undefined {
 // up on a large repo and stays cheap enough to run on every brief build.
 
 /** Directory names never descended into during the subdir scan. */
-const SUBDIR_SCAN_EXCLUDE = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "target",
-  "out",
-  "coverage",
-]);
+const SUBDIR_SCAN_EXCLUDE = new Set(["node_modules", ".git", "dist", "build", "target", "out", "coverage"]);
 /** Max directory depth (below the workspace root) the scan descends. */
 const SUBDIR_SCAN_MAX_DEPTH = 4;
 /** Max number of subdir memory files collected (hard stop). */
@@ -446,11 +435,7 @@ export function appendProjectFact(workspace: string, candidate: MemoryCandidate)
   recordFactAdded(workspace, bullet);
 }
 
-function setCandidateStatus(
-  workspace: string,
-  id: string,
-  status: MemoryCandidate["status"],
-): MemoryCandidate {
+function setCandidateStatus(workspace: string, id: string, status: MemoryCandidate["status"]): MemoryCandidate {
   const candidates = readCandidates(workspace);
   const target = candidates.find((c) => c.id === id);
   if (!target) {

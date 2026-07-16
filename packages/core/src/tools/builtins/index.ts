@@ -19,5 +19,20 @@ export { acquireBrowserLease, disposeBrowser, type BrowserLease } from "./browse
 export { acquireLspServerLease, disposeLspServers, type LspServerLease } from "../lsp/client.js";
 
 export function builtinTools(): ToolSpec[] {
-  return [...fsTools, ...globTools, ...commandTools, ...gitTools, ...projectTools, ...planTools, ...webTools, ...askTools, ...visionTools, ...memoryTools, ...commandInvokeTools, ...repoMapTools, ...browserTools, ...lspTools];
+  return [
+    ...fsTools,
+    ...globTools,
+    ...commandTools,
+    ...gitTools,
+    ...projectTools,
+    ...planTools,
+    ...webTools,
+    ...askTools,
+    ...visionTools,
+    ...memoryTools,
+    ...commandInvokeTools,
+    ...repoMapTools,
+    ...browserTools,
+    ...lspTools,
+  ];
 }

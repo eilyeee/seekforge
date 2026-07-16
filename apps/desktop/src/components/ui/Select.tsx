@@ -92,11 +92,12 @@ export function Select({
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {leading != null && <span className="shrink-0 text-tertiary">{leading}</span>}
-          <span className={`truncate ${selected ? "" : "text-tertiary"}`}>
-            {selected?.label ?? placeholder ?? ""}
-          </span>
+          <span className={`truncate ${selected ? "" : "text-tertiary"}`}>{selected?.label ?? placeholder ?? ""}</span>
         </span>
-        <IconChevron size={size === "sm" ? 12 : 14} className={`shrink-0 text-tertiary transition-transform ${open ? "rotate-180" : ""}`} />
+        <IconChevron
+          size={size === "sm" ? 12 : 14}
+          className={`shrink-0 text-tertiary transition-transform ${open ? "rotate-180" : ""}`}
+        />
       </button>
 
       {open && (
@@ -115,7 +116,9 @@ export function Select({
                   type="button"
                   onClick={() => pick(o.value)}
                   className={`flex w-full flex-col gap-0.5 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
-                    active ? "bg-accent-muted text-accent" : "text-secondary hover:bg-surface-overlay hover:text-primary"
+                    active
+                      ? "bg-accent-muted text-accent"
+                      : "text-secondary hover:bg-surface-overlay hover:text-primary"
                   }`}
                 >
                   <span className="truncate font-medium">{o.label}</span>

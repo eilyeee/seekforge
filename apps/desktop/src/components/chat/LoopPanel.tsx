@@ -64,10 +64,7 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
         title={open ? t("chat.loop.collapse") : t("chat.loop.expand")}
         className="focus-ring flex w-full items-center gap-2 px-4 py-2 text-left"
       >
-        <IconChevron
-          size={14}
-          className={`text-secondary transition-transform ${open ? "rotate-90" : ""}`}
-        />
+        <IconChevron size={14} className={`text-secondary transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="text-xs font-semibold text-primary">{t("chat.loop.title")}</span>
         {loopRunning && progress.events.length === 0 && (
           <span className="flex items-center gap-1.5 text-2xs text-warn">
@@ -88,9 +85,7 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
 
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1">
-              <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
-                {t("chat.loop.task")}
-              </span>
+              <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">{t("chat.loop.task")}</span>
               <TextArea
                 rows={2}
                 value={task}
@@ -164,99 +159,97 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
           {(rows.length > 0 || warnings.length > 0 || result) && (
             <Card className="mt-3 flex flex-col gap-1.5 p-3">
               {warnings.map((warning, index) => (
-                <div key={`warning-${index}`} className="text-xs text-danger">{warning}</div>
+                <div key={`warning-${index}`} className="text-xs text-danger">
+                  {warning}
+                </div>
               ))}
               {rows.map((row) => (
-                  <div key={row.iteration} className="flex flex-wrap items-center gap-2 text-xs">
-                    <Badge tone="neutral">{t("chat.loop.iteration", { n: row.iteration })}</Badge>
-                    {row.costUsd !== null && (
-                      <span className="font-mono text-2xs text-secondary">
-                        {t("chat.loop.runCost", { cost: formatCost(row.costUsd) })}
-                      </span>
-                    )}
-                    {row.verify && (
-                      <>
-                        <Badge tone={row.verify.passed ? "ok" : "danger"}>
-                          {row.verify.passed
-                            ? t("chat.loop.verifyPass")
-                            : t("chat.loop.verifyFail", { code: row.verify.code })}
-                        </Badge>
-                        {row.verify.tail && (
-                          <span className="truncate font-mono text-2xs text-tertiary">{row.verify.tail}</span>
-                        )}
-                      </>
-                    )}
-                    {!row.verify && row.liveTail && (
-                      <span className="truncate font-mono text-2xs text-tertiary">{row.liveTail}</span>
-                    )}
-                  </div>
-                ))}
-
-                {result && (
-                  <div
-                    className={`mt-1 border-t border-subtle pt-2 text-xs ${toneText(loopStatusTone(result.status))}`}
-                  >
-                    <span className="font-semibold">
-                      {t("chat.loop.doneTitle", { status: t(`chat.loop.status.${result.status}`) })}
-                    </span>{" "}
-                    <span className="text-secondary">
-                      {t("chat.loop.doneSummary", {
-                        iterations: result.iterations,
-                        cost: formatCost(result.costUsd),
-                      })}
+                <div key={row.iteration} className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge tone="neutral">{t("chat.loop.iteration", { n: row.iteration })}</Badge>
+                  {row.costUsd !== null && (
+                    <span className="font-mono text-2xs text-secondary">
+                      {t("chat.loop.runCost", { cost: formatCost(row.costUsd) })}
                     </span>
-                    {result.loopId && (
-                      <span className="ml-2 font-mono text-2xs text-tertiary">{result.loopId}</span>
-                    )}
-                    {result.loopId && !running && (
-                      <div className="mt-3 flex flex-wrap items-end gap-2 text-primary">
-                        <label className="flex w-32 flex-col gap-1">
-                          <span className="text-2xs text-tertiary">{t("chat.loop.addedIterations")}</span>
-                          <Input
-                            value={addedIterations}
-                            onChange={(e) => setAddedIterations(e.target.value)}
-                            type="number"
-                            min={1}
-                            max={100}
-                            aria-invalid={addedIters.error !== undefined}
-                            className={addedIters.error ? "border-danger" : ""}
-                            placeholder={t("chat.loop.optional")}
-                          />
-                          {addedIters.error && (
-                            <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>
-                          )}
-                        </label>
-                        <label className="flex w-32 flex-col gap-1">
-                          <span className="text-2xs text-tertiary">{t("chat.loop.addedBudget")}</span>
-                          <Input
-                            value={addedBudget}
-                            onChange={(e) => setAddedBudget(e.target.value)}
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            aria-invalid={addedBud.error !== undefined}
-                            className={addedBud.error ? "border-danger" : ""}
-                            placeholder={t("chat.loop.optional")}
-                          />
-                          {addedBud.error && (
-                            <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>
-                          )}
-                        </label>
-                        <Button
-                          variant="primary"
-                          disabled={!!addedIters.error || !!addedBud.error}
-                          onClick={() => onResume({
+                  )}
+                  {row.verify && (
+                    <>
+                      <Badge tone={row.verify.passed ? "ok" : "danger"}>
+                        {row.verify.passed
+                          ? t("chat.loop.verifyPass")
+                          : t("chat.loop.verifyFail", { code: row.verify.code })}
+                      </Badge>
+                      {row.verify.tail && (
+                        <span className="truncate font-mono text-2xs text-tertiary">{row.verify.tail}</span>
+                      )}
+                    </>
+                  )}
+                  {!row.verify && row.liveTail && (
+                    <span className="truncate font-mono text-2xs text-tertiary">{row.liveTail}</span>
+                  )}
+                </div>
+              ))}
+
+              {result && (
+                <div className={`mt-1 border-t border-subtle pt-2 text-xs ${toneText(loopStatusTone(result.status))}`}>
+                  <span className="font-semibold">
+                    {t("chat.loop.doneTitle", { status: t(`chat.loop.status.${result.status}`) })}
+                  </span>{" "}
+                  <span className="text-secondary">
+                    {t("chat.loop.doneSummary", {
+                      iterations: result.iterations,
+                      cost: formatCost(result.costUsd),
+                    })}
+                  </span>
+                  {result.loopId && <span className="ml-2 font-mono text-2xs text-tertiary">{result.loopId}</span>}
+                  {result.loopId && !running && (
+                    <div className="mt-3 flex flex-wrap items-end gap-2 text-primary">
+                      <label className="flex w-32 flex-col gap-1">
+                        <span className="text-2xs text-tertiary">{t("chat.loop.addedIterations")}</span>
+                        <Input
+                          value={addedIterations}
+                          onChange={(e) => setAddedIterations(e.target.value)}
+                          type="number"
+                          min={1}
+                          max={100}
+                          aria-invalid={addedIters.error !== undefined}
+                          className={addedIters.error ? "border-danger" : ""}
+                          placeholder={t("chat.loop.optional")}
+                        />
+                        {addedIters.error && (
+                          <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>
+                        )}
+                      </label>
+                      <label className="flex w-32 flex-col gap-1">
+                        <span className="text-2xs text-tertiary">{t("chat.loop.addedBudget")}</span>
+                        <Input
+                          value={addedBudget}
+                          onChange={(e) => setAddedBudget(e.target.value)}
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          aria-invalid={addedBud.error !== undefined}
+                          className={addedBud.error ? "border-danger" : ""}
+                          placeholder={t("chat.loop.optional")}
+                        />
+                        {addedBud.error && <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>}
+                      </label>
+                      <Button
+                        variant="primary"
+                        disabled={!!addedIters.error || !!addedBud.error}
+                        onClick={() =>
+                          onResume({
                             loopId: result.loopId!,
                             ...(addedIters.value !== undefined ? { addedIterations: addedIters.value } : {}),
                             ...(addedBud.value !== undefined ? { addedBudget: addedBud.value } : {}),
-                          })}
-                        >
-                          {t("chat.loop.resume")}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                          })
+                        }
+                      >
+                        {t("chat.loop.resume")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </Card>
           )}
         </div>

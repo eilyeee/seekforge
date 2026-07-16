@@ -101,10 +101,7 @@ export function parseMcpPromptCommand(name: string): { server: string; prompt: s
  * Resolves a typed command name back to its live McpPromptRef using the same
  * collision-safe mapping advertised by mcpPromptCommandSpecs.
  */
-export function findPromptByCommand(
-  prompts: readonly McpPromptRef[],
-  name: string,
-): McpPromptRef | null {
+export function findPromptByCommand(prompts: readonly McpPromptRef[], name: string): McpPromptRef | null {
   const parsed = parseMcpPromptCommand(name);
   if (!parsed) return null;
   return namedPrompts(prompts).find(({ command }) => command === name)?.prompt ?? null;
@@ -115,10 +112,7 @@ export function findPromptByCommand(
  * the prompt's first declared argument. Returns undefined when the prompt has
  * no arguments or the text is empty (getMcpPrompt then sends no args).
  */
-export function promptArgsFromText(
-  prompt: McpPromptRef,
-  text: string,
-): Record<string, unknown> | undefined {
+export function promptArgsFromText(prompt: McpPromptRef, text: string): Record<string, unknown> | undefined {
   const trimmed = text.trim();
   const first = prompt.arguments?.[0];
   if (!first || trimmed === "") return undefined;

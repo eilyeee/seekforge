@@ -6,7 +6,15 @@ import { createAgentCore } from "../../src/agent/loop.js";
 import { parseAgentMarkdown } from "../../src/subagents/load.js";
 import { parseExternalAgent, renderAgentMarkdown } from "../../src/subagents/import.js";
 import type { AgentDefinition } from "../../src/subagents/index.js";
-import { collect, fakeDispatcher, fakeProvider, response, toolCall, toolCallsResponse, toolCompleted } from "./helpers.js";
+import {
+  collect,
+  fakeDispatcher,
+  fakeProvider,
+  response,
+  toolCall,
+  toolCallsResponse,
+  toolCompleted,
+} from "./helpers.js";
 
 const specialist: AgentDefinition = {
   id: "specialist",

@@ -10,10 +10,9 @@ export const commands = {
       "Prices shown are in USD per 1 million tokens. Cache-hit pricing applies when the input prompt prefix is cached.",
 
     // ── cmd.sessions.* ──────────────────────────────────────────────────
-    "cmd.sessions.none": "No sessions yet. Run `seekforge run \"<task>\"` to start one.",
+    "cmd.sessions.none": 'No sessions yet. Run `seekforge run "<task>"` to start one.',
     "cmd.sessions.output": "{id}  [{status}]{cost}  {task}",
-    "cmd.sessions.pruneSpecify":
-      "Specify --older-than <days> and/or --keep-last <n> (use --dry-run to preview).",
+    "cmd.sessions.pruneSpecify": "Specify --older-than <days> and/or --keep-last <n> (use --dry-run to preview).",
     "cmd.sessions.pruneNumbers": "--older-than and --keep-last must be numbers.",
     "cmd.sessions.pruneNone": "Nothing to prune.",
     "cmd.sessions.pruneResult": "{verb} {removed} session(s); {kept} kept.",
@@ -54,11 +53,9 @@ export const commands = {
     "cmd.memory.factsHeader": "Project facts (remove with `seekforge memory remove <n>`):",
     "cmd.memory.noFacts": "project.md: (no facts)",
     "cmd.memory.factLine": "  {index}. {line}",
-    "cmd.memory.pendingHeader":
-      "Pending candidates (approve with `seekforge memory approve <id>`):",
+    "cmd.memory.pendingHeader": "Pending candidates (approve with `seekforge memory approve <id>`):",
     "cmd.memory.noPending": "No pending memory candidates.",
-    "cmd.memory.pendingCandidate":
-      "  {id}  [{type}] ({confidence})  {content}",
+    "cmd.memory.pendingCandidate": "  {id}  [{type}] ({confidence})  {content}",
     "cmd.memory.addedQueued":
       "queued pending candidate {id}: [{type}] {content}\napprove with `seekforge memory approve {id}`",
     "cmd.memory.addedTo": "added to {path}:",
@@ -80,8 +77,7 @@ export const commands = {
     "cmd.memory.nothingToCompact": "Nothing to compact.",
     "cmd.memory.dryRunNote": "(dry run \u2014 project.md unchanged)",
     "cmd.memory.statsHeader": "Memory extraction stats:",
-    "cmd.memory.statsApproved":
-      "  approved facts: {total} ({auto} auto-extracted, {direct} direct-added)",
+    "cmd.memory.statsApproved": "  approved facts: {total} ({auto} auto-extracted, {direct} direct-added)",
     "cmd.memory.statsUsed": "  used fraction (precision proxy): {percent}%",
     "cmd.memory.statsRejection": "  candidate rejection rate: {percent}%",
     "cmd.memory.statsCandidates": "  candidates: {pending} pending, {approved} approved, {rejected} rejected",
@@ -91,30 +87,24 @@ export const commands = {
     // ── cmd.agent.* ─────────────────────────────────────────────────────
     "cmd.agent.none": "No agents available. Import one with `seekforge agent import <path>`.",
     "cmd.agent.listLine": "{id}  [{scope}] [{mode}]  {description}",
-    "cmd.agent.imported": "imported \"{id}\" [{mode}] \u2192 {dir}",
+    "cmd.agent.imported": 'imported "{id}" [{mode}] \u2192 {dir}',
     "cmd.agent.tools": "tools: {tools}",
-    "cmd.agent.droppedTools":
-      "dropped tools (no SeekForge equivalent): {tools}",
-    "cmd.agent.importedMore":
-      "Check it with `seekforge agent show {id}`. The main agent can now",
-    "cmd.agent.importedMore2":
-      "delegate to it via dispatch_agent; edit-mode dispatch still asks for approval.",
+    "cmd.agent.droppedTools": "dropped tools (no SeekForge equivalent): {tools}",
+    "cmd.agent.importedMore": "Check it with `seekforge agent show {id}`. The main agent can now",
+    "cmd.agent.importedMore2": "delegate to it via dispatch_agent; edit-mode dispatch still asks for approval.",
 
     // ── cmd.skill.* ─────────────────────────────────────────────────────
     "cmd.skill.none": "No skills available.",
     "cmd.skill.listLine": "{id}  [{scope}]  {description}",
-    "cmd.skill.imported": "imported \"{id}\" \u2192 {dir}",
+    "cmd.skill.imported": 'imported "{id}" \u2192 {dir}',
     "cmd.skill.importedTriggers": "triggers: {triggers}",
-    "cmd.skill.importedMore":
-      "Check it with `seekforge skill show {id}`. Imported skills are",
-    "cmd.skill.importedMore2":
-      "procedure suggestions only \u2014 they never grant extra permissions.",
+    "cmd.skill.importedMore": "Check it with `seekforge skill show {id}`. Imported skills are",
+    "cmd.skill.importedMore2": "procedure suggestions only \u2014 they never grant extra permissions.",
     "cmd.skill.created": "created {dir}",
-    "cmd.skill.createdMore":
-      "Edit SKILL.md and skill.json, then check with `seekforge skill show {id}`.",
-    "cmd.skill.enabled": "enabled \"{id}\" ({scope})",
-    "cmd.skill.disabled": "disabled \"{id}\" ({scope}){marker}",
-    "cmd.skill.removed": "removed \"{id}\" ({path})",
+    "cmd.skill.createdMore": "Edit SKILL.md and skill.json, then check with `seekforge skill show {id}`.",
+    "cmd.skill.enabled": 'enabled "{id}" ({scope})',
+    "cmd.skill.disabled": 'disabled "{id}" ({scope}){marker}',
+    "cmd.skill.removed": 'removed "{id}" ({path})',
 
     // ── cmd.evolve.* ────────────────────────────────────────────────────
     "cmd.evolve.none": "No evolution proposals yet. Run `seekforge evolve analyze` after a session.",
@@ -137,11 +127,9 @@ export const commands = {
     "cmd.config.setConfig": "set {key} in {path}",
 
     // ── cmd.mcp.* ───────────────────────────────────────────────────────
-    "cmd.mcp.none":
-      "no MCP servers configured \u2014 add \"mcpServers\" to .seekforge/config.json",
+    "cmd.mcp.none": 'no MCP servers configured \u2014 add "mcpServers" to .seekforge/config.json',
     "cmd.mcp.serverLine": "{name}  ({cmd}, {trust})  {count} tool(s)",
-    "cmd.mcp.serverError":
-      "{name}  ({cmd}, {trust})  error: {error}",
+    "cmd.mcp.serverError": "{name}  ({cmd}, {trust})  error: {error}",
     "cmd.mcp.trusted": "trusted",
     "cmd.mcp.untrusted": "untrusted",
 
@@ -149,8 +137,7 @@ export const commands = {
     "cmd.rewind.restore": "restore  {path}",
     "cmd.rewind.delete": "delete   {path}",
     "cmd.rewind.skip": "skip     {path} ({reason})",
-    "cmd.rewind.summary":
-      "{verb} session {id}: {restored} restored, {deleted} deleted, {skipped} skipped.",
+    "cmd.rewind.summary": "{verb} session {id}: {restored} restored, {deleted} deleted, {skipped} skipped.",
     "cmd.rewind.review": "Review the working tree with `seekforge diff`.",
 
     // ── cmd.replay.* ────────────────────────────────────────────────────
@@ -202,14 +189,12 @@ export const commands = {
     "cmd.models.header": "DeepSeek 可用模型：\n",
     "cmd.models.deprecated": "（已弃用）",
     "cmd.models.default": "（默认）",
-    "cmd.models.footer":
-      "价格以美元计，每 100 万 Token。当输入提示前缀被缓存时，适用缓存命中价格。",
+    "cmd.models.footer": "价格以美元计，每 100 万 Token。当输入提示前缀被缓存时，适用缓存命中价格。",
 
     // ── cmd.sessions.* ──────────────────────────────────────────────────
-    "cmd.sessions.none": "暂无会话。运行 `seekforge run \"<task>\"` 开始一个会话。",
+    "cmd.sessions.none": '暂无会话。运行 `seekforge run "<task>"` 开始一个会话。',
     "cmd.sessions.output": "{id}  [{status}]{cost}  {task}",
-    "cmd.sessions.pruneSpecify":
-      "请指定 --older-than <天数> 和/或 --keep-last <数量>（使用 --dry-run 预览）。",
+    "cmd.sessions.pruneSpecify": "请指定 --older-than <天数> 和/或 --keep-last <数量>（使用 --dry-run 预览）。",
     "cmd.sessions.pruneNumbers": "--older-than 和 --keep-last 必须是数字。",
     "cmd.sessions.pruneNone": "没有需要清理的会话。",
     "cmd.sessions.pruneResult": "{verb} {removed} 个会话；保留 {kept} 个。",
@@ -250,13 +235,10 @@ export const commands = {
     "cmd.memory.factsHeader": "项目事实（使用 `seekforge memory remove <n>` 移除）：",
     "cmd.memory.noFacts": "project.md：（无事实）",
     "cmd.memory.factLine": "  {index}. {line}",
-    "cmd.memory.pendingHeader":
-      "待定候选（使用 `seekforge memory approve <id>` 批准）：",
+    "cmd.memory.pendingHeader": "待定候选（使用 `seekforge memory approve <id>` 批准）：",
     "cmd.memory.noPending": "暂无待定的记忆候选。",
-    "cmd.memory.pendingCandidate":
-      "  {id}  [{type}]（{confidence}）  {content}",
-    "cmd.memory.addedQueued":
-      "已排队待定候选 {id}：[{type}] {content}\n使用 `seekforge memory approve {id}` 批准",
+    "cmd.memory.pendingCandidate": "  {id}  [{type}]（{confidence}）  {content}",
+    "cmd.memory.addedQueued": "已排队待定候选 {id}：[{type}] {content}\n使用 `seekforge memory approve {id}` 批准",
     "cmd.memory.addedUser": "已添加到用户记忆（~/.seekforge）：[{type}] {content}",
     "cmd.memory.addedTo": "已添加到 {path}：",
     "cmd.memory.addedFact": "  - [{type}] {content}",
@@ -276,8 +258,7 @@ export const commands = {
     "cmd.memory.nothingToCompact": "没有需要压缩的内容。",
     "cmd.memory.dryRunNote": "（试运行 — project.md 未更改）",
     "cmd.memory.statsHeader": "记忆提取统计：",
-    "cmd.memory.statsApproved":
-      "  已批准事实：{total} 条（{auto} 条自动提取，{direct} 条手动添加）",
+    "cmd.memory.statsApproved": "  已批准事实：{total} 条（{auto} 条自动提取，{direct} 条手动添加）",
     "cmd.memory.statsUsed": "  使用占比（精确度代理）：{percent}%",
     "cmd.memory.statsRejection": "  候选拒绝率：{percent}%",
     "cmd.memory.statsCandidates": "  候选：{pending} 待定，{approved} 已批准，{rejected} 已拒绝",
@@ -287,30 +268,24 @@ export const commands = {
     // ── cmd.agent.* ─────────────────────────────────────────────────────
     "cmd.agent.none": "没有可用代理。使用 `seekforge agent import <path>` 导入一个。",
     "cmd.agent.listLine": "{id}  [{scope}] [{mode}]  {description}",
-    "cmd.agent.imported": "已导入 \"{id}\" [{mode}] → {dir}",
+    "cmd.agent.imported": '已导入 "{id}" [{mode}] → {dir}',
     "cmd.agent.tools": "工具：{tools}",
-    "cmd.agent.droppedTools":
-      "已丢弃的工具（无 SeekForge 等效项）：{tools}",
-    "cmd.agent.importedMore":
-      "使用 `seekforge agent show {id}` 查看。主代理现在可以通过",
-    "cmd.agent.importedMore2":
-      "dispatch_agent 委托给子代理；编辑模式下的委托仍需批准。",
+    "cmd.agent.droppedTools": "已丢弃的工具（无 SeekForge 等效项）：{tools}",
+    "cmd.agent.importedMore": "使用 `seekforge agent show {id}` 查看。主代理现在可以通过",
+    "cmd.agent.importedMore2": "dispatch_agent 委托给子代理；编辑模式下的委托仍需批准。",
 
     // ── cmd.skill.* ─────────────────────────────────────────────────────
     "cmd.skill.none": "没有可用技能。",
     "cmd.skill.listLine": "{id}  [{scope}]  {description}",
-    "cmd.skill.imported": "已导入 \"{id}\" → {dir}",
+    "cmd.skill.imported": '已导入 "{id}" → {dir}',
     "cmd.skill.importedTriggers": "触发器：{triggers}",
-    "cmd.skill.importedMore":
-      "使用 `seekforge skill show {id}` 查看。导入的技能仅作为",
-    "cmd.skill.importedMore2":
-      "过程建议 — 它们不会授予额外权限。",
+    "cmd.skill.importedMore": "使用 `seekforge skill show {id}` 查看。导入的技能仅作为",
+    "cmd.skill.importedMore2": "过程建议 — 它们不会授予额外权限。",
     "cmd.skill.created": "已创建 {dir}",
-    "cmd.skill.createdMore":
-      "编辑 SKILL.md 和 skill.json，然后使用 `seekforge skill show {id}` 查看。",
-    "cmd.skill.enabled": "已启用 \"{id}\"（{scope}）",
-    "cmd.skill.disabled": "已禁用 \"{id}\"（{scope}）{marker}",
-    "cmd.skill.removed": "已移除 \"{id}\"（{path}）",
+    "cmd.skill.createdMore": "编辑 SKILL.md 和 skill.json，然后使用 `seekforge skill show {id}` 查看。",
+    "cmd.skill.enabled": '已启用 "{id}"（{scope}）',
+    "cmd.skill.disabled": '已禁用 "{id}"（{scope}）{marker}',
+    "cmd.skill.removed": '已移除 "{id}"（{path}）',
 
     // ── cmd.evolve.* ────────────────────────────────────────────────────
     "cmd.evolve.none": "尚无进化提案。请在会话后运行 `seekforge evolve analyze`。",
@@ -333,11 +308,9 @@ export const commands = {
     "cmd.config.setConfig": "已在 {path} 中设置 {key}",
 
     // ── cmd.mcp.* ───────────────────────────────────────────────────────
-    "cmd.mcp.none":
-      "未配置 MCP 服务器 — 在 .seekforge/config.json 中添加 \"mcpServers\"",
+    "cmd.mcp.none": '未配置 MCP 服务器 — 在 .seekforge/config.json 中添加 "mcpServers"',
     "cmd.mcp.serverLine": "{name}  ({cmd}, {trust})  {count} 个工具",
-    "cmd.mcp.serverError":
-      "{name}  ({cmd}, {trust})  错误：{error}",
+    "cmd.mcp.serverError": "{name}  ({cmd}, {trust})  错误：{error}",
     "cmd.mcp.trusted": "受信任",
     "cmd.mcp.untrusted": "不受信任",
 
@@ -345,8 +318,7 @@ export const commands = {
     "cmd.rewind.restore": "恢复    {path}",
     "cmd.rewind.delete": "删除    {path}",
     "cmd.rewind.skip": "跳过    {path}（{reason}）",
-    "cmd.rewind.summary":
-      "{verb} 会话 {id}：恢复 {restored} 个，删除 {deleted} 个，跳过 {skipped} 个。",
+    "cmd.rewind.summary": "{verb} 会话 {id}：恢复 {restored} 个，删除 {deleted} 个，跳过 {skipped} 个。",
     "cmd.rewind.review": "使用 `seekforge diff` 查看工作树。",
 
     // ── cmd.replay.* ────────────────────────────────────────────────────
@@ -380,8 +352,7 @@ export const commands = {
     "cmd.completion.unsupportedShell": "不支持的 shell：{shell}（期望 bash 或 zsh）",
 
     // ── cmd.loop.* ──────────────────────────────────────────────────────
-    "cmd.loop.autoApproveNote":
-      "提示：loop 为自主模式，会自动批准编辑（acceptEdits）。加 -y 可隐藏此提示。",
+    "cmd.loop.autoApproveNote": "提示：loop 为自主模式，会自动批准编辑（acceptEdits）。加 -y 可隐藏此提示。",
     "cmd.loop.iterationStart": "── 第 {n} 轮 ──",
     "cmd.loop.runCompleted": "第 {n} 轮：运行完成（${cost}）",
     "cmd.loop.verifyPassed": "第 {n} 轮：校验通过",

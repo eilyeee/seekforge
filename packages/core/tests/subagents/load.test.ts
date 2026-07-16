@@ -64,9 +64,9 @@ describe("parseAgentMarkdown", () => {
     ["zero max-turns", "max-turns: 0"],
     ["unsafe max-turns", "max-turns: 999999999999999999999"],
   ])("rejects %s instead of coercing it", (_label, field) => {
-    expect(() =>
-      parseAgentMarkdown("project", "unsafe", `---\nname: unsafe\n${field}\n---\nbody`),
-    ).toThrow(/invalid subagent/);
+    expect(() => parseAgentMarkdown("project", "unsafe", `---\nname: unsafe\n${field}\n---\nbody`)).toThrow(
+      /invalid subagent/,
+    );
   });
 });
 

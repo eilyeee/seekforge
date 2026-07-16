@@ -24,8 +24,7 @@ export type ApplyProposalResult = {
 
 const AGENT_RULES_HEADING_RE = /^##\s+Agent Rules\s*$/;
 
-const AGENTS_MD_TEMPLATE = (bullet: string): string =>
-  `# AGENTS.md\n\n## Agent Rules\n\n${bullet}\n`;
+const AGENTS_MD_TEMPLATE = (bullet: string): string => `# AGENTS.md\n\n## Agent Rules\n\n${bullet}\n`;
 
 /**
  * Appends `- <content>` under the "## Agent Rules" section of AGENTS.md.

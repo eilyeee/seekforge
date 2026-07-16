@@ -83,12 +83,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 400, "bad_request", "content must be a non-empty string");
     }
     if (type !== undefined && !MEMORY_CANDIDATE_TYPES.includes(type as MemoryCandidateType)) {
-      return sendApiError(
-        res,
-        400,
-        "bad_request",
-        `type must be one of: ${MEMORY_CANDIDATE_TYPES.join(", ")}`,
-      );
+      return sendApiError(res, 400, "bad_request", `type must be one of: ${MEMORY_CANDIDATE_TYPES.join(", ")}`);
     }
     if (pending !== undefined && typeof pending !== "boolean") {
       return sendApiError(res, 400, "bad_request", "pending must be a boolean");

@@ -5,7 +5,7 @@
  * gutter, capped at maxLines with a dim overflow footer. Presentation only —
  * no input handling.
  */
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { DiffLine, DiffLineKind } from "../model.js";
 import { diffStats, numberDiffLines } from "../render-helpers.js";

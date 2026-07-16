@@ -147,7 +147,9 @@ function runCheck() {
   }
   const versions = new Set(found.map((f) => f.version));
   if (versions.size <= 1) {
-    process.stdout.write(`release: coherent — all ${found.length} versioned files at ${[...versions][0] ?? "(none)"}\n`);
+    process.stdout.write(
+      `release: coherent — all ${found.length} versioned files at ${[...versions][0] ?? "(none)"}\n`,
+    );
     return;
   }
   process.stderr.write(`release: INCOHERENT — files disagree: ${[...versions].join(", ")}\n`);

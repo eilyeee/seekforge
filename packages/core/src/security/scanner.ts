@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentCore } from "../agent/index.js";
 import type { Finding, ScanRun } from "./types.js";
-import { appendSecurityEvent, buildSecurityState, changeFindingStatus, changeFindingVerification, newSecurityEventId } from "./store.js";
+import {
+  appendSecurityEvent,
+  buildSecurityState,
+  changeFindingStatus,
+  changeFindingVerification,
+  newSecurityEventId,
+} from "./store.js";
 import { sanitizeSecurityText } from "./redact.js";
 import { validateAgentFindings } from "./validation.js";
 
@@ -39,13 +45,10 @@ function fingerprint(parts: string[]): string {
   return createHash("sha256").update(parts.join("\0")).digest("hex");
 }
 
-function findingIdentity(input: {
-  scanner: string;
-  ruleId: string;
-  category: string;
-  path: string;
-  excerpt: string;
-}): { id: string; fingerprint: string } {
+function findingIdentity(input: { scanner: string; ruleId: string; category: string; path: string; excerpt: string }): {
+  id: string;
+  fingerprint: string;
+} {
   const value = fingerprint([
     input.scanner,
     input.ruleId.toLowerCase(),
@@ -167,7 +170,13 @@ export async function scanRepository(options: RepositoryScanOptions): Promise<Re
         changeFindingStatus(options.workspace, finding.id, "reopened", "finding reappeared in a later scan");
       }
       if (previous?.verificationStatus === "verified") {
-        changeFindingVerification(options.workspace, finding.id, "stale", "finding reappeared in a later scan", scan.id);
+        changeFindingVerification(
+          options.workspace,
+          finding.id,
+          "stale",
+          "finding reappeared in a later scan",
+          scan.id,
+        );
       }
       findings.push(finding);
     }

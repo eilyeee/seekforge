@@ -144,9 +144,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   }
 
   if (opts.memoryBrief) {
-    parts.push(
-      `Relevant project memory:\n${opts.memoryBrief}`,
-    );
+    parts.push(`Relevant project memory:\n${opts.memoryBrief}`);
   }
 
   if (opts.subagentRoster) {

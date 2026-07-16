@@ -80,9 +80,7 @@ export const RESOURCE_READ_MAX_CHARS = 50_000;
 
 /** Cap resource/prompt text at RESOURCE_READ_MAX_CHARS with a truncation marker. */
 const capText = (text: string): string =>
-  text.length > RESOURCE_READ_MAX_CHARS
-    ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
-    : text;
+  text.length > RESOURCE_READ_MAX_CHARS ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]` : text;
 
 type ContentPart = { type: string; text?: string };
 type CallToolResult = { content?: ContentPart[]; isError?: boolean };
@@ -93,9 +91,7 @@ type GetPromptResult = { description?: string; messages?: PromptMessage[] };
 type PaginatedResult<T> = { nextCursor?: string } & T;
 
 function flattenContent(parts: ContentPart[]): string {
-  return parts
-    .map((p) => (p.type === "text" ? (p.text ?? "") : `[${p.type} content]`))
-    .join("\n");
+  return parts.map((p) => (p.type === "text" ? (p.text ?? "") : `[${p.type} content]`)).join("\n");
 }
 
 function flattenResourceContents(contents: ResourceContent[]): string {
@@ -122,12 +118,7 @@ function buildRootsResult(workspaceRoots: string[] | undefined): { roots: Array<
 }
 
 /** Reads a complete MCP list while failing closed on malformed cursor loops. */
-async function listAll<T>(
-  transport: McpTransport,
-  method: string,
-  field: string,
-  signal?: AbortSignal,
-): Promise<T[]> {
+async function listAll<T>(transport: McpTransport, method: string, field: string, signal?: AbortSignal): Promise<T[]> {
   const values: T[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -286,7 +277,9 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         pending.delete(id);
         cleanup();
         notify(proc, "notifications/cancelled", { requestId: id, reason: "request timed out" });
-        reject(new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`));
+        reject(
+          new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`),
+        );
       }, timeoutMs);
       pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup });
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -306,9 +299,12 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
   }
 
   function notify(proc: ChildProcessWithoutNullStreams, method: string, params?: unknown): void {
-    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) })}\n`, () => {
-      /* a failed notification surfaces via the next request */
-    });
+    proc.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) })}\n`,
+      () => {
+        /* a failed notification surfaces via the next request */
+      },
+    );
   }
 
   /** Spawn if needed and run/await the initialize handshake exactly once per process. */
@@ -388,9 +384,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
  * (initialize handshake, tools list/call, resources list/read, dispose).
  */
 export function createMcpClient(options: McpClientOptions): McpClient {
-  const transport: McpTransport = options.config.url
-    ? createMcpHttpTransport(options)
-    : createStdioTransport(options);
+  const transport: McpTransport = options.config.url ? createMcpHttpTransport(options) : createStdioTransport(options);
 
   return {
     async listTools(signal?: AbortSignal): Promise<McpTool[]> {

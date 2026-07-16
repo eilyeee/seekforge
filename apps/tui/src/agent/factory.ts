@@ -92,8 +92,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
       // Opt-in disk cache for identical non-streaming calls (evals, subagents).
       config.llmCache
         ? {
-            wrapProvider: (provider) =>
-              wrapProviderWithCache(provider, join(homedir(), ".seekforge", "llm-cache")),
+            wrapProvider: (provider) => wrapProviderWithCache(provider, join(homedir(), ".seekforge", "llm-cache")),
           }
         : {},
     ),

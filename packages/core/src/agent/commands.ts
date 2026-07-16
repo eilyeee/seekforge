@@ -75,7 +75,11 @@ function parseCommandFile(name: string, scope: "project" | "user", raw: string):
   }
 
   if (description === "") {
-    description = body.split(/\r?\n/).find((line) => line.trim() !== "")?.trim() ?? "";
+    description =
+      body
+        .split(/\r?\n/)
+        .find((line) => line.trim() !== "")
+        ?.trim() ?? "";
   }
 
   return {
@@ -164,9 +168,7 @@ const POSITIONAL_PLACEHOLDER_RE = /\$([1-9])/;
 
 /** True when the command body interpolates arguments (so callers can prompt). */
 export function commandTakesArguments(command: Pick<UserCommand, "body">): boolean {
-  return (
-    command.body.includes(COMMAND_ARGUMENTS_PLACEHOLDER) || POSITIONAL_PLACEHOLDER_RE.test(command.body)
-  );
+  return command.body.includes(COMMAND_ARGUMENTS_PLACEHOLDER) || POSITIONAL_PLACEHOLDER_RE.test(command.body);
 }
 
 /**
@@ -202,10 +204,7 @@ export function commandHasShellInjection(text: string): boolean {
  * an inline `[command failed: …]` marker so one bad command never aborts the
  * whole expansion.
  */
-export async function expandShellInjections(
-  text: string,
-  exec: (command: string) => Promise<string>,
-): Promise<string> {
+export async function expandShellInjections(text: string, exec: (command: string) => Promise<string>): Promise<string> {
   const re = /!`([^`]+)`/g;
   let out = "";
   let last = 0;

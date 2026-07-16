@@ -45,13 +45,7 @@ describe("backtrackTargets", () => {
 describe("truncateItems", () => {
   it("drops the target user item and everything after it", () => {
     const [first, second] = backtrackTargets(transcript);
-    expect(truncateItems(transcript, second!).map((it) => it.id)).toEqual([
-      "u1",
-      "a1",
-      "u2",
-      "n1",
-      "a2",
-    ]);
+    expect(truncateItems(transcript, second!).map((it) => it.id)).toEqual(["u1", "a1", "u2", "n1", "a2"]);
     expect(truncateItems(transcript, first!).map((it) => it.id)).toEqual(["u1", "a1"]);
   });
 

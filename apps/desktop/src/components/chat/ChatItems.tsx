@@ -151,7 +151,14 @@ function SubagentBlock({
     onSteer(item.dispatchId, trimmed);
     setMessage("");
   };
-  const tone = item.status === "done" ? "ok" : item.status === "failed" ? "danger" : item.status === "cancelled" ? "warn" : "accent";
+  const tone =
+    item.status === "done"
+      ? "ok"
+      : item.status === "failed"
+        ? "danger"
+        : item.status === "cancelled"
+          ? "warn"
+          : "accent";
   return (
     <div className="rounded-lg border border-subtle bg-surface-raised px-3 py-2.5 text-xs">
       <div className="flex min-w-0 items-center gap-2">
@@ -176,22 +183,29 @@ function SubagentBlock({
       {item.steps.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {item.steps.map((step, index) => (
-            <span key={`${index}-${step}`} className="rounded border border-subtle bg-surface px-1.5 py-0.5 font-mono text-2xs text-tertiary">
+            <span
+              key={`${index}-${step}`}
+              className="rounded border border-subtle bg-surface px-1.5 py-0.5 font-mono text-2xs text-tertiary"
+            >
               {step}
             </span>
           ))}
         </div>
       )}
       {item.resultSummary && (
-        <div className={`mt-2 whitespace-pre-wrap border-l-2 pl-2 ${item.status === "failed" ? "border-danger text-danger" : "border-strong text-secondary"}`}>
+        <div
+          className={`mt-2 whitespace-pre-wrap border-l-2 pl-2 ${item.status === "failed" ? "border-danger text-danger" : "border-strong text-secondary"}`}
+        >
           {item.resultSummary}
         </div>
       )}
-      {item.error && <div className="mt-1 font-mono text-2xs text-danger">[{item.error.code}] {item.error.message}</div>}
-      {item.control && (
-        <div className="mt-1 font-mono text-2xs text-ok">
-          {t(`chat.subagent.${item.control.operation}Accepted`)}
+      {item.error && (
+        <div className="mt-1 font-mono text-2xs text-danger">
+          [{item.error.code}] {item.error.message}
         </div>
+      )}
+      {item.control && (
+        <div className="mt-1 font-mono text-2xs text-ok">{t(`chat.subagent.${item.control.operation}Accepted`)}</div>
       )}
       {running && onSteer && (
         <div className="mt-2 flex items-center gap-1.5">
@@ -222,9 +236,25 @@ function SubagentBlock({
 function TeamBlock({ item }: { item: Extract<ChatItem, { kind: "team" }> }) {
   const t = useT();
   const [mode, setMode] = useState<"list" | "dag">("list");
-  const tone = item.status === "done" ? "ok" : item.status === "failed" ? "danger" : item.status === "cancelled" ? "warn" : "accent";
-  const memberRow = (member: typeof item.members[number]) => {
-    const memberTone = member.status === "done" ? "ok" : member.status === "failed" ? "danger" : member.status === "cancelled" || member.status === "skipped" ? "warn" : member.status === "running" ? "accent" : "neutral";
+  const tone =
+    item.status === "done"
+      ? "ok"
+      : item.status === "failed"
+        ? "danger"
+        : item.status === "cancelled"
+          ? "warn"
+          : "accent";
+  const memberRow = (member: (typeof item.members)[number]) => {
+    const memberTone =
+      member.status === "done"
+        ? "ok"
+        : member.status === "failed"
+          ? "danger"
+          : member.status === "cancelled" || member.status === "skipped"
+            ? "warn"
+            : member.status === "running"
+              ? "accent"
+              : "neutral";
     return (
       <div key={member.id} className="min-w-0 rounded-md border border-subtle bg-surface px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -233,7 +263,11 @@ function TeamBlock({ item }: { item: Extract<ChatItem, { kind: "team" }> }) {
           <Badge tone={memberTone}>{member.status}</Badge>
         </div>
         <p className="mt-1 break-words text-secondary">{member.task}</p>
-        {member.dependsOn.length > 0 && <p className="mt-1 font-mono text-2xs text-tertiary">{t("chat.team.dependsOn")}: {member.dependsOn.join(", ")}</p>}
+        {member.dependsOn.length > 0 && (
+          <p className="mt-1 font-mono text-2xs text-tertiary">
+            {t("chat.team.dependsOn")}: {member.dependsOn.join(", ")}
+          </p>
+        )}
         {member.dispatchId && <p className="mt-1 font-mono text-2xs text-tertiary">{member.dispatchId}</p>}
         {member.reason && <p className="mt-1 text-2xs text-warn">{member.reason}</p>}
       </div>
@@ -245,11 +279,25 @@ function TeamBlock({ item }: { item: Extract<ChatItem, { kind: "team" }> }) {
         <IconCornerDownRight size={14} className="text-tertiary" />
         <span className="font-semibold text-primary">{t("chat.team.title")}</span>
         <Badge tone={tone}>{item.status}</Badge>
-        <span className="font-mono text-2xs text-tertiary">{t("chat.team.concurrency", { count: item.maxConcurrency })}</span>
+        <span className="font-mono text-2xs text-tertiary">
+          {t("chat.team.concurrency", { count: item.maxConcurrency })}
+        </span>
         <span className="font-mono text-2xs text-tertiary">{item.failurePolicy}</span>
         <div className="ml-auto inline-flex rounded-md border border-subtle p-0.5">
-          <button type="button" className={`rounded px-2 py-0.5 ${mode === "list" ? "bg-surface-overlay text-primary" : "text-tertiary"}`} onClick={() => setMode("list")}>{t("chat.team.list")}</button>
-          <button type="button" className={`rounded px-2 py-0.5 ${mode === "dag" ? "bg-surface-overlay text-primary" : "text-tertiary"}`} onClick={() => setMode("dag")}>{t("chat.team.dag")}</button>
+          <button
+            type="button"
+            className={`rounded px-2 py-0.5 ${mode === "list" ? "bg-surface-overlay text-primary" : "text-tertiary"}`}
+            onClick={() => setMode("list")}
+          >
+            {t("chat.team.list")}
+          </button>
+          <button
+            type="button"
+            className={`rounded px-2 py-0.5 ${mode === "dag" ? "bg-surface-overlay text-primary" : "text-tertiary"}`}
+            onClick={() => setMode("dag")}
+          >
+            {t("chat.team.dag")}
+          </button>
         </div>
       </div>
       {mode === "list" ? (
@@ -321,7 +369,9 @@ function ItemView({
           <ul className="mt-1 space-y-0.5">
             {item.steps.map((step, i) => (
               <li key={i} className="flex items-start gap-1.5 pl-4 font-mono text-tertiary">
-                <span aria-hidden className="text-tertiary/60">•</span>
+                <span aria-hidden className="text-tertiary/60">
+                  •
+                </span>
                 <span className="break-all">{step}</span>
               </li>
             ))}
@@ -337,7 +387,9 @@ function ItemView({
       if (isImage) return <ImageFileChip path={item.path} />;
       return (
         <div className="inline-flex items-center gap-1.5 rounded-full border border-subtle bg-surface-overlay px-2.5 py-0.5 font-mono text-xs text-secondary">
-          <span aria-hidden className="text-tertiary">±</span>
+          <span aria-hidden className="text-tertiary">
+            ±
+          </span>
           <span>{item.path}</span>
         </div>
       );
@@ -370,7 +422,9 @@ function ItemView({
       return (
         <div className="rounded-xl border border-ok/40 bg-ok/10 px-4 py-3 text-xs text-secondary">
           <div className="flex items-center gap-1.5">
-            <span aria-hidden className="text-ok">⏺</span>
+            <span aria-hidden className="text-ok">
+              ⏺
+            </span>
             <span className="font-semibold text-ok">{t("chat.sessionCompleted")}</span>
             {item.report.changedFiles.length > 0 && (
               <span className="text-tertiary"> · {t("chat.filesChanged", { n: item.report.changedFiles.length })}</span>
@@ -395,7 +449,8 @@ function ItemView({
           {item.error.hint && <div className="mt-1 text-xs text-danger/80">→ {item.error.hint}</div>}
           {resumeId && (
             <div className="mt-1 text-xs text-danger/80">
-              {t("chat.resumeInfo.prefix")} <span className="font-mono text-danger">/resume {resumeId}</span> {t("chat.resumeInfo.suffix")}
+              {t("chat.resumeInfo.prefix")} <span className="font-mono text-danger">/resume {resumeId}</span>{" "}
+              {t("chat.resumeInfo.suffix")}
             </div>
           )}
         </div>

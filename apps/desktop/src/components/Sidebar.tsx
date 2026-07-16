@@ -155,10 +155,7 @@ export function Sidebar() {
       aria-label={mobile ? t("nav.group.system") : undefined}
       className={`${mobile ? "fixed inset-y-0 left-0 z-50 flex shadow-xl sm:hidden" : "hidden sm:flex"} w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised`}
     >
-      <div
-        data-tauri-drag-region
-        className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}
-      >
+      <div data-tauri-drag-region className={`flex items-center gap-2 px-4 pb-3 ${IS_MAC ? "pt-9" : "pt-4"}`}>
         <LogoMark size={18} className="text-accent" />
         <span className="text-sm font-semibold tracking-tight text-primary">
           Seek<span className="text-accent">Forge</span>
@@ -198,10 +195,7 @@ export function Sidebar() {
                       : "text-secondary hover:bg-surface-overlay hover:text-primary"
                   }`}
                 >
-                  <Icon
-                    size={16}
-                    className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"}
-                  />
+                  <Icon size={16} className={active ? "text-accent" : "text-tertiary group-hover:text-secondary"} />
                   {t(key)}
                 </button>
               );
@@ -219,10 +213,14 @@ export function Sidebar() {
           title={t("todos.title")}
           aria-pressed={todosOpen}
           className={`focus-ring flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-sm ${
-            todosOpen ? "bg-surface-overlay text-primary" : "text-secondary hover:bg-surface-overlay/50 hover:text-primary"
+            todosOpen
+              ? "bg-surface-overlay text-primary"
+              : "text-secondary hover:bg-surface-overlay/50 hover:text-primary"
           }`}
         >
-          <span aria-hidden className="font-mono text-xs text-tertiary">☑</span>
+          <span aria-hidden className="font-mono text-xs text-tertiary">
+            ☑
+          </span>
           {t("nav.todos")}
         </button>
       </div>

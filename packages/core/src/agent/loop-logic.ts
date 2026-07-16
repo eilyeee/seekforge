@@ -71,11 +71,7 @@ export function commandResultSatisfiesGate(result: ToolResult, configuredCommand
   const command = configuredCommand?.trim();
   const exitCode = (result.data as { exitCode?: unknown } | undefined)?.exitCode;
   return Boolean(
-    result.ok &&
-    exitCode === 0 &&
-    result.meta?.command &&
-    command &&
-    commandInvokes(result.meta.command, command),
+    result.ok && exitCode === 0 && result.meta?.command && command && commandInvokes(result.meta.command, command),
   );
 }
 
@@ -137,9 +133,10 @@ export function classifyAutoGateResult(
         "finish now; otherwise keep working.",
     };
   }
-  const instruction = gate.kind === "verify"
-    ? "Diagnose and fix the cause, then finish — do not claim success until it passes."
-    : "Fix the reported lint issues, then finish — do not claim success until it passes.";
+  const instruction =
+    gate.kind === "verify"
+      ? "Diagnose and fix the cause, then finish — do not claim success until it passes."
+      : "Fix the reported lint issues, then finish — do not claim success until it passes.";
   return {
     ranSinceEdit: true,
     retryAfterEdit: true,

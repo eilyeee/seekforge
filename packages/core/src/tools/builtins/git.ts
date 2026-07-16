@@ -78,10 +78,7 @@ const gitDiff = defineTool({
 
 const gitCommitSchema = z.object({
   message: z.string().min(1).describe("Commit message (conventional commits preferred)."),
-  addAll: z
-    .boolean()
-    .optional()
-    .describe("Stage all changes first with `git add -A` (default true)."),
+  addAll: z.boolean().optional().describe("Stage all changes first with `git add -A` (default true)."),
 });
 
 const gitCommit = defineTool({

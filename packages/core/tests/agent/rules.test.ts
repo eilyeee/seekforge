@@ -157,11 +157,7 @@ describe("path-scoped subdir AGENTS.md", () => {
     // A planted AGENTS.md under node_modules must never be included, even when
     // the task path token would otherwise match.
     writeSubdir("node_modules/some-pkg", "NODE-MODULES-RULE: should never load");
-    const merged = collectProjectRules(
-      workspace,
-      home,
-      "look at node_modules/some-pkg/index.js",
-    );
+    const merged = collectProjectRules(workspace, home, "look at node_modules/some-pkg/index.js");
     expect(merged ?? "").not.toContain("NODE-MODULES-RULE");
   });
 });
@@ -218,17 +214,13 @@ describe("agent loop rules integration", () => {
     writeFileSync(join(workspace, "AGENTS.md"), "PROJECT-RULE-MARKER: use pnpm");
     writeFileSync(join(workspace, "AGENTS.local.md"), "LOCAL-RULE-MARKER: my machine");
 
-    const provider = fakeProvider([
-      { content: "done", toolCalls: [], usage: USAGE, finishReason: "stop" },
-    ]);
+    const provider = fakeProvider([{ content: "done", toolCalls: [], usage: USAGE, finishReason: "stop" }]);
     const agent = createAgentCore({
       provider,
       dispatcher: noopDispatcher,
       confirm: async () => true,
     });
-    await drain(
-      agent.runTask({ projectPath: workspace, task: "t", mode: "edit", approvalMode: "auto" }),
-    );
+    await drain(agent.runTask({ projectPath: workspace, task: "t", mode: "edit", approvalMode: "auto" }));
 
     const system = provider.requests[0]!.messages[0]!;
     expect(system.role).toBe("system");

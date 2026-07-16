@@ -60,11 +60,7 @@ export function clearFilesCacheForTests(): void {
   filesCache.clear();
 }
 
-export async function listWorkspaceFiles(
-  root: string,
-  q = "",
-  limit = FILE_LIST_LIMIT,
-): Promise<FileList> {
+export async function listWorkspaceFiles(root: string, q = "", limit = FILE_LIST_LIMIT): Promise<FileList> {
   let entry = filesCache.get(root);
   if (!entry || Date.now() - entry.ts >= FILES_CACHE_TTL_MS) {
     entry = { ts: Date.now(), ...(await walkWorkspaceFiles(root, FILE_LIST_LIMIT)) };
@@ -73,15 +69,13 @@ export async function listWorkspaceFiles(
   if (limit > FILE_LIST_LIMIT && entry.truncated) {
     const expanded = await walkWorkspaceFiles(root, limit);
     const needle = q.toLowerCase();
-    const matched =
-      needle === "" ? expanded.files : expanded.files.filter((f) => f.toLowerCase().includes(needle));
+    const matched = needle === "" ? expanded.files : expanded.files.filter((f) => f.toLowerCase().includes(needle));
     return matched.length > limit
       ? { files: matched.slice(0, limit), truncated: true }
       : { files: matched, truncated: expanded.truncated };
   }
   const needle = q.toLowerCase();
-  const matched =
-    needle === "" ? entry.files : entry.files.filter((f) => f.toLowerCase().includes(needle));
+  const matched = needle === "" ? entry.files : entry.files.filter((f) => f.toLowerCase().includes(needle));
   return matched.length > limit
     ? { files: matched.slice(0, limit), truncated: true }
     : { files: matched, truncated: entry.truncated };
@@ -171,11 +165,7 @@ function looksBinary(buf: Buffer): boolean {
   return buf.subarray(0, Math.min(buf.length, 8000)).includes(0);
 }
 
-export async function searchWorkspaceContent(
-  root: string,
-  q: string,
-  opts: SearchOptions = {},
-): Promise<SearchResult> {
+export async function searchWorkspaceContent(root: string, q: string, opts: SearchOptions = {}): Promise<SearchResult> {
   if (q === "") return { hits: [], truncated: false };
   const limit = opts.limit ?? SEARCH_MAX_HITS;
   const flags = opts.caseSensitive ? "" : "i";
@@ -220,7 +210,6 @@ export async function searchWorkspaceContent(
         }
       }
     } catch {
-      continue;
     } finally {
       if (opened) await closeVerifiedFileAsync(opened);
     }

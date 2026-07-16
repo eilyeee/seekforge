@@ -40,11 +40,7 @@ function parseConfigDoc(raw: string): Record<string, unknown> | null {
 export function configShowCommand(): void {
   const merged = loadConfig(process.cwd());
   console.log(
-    JSON.stringify(
-      { ...merged, apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined },
-      null,
-      2,
-    ),
+    JSON.stringify({ ...merged, apiKey: merged.apiKey ? `${merged.apiKey.slice(0, 6)}****` : undefined }, null, 2),
   );
   const profiles = availableProfiles(process.cwd());
   if (profiles.length > 0) {
@@ -75,7 +71,10 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
   }
   if (key === "commandAllowlist" || key === "models") {
     // Array of strings: accept comma-separated.
-    current[key] = value.split(",").map((s) => s.trim()).filter(Boolean);
+    current[key] = value
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   } else if (key === "thinking") {
     if (value !== "true" && value !== "false") {
       console.error(t("err.configSetBadValue", { key, allowed: "true, false" }));

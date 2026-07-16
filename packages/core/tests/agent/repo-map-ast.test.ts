@@ -19,7 +19,10 @@ describe("tree-sitter AST backend (optional)", () => {
   it.skipIf(!astReady)("ignores a commented-out definition (which regex would false-match)", () => {
     const d = mkdtempSync(join(tmpdir(), "ast-test-"));
     try {
-      writeFileSync(join(d, "a.ts"), "// function foo lives only in this comment\nfunction realFoo() {}\ninterface Thing {}");
+      writeFileSync(
+        join(d, "a.ts"),
+        "// function foo lives only in this comment\nfunction realFoo() {}\ninterface Thing {}",
+      );
       expect(findDefinitions(d, "foo")).toHaveLength(0); // AST sees the comment, not a definition
       expect(findDefinitions(d, "realFoo")).toHaveLength(1);
       expect(findDefinitions(d, "Thing")).toHaveLength(1); // TS interface
@@ -78,8 +81,18 @@ describe("tree-sitter AST backend (optional)", () => {
       writeFileSync(join(d, "e.cpp"), "class Widget { void run(){} };\nint main(){ return 0; }");
       writeFileSync(join(d, "f.cs"), "class Svc { void Doit() {} }");
       for (const [sym, n] of [
-        ["Foo", 1], ["bar", 1], ["baz", 1], ["Qux", 1], ["Hello", 1],
-        ["Tee", 1], ["add", 1], ["Pt", 1], ["Widget", 1], ["main", 1], ["Svc", 1], ["Doit", 1],
+        ["Foo", 1],
+        ["bar", 1],
+        ["baz", 1],
+        ["Qux", 1],
+        ["Hello", 1],
+        ["Tee", 1],
+        ["add", 1],
+        ["Pt", 1],
+        ["Widget", 1],
+        ["main", 1],
+        ["Svc", 1],
+        ["Doit", 1],
       ] as const) {
         expect(findDefinitions(d, sym), `definition of ${sym}`).toHaveLength(n);
       }

@@ -12,19 +12,16 @@ afterEach(() => {
 });
 
 describe("loadConfig", () => {
-  it.each(["null", "[]", '"invalid shape"', "42"])(
-    "ignores a non-object project config: %s",
-    (content) => {
-      const project = mkdtempSync(join(tmpdir(), "seekforge-tui-config-"));
-      roots.push(project);
-      const stateDir = join(project, ".seekforge");
-      mkdirSync(stateDir);
-      writeFileSync(join(stateDir, "config.json"), content);
+  it.each(["null", "[]", '"invalid shape"', "42"])("ignores a non-object project config: %s", (content) => {
+    const project = mkdtempSync(join(tmpdir(), "seekforge-tui-config-"));
+    roots.push(project);
+    const stateDir = join(project, ".seekforge");
+    mkdirSync(stateDir);
+    writeFileSync(join(stateDir, "config.json"), content);
 
-      expect(() => loadConfig(project)).not.toThrow();
-      expect(configParseErrors(project)).toContain(join(stateDir, "config.json"));
-    },
-  );
+    expect(() => loadConfig(project)).not.toThrow();
+    expect(configParseErrors(project)).toContain(join(stateDir, "config.json"));
+  });
 
   it("ignores malformed structured fields and retains lower valid values", () => {
     const merged = mergeConfigLayers(

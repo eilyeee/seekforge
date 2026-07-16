@@ -16,9 +16,7 @@ describe("fetchBalance", () => {
   it("parses the DeepSeek balance shape", async () => {
     const spy = fetchReturning({
       is_available: true,
-      balance_infos: [
-        { currency: "USD", total_balance: "42.50", granted_balance: "0.00", topped_up_balance: "42.50" },
-      ],
+      balance_infos: [{ currency: "USD", total_balance: "42.50", granted_balance: "0.00", topped_up_balance: "42.50" }],
     });
     const balance = await fetchBalance("sk-test");
     expect(balance).toEqual({ currency: "USD", totalBalance: "42.50" });

@@ -17,9 +17,7 @@ export type CandidateScope = "project" | "user";
 export type CandidateRow = Pick<MemoryCandidate, "type" | "content" | "confidence">;
 
 /** Keep only pending candidates (mirrors the desktop MemoryView filter). */
-export function pendingCandidates<T extends { status: MemoryCandidate["status"] }>(
-  candidates: readonly T[],
-): T[] {
+export function pendingCandidates<T extends { status: MemoryCandidate["status"] }>(candidates: readonly T[]): T[] {
   return candidates.filter((c) => c.status === "pending");
 }
 
@@ -43,10 +41,7 @@ export function moveCandidateIndex(index: number, delta: number, count: number):
  * list plus a still-valid selection index: clamped to the new last row, or 0
  * when the list becomes empty. Out-of-range indices leave the list untouched.
  */
-export function removeCandidateAt<T>(
-  candidates: readonly T[],
-  index: number,
-): { candidates: T[]; index: number } {
+export function removeCandidateAt<T>(candidates: readonly T[], index: number): { candidates: T[]; index: number } {
   if (index < 0 || index >= candidates.length) {
     return { candidates: candidates.slice(), index: clampIndex(index, candidates.length) };
   }

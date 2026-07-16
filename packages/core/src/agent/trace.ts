@@ -157,7 +157,12 @@ export type SessionMeta = {
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SESSION_STATUSES = new Set<SessionStatus>([
-  "idle", "running", "waiting_approval", "completed", "failed", "cancelled",
+  "idle",
+  "running",
+  "waiting_approval",
+  "completed",
+  "failed",
+  "cancelled",
 ]);
 const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
 
@@ -198,12 +203,7 @@ function sessionDir(workspace: string, sessionId: string, create = false): strin
   return dir;
 }
 
-function sessionFile(
-  workspace: string,
-  sessionId: string,
-  name: string,
-  createDir = false,
-): string {
+function sessionFile(workspace: string, sessionId: string, name: string, createDir = false): string {
   const dir = sessionDir(workspace, sessionId, createDir);
   const file = join(dir, name);
   try {
@@ -263,37 +263,65 @@ function parseSessionMeta(value: unknown, expectedId: string): SessionMeta | und
     return undefined;
   }
   if (
-    typeof value["task"] !== "string" || (value["mode"] !== "ask" && value["mode"] !== "edit") ||
-    typeof value["status"] !== "string" || !SESSION_STATUSES.has(value["status"] as SessionStatus) ||
-    typeof value["createdAt"] !== "string" || !Number.isFinite(Date.parse(value["createdAt"])) ||
-    typeof value["updatedAt"] !== "string" || !Number.isFinite(Date.parse(value["updatedAt"])) ||
+    typeof value["task"] !== "string" ||
+    (value["mode"] !== "ask" && value["mode"] !== "edit") ||
+    typeof value["status"] !== "string" ||
+    !SESSION_STATUSES.has(value["status"] as SessionStatus) ||
+    typeof value["createdAt"] !== "string" ||
+    !Number.isFinite(Date.parse(value["createdAt"])) ||
+    typeof value["updatedAt"] !== "string" ||
+    !Number.isFinite(Date.parse(value["updatedAt"])) ||
     (value["parentAgentId"] !== undefined && typeof value["parentAgentId"] !== "string")
-  ) return undefined;
+  )
+    return undefined;
   const usage = value["usage"];
-  if (usage !== undefined && (!isRecord(usage) ||
-      !["promptTokens", "completionTokens", "cacheHitTokens", "costUsd"].every((key) =>
-        typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0))) {
+  if (
+    usage !== undefined &&
+    (!isRecord(usage) ||
+      !["promptTokens", "completionTokens", "cacheHitTokens", "costUsd"].every(
+        (key) => typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0,
+      ))
+  ) {
     return undefined;
   }
   const plan = value["plan"];
-  if (plan !== undefined && (!Array.isArray(plan) || !plan.every((item) =>
-    isRecord(item) && typeof item["step"] === "string" && typeof item["status"] === "string" &&
-    PLAN_STATUSES.has(item["status"])))) {
+  if (
+    plan !== undefined &&
+    (!Array.isArray(plan) ||
+      !plan.every(
+        (item) =>
+          isRecord(item) &&
+          typeof item["step"] === "string" &&
+          typeof item["status"] === "string" &&
+          PLAN_STATUSES.has(item["status"]),
+      ))
+  ) {
     return undefined;
   }
   return value as SessionMeta;
 }
 
 function parseChatMessage(value: unknown): ChatMessage | undefined {
-  if (!isRecord(value) || !["system", "user", "assistant", "tool"].includes(String(value["role"])) ||
-      typeof value["content"] !== "string" ||
-      (value["toolCallId"] !== undefined && typeof value["toolCallId"] !== "string")) {
+  if (
+    !isRecord(value) ||
+    !["system", "user", "assistant", "tool"].includes(String(value["role"])) ||
+    typeof value["content"] !== "string" ||
+    (value["toolCallId"] !== undefined && typeof value["toolCallId"] !== "string")
+  ) {
     return undefined;
   }
   const toolCalls = value["toolCalls"];
-  if (toolCalls !== undefined && (!Array.isArray(toolCalls) || !toolCalls.every((call) =>
-    isRecord(call) && typeof call["id"] === "string" && typeof call["name"] === "string" &&
-    typeof call["argumentsJson"] === "string"))) {
+  if (
+    toolCalls !== undefined &&
+    (!Array.isArray(toolCalls) ||
+      !toolCalls.every(
+        (call) =>
+          isRecord(call) &&
+          typeof call["id"] === "string" &&
+          typeof call["name"] === "string" &&
+          typeof call["argumentsJson"] === "string",
+      ))
+  ) {
     return undefined;
   }
   const { ts: _ts, ...message } = value;
@@ -307,10 +335,7 @@ export function writeSessionMeta(workspace: string, meta: SessionMeta): void {
 
 export function readSessionMeta(workspace: string, sessionId: string): SessionMeta | undefined {
   try {
-    return parseSessionMeta(
-      JSON.parse(readSessionText(workspace, sessionId, "session.json")) as unknown,
-      sessionId,
-    );
+    return parseSessionMeta(JSON.parse(readSessionText(workspace, sessionId, "session.json")) as unknown, sessionId);
   } catch {
     return undefined;
   }
@@ -362,8 +387,7 @@ export function pruneSessions(workspace: string, opts: PruneSessionsOptions = {}
   if (!existsSync(root)) return { removed: [], kept: 0 };
 
   const all = listSessions(workspace, { includeSubagents: true });
-  const cutoff =
-    opts.olderThanDays !== undefined ? Date.now() - opts.olderThanDays * 86_400_000 : undefined;
+  const cutoff = opts.olderThanDays !== undefined ? Date.now() - opts.olderThanDays * 86_400_000 : undefined;
 
   // keepLast applies to top-level sessions only (subagent runs ride along).
   const topLevel = all.filter((m) => !m.parentAgentId);
@@ -442,9 +466,14 @@ function messagesFingerprint(messages: ChatMessage[]): string {
 }
 
 function parseCompactionSnapshot(value: unknown): CompactionSnapshot | undefined {
-  if (!isRecord(value) || value["version"] !== 1 ||
-      !Number.isInteger(value["sourceMessageCount"]) || (value["sourceMessageCount"] as number) < 0 ||
-      typeof value["sourceFingerprint"] !== "string" || !Array.isArray(value["messages"])) {
+  if (
+    !isRecord(value) ||
+    value["version"] !== 1 ||
+    !Number.isInteger(value["sourceMessageCount"]) ||
+    (value["sourceMessageCount"] as number) < 0 ||
+    typeof value["sourceFingerprint"] !== "string" ||
+    !Array.isArray(value["messages"])
+  ) {
     return undefined;
   }
   const messages: ChatMessage[] = [];
@@ -715,9 +744,12 @@ function applyCheckpoints(
         result.restored.push(entry.path);
       }
     } catch (err) {
-      const reason = (err as { code?: unknown }).code === "outside_workspace"
-        ? "path escapes the workspace"
-        : err instanceof Error ? err.message : String(err);
+      const reason =
+        (err as { code?: unknown }).code === "outside_workspace"
+          ? "path escapes the workspace"
+          : err instanceof Error
+            ? err.message
+            : String(err);
       result.skipped.push({ path: entry.path, reason });
     }
   }

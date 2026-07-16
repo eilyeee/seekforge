@@ -32,7 +32,10 @@ describe("listOutputStyles", () => {
     const list = listOutputStyles(workspace);
     expect(list.slice(0, 4).map((s) => s.name)).toEqual(["default", "concise", "explanatory", "learning"]);
     expect(list.slice(0, 4).every((s) => s.kind === "builtin")).toBe(true);
-    const custom = list.filter((s) => s.kind === "custom").map((s) => s.name).sort();
+    const custom = list
+      .filter((s) => s.kind === "custom")
+      .map((s) => s.name)
+      .sort();
     expect(custom).toEqual(["formal", "pirate"]);
   });
 

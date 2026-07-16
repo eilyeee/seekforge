@@ -9,7 +9,18 @@ import { ChatItems } from "../components/chat/ChatItems";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
-import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, Modal, type BadgeTone } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  IconChat,
+  IconChevron,
+  IconSessions,
+  Input,
+  Modal,
+  type BadgeTone,
+} from "../components/ui";
 import type { PruneResult, RewindResult, SessionMeta } from "../types";
 import { LatestRequest } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
@@ -207,7 +218,11 @@ export function SessionsView() {
         if (!requests.isCurrent(operation)) return;
         setRewindNotes((n) => ({
           ...n,
-          [sessionId]: t("sessions.rewindResult", { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length }),
+          [sessionId]: t("sessions.rewindResult", {
+            restored: r.restored.length,
+            deleted: r.deleted.length,
+            skipped: r.skipped.length,
+          }),
         }));
       })
       .catch((e: unknown) => {
@@ -226,9 +241,7 @@ export function SessionsView() {
       .sessionAudit(id, operation.workspaceId)
       .then(({ markdown }) => {
         if (!requests.isCurrent(operation)) return;
-        setAudit((a) =>
-          a && a.sessionId === id && a.workspaceId === operation.workspaceId ? { ...a, markdown } : a,
-        );
+        setAudit((a) => (a && a.sessionId === id && a.workspaceId === operation.workspaceId ? { ...a, markdown } : a));
       })
       .catch((e: unknown) => {
         if (!requests.isCurrent(operation)) return;
@@ -330,9 +343,7 @@ export function SessionsView() {
                       </div>
                       <div className="mt-1 flex items-center gap-2">
                         <span className="truncate font-mono text-2xs text-tertiary">{s.id}</span>
-                        {rewindNotes[s.id] && (
-                          <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>
-                        )}
+                        {rewindNotes[s.id] && <span className="font-mono text-2xs text-warn">{rewindNotes[s.id]}</span>}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
@@ -437,7 +448,9 @@ export function SessionsView() {
               <>
                 {rewindPreview.result.restored.length > 0 && (
                   <div>
-                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{t("sessions.rewindSectionRestore")}</div>
+                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">
+                      {t("sessions.rewindSectionRestore")}
+                    </div>
                     <ul className="space-y-0.5 font-mono text-accent">
                       {rewindPreview.result.restored.map((p) => (
                         <li key={p}>{p}</li>
@@ -447,7 +460,9 @@ export function SessionsView() {
                 )}
                 {rewindPreview.result.deleted.length > 0 && (
                   <div>
-                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">{t("sessions.rewindSectionDelete")}</div>
+                    <div className="mb-1 text-2xs uppercase tracking-wider text-tertiary">
+                      {t("sessions.rewindSectionDelete")}
+                    </div>
                     <ul className="space-y-0.5 font-mono text-danger">
                       {rewindPreview.result.deleted.map((p) => (
                         <li key={p}>{p}</li>
@@ -458,7 +473,9 @@ export function SessionsView() {
               </>
             )}
             {rewindPreview.result.skipped.length > 0 && (
-              <p className="text-tertiary">{t("sessions.rewindSkipped", { count: rewindPreview.result.skipped.length })}</p>
+              <p className="text-tertiary">
+                {t("sessions.rewindSkipped", { count: rewindPreview.result.skipped.length })}
+              </p>
             )}
           </div>
         </ConfirmDialog>
@@ -628,9 +645,7 @@ function PruneDialog({
         </label>
         {hasPreview &&
           (willPrune > 0 ? (
-            <p className="text-secondary">
-              {t("sessions.prunePreview", { count: willPrune, kept: preview!.kept })}
-            </p>
+            <p className="text-secondary">{t("sessions.prunePreview", { count: willPrune, kept: preview!.kept })}</p>
           ) : (
             <p className="text-tertiary">{t("sessions.pruneNone")}</p>
           ))}

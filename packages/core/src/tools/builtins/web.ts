@@ -184,11 +184,7 @@ function extractKeywords(extract: string): string[] {
  * full LLM-summarize-on-fetch would need a provider plumbed into tools and is a
  * follow-up. Falls back to plain head+tail when nothing matches.
  */
-export function extractRelevant(
-  text: string,
-  extract: string,
-  maxChars: number,
-): { text: string; truncated: boolean } {
+export function extractRelevant(text: string, extract: string, maxChars: number): { text: string; truncated: boolean } {
   if (text.length <= maxChars) return { text, truncated: false };
   const keywords = extractKeywords(extract);
   if (keywords.length === 0) return truncateHeadTail(text, maxChars);
@@ -251,10 +247,7 @@ const webFetch = defineTool({
         headers: { "user-agent": "seekforge-agent" },
       });
     } catch (err) {
-      throw new ToolError(
-        "fetch_failed",
-        `Fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw new ToolError("fetch_failed", `Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
     }
@@ -349,8 +342,7 @@ export function parseDdgResults(html: string, limit: number): WebSearchResult[] 
   const results: WebSearchResult[] = [];
   const seen = new Set<string>();
   // Anchor with class result__a: capture href and inner title text.
-  const anchorRe =
-    /<a\b[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const anchorRe = /<a\b[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
   while ((match = anchorRe.exec(html)) !== null) {
     if (results.length >= limit) break;
@@ -415,10 +407,7 @@ const webSearch = defineTool({
         headers: { "user-agent": "seekforge-agent" },
       });
     } catch (err) {
-      throw new ToolError(
-        "search_failed",
-        `Search failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw new ToolError("search_failed", `Search failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
     }

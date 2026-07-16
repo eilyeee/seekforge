@@ -196,7 +196,8 @@ export const mockSkills: Skill[] = [
 
 export const mockSkillContent: Record<string, string> = {
   "vitest-unit-tests": skillMd,
-  "conventional-commits": "# Conventional commits\n\n- `feat:` new behaviour\n- `fix:` bug fixes\n- `chore:` plumbing\n",
+  "conventional-commits":
+    "# Conventional commits\n\n- `feat:` new behaviour\n- `fix:` bug fixes\n- `chore:` plumbing\n",
   "release-checklist": "# Release checklist\n\n1. Bump version\n2. Update CHANGELOG.md\n3. `pnpm publish`\n",
 };
 
@@ -328,7 +329,8 @@ export const mockEvolutionProposals: EvolutionProposal[] = [
     problem: "Adding a REPL command failed twice because the help table and dispatcher live in different files.",
     evidence: { files: ["apps/cli/src/repl.ts"], errors: ["unknown command: /help"] },
     proposal: {
-      content: "# REPL command checklist\n\n1. Add the handler in repl.ts dispatch\n2. Register it in the help table\n3. Add a smoke test",
+      content:
+        "# REPL command checklist\n\n1. Add the handler in repl.ts dispatch\n2. Register it in the help table\n3. Add a smoke test",
       skillId: "repl-command-checklist",
     },
     risk: "medium",

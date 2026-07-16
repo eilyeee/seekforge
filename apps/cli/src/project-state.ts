@@ -67,7 +67,8 @@ export function writeProjectStateFile(projectPath: string, name: string, data: s
 
   try {
     const stat = lstatSync(target);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`project state file must be a regular file: ${target}`);
+    if (stat.isSymbolicLink() || !stat.isFile())
+      throw new Error(`project state file must be a regular file: ${target}`);
   } catch (err) {
     if (!isMissing(err)) throw err;
   }
@@ -84,9 +85,11 @@ export function writeProjectStateFile(projectPath: string, name: string, data: s
     fd = undefined;
 
     assertPlainDirectory(stateDir);
-    if (realpathSync(stateDir) !== stateDir) throw new Error(`project state directory changed during write: ${stateDir}`);
+    if (realpathSync(stateDir) !== stateDir)
+      throw new Error(`project state directory changed during write: ${stateDir}`);
     try {
-      if (lstatSync(target).isSymbolicLink()) throw new Error(`refusing to replace symlinked project state file: ${target}`);
+      if (lstatSync(target).isSymbolicLink())
+        throw new Error(`refusing to replace symlinked project state file: ${target}`);
     } catch (err) {
       if (!isMissing(err)) throw err;
     }

@@ -16,10 +16,7 @@ describe("evolution store", () => {
 
   it("appends proposals and lists them newest first", () => {
     const ws = makeWorkspace();
-    appendEvolutionProposals(ws, [
-      makeProposal({ id: "ep-sess1-1" }),
-      makeProposal({ id: "ep-sess1-2" }),
-    ]);
+    appendEvolutionProposals(ws, [makeProposal({ id: "ep-sess1-1" }), makeProposal({ id: "ep-sess1-2" })]);
     expect(readEvolutionProposals(ws).map((p) => p.id)).toEqual(["ep-sess1-1", "ep-sess1-2"]);
     expect(listEvolutionProposals(ws).map((p) => p.id)).toEqual(["ep-sess1-2", "ep-sess1-1"]);
   });
@@ -67,9 +64,7 @@ describe("evolution store", () => {
   it("only applies from accepted", () => {
     const ws = makeWorkspace();
     appendEvolutionProposals(ws, [makeProposal()]);
-    expect(() => setEvolutionProposalStatus(ws, "ep-sess1-1", "applied")).toThrow(
-      /must be accepted before apply/,
-    );
+    expect(() => setEvolutionProposalStatus(ws, "ep-sess1-1", "applied")).toThrow(/must be accepted before apply/);
     setEvolutionProposalStatus(ws, "ep-sess1-1", "accepted");
     const applied = setEvolutionProposalStatus(ws, "ep-sess1-1", "applied");
     expect(applied.status).toBe("applied");
@@ -85,8 +80,6 @@ describe("evolution store", () => {
 
   it("throws on unknown ids for status updates", () => {
     const ws = makeWorkspace();
-    expect(() => setEvolutionProposalStatus(ws, "ep-missing", "accepted")).toThrow(
-      /proposal not found/,
-    );
+    expect(() => setEvolutionProposalStatus(ws, "ep-missing", "accepted")).toThrow(/proposal not found/);
   });
 });

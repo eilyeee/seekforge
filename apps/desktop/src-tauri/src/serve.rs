@@ -26,9 +26,7 @@ pub fn parse_url_line(line: &str) -> Option<String> {
     const NEEDLE: &str = "http://127.0.0.1:";
     let start = line.find(NEEDLE)?;
     let rest = &line[start..];
-    let end = rest
-        .find(|c: char| c.is_whitespace())
-        .unwrap_or(rest.len());
+    let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
     let url = &rest[..end];
 
     // Validate shape: http://127.0.0.1:<port>/?token=<non-empty>
@@ -282,7 +280,9 @@ pub fn diagnostics_text(
     s.push_str(&format!("failure:      {}\n", d.failure));
     s.push_str(&format!(
         "resolved via: {}\n",
-        d.resolution.map(Resolution::label).unwrap_or("(unresolved)")
+        d.resolution
+            .map(Resolution::label)
+            .unwrap_or("(unresolved)")
     ));
     s.push_str(&format!(
         "command:      {}\n",
@@ -330,8 +330,9 @@ pub fn diagnostics_text(
 /// the dialog (never panic). `timestamp_slug` is used in the filename and should
 /// be filesystem-safe (e.g. digits only).
 pub fn write_diagnostics_file(body: &str, timestamp_slug: &str) -> Option<PathBuf> {
-    let path = std::env::temp_dir()
-        .join(format!("seekforge-desktop-diagnostics-{timestamp_slug}.txt"));
+    let path = std::env::temp_dir().join(format!(
+        "seekforge-desktop-diagnostics-{timestamp_slug}.txt"
+    ));
     match std::fs::write(&path, body) {
         Ok(()) => Some(path),
         Err(_) => None,
@@ -574,13 +575,16 @@ mod tests {
         fs::create_dir_all(root.path().join("apps/cli/src")).unwrap();
         fs::write(root.path().join("apps/cli/src/index.ts"), "// cli\n").unwrap();
 
-        let cmd = resolve_serve_command(None, Some("/definitely/not/a/dir"), Some(root.path()), false)
-            .unwrap();
+        let cmd = resolve_serve_command(
+            None,
+            Some("/definitely/not/a/dir"),
+            Some(root.path()),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             cmd.program,
-            root.path()
-                .join("node_modules/.bin/tsx")
-                .to_string_lossy()
+            root.path().join("node_modules/.bin/tsx").to_string_lossy()
         );
         assert_eq!(
             cmd.args,
@@ -671,7 +675,10 @@ mod tests {
             resolve_workspace(None, Some(Path::new("/")), Some(Path::new("/home/u"))),
             None
         );
-        assert_eq!(resolve_workspace(Some(""), None, Some(Path::new("/home/u"))), None);
+        assert_eq!(
+            resolve_workspace(Some(""), None, Some(Path::new("/home/u"))),
+            None
+        );
         assert_eq!(resolve_workspace(None, None, None), None);
     }
 

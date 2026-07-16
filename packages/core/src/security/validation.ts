@@ -8,28 +8,34 @@ import { sanitizeSecurityText } from "./redact.js";
 const MAX_FINDINGS = 100;
 const MAX_EVIDENCE = 5;
 
-const evidenceSchema = z.object({
-  path: z.string().min(1).max(1_000),
-  lineStart: z.number().int().positive(),
-  lineEnd: z.number().int().positive(),
-  excerpt: z.string().min(1).max(20_000),
-}).strict();
+const evidenceSchema = z
+  .object({
+    path: z.string().min(1).max(1_000),
+    lineStart: z.number().int().positive(),
+    lineEnd: z.number().int().positive(),
+    excerpt: z.string().min(1).max(20_000),
+  })
+  .strict();
 
-const rawFindingSchema = z.object({
-  title: z.string().min(1).max(300),
-  description: z.string().min(1).max(8_000),
-  severity: z.enum(FINDING_SEVERITIES),
-  confidence: z.enum(["low", "medium", "high"]),
-  category: z.string().min(1).max(200),
-  cwe: z.string().max(64).optional(),
-  ruleId: z.string().min(1).max(200),
-  recommendation: z.string().min(1).max(8_000),
-  evidence: z.array(evidenceSchema).min(1).max(MAX_EVIDENCE),
-}).strict();
+const rawFindingSchema = z
+  .object({
+    title: z.string().min(1).max(300),
+    description: z.string().min(1).max(8_000),
+    severity: z.enum(FINDING_SEVERITIES),
+    confidence: z.enum(["low", "medium", "high"]),
+    category: z.string().min(1).max(200),
+    cwe: z.string().max(64).optional(),
+    ruleId: z.string().min(1).max(200),
+    recommendation: z.string().min(1).max(8_000),
+    evidence: z.array(evidenceSchema).min(1).max(MAX_EVIDENCE),
+  })
+  .strict();
 
-export const agentScanEnvelopeSchema = z.object({
-  findings: z.array(rawFindingSchema).max(MAX_FINDINGS),
-}).strict();
+export const agentScanEnvelopeSchema = z
+  .object({
+    findings: z.array(rawFindingSchema).max(MAX_FINDINGS),
+  })
+  .strict();
 
 export type ValidatedAgentFinding = {
   title: string;

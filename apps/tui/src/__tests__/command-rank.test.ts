@@ -30,13 +30,7 @@ describe("rankCommands", () => {
   });
 
   it("empty query with no usage keeps registry order", () => {
-    expect(rankCommands("", specs, {}).map((s) => s.name)).toEqual([
-      "help",
-      "model",
-      "memory",
-      "diff",
-      "export",
-    ]);
+    expect(rankCommands("", specs, {}).map((s) => s.name)).toEqual(["help", "model", "memory", "diff", "export"]);
   });
 
   it("non-empty query drops commands matching neither name nor summary", () => {

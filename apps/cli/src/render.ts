@@ -18,9 +18,7 @@ function summarizeResult(data: unknown): string {
 
 export function formatUsage(usage: TokenUsage): string {
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
-  return (
-    `${t("render.tokensLabel", { prompt: k(usage.promptTokens), cacheHit: k(usage.cacheHitTokens), completion: k(usage.completionTokens) })}   ${t("render.costLabel", { cost: usage.costUsd.toFixed(4) })}`
-  );
+  return `${t("render.tokensLabel", { prompt: k(usage.promptTokens), cacheHit: k(usage.cacheHitTokens), completion: k(usage.completionTokens) })}   ${t("render.costLabel", { cost: usage.costUsd.toFixed(4) })}`;
 }
 
 export type RendererOptions = {
@@ -40,10 +38,7 @@ export type RendererOptions = {
  * Suffix for usage lines: dim "· ctx 42%". Only shown from 50% occupancy up
  * (below that it is noise); `always` forces it (REPL /usage, /context).
  */
-export function formatContextSuffix(
-  ctx: { percent: number } | undefined,
-  opts: { always?: boolean } = {},
-): string {
+export function formatContextSuffix(ctx: { percent: number } | undefined, opts: { always?: boolean } = {}): string {
   if (!ctx || (!opts.always && ctx.percent < 50)) return "";
   const c = makeColorizer(colorIsEnabled());
   return ` ${c.dim(`· ctx ${ctx.percent}%`)}`;
@@ -153,7 +148,14 @@ function renderEvent(e: AgentEvent, opts: RendererOptions, c: Colorizer): void {
     case "provider.retry":
       // Transient retry progress: dim stderr so it never pollutes piped stdout.
       console.error(
-        c.dim(t("render.retrying", { attempt: e.attempt, maxAttempts: e.maxAttempts, delay: (e.delayMs / 1000).toFixed(1), reason: e.reason })),
+        c.dim(
+          t("render.retrying", {
+            attempt: e.attempt,
+            maxAttempts: e.maxAttempts,
+            delay: (e.delayMs / 1000).toFixed(1),
+            reason: e.reason,
+          }),
+        ),
       );
       break;
     case "session.failed": {
@@ -206,7 +208,10 @@ export async function confirmInTerminal(req: PermissionRequest): Promise<Confirm
       // must deny — only an explicit y/yes approves every hunk.
       if (trimmed === "y" || trimmed === "yes") return true;
       // Try to parse as comma-separated hunk indices.
-      const selected = parseIndexList(trimmed, req.hunks.map((hunk) => hunk.index));
+      const selected = parseIndexList(
+        trimmed,
+        req.hunks.map((hunk) => hunk.index),
+      );
       if (selected) return { allow: true, selectedHunks: selected };
       return false;
     } finally {

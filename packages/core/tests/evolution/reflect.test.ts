@@ -155,7 +155,15 @@ describe("reflectOnSession (happy path)", () => {
         { type: "agent_rule", title: "No content", problem: "p", content: "", risk: "low", evidence: {} },
         { type: "secret", title: "Bad type", problem: "p", content: "x", risk: "low", evidence: {} },
         // skill without a valid kebab-case id cannot be applied → dropped.
-        { type: "skill", title: "Bad skill", problem: "p", content: SKILL_BODY, skillId: "Bad Id!", risk: "low", evidence: {} },
+        {
+          type: "skill",
+          title: "Bad skill",
+          problem: "p",
+          content: SKILL_BODY,
+          skillId: "Bad Id!",
+          risk: "low",
+          evidence: {},
+        },
         {
           type: "agent_rule",
           title: "Keep .gitignore facts",
@@ -228,8 +236,6 @@ describe("reflectOnSession (degraded path)", () => {
   it("still throws when the session itself does not exist", async () => {
     const ws = makeWorkspace();
     const provider = makeFakeProvider([]);
-    await expect(reflectOnSession(provider, { workspace: ws, sessionId: "nope" })).rejects.toThrow(
-      /session not found/,
-    );
+    await expect(reflectOnSession(provider, { workspace: ws, sessionId: "nope" })).rejects.toThrow(/session not found/);
   });
 });

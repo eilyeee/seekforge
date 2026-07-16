@@ -129,11 +129,7 @@ export function collectRuleFiles(workspace: string, homeOverride?: string): Rule
  * rules from bloating the prompt). The global → project → local layers are
  * unchanged; subdir rules are additive and labeled with their dir.
  */
-export function collectProjectRules(
-  workspace: string,
-  homeOverride?: string,
-  task?: string,
-): string | undefined {
+export function collectProjectRules(workspace: string, homeOverride?: string, task?: string): string | undefined {
   const blocks = collectRuleFiles(workspace, homeOverride).map(
     (f) => `<!-- from: ${f.origin} -->\n${f.content.trim()}`,
   );

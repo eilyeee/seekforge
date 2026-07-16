@@ -27,29 +27,24 @@ export const repl = {
     // ── prompt / welcome ────────────────────────────────────────────────
     "repl.prompt": "seekforge \u276f ",
     "repl.welcome": "SeekForge \u2014 interactive session  ({model}, {path})",
-    "repl.welcomeHint":
-      "Type a task, or /help for commands. Ctrl+C cancels a running task.",
+    "repl.welcomeHint": "Type a task, or /help for commands. Ctrl+C cancels a running task.",
     "repl.screenCleared": "screen cleared",
 
     // ── slash command responses ─────────────────────────────────────────
     "repl.noActiveSession": "no active session to compact \u2014 run a task first",
     "repl.sessionTooShort": "session is too short to compact or has no messages file",
-    "repl.compacted":
-      "compacted: dropped {dropped} turn(s), {before} \u2192 {after} tokens",
+    "repl.compacted": "compacted: dropped {dropped} turn(s), {before} \u2192 {after} tokens",
     "repl.nextMessageFresh": "next message starts a fresh session",
     "repl.resumeUsage": "usage: /resume <session-id> (see /sessions)",
     "repl.continuingSession": "continuing session {id} \u2014 your next message resumes it",
     "repl.planUsage": "usage: /plan <task>",
     "repl.planKept": "plan kept; the session continues \u2014 refine it or /new",
     "repl.modelUsage": "usage: /think [on|off|high|max]",
-    "repl.reasonerBlocked":
-      "deepseek-reasoner has no tool calling and cannot drive the agent yet",
+    "repl.reasonerBlocked": "deepseek-reasoner has no tool calling and cannot drive the agent yet",
     "repl.modelCurrent": "model: {model} (try deepseek-v4-flash, deepseek-v4-pro)",
     "repl.modelSet": "model: {model}",
-    "repl.thinkingCurrent":
-      "thinking: {state}{effortSuffix} (V4 models only \u2014 /think on|off|high|max)",
-    "repl.thinkingSet":
-      "thinking {state}{effortSuffix} \u2014 applies from the next message{modelSuffix}",
+    "repl.thinkingCurrent": "thinking: {state}{effortSuffix} (V4 models only \u2014 /think on|off|high|max)",
+    "repl.thinkingSet": "thinking {state}{effortSuffix} \u2014 applies from the next message{modelSuffix}",
     "repl.rememberUsage": "usage: /remember <fact>",
     "repl.remembered": "remembered \u2192 project.md: {content}",
     "repl.contextNone": "context: no turn run yet this REPL",
@@ -92,35 +87,29 @@ export const repl = {
     // ── prompt / welcome ────────────────────────────────────────────────
     "repl.prompt": "seekforge ❯ ",
     "repl.welcome": "SeekForge — 交互式会话  ({model}, {path})",
-    "repl.welcomeHint":
-      "输入任务，或输入 /help 查看命令。Ctrl+C 取消正在运行的任务。",
+    "repl.welcomeHint": "输入任务，或输入 /help 查看命令。Ctrl+C 取消正在运行的任务。",
     "repl.screenCleared": "屏幕已清空",
 
     // ── slash command responses ─────────────────────────────────────────
     "repl.noActiveSession": "无活动会话可压缩 — 请先运行一个任务",
     "repl.sessionTooShort": "会话太短或没有消息文件，无法压缩",
-    "repl.compacted":
-      "已压缩：丢弃 {dropped} 轮，{before} → {after} Token",
+    "repl.compacted": "已压缩：丢弃 {dropped} 轮，{before} → {after} Token",
     "repl.nextMessageFresh": "下一条消息将开始一个新的会话",
     "repl.resumeUsage": "用法：/resume <session-id>（参见 /sessions）",
     "repl.continuingSession": "正在继续会话 {id} — 您的下一条消息将恢复它",
     "repl.planUsage": "用法：/plan <task>",
     "repl.planKept": "计划已保留；会话继续 — 完善它或输入 /new",
     "repl.modelUsage": "用法：/think [on|off|high|max]",
-    "repl.reasonerBlocked":
-      "deepseek-reasoner 不支持工具调用，暂无法驱动代理",
+    "repl.reasonerBlocked": "deepseek-reasoner 不支持工具调用，暂无法驱动代理",
     "repl.modelCurrent": "模型：{model}（试试 deepseek-v4-flash, deepseek-v4-pro）",
     "repl.modelSet": "模型：{model}",
-    "repl.thinkingCurrent":
-      "思考模式：{state}{effortSuffix}（仅 V4 模型 — /think on|off|high|max）",
-    "repl.thinkingSet":
-      "思考模式 {state}{effortSuffix} — 从下一条消息生效{modelSuffix}",
+    "repl.thinkingCurrent": "思考模式：{state}{effortSuffix}（仅 V4 模型 — /think on|off|high|max）",
+    "repl.thinkingSet": "思考模式 {state}{effortSuffix} — 从下一条消息生效{modelSuffix}",
     "repl.rememberUsage": "用法：/remember <fact>",
     "repl.remembered": "已记住 → project.md：{content}",
     "repl.contextNone": "上下文：此 REPL 尚未运行任何轮次",
     "repl.contextInfo": "上下文：已使用 {used}}/{budget} 预算 Token（{percent}%）",
-    "repl.contextAutoCompaction":
-      "当使用量超过预算时，较旧的轮次将自动压缩为简短摘要。",
+    "repl.contextAutoCompaction": "当使用量超过预算时，较旧的轮次将自动压缩为简短摘要。",
     "repl.executeQuestion": "\n是否执行此计划？[y/N] ",
     "repl.error": "错误：{message}",
 

@@ -31,8 +31,7 @@ const STRINGS: Record<Locale, Record<string, string>> = { en: EN, "zh-CN": ZH };
 /** Resolve a starting locale: stored choice > browser language ("zh*" → zh-CN) > en. */
 export function detectLocale(stored?: string | null): Locale {
   if (stored === "en" || stored === "zh-CN") return stored;
-  const nav =
-    typeof navigator !== "undefined" && navigator.language ? navigator.language.toLowerCase() : "";
+  const nav = typeof navigator !== "undefined" && navigator.language ? navigator.language.toLowerCase() : "";
   return nav.startsWith("zh") ? "zh-CN" : "en";
 }
 
@@ -85,10 +84,7 @@ export function useLocale(): Locale {
 /** Returns a `t` bound to the active locale; the component re-renders on switch. */
 export function useT(): (key: string, vars?: Record<string, string | number>) => string {
   const locale = useLocale();
-  return useMemo(
-    () => (key: string, vars?: Record<string, string | number>) => translate(locale, key, vars),
-    [locale],
-  );
+  return useMemo(() => (key: string, vars?: Record<string, string | number>) => translate(locale, key, vars), [locale]);
 }
 
 /** Apply the persisted locale's <html lang> early (called from the app entry). */

@@ -103,7 +103,10 @@ describe("runAutoLoop", () => {
     });
     const logPath = join(workspace, ".seekforge", "loops", `${result.loopId}.log`);
     expect(existsSync(logPath)).toBe(true);
-    const logged = readFileSync(logPath, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+    const logged = readFileSync(logPath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l));
     // One line per emitted event, each timestamped and carrying the event type.
     expect(logged).toHaveLength(events.length);
     expect(logged.every((l) => typeof l.ts === "string" && typeof l.type === "string")).toBe(true);
@@ -175,9 +178,13 @@ describe("runAutoLoop", () => {
   it("rejects concurrent runs for the same loop id and releases after completion", async () => {
     const loopId = "exclusive-loop";
     let unblock!: () => void;
-    const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
     let entered!: () => void;
-    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     const first = runAutoLoop(mkDeps().deps, {
       ...baseOpts(workspace, async () => {
         entered();
@@ -187,16 +194,20 @@ describe("runAutoLoop", () => {
       loopId,
     });
     await started;
-    await expect(runAutoLoop(mkDeps().deps, {
-      ...baseOpts(workspace, failNTimes(0)),
-      loopId,
-    })).rejects.toThrow("already running");
+    await expect(
+      runAutoLoop(mkDeps().deps, {
+        ...baseOpts(workspace, failNTimes(0)),
+        loopId,
+      }),
+    ).rejects.toThrow("already running");
     unblock();
     await expect(first).resolves.toMatchObject({ status: "passed" });
-    await expect(runAutoLoop(mkDeps().deps, {
-      ...baseOpts(workspace, failNTimes(0)),
-      loopId,
-    })).resolves.toMatchObject({ status: "passed" });
+    await expect(
+      runAutoLoop(mkDeps().deps, {
+        ...baseOpts(workspace, failNTimes(0)),
+        loopId,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
   });
 
   it("recovers a lease whose owning process is dead", async () => {
@@ -204,10 +215,12 @@ describe("runAutoLoop", () => {
     const root = join(workspace, ".seekforge", "loops");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, `.${loopId}.lock`), JSON.stringify({ pid: 2_147_483_647, token: "old" }));
-    await expect(runAutoLoop(mkDeps().deps, {
-      ...baseOpts(workspace, failNTimes(0)),
-      loopId,
-    })).resolves.toMatchObject({ status: "passed" });
+    await expect(
+      runAutoLoop(mkDeps().deps, {
+        ...baseOpts(workspace, failNTimes(0)),
+        loopId,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
     expect(existsSync(join(root, `.${loopId}.lock`))).toBe(false);
   });
 
@@ -342,9 +355,7 @@ describe("runAutoLoop", () => {
       ...baseOpts(workspace, async () => {
         checks++;
         writeFileSync(target, `${prefix}${String.fromCharCode(97 + checks)}`);
-        return checks < 3
-          ? { code: 1, output: "identical failure" }
-          : { code: 0, output: "green" };
+        return checks < 3 ? { code: 1, output: "identical failure" } : { code: 0, output: "green" };
       }),
       maxIterations: 3,
     });
@@ -386,9 +397,14 @@ describe("runAutoLoop", () => {
       }),
     });
     expect(result.status).toBe("passed");
-    expect(provider.seen.flat().some((message) =>
-      typeof message.content === "string" && message.content.includes("tests/early.test.ts > fails first"),
-    )).toBe(true);
+    expect(
+      provider.seen
+        .flat()
+        .some(
+          (message) =>
+            typeof message.content === "string" && message.content.includes("tests/early.test.ts > fails first"),
+        ),
+    ).toBe(true);
     expect(result.finalVerify.output.length).toBeLessThanOrEqual(4096);
   });
 
@@ -408,12 +424,20 @@ describe("runAutoLoop", () => {
       }),
     });
     expect(result.status).toBe("passed");
-    expect(provider.seen.flat().some((message) =>
-      typeof message.content === "string" && message.content.includes("tests/streamed.test.ts > preserves the tail"),
-    )).toBe(true);
-    expect(provider.seen.flat().some((message) =>
-      typeof message.content === "string" && message.content.includes("raw captured prefix only"),
-    )).toBe(false);
+    expect(
+      provider.seen
+        .flat()
+        .some(
+          (message) =>
+            typeof message.content === "string" &&
+            message.content.includes("tests/streamed.test.ts > preserves the tail"),
+        ),
+    ).toBe(true);
+    expect(
+      provider.seen
+        .flat()
+        .some((message) => typeof message.content === "string" && message.content.includes("raw captured prefix only")),
+    ).toBe(false);
   });
 
   it("cancels via an aborted signal", async () => {
@@ -485,9 +509,9 @@ describe("runAutoLoop", () => {
     const { deps } = mkDeps();
     const result = await runAutoLoop(deps, {
       ...baseOpts(workspace, async () => {
-        throw new (await import("../../src/tools/errors.js")).ToolError(
-          "timeout", "Command timed out after 10ms", { stdout: "partial verifier output" },
-        );
+        throw new (await import("../../src/tools/errors.js")).ToolError("timeout", "Command timed out after 10ms", {
+          stdout: "partial verifier output",
+        });
       }),
     });
     expect(result).toMatchObject({
@@ -598,17 +622,23 @@ describe("runAutoLoop", () => {
       maxIterations: 1,
       costBudgetUsd: Number.MAX_VALUE,
     });
-    await expect(resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
-      workspace,
-      additionalIterations: -1,
-    })).rejects.toThrow(/positive safe integer/);
-    await expect(resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
-      workspace,
-      additionalCostBudgetUsd: Number.POSITIVE_INFINITY,
-    })).rejects.toThrow(/finite positive number/);
-    await expect(resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
-      workspace,
-      additionalCostBudgetUsd: Number.MAX_VALUE,
-    })).rejects.toThrow(/resulting cost budget must be finite/);
+    await expect(
+      resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+        workspace,
+        additionalIterations: -1,
+      }),
+    ).rejects.toThrow(/positive safe integer/);
+    await expect(
+      resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+        workspace,
+        additionalCostBudgetUsd: Number.POSITIVE_INFINITY,
+      }),
+    ).rejects.toThrow(/finite positive number/);
+    await expect(
+      resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+        workspace,
+        additionalCostBudgetUsd: Number.MAX_VALUE,
+      }),
+    ).rejects.toThrow(/resulting cost budget must be finite/);
   });
 });

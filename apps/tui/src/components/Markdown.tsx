@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import { ACCENT } from "./Header.js";
 import { highlightLines } from "../highlight.js";
@@ -144,8 +144,7 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
 /** Inline spans: `code`, [text](url), **bold**, *italic*, bare URLs. */
 function renderInline(text: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
-  const regex =
-    /(`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s)\]]+)/g;
+  const regex = /(`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s)\]]+)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;

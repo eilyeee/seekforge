@@ -50,7 +50,10 @@ describe("extractSymbols", () => {
   });
 
   it("names a Vue component and flags setup", () => {
-    const s = extractSymbols("C.vue", "<template></template>\n<script setup>\nconst name = { name: 'Widget' };\n</script>");
+    const s = extractSymbols(
+      "C.vue",
+      "<template></template>\n<script setup>\nconst name = { name: 'Widget' };\n</script>",
+    );
     expect(s).toContain("[vue");
     expect(s).toContain("setup");
   });
@@ -192,10 +195,7 @@ describe("dependency graph + PageRank (Aider-style ranking)", () => {
     writeFileSync(join(dir, "src/core/registry.ts"), "export function registry(){ return 1; }");
     for (let i = 0; i < features; i++) {
       // Each feature references the hub's exported symbol `registry`.
-      writeFileSync(
-        join(dir, `src/feat/feature${i}.ts`),
-        `export function feature${i}(){ return registry(); }`,
-      );
+      writeFileSync(join(dir, `src/feat/feature${i}.ts`), `export function feature${i}(){ return registry(); }`);
     }
   }
 
@@ -355,10 +355,7 @@ describe("shared file graph (lazyFileGraph) — build once, byte-identical outpu
     mkdirSync(join(dir, "src/feat"), { recursive: true });
     writeFileSync(join(dir, "src/core/registry.ts"), "export function registry(){ return 1; }");
     for (let i = 0; i < 60; i++) {
-      writeFileSync(
-        join(dir, `src/feat/feature${i}.ts`),
-        `export function feature${i}(){ return registry(); }`,
-      );
+      writeFileSync(join(dir, `src/feat/feature${i}.ts`), `export function feature${i}(){ return registry(); }`);
     }
   }
 

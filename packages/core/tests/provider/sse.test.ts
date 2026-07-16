@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createSseAccumulator,
-  feedSseChunk,
-  finalizeSse,
-  MAX_SSE_LINE_CHARS,
-} from "../../src/provider/sse.js";
+import { createSseAccumulator, feedSseChunk, finalizeSse, MAX_SSE_LINE_CHARS } from "../../src/provider/sse.js";
 
 const TRANSCRIPT = [
   'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}',
@@ -103,11 +98,14 @@ describe("SSE accumulation", () => {
 
   it("ignores malformed nested choices and tool calls", () => {
     const acc = createSseAccumulator();
-    feedSseChunk(acc, [
-      'data: {"choices":"bad"}',
-      'data: {"choices":[{"delta":{"tool_calls":[null,42,{"index":-1,"function":"bad"}]}}]}',
-      'data: {"choices":[{"delta":{"content":"ok"}}]}',
-    ].join("\n") + "\n");
+    feedSseChunk(
+      acc,
+      [
+        'data: {"choices":"bad"}',
+        'data: {"choices":[{"delta":{"tool_calls":[null,42,{"index":-1,"function":"bad"}]}}]}',
+        'data: {"choices":[{"delta":{"content":"ok"}}]}',
+      ].join("\n") + "\n",
+    );
     expect(finalizeSse(acc).content).toBe("ok");
   });
 
@@ -159,7 +157,12 @@ describe("streaming reasoning_content", () => {
       "data: [DONE]",
       "",
     ].join("\n");
-    feedSseChunk(acc, lines, (d) => content.push(d), (d) => reasoning.push(d));
+    feedSseChunk(
+      acc,
+      lines,
+      (d) => content.push(d),
+      (d) => reasoning.push(d),
+    );
     const result = finalizeSse(acc);
     expect(reasoning.join("")).toBe("think hard");
     expect(content.join("")).toBe("answer");

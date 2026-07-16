@@ -8,12 +8,14 @@ import type { ClientFrame, ServerFrame as SharedServerFrame } from "@seekforge/s
 
 export type { RunOverrides, ClientFrame } from "@seekforge/shared";
 
-export type ServerFrame = SharedServerFrame | {
-  type: "subagent.control";
-  dispatchId: string;
-  operation: "steer" | "cancel";
-  status: "accepted";
-};
+export type ServerFrame =
+  | SharedServerFrame
+  | {
+      type: "subagent.control";
+      dispatchId: string;
+      operation: "steer" | "cancel";
+      status: "accepted";
+    };
 
 export type ConnState = "disconnected" | "connecting" | "connected";
 

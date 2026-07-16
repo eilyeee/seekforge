@@ -109,9 +109,7 @@ export function unifiedDiff(before: string | null, after: string, relPath: strin
     const aSufStart = n - suf;
     const bSufStart = m - suf;
     const dp = (i: number, j: number): number =>
-      i >= aSufStart || j >= bSufStart
-        ? Math.min(n - i, m - j)
-        : table[(i - pre) * width + (j - pre)]! + suf;
+      i >= aSufStart || j >= bSufStart ? Math.min(n - i, m - j) : table[(i - pre) * width + (j - pre)]! + suf;
 
     // Emit walk over the FULL arrays — logic and tie-breaks unchanged.
     let i = 0;
@@ -264,7 +262,10 @@ const listFiles = defineTool({
 
 const readFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
-  offset: z.number().optional().describe("1-based line number to start reading from (combine with limit for large files)."),
+  offset: z
+    .number()
+    .optional()
+    .describe("1-based line number to start reading from (combine with limit for large files)."),
   limit: z.number().optional().describe("Maximum number of lines to return."),
 });
 
@@ -334,7 +335,9 @@ const readFile = defineTool({
 const searchTextSchema = z.object({
   pattern: z
     .string()
-    .describe("JavaScript regular expression, e.g. \"function\\\\s+createUser\" (invalid regex is retried as literal text; unsafe backtracking shapes are rejected)."),
+    .describe(
+      'JavaScript regular expression, e.g. "function\\\\s+createUser" (invalid regex is retried as literal text; unsafe backtracking shapes are rejected).',
+    ),
   path: z.string().optional().describe("File or directory to search, relative to the workspace root (default '.')."),
   caseSensitive: z.boolean().optional().describe("Case-sensitive matching (default false)."),
   glob: z
@@ -353,10 +356,7 @@ const searchTextSchema = z.object({
     .boolean()
     .optional()
     .describe("Treat each file as one string so the pattern can span newlines (regex 's' flag)."),
-  maxMatches: z
-    .number()
-    .optional()
-    .describe("Cap on the number of results (default 1000, max 5000)."),
+  maxMatches: z.number().optional().describe("Cap on the number of results (default 1000, max 5000)."),
 });
 
 function escapeRegExp(s: string): string {
@@ -437,7 +437,7 @@ type SearchMatch = {
 const searchText = defineTool({
   name: "search_text",
   description:
-    "Search file contents by regex pattern (e.g. \"function\\s+createUser\"). Invalid regex falls back to literal text; unsafe backtracking shapes are rejected. Case-insensitive per line by default; returns {file, line, text} up to 1000 matches (max 5000). Options: glob filters paths; contextLines adds surrounding lines; filesWithMatches returns paths only; multiline spans newlines. Skips binaries, files over 1MB, and ignored dirs. Use glob to find files by name.",
+    'Search file contents by regex pattern (e.g. "function\\s+createUser"). Invalid regex falls back to literal text; unsafe backtracking shapes are rejected. Case-insensitive per line by default; returns {file, line, text} up to 1000 matches (max 5000). Options: glob filters paths; contextLines adds surrounding lines; filesWithMatches returns paths only; multiline spans newlines. Skips binaries, files over 1MB, and ignored dirs. Use glob to find files by name.',
   schema: searchTextSchema,
   classify: (args) => ({
     permission: "readonly",
@@ -489,8 +489,7 @@ const searchText = defineTool({
     let truncated = false;
 
     /** Count the limiting unit (files in -l mode, otherwise individual matches). */
-    const atCap = (): boolean =>
-      args.filesWithMatches ? filesWithMatches.length >= cap : matches.length >= cap;
+    const atCap = (): boolean => (args.filesWithMatches ? filesWithMatches.length >= cap : matches.length >= cap);
 
     const searchFile = (filePath: string, rel: string): void => {
       if (!matchesGlob(rel)) return;
@@ -604,13 +603,7 @@ const searchText = defineTool({
 });
 
 /** Append a single match (line index `i`, 0-based) with optional context. */
-function pushMatch(
-  matches: SearchMatch[],
-  lines: string[],
-  rel: string,
-  i: number,
-  ctxLines: number,
-): void {
+function pushMatch(matches: SearchMatch[], lines: string[], rel: string, i: number, ctxLines: number): void {
   const entry: SearchMatch = { file: rel, line: i + 1, text: (lines[i] as string).slice(0, 500) };
   if (ctxLines > 0) {
     const before = lines.slice(Math.max(0, i - ctxLines), i).map((l) => l.slice(0, 500));
@@ -706,9 +699,7 @@ const applyPatchSchema = z.object({
 });
 
 function previewHunk(text: string): string {
-  const first = text
-    .split("\n")
-    .find((l) => l.trim().length > 0);
+  const first = text.split("\n").find((l) => l.trim().length > 0);
   if (!first) return "(empty)";
   return first.length > 80 ? first.slice(0, 80) + "…" : first;
 }
@@ -716,14 +707,12 @@ function previewHunk(text: string): string {
 const applyPatch = defineTool({
   name: "apply_patch",
   description:
-    "Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read the file first; each oldString must be copied VERBATIM from its current content (exact whitespace/indentation) and match EXACTLY ONCE — add surrounding lines to make it unique. newString is the replacement. Prefer several small targeted edits over one large rewrite. Example edit: {oldString:\"const port = 3000;\", newString:\"const port = 8080;\"}. If a patch fails (no_match/ambiguous), re-read the file and retry with the latest content.",
+    'Edit the file at path with search/replace edits, applied atomically (any failure writes nothing). Read the file first; each oldString must be copied VERBATIM from its current content (exact whitespace/indentation) and match EXACTLY ONCE — add surrounding lines to make it unique. newString is the replacement. Prefer several small targeted edits over one large rewrite. Example edit: {oldString:"const port = 3000;", newString:"const port = 8080;"}. If a patch fails (no_match/ambiguous), re-read the file and retry with the latest content.',
   schema: applyPatchSchema,
   classify: (args, ctx) => {
     // applyEdits throws on no_match/ambiguous; buildPreview swallows it and the
     // preview is simply omitted — the real run will surface the same error.
-    const preview = buildPreview(ctx, args.path, (before) =>
-      applyEdits(before ?? "", args.edits),
-    );
+    const preview = buildPreview(ctx, args.path, (before) => applyEdits(before ?? "", args.edits));
     // Per-hunk previews for multi-edit patches, so frontends can offer
     // per-hunk selection. Single-edit calls omit hunks (backward compatible).
     const hunks =
@@ -751,12 +740,10 @@ const applyPatch = defineTool({
       if (ctx.checkpoint) {
         ctx.checkpoint(args.path, await runtimeBeforeContent(ctx, args.path));
       }
-      const res = await callRuntime<{ path: string; editsApplied: number }>(
-        ctx.runtime,
-        "apply_patch",
-        ctx.workspace,
-        { path: args.path, edits: args.edits },
-      );
+      const res = await callRuntime<{ path: string; editsApplied: number }>(ctx.runtime, "apply_patch", ctx.workspace, {
+        path: args.path,
+        edits: args.edits,
+      });
       return { data: res };
     }
     const resolved = resolveForWrite(ctx.workspace, args.path);

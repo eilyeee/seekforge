@@ -1,25 +1,51 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  acquireLoopLease, createLoopState, hasActiveLoopLease, isLoopLeaseActive, listLoopStates, loadLoopState,
-  removeLoopState, saveLoopState,
+  acquireLoopLease,
+  createLoopState,
+  hasActiveLoopLease,
+  isLoopLeaseActive,
+  listLoopStates,
+  loadLoopState,
+  removeLoopState,
+  saveLoopState,
 } from "../../src/agent/loop-state.js";
 
 describe("loop state persistence", () => {
   let workspace: string;
-  beforeEach(() => { workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-state-")); });
-  afterEach(() => { rmSync(workspace, { recursive: true, force: true }); });
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-state-"));
+  });
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
 
   it("creates, loads, updates, lists, and removes state", () => {
     const created = createLoopState({
-      loopId: "loop-one", task: "fix tests", workspace,
-      verifyCommand: "pnpm test", maxIterations: 8, costBudgetUsd: 2,
+      loopId: "loop-one",
+      task: "fix tests",
+      workspace,
+      verifyCommand: "pnpm test",
+      maxIterations: 8,
+      costBudgetUsd: 2,
     });
     expect(loadLoopState(workspace, created.loopId)).toEqual(created);
     const updated = {
-      ...created, iterations: 1, costUsd: 0.25, sessionId: "session-1",
+      ...created,
+      iterations: 1,
+      costUsd: 0.25,
+      sessionId: "session-1",
       lastVerify: { code: 1, output: "one failure" },
       updatedAt: new Date(Date.now() + 1_000).toISOString(),
     };
@@ -31,11 +57,21 @@ describe("loop state persistence", () => {
 
   it("does not overwrite an existing explicit loop id", () => {
     const first = createLoopState({
-      loopId: "same-id", task: "first", workspace, verifyCommand: "test", maxIterations: 1,
+      loopId: "same-id",
+      task: "first",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
     });
-    expect(() => createLoopState({
-      loopId: "same-id", task: "second", workspace, verifyCommand: "other", maxIterations: 2,
-    })).toThrow(/already exists/);
+    expect(() =>
+      createLoopState({
+        loopId: "same-id",
+        task: "second",
+        workspace,
+        verifyCommand: "other",
+        maxIterations: 2,
+      }),
+    ).toThrow(/already exists/);
     expect(loadLoopState(workspace, "same-id")).toEqual(first);
   });
 
@@ -44,18 +80,18 @@ describe("loop state persistence", () => {
     expect(readdirSync(join(workspace, ".seekforge", "loops"))).toEqual([`${state.loopId}.json`]);
   });
 
-  it.each(["../escape", "a/b", ".", "", "loop.json", " space"])(
-    "rejects unsafe id %j", (loopId) => {
-      expect(() => createLoopState({ loopId, task: "x", workspace, verifyCommand: "test", maxIterations: 1 }))
-        .toThrow(/Invalid loop id/);
-      expect(() => loadLoopState(workspace, loopId)).toThrow(/Invalid loop id/);
-      expect(() => removeLoopState(workspace, loopId)).toThrow(/Invalid loop id/);
-    },
-  );
+  it.each(["../escape", "a/b", ".", "", "loop.json", " space"])("rejects unsafe id %j", (loopId) => {
+    expect(() => createLoopState({ loopId, task: "x", workspace, verifyCommand: "test", maxIterations: 1 })).toThrow(
+      /Invalid loop id/,
+    );
+    expect(() => loadLoopState(workspace, loopId)).toThrow(/Invalid loop id/);
+    expect(() => removeLoopState(workspace, loopId)).toThrow(/Invalid loop id/);
+  });
 
   it("rejects relative workspaces", () => {
-    expect(() => createLoopState({ task: "x", workspace: "relative", verifyCommand: "test", maxIterations: 1 }))
-      .toThrow(/absolute path/);
+    expect(() =>
+      createLoopState({ task: "x", workspace: "relative", verifyCommand: "test", maxIterations: 1 }),
+    ).toThrow(/absolute path/);
   });
 
   it("rejects a symlinked loop directory that escapes the workspace", () => {
@@ -63,8 +99,9 @@ describe("loop state persistence", () => {
     try {
       mkdirSync(join(workspace, ".seekforge"), { recursive: true });
       symlinkSync(outside, join(workspace, ".seekforge", "loops"));
-      expect(() => createLoopState({ task: "x", workspace, verifyCommand: "test", maxIterations: 1 }))
-        .toThrow(/escapes the workspace/i);
+      expect(() => createLoopState({ task: "x", workspace, verifyCommand: "test", maxIterations: 1 })).toThrow(
+        /escapes the workspace/i,
+      );
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -106,9 +143,14 @@ describe("loop state persistence", () => {
   it("recovers a dead stale lock before removing state", () => {
     const state = createLoopState({ loopId: "stale", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
     const lock = join(workspace, ".seekforge", "loops", `.${state.loopId}.lock`);
-    writeFileSync(lock, JSON.stringify({
-      pid: 2_147_483_647, token: "dead", createdAt: new Date().toISOString(),
-    }));
+    writeFileSync(
+      lock,
+      JSON.stringify({
+        pid: 2_147_483_647,
+        token: "dead",
+        createdAt: new Date().toISOString(),
+      }),
+    );
     expect(isLoopLeaseActive(workspace, state.loopId)).toBe(false);
     expect(removeLoopState(workspace, state.loopId)).toBe(true);
   });
@@ -151,7 +193,11 @@ describe("loop state persistence", () => {
 
   it("rejects non-finite and inconsistent numbers", () => {
     const state = createLoopState({
-      loopId: "numbers", task: "x", workspace, verifyCommand: "test", maxIterations: 2,
+      loopId: "numbers",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 2,
     });
     expect(() => saveLoopState(workspace, { ...state, costUsd: Infinity })).toThrow(/Invalid loop state/);
     expect(() => saveLoopState(workspace, { ...state, iterations: 3 })).toThrow(/Invalid loop state/);
@@ -164,7 +210,11 @@ describe("loop state persistence", () => {
 
   it("skips corrupt records and rejects records copied across workspaces", () => {
     const state = createLoopState({
-      loopId: "valid", task: "x", workspace, verifyCommand: "test", maxIterations: 1,
+      loopId: "valid",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
     });
     writeFileSync(join(workspace, ".seekforge", "loops", "corrupt.json"), "null");
     expect(listLoopStates(workspace)).toEqual([state]);
@@ -174,12 +224,18 @@ describe("loop state persistence", () => {
       createLoopState({ loopId: "valid", task: "x", workspace: other, verifyCommand: "test", maxIterations: 1 });
       writeFileSync(join(other, ".seekforge", "loops", "valid.json"), JSON.stringify(state));
       expect(loadLoopState(other, "valid")).toBeNull();
-    } finally { rmSync(other, { recursive: true, force: true }); }
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("loads legacy state written with a symlinked workspace path", () => {
     const state = createLoopState({
-      loopId: "legacy-alias", task: "x", workspace, verifyCommand: "test", maxIterations: 1,
+      loopId: "legacy-alias",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
     });
     const aliasRoot = mkdtempSync(join(tmpdir(), "seekforge-loop-alias-"));
     const alias = join(aliasRoot, "workspace");

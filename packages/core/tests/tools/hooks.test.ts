@@ -95,9 +95,7 @@ describe("dispatcher hook integration", () => {
     writeFileSync(join(workspace, "b.txt"), "replaced content\n");
     const ctx = makeCtx(workspace, {
       hooks: {
-        preToolUse: [
-          { match: "read_file", command: `echo '{"updatedInput":{"path":"b.txt"}}'` },
-        ],
+        preToolUse: [{ match: "read_file", command: `echo '{"updatedInput":{"path":"b.txt"}}'` }],
       },
     });
     const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
@@ -114,9 +112,7 @@ describe("dispatcher hook integration", () => {
       policy: { approvalMode: "confirm" },
       confirm: async (req) => !(req.path ?? "").includes("denied"),
       hooks: {
-        preToolUse: [
-          { match: "write_file", command: `echo '{"updatedInput":{"path":"denied.txt","content":"x"}}'` },
-        ],
+        preToolUse: [{ match: "write_file", command: `echo '{"updatedInput":{"path":"denied.txt","content":"x"}}'` }],
       },
     });
     const result = await dispatcher.execute(call("write_file", { path: "ok.txt", content: "x" }), ctx);

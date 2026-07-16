@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import { toolResultSummary, toolTitle } from "../render-helpers.js";
@@ -23,7 +23,15 @@ type ToolRowProps = {
   outputTail?: string;
 };
 
-export function ToolRow({ toolName, args, status, error, resultPreview, verbose, outputTail }: ToolRowProps): React.ReactElement {
+export function ToolRow({
+  toolName,
+  args,
+  status,
+  error,
+  resultPreview,
+  verbose,
+  outputTail,
+}: ToolRowProps): React.ReactElement {
   const { verb, detail } = toolTitle(toolName, args);
   const summary = toolResultSummary(toolName, status === "ok", resultPreview, error);
   return (

@@ -2,13 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  AgentEvent,
-  ChatResponse,
-  PermissionRequest,
-  ToolCall,
-  ToolResult,
-} from "@seekforge/shared";
+import type { AgentEvent, ChatResponse, PermissionRequest, ToolCall, ToolResult } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
@@ -256,9 +250,7 @@ describe("dispatch_agent (loop-level)", () => {
       subagents: [fixer],
     });
     // ask-mode parent (also covers --plan, which runs as mode "ask")
-    const events = await collect(
-      agent.runTask({ ...baseInput, mode: "ask", projectPath: workspace }),
-    );
+    const events = await collect(agent.runTask({ ...baseInput, mode: "ask", projectPath: workspace }));
     const [done] = toolCompleted(events, "dispatch_agent");
     expect(done!.result.ok).toBe(false);
     expect(done!.result.error!.code).toBe("forbidden_in_ask_mode");
@@ -386,9 +378,7 @@ describe("dispatch_agent (loop-level)", () => {
       subagents: [reviewer],
       finalizeReview: true,
     });
-    const events = await collect(
-      agent.runTask({ ...baseInput, projectPath: workspace, approvalMode: "auto" }),
-    );
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace, approvalMode: "auto" }));
     // The loop dispatched the reviewer on its own (no dispatch_agent tool call).
     expect(events.some((e) => e.type === "notice" && e.message.includes("Dispatching the reviewer"))).toBe(true);
     // The reviewer's findings were fed back into the PARENT conversation.

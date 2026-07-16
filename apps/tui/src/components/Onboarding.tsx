@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import type React from "react";
+import { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { ACCENT } from "./Header.js";
 import { validateApiKeyFormat } from "../onboarding.js";
@@ -62,8 +63,8 @@ export function Onboarding({ onDone, onSkip }: OnboardingProps): React.ReactElem
         Welcome to SeekForge
       </Text>
       <Text dimColor>
-        SeekForge needs a DeepSeek API key to talk to the model. Get one at https://platform.deepseek.com — it
-        is stored locally in ~/.seekforge/config.json.
+        SeekForge needs a DeepSeek API key to talk to the model. Get one at https://platform.deepseek.com — it is stored
+        locally in ~/.seekforge/config.json.
       </Text>
       <Text>
         <Text dimColor>API key: </Text>

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  approveMemoryCandidate,
-  listMemoryCandidates,
-  rejectMemoryCandidate,
-} from "../../src/memory/index.js";
+import { approveMemoryCandidate, listMemoryCandidates, rejectMemoryCandidate } from "../../src/memory/index.js";
 import {
   makeCandidate,
   makeWorkspace,
@@ -24,10 +20,7 @@ describe("listMemoryCandidates", () => {
 
   it("lists candidates newest first", () => {
     const ws = makeWorkspace();
-    seed(ws, [
-      makeCandidate({ id: "mc-s1-1", content: "older" }),
-      makeCandidate({ id: "mc-s1-2", content: "newer" }),
-    ]);
+    seed(ws, [makeCandidate({ id: "mc-s1-1", content: "older" }), makeCandidate({ id: "mc-s1-2", content: "newer" })]);
     const list = listMemoryCandidates(ws);
     expect(list.map((c) => c.id)).toEqual(["mc-s1-2", "mc-s1-1"]);
   });
@@ -97,17 +90,12 @@ describe("rejectMemoryCandidate", () => {
   });
 
   it("throws for an unknown id", () => {
-    expect(() => rejectMemoryCandidate(makeWorkspace(), "ghost")).toThrowError(
-      "candidate not found: ghost",
-    );
+    expect(() => rejectMemoryCandidate(makeWorkspace(), "ghost")).toThrowError("candidate not found: ghost");
   });
 
   it("only updates the matching candidate on rewrite", () => {
     const ws = makeWorkspace();
-    seed(ws, [
-      makeCandidate({ id: "mc-s1-1", content: "a" }),
-      makeCandidate({ id: "mc-s1-2", content: "b" }),
-    ]);
+    seed(ws, [makeCandidate({ id: "mc-s1-1", content: "a" }), makeCandidate({ id: "mc-s1-2", content: "b" })]);
     rejectMemoryCandidate(ws, "mc-s1-1");
     const raw = readCandidatesRaw(ws);
     expect(raw.split("\n").filter(Boolean)).toHaveLength(2);

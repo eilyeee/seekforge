@@ -51,13 +51,14 @@ fn start_server_and_open_window(handle: tauri::AppHandle) {
                     return;
                 }
             };
-            let builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(external))
-                .title("SeekForge")
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(800.0, 560.0)
-                // Matches the default (light) --sf-surface (#f8fafc) to avoid a
-                // flash before the web UI loads.
-                .background_color(tauri::webview::Color(248, 250, 252, 255));
+            let builder =
+                WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(external))
+                    .title("SeekForge")
+                    .inner_size(1280.0, 800.0)
+                    .min_inner_size(800.0, 560.0)
+                    // Matches the default (light) --sf-surface (#f8fafc) to avoid a
+                    // flash before the web UI loads.
+                    .background_color(tauri::webview::Color(248, 250, 252, 255));
             // macOS: transparent overlay title bar — traffic lights float over
             // the sidebar (which pads for them); content runs edge-to-edge.
             #[cfg(target_os = "macos")]
@@ -137,15 +138,13 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
         match web {
             Some(p) => Some(p),
             None => {
-                return Err(
-                    "this SeekForge bundle is missing its web UI resource \
+                return Err("this SeekForge bundle is missing its web UI resource \
                      (expected `Contents/Resources/web/index.html`).\n\n\
                      The bundled server cannot locate the workbench, so it would \
                      only serve a UI-less API page. Reinstall from a complete \
                      release, or rebuild the bundle (the `web` resource is laid \
                      out by `tauri build`)."
-                        .to_string(),
-                );
+                    .to_string());
             }
         }
     } else {
@@ -158,23 +157,24 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
 
     let env_ws = std::env::var("SEEKFORGE_WORKSPACE").ok();
     let cwd = std::env::current_dir().ok();
-    let workspace = match serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref()) {
-        Some(ws) => ws,
-        None => {
-            // Launched from Finder with no workspace: ask the user to choose a
-            // folder rather than silently defaulting to their home directory.
-            match handle.dialog().file().blocking_pick_folder() {
-                Some(folder) => folder
-                    .into_path()
-                    .map_err(|e| format!("could not use the selected folder: {e}"))?,
-                None => {
-                    return Err("No project folder was selected. Launch SeekForge again \
+    let workspace =
+        match serve::resolve_workspace(env_ws.as_deref(), cwd.as_deref(), home.as_deref()) {
+            Some(ws) => ws,
+            None => {
+                // Launched from Finder with no workspace: ask the user to choose a
+                // folder rather than silently defaulting to their home directory.
+                match handle.dialog().file().blocking_pick_folder() {
+                    Some(folder) => folder
+                        .into_path()
+                        .map_err(|e| format!("could not use the selected folder: {e}"))?,
+                    None => {
+                        return Err("No project folder was selected. Launch SeekForge again \
                          and choose a folder for the agent to work on."
-                        .to_string());
+                            .to_string());
+                    }
                 }
             }
-        }
-    };
+        };
 
     let resolution = if from_sidecar {
         Resolution::Sidecar
@@ -331,7 +331,13 @@ fn extra_bin_dirs(home: Option<&std::path::Path>) -> Vec<PathBuf> {
         PathBuf::from("/opt/homebrew/bin"),
     ];
     if let Some(home) = home {
-        for rel in [".npm-global/bin", ".local/bin", ".volta/bin", ".yarn/bin", ".bun/bin"] {
+        for rel in [
+            ".npm-global/bin",
+            ".local/bin",
+            ".volta/bin",
+            ".yarn/bin",
+            ".bun/bin",
+        ] {
             dirs.push(home.join(rel));
         }
         // nvm installs each node version under ~/.nvm/versions/node/<v>/bin.

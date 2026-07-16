@@ -20,7 +20,13 @@ function finite(values: number[]): number[] {
 
 /** Wilson score interval for a binomial proportion. */
 export function proportionCi95(successes: number, samples: number): ConfidenceInterval {
-  if (!Number.isSafeInteger(successes) || !Number.isSafeInteger(samples) || samples < 0 || successes < 0 || successes > samples) {
+  if (
+    !Number.isSafeInteger(successes) ||
+    !Number.isSafeInteger(samples) ||
+    samples < 0 ||
+    successes < 0 ||
+    successes > samples
+  ) {
     throw new Error("successes and samples must be safe integers with 0 <= successes <= samples");
   }
   if (samples === 0) return { lower: 0, upper: 1, confidence: 0.95 };
@@ -28,7 +34,7 @@ export function proportionCi95(successes: number, samples: number): ConfidenceIn
   const z2 = Z_95 * Z_95;
   const denominator = 1 + z2 / samples;
   const center = (rate + z2 / (2 * samples)) / denominator;
-  const margin = Z_95 * Math.sqrt((rate * (1 - rate) + z2 / (4 * samples)) / samples) / denominator;
+  const margin = (Z_95 * Math.sqrt((rate * (1 - rate) + z2 / (4 * samples)) / samples)) / denominator;
   return {
     lower: Math.max(0, center - margin),
     upper: Math.min(1, center + margin),

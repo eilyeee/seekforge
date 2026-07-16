@@ -216,8 +216,7 @@ describe("createDeepSeekProvider fallbackModel", () => {
 
   it("falls back on the streaming path too", async () => {
     const stream = (model: string): Response => {
-      const payload =
-        `data: {"choices":[{"delta":{"content":"hi from ${model}"}}]}\n\n` + "data: [DONE]\n\n";
+      const payload = `data: {"choices":[{"delta":{"content":"hi from ${model}"}}]}\n\n` + "data: [DONE]\n\n";
       return {
         ok: true,
         status: 200,

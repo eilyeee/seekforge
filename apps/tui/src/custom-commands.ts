@@ -50,8 +50,7 @@ function parseCommandFile(raw: string): { description: string; body: string } {
   const body = bodyLines.join("\n").trim();
   if (description === "") {
     const firstLine = body.split("\n")[0] ?? "";
-    description =
-      firstLine.length > DESCRIPTION_CAP ? `${firstLine.slice(0, DESCRIPTION_CAP - 1)}…` : firstLine;
+    description = firstLine.length > DESCRIPTION_CAP ? `${firstLine.slice(0, DESCRIPTION_CAP - 1)}…` : firstLine;
   }
   return { description, body };
 }

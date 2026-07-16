@@ -4,7 +4,7 @@
  * reducer's overlay state — this component only windows and paints rows.
  */
 
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { CommandSpec } from "../commands.js";
 import { t } from "../strings.js";
@@ -40,7 +40,10 @@ export function Palette({
               {selected ? <Text color={ACCENT}>❯ </Text> : <Text>{"  "}</Text>}
               <Text bold={selected}>/{cmd.name}</Text>
               {cmd.args ? <Text dimColor> {cmd.args}</Text> : null}
-              <Text dimColor>{"  "}{cmd.summary}</Text>
+              <Text dimColor>
+                {"  "}
+                {cmd.summary}
+              </Text>
             </Box>
           );
         })

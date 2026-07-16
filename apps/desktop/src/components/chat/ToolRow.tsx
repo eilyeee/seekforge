@@ -9,8 +9,7 @@ type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
 /** TUI-style status dot: ⏺ accent while running, green ok, red error. */
 function StatusDot({ status }: { status: ToolItem["status"] }) {
-  const cls =
-    status === "running" ? "animate-pulse text-accent" : status === "ok" ? "text-ok" : "text-danger";
+  const cls = status === "running" ? "animate-pulse text-accent" : status === "ok" ? "text-ok" : "text-danger";
   return <span className={`${cls} select-none`}>⏺</span>;
 }
 

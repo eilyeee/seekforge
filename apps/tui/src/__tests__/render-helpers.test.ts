@@ -202,9 +202,10 @@ describe("keyHints", () => {
 
 describe("diffStats", () => {
   it("counts adds and dels, ignoring context and hunks", () => {
-    expect(
-      diffStats([{ kind: "hunk" }, { kind: "add" }, { kind: "add" }, { kind: "del" }, { kind: "ctx" }]),
-    ).toEqual({ adds: 2, dels: 1 });
+    expect(diffStats([{ kind: "hunk" }, { kind: "add" }, { kind: "add" }, { kind: "del" }, { kind: "ctx" }])).toEqual({
+      adds: 2,
+      dels: 1,
+    });
     expect(diffStats([])).toEqual({ adds: 0, dels: 0 });
   });
 });
@@ -312,7 +313,7 @@ describe("supportsHyperlinks / osc8Link", () => {
   it("honors FORCE_HYPERLINK as an explicit override in both directions", () => {
     expect(supportsHyperlinks({ FORCE_HYPERLINK: "1" })).toBe(true);
     expect(supportsHyperlinks({ FORCE_HYPERLINK: "0", TERM_PROGRAM: "iTerm.app" })).toBe(false);
-    expect(supportsHyperlinks({ FORCE_HYPERLINK: "" , TERM_PROGRAM: "kitty" })).toBe(true);
+    expect(supportsHyperlinks({ FORCE_HYPERLINK: "", TERM_PROGRAM: "kitty" })).toBe(true);
   });
 
   it("wraps text in BEL-terminated OSC 8 escapes when supported", () => {

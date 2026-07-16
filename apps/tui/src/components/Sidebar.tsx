@@ -4,7 +4,7 @@
  * this component just windows ~20 rows around the cursor and paints them.
  */
 
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { TreeNode } from "../file-tree.js";
 import { t } from "../strings.js";
@@ -46,16 +46,9 @@ export function Sidebar({ visible, cursor, focused, width }: SidebarProps): Reac
         const selected = absolute === cursor;
         const indent = "  ".repeat(node.depth);
         const expanded = node.dir && nextIsChild(visible, absolute);
-        const label = node.dir
-          ? `${indent}${expanded ? "▾" : "▸"} ${node.name}/`
-          : `${indent}  ${node.name}`;
+        const label = node.dir ? `${indent}${expanded ? "▾" : "▸"} ${node.name}/` : `${indent}  ${node.name}`;
         return (
-          <Text
-            key={node.path}
-            inverse={selected && focused}
-            color={expanded ? ACCENT : undefined}
-            dimColor={!focused}
-          >
+          <Text key={node.path} inverse={selected && focused} color={expanded ? ACCENT : undefined} dimColor={!focused}>
             {label}
           </Text>
         );

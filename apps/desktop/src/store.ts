@@ -297,19 +297,18 @@ export const useStore = create<AppStore>()((set, get) => {
               workspaces,
               recents,
               activeWorkspaceId: next,
-              tabs:
-                !next || workspaces.length === 0
-                  ? s.tabs
-                  : bindBlankInitialTab(s.tabs, next),
+              tabs: !next || workspaces.length === 0 ? s.tabs : bindBlankInitialTab(s.tabs, next),
             };
           });
           // Auto-reopen the last project on a fresh relaunch: the server only
           // hosts its launch cwd, but if the remembered project is a known
           // recent we re-host + switch to it (the Codex "reopen last" flow).
           if (!hadPick && !restored && storedPath && recents.some((r) => r.path === storedPath)) {
-            void get().openWorkspace(storedPath).catch(() => {
-              /* the folder may have moved/been deleted — stay on the default */
-            });
+            void get()
+              .openWorkspace(storedPath)
+              .catch(() => {
+                /* the folder may have moved/been deleted — stay on the default */
+              });
           }
         })
         .catch((e: unknown) => {
@@ -345,7 +344,9 @@ export const useStore = create<AppStore>()((set, get) => {
       // Close any tabs bound to the now-unhosted workspace — their sockets and
       // REST calls would otherwise target a workspace id the server no longer
       // knows (404s). The folder itself is untouched; reopening restores it.
-      for (const tabId of get().tabs.tabs.filter((t) => t.ws === id).map((t) => t.tabId)) {
+      for (const tabId of get()
+        .tabs.tabs.filter((t) => t.ws === id)
+        .map((t) => t.tabId)) {
         get().closeTab(tabId);
       }
       set((s) => {
@@ -462,8 +463,7 @@ export const useStore = create<AppStore>()((set, get) => {
 
     setMode: (mode) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { mode }) })),
 
-    setApprovalMode: (approvalMode) =>
-      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { approvalMode }) })),
+    setApprovalMode: (approvalMode) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { approvalMode }) })),
 
     setModel: (model) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { model }) })),
 
@@ -472,8 +472,7 @@ export const useStore = create<AppStore>()((set, get) => {
     setReasoningEffort: (effort) =>
       set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { reasoningEffort: effort }) })),
 
-    setOutputStyle: (outputStyle) =>
-      set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { outputStyle }) })),
+    setOutputStyle: (outputStyle) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { outputStyle }) })),
 
     setSandbox: (sandbox) => set((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { sandbox }) })),
 
@@ -488,8 +487,7 @@ export const useStore = create<AppStore>()((set, get) => {
     openFilesFinder: () => set({ view: "files", filesFinderOpen: true }),
 
     filesTarget: null,
-    openFileAt: (path, loc) =>
-      set({ view: "files", filesTarget: { path, ...(loc ?? {}), nonce: Date.now() } }),
+    openFileAt: (path, loc) => set({ view: "files", filesTarget: { path, ...(loc ?? {}), nonce: Date.now() } }),
     clearFilesTarget: () => set({ filesTarget: null }),
 
     truncateAtItem: (tabId, sessionId, itemId) =>

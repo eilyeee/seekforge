@@ -61,9 +61,7 @@ describe("fetchWithRetry onRetry", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const retries: RetryInfo[] = [];
-    await runWithTimers(
-      fetchWithRetry("https://x/y", { method: "POST" }, { onRetry: (i) => retries.push(i) }),
-    );
+    await runWithTimers(fetchWithRetry("https://x/y", { method: "POST" }, { onRetry: (i) => retries.push(i) }));
 
     expect(retries.map((r) => r.reason)).toEqual(["server error (503)", "network error"]);
     expect(retries.map((r) => r.attempt)).toEqual([1, 2]);
@@ -86,9 +84,9 @@ describe("fetchWithRetry onRetry", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const onRetry = vi.fn();
-    await expect(
-      runWithTimers(fetchWithRetry("https://x/y", { method: "POST" }, { onRetry })),
-    ).rejects.toThrow(/HTTP 400/);
+    await expect(runWithTimers(fetchWithRetry("https://x/y", { method: "POST" }, { onRetry }))).rejects.toThrow(
+      /HTTP 400/,
+    );
     expect(onRetry).not.toHaveBeenCalled();
   });
 
@@ -121,9 +119,9 @@ describe("fetchWithRetry timeout", () => {
         init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
       })) as unknown as typeof fetch;
 
-    await expect(
-      fetchWithRetry("https://x/y", { method: "POST" }, { maxRetries: 0, timeoutMs: 20 }),
-    ).rejects.toThrow(/timed out/);
+    await expect(fetchWithRetry("https://x/y", { method: "POST" }, { maxRetries: 0, timeoutMs: 20 })).rejects.toThrow(
+      /timed out/,
+    );
   });
 
   it("does NOT abort the body after headers arrive (TTFB-only; streaming is safe)", async () => {

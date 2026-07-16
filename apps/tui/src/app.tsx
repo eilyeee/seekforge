@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
@@ -484,7 +485,12 @@ export function App({
         const all = argCandidates(slashArg.name, slashArg.arg, buildArgContext());
         if (all && all.length > 0) {
           const candidates = slashArg.arg
-            ? fuzzyRank(slashArg.arg, all.filter((c) => c.value !== ""), (c) => c.value, 10)
+            ? fuzzyRank(
+                slashArg.arg,
+                all.filter((c) => c.value !== ""),
+                (c) => c.value,
+                10,
+              )
             : all.slice(0, 10);
           if (candidates.length > 0) {
             const keep =
@@ -568,8 +574,7 @@ export function App({
       // The run belongs to the tab it started in: every dispatch below
       // routes there by ID, surviving tab switches.
       const runTabId = opts?.reservation?.tabId ?? activeIdRef.current;
-      const reservation =
-        opts?.reservation ?? reserveRun(runsByTabRef.current, runTabId, ++runIdCounterRef.current);
+      const reservation = opts?.reservation ?? reserveRun(runsByTabRef.current, runTabId, ++runIdCounterRef.current);
       if (!reservation || !ownsRun(runsByTabRef.current, reservation)) return;
       if (reservation.controller.signal.aborted) {
         releaseRun(runsByTabRef.current, reservation);
@@ -724,11 +729,7 @@ export function App({
    * notices. The loop forces acceptEdits internally (see run-loop.ts).
    */
   const runLoopTask = useCallback(
-    async (
-      task: string,
-      verifyCommand: string,
-      options: { maxIterations?: number; costBudgetUsd?: number } = {},
-    ) => {
+    async (task: string, verifyCommand: string, options: { maxIterations?: number; costBudgetUsd?: number } = {}) => {
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
@@ -801,14 +802,16 @@ export function App({
           ...options,
           onEvent: (event) => {
             if (!ownsThisRun()) return;
-            for (const line of formatLoopEvent(event)) dispatchTab({ type: "notice", text: line.text, tone: line.tone });
+            for (const line of formatLoopEvent(event))
+              dispatchTab({ type: "notice", text: line.text, tone: line.tone });
           },
         });
         if (result.sessionId && ownsThisRun()) dispatchTab({ type: "set-session", sessionId: result.sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (ownsThisRun()) lastErrorRef.current = message;
-        if (ownsThisRun() && !controller.signal.aborted) dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
+        if (ownsThisRun() && !controller.signal.aborted)
+          dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
       } finally {
         if (detached()) {
           detachedRunsRef.current.delete(runId);
@@ -990,10 +993,7 @@ export function App({
             break;
           }
           if (!task) {
-            notice(
-              "add the task on the line(s) below the /loop command — the composer text is the task",
-              "error",
-            );
+            notice("add the task on the line(s) below the /loop command — the composer text is the task", "error");
             break;
           }
           void runLoopTask(task, verifyCommand, {
@@ -1068,7 +1068,10 @@ export function App({
                 kind: "model",
                 ids: models.map((m) => m.id),
                 lines: modelPickerLines(models, modelRef.current),
-                index: Math.max(0, models.findIndex((m) => m.id === modelRef.current)),
+                index: Math.max(
+                  0,
+                  models.findIndex((m) => m.id === modelRef.current),
+                ),
               },
             });
           } else if (command.arg === "deepseek-reasoner") {
@@ -1357,7 +1360,12 @@ export function App({
           const target = isAbsolute(rel) ? rel : resolve(projectPath, rel);
           try {
             mkdirSync(dirname(target), { recursive: true });
-            writeFileSync(target, transcriptToMarkdown(stateRef.current.items, { title: `SeekForge session ${stateRef.current.sessionId ?? ""}` }));
+            writeFileSync(
+              target,
+              transcriptToMarkdown(stateRef.current.items, {
+                title: `SeekForge session ${stateRef.current.sessionId ?? ""}`,
+              }),
+            );
             notice(`exported transcript → ${rel}`);
           } catch (err) {
             notice(`export failed: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -1476,7 +1484,9 @@ export function App({
         case "mcp":
           for (const line of formatMcpLines(config.mcpServers, mcpToolSpecs)) notice(line);
           if (mcpEntries.length > 0) {
-            notice("(connections are per-process — restart the TUI to reconnect; edit config.json to add/remove servers)");
+            notice(
+              "(connections are per-process — restart the TUI to reconnect; edit config.json to add/remove servers)",
+            );
             void listMcpResources(mcpEntries)
               .then((rs) => {
                 if (rs.length === 0) return;
@@ -1649,7 +1659,12 @@ export function App({
             ...(lastErrorRef.current ? { lastError: lastErrorRef.current } : {}),
           });
           const copied = copyToClipboard(report);
-          notice(copied ? "bug report copied to the clipboard — paste it into a GitHub issue:" : "clipboard unavailable — report follows:", "dim");
+          notice(
+            copied
+              ? "bug report copied to the clipboard — paste it into a GitHub issue:"
+              : "clipboard unavailable — report follows:",
+            "dim",
+          );
           notice("  https://github.com/eilyeee/seekforge/issues/new");
           if (!copied) for (const l of report.split("\n").slice(0, 30)) notice(`  ${l}`);
           break;
@@ -1665,7 +1680,7 @@ export function App({
                 index: 0,
               },
             });
-            notice("themes — Enter applies for this session; set \"accent\" in config.json to persist");
+            notice('themes — Enter applies for this session; set "accent" in config.json to persist');
             break;
           }
           setAccent(loadTheme(command.arg).accent);
@@ -1674,7 +1689,10 @@ export function App({
         }
         case "balance":
           void fetchBalance(runConfigRef.current.apiKey ?? "", runConfigRef.current.baseUrl).then((b) =>
-            notice(b ? `balance: ${b.totalBalance} ${b.currency}` : "balance unavailable (network or auth)", b ? "dim" : "error"),
+            notice(
+              b ? `balance: ${b.totalBalance} ${b.currency}` : "balance unavailable (network or auth)",
+              b ? "dim" : "error",
+            ),
           );
           break;
         case "stash": {
@@ -1823,7 +1841,20 @@ export function App({
         }
       }
     },
-    [notice, projectPath, config.mcpServers, mcpToolSpecs, mcpEntries, runTask, runLoopTask, resumeLoopTask, openExternalEditor, quit, syncBg, setRawMode],
+    [
+      notice,
+      projectPath,
+      config.mcpServers,
+      mcpToolSpecs,
+      mcpEntries,
+      runTask,
+      runLoopTask,
+      resumeLoopTask,
+      openExternalEditor,
+      quit,
+      syncBg,
+      setRawMode,
+    ],
   );
 
   // ---------------------------------------------------------------------
@@ -1839,7 +1870,8 @@ export function App({
         timeout: 60_000,
         maxBuffer: 4_000_000,
       });
-      const output = `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd() || (r.error ? String(r.error.message) : "(no output)");
+      const output =
+        `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd() || (r.error ? String(r.error.message) : "(no output)");
       dispatch({ type: "shell", command, output, exitCode: r.status ?? 1 });
     },
     [projectPath],
@@ -2077,9 +2109,7 @@ export function App({
         if (/^[1-9]$/.test(rawInput)) {
           const idx = Number(rawInput) - 1;
           if (idx < numHunks) {
-            setHunkSelection((prev) =>
-              prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx].sort(),
-            );
+            setHunkSelection((prev) => (prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx].sort()));
           }
           return;
         }
@@ -2580,21 +2610,22 @@ export function App({
       {tabsState.tabs.length > 1 ? (
         <Box>
           {tabLabels(tabsState).map((label, i) => (
-            <Text key={i} inverse={i === tabsState.active} color={i === tabsState.active ? ACCENT : undefined} dimColor={i !== tabsState.active}>
+            <Text
+              key={i}
+              inverse={i === tabsState.active}
+              color={i === tabsState.active ? ACCENT : undefined}
+              dimColor={i !== tabsState.active}
+            >
               {" "}
               {label}{" "}
             </Text>
           ))}
-          <Text dimColor>  Ctrl+T switch · Ctrl+N new · /tab close</Text>
+          <Text dimColor> Ctrl+T switch · Ctrl+N new · /tab close</Text>
         </Box>
       ) : null}
       <Header projectPath={projectPath} model={state.model} {...(version ? { version } : {})} />
       {pager ? (
-        <Pager
-          lines={pager.lines}
-          offset={Math.min(pager.offset, Math.max(0, pager.lines.length - 1))}
-          height={20}
-        />
+        <Pager lines={pager.lines} offset={Math.min(pager.offset, Math.max(0, pager.lines.length - 1))} height={20} />
       ) : (
         <Box>
           {sidebar ? (
@@ -2612,9 +2643,7 @@ export function App({
       {state.permission ? (
         <PermissionPanel
           request={state.permission}
-          hunkSelection={
-            state.permission.hunks && state.permission.hunks.length > 1 ? hunkSelection : undefined
-          }
+          hunkSelection={state.permission.hunks && state.permission.hunks.length > 1 ? hunkSelection : undefined}
         />
       ) : null}
       {state.overlay?.kind === "question" ? (
@@ -2701,8 +2730,8 @@ export function App({
         {state.overlay?.kind === "args" ? (
           <ListOverlay
             title={`/${state.overlay.command}`}
-            lines={state.overlay.candidates.map(
-              (c) => `${(c.value || "(no argument)").padEnd(26)} ${c.hint ?? ""}`.trimEnd(),
+            lines={state.overlay.candidates.map((c) =>
+              `${(c.value || "(no argument)").padEnd(26)} ${c.hint ?? ""}`.trimEnd(),
             )}
             index={state.overlay.index}
             footer={t("picker.history")}
@@ -2752,7 +2781,9 @@ export function App({
             {runningShell && (bgRunning > 0 || state.detached.length > 0) ? "  ·  " : null}
             {bgRunning > 0 ? `${bgRunning} background task${bgRunning > 1 ? "s" : ""}` : null}
             {bgRunning > 0 && state.detached.length > 0 ? "  ·  " : null}
-            {state.detached.length > 0 ? `${state.detached.length} detached run${state.detached.length > 1 ? "s" : ""}` : null}
+            {state.detached.length > 0
+              ? `${state.detached.length} detached run${state.detached.length > 1 ? "s" : ""}`
+              : null}
           </Text>
         ) : null}
         {statusLineText ? <Text dimColor>{statusLineText}</Text> : null}

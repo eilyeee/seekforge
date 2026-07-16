@@ -1,12 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  createSkillScaffold,
-  importExternalSkill,
-  loadSkills,
-  removeSkill,
-  setSkillEnabled,
-} from "@seekforge/core";
+import { createSkillScaffold, importExternalSkill, loadSkills, removeSkill, setSkillEnabled } from "@seekforge/core";
 import { t } from "../i18n.js";
 
 export function skillListCommand(): void {
@@ -33,10 +27,7 @@ export function skillShowCommand(id: string): void {
   console.log(skill.content);
 }
 
-export function skillImportCommand(
-  sourcePath: string,
-  opts: { global?: boolean; force?: boolean },
-): void {
+export function skillImportCommand(sourcePath: string, opts: { global?: boolean; force?: boolean }): void {
   const targetRoot = opts.global
     ? join(homedir(), ".seekforge", "skills")
     : join(process.cwd(), ".seekforge", "skills");

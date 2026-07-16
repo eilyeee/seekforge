@@ -32,10 +32,7 @@ describe("chatStream mid-stream idle timeout", () => {
   });
 
   it("streams normally when data flows (idle timeout does not fire)", async () => {
-    const chunks = [
-      'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
-      "data: [DONE]\n\n",
-    ];
+    const chunks = ['data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', "data: [DONE]\n\n"];
     let i = 0;
     const enc = new TextEncoder();
     globalThis.fetch = (async () => ({
@@ -69,7 +66,8 @@ describe("chatStream mid-stream idle timeout", () => {
           read: async () =>
             sent
               ? { done: true, value: undefined }
-              : ((sent = true), {
+              : ((sent = true),
+                {
                   done: false,
                   value: enc.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'),
                 }),

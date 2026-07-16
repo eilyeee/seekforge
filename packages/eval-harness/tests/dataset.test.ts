@@ -109,19 +109,37 @@ describe("task validation", () => {
     expect(() => validateCheck({ type: "command_succeeds", command: "true", cwd: "sub" }, "c")).not.toThrow();
     expect(() => validateCheck({ type: "answer_matches", pattern: "x" }, "c")).not.toThrow();
     expect(() => validateCheck({ type: "memory_stats", field: "approved", equals: 1 }, "c")).not.toThrow();
-    expect(() => validateCheck({
-      type: "memory_fact_activity", fact: "[convention] x", activity: "exposures", equals: 0,
-    }, "c")).not.toThrow();
-    expect(() => validateTask({
-      ...valid,
-      runner: "loop",
-      loop: { verifyCommand: "npm test", maxIterations: 2, expectedStatus: "passed" },
-    }, "loop")).not.toThrow();
-    expect(() => validateTask({
-      ...valid,
-      runner: "session_scenario",
-      scenario: { steps: [{ type: "agent" }, { type: "agent", resume: true }] },
-    }, "scenario")).not.toThrow();
+    expect(() =>
+      validateCheck(
+        {
+          type: "memory_fact_activity",
+          fact: "[convention] x",
+          activity: "exposures",
+          equals: 0,
+        },
+        "c",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "loop",
+          loop: { verifyCommand: "npm test", maxIterations: 2, expectedStatus: "passed" },
+        },
+        "loop",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "session_scenario",
+          scenario: { steps: [{ type: "agent" }, { type: "agent", resume: true }] },
+        },
+        "scenario",
+      ),
+    ).not.toThrow();
   });
 
   it("rejects bad shapes", () => {
@@ -148,21 +166,65 @@ describe("task validation", () => {
     ]) {
       expect(() => validateCheck({ type: "file_contains", path, pattern: "x" }, "c"), path).toThrow(/within/);
     }
-    expect(() => validateCheck({
-      type: "file_contains", path: "safe\\nested/file.txt", pattern: "x",
-    }, "c")).not.toThrow();
+    expect(() =>
+      validateCheck(
+        {
+          type: "file_contains",
+          path: "safe\\nested/file.txt",
+          pattern: "x",
+        },
+        "c",
+      ),
+    ).not.toThrow();
     expect(() => validateCheck({ type: "memory_stats", field: "missing", equals: 0 }, "c")).toThrow(/memoryStats/);
-    expect(() => validateCheck({
-      type: "memory_fact_activity", fact: "x", activity: "bad", equals: 0,
-    }, "c")).toThrow(/activity/);
-    expect(() => validateTask({ ...valid, runner: "loop", loop: {
-      verifyCommand: "npm test", maxIterations: 0, expectedStatus: "passed",
-    } }, "t")).toThrow(/maxIterations/);
-    expect(() => validateTask({ ...valid, runner: "session_scenario", scenario: {
-      steps: [{ type: "agent", resume: true }],
-    } }, "t")).toThrow(/earlier agent/);
-    expect(() => validateTask({ ...valid, runner: "session_scenario", scenario: {
-      steps: [{ type: "memory.approve", key: "missing" }, { type: "agent" }],
-    } }, "t")).toThrow(/unknown memory alias/);
+    expect(() =>
+      validateCheck(
+        {
+          type: "memory_fact_activity",
+          fact: "x",
+          activity: "bad",
+          equals: 0,
+        },
+        "c",
+      ),
+    ).toThrow(/activity/);
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "loop",
+          loop: {
+            verifyCommand: "npm test",
+            maxIterations: 0,
+            expectedStatus: "passed",
+          },
+        },
+        "t",
+      ),
+    ).toThrow(/maxIterations/);
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "session_scenario",
+          scenario: {
+            steps: [{ type: "agent", resume: true }],
+          },
+        },
+        "t",
+      ),
+    ).toThrow(/earlier agent/);
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "session_scenario",
+          scenario: {
+            steps: [{ type: "memory.approve", key: "missing" }, { type: "agent" }],
+          },
+        },
+        "t",
+      ),
+    ).toThrow(/unknown memory alias/);
   });
 });

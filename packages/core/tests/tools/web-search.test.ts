@@ -43,12 +43,10 @@ const DDG_FIXTURE = `
 
 describe("decodeDdgUrl", () => {
   it("decodes the uddg redirect target", () => {
-    expect(decodeDdgUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fnodejs.org%2Fdocs")).toBe(
-      "https://nodejs.org/docs",
+    expect(decodeDdgUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fnodejs.org%2Fdocs")).toBe("https://nodejs.org/docs");
+    expect(decodeDdgUrl("/l/?uddg=https%3A%2F%2Fexample.com%2Fguide%3Fa%3D1%26b%3D2")).toBe(
+      "https://example.com/guide?a=1&b=2",
     );
-    expect(
-      decodeDdgUrl("/l/?uddg=https%3A%2F%2Fexample.com%2Fguide%3Fa%3D1%26b%3D2"),
-    ).toBe("https://example.com/guide?a=1&b=2");
   });
 
   it("rejects non-http(s) and unparseable hrefs", () => {

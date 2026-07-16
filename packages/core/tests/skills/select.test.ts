@@ -27,10 +27,7 @@ describe("selectSkills", () => {
 
   it("boosts skills whose appliesTo.frameworks match package.json deps", () => {
     const ws = makeTempDir();
-    fs.writeFileSync(
-      path.join(ws, "package.json"),
-      JSON.stringify({ name: "x", dependencies: { vue: "^3.4.0" } }),
-    );
+    fs.writeFileSync(path.join(ws, "package.json"), JSON.stringify({ name: "x", dependencies: { vue: "^3.4.0" } }));
     const vueSkill = makeSkill("vue-skill", { appliesTo: { frameworks: ["vue"] } });
 
     const withWs = selectSkills("anything at all", [vueSkill], { workspace: ws });

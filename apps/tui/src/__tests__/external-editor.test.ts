@@ -12,8 +12,10 @@ describe("parseEditorCommand", () => {
   });
 
   it("preserves quoted and escaped arguments without a shell", () => {
-    expect(parseEditorCommand("'/Applications/Visual Studio Code.app/Contents/MacOS/Electron' --wait"))
-      .toEqual(["/Applications/Visual Studio Code.app/Contents/MacOS/Electron", "--wait"]);
+    expect(parseEditorCommand("'/Applications/Visual Studio Code.app/Contents/MacOS/Electron' --wait")).toEqual([
+      "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+      "--wait",
+    ]);
     expect(parseEditorCommand('code --profile "Work Profile" path\\ with\\ spaces')).toEqual([
       "code",
       "--profile",

@@ -126,10 +126,7 @@ export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
  */
 export function unknownConfigKeys(projectPath: string): string[] {
   const unknown = new Set<string>();
-  for (const path of [
-    join(homedir(), ".seekforge", "config.json"),
-    join(projectPath, ".seekforge", "config.json"),
-  ]) {
+  for (const path of [join(homedir(), ".seekforge", "config.json"), join(projectPath, ".seekforge", "config.json")]) {
     const cfg = readJson(path) as unknown;
     if (!isPlainObject(cfg)) continue;
     for (const key of Object.keys(cfg)) {
@@ -146,10 +143,7 @@ export function unknownConfigKeys(projectPath: string): string[] {
  */
 export function configParseErrors(projectPath: string): string[] {
   const broken: string[] = [];
-  for (const path of [
-    join(homedir(), ".seekforge", "config.json"),
-    join(projectPath, ".seekforge", "config.json"),
-  ]) {
+  for (const path of [join(homedir(), ".seekforge", "config.json"), join(projectPath, ".seekforge", "config.json")]) {
     let raw: string;
     try {
       raw = readFileSync(path, "utf8");

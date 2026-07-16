@@ -29,9 +29,11 @@ export function validateTeamPlan(raw: unknown, availableAgentIds?: ReadonlySet<s
     const id = typeof value.id === "string" ? value.id.trim() : "";
     const agentId = typeof value.agentId === "string" ? value.agentId.trim() : "";
     const task = typeof value.task === "string" ? value.task.trim() : "";
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id)) return { ok: false, error: "member ids must be 1-64 letters, digits, underscores, or hyphens" };
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id))
+      return { ok: false, error: "member ids must be 1-64 letters, digits, underscores, or hyphens" };
     if (ids.has(id)) return { ok: false, error: `duplicate member id: ${id}` };
-    if (!agentId || (availableAgentIds && !availableAgentIds.has(agentId))) return { ok: false, error: `unknown agent for ${id}: ${agentId || "(empty)"}` };
+    if (!agentId || (availableAgentIds && !availableAgentIds.has(agentId)))
+      return { ok: false, error: `unknown agent for ${id}: ${agentId || "(empty)"}` };
     if (!task) return { ok: false, error: `member ${id} needs a task` };
     if (!Array.isArray(value.dependsOn) || !value.dependsOn.every((dependency) => typeof dependency === "string")) {
       return { ok: false, error: `member ${id} dependencies must be strings` };
@@ -60,11 +62,17 @@ export function validateTeamPlan(raw: unknown, availableAgentIds?: ReadonlySet<s
   if (visited !== members.length) return { ok: false, error: "team dependencies contain a cycle" };
 
   const maxConcurrency = raw.maxConcurrency ?? Math.min(3, members.length);
-  if (typeof maxConcurrency !== "number" || !Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 6) {
+  if (
+    typeof maxConcurrency !== "number" ||
+    !Number.isSafeInteger(maxConcurrency) ||
+    maxConcurrency < 1 ||
+    maxConcurrency > 6
+  ) {
     return { ok: false, error: "max concurrency must be an integer from 1 to 6" };
   }
   const failurePolicy = raw.failurePolicy ?? "stop";
-  if (failurePolicy !== "stop" && failurePolicy !== "continue") return { ok: false, error: "failure policy must be stop or continue" };
+  if (failurePolicy !== "stop" && failurePolicy !== "continue")
+    return { ok: false, error: "failure policy must be stop or continue" };
   return { ok: true, plan: { members, maxConcurrency, failurePolicy } };
 }
 

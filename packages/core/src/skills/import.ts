@@ -56,7 +56,10 @@ export function parseFrontmatterSkill(markdown: string): ParsedExternalSkill {
     if (value === "|" || value === ">") {
       // Block scalar: consume the indented lines that follow.
       const block: string[] = [];
-      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")) {
+      while (
+        i + 1 < lines.length &&
+        (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")
+      ) {
         i++;
         block.push((lines[i] as string).trim());
       }
@@ -96,7 +99,10 @@ export type ImportSkillOptions = {
  * Imports a SKILL.md file (or a directory containing one) into targetRoot.
  * Returns the created skill directory.
  */
-export function importExternalSkill(sourcePath: string, opts: ImportSkillOptions): { dir: string; skill: ParsedExternalSkill } {
+export function importExternalSkill(
+  sourcePath: string,
+  opts: ImportSkillOptions,
+): { dir: string; skill: ParsedExternalSkill } {
   let file = sourcePath;
   let stat: fs.Stats;
   try {

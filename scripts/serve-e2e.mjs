@@ -22,11 +22,10 @@ if (!workspace) {
 }
 
 const repo = new URL("..", import.meta.url).pathname;
-const child = spawn(
-  `${repo}/node_modules/.bin/tsx`,
-  [`${repo}/apps/cli/src/index.ts`, "serve", "--port", "0"],
-  { cwd: workspace, stdio: ["ignore", "pipe", "pipe"] },
-);
+const child = spawn(`${repo}/node_modules/.bin/tsx`, [`${repo}/apps/cli/src/index.ts`, "serve", "--port", "0"], {
+  cwd: workspace,
+  stdio: ["ignore", "pipe", "pipe"],
+});
 
 let baseUrl = "";
 let token = "";
@@ -95,7 +94,9 @@ await new Promise((resolve, reject) => {
   ws.on("open", resolve);
   ws.on("error", reject);
 });
-ws.send(JSON.stringify({ type: "start", task: "这个项目的测试命令是什么？一句话回答", mode: "ask", approvalMode: "confirm" }));
+ws.send(
+  JSON.stringify({ type: "start", task: "这个项目的测试命令是什么？一句话回答", mode: "ask", approvalMode: "confirm" }),
+);
 
 for (let i = 0; i < 600 && !done; i++) await sleep(200);
 if (done !== "session.completed") fail(`session did not complete (got ${done}; events: ${events.join(",")})`);

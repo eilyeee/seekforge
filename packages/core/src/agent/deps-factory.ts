@@ -185,9 +185,7 @@ export function buildAgentCoreDeps(
     ...(input.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: input.memoryAutoApproveConfidence }
       : {}),
-    ...(typeof input.lintCommand === "string" && input.lintCommand.trim()
-      ? { lintCommand: input.lintCommand }
-      : {}),
+    ...(typeof input.lintCommand === "string" && input.lintCommand.trim() ? { lintCommand: input.lintCommand } : {}),
     ...(input.autoLint === false ? { autoLint: false } : {}),
     ...(input.editFormat ? { editFormat: input.editFormat } : {}),
   };

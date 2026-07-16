@@ -50,8 +50,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "loop.verifyCommand must be a non-empty string");
       return true;
     }
-    if (maxIterations !== undefined &&
-      (!Number.isSafeInteger(maxIterations) || (maxIterations as number) <= 0 || (maxIterations as number) > MAX_LOOP_ITERATIONS)) {
+    if (
+      maxIterations !== undefined &&
+      (!Number.isSafeInteger(maxIterations) ||
+        (maxIterations as number) <= 0 ||
+        (maxIterations as number) > MAX_LOOP_ITERATIONS)
+    ) {
       sendApiError(res, 400, "bad_request", `maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
       return true;
     }
@@ -89,7 +93,8 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               costBudgetUsd: maxCostUsd,
               approvalMode: "acceptEdits",
               signal: controller.signal,
-              onEvent: (event) => rest.runManager.appendFrame(workspace, ledgerRun.runId, { type: "loop.event", event }),
+              onEvent: (event) =>
+                rest.runManager.appendFrame(workspace, ledgerRun.runId, { type: "loop.event", event }),
             },
           );
           finalSessionId = result.sessionId;
@@ -97,7 +102,9 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
             status: result.status === "passed" ? "succeeded" : result.status === "cancelled" ? "cancelled" : "failed",
             sessionId: result.sessionId,
             costUsd: result.costUsd,
-            ...(result.status !== "passed" ? { error: { code: result.status, message: `loop ended with status ${result.status}` } } : {}),
+            ...(result.status !== "passed"
+              ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
+              : {}),
           });
         } catch (err) {
           rest.runManager.update(workspace, ledgerRun.runId, {

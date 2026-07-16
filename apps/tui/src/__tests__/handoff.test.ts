@@ -61,9 +61,7 @@ describe("buildHandoff", () => {
   });
 
   it("an all-bullet assistant message is a list answer, not open questions", () => {
-    const items: ChatItem[] = [
-      { kind: "assistant", id: "a1", text: "- alpha\n- beta", streaming: false },
-    ];
+    const items: ChatItem[] = [{ kind: "assistant", id: "a1", text: "- alpha\n- beta", streaming: false }];
     const md = buildHandoff({ items, model: "m", costUsd: 0 });
     expect(md).toContain("## Open questions\n\n- (none");
   });
@@ -114,10 +112,7 @@ describe("listHandoffs / latestHandoff", () => {
     writeFileSync(join(dir, "notes.txt"), "ignored");
 
     const list = listHandoffs(workspace);
-    expect(list).toEqual([
-      join(dir, "handoff-20260612T100000.md"),
-      join(dir, "handoff-20260101T000000.md"),
-    ]);
+    expect(list).toEqual([join(dir, "handoff-20260612T100000.md"), join(dir, "handoff-20260101T000000.md")]);
 
     const preview = latestHandoff(workspace);
     expect(preview!.split("\n")).toHaveLength(10);

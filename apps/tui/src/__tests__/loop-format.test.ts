@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LoopEvent, LoopResult } from "@seekforge/core";
-import {
-  formatLoopEvent,
-  formatLoopSummary,
-  loopOutputTail,
-  loopStatusTone,
-} from "../loop-format.js";
+import { formatLoopEvent, formatLoopSummary, loopOutputTail, loopStatusTone } from "../loop-format.js";
 
 function result(overrides: Partial<LoopResult> = {}): LoopResult {
   return {
@@ -20,8 +15,9 @@ function result(overrides: Partial<LoopResult> = {}): LoopResult {
 
 describe("formatLoopEvent warnings", () => {
   it("surfaces persistence warnings", () => {
-    expect(formatLoopEvent({ type: "loop.warning", warning: "persistence", message: "disk full" }))
-      .toEqual([{ text: "  ! loop persistence warning: disk full", tone: "error" }]);
+    expect(formatLoopEvent({ type: "loop.warning", warning: "persistence", message: "disk full" })).toEqual([
+      { text: "  ! loop persistence warning: disk full", tone: "error" },
+    ]);
   });
 });
 
@@ -81,9 +77,7 @@ describe("formatLoopEvent", () => {
 
   it("formats run.completed with a 4-decimal cost", () => {
     const e: LoopEvent = { type: "run.completed", iteration: 1, costUsd: 0.0123 };
-    expect(formatLoopEvent(e)).toEqual([
-      { text: "  loop · iteration 1 run complete · $0.0123", tone: "dim" },
-    ]);
+    expect(formatLoopEvent(e)).toEqual([{ text: "  loop · iteration 1 run complete · $0.0123", tone: "dim" }]);
   });
 
   it("formats live verification output as a bounded dim line", () => {

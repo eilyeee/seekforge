@@ -15,7 +15,13 @@ import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
-import { cleanupLoopWorktree, createLoopWorktree, formatLoopWorktree, resolveLoopRepository, type LoopWorktree } from "../loop-worktree.js";
+import {
+  cleanupLoopWorktree,
+  createLoopWorktree,
+  formatLoopWorktree,
+  resolveLoopRepository,
+  type LoopWorktree,
+} from "../loop-worktree.js";
 
 export type LoopOptions = {
   /** Verify command; exit 0 == success. Required. */
@@ -116,10 +122,7 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
   let worktree: LoopWorktree | undefined;
   if (opts.worktree !== undefined && opts.worktree !== false) {
     try {
-      worktree = await createLoopWorktree(
-        basePath,
-        typeof opts.worktree === "string" ? opts.worktree : undefined,
-      );
+      worktree = await createLoopWorktree(basePath, typeof opts.worktree === "string" ? opts.worktree : undefined);
       console.log(formatLoopWorktree(worktree));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
@@ -225,9 +228,11 @@ export async function loopDeleteCommand(loopId: string): Promise<void> {
 export async function loopCleanupCommand(name: string, opts: { force?: boolean }): Promise<void> {
   try {
     const removed = await cleanupLoopWorktree(process.cwd(), name, opts.force === true);
-    console.log(removed.branchRemoved === false
-      ? `Removed loop worktree: ${removed.path}\nRetained branch (remove manually): ${removed.branch}`
-      : `Removed loop worktree: ${removed.path}\nRemoved branch: ${removed.branch}`);
+    console.log(
+      removed.branchRemoved === false
+        ? `Removed loop worktree: ${removed.path}\nRetained branch (remove manually): ${removed.branch}`
+        : `Removed loop worktree: ${removed.path}\nRemoved branch: ${removed.branch}`,
+    );
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
@@ -241,7 +246,7 @@ async function executeLoop(
   resume?: ResumeAutoLoop,
   prepared?: LoopPreflight,
 ): Promise<void> {
-  const preflight = prepared ?? await preflightLoop(projectPath, opts);
+  const preflight = prepared ?? (await preflightLoop(projectPath, opts));
   if (!preflight) return;
   const { config, model } = preflight;
   await runPreparedLoop(taskOrLoopId, opts, projectPath, config, model, resume);
@@ -249,7 +254,10 @@ async function executeLoop(
 
 type LoopPreflight = { config: ReturnType<typeof loadConfig>; model: string | undefined };
 
-async function preflightLoop(projectPath: string, opts: LoopOptions | LoopResumeOptions): Promise<LoopPreflight | undefined> {
+async function preflightLoop(
+  projectPath: string,
+  opts: LoopOptions | LoopResumeOptions,
+): Promise<LoopPreflight | undefined> {
   let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(projectPath, undefined, opts.profile);
@@ -286,7 +294,6 @@ async function runPreparedLoop(
   model: string | undefined,
   resume?: ResumeAutoLoop,
 ): Promise<void> {
-
   // The loop is inherently autonomous: it must apply edits without a human in
   // the loop. We always run in acceptEdits. Without -y we still proceed (that
   // is the sensible default for a "drive to green" command) but print a note.
@@ -336,9 +343,7 @@ async function runPreparedLoop(
           workspace: projectPath,
           verifyCommand: (opts as LoopOptions).verify,
           maxIterations: (opts as LoopOptions).maxIters ?? 8,
-          ...((opts as LoopOptions).budget !== undefined
-            ? { costBudgetUsd: (opts as LoopOptions).budget }
-            : {}),
+          ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
           approvalMode: "acceptEdits",
           ...common,
         });

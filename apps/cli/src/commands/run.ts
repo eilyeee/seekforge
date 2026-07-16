@@ -138,7 +138,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   const format: OutputFormat = opts.outputFormat ?? "text";
   const machine = isMachineFormat(format);
 
-
   const model = opts.model ?? config.model;
   if (model === "deepseek-reasoner") {
     // reasoner has no function calling; the fallback text protocol is not

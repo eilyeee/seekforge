@@ -124,14 +124,10 @@ export function DiffView() {
       {/* Body */}
       <div className="flex-1 space-y-4 overflow-auto px-6 py-5">
         {error && (
-          <div className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            {error}
-          </div>
+          <div className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
         )}
 
-        {!error && loading && files === null && (
-          <p className="text-sm text-tertiary">{t("diff.loading")}</p>
-        )}
+        {!error && loading && files === null && <p className="text-sm text-tertiary">{t("diff.loading")}</p>}
 
         {!error && !loading && notGit && (
           <EmptyState
@@ -158,8 +154,7 @@ export function DiffView() {
             <div className="min-w-0">
               <p className="text-sm font-medium text-primary">{t("diff.title")}</p>
               <p className="mt-0.5 font-mono text-xs text-secondary">
-                {t("diff.fileCount", { count: totals.files })}{" "}
-                <span className="text-ok">+{totals.additions}</span>{" "}
+                {t("diff.fileCount", { count: totals.files })} <span className="text-ok">+{totals.additions}</span>{" "}
                 <span className="text-danger">-{totals.deletions}</span>
               </p>
             </div>

@@ -4,7 +4,7 @@
  * this component just paints the current pagerWindow plus a position gauge.
  */
 
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import { pagerWindow } from "../pager-source.js";
 import { t } from "../strings.js";

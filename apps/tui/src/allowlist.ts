@@ -12,7 +12,10 @@
  * "git push origin main" → "git push"; "node scripts/x.js" → "node".
  */
 export function sessionAllowPrefix(command: string): string {
-  const tokens = command.trim().split(/\s+/).filter((t) => t !== "");
+  const tokens = command
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t !== "");
   const first = tokens[0] ?? "";
   const second = tokens[1];
   if (second === undefined) return first;

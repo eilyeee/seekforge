@@ -76,12 +76,7 @@ async function routes({ req, res, url, method, workspace }: RouteCtx): Promise<v
       }
     } catch (error) {
       if (!(error instanceof SessionBusyError)) throw error;
-      return sendApiError(
-        res,
-        409,
-        "session_busy",
-        "cannot modify files while the workspace has an active session",
-      );
+      return sendApiError(res, 409, "session_busy", "cannot modify files while the workspace has an active session");
     }
   }
 

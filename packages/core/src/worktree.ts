@@ -125,10 +125,7 @@ function physicalWorktreesRoot(basePath: string): string {
  * base repo. Verifies `basePath` is a work tree (throws `not_a_git_repo`
  * otherwise) and keeps the checkouts out of `git status` via info/exclude.
  */
-export async function createWorktree(
-  basePath: string,
-  slug: string,
-): Promise<{ path: string; branch: string }> {
+export async function createWorktree(basePath: string, slug: string): Promise<{ path: string; branch: string }> {
   if (!WORKTREE_SLUG_RE.test(slug)) {
     throw new WorktreeGitError("git_error", `invalid worktree slug: ${slug}`);
   }
@@ -202,9 +199,7 @@ export async function mergeWorktree(
     // Always abort, even if collecting the conflict list throws, so the base
     // repo is never left mid-merge (which blocks all later operations on it).
     try {
-      const files = (await git(basePath, ["diff", "--name-only", "--diff-filter=U"]))
-        .split("\n")
-        .filter(Boolean);
+      const files = (await git(basePath, ["diff", "--name-only", "--diff-filter=U"])).split("\n").filter(Boolean);
       return { conflict: true, files };
     } finally {
       await git(basePath, ["merge", "--abort"]).catch(() => undefined);
@@ -236,7 +231,6 @@ export async function listGitWorktrees(basePath: string): Promise<GitWorktreeEnt
       current = { path: field.slice("worktree ".length), branch: "", head: "" };
       entries.push(current);
     } else if (!current) {
-      continue;
     } else if (field.startsWith("HEAD ")) {
       current.head = field.slice("HEAD ".length);
     } else if (field.startsWith("branch ")) {

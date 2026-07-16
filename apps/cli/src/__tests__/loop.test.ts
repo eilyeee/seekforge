@@ -162,19 +162,28 @@ test("formatLoopState includes management-relevant fields", () => {
 });
 
 test("cleanup safety accepts only seekforge branches inside retained root", () => {
-  assert.equal(isRetainedLoopWorktree("/repo", {
-    path: "/repo/.seekforge/worktrees/loop-fix",
-    branch: "seekforge/loop-fix",
-  }), true);
+  assert.equal(
+    isRetainedLoopWorktree("/repo", {
+      path: "/repo/.seekforge/worktrees/loop-fix",
+      branch: "seekforge/loop-fix",
+    }),
+    true,
+  );
   assert.equal(isRetainedLoopWorktree("/repo", { path: "/repo", branch: "main" }), false);
-  assert.equal(isRetainedLoopWorktree("/repo", {
-    path: "/repo/.seekforge/worktrees/../outside",
-    branch: "seekforge/loop-outside",
-  }), false);
-  assert.equal(isRetainedLoopWorktree("/repo", {
-    path: "/repo/.seekforge/worktrees/loop-fix",
-    branch: "feature/fix",
-  }), false);
+  assert.equal(
+    isRetainedLoopWorktree("/repo", {
+      path: "/repo/.seekforge/worktrees/../outside",
+      branch: "seekforge/loop-outside",
+    }),
+    false,
+  );
+  assert.equal(
+    isRetainedLoopWorktree("/repo", {
+      path: "/repo/.seekforge/worktrees/loop-fix",
+      branch: "feature/fix",
+    }),
+    false,
+  );
 });
 
 test("worktree operations resolve the base checkout from a subdirectory", { timeout: 120_000 }, async () => {
@@ -205,18 +214,22 @@ test("worktree operations resolve the base checkout from a subdirectory", { time
     createLoopState({ ...stateInput, workspace: created.path });
     const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
     const tsxLoader = resolve(cliDir, "node_modules/tsx/dist/loader.mjs");
-    const duplicate = spawnSync(process.execPath, ["--import", tsxLoader, resolve(cliDir, "src/index.ts"), "loop-show", "duplicate-loop"], {
-      cwd: canonicalRepo,
-      encoding: "utf8",
-    });
+    const duplicate = spawnSync(
+      process.execPath,
+      ["--import", tsxLoader, resolve(cliDir, "src/index.ts"), "loop-show", "duplicate-loop"],
+      {
+        cwd: canonicalRepo,
+        encoding: "utf8",
+      },
+    );
     assert.notEqual(duplicate.status, 0);
     assert.match(`${duplicate.stdout}${duplicate.stderr}`, /ambiguous across workspaces/);
 
     const removed = await cleanupLoopWorktree(subdir, "loop-subdir", true);
     assert.equal(removed.branch, "seekforge/loop-subdir");
     assert.equal(removed.branchRemoved, true);
-    assert.throws(
-      () => execFileSync("git", ["show-ref", "--verify", "refs/heads/seekforge/loop-subdir"], { cwd: repo }),
+    assert.throws(() =>
+      execFileSync("git", ["show-ref", "--verify", "refs/heads/seekforge/loop-subdir"], { cwd: repo }),
     );
   } finally {
     rmSync(repo, { recursive: true, force: true });
@@ -258,13 +271,17 @@ test("loop state management still works outside a git repository", { timeout: 12
       maxIterations: 1,
     });
     const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-    const result = spawnSync(process.execPath, [
-      "--import",
-      resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
-      resolve(cliDir, "src/index.ts"),
-      "loop-show",
-      "nongit-loop",
-    ], { cwd: workspace, encoding: "utf8" });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-show",
+        "nongit-loop",
+      ],
+      { cwd: workspace, encoding: "utf8" },
+    );
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /loop: nongit-loop/);
   } finally {

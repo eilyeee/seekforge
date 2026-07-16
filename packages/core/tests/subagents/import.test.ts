@@ -104,7 +104,7 @@ describe("importExternalAgent", () => {
 
     const written = readFileSync(join(dir, "AGENT.md"), "utf8");
     expect(written.startsWith("---\n")).toBe(true);
-    expect(written).toContain("mode: \"ask\"");
+    expect(written).toContain('mode: "ask"');
     expect(written).toContain("# Meta-Conductor"); // original body preserved
 
     const loaded = loadAgentDefinitionsFromDirs([{ scope: "project", path: target }]);

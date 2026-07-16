@@ -100,10 +100,7 @@ describe("search_memory tool", () => {
 
   it("an empty query returns always-include (command/tech) facts", async () => {
     const ws = makeWorkspace();
-    writeProjectMemory(
-      ws,
-      ["- [command] build with pnpm build", "- [convention] PRs need two reviewers"].join("\n"),
-    );
+    writeProjectMemory(ws, ["- [command] build with pnpm build", "- [convention] PRs need two reviewers"].join("\n"));
     const text = await search(ws, "   ");
     expect(text).toContain("build with pnpm build");
   });

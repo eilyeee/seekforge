@@ -41,10 +41,12 @@ export const views = {
     "chat.emptyLine1": "Describe a coding task to start a session.",
     "chat.emptyLine2": "Enter sends · Shift+Enter inserts a newline",
     "chat.home.title": "Welcome back — what should we build?",
-    "chat.home.desc": "SeekForge is your coding partner: explore the codebase, fix issues, verify changes, and keep evolving.",
+    "chat.home.desc":
+      "SeekForge is your coding partner: explore the codebase, fix issues, verify changes, and keep evolving.",
     "chat.home.quickActions": "Quick actions",
     "chat.home.action.explore": "Explore the codebase",
-    "chat.home.action.exploreTask": "Explore this codebase and give me an overview of the main modules and entry points.",
+    "chat.home.action.exploreTask":
+      "Explore this codebase and give me an overview of the main modules and entry points.",
     "chat.home.action.fixTests": "Fix failing tests",
     "chat.home.action.fixTestsTask": "Run the test suite, find the failing cases, and fix them.",
     "chat.home.action.viewDiff": "Review changes",
@@ -60,17 +62,21 @@ export const views = {
     "chat.composerPlaceholder": "What should the agent do? ({slash} commands · {at} files)",
     "chat.backtrackTitle": "Rewind conversation to here?",
     "chat.backtrackConfirm": "Rewind",
-    "chat.backtrackBody": "This message and everything after it are removed from the session transcript. The next message continues from the earlier state.",
+    "chat.backtrackBody":
+      "This message and everything after it are removed from the session transcript. The next message continues from the earlier state.",
     "chat.backtrackRestore": "also restore files changed by the removed turns (checkpoint restore)",
     "chat.backtrackError": "backtrack failed: {error}",
     "chat.closeRunningTitle": "Close running tab?",
-    "chat.closeRunningBody": "This tab has a running session. Closing it disconnects the socket and cancels the run on the server.",
+    "chat.closeRunningBody":
+      "This tab has a running session. Closing it disconnects the socket and cancels the run on the server.",
     "chat.discardTitle": "Discard worktree?",
     "chat.discardConfirm": "Discard",
-    "chat.discardBody": "The worktree checkout and its branch are deleted permanently — any unmerged work in this session is lost. The tab closes too.",
+    "chat.discardBody":
+      "The worktree checkout and its branch are deleted permanently — any unmerged work in this session is lost. The tab closes too.",
     "chat.mergedTitle": "Merged back",
     "chat.mergedConfirm": "Delete worktree & close tab",
-    "chat.mergedBody": "The worktree branch was merged into the base workspace. Delete the worktree and close this tab? (Cancel keeps both — you can continue working and merge again later.)",
+    "chat.mergedBody":
+      "The worktree branch was merged into the base workspace. Delete the worktree and close this tab? (Cancel keeps both — you can continue working and merge again later.)",
     "chat.mergedToast": "Worktree merged back",
     "chat.discardToast": "Worktree discarded",
     "chat.conflictTitle": "Merge conflict — nothing was changed",
@@ -204,7 +210,7 @@ export const views = {
     "agents.loading": "Loading…",
     "agents.backBtn": "← Back",
     "agents.askBtn": "Ask",
-    "agents.askPrefill": "Use the \"{name}\" subagent ({id}) to: ",
+    "agents.askPrefill": 'Use the "{name}" subagent ({id}) to: ',
     "agents.emptyTitle": "No agents configured",
     "agents.emptyDescription": "Define agents in .seekforge/agents to dispatch specialized subagents.",
     "agents.fieldModel": "model",
@@ -247,7 +253,8 @@ export const views = {
     "memory.scopeUser": "User",
     "memory.scopeProjectHint": "Writes to this project's .seekforge/memory/project.md.",
     "memory.scopeUserHint": "Writes to your user memory (~/.seekforge), applied across all projects.",
-    "memory.description": "Manage the project knowledge, preferences, and working context SeekForge remembers, so every conversation starts sharper.",
+    "memory.description":
+      "Manage the project knowledge, preferences, and working context SeekForge remembers, so every conversation starts sharper.",
     "memory.filterPlaceholder": "Filter facts & candidates…",
     "memory.loading": "Loading…",
     "memory.emptyTitle": "No memory yet",
@@ -287,7 +294,8 @@ export const views = {
     "memory.stats.na": "n/a",
     // Compact control
     "memory.compact.title": "compact memory",
-    "memory.compact.description": "Collapse exact duplicates and merge near-duplicate bullets. Optionally archive stale, never-used facts.",
+    "memory.compact.description":
+      "Collapse exact duplicates and merge near-duplicate bullets. Optionally archive stale, never-used facts.",
     "memory.compact.pruneLabel": "prune unused facts older than (days)",
     "memory.compact.prunePlaceholder": "e.g. 60 (blank = don't prune)",
     "memory.compact.previewBtn": "Preview",
@@ -387,8 +395,10 @@ export const views = {
     "settings.reasoningDefault": "(API default)",
     "settings.reasoningHigh": "high",
     "settings.reasoningMax": "max",
-    "settings.modelsHint": "The models offered in the chat-box picker. Add any id (other OpenAI-compatible providers too — set baseUrl + apiKey for those).",
-    "settings.sandboxHint": "Wraps commands in seatbelt (macOS) / bwrap (Linux). Hard-fails if requested but unavailable.",
+    "settings.modelsHint":
+      "The models offered in the chat-box picker. Add any id (other OpenAI-compatible providers too — set baseUrl + apiKey for those).",
+    "settings.sandboxHint":
+      "Wraps commands in seatbelt (macOS) / bwrap (Linux). Hard-fails if requested but unavailable.",
     "settings.modelsPlaceholder": "deepseek-v4-flash, deepseek-v4-pro, gpt-4o",
     "settings.apiKeyPlaceholder": "sk-…",
     // Agent behaviour knobs
@@ -398,7 +408,8 @@ export const views = {
     "settings.planModelPlaceholder": "deepseek-v4-pro (blank = default model)",
     "settings.escalateOnFailureLabel": "escalateOnFailure — retry a failed task once with a stronger model",
     "settings.memoryAutoApproveLabel": "memoryAutoApproveConfidence (0..1, blank = off)",
-    "settings.memoryAutoApproveHint": "Auto-approve extracted memory candidates at or above this confidence. Blank disables auto-approval.",
+    "settings.memoryAutoApproveHint":
+      "Auto-approve extracted memory candidates at or above this confidence. Blank disables auto-approval.",
     "settings.memoryAutoApprovePlaceholder": "e.g. 0.9 (blank = off)",
     // MCP add / remove
     "settings.mcpAddTitle": "Add MCP server",
@@ -439,7 +450,8 @@ export const views = {
     "settings.mcpRemoveBtn": "Remove",
     "settings.mcpRemoveTitle": "Remove MCP server {name}?",
     "settings.mcpRemoveBody": "This removes the server from the configuration. This cannot be undone.",
-    "settings.mcpRemoveBodyScoped": "This removes the server from {scope} configuration. A shadowed lower-precedence entry may become active.",
+    "settings.mcpRemoveBodyScoped":
+      "This removes the server from {scope} configuration. A shadowed lower-precedence entry may become active.",
     "settings.mcpRemoveConfirm": "Remove",
 
     // ── DiagnosticsView ───────────────────────────────────────────
@@ -466,7 +478,8 @@ export const views = {
     "diagnostics.modelsNone": "no models configured",
     "diagnostics.workspace": "workspace",
     "diagnostics.error": "Could not run diagnostics: {error}",
-    "diagnostics.unsupported": "Diagnostics aren't available on the running server — it predates this feature. Restart the desktop app (or rebuild the server) to update it.",
+    "diagnostics.unsupported":
+      "Diagnostics aren't available on the running server — it predates this feature. Restart the desktop app (or rebuild the server) to update it.",
     // ── FilesView ─────────────────────────────────────────────────
     "files.title": "Files",
     "files.description": "Browse and edit workspace files. Open AGENTS.md to edit the agent rules.",
@@ -570,7 +583,8 @@ export const views = {
     "security.statusTitle": "Change finding status",
     "security.statusReason": "Reason for the lifecycle change",
     "security.fixTitle": "Fix {id}",
-    "security.fixWarning": "The fix runs an edit-mode Agent, then the exact verification commands below, followed by a fresh security scan.",
+    "security.fixWarning":
+      "The fix runs an edit-mode Agent, then the exact verification commands below, followed by a fresh security scan.",
     "security.maxCost": "maximum Agent cost (USD)",
     "security.verifyCommand": "verification command",
     "security.lintCommand": "lint / typecheck command (optional)",
@@ -651,7 +665,8 @@ export const views = {
     "chat.discardBody": "工作树检出及其分支将被永久删除——本次会话中所有未合并的修改都将丢失。标签页也将关闭。",
     "chat.mergedTitle": "合并完成",
     "chat.mergedConfirm": "删除工作树并关闭标签页",
-    "chat.mergedBody": "工作树分支已合并到基础工作区。是否删除工作树并关闭此标签页？（取消保留两者——您可以继续工作，稍后再次合并。）",
+    "chat.mergedBody":
+      "工作树分支已合并到基础工作区。是否删除工作树并关闭此标签页？（取消保留两者——您可以继续工作，稍后再次合并。）",
     "chat.mergedToast": "工作树已合并",
     "chat.discardToast": "工作树已放弃",
     "chat.conflictTitle": "合并冲突——未做任何更改",
@@ -967,7 +982,8 @@ export const views = {
     "settings.reasoningDefault": "(API 默认值)",
     "settings.reasoningHigh": "high",
     "settings.reasoningMax": "max",
-    "settings.modelsHint": "聊天框选择器中提供的模型。添加任意 ID（也可添加其他兼容 OpenAI 的提供商——同时为其设置 baseUrl 和 apiKey）。",
+    "settings.modelsHint":
+      "聊天框选择器中提供的模型。添加任意 ID（也可添加其他兼容 OpenAI 的提供商——同时为其设置 baseUrl 和 apiKey）。",
     "settings.sandboxHint": "使用 seatbelt (macOS) / bwrap (Linux) 包裹命令。如果请求但不可用则硬性失败。",
     "settings.modelsPlaceholder": "deepseek-v4-flash, deepseek-v4-pro, gpt-4o",
     "settings.apiKeyPlaceholder": "sk-…",

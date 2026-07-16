@@ -74,10 +74,7 @@ export function buildUsage(usage: TokenUsage): Record<string, number> {
 }
 
 /** "How did this run end" → the Claude result-envelope subtype + is_error. */
-export type ResultOutcome =
-  | { kind: "success" }
-  | { kind: "max_turns" }
-  | { kind: "error"; message?: string };
+export type ResultOutcome = { kind: "success" } | { kind: "max_turns" } | { kind: "error"; message?: string };
 
 /** Maps an AgentEvent error code (session.failed) to a result outcome. */
 export function outcomeFromErrorCode(code: string, message?: string): ResultOutcome {
@@ -113,14 +110,12 @@ export function buildResultEnvelope(input: ResultEnvelopeInput): Record<string, 
   const { report, sessionId, numTurns, durationMs } = input;
   const outcome: ResultOutcome = input.outcome ?? { kind: "success" };
 
-  const subtype =
-    outcome.kind === "success" ? "success" : outcome.kind === "max_turns" ? "error_max_turns" : "error";
+  const subtype = outcome.kind === "success" ? "success" : outcome.kind === "max_turns" ? "error_max_turns" : "error";
   const isError = outcome.kind !== "success";
 
   // `result` is the final summary text; on a failed run with no report, surface
   // the error message (Claude puts the error string in `result` for errors).
-  const result =
-    report?.summary ?? (outcome.kind === "error" ? (outcome.message ?? "") : "");
+  const result = report?.summary ?? (outcome.kind === "error" ? (outcome.message ?? "") : "");
 
   const usage = report?.usage;
 

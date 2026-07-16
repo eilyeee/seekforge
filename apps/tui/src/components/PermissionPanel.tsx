@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import type { PermissionRequest } from "@seekforge/shared";
 import { classifyUnifiedDiff } from "../diff.js";
@@ -46,10 +46,15 @@ export function PermissionPanel({
               <Text>
                 <Text color={selected ? "green" : "red"}>{selected ? "[x]" : "[ ]"}</Text>
                 <Text> </Text>
-                <Text bold>{t("permission.hunk")} {hunk.index + 1}</Text>
+                <Text bold>
+                  {t("permission.hunk")} {hunk.index + 1}
+                </Text>
               </Text>
               <Box paddingLeft={4}>
-                <Text dimColor>{hunk.preview.slice(0, 200)}{hunk.preview.length > 200 ? "…" : ""}</Text>
+                <Text dimColor>
+                  {hunk.preview.slice(0, 200)}
+                  {hunk.preview.length > 200 ? "…" : ""}
+                </Text>
               </Box>
             </Box>
           );
@@ -90,7 +95,7 @@ export function PermissionPanel({
       ) : null}
       {request.path ? (
         <Text>
-          <Text dimColor>{t("permission.path")}    </Text>
+          <Text dimColor>{t("permission.path")} </Text>
           <Text bold>{request.path}</Text>
         </Text>
       ) : null}

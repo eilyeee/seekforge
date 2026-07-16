@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FinalReport } from "@seekforge/shared";
-import {
-  appendUser,
-  initialChatState,
-  reduceEvent,
-  type ChatState,
-  type StreamEvent,
-} from "./events";
+import { appendUser, initialChatState, reduceEvent, type ChatState, type StreamEvent } from "./events";
 
 function play(events: StreamEvent[], from: ChatState = initialChatState()): ChatState {
   return events.reduce(reduceEvent, from);
@@ -87,16 +81,38 @@ describe("reduceEvent", () => {
     const v1: StreamEvent = {
       type: "tool.completed",
       toolName: "update_plan",
-      result: { ok: true, data: { items: [{ step: "a", status: "in_progress" }, { step: "b", status: "pending" }] } },
+      result: {
+        ok: true,
+        data: {
+          items: [
+            { step: "a", status: "in_progress" },
+            { step: "b", status: "pending" },
+          ],
+        },
+      },
     };
     const v2: StreamEvent = {
       type: "tool.completed",
       toolName: "update_plan",
-      result: { ok: true, data: { items: [{ step: "a", status: "done" }, { step: "b", status: "in_progress" }] } },
+      result: {
+        ok: true,
+        data: {
+          items: [
+            { step: "a", status: "done" },
+            { step: "b", status: "in_progress" },
+          ],
+        },
+      },
     };
     let s = play([{ type: "tool.started", toolName: "update_plan", args: {} }, v1]);
     expect(s.items).toHaveLength(1);
-    expect(s.items[0]).toMatchObject({ kind: "plan", items: [{ step: "a", status: "in_progress" }, { step: "b", status: "pending" }] });
+    expect(s.items[0]).toMatchObject({
+      kind: "plan",
+      items: [
+        { step: "a", status: "in_progress" },
+        { step: "b", status: "pending" },
+      ],
+    });
 
     const planId = s.items[0]!.id;
     s = play([{ type: "tool.started", toolName: "read_file", args: {} }, v2], s);
@@ -104,12 +120,21 @@ describe("reduceEvent", () => {
     const plans = s.items.filter((i) => i.kind === "plan");
     expect(plans).toHaveLength(1);
     expect(plans[0]!.id).toBe(planId);
-    expect(plans[0]).toMatchObject({ items: [{ step: "a", status: "done" }, { step: "b", status: "in_progress" }] });
+    expect(plans[0]).toMatchObject({
+      items: [
+        { step: "a", status: "done" },
+        { step: "b", status: "in_progress" },
+      ],
+    });
   });
 
   it("ignores malformed update_plan payloads", () => {
     const s = play([
-      { type: "tool.completed", toolName: "update_plan", result: { ok: true, data: { items: [{ step: 1, status: "weird" }] } } },
+      {
+        type: "tool.completed",
+        toolName: "update_plan",
+        result: { ok: true, data: { items: [{ step: 1, status: "weird" }] } },
+      },
     ]);
     expect(s.items).toHaveLength(0);
   });
@@ -143,10 +168,10 @@ describe("reduceEvent", () => {
   });
 
   it("renders session.failed as a banner and stops running", () => {
-    const s = play(
-      [{ type: "session.failed", error: { code: "max_turns_exceeded", message: "boom" } }],
-      { ...initialChatState(), running: true },
-    );
+    const s = play([{ type: "session.failed", error: { code: "max_turns_exceeded", message: "boom" } }], {
+      ...initialChatState(),
+      running: true,
+    });
     expect(s.running).toBe(false);
     expect(s.items[0]).toMatchObject({ kind: "failed", error: { code: "max_turns_exceeded" } });
   });
@@ -366,13 +391,37 @@ describe("reduceEvent", () => {
     const s = play([
       { type: "tool.started", toolName: "dispatch_team", args: plan },
       { type: "subagent.started", dispatchId: "ag-1", agentId: "explorer", task: "inspect parser", status: "running" },
-      { type: "subagent.completed", dispatchId: "ag-1", agentId: "explorer", task: "inspect parser", status: "done", resultSummary: "done" },
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-1",
+        agentId: "explorer",
+        task: "inspect parser",
+        status: "done",
+        resultSummary: "done",
+      },
       { type: "subagent.started", dispatchId: "ag-2", agentId: "reviewer", task: "review parser", status: "running" },
-      { type: "subagent.completed", dispatchId: "ag-2", agentId: "reviewer", task: "review parser", status: "done", resultSummary: "done" },
-      { type: "tool.completed", toolName: "dispatch_team", result: { ok: true, data: { status: "done", members: [
-        { id: "inspect", agentId: "explorer", status: "done" },
-        { id: "review", agentId: "reviewer", status: "done" },
-      ] } } },
+      {
+        type: "subagent.completed",
+        dispatchId: "ag-2",
+        agentId: "reviewer",
+        task: "review parser",
+        status: "done",
+        resultSummary: "done",
+      },
+      {
+        type: "tool.completed",
+        toolName: "dispatch_team",
+        result: {
+          ok: true,
+          data: {
+            status: "done",
+            members: [
+              { id: "inspect", agentId: "explorer", status: "done" },
+              { id: "review", agentId: "reviewer", status: "done" },
+            ],
+          },
+        },
+      },
     ]);
     const team = s.items.find((item) => item.kind === "team");
     expect(team).toMatchObject({

@@ -487,9 +487,7 @@ export async function runHooks(
       ...ran,
       ...(extras.continue !== undefined ? { continue: extras.continue } : {}),
       ...(extras.systemMessage !== undefined ? { systemMessage: extras.systemMessage } : {}),
-      ...(stage === "preToolUse" && extras.updatedInput !== undefined
-        ? { updatedInput: extras.updatedInput }
-        : {}),
+      ...(stage === "preToolUse" && extras.updatedInput !== undefined ? { updatedInput: extras.updatedInput } : {}),
     };
 
     // preToolUse JSON stdout decisions (exit 0 only): deny blocks with the

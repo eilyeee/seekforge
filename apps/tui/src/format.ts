@@ -50,12 +50,8 @@ export function relativeAge(iso: string, now: Date | number = Date.now()): strin
  * cost rows with the cache-hit ratio, plus optional duration and turn count.
  * The one-line formatUsage stays for the status bar.
  */
-export function formatUsageDetail(
-  usage: TokenUsage,
-  opts?: { durationMs?: number; turns?: number },
-): string[] {
-  const hitRate =
-    usage.promptTokens > 0 ? Math.round((usage.cacheHitTokens / usage.promptTokens) * 100) : 0;
+export function formatUsageDetail(usage: TokenUsage, opts?: { durationMs?: number; turns?: number }): string[] {
+  const hitRate = usage.promptTokens > 0 ? Math.round((usage.cacheHitTokens / usage.promptTokens) * 100) : 0;
   const lines = [
     `prompt      ${kfmt(usage.promptTokens)} tokens (${kfmt(usage.cacheHitTokens)} cache hit · ${hitRate}% hit rate)`,
     `completion  ${kfmt(usage.completionTokens)} tokens`,

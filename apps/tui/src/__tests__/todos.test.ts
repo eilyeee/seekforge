@@ -77,9 +77,7 @@ describe("removeTodo", () => {
   it("removes only the checklist line, preserving surrounding prose", () => {
     writeFile("# Plan\n- [ ] a\nprose between\n- [x] b\ntrailing prose\n");
     expect(removeTodo(workspace, 2)).toEqual({ index: 2, text: "b", done: true });
-    expect(fs.readFileSync(todosPath(), "utf8")).toBe(
-      "# Plan\n- [ ] a\nprose between\ntrailing prose\n",
-    );
+    expect(fs.readFileSync(todosPath(), "utf8")).toBe("# Plan\n- [ ] a\nprose between\ntrailing prose\n");
   });
 
   it("returns null when out of range", () => {

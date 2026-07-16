@@ -1,12 +1,4 @@
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  realpathSync,
-  statSync,
-  type Stats,
-} from "node:fs";
+import { closeSync, constants, fstatSync, openSync, realpathSync, statSync, type Stats } from "node:fs";
 import { open, realpath, stat, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { resolveInsideWorkspace } from "@seekforge/core";
@@ -39,21 +31,13 @@ export function isPathInside(parent: string, child: string): boolean {
  * With rejectSymlinks, the requested lexical path must also equal the physical
  * path, including for a missing leaf below an existing directory.
  */
-export function resolveWorkspacePath(
-  workspace: string,
-  rel: string,
-  rejectSymlinks: boolean,
-): ResolvedWorkspacePath {
+export function resolveWorkspacePath(workspace: string, rel: string, rejectSymlinks: boolean): ResolvedWorkspacePath {
   const workspaceReal = realpathSync(resolve(workspace));
   const expected = resolve(workspaceReal, rel);
   const physical = resolveInsideWorkspace(workspaceReal, rel);
   if (rejectSymlinks && physical !== expected) throw new FilePathChangedError();
   const fromWorkspace = relative(workspaceReal, physical);
-  if (
-    fromWorkspace === ".." ||
-    fromWorkspace.startsWith(`..${sep}`) ||
-    isAbsolute(fromWorkspace)
-  ) {
+  if (fromWorkspace === ".." || fromWorkspace.startsWith(`..${sep}`) || isAbsolute(fromWorkspace)) {
     throw new FilePathChangedError();
   }
   return {
@@ -139,27 +123,20 @@ export type OpenedVerifiedFileAsync = {
 };
 
 /** Async counterpart used by bounded content search. */
-export async function openVerifiedFileAsync(
-  path: string,
-  flags: number,
-): Promise<OpenedVerifiedFileAsync> {
+export async function openVerifiedFileAsync(path: string, flags: number): Promise<OpenedVerifiedFileAsync> {
   let parentHandle: FileHandle | undefined;
   let fileHandle: FileHandle | undefined;
   try {
-    parentHandle = await open(
-      dirname(path),
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
+    parentHandle = await open(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     fileHandle = await open(path, flags | constants.O_NOFOLLOW);
-    const [parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal] =
-      await Promise.all([
-        stat(dirname(path)),
-        stat(path),
-        parentHandle.stat(),
-        fileHandle.stat(),
-        realpath(dirname(path)),
-        realpath(path),
-      ]);
+    const [parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal] = await Promise.all([
+      stat(dirname(path)),
+      stat(path),
+      parentHandle.stat(),
+      fileHandle.stat(),
+      realpath(dirname(path)),
+      realpath(path),
+    ]);
     const result = verifyPathIdentity(
       path,
       parentPathStat,
@@ -183,26 +160,14 @@ export async function closeVerifiedFileAsync(opened: OpenedVerifiedFileAsync): P
 }
 
 /** Async revalidation for operations that must reopen an already checked path. */
-export async function revalidateOpenedFileAsync(
-  path: string,
-  opened: OpenedVerifiedFileAsync,
-): Promise<void> {
-  const [parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal] =
-    await Promise.all([
-      stat(dirname(path)),
-      stat(path),
-      opened.parentHandle.stat(),
-      opened.fileHandle.stat(),
-      realpath(dirname(path)),
-      realpath(path),
-    ]);
-  verifyPathIdentity(
-    path,
-    parentPathStat,
-    filePathStat,
-    parentFdStat,
-    fileFdStat,
-    parentReal,
-    fileReal,
-  );
+export async function revalidateOpenedFileAsync(path: string, opened: OpenedVerifiedFileAsync): Promise<void> {
+  const [parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal] = await Promise.all([
+    stat(dirname(path)),
+    stat(path),
+    opened.parentHandle.stat(),
+    opened.fileHandle.stat(),
+    realpath(dirname(path)),
+    realpath(path),
+  ]);
+  verifyPathIdentity(path, parentPathStat, filePathStat, parentFdStat, fileFdStat, parentReal, fileReal);
 }

@@ -164,7 +164,7 @@ describe("POST /api/worktrees", () => {
         body: JSON.stringify({ name: "blocked-create" }),
       });
       expect(res.status).toBe(409);
-      expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe("session_busy");
     } finally {
       lease.release();
     }
@@ -208,7 +208,7 @@ describe("GET /api/worktrees", () => {
     ]);
     expect(list.status).toBe(200);
     expect(removal.status).toBe(200);
-    const body = await list.json() as Array<{ id: string }>;
+    const body = (await list.json()) as Array<{ id: string }>;
     expect(body.length === 0 || body.some((entry) => entry.id === wt.id)).toBe(true);
   });
 });
@@ -222,7 +222,9 @@ describe("repository coordination", () => {
     let firstStarted = false;
     let secondStarted = false;
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
 
     const first = coordinator.withRepository(repo, async () => {
       firstStarted = true;
@@ -267,9 +269,8 @@ describe("POST /api/worktrees/:id/merge", () => {
     expect(await del.json()).toEqual({ deleted: true });
     expect(existsSync(wt.path)).toBe(false);
     expect(gitIn(repo, "branch", "--list", "seekforge/lifecycle")).toBe("");
-    const workspaces = (
-      (await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> }
-    ).workspaces;
+    const workspaces = ((await (await authed(base, "/api/workspaces")).json()) as { workspaces: Array<{ id: string }> })
+      .workspaces;
     expect(workspaces.map((w) => w.id)).not.toContain("wt-lifecycle");
     expect((await authed(base, "/api/sessions?ws=wt-lifecycle")).status).toBe(404);
   });
@@ -330,7 +331,7 @@ describe("POST /api/worktrees/:id/merge", () => {
       ] as const) {
         const res = await authed(base, path, { method });
         expect(res.status).toBe(409);
-        expect((await res.json() as { error: { code: string } }).error.code).toBe("session_busy");
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe("session_busy");
       }
     } finally {
       lease.release();
@@ -386,7 +387,7 @@ describe("POST /api/worktrees/:id/merge", () => {
     ]);
     expect([merge.status, create.status]).toEqual([200, 200]);
     expect(readFileSync(join(repo, "merged.txt"), "utf8")).toBe("merged\n");
-    const created = await create.json() as { path: string };
+    const created = (await create.json()) as { path: string };
     expect(existsSync(created.path)).toBe(true);
     expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
   });

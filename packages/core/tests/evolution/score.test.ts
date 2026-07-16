@@ -2,13 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { scoreSession } from "../../src/evolution/index.js";
-import {
-  failedCall,
-  makeWorkspace,
-  okCall,
-  runCommandCall,
-  writeSessionFixture,
-} from "./helpers.js";
+import { failedCall, makeWorkspace, okCall, runCommandCall, writeSessionFixture } from "./helpers.js";
 
 describe("scoreSession", () => {
   it("throws when the session does not exist", () => {

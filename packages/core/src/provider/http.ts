@@ -34,14 +34,7 @@ export type FetchWithRetryOptions = {
 
 export type ResponseHandler<T> = (response: Response) => Promise<T>;
 
-const BODY_CONSUMERS = new Set<PropertyKey>([
-  "arrayBuffer",
-  "blob",
-  "bytes",
-  "formData",
-  "json",
-  "text",
-]);
+const BODY_CONSUMERS = new Set<PropertyKey>(["arrayBuffer", "blob", "bytes", "formData", "json", "text"]);
 
 function withBodyTimeout(response: Response, cleanup: () => void): Response {
   return new Proxy(response, {
@@ -111,11 +104,7 @@ function backoffMs(attempt: number): number {
   return BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 250;
 }
 
-export function fetchWithRetry(
-  url: string,
-  init: RequestInit,
-  options?: FetchWithRetryOptions,
-): Promise<Response>;
+export function fetchWithRetry(url: string, init: RequestInit, options?: FetchWithRetryOptions): Promise<Response>;
 export function fetchWithRetry<T>(
   url: string,
   init: RequestInit,

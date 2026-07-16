@@ -21,119 +21,143 @@ const eventBaseSchema = z.object({
   at: z.string().datetime(),
 });
 
-const evidenceSchema = z.object({
-  path: z.string().min(1).max(1_000),
-  lineStart: z.number().int().positive(),
-  lineEnd: z.number().int().positive(),
-  excerpt: z.string().max(2_100),
-}).strict();
-const sourceSchema = z.object({
-  scanner: z.string().min(1).max(200),
-  version: z.string().min(1).max(100),
-  ruleId: z.string().min(1).max(200),
-}).strict();
-const findingSchema = z.object({
-  id: z.string().min(1).max(200),
-  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  title: z.string().min(1).max(300),
-  description: z.string().min(1).max(8_100),
-  severity: z.enum(FINDING_SEVERITIES),
-  confidence: z.enum(["low", "medium", "high"]),
-  category: z.string().min(1).max(200),
-  cwe: z.string().max(64).optional(),
-  recommendation: z.string().min(1).max(8_100),
-  evidence: z.array(evidenceSchema).min(1).max(5),
-  source: sourceSchema,
-  status: z.enum(FINDING_STATUSES),
-  verificationStatus: z.enum(VERIFICATION_STATUSES),
-  firstSeenAt: z.string().datetime(),
-  lastSeenAt: z.string().datetime(),
-  scanRunId: z.string().min(1).max(200),
-}).strict();
-const scanSchema = z.object({
-  id: z.string().min(1).max(200),
-  startedAt: z.string().datetime(),
-  completedAt: z.string().datetime().optional(),
-  status: z.enum(["running", "completed", "failed"]),
-  scanner: z.string().min(1).max(200),
-  scannerVersion: z.string().min(1).max(100),
-  findingIds: z.array(z.string().min(1).max(200)).max(100),
-  error: z.string().max(2_100).optional(),
-}).strict();
-const commandResultSchema = z.object({
-  kind: z.enum(["verify", "lint"]),
-  command: z.string().max(2_100),
-  exitCode: z.number().int(),
-  stdout: z.string().max(20_100),
-  stderr: z.string().max(20_100),
-  durationMs: z.number().int().nonnegative(),
-  timedOut: z.boolean(),
-}).strict();
-const fixSchema = z.object({
-  id: z.string().min(1).max(200),
-  findingId: z.string().min(1).max(200),
-  startedAt: z.string().datetime(),
-  completedAt: z.string().datetime().optional(),
-  status: z.enum(["running", "agent_failed", "verification_failed", "verified"]),
-  sessionCompleted: z.boolean().optional(),
-  commands: z.array(commandResultSchema).max(10),
-  scanRunId: z.string().max(200).optional(),
-  notes: z.string().max(2_100).optional(),
-}).strict();
+const evidenceSchema = z
+  .object({
+    path: z.string().min(1).max(1_000),
+    lineStart: z.number().int().positive(),
+    lineEnd: z.number().int().positive(),
+    excerpt: z.string().max(2_100),
+  })
+  .strict();
+const sourceSchema = z
+  .object({
+    scanner: z.string().min(1).max(200),
+    version: z.string().min(1).max(100),
+    ruleId: z.string().min(1).max(200),
+  })
+  .strict();
+const findingSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    title: z.string().min(1).max(300),
+    description: z.string().min(1).max(8_100),
+    severity: z.enum(FINDING_SEVERITIES),
+    confidence: z.enum(["low", "medium", "high"]),
+    category: z.string().min(1).max(200),
+    cwe: z.string().max(64).optional(),
+    recommendation: z.string().min(1).max(8_100),
+    evidence: z.array(evidenceSchema).min(1).max(5),
+    source: sourceSchema,
+    status: z.enum(FINDING_STATUSES),
+    verificationStatus: z.enum(VERIFICATION_STATUSES),
+    firstSeenAt: z.string().datetime(),
+    lastSeenAt: z.string().datetime(),
+    scanRunId: z.string().min(1).max(200),
+  })
+  .strict();
+const scanSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    startedAt: z.string().datetime(),
+    completedAt: z.string().datetime().optional(),
+    status: z.enum(["running", "completed", "failed"]),
+    scanner: z.string().min(1).max(200),
+    scannerVersion: z.string().min(1).max(100),
+    findingIds: z.array(z.string().min(1).max(200)).max(100),
+    error: z.string().max(2_100).optional(),
+  })
+  .strict();
+const commandResultSchema = z
+  .object({
+    kind: z.enum(["verify", "lint"]),
+    command: z.string().max(2_100),
+    exitCode: z.number().int(),
+    stdout: z.string().max(20_100),
+    stderr: z.string().max(20_100),
+    durationMs: z.number().int().nonnegative(),
+    timedOut: z.boolean(),
+  })
+  .strict();
+const fixSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    findingId: z.string().min(1).max(200),
+    startedAt: z.string().datetime(),
+    completedAt: z.string().datetime().optional(),
+    status: z.enum(["running", "agent_failed", "verification_failed", "verified"]),
+    sessionCompleted: z.boolean().optional(),
+    commands: z.array(commandResultSchema).max(10),
+    scanRunId: z.string().max(200).optional(),
+    notes: z.string().max(2_100).optional(),
+  })
+  .strict();
 const locationSchema = evidenceSchema.omit({ excerpt: true });
-const threatModelItemSchema = z.object({
-  name: z.string().min(1).max(300),
-  description: z.string().min(1).max(4_100),
-  evidence: z.array(locationSchema).min(1).max(10),
-}).strict();
-const threatSchema = z.object({
-  id: z.string().min(1).max(200),
-  title: z.string().min(1).max(300),
-  scenario: z.string().min(1).max(6_100),
-  affectedAssets: z.array(z.string().max(300)).max(20),
-  entryPoints: z.array(z.string().max(300)).max(20),
-  trustBoundaries: z.array(z.string().max(300)).max(20),
-  mitigations: z.array(z.string().max(2_100)).max(30),
-  severity: z.enum(FINDING_SEVERITIES),
-  evidence: z.array(locationSchema).min(1).max(10),
-}).strict();
-const threatModelSchema = z.object({
-  id: z.string().min(1).max(200),
-  createdAt: z.string().datetime(),
-  repository: z.string().min(1).max(300),
-  summary: z.string().min(1).max(8_100),
-  assets: z.array(threatModelItemSchema).max(50),
-  entryPoints: z.array(threatModelItemSchema).max(50),
-  trustBoundaries: z.array(threatModelItemSchema).max(50),
-  dataFlows: z.array(threatModelItemSchema).max(50),
-  threats: z.array(threatSchema).max(100),
-}).strict();
+const threatModelItemSchema = z
+  .object({
+    name: z.string().min(1).max(300),
+    description: z.string().min(1).max(4_100),
+    evidence: z.array(locationSchema).min(1).max(10),
+  })
+  .strict();
+const threatSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    title: z.string().min(1).max(300),
+    scenario: z.string().min(1).max(6_100),
+    affectedAssets: z.array(z.string().max(300)).max(20),
+    entryPoints: z.array(z.string().max(300)).max(20),
+    trustBoundaries: z.array(z.string().max(300)).max(20),
+    mitigations: z.array(z.string().max(2_100)).max(30),
+    severity: z.enum(FINDING_SEVERITIES),
+    evidence: z.array(locationSchema).min(1).max(10),
+  })
+  .strict();
+const threatModelSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    createdAt: z.string().datetime(),
+    repository: z.string().min(1).max(300),
+    summary: z.string().min(1).max(8_100),
+    assets: z.array(threatModelItemSchema).max(50),
+    entryPoints: z.array(threatModelItemSchema).max(50),
+    trustBoundaries: z.array(threatModelItemSchema).max(50),
+    dataFlows: z.array(threatModelItemSchema).max(50),
+    threats: z.array(threatSchema).max(100),
+  })
+  .strict();
 
 const securityEventSchema = z.discriminatedUnion("type", [
   eventBaseSchema.extend({ type: z.literal("scan.started"), scan: scanSchema }).strict(),
-  eventBaseSchema.extend({
-    type: z.literal("scan.completed"),
-    scanId: z.string().min(1).max(200),
-    status: z.enum(["completed", "failed"]),
-    findingIds: z.array(z.string().min(1).max(200)).max(100),
-    error: z.string().max(2_100).optional(),
-  }).strict(),
+  eventBaseSchema
+    .extend({
+      type: z.literal("scan.completed"),
+      scanId: z.string().min(1).max(200),
+      status: z.enum(["completed", "failed"]),
+      findingIds: z.array(z.string().min(1).max(200)).max(100),
+      error: z.string().max(2_100).optional(),
+    })
+    .strict(),
   eventBaseSchema.extend({ type: z.literal("finding.detected"), finding: findingSchema }).strict(),
-  eventBaseSchema.extend({
-    type: z.literal("finding.status_changed"),
-    findingId: z.string().min(1).max(200),
-    from: z.enum(FINDING_STATUSES),
-    to: z.enum(FINDING_STATUSES),
-    reason: z.string().min(1).max(2_100),
-  }).strict(),
-  eventBaseSchema.extend({
-    type: z.literal("finding.verification_changed"),
-    findingId: z.string().min(1).max(200),
-    from: z.enum(VERIFICATION_STATUSES),
-    to: z.enum(VERIFICATION_STATUSES),
-    reason: z.string().min(1).max(2_100),
-    scanRunId: z.string().max(200).optional(),
-  }).strict(),
+  eventBaseSchema
+    .extend({
+      type: z.literal("finding.status_changed"),
+      findingId: z.string().min(1).max(200),
+      from: z.enum(FINDING_STATUSES),
+      to: z.enum(FINDING_STATUSES),
+      reason: z.string().min(1).max(2_100),
+    })
+    .strict(),
+  eventBaseSchema
+    .extend({
+      type: z.literal("finding.verification_changed"),
+      findingId: z.string().min(1).max(200),
+      from: z.enum(VERIFICATION_STATUSES),
+      to: z.enum(VERIFICATION_STATUSES),
+      reason: z.string().min(1).max(2_100),
+      scanRunId: z.string().max(200).optional(),
+    })
+    .strict(),
   eventBaseSchema.extend({ type: z.literal("fix.started"), fix: fixSchema }).strict(),
   eventBaseSchema.extend({ type: z.literal("fix.completed"), fix: fixSchema }).strict(),
   eventBaseSchema.extend({ type: z.literal("threat_model.created"), threatModel: threatModelSchema }).strict(),
@@ -189,7 +213,9 @@ export function readSecurityEvents(workspace: string): SecurityEvent[] {
       parsed = JSON.parse(line) as unknown;
       parsed = securityEventSchema.parse(parsed);
     } catch (error) {
-      throw new Error(`invalid security event at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `invalid security event at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     events.push(parsed as SecurityEvent);
   }
@@ -234,7 +260,9 @@ export function buildSecurityState(workspace: string): SecurityState {
         const finding = state.findings.get(event.findingId);
         if (!finding) throw new Error(`security event ${event.id} references unknown finding ${event.findingId}`);
         if (finding.status !== event.from) {
-          throw new Error(`security event ${event.id} expected finding ${event.findingId} status ${event.from}, got ${finding.status}`);
+          throw new Error(
+            `security event ${event.id} expected finding ${event.findingId} status ${event.from}, got ${finding.status}`,
+          );
         }
         if (!allowedTransitions[event.from].has(event.to)) {
           throw new Error(`security event ${event.id} has invalid transition ${event.from} -> ${event.to}`);
@@ -246,7 +274,9 @@ export function buildSecurityState(workspace: string): SecurityState {
         const finding = state.findings.get(event.findingId);
         if (!finding) throw new Error(`security event ${event.id} references unknown finding ${event.findingId}`);
         if (finding.verificationStatus !== event.from) {
-          throw new Error(`security event ${event.id} expected verification ${event.from}, got ${finding.verificationStatus}`);
+          throw new Error(
+            `security event ${event.id} expected verification ${event.from}, got ${finding.verificationStatus}`,
+          );
         }
         finding.verificationStatus = event.to;
         break;

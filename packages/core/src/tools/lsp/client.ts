@@ -137,8 +137,7 @@ function tsEntry(languageId: string): LangEntry {
   return {
     languageId,
     servers: [{ command: "typescript-language-server", args: STDIO }],
-    install:
-      "Install the TypeScript/JavaScript language server: `npm i -g typescript-language-server typescript`.",
+    install: "Install the TypeScript/JavaScript language server: `npm i -g typescript-language-server typescript`.",
   };
 }
 
@@ -152,10 +151,7 @@ export function commandExistsOnPath(command: string): boolean {
     }
   }
   const rawPath = process.env.PATH ?? "";
-  const exts =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
-      : [""];
+  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
   for (const dir of rawPath.split(path.delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
@@ -397,7 +393,8 @@ class LspSession {
     timeoutMs = REQUEST_TIMEOUT_MS,
     signal?: AbortSignal,
   ): Promise<unknown> {
-    if (this.disposed || this.ended) return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
+    if (this.disposed || this.ended)
+      return Promise.reject(new ToolError("lsp_exited", "language server session ended"));
     if (signal?.aborted) return Promise.reject(cancelledError());
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
@@ -464,20 +461,30 @@ class LspSession {
 
   async definition(absPath: string, position: LspPosition, signal?: AbortSignal): Promise<LspLocation[]> {
     const { uri } = this.syncDocument(absPath);
-    const result = await this.request("textDocument/definition", {
-      textDocument: { uri },
-      position,
-    }, REQUEST_TIMEOUT_MS, signal);
+    const result = await this.request(
+      "textDocument/definition",
+      {
+        textDocument: { uri },
+        position,
+      },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
     return normalizeLocations(result);
   }
 
   async references(absPath: string, position: LspPosition, signal?: AbortSignal): Promise<LspLocation[]> {
     const { uri } = this.syncDocument(absPath);
-    const result = await this.request("textDocument/references", {
-      textDocument: { uri },
-      position,
-      context: { includeDeclaration: true },
-    }, REQUEST_TIMEOUT_MS, signal);
+    const result = await this.request(
+      "textDocument/references",
+      {
+        textDocument: { uri },
+        position,
+        context: { includeDeclaration: true },
+      },
+      REQUEST_TIMEOUT_MS,
+      signal,
+    );
     return normalizeLocations(result);
   }
 
@@ -640,11 +647,7 @@ const startingSessions = new Map<string, Promise<LspSession>>();
 const workspaceLeases = new Map<string, Set<symbol>>();
 let exitHookInstalled = false;
 
-async function getSession(
-  workspace: string,
-  absPath: string,
-  signal?: AbortSignal,
-): Promise<{ session: LspSession }> {
+async function getSession(workspace: string, absPath: string, signal?: AbortSignal): Promise<{ session: LspSession }> {
   if (signal?.aborted) throw cancelledError();
   workspace = workspaceIdentity(workspace);
   const { languageId, candidate } = resolveServerCommand(absPath); // throws when unavailable

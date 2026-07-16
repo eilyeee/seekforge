@@ -77,11 +77,7 @@ export function TodosPanel() {
         onChange={() => run({ op: "toggle", index: todo.index })}
         className="focus-ring mt-0.5 h-4 w-4 shrink-0 rounded accent-accent disabled:cursor-not-allowed"
       />
-      <span
-        className={`flex-1 text-sm leading-snug ${
-          todo.done ? "text-tertiary line-through" : "text-secondary"
-        }`}
-      >
+      <span className={`flex-1 text-sm leading-snug ${todo.done ? "text-tertiary line-through" : "text-secondary"}`}>
         {todo.text}
       </span>
       <button
@@ -113,9 +109,7 @@ export function TodosPanel() {
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-2 text-sm font-semibold text-primary">
             {t("nav.todos")}
-            {todos !== null && (
-              <span className="text-tertiary">· {active.length}</span>
-            )}
+            {todos !== null && <span className="text-tertiary">· {active.length}</span>}
           </span>
         </div>
         <span className="mt-1 block font-mono text-2xs text-tertiary">.seekforge/todos.md</span>

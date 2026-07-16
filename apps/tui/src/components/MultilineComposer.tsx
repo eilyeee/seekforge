@@ -4,7 +4,7 @@
  * centralized in app.tsx, which owns the editor state and pushes it down.
  */
 
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import { snapToBoundary, type EditorState } from "../editor.js";
 import { t } from "../strings.js";
@@ -91,7 +91,11 @@ export function MultilineComposer({
           ) : (
             <Text dimColor>… </Text>
           )}
-          {i === cursorLine ? <LineWithCursor line={line} column={cursorColumn} {...(ghost ? { ghost } : {})} /> : <Text>{line}</Text>}
+          {i === cursorLine ? (
+            <LineWithCursor line={line} column={cursorColumn} {...(ghost ? { ghost } : {})} />
+          ) : (
+            <Text>{line}</Text>
+          )}
         </Box>
       ))}
     </Box>

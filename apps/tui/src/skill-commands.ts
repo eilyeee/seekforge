@@ -27,8 +27,7 @@ export type SkillCommandSpec = {
 
 const COMMAND_PREFIX = "skill:";
 const SUMMARY_CAP = 60;
-const DEFAULT_TASK =
-  "Apply this skill to the current context — ask via ask_user if the target is unclear.";
+const DEFAULT_TASK = "Apply this skill to the current context — ask via ask_user if the target is unclear.";
 
 /** Sanitizes a skill id into a command-safe name: lowercase [a-z0-9-]. */
 function sanitizeId(id: string): string {
@@ -49,10 +48,7 @@ function collapse(text: string, max: number): string {
  * Joins /skills rows with the full skill content from core's loadSkills().
  * Rows without a loaded counterpart (disabled builtins) stay content-less.
  */
-export function attachSkillContent(
-  workspace: string,
-  rows: readonly SkillRow[],
-): SkillCommandRow[] {
+export function attachSkillContent(workspace: string, rows: readonly SkillRow[]): SkillCommandRow[] {
   const contentById = new Map(loadSkills(workspace).map((s) => [s.id, s.content]));
   return rows.map((row) => {
     const content = contentById.get(row.id);
@@ -99,10 +95,7 @@ export function expandSkillCommand(skill: SkillCommandRow, args: string): string
  * advertises — and never returns disabled skills. Null when not a skill
  * command or no enabled skill matches.
  */
-export function findSkillByCommand(
-  skills: readonly SkillCommandRow[],
-  name: string,
-): SkillCommandRow | null {
+export function findSkillByCommand(skills: readonly SkillCommandRow[], name: string): SkillCommandRow | null {
   if (!name.startsWith(COMMAND_PREFIX)) return null;
   const id = name.slice(COMMAND_PREFIX.length);
   if (id === "") return null;

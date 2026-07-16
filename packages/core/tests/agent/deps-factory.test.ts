@@ -12,7 +12,8 @@ describe("buildAgentCoreDeps", () => {
   );
 
   it.each([0, 0.5, 1])("accepts memoryAutoApproveConfidence %s", (memoryAutoApproveConfidence) => {
-    expect(buildAgentCoreDeps({ apiKey: "test", memoryAutoApproveConfidence }))
-      .toMatchObject({ memoryAutoApproveConfidence });
+    expect(buildAgentCoreDeps({ apiKey: "test", memoryAutoApproveConfidence })).toMatchObject({
+      memoryAutoApproveConfidence,
+    });
   });
 });

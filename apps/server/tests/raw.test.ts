@@ -12,8 +12,7 @@ let server: RunningServer;
 let base: string;
 
 // A tiny 1x1 transparent PNG.
-const PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const PNG_BYTES = Buffer.from(PNG_BASE64, "base64");
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {

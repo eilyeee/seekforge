@@ -2,13 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readGlobalMemory, readProjectMemory } from "../../src/memory/index.js";
-import {
-  clearGlobalMemory,
-  globalHome,
-  makeWorkspace,
-  writeGlobalMemory,
-  writeProjectMemory,
-} from "./helpers.js";
+import { clearGlobalMemory, globalHome, makeWorkspace, writeGlobalMemory, writeProjectMemory } from "./helpers.js";
 
 /** Absolute path to the memory dir of a workspace. */
 function memDir(ws: string): string {
@@ -25,10 +19,7 @@ describe("@import composition in memory files", () => {
   it("inlines a referenced file in place (basic include)", () => {
     const ws = makeWorkspace();
     writeMemFile(ws, "shared.md", "- [convention] shared rule from include\n");
-    writeProjectMemory(
-      ws,
-      ["# Project Memory", "- [command] local command", "@shared.md", ""].join("\n"),
-    );
+    writeProjectMemory(ws, ["# Project Memory", "- [command] local command", "@shared.md", ""].join("\n"));
     const text = readProjectMemory(ws)!;
     expect(text).toContain("- [command] local command");
     expect(text).toContain("- [convention] shared rule from include");
@@ -38,10 +29,7 @@ describe("@import composition in memory files", () => {
 
   it("skips a missing referenced file silently", () => {
     const ws = makeWorkspace();
-    writeProjectMemory(
-      ws,
-      ["# Project Memory", "- [command] local command", "@does-not-exist.md", ""].join("\n"),
-    );
+    writeProjectMemory(ws, ["# Project Memory", "- [command] local command", "@does-not-exist.md", ""].join("\n"));
     const text = readProjectMemory(ws)!;
     expect(text).toContain("- [command] local command");
     expect(text).not.toContain("@does-not-exist.md");
@@ -76,10 +64,7 @@ describe("@import composition in memory files", () => {
     const secret = path.join(ws, ".seekforge", "secret.md");
     fs.mkdirSync(path.dirname(secret), { recursive: true });
     fs.writeFileSync(secret, "- [tech] SECRET should not leak\n", "utf8");
-    writeProjectMemory(
-      ws,
-      ["# Project Memory", "@../secret.md", ""].join("\n"),
-    );
+    writeProjectMemory(ws, ["# Project Memory", "@../secret.md", ""].join("\n"));
     const text = readProjectMemory(ws)!;
     expect(text).not.toContain("SECRET should not leak");
   });

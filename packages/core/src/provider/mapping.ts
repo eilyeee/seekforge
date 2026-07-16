@@ -187,9 +187,10 @@ export function mapUsage(
     completionTokens: tokenCount(raw?.completion_tokens),
     cacheHitTokens: 0,
   };
-  tokens.cacheHitTokens = (capabilities?.cacheHitTokens ?? true)
-    ? Math.min(tokenCount(raw?.prompt_cache_hit_tokens), tokens.promptTokens)
-    : 0;
+  tokens.cacheHitTokens =
+    (capabilities?.cacheHitTokens ?? true)
+      ? Math.min(tokenCount(raw?.prompt_cache_hit_tokens), tokens.promptTokens)
+      : 0;
   // A user-supplied price for this model always wins — it enables cost/budget
   // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
   // Otherwise keep the built-in behavior: priced when costAccounting, else 0.
@@ -206,11 +207,13 @@ export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolC
   return (Array.isArray(raw) ? raw : []).flatMap((value, i) => {
     if (!isRecord(value)) return [];
     const fn = isRecord(value["function"]) ? value["function"] : undefined;
-    return [{
-      id: typeof value["id"] === "string" ? value["id"] : `call-${i + 1}`,
-      name: typeof fn?.["name"] === "string" ? fn["name"] : "",
-      argumentsJson: typeof fn?.["arguments"] === "string" ? fn["arguments"] : "",
-    }];
+    return [
+      {
+        id: typeof value["id"] === "string" ? value["id"] : `call-${i + 1}`,
+        name: typeof fn?.["name"] === "string" ? fn["name"] : "",
+        argumentsJson: typeof fn?.["arguments"] === "string" ? fn["arguments"] : "",
+      },
+    ];
   });
 }
 
@@ -226,9 +229,7 @@ export function mapChatResponse(
   const root = json;
   const error = root["error"];
   if (error !== undefined) {
-    const message = isRecord(error) && typeof error["message"] === "string"
-      ? `: ${error["message"]}`
-      : "";
+    const message = isRecord(error) && typeof error["message"] === "string" ? `: ${error["message"]}` : "";
     throw new ProviderProtocolError(`Provider protocol error: successful response contained an error${message}`);
   }
   const choices = root["choices"];
@@ -245,7 +246,12 @@ export function mapChatResponse(
     content: typeof message?.["content"] === "string" ? message["content"] : "",
     toolCalls: mapWireToolCalls(message?.["tool_calls"] as WireToolCall[] | undefined),
     finishReason: mapFinishReason(typeof choice?.["finish_reason"] === "string" ? choice["finish_reason"] : undefined),
-    usage: mapUsage(isRecord(root["usage"]) ? root["usage"] as WireUsage : undefined, model, capabilities, modelPricing),
+    usage: mapUsage(
+      isRecord(root["usage"]) ? (root["usage"] as WireUsage) : undefined,
+      model,
+      capabilities,
+      modelPricing,
+    ),
     ...(typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
   };
 }

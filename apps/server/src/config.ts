@@ -193,11 +193,7 @@ export function appendProjectFile(workspace: string, rel: string, content: strin
   const target = projectPath(workspace, rel, true);
   let fd: number | undefined;
   try {
-    fd = openSync(
-      target,
-      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW,
-      0o600,
-    );
+    fd = openSync(target, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     if (!fstatSync(fd).isFile()) {
       throw new ProjectPathError(`project file is not a regular file: ${rel}`);
     }

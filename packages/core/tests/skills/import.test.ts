@@ -41,7 +41,7 @@ describe("parseFrontmatterSkill", () => {
   });
 
   it("kebabizes names and rejects unusable ones", () => {
-    expect(parseFrontmatterSkill('---\nname: My Cool_Skill\n---\nbody').id).toBe("my-cool-skill");
+    expect(parseFrontmatterSkill("---\nname: My Cool_Skill\n---\nbody").id).toBe("my-cool-skill");
     expect(() => parseFrontmatterSkill("---\nversion: 1\n---\nbody")).toThrow(/name/);
     expect(() => parseFrontmatterSkill("# no frontmatter at all")).toThrow(/frontmatter/);
   });

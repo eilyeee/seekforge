@@ -73,15 +73,16 @@ export function writeSessionFixture(workspace: string, fixture: SessionFixture =
   fs.writeFileSync(
     path.join(dir, "tool-calls.jsonl"),
     toolCalls
-      .map((t) =>
-        `${JSON.stringify({
-          ts: meta.createdAt,
-          toolName: t.toolName,
-          args: t.args ?? {},
-          ok: t.ok,
-          errorCode: t.errorCode ?? null,
-          durationMs: 5,
-        })}\n`,
+      .map(
+        (t) =>
+          `${JSON.stringify({
+            ts: meta.createdAt,
+            toolName: t.toolName,
+            args: t.args ?? {},
+            ok: t.ok,
+            errorCode: t.errorCode ?? null,
+            durationMs: 5,
+          })}\n`,
       )
       .join(""),
   );
@@ -131,10 +132,7 @@ export function readProposalsRaw(workspace: string): string {
 }
 
 export function readReflection(workspace: string, sessionId = "sess1"): string {
-  return fs.readFileSync(
-    path.join(workspace, ".seekforge", "sessions", sessionId, "reflection.md"),
-    "utf8",
-  );
+  return fs.readFileSync(path.join(workspace, ".seekforge", "sessions", sessionId, "reflection.md"), "utf8");
 }
 
 /**

@@ -46,9 +46,7 @@ describe("redactSecrets", () => {
   });
 
   it("leaves low-entropy and unrelated values alone", () => {
-    expect(redactSecrets("password = aaaaaaaaaaaaaaaaaaaaaaaa")).toBe(
-      "password = aaaaaaaaaaaaaaaaaaaaaaaa",
-    );
+    expect(redactSecrets("password = aaaaaaaaaaaaaaaaaaaaaaaa")).toBe("password = aaaaaaaaaaaaaaaaaaaaaaaa");
     expect(redactSecrets("the keyboard layout = de_DE and that is fine")).toContain("keyboard");
     expect(redactSecrets("plain text without secrets")).toBe("plain text without secrets");
   });

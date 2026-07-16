@@ -51,10 +51,7 @@ describe("lsp wire framing (pure)", () => {
 
   it("ignores valid JSON non-object frames and continues parsing", () => {
     const good = { jsonrpc: "2.0", id: 3, result: "ok" };
-    const buf = Buffer.concat([
-      ...[null, 42, "text", []].map(encodeLspMessage),
-      encodeLspMessage(good),
-    ]);
+    const buf = Buffer.concat([...[null, 42, "text", []].map(encodeLspMessage), encodeLspMessage(good)]);
     expect(parseLspMessages(buf)).toEqual({ messages: [good], rest: Buffer.alloc(0) });
   });
 
@@ -177,10 +174,7 @@ describe("lsp tools graceful degradation (no language server on PATH)", () => {
 
   it("reports lsp_unsupported for a file type with no known server", async () => {
     const dispatcher = createDefaultDispatcher();
-    const res = await dispatcher.execute(
-      call("lsp_diagnostics", { path: "notes.txt" }),
-      makeCtx(makeWorkspace()),
-    );
+    const res = await dispatcher.execute(call("lsp_diagnostics", { path: "notes.txt" }), makeCtx(makeWorkspace()));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("lsp_unsupported");
   });

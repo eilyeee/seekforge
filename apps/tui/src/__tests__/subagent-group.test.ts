@@ -59,11 +59,7 @@ describe("groupSubagentSteps", () => {
 
   it("does not merge same-agent steps split by an intervening item", () => {
     const assistant: ChatItem = { kind: "assistant", id: "m1", text: "note", streaming: false };
-    const nodes = groupSubagentSteps([
-      step("s1", "a1", "agent-a"),
-      assistant,
-      step("s2", "a2", "agent-a"),
-    ]);
+    const nodes = groupSubagentSteps([step("s1", "a1", "agent-a"), assistant, step("s2", "a2", "agent-a")]);
     expect(nodes).toHaveLength(3);
     expect(nodes[0]).toMatchObject({ kind: "subagent-group", steps: [{ id: "s1" }] });
     expect(nodes[1]).toEqual({ kind: "item", item: assistant });

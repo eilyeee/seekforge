@@ -108,14 +108,16 @@ describe("trigger registry paths", () => {
   it("rejects a symlinked project registry for reads and writes", () => {
     const ws = makeWorkspace();
     const outside = join(makeWorkspace(), "triggers.json");
-    const external = JSON.stringify([{
-      id: "outside",
-      task: "external task",
-      mode: "ask",
-      maxCostUsd: 1,
-      secret: "external-secret",
-      enabled: true,
-    }]);
+    const external = JSON.stringify([
+      {
+        id: "outside",
+        task: "external task",
+        mode: "ask",
+        maxCostUsd: 1,
+        secret: "external-secret",
+        enabled: true,
+      },
+    ]);
     writeFileSync(outside, external);
     mkdirSync(join(ws, ".seekforge"));
     symlinkSync(outside, join(ws, ".seekforge", "triggers.json"), "file");
@@ -231,11 +233,7 @@ beforeAll(async () => {
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
   workspace = makeWorkspace();
-  writeFileIn(
-    workspace,
-    ".seekforge/config.json",
-    JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }),
-  );
+  writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }));
   // A fake agent that immediately reports a created + completed session, so the
   // fire endpoint can resolve with a session id without any real run.
   const createAgent = fakeAgentFactory(async function* () {
@@ -372,7 +370,12 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
     const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
     const unsupported = await fetch(`${base}/api/triggers/ci`, {
       method: "POST",
-      headers: { ...common, "x-github-delivery": "delivery-3", "x-github-event": "fork", "x-hub-signature-256": signature },
+      headers: {
+        ...common,
+        "x-github-delivery": "delivery-3",
+        "x-github-event": "fork",
+        "x-hub-signature-256": signature,
+      },
       body: payload,
     });
     expect(unsupported.status).toBe(400);
@@ -449,7 +452,9 @@ describe("server shutdown", () => {
             yield { type: "session.created" as const, sessionId: "dispose-trigger" };
           },
         },
-        dispose: () => { throw new Error("dispose failed"); },
+        dispose: () => {
+          throw new Error("dispose failed");
+        },
       }),
     });
 
@@ -459,14 +464,20 @@ describe("server shutdown", () => {
 
   it("aborts and disposes background trigger runs before close resolves", async () => {
     const ws = makeWorkspace();
-    writeFileIn(ws, ".seekforge/triggers.json", JSON.stringify([{
-      id: "slow",
-      task: "wait",
-      mode: "ask",
-      maxCostUsd: 1,
-      secret: "slow-trigger-secret",
-      enabled: true,
-    }]));
+    writeFileIn(
+      ws,
+      ".seekforge/triggers.json",
+      JSON.stringify([
+        {
+          id: "slow",
+          task: "wait",
+          mode: "ask",
+          maxCostUsd: 1,
+          secret: "slow-trigger-secret",
+          enabled: true,
+        },
+      ]),
+    );
     let aborted = false;
     let disposed = false;
     let cleanupStarted = false;
@@ -493,7 +504,9 @@ describe("server shutdown", () => {
           }
         },
       },
-      dispose: () => { disposed = true; },
+      dispose: () => {
+        disposed = true;
+      },
     });
     const local = await startServer({ workspace: ws, port: 0, token: TOKEN, createAgent });
     const response = await fetch(`http://127.0.0.1:${local.port}/api/triggers/slow`, {

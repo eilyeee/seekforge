@@ -54,7 +54,10 @@ describe("formatSessionLines", () => {
 
   it("derives the age from updatedAt per session", () => {
     const lines = formatSessionLines(
-      [meta({ id: "s-old", updatedAt: "2026-06-09T12:05:00.000Z" }), meta({ id: "s-fresh", updatedAt: "2026-06-12T12:04:40.000Z" })],
+      [
+        meta({ id: "s-old", updatedAt: "2026-06-09T12:05:00.000Z" }),
+        meta({ id: "s-fresh", updatedAt: "2026-06-12T12:04:40.000Z" }),
+      ],
       15,
       NOW,
     );
@@ -216,12 +219,7 @@ describe("contextBreakdown", () => {
 
   it("groups items into categories with chars/4 estimates, sorted by tokens", () => {
     const rows = contextBreakdown(items);
-    expect(rows.map((r) => r.label)).toEqual([
-      "tool results",
-      "assistant text",
-      "user messages",
-      "shell output",
-    ]);
+    expect(rows.map((r) => r.label)).toEqual(["tool results", "assistant text", "user messages", "shell output"]);
     const tool = rows[0]!;
     // read_file + args JSON + 800-char preview, chars/4
     expect(tool.tokens).toBeGreaterThan(200);

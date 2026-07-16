@@ -25,12 +25,7 @@ import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from 
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
-import {
-  SERVER_CAPABILITIES,
-  SERVER_PROTOCOL_VERSION,
-  type RunManager,
-  type RunStatus,
-} from "./run-ledger.js";
+import { SERVER_CAPABILITIES, SERVER_PROTOCOL_VERSION, type RunManager, type RunStatus } from "./run-ledger.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -50,7 +45,13 @@ type ModelDeltaEvent = { type: "model.delta"; chunk: string };
 type ReasoningDeltaEvent = { type: "reasoning.delta"; chunk: string };
 
 type ServerFrame =
-  | { type: "hello"; protocolVersion: number; capabilities: readonly string[]; disconnectPolicy: "cancel"; backgroundDisconnectPolicy: "continue" }
+  | {
+      type: "hello";
+      protocolVersion: number;
+      capabilities: readonly string[];
+      disconnectPolicy: "cancel";
+      backgroundDisconnectPolicy: "continue";
+    }
   | { type: "run.accepted"; runId: string; status: "queued" }
   | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent | ReasoningDeltaEvent }
   | { type: "permission.request"; requestId: string; request: PermissionRequest }
@@ -88,9 +89,7 @@ type RunInput = {
  * Returns the overrides object (undefined when none are present) or an
  * error string describing the first invalid field.
  */
-export function parseRunOverrides(
-  frame: Record<string, unknown>,
-): { overrides?: RunOverrides } | { error: string } {
+export function parseRunOverrides(frame: Record<string, unknown>): { overrides?: RunOverrides } | { error: string } {
   const { model, thinking, reasoningEffort, outputStyle, sandbox } = frame;
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
     return { error: "model must be a non-empty string when present" };
@@ -198,11 +197,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     else send(frame);
   };
 
-  const bufferDelta = (
-    type: "model.delta" | "reasoning.delta",
-    sessionId: string,
-    chunk: string,
-  ): void => {
+  const bufferDelta = (type: "model.delta" | "reasoning.delta", sessionId: string, chunk: string): void => {
     // A kind or session switch flushes first, preserving cross-kind order.
     if (pendingDeltaType !== undefined && (pendingDeltaType !== type || pendingDeltaSessionId !== sessionId)) {
       flushDeltas();
@@ -234,7 +229,8 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       timer = setTimeout(() => settle(false), timeoutMs);
       pending.set(requestId, settle);
       flushDeltas(); // buffered text must render before the permission prompt
-      if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, { type: "permission.request", requestId, request });
+      if (activeRunId && activeWorkspace)
+        sendRun(activeRunId, activeWorkspace, { type: "permission.request", requestId, request });
       else send({ type: "permission.request", requestId, request });
     });
 
@@ -255,7 +251,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       timer = setTimeout(() => settle(DECLINED_ANSWER), timeoutMs);
       pendingQuestions.set(id, settle);
       flushDeltas(); // buffered text must render before the question prompt
-      if (activeRunId && activeWorkspace) sendRun(activeRunId, activeWorkspace, { type: "question.request", id, question: q.question, options: q.options });
+      if (activeRunId && activeWorkspace)
+        sendRun(activeRunId, activeWorkspace, {
+          type: "question.request",
+          id,
+          question: q.question,
+          options: q.options,
+        });
       else send({ type: "question.request", id, question: q.question, options: q.options });
     });
 
@@ -277,9 +279,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
       // for this turn, on top of (winning over) any frame overrides.
       const effort = detectThinkingKeyword(input.task);
-      const overrides = effort
-        ? { ...input.overrides, thinking: true, reasoningEffort: effort }
-        : input.overrides;
+      const overrides = effort ? { ...input.overrides, thinking: true, reasoningEffort: effort } : input.overrides;
       handle = await deps.createAgent({
         workspace: input.workspace,
         confirm,
@@ -319,7 +319,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           deps.runManager.update(input.workspace, runId, { costUsd: event.usage.costUsd });
         } else if (event.type === "session.completed") {
           terminalStatus = "succeeded";
-          deps.runManager.update(input.workspace, runId, { status: terminalStatus, costUsd: event.report.usage.costUsd });
+          deps.runManager.update(input.workspace, runId, {
+            status: terminalStatus,
+            costUsd: event.report.usage.costUsd,
+          });
         } else if (event.type === "session.failed") {
           terminalStatus = event.error.code === "cancelled" ? "cancelled" : "failed";
           deps.runManager.update(input.workspace, runId, {
@@ -366,14 +369,17 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
-  const loop = async (runId: string, input: {
-    workspace: string;
-    task: string;
-    verifyCommand: string;
-    maxIterations?: number;
-    budget?: number;
-    overrides?: RunOverrides;
-  }): Promise<void> => {
+  const loop = async (
+    runId: string,
+    input: {
+      workspace: string;
+      task: string;
+      verifyCommand: string;
+      maxIterations?: number;
+      budget?: number;
+      overrides?: RunOverrides;
+    },
+  ): Promise<void> => {
     running = true;
     controller = new AbortController();
     activeRunId = runId;
@@ -410,7 +416,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
         sessionId: result.sessionId,
         costUsd: result.costUsd,
-        ...(result.status !== "passed" ? { error: { code: result.status, message: `loop ended with status ${result.status}` } } : {}),
+        ...(result.status !== "passed"
+          ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
+          : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -429,13 +437,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
-  const resumeLoop = async (runId: string, input: {
-    workspace: string;
-    loopId: string;
-    addedIterations?: number;
-    addedBudget?: number;
-    overrides?: RunOverrides;
-  }): Promise<void> => {
+  const resumeLoop = async (
+    runId: string,
+    input: {
+      workspace: string;
+      loopId: string;
+      addedIterations?: number;
+      addedBudget?: number;
+      overrides?: RunOverrides;
+    },
+  ): Promise<void> => {
     running = true;
     controller = new AbortController();
     activeRunId = runId;
@@ -464,7 +475,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
         sessionId: result.sessionId,
         costUsd: result.costUsd,
-        ...(result.status !== "passed" ? { error: { code: result.status, message: `loop ended with status ${result.status}` } } : {}),
+        ...(result.status !== "passed"
+          ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
+          : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -555,19 +568,25 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         // store (same predicate the REST session routes use).
         const meta = isSafeId(sessionId) ? readSessionMeta(workspace.path, sessionId) : undefined;
         if (!meta) return fail("unknown_session", `session not found: ${sessionId}`);
-        const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "ws", labels: { resumedSessionId: sessionId } });
+        const ledgerRun = deps.runManager.create({
+          workspace: workspace.path,
+          source: "ws",
+          labels: { resumedSessionId: sessionId },
+        });
         sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
         // A resumed session keeps its original ask/edit mode unless the frame
         // overrides it (plan -> execute). Approvals default to interactive
         // ("confirm") but the client may change them per follow-up message.
-        launch(run(ledgerRun.runId, {
-          task,
-          mode: mode ?? meta.mode,
-          approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
-          resumeSessionId: sessionId,
-          workspace: workspace.path,
-          ...parsed,
-        }));
+        launch(
+          run(ledgerRun.runId, {
+            task,
+            mode: mode ?? meta.mode,
+            approvalMode: (approvalMode as ApprovalMode | undefined) ?? "confirm",
+            resumeSessionId: sessionId,
+            workspace: workspace.path,
+            ...parsed,
+          }),
+        );
         return;
       }
 
@@ -589,10 +608,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         ) {
           return fail("bad_frame", `loop.maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
         }
-        if (
-          budget !== undefined &&
-          (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)
-        ) {
+        if (budget !== undefined && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)) {
           return fail("bad_frame", "loop.budget must be a finite positive number when present");
         }
         if (wsId !== undefined && typeof wsId !== "string") {
@@ -604,14 +620,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop" });
         sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
-        launch(loop(ledgerRun.runId, {
-          workspace: workspace.path,
-          task,
-          verifyCommand,
-          ...(maxIterations !== undefined ? { maxIterations } : {}),
-          ...(budget !== undefined ? { budget } : {}),
-          ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
-        }));
+        launch(
+          loop(ledgerRun.runId, {
+            workspace: workspace.path,
+            task,
+            verifyCommand,
+            ...(maxIterations !== undefined ? { maxIterations } : {}),
+            ...(budget !== undefined ? { budget } : {}),
+            ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
+          }),
+        );
         return;
       }
 
@@ -621,15 +639,19 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (typeof loopId !== "string" || !isValidLoopId(loopId)) {
           return fail("bad_frame", "loop.resume.loopId must be a safe non-empty id");
         }
-        if (addedIterations !== undefined && (
-          typeof addedIterations !== "number" || !Number.isInteger(addedIterations) ||
-          addedIterations <= 0 || addedIterations > MAX_LOOP_ITERATIONS
-        )) {
+        if (
+          addedIterations !== undefined &&
+          (typeof addedIterations !== "number" ||
+            !Number.isInteger(addedIterations) ||
+            addedIterations <= 0 ||
+            addedIterations > MAX_LOOP_ITERATIONS)
+        ) {
           return fail("bad_frame", `loop.resume.addedIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
         }
-        if (addedBudget !== undefined && (
-          typeof addedBudget !== "number" || !Number.isFinite(addedBudget) || addedBudget <= 0
-        )) {
+        if (
+          addedBudget !== undefined &&
+          (typeof addedBudget !== "number" || !Number.isFinite(addedBudget) || addedBudget <= 0)
+        ) {
           return fail("bad_frame", "loop.resume.addedBudget must be a finite positive number when present");
         }
         if (wsId !== undefined && typeof wsId !== "string") {
@@ -641,13 +663,15 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop", labels: { loopId } });
         sendRun(ledgerRun.runId, workspace.path, { type: "run.accepted", runId: ledgerRun.runId, status: "queued" });
-        launch(resumeLoop(ledgerRun.runId, {
-          workspace: workspace.path,
-          loopId,
-          ...(addedIterations !== undefined ? { addedIterations } : {}),
-          ...(addedBudget !== undefined ? { addedBudget } : {}),
-          ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
-        }));
+        launch(
+          resumeLoop(ledgerRun.runId, {
+            workspace: workspace.path,
+            loopId,
+            ...(addedIterations !== undefined ? { addedIterations } : {}),
+            ...(addedBudget !== undefined ? { addedBudget } : {}),
+            ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
+          }),
+        );
         return;
       }
 
@@ -710,10 +734,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           return fail("bad_frame", "subagent.steer.dispatchId must be a valid dispatch id");
         }
         if (typeof message !== "string" || message.trim().length === 0 || message.length > MAX_STEER_MESSAGE_LENGTH) {
-          return fail(
-            "bad_frame",
-            `subagent.steer.message must contain 1-${MAX_STEER_MESSAGE_LENGTH} characters`,
-          );
+          return fail("bad_frame", `subagent.steer.message must contain 1-${MAX_STEER_MESSAGE_LENGTH} characters`);
         }
         if (!running || !activeDispatchManager) {
           return fail("not_running", "no controllable agent run is active");

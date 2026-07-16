@@ -54,25 +54,27 @@ function toToolSpec(entry: McpClientEntry, tool: McpTool): ToolSpec {
  * contributes zero tools. Cancellation is propagated to the caller.
  */
 export async function buildMcpToolSpecs(clients: McpClientEntry[], signal?: AbortSignal): Promise<ToolSpec[]> {
-  const groups = await Promise.all(clients.map(async (entry): Promise<ToolSpec[]> => {
-    try {
-      const tools: unknown = await entry.client.listTools(signal);
-      if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
-      const specs: ToolSpec[] = [];
-      for (const value of tools) {
-        if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
-        const tool = value as Partial<McpTool>;
-        if (typeof tool.name !== "string" || tool.name.length === 0) continue;
-        specs.push(toToolSpec(entry, tool as McpTool));
+  const groups = await Promise.all(
+    clients.map(async (entry): Promise<ToolSpec[]> => {
+      try {
+        const tools: unknown = await entry.client.listTools(signal);
+        if (!Array.isArray(tools)) throw new TypeError("tools/list result.tools must be an array");
+        const specs: ToolSpec[] = [];
+        for (const value of tools) {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+          const tool = value as Partial<McpTool>;
+          if (typeof tool.name !== "string" || tool.name.length === 0) continue;
+          specs.push(toToolSpec(entry, tool as McpTool));
+        }
+        return specs;
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`warning: MCP server "${entry.serverName}" unavailable: ${message}\n`);
+        return [];
       }
-      return specs;
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      const message = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`warning: MCP server "${entry.serverName}" unavailable: ${message}\n`);
-      return [];
-    }
-  }));
+    }),
+  );
   return groups.flat();
 }
 

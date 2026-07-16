@@ -90,7 +90,9 @@ function appendRing(cur: string, text: string): string {
   return next.length > RING_BUFFER_CHARS ? next.slice(next.length - RING_BUFFER_CHARS) : next;
 }
 
-export function createBackgroundTasks(options: { onEvent?: (event: BackgroundTaskEvent) => void } = {}): BackgroundTasks {
+export function createBackgroundTasks(
+  options: { onEvent?: (event: BackgroundTaskEvent) => void } = {},
+): BackgroundTasks {
   const tasks = new Map<string, TaskRecord>();
   let nextId = 0;
 
@@ -114,10 +116,7 @@ export function createBackgroundTasks(options: { onEvent?: (event: BackgroundTas
   return {
     start({ command, cwd, sandbox, workspace = cwd }) {
       if (sandbox !== undefined && sandbox !== "off" && buildSandboxSpec(sandbox, workspace) === null) {
-        throw new ToolError(
-          "sandbox_unavailable",
-          "sandbox requested but sandbox-exec/bwrap not found on this system",
-        );
+        throw new ToolError("sandbox_unavailable", "sandbox requested but sandbox-exec/bwrap not found on this system");
       }
       const shell = sandboxedShell(command, sandbox, workspace);
       const id = `bg-${++nextId}`;
@@ -169,7 +168,11 @@ export function createBackgroundTasks(options: { onEvent?: (event: BackgroundTas
           status: task.killed ? "cancelled" : code === 0 ? "succeeded" : "failed",
           attempt: 1,
           costUsd: 0,
-          ...(task.error ? { error: task.error } : code && code !== 0 ? { error: { code: "exit_nonzero", message: `command exited ${code}` } } : {}),
+          ...(task.error
+            ? { error: task.error }
+            : code && code !== 0
+              ? { error: { code: "exit_nonzero", message: `command exited ${code}` } }
+              : {}),
         });
       });
 

@@ -112,7 +112,8 @@ export class WorktreeManager {
    */
   create(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
     return this.coordinator.withRepository(base.path, () =>
-      this.withWorkspaceGuards([base.path], base.id, () => this.createLocked(base, name)));
+      this.withWorkspaceGuards([base.path], base.id, () => this.createLocked(base, name)),
+    );
   }
 
   private async createLocked(base: Workspace, name?: string): Promise<{ id: string; path: string; branch: string }> {
@@ -184,10 +185,8 @@ export class WorktreeManager {
     return this.withLock(this.operationLocks, id, async () => {
       const r = this.require(id);
       return this.coordinator.withRepository(r.basePath, async () => {
-        return this.withWorkspaceGuards(
-          [r.basePath, r.path],
-          r.id,
-          () => delegate(mergeWorktree(r.basePath, r.path, r.branch)),
+        return this.withWorkspaceGuards([r.basePath, r.path], r.id, () =>
+          delegate(mergeWorktree(r.basePath, r.path, r.branch)),
         );
       });
     });
@@ -230,11 +229,7 @@ export class WorktreeManager {
     }
   }
 
-  private withLock<T>(
-    locks: Map<string, Promise<unknown>>,
-    key: string,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  private withLock<T>(locks: Map<string, Promise<unknown>>, key: string, operation: () => Promise<T>): Promise<T> {
     const previous = locks.get(key) ?? Promise.resolve();
     const result = previous.then(operation, operation);
     const tail = result.catch(() => {});

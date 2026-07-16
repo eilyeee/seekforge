@@ -11,13 +11,8 @@ export type UsageTokens = Pick<TokenUsage, "promptTokens" | "completionTokens" |
  * entry for `model` that entry is used; otherwise the lookup falls back to the
  * built-in MODEL_PRICING (and, failing that, the default model's pricing).
  */
-export function estimateCostUsd(
-  usage: UsageTokens,
-  model: string,
-  pricing?: Record<string, ModelPricing>,
-): number {
-  const rates =
-    pricing?.[model] ?? MODEL_PRICING[model] ?? MODEL_PRICING[FALLBACK_PRICING_MODEL];
+export function estimateCostUsd(usage: UsageTokens, model: string, pricing?: Record<string, ModelPricing>): number {
+  const rates = pricing?.[model] ?? MODEL_PRICING[model] ?? MODEL_PRICING[FALLBACK_PRICING_MODEL];
   if (!rates) return 0;
   const cacheHit = Math.min(usage.cacheHitTokens, usage.promptTokens);
   const cacheMiss = usage.promptTokens - cacheHit;

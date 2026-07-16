@@ -49,11 +49,7 @@ function sessionAllowed(toolName: string, cls: ClassifiedCall, ctx: ToolContext)
   return list.includes(token);
 }
 
-async function confirmWithUser(
-  toolName: string,
-  cls: ClassifiedCall,
-  ctx: ToolContext,
-): Promise<PermissionOutcome> {
+async function confirmWithUser(toolName: string, cls: ClassifiedCall, ctx: ToolContext): Promise<PermissionOutcome> {
   const answer = await ctx.confirm({
     toolName,
     permission: cls.permission,
@@ -67,10 +63,8 @@ async function confirmWithUser(
   // Normalize the boolean | { allow, remember } | { allow, selectedHunks }
   // contract. A bare boolean is treated exactly as before.
   const allow = typeof answer === "boolean" ? answer : answer.allow;
-  const remember =
-    typeof answer !== "boolean" && "remember" in answer ? answer.remember : undefined;
-  const selectedHunks =
-    typeof answer !== "boolean" && "selectedHunks" in answer ? answer.selectedHunks : undefined;
+  const remember = typeof answer !== "boolean" && "remember" in answer ? answer.remember : undefined;
+  const selectedHunks = typeof answer !== "boolean" && "selectedHunks" in answer ? answer.selectedHunks : undefined;
   if (allow) {
     if (remember === "session") {
       // Grow the run's in-memory session allowlist in place so the next

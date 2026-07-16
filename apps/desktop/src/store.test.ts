@@ -369,7 +369,13 @@ describe("store: loop mode", () => {
       type: "loop.event",
       event: {
         type: "loop.done",
-        result: { status: "exhausted", iterations: 1, costUsd: 0.1, sessionId: "s", finalVerify: { code: 1, output: "no" } },
+        result: {
+          status: "exhausted",
+          iterations: 1,
+          costUsd: 0.1,
+          sessionId: "s",
+          finalVerify: { code: 1, output: "no" },
+        },
       },
     });
     const completed = activeTab(useStore.getState().tabs).loop;
@@ -399,7 +405,13 @@ describe("store: loop mode", () => {
       type: "loop.event",
       event: {
         type: "loop.done",
-        result: { status: "exhausted", iterations: 1, costUsd: 0.1, sessionId: "s", finalVerify: { code: 1, output: "no" } },
+        result: {
+          status: "exhausted",
+          iterations: 1,
+          costUsd: 0.1,
+          sessionId: "s",
+          finalVerify: { code: 1, output: "no" },
+        },
       },
     });
     const completed = activeTab(useStore.getState().tabs).loop;
@@ -452,7 +464,13 @@ describe("store: loop mode", () => {
       type: "loop.event",
       event: {
         type: "loop.done",
-        result: { status: "passed", iterations: 1, costUsd: 0.01, sessionId: "s", finalVerify: { code: 0, output: "ok" } },
+        result: {
+          status: "passed",
+          iterations: 1,
+          costUsd: 0.01,
+          sessionId: "s",
+          finalVerify: { code: 0, output: "ok" },
+        },
       },
     });
     const tab = activeTab(useStore.getState().tabs);
@@ -505,11 +523,13 @@ describe("store: async session actions preserve their target identity", () => {
   it("continued sessions bind to the workspace that produced the response", () => {
     useStore.setState({ activeWorkspaceId: "workspace-b" });
 
-    useStore.getState().continueSession(
-      { id: "session-a", task: "continue me", mode: "edit", status: "completed", createdAt: "now", updatedAt: "now" },
-      [],
-      "workspace-a",
-    );
+    useStore
+      .getState()
+      .continueSession(
+        { id: "session-a", task: "continue me", mode: "edit", status: "completed", createdAt: "now", updatedAt: "now" },
+        [],
+        "workspace-a",
+      );
 
     expect(activeTab(useStore.getState().tabs).ws).toBe("workspace-a");
     expect(activeTab(useStore.getState().tabs).chat.sessionId).toBe("session-a");

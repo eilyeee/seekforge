@@ -23,9 +23,7 @@ const failing = (): TaskResult =>
   result({
     taskId: "failing-test-fix",
     success: false,
-    checks: [
-      { check: { type: "command_succeeds", command: "npm test" }, passed: false, detail: "exit 1" },
-    ],
+    checks: [{ check: { type: "command_succeeds", command: "npm test" }, passed: false, detail: "exit 1" }],
     metrics: { toolCalls: 2, failedToolCalls: 1, costUsd: 0.02, durationMs: 99, score: 60, turns: 12 },
   });
 
@@ -41,9 +39,7 @@ describe("toMarkdown", () => {
   });
 
   it("renders '-' for missing score/turns", () => {
-    const md = toMarkdown([
-      result({ metrics: { toolCalls: 0, failedToolCalls: 0, costUsd: 0, durationMs: 1 } }),
-    ]);
+    const md = toMarkdown([result({ metrics: { toolCalls: 0, failedToolCalls: 0, costUsd: 0, durationMs: 1 } })]);
     expect(md).toContain("| title-change | ✓ | 2/2 | - | - | 0 | 0.0000 |");
   });
 
@@ -97,7 +93,10 @@ describe("toJson / compare", () => {
 
   it("compare reports success, score and cost deltas per task", () => {
     const baseline = toJson([
-      result({ success: false, metrics: { toolCalls: 5, failedToolCalls: 2, costUsd: 0.03, durationMs: 1, score: 80, turns: 4 } }),
+      result({
+        success: false,
+        metrics: { toolCalls: 5, failedToolCalls: 2, costUsd: 0.03, durationMs: 1, score: 80, turns: 4 },
+      }),
       failing(),
     ]);
     const current = [
@@ -158,22 +157,34 @@ describe("regressions", () => {
   });
 
   it("deduplicates a regressed task across repeated samples", () => {
-    expect(regressions([
-      result({ taskId: "a", success: false, sample: 1 }),
-      result({ taskId: "a", success: false, sample: 2 }),
-    ], baseline)).toEqual(["a"]);
+    expect(
+      regressions(
+        [result({ taskId: "a", success: false, sample: 1 }), result({ taskId: "a", success: false, sample: 2 })],
+        baseline,
+      ),
+    ).toEqual(["a"]);
   });
 
   it("uses the task-level sample majority for repeated runs", () => {
-    expect(regressions([
-      result({ taskId: "a", success: true, sample: 1 }),
-      result({ taskId: "a", success: false, sample: 2 }),
-      result({ taskId: "a", success: true, sample: 3 }),
-    ], baseline)).toEqual([]);
-    expect(regressions([
-      result({ taskId: "a", success: false, sample: 1 }),
-      result({ taskId: "a", success: false, sample: 2 }),
-      result({ taskId: "a", success: true, sample: 3 }),
-    ], baseline)).toEqual(["a"]);
+    expect(
+      regressions(
+        [
+          result({ taskId: "a", success: true, sample: 1 }),
+          result({ taskId: "a", success: false, sample: 2 }),
+          result({ taskId: "a", success: true, sample: 3 }),
+        ],
+        baseline,
+      ),
+    ).toEqual([]);
+    expect(
+      regressions(
+        [
+          result({ taskId: "a", success: false, sample: 1 }),
+          result({ taskId: "a", success: false, sample: 2 }),
+          result({ taskId: "a", success: true, sample: 3 }),
+        ],
+        baseline,
+      ),
+    ).toEqual(["a"]);
   });
 });

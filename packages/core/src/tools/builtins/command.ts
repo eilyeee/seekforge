@@ -70,10 +70,7 @@ const runCommand = defineTool({
 
     if (args.background) {
       if (!ctx.background) {
-        throw new ToolError(
-          "background_unavailable",
-          "background tasks are not available in this session",
-        );
+        throw new ToolError("background_unavailable", "background tasks are not available in this session");
       }
       const { id } = ctx.background.start({
         command: args.command,
@@ -196,10 +193,7 @@ const DEFAULT_TASK_OUTPUT_TAIL_CHARS = 2_000;
 
 const taskOutputSchema = z.object({
   taskId: z.string().describe("Background task id returned by run_command with background:true."),
-  tail: z
-    .number()
-    .optional()
-    .describe("Return only the last N chars of each stream (default 2000)."),
+  tail: z.number().optional().describe("Return only the last N chars of each stream (default 2000)."),
 });
 
 const taskOutput = defineTool({
@@ -216,10 +210,7 @@ const taskOutput = defineTool({
     if (!task) {
       throw new ToolError("unknown_task", `Unknown background task: ${args.taskId}`);
     }
-    const tail = Math.max(
-      0,
-      Math.min(args.tail ?? DEFAULT_TASK_OUTPUT_TAIL_CHARS, DEFAULT_LIMITS.toolOutputMaxChars),
-    );
+    const tail = Math.max(0, Math.min(args.tail ?? DEFAULT_TASK_OUTPUT_TAIL_CHARS, DEFAULT_LIMITS.toolOutputMaxChars));
     // slice(-0) is slice(0) — the WHOLE buffer — so tail:0 must short-circuit
     // to empty rather than return everything.
     const lastChars = (s: string): string => (tail === 0 ? "" : s.slice(-tail));
@@ -251,9 +242,7 @@ const taskKill = defineTool({
     return {
       // "write": it only kills tasks this session itself started.
       permission: "write",
-      description: task
-        ? `Kill background task ${task.id} (${task.command})`
-        : `Kill background task ${args.taskId}`,
+      description: task ? `Kill background task ${task.id} (${task.command})` : `Kill background task ${args.taskId}`,
       ...(task ? { command: task.command } : {}),
     };
   },

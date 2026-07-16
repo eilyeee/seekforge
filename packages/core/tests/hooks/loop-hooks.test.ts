@@ -172,10 +172,7 @@ describe("agent loop: hooks + context visibility", () => {
     const sent = requests[0]!.messages as ChatMessage[];
     expect(sent.find((m) => m.role === "user")!.content).toBe(expected);
     // …and the trace records it too (session resume replays the same text).
-    const traced = readFileSync(
-      join(workspace, ".seekforge", "sessions", created.sessionId, "messages.jsonl"),
-      "utf8",
-    )
+    const traced = readFileSync(join(workspace, ".seekforge", "sessions", created.sessionId, "messages.jsonl"), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as ChatMessage & { ts: string });
@@ -218,10 +215,7 @@ describe("agent loop: hooks + context visibility", () => {
       },
     });
     const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
-    const failed = events.find((e) => e.type === "session.failed") as Extract<
-      AgentEvent,
-      { type: "session.failed" }
-    >;
+    const failed = events.find((e) => e.type === "session.failed") as Extract<AgentEvent, { type: "session.failed" }>;
     expect(failed).toBeDefined();
     expect(failed.error.code).toBe("blocked_by_hook");
     expect(failed.error.message).toContain("not today");
@@ -390,15 +384,14 @@ describe("agent loop: hooks across nested subagent runs", () => {
       subagents: [fixer],
       hooks: { notification: [{ command: "cat > notif.json" }] },
     });
-    const events = await collect(
-      agent.runTask({ ...baseInput, approvalMode: "confirm", projectPath: workspace }),
-    );
+    const events = await collect(agent.runTask({ ...baseInput, approvalMode: "confirm", projectPath: workspace }));
     const notif = JSON.parse(readFileSync(join(workspace, "notif.json"), "utf8"));
     expect(notif).toMatchObject({ stage: "notification", kind: "permission" });
     expect(notif.detail).toMatchObject({ toolName: "dispatch_agent", permission: "write" });
-    const [done] = events.filter(
-      (e) => e.type === "tool.completed" && e.toolName === "dispatch_agent",
-    ) as Extract<AgentEvent, { type: "tool.completed" }>[];
+    const [done] = events.filter((e) => e.type === "tool.completed" && e.toolName === "dispatch_agent") as Extract<
+      AgentEvent,
+      { type: "tool.completed" }
+    >[];
     expect(done!.result.error?.code).toBe("denied_by_user");
   });
 });
@@ -468,9 +461,7 @@ describe("agent loop: micro-compaction", () => {
     const toolMsgs = sent.filter((m) => m.role === "tool");
     // Source-aware cleared note: names the originating tool (read_file). The
     // seeded call has empty args ("{}"), so it falls back to the name-only form.
-    expect(toolMsgs[0]!.content).toBe(
-      '{"ok":true,"note":"[old read_file output cleared — re-run if you need it]"}',
-    );
+    expect(toolMsgs[0]!.content).toBe('{"ok":true,"note":"[old read_file output cleared — re-run if you need it]"}');
     expect(toolMsgs[1]!.content).toBe("x".repeat(20_000));
   });
 

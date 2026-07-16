@@ -161,8 +161,6 @@ export function buildTranscriptDigest(messages: ChatMessage[]): string {
       const isSignal = SIGNAL_PATTERN.test(lines[i] as string);
       if (wantSignal !== isSignal) continue;
       if (!tryAdd(i)) {
-        // Keep scanning: a later (shorter) line might still fit.
-        continue;
       }
     }
   }
@@ -190,9 +188,7 @@ function buildUserPrompt(input: ExtractMemoryInput): string {
 
 function buildMinimalSummary(input: ExtractMemoryInput): string {
   const { report } = input;
-  const files = report.changedFiles.length
-    ? report.changedFiles.map((f) => `- ${f}`).join("\n")
-    : "- (none)";
+  const files = report.changedFiles.length ? report.changedFiles.map((f) => `- ${f}`).join("\n") : "- (none)";
   return [
     "## Task",
     input.task,
@@ -298,10 +294,7 @@ export async function extractMemoryFromSession(
     // Opt-in auto-approval (default off): a finite, in-range threshold enables it.
     const threshold = input.autoApproveConfidence;
     const autoApproveEnabled =
-      typeof threshold === "number" &&
-      Number.isFinite(threshold) &&
-      threshold >= 0 &&
-      threshold <= 1;
+      typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
 
     const candidates: MemoryCandidate[] = [];
     for (const fact of parsed.facts) {

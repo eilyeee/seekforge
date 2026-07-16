@@ -33,7 +33,14 @@ export function memoryListCommand(): void {
   }
   console.log(`\n${t("cmd.memory.pendingHeader")}`);
   for (const c of pending) {
-    console.log(t("cmd.memory.pendingCandidate", { id: c.id, type: c.type, confidence: c.confidence.toFixed(2), content: c.content }));
+    console.log(
+      t("cmd.memory.pendingCandidate", {
+        id: c.id,
+        type: c.type,
+        confidence: c.confidence.toFixed(2),
+        content: c.content,
+      }),
+    );
   }
 }
 
@@ -53,9 +60,7 @@ export function memoryStatsCommand(): void {
   );
   console.log(t("cmd.memory.statsUsed", { percent: pct(s.usedFraction) }));
   console.log(t("cmd.memory.statsRejection", { percent: pct(s.rejectionRate) }));
-  console.log(
-    t("cmd.memory.statsCandidates", { pending: s.pending, approved: s.approved, rejected: s.rejected }),
-  );
+  console.log(t("cmd.memory.statsCandidates", { pending: s.pending, approved: s.approved, rejected: s.rejected }));
   console.log(
     t("cmd.memory.statsConfidence", {
       used: conf(s.avgConfidenceUsed),
@@ -64,10 +69,7 @@ export function memoryStatsCommand(): void {
   );
 }
 
-export function memoryAddCommand(
-  words: string[],
-  opts: { type?: string; pending?: boolean; user?: boolean },
-): void {
+export function memoryAddCommand(words: string[], opts: { type?: string; pending?: boolean; user?: boolean }): void {
   const type = opts.type ?? "convention";
   if (!MEMORY_CANDIDATE_TYPES.includes(type as MemoryCandidateType)) {
     console.error(t("err.invalidMemoryType", { type, expected: MEMORY_CANDIDATE_TYPES.join(" | ") }));
@@ -85,9 +87,7 @@ export function memoryAddCommand(
     if (opts.user) {
       console.log(t("cmd.memory.addedUser", { type: candidate.type, content: candidate.content }));
     } else if (opts.pending) {
-      console.log(
-        t("cmd.memory.addedQueued", { id: candidate.id, type: candidate.type, content: candidate.content }),
-      );
+      console.log(t("cmd.memory.addedQueued", { id: candidate.id, type: candidate.type, content: candidate.content }));
     } else {
       console.log(t("cmd.memory.addedTo", { path: projectMemoryPath(workspace) }));
       console.log(t("cmd.memory.addedFact", { type: candidate.type, content: candidate.content }));

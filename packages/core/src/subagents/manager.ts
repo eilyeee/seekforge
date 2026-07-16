@@ -71,9 +71,7 @@ export type DispatchControlError =
   | "invalid_steering"
   | "steering_queue_full";
 
-export type DispatchControlResult =
-  | { ok: true }
-  | { ok: false; code: DispatchControlError; message: string };
+export type DispatchControlResult = { ok: true } | { ok: false; code: DispatchControlError; message: string };
 
 type DispatchRecord = {
   id: string;
@@ -115,7 +113,11 @@ export function createDispatchManager(): DispatchManager {
     rec.controller?.abort();
   }
 
-  function execute(rec: DispatchRecord, parentSignal: AbortSignal | undefined, run: DispatchRunner): Promise<ToolResult> {
+  function execute(
+    rec: DispatchRecord,
+    parentSignal: AbortSignal | undefined,
+    run: DispatchRunner,
+  ): Promise<ToolResult> {
     const controller = new AbortController();
     rec.controller = controller;
     rec.status = "running";

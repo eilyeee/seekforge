@@ -78,10 +78,7 @@ export function readEvolutionProposal(workspace: string, id: string): EvolutionP
   return proposal;
 }
 
-export function appendEvolutionProposals(
-  workspace: string,
-  proposals: EvolutionProposal[],
-): void {
+export function appendEvolutionProposals(workspace: string, proposals: EvolutionProposal[]): void {
   if (proposals.length === 0) return;
   const file = evolutionProposalsPath(workspace);
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -96,7 +96,10 @@ function validBudget(maxCost: number): boolean {
 
 function verify(projectPath: string, cwd: string): boolean {
   const config = loadConfig(projectPath);
-  for (const [label, command] of [["verify", config.verifyCommand], ["lint", config.lintCommand]] as const) {
+  for (const [label, command] of [
+    ["verify", config.verifyCommand],
+    ["lint", config.lintCommand],
+  ] as const) {
     if (!command?.trim()) continue;
     console.log(`\n  running ${label} command: ${command}`);
     const result = spawnSync(command, { cwd, shell: true, stdio: "inherit" });
@@ -198,7 +201,11 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   const workPath = useWorktree ? createTempWorktreePath() : projectPath;
   const reuseBranch = existingBranch(projectPath, branch);
   const branchResult = useWorktree
-    ? run("git", reuseBranch ? buildWorktreeReuseArgs(workPath, branch) : buildWorktreeAddArgs(workPath, branch, base), projectPath)
+    ? run(
+        "git",
+        reuseBranch ? buildWorktreeReuseArgs(workPath, branch) : buildWorktreeAddArgs(workPath, branch, base),
+        projectPath,
+      )
     : run("git", reuseBranch ? ["checkout", branch] : buildBranchArgs(branch), projectPath);
   if (branchResult.code !== 0) {
     fail(`failed to create work branch "${branch}"`, { hint: branchResult.stderr.trim() || undefined });
@@ -234,7 +241,12 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
     const prArgs = buildPrCreateArgs({ issue, branch, base, draft: opts.draft });
     if (opts.dryRun) {
       console.log("\n[dry-run] would commit, push, and open a PR with:");
-      for (const [bin, args] of [["git", buildAddArgs()], ["git", commitArgs], ["git", pushArgs], ["gh", prArgs]] as const) {
+      for (const [bin, args] of [
+        ["git", buildAddArgs()],
+        ["git", commitArgs],
+        ["git", pushArgs],
+        ["gh", prArgs],
+      ] as const) {
         console.log(`  ${formatCommand(bin, args)}`);
       }
       console.log(`\n[dry-run] nothing was pushed; inspect the changes in ${workPath}`);

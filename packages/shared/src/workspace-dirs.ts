@@ -22,9 +22,7 @@ const MAX_TOTAL_CHARS = 60_000;
 /** True when `child` is `parent` or nested anywhere below it. */
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
-  return (
-    rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
-  );
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /**

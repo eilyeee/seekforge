@@ -345,9 +345,7 @@ describe("git stage / unstage / commit", () => {
     });
     expect(unstage.status).toBe(200);
     const status = await jsonOf(await authed("/api/git/status"));
-    const entry = status.files.find(
-      (f: { path: string; staged: boolean }) => f.path === "src/app.ts" && f.staged,
-    );
+    const entry = status.files.find((f: { path: string; staged: boolean }) => f.path === "src/app.ts" && f.staged);
     expect(entry).toBeUndefined();
   });
 
@@ -540,9 +538,7 @@ describe("GET /api/search", () => {
     const rx = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("f.o")}&regex=1`));
     expect(rx.hits.some((h: { path: string }) => h.path === "cs.txt")).toBe(true);
 
-    const ordinaryGroup = await jsonOf(
-      await authed(`/api/search?q=${encodeURIComponent("(?:f.o)+")}&regex=1`),
-    );
+    const ordinaryGroup = await jsonOf(await authed(`/api/search?q=${encodeURIComponent("(?:f.o)+")}&regex=1`));
     expect(ordinaryGroup.error).toBeUndefined();
     expect(ordinaryGroup.hits.some((h: { path: string }) => h.path === "cs.txt")).toBe(true);
 

@@ -25,7 +25,11 @@ describe("tabsReducer", () => {
   it("names a tab from its first user message, capped", () => {
     let s = initialTabs("m");
     const id = activeTabId(s);
-    s = tabsReducer(s, { type: "chat", tabId: id, action: { type: "user", text: "fix the flaky   renderer test please" } });
+    s = tabsReducer(s, {
+      type: "chat",
+      tabId: id,
+      action: { type: "user", text: "fix the flaky   renderer test please" },
+    });
     expect(s.tabs[0]!.name).toBe("fix the flaky re");
     s = tabsReducer(s, { type: "chat", tabId: id, action: { type: "user", text: "second message" } });
     expect(s.tabs[0]!.name).toBe("fix the flaky re"); // name sticks

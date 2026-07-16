@@ -31,9 +31,7 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
     case "ZodString":
       return { ...out, type: "string" };
     case "ZodNumber":
-      return { ...out, type: def.checks?.some((c: { kind: string }) => c.kind === "int")
-        ? "integer"
-        : "number" };
+      return { ...out, type: def.checks?.some((c: { kind: string }) => c.kind === "int") ? "integer" : "number" };
     case "ZodBoolean":
       return { ...out, type: "boolean" };
     case "ZodArray":

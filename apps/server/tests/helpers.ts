@@ -18,10 +18,7 @@ export function writeFileIn(root: string, rel: string, content: string): void {
   writeFileSync(path, content);
 }
 
-export type FakeRun = (
-  opts: CreateAgentOptions,
-  input: RunAgentTaskInput,
-) => AsyncIterable<AgentEvent>;
+export type FakeRun = (opts: CreateAgentOptions, input: RunAgentTaskInput) => AsyncIterable<AgentEvent>;
 
 /** Agent factory whose runTask is a scripted async generator. */
 export function fakeAgentFactory(run: FakeRun): CreateAgentFn {

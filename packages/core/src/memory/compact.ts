@@ -94,9 +94,7 @@ export function computeCompaction(raw: string): { result: CompactResult; content
     // Near-duplicate of an earlier survivor of the same type → keep longer.
     let mergedAway = false;
     for (const survivor of survivors) {
-      const survBullet = survivor.replacement
-        ? parseBullet(survivor.replacement)
-        : survivor.bullet;
+      const survBullet = survivor.replacement ? parseBullet(survivor.replacement) : survivor.bullet;
       if (survBullet.type !== entry.bullet.type) continue;
       if (jaccard(survBullet.words, entry.bullet.words) < NEAR_DUP_JACCARD) continue;
 

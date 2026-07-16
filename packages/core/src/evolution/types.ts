@@ -8,11 +8,7 @@
 
 export type EvolutionProposalType = "project_memory" | "agent_rule" | "skill";
 
-export const EVOLUTION_PROPOSAL_TYPES: readonly EvolutionProposalType[] = [
-  "project_memory",
-  "agent_rule",
-  "skill",
-];
+export const EVOLUTION_PROPOSAL_TYPES: readonly EvolutionProposalType[] = ["project_memory", "agent_rule", "skill"];
 
 export type EvolutionProposalRisk = "low" | "medium" | "high";
 

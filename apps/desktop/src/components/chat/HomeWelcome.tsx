@@ -45,17 +45,24 @@ export function HomeWelcome({ onQuickAction, onNavigate, workspaceId }: Props) {
 
   useEffect(() => {
     let alive = true;
-    api.sessions(workspaceId).then((r) => alive && setSessions(r)).catch(() => {});
-    api.skills(workspaceId).then((r) => alive && setSkills(r)).catch(() => {});
-    api.agents(workspaceId).then((r) => alive && setAgents(r)).catch(() => {});
+    api
+      .sessions(workspaceId)
+      .then((r) => alive && setSessions(r))
+      .catch(() => {});
+    api
+      .skills(workspaceId)
+      .then((r) => alive && setSkills(r))
+      .catch(() => {});
+    api
+      .agents(workspaceId)
+      .then((r) => alive && setAgents(r))
+      .catch(() => {});
     return () => {
       alive = false;
     };
   }, [workspaceId]);
 
-  const recentSessions = [...sessions]
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-    .slice(0, 4);
+  const recentSessions = [...sessions].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 4);
   const topSkills = skills.filter((s) => s.enabled).slice(0, 4);
   const topAgents = agents.slice(0, 4);
 

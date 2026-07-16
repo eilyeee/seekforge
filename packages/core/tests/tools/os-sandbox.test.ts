@@ -23,10 +23,12 @@ const noneAvailable = () => setSandboxAvailabilityCheckForTests(() => false);
 describe("buildSandboxSpec", () => {
   it("composes profiles and probes platform capabilities", () => {
     allAvailable();
-    expect(composeSandboxProfiles(
-      { filesystem: "workspace-write", network: "inherit", writablePaths: ["/one"] },
-      { filesystem: "read-only", network: "deny", writablePaths: ["/two"] },
-    )).toEqual({ filesystem: "read-only", network: "deny", writablePaths: ["/one", "/two"] });
+    expect(
+      composeSandboxProfiles(
+        { filesystem: "workspace-write", network: "inherit", writablePaths: ["/one"] },
+        { filesystem: "read-only", network: "deny", writablePaths: ["/two"] },
+      ),
+    ).toEqual({ filesystem: "read-only", network: "deny", writablePaths: ["/one", "/two"] });
     expect(probeSandboxCapabilities("linux")).toMatchObject({
       available: true,
       binary: "bwrap",
@@ -99,11 +101,19 @@ describe("buildSandboxSpec", () => {
 
     const linux = buildSandboxSpec("read-only", "/tmp/seekforge-read-only-workspace", "linux")!.args;
     expect(linux).toEqual([
-      "--ro-bind", "/", "/",
-      "--bind", "/tmp", "/tmp",
-      "--ro-bind", "/tmp/seekforge-read-only-workspace", "/tmp/seekforge-read-only-workspace",
-      "--dev", "/dev",
-      "--proc", "/proc",
+      "--ro-bind",
+      "/",
+      "/",
+      "--bind",
+      "/tmp",
+      "/tmp",
+      "--ro-bind",
+      "/tmp/seekforge-read-only-workspace",
+      "/tmp/seekforge-read-only-workspace",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
       "--die-with-parent",
     ]);
   });
@@ -119,11 +129,19 @@ describe("buildSandboxSpec", () => {
     const ww = buildSandboxSpec("workspace-write", "/ws", "linux")!;
     expect(ww.bin).toBe("bwrap");
     expect(ww.args).toEqual([
-      "--ro-bind", "/", "/",
-      "--bind", "/ws", "/ws",
-      "--bind", "/tmp", "/tmp",
-      "--dev", "/dev",
-      "--proc", "/proc",
+      "--ro-bind",
+      "/",
+      "/",
+      "--bind",
+      "/ws",
+      "/ws",
+      "--bind",
+      "/tmp",
+      "/tmp",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
       "--die-with-parent",
     ]);
     const restricted = buildSandboxSpec("restricted", "/ws", "linux")!;
@@ -191,8 +209,7 @@ describe("sandbox requested but unavailable", () => {
   });
 });
 
-const hasSeatbelt =
-  process.platform === "darwin" && spawnSync("/usr/bin/which", ["sandbox-exec"]).status === 0;
+const hasSeatbelt = process.platform === "darwin" && spawnSync("/usr/bin/which", ["sandbox-exec"]).status === 0;
 const canWriteHome = (() => {
   try {
     fs.accessSync(os.homedir(), fs.constants.W_OK);
@@ -201,8 +218,7 @@ const canWriteHome = (() => {
     return false;
   }
 })();
-const hasBwrap =
-  process.platform === "linux" && spawnSync("which", ["bwrap"]).status === 0;
+const hasBwrap = process.platform === "linux" && spawnSync("which", ["bwrap"]).status === 0;
 
 // The enforcement tests below skip when the OS mechanism is unavailable, so on
 // a runner that silently lost its sandbox binary a green suite would prove

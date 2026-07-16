@@ -22,11 +22,7 @@ export function parseFallbackToolCalls(text: string): ProviderToolCall[] {
     } catch {
       continue;
     }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      typeof (parsed as { name?: unknown }).name !== "string"
-    ) {
+    if (typeof parsed !== "object" || parsed === null || typeof (parsed as { name?: unknown }).name !== "string") {
       continue;
     }
     const { name, arguments: args } = parsed as { name: string; arguments?: unknown };
@@ -45,10 +41,7 @@ export function parseFallbackToolCalls(text: string): ProviderToolCall[] {
  */
 export function buildFallbackToolPrompt(tools: ToolDefinitionForModel[]): string {
   const toolDocs = tools
-    .map(
-      (t) =>
-        `### ${t.name}\n${t.description}\nParameters (JSON Schema): ${JSON.stringify(t.parameters)}`,
-    )
+    .map((t) => `### ${t.name}\n${t.description}\nParameters (JSON Schema): ${JSON.stringify(t.parameters)}`)
     .join("\n\n");
   return [
     "## Tool calling",

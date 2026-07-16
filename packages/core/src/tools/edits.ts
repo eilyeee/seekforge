@@ -114,11 +114,7 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     const edit = edits[i] as SearchReplaceEdit;
     // Empty oldString is always rejected (matches every position / is meaningless).
     if (edit.oldString.length === 0) {
-      throw new ToolError(
-        "no_match",
-        `Edit ${i + 1}/${edits.length}: oldString is empty`,
-        { editIndex: i, hint: "" },
-      );
+      throw new ToolError("no_match", `Edit ${i + 1}/${edits.length}: oldString is empty`, { editIndex: i, hint: "" });
     }
 
     const count = countOccurrences(next, edit.oldString);
@@ -146,11 +142,10 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     const regions = findFuzzyRegions(lines, oldLines);
 
     if (regions.length === 0) {
-      throw new ToolError(
-        "no_match",
-        `Edit ${i + 1}/${edits.length}: oldString not found in file`,
-        { editIndex: i, hint: closestRegion(next, edit.oldString) },
-      );
+      throw new ToolError("no_match", `Edit ${i + 1}/${edits.length}: oldString not found in file`, {
+        editIndex: i,
+        hint: closestRegion(next, edit.oldString),
+      });
     }
     if (regions.length > 1) {
       throw new ToolError(
@@ -171,8 +166,7 @@ export function applyEdits(content: string, edits: SearchReplaceEdit[]): string 
     const lastIdx = lines.length - 1;
     // Terminator that originally followed line i: "" for the final token (no
     // trailing newline), else CRLF/LF per whether split("\n") left a "\r".
-    const termAfter = (i: number): string =>
-      i >= lastIdx ? "" : (lines[i] as string).endsWith("\r") ? "\r\n" : "\n";
+    const termAfter = (i: number): string => (i >= lastIdx ? "" : (lines[i] as string).endsWith("\r") ? "\r\n" : "\n");
     const content = (i: number): string => (lines[i] as string).replace(/\r$/, "");
 
     const out: string[] = [];

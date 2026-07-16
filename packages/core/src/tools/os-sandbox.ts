@@ -158,18 +158,24 @@ function buildSeatbeltProfile(profile: SandboxProfile, workspace: string): strin
 
 function buildBwrapArgs(profile: SandboxProfile, workspace: string): string[] {
   const args = [
-    "--ro-bind", "/", "/",
+    "--ro-bind",
+    "/",
+    "/",
     ...(profile.filesystem === "read-only" ? [] : ["--bind", workspace, workspace]),
     ...(profile.writablePaths ?? []).flatMap((candidate) => {
       const root = realpathOrNull(candidate);
       return root ? ["--bind", root, root] : [];
     }),
-    "--bind", "/tmp", "/tmp",
+    "--bind",
+    "/tmp",
+    "/tmp",
     // Later nested mounts override the writable /tmp bind for a workspace
     // located below /tmp.
     ...(profile.filesystem === "read-only" ? ["--ro-bind", workspace, workspace] : []),
-    "--dev", "/dev",
-    "--proc", "/proc",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
     "--die-with-parent",
   ];
   if (profile.network === "deny") args.push("--unshare-net");

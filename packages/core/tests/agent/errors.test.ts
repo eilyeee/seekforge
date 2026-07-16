@@ -100,12 +100,28 @@ describe("loop wires hints into session.failed", () => {
     controller.abort();
     const provider: ChatProvider = {
       model: "fake",
-      chat: async () => ({ content: "x", toolCalls: [], usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 }, finishReason: "stop" }),
-      chatStream: async () => ({ content: "x", toolCalls: [], usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 }, finishReason: "stop" }),
+      chat: async () => ({
+        content: "x",
+        toolCalls: [],
+        usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        finishReason: "stop",
+      }),
+      chatStream: async () => ({
+        content: "x",
+        toolCalls: [],
+        usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        finishReason: "stop",
+      }),
     };
     const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
     const events = await collect(
-      agent.runTask({ projectPath: workspace, task: "t", mode: "edit", approvalMode: "auto", signal: controller.signal }),
+      agent.runTask({
+        projectPath: workspace,
+        task: "t",
+        mode: "edit",
+        approvalMode: "auto",
+        signal: controller.signal,
+      }),
     );
     const failed = events.find((e) => e.type === "session.failed");
     if (failed?.type !== "session.failed") throw new Error("expected session.failed");

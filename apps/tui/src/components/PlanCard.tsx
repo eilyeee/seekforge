@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { Box, Text } from "ink";
 import { planGlyph } from "../format.js";
 import type { PlanItem } from "../model.js";

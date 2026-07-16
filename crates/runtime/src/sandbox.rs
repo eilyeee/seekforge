@@ -139,10 +139,7 @@ mod tests {
 
     fn tmpdir(tag: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let p = std::env::temp_dir().join(format!(
-            "sf-sandbox-{tag}-{}-{n}",
-            std::process::id()
-        ));
+        let p = std::env::temp_dir().join(format!("sf-sandbox-{tag}-{}-{n}", std::process::id()));
         fs::create_dir_all(&p).unwrap();
         p
     }
@@ -216,8 +213,19 @@ mod tests {
         ] {
             assert!(is_sensitive_basename(name), "{name} should be sensitive");
         }
-        for name in ["env", ".environment", ".env.", "envfile", "key.txt", "pem.txt", "rsa_id"] {
-            assert!(!is_sensitive_basename(name), "{name} should not be sensitive");
+        for name in [
+            "env",
+            ".environment",
+            ".env.",
+            "envfile",
+            "key.txt",
+            "pem.txt",
+            "rsa_id",
+        ] {
+            assert!(
+                !is_sensitive_basename(name),
+                "{name} should not be sensitive"
+            );
         }
     }
 

@@ -43,9 +43,11 @@ describe("withWorkspace", () => {
 describe("tab-scoped home requests", () => {
   it("uses the explicit tab workspace for recents instead of the active workspace", async () => {
     setWorkspaceProvider(() => "active-workspace");
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+      );
 
     await Promise.all([api.sessions("tab-workspace"), api.skills("tab-workspace"), api.agents("tab-workspace")]);
 
