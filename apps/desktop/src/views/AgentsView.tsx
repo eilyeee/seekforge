@@ -21,6 +21,7 @@ import {
 } from "../components/ui";
 import type { AgentInfo, AgentScope } from "../types";
 import { LatestRequest } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const SCOPE_TONE: Record<AgentScope, BadgeTone> = {
   builtin: "neutral",
@@ -60,12 +61,20 @@ export function AgentsView() {
   // Re-fetch when the active workspace changes (api scopes by ?ws=<active>).
   const ws = useStore((s) => s.activeWorkspaceId);
   const composeInChat = useStore((s) => s.composeInChat);
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
-  const refresh = () =>
-    api
-      .agents(ws)
-      .then(setAgents)
-      .catch((e: unknown) => setError(String(e)));
+  const refresh = (workspaceId: string) => {
+    const operation = coordinator.beginLatest(workspaceId);
+    if (!operation) return Promise.resolve();
+    return api
+      .agents(operation.workspaceId)
+      .then((value) => {
+        if (coordinator.isCurrent(operation)) setAgents(value);
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setError(String(e));
+      });
+  };
 
   useEffect(() => {
     detailRequests.current.invalidate();
@@ -76,20 +85,22 @@ export function AgentsView() {
     setImportOpen(false);
     setTeamOpen(false);
     setNote(null);
-    void refresh();
+    void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [coordinator, ws]);
 
   const openAgent = (id: string) => {
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     const request = detailRequests.current.begin();
     setError(null);
     api
-      .agent(id, ws)
+      .agent(id, operation.workspaceId)
       .then((agent) => {
-        if (detailRequests.current.isCurrent(request)) setDetail(agent);
+        if (coordinator.isCurrent(operation) && detailRequests.current.isCurrent(request)) setDetail(agent);
       })
       .catch((e: unknown) => {
-        if (detailRequests.current.isCurrent(request)) setError(String(e));
+        if (coordinator.isCurrent(operation) && detailRequests.current.isCurrent(request)) setError(String(e));
       });
   };
 
@@ -253,17 +264,22 @@ export function AgentsView() {
       {importOpen && (
         <ImportAgentDialog
           onClose={() => setImportOpen(false)}
-          onImport={(path, global) =>
-            api.agentImport(path, global, ws).then((result) => {
+          onImport={(path, global, onError) => {
+            const operation = coordinator.capture(ws);
+            if (!operation) return;
+            void api.agentImport(path, global, operation.workspaceId).then((result) => {
+              if (!coordinator.isCurrent(operation)) return;
               setImportOpen(false);
               setNote(
                 result.droppedTools.length > 0
                   ? t("agents.importDoneDropped", { id: result.agent.id, tools: result.droppedTools.join(", ") })
                   : t("agents.importDone", { id: result.agent.id }),
               );
-              void refresh();
-            })
-          }
+              void refresh(operation.workspaceId);
+            }).catch((e: unknown) => {
+              if (coordinator.isCurrent(operation)) onError(e);
+            });
+          }}
         />
       )}
       {teamOpen && agents && (
@@ -373,7 +389,7 @@ function ImportAgentDialog({
   onImport,
 }: {
   onClose: () => void;
-  onImport: (path: string, global: boolean) => Promise<unknown>;
+  onImport: (path: string, global: boolean, onError: (error: unknown) => void) => void;
 }) {
   const t = useT();
   const [path, setPath] = useState("");
@@ -386,7 +402,7 @@ function ImportAgentDialog({
     if (trimmed === "" || busy) return;
     setBusy(true);
     setError(null);
-    onImport(trimmed, global).catch((e: unknown) => {
+    onImport(trimmed, global, (e: unknown) => {
       setError(t("agents.importError", { error: String(e) }));
       setBusy(false);
     });
