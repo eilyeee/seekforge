@@ -251,17 +251,13 @@ async function defaultVerify(
   signal?: AbortSignal,
   onOutput?: (stream: "stdout" | "stderr", chunk: string) => void,
 ): Promise<{ code: number; output: string }> {
-  try {
-    const result = await runShellCommand(command, workspace, 120_000, {
-      sandbox: deps.sandbox,
-      workspace,
-      signal,
-      onOutput,
-    });
-    return { code: result.exitCode, output: `${result.stdout}${result.stderr}` };
-  } catch (err) {
-    throw err;
-  }
+  const result = await runShellCommand(command, workspace, 120_000, {
+    sandbox: deps.sandbox,
+    workspace,
+    signal,
+    onOutput,
+  });
+  return { code: result.exitCode, output: `${result.stdout}${result.stderr}` };
 }
 
 const MAX_LIVE_VERIFY_EVENTS = 100;
@@ -379,9 +375,11 @@ async function runAutoLoopWithLease(
       persistenceWarning(error);
     }
   };
-  const initialIterations = opts.resumeState?.iterations ?? 0;
-  const initialCostUsd = opts.resumeState?.costUsd ?? 0;
-  const initialSessionId = opts.resumeState?.sessionId ?? "";
+  // The three fields every terminal result carries. Mutated as the loop
+  // progresses so `finish` always reads the latest values.
+  let iterations = opts.resumeState?.iterations ?? 0;
+  let costUsd = opts.resumeState?.costUsd ?? 0;
+  let sessionId = opts.resumeState?.sessionId ?? "";
 
   const done = (result: LoopResult): LoopResult => {
     const withId = state === undefined ? result : { ...result, loopId: state.loopId };
@@ -395,18 +393,15 @@ async function runAutoLoopWithLease(
     emit({ type: "loop.done", result: withId });
     return withId;
   };
+  const finish = (status: LoopStatus, finalVerify: { code: number; output: string }): LoopResult =>
+    done({ status, iterations, costUsd, sessionId, finalVerify });
+  const cancelledVerify = { code: -1, output: "cancelled" };
 
   // --- Pre-check: maybe it's already green. ---------------------------------
   let preVerify: { code: number; output: string };
   let preVerifyDiagnostics = "";
   if (opts.signal?.aborted) {
-    return done({
-      status: "cancelled",
-      iterations: initialIterations,
-      costUsd: initialCostUsd,
-      sessionId: initialSessionId,
-      finalVerify: { code: -1, output: "cancelled" },
-    });
+    return finish("cancelled", cancelledVerify);
   }
   try {
     const captured = await captureVerify(verify,
@@ -419,53 +414,30 @@ async function runAutoLoopWithLease(
     preVerifyDiagnostics = captured.diagnostics;
   } catch (error) {
     if (opts.signal?.aborted) {
-      return done({
-        status: "cancelled",
-        iterations: initialIterations,
-        costUsd: initialCostUsd,
-        sessionId: initialSessionId,
-        finalVerify: { code: -1, output: "cancelled" },
-      });
+      return finish("cancelled", cancelledVerify);
     }
     // The command could not be run at all.
-    const result: LoopResult = {
-      status: "verify_error",
-      iterations: initialIterations,
-      costUsd: initialCostUsd,
-      sessionId: initialSessionId,
-      finalVerify: { code: -1, output: verifyErrorOutput(error) },
-    };
-    return done(result);
+    return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
   }
   if (preVerify.code === 0) {
-    const result: LoopResult = {
-      status: "passed",
-      iterations: initialIterations,
-      costUsd: initialCostUsd,
-      sessionId: initialSessionId,
-      finalVerify: preVerify,
-    };
-    return done(result);
+    return finish("passed", preVerify);
   }
   persist({ lastVerify: preVerify });
 
   // --- Iterate run → verify → continue. ------------------------------------
-  let sessionId = initialSessionId;
-  let costUsd = initialCostUsd;
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousWorkspace = workspaceFingerprint(opts.workspace);
   const progressFingerprints = [
     `${previousDiagnostics.fingerprint}:${previousWorkspace ?? "unknown-workspace"}`,
   ];
-  let iterations = initialIterations;
 
   for (let i = iterations + 1; i <= maxIterations; i++) {
     if (opts.signal?.aborted) {
-      return done({ status: "cancelled", iterations, costUsd, sessionId, finalVerify: lastVerify });
+      return finish("cancelled", lastVerify);
     }
     if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-      return done({ status: "budget", iterations, costUsd, sessionId, finalVerify: lastVerify });
+      return finish("budget", lastVerify);
     }
     emit({ type: "iteration.start", iteration: i });
 
@@ -525,22 +497,9 @@ async function runAutoLoopWithLease(
       verifyDiagnostics = captured.diagnostics;
     } catch (error) {
       if (opts.signal?.aborted) {
-        return done({
-          status: "cancelled",
-          iterations: i,
-          costUsd,
-          sessionId,
-          finalVerify: { code: -1, output: "cancelled" },
-        });
+        return finish("cancelled", cancelledVerify);
       }
-      const result: LoopResult = {
-        status: "verify_error",
-        iterations: i,
-        costUsd,
-        sessionId,
-        finalVerify: { code: -1, output: verifyErrorOutput(error) },
-      };
-      return done(result);
+      return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
     }
     lastVerify = v;
     const diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
@@ -549,15 +508,15 @@ async function runAutoLoopWithLease(
     emit({ type: "verify", iteration: i, code: v.code, passed: v.code === 0, output: v.output });
 
     if (v.code === 0) {
-      return done({ status: "passed", iterations: i, costUsd, sessionId, finalVerify: v });
+      return finish("passed", v);
     }
 
     // --- Guardrails (checked before spending another iteration). -----------
     if (opts.signal?.aborted) {
-      return done({ status: "cancelled", iterations: i, costUsd, sessionId, finalVerify: v });
+      return finish("cancelled", v);
     }
     if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-      return done({ status: "budget", iterations: i, costUsd, sessionId, finalVerify: v });
+      return finish("budget", v);
     }
     // Structured diagnostics ignore incidental timing/format noise. Pair them
     // with repository content so repeated edits still count as progress.
@@ -568,13 +527,13 @@ async function runAutoLoopWithLease(
     if (progressFingerprints.length > 8) progressFingerprints.shift();
     const cyclePeriod = detectActionCycle(progressFingerprints);
     if ((sameFailure && sameWorkspace) || cyclePeriod !== null) {
-      return done({ status: "no_progress", iterations: i, costUsd, sessionId, finalVerify: v });
+      return finish("no_progress", v);
     }
     previousDiagnostics = diagnostics;
     previousWorkspace = currentWorkspace;
   }
 
-  return done({ status: "exhausted", iterations, costUsd, sessionId, finalVerify: lastVerify });
+  return finish("exhausted", lastVerify);
 }
 
 export async function resumeAutoLoop(

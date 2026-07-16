@@ -545,7 +545,6 @@ const searchText = defineTool({
       }
 
       const lines = content.split("\n");
-      let matchedFile = false;
       for (let i = 0; i < lines.length; i++) {
         if (atCap()) {
           truncated = true;
@@ -553,7 +552,6 @@ const searchText = defineTool({
         }
         const line = lines[i] as string;
         if (re.test(line)) {
-          matchedFile = true;
           if (args.filesWithMatches) {
             filesWithMatches.push(rel);
             return;
@@ -561,7 +559,6 @@ const searchText = defineTool({
           pushMatch(matches, lines, rel, i, ctxLines);
         }
       }
-      void matchedFile;
     };
 
     const walk = (dir: string, rel: string): void => {
