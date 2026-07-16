@@ -6,6 +6,7 @@
  */
 
 import type { RetryInfo } from "./types.js";
+import { onAbortOnce } from "../util/abort.js";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
@@ -87,15 +88,13 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
+      offAbort();
       resolve();
     }, ms);
-    const onAbort = (): void => {
+    const offAbort = onAbortOnce(signal ?? undefined, () => {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
       reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
+    });
   });
 }
 

@@ -1,4 +1,5 @@
 import type { ToolResult } from "@seekforge/shared";
+import { onAbortOnce } from "../util/abort.js";
 
 /**
  * Per-session manager for dispatched subagent runs (mirrors the
@@ -128,15 +129,7 @@ export function createDispatchManager(): DispatchManager {
     // long-lived parentSignal, so it must be removed once this dispatch settles;
     // { once: true } only fires-and-removes on abort, leaking one listener per
     // dispatch across a session otherwise.
-    let unbindParent: (() => void) | undefined;
-    if (parentSignal) {
-      if (parentSignal.aborted) cancelRecord(rec, "parent run cancelled");
-      else {
-        const onAbort = (): void => cancelRecord(rec, "parent run cancelled");
-        parentSignal.addEventListener("abort", onAbort, { once: true });
-        unbindParent = () => parentSignal.removeEventListener("abort", onAbort);
-      }
-    }
+    const unbindParent = onAbortOnce(parentSignal, () => cancelRecord(rec, "parent run cancelled"));
     const hooks: DispatchHooks = {
       onStep: (toolName) => rec.steps.push(toolName),
       onSubSession: (sessionId) => {
@@ -148,7 +141,7 @@ export function createDispatchManager(): DispatchManager {
       .then(() => run(controller.signal, hooks))
       .then(
         (result) => {
-          unbindParent?.();
+          unbindParent();
           rec.controller = undefined;
           rec.steering.length = 0;
           if (rec.status === "cancelled" || controller.signal.aborted) {
@@ -165,7 +158,7 @@ export function createDispatchManager(): DispatchManager {
           return result;
         },
         (err: unknown): ToolResult => {
-          unbindParent?.();
+          unbindParent();
           rec.controller = undefined;
           rec.steering.length = 0;
           if (rec.status === "cancelled" || controller.signal.aborted) {

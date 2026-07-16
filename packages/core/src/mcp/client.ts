@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { McpError } from "./errors.js";
+import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
 import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
 
@@ -263,16 +264,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
         return;
       }
-      const onAbort = (): void => {
-        const p = pending.get(id);
-        if (!p) return;
-        pending.delete(id);
-        clearTimeout(p.timer);
-        p.cleanup();
-        notify(proc, "notifications/cancelled", { requestId: id, reason: "caller aborted" });
-        reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
-      };
-      const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
+      let cleanup: () => void = () => {};
       const timer = setTimeout(() => {
         pending.delete(id);
         cleanup();
@@ -281,12 +273,18 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
           new McpError("mcp_timeout", `MCP server "${options.name}" did not answer ${method} within ${timeoutMs}ms`),
         );
       }, timeoutMs);
-      pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup });
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-        return;
-      }
+      pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer, cleanup: () => cleanup() });
+      cleanup = onAbortOnce(signal, () => {
+        const p = pending.get(id);
+        if (!p) return;
+        pending.delete(id);
+        clearTimeout(p.timer);
+        notify(proc, "notifications/cancelled", { requestId: id, reason: "caller aborted" });
+        reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
+      });
+      // An already-aborted signal fired synchronously above: rejected, entry
+      // removed — do not write the request at all.
+      if (signal?.aborted) return;
       proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
         if (err) {
           pending.delete(id);
@@ -339,24 +337,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
   return {
     async request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
       const { proc, ready } = ensureReady();
-      if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
-      if (!signal) {
-        await ready;
-      } else {
-        let onAbort: (() => void) | undefined;
-        try {
-          await Promise.race([
-            ready,
-            new Promise<never>((_, reject) => {
-              onAbort = () => reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
-              signal.addEventListener("abort", onAbort, { once: true });
-              if (signal.aborted) onAbort();
-            }),
-          ]);
-        } finally {
-          if (onAbort) signal.removeEventListener("abort", onAbort);
-        }
-      }
+      await abortablePromise(ready, signal, () => new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
       return rawRequest<T>(proc, method, params, defaultTimeout, signal);
     },
 

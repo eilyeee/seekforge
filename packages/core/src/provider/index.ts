@@ -8,6 +8,7 @@
  */
 
 import type { ChatResponse } from "@seekforge/shared";
+import { onAbortOnce } from "../util/abort.js";
 import * as crypto from "node:crypto";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "./constants.js";
 import { buildRequestBody, mapChatResponse, mapUsage, type WireChatCompletion } from "./mapping.js";
@@ -53,17 +54,17 @@ async function readWithIdleTimeout<T>(reader: ReadableStreamDefaultReader<T>, id
       idleMs,
     );
   });
-  let onAbort: (() => void) | undefined;
+  let offAbort: () => void = () => {};
   const aborted = new Promise<never>((_resolve, reject) => {
-    if (!signal) return;
-    onAbort = () => reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
+    // onAbortOnce fires immediately on an already-aborted signal, closing the
+    // guard-then-subscribe race the hand-rolled listener left open.
+    offAbort = onAbortOnce(signal, () => reject(signal?.reason));
   });
   try {
     return await Promise.race([reader.read(), timeout, aborted]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    offAbort();
   }
 }
 

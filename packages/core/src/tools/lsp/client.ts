@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ToolError } from "../errors.js";
+import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { isRecord } from "../../util/guards.js";
 
 // ---------------------------------------------------------------------------
@@ -226,8 +227,8 @@ type Pending = {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
   timer: NodeJS.Timeout;
-  signal?: AbortSignal;
-  onAbort?: () => void;
+  /** Detaches the abort listener; installed right after the entry is registered. */
+  offAbort?: () => void;
 };
 type DiagnosticWaiter = {
   resolve: (diagnostics: LspDiagnostic[]) => void;
@@ -403,20 +404,16 @@ class LspSession {
         this.notify("$/cancelRequest", { id });
         reject(new ToolError("lsp_timeout", `${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      const pending: Pending = { resolve, reject, timer, signal };
-      if (signal) {
-        pending.onAbort = () => {
-          if (!this.takePending(id)) return;
-          this.notify("$/cancelRequest", { id });
-          reject(cancelledError());
-        };
-      }
+      const pending: Pending = { resolve, reject, timer };
       this.pending.set(id, pending);
-      if (signal?.aborted) {
-        pending.onAbort?.();
-        return;
-      }
-      if (signal && pending.onAbort) signal.addEventListener("abort", pending.onAbort, { once: true });
+      pending.offAbort = onAbortOnce(signal, () => {
+        if (!this.takePending(id)) return;
+        this.notify("$/cancelRequest", { id });
+        reject(cancelledError());
+      });
+      // An already-aborted signal fired synchronously above: rejected, entry
+      // taken — do not send the request at all.
+      if (signal?.aborted) return;
       // If the write can't go out (dead/closed pipe), fail NOW rather than
       // leaving the caller to wait out the full timeout.
       if (!this.send({ jsonrpc: "2.0", id, method, params })) {
@@ -431,7 +428,7 @@ class LspSession {
     if (!pending) return undefined;
     this.pending.delete(id);
     clearTimeout(pending.timer);
-    if (pending.signal && pending.onAbort) pending.signal.removeEventListener("abort", pending.onAbort);
+    pending.offAbort?.();
     return pending;
   }
 
@@ -615,28 +612,8 @@ function cancelledError(): ToolError {
   return new ToolError("cancelled", "LSP request cancelled");
 }
 
-function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(cancelledError());
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => {
-      cleanup();
-      reject(cancelledError());
-    };
-    const cleanup = (): void => signal.removeEventListener("abort", onAbort);
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (err: unknown) => {
-        cleanup();
-        reject(err);
-      },
-    );
-  });
-}
+const abortable = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> =>
+  abortablePromise(promise, signal, cancelledError);
 
 // ---------------------------------------------------------------------------
 // Shared session registry (one per workspace + languageId) + teardown.

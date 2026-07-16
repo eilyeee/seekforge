@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
 
 /** Error thrown for runtime-reported failures; code mirrors PROTOCOL.md. */
@@ -34,8 +35,8 @@ type Pending = {
   resolve: (data: unknown) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
-  signal?: AbortSignal;
-  onAbort?: () => void;
+  /** Detaches the abort listener; installed right after the entry is registered. */
+  offAbort?: () => void;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -58,9 +59,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     if (!request) return undefined;
     pending.delete(id);
     clearTimeout(request.timer);
-    if (request.signal && request.onAbort) {
-      request.signal.removeEventListener("abort", request.onAbort);
-    }
+    request.offAbort?.();
     return request;
   }
 
@@ -110,7 +109,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       pending = new Map();
       for (const p of stale.values()) {
         clearTimeout(p.timer);
-        if (p.signal && p.onAbort) p.signal.removeEventListener("abort", p.onAbort);
+        p.offAbort?.();
         p.reject(new RuntimeError("runtime_crashed", `seekforge-runtime exited unexpectedly (${detail})`));
       }
     };
@@ -140,23 +139,17 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
           sendCancellation(proc, id);
           request.reject(new RuntimeError("runtime_timeout", `runtime did not answer ${method} within ${timeoutMs}ms`));
         }, timeoutMs);
-        const onAbort = () => {
+        const entry: Pending = { resolve: resolve as (d: unknown) => void, reject, timer };
+        pending.set(id, entry);
+        entry.offAbort = onAbortOnce(opts?.signal, () => {
           const request = takePending(id);
           if (!request) return;
           sendCancellation(proc, id);
           request.reject(new RuntimeError("cancelled", `runtime request ${method} cancelled`));
-        };
-        pending.set(id, {
-          resolve: resolve as (d: unknown) => void,
-          reject,
-          timer,
-          ...(opts?.signal ? { signal: opts.signal, onAbort } : {}),
         });
-        opts?.signal?.addEventListener("abort", onAbort, { once: true });
-        if (opts?.signal?.aborted) {
-          onAbort();
-          return;
-        }
+        // An already-aborted signal fired synchronously above: rejected, entry
+        // taken — do not write the request at all.
+        if (opts?.signal?.aborted) return;
         proc.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (err) => {
           if (err) {
             const request = takePending(id);

@@ -23,6 +23,7 @@ import {
   type TeamMemberPlan,
 } from "../subagents/index.js";
 import { runHooks } from "../hooks/index.js";
+import { onAbortOnce } from "../util/abort.js";
 import { ZERO_USAGE, addUsage, subtractUsage } from "./loop-logic.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import type { AgentCoreDeps, ConfirmQueue } from "./loop.js";
@@ -164,12 +165,10 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       [Symbol.asyncIterator]();
 
     const ABORTED = Symbol("dispatch-aborted");
-    let onAbort!: () => void;
+    let offAbort: () => void = () => {};
     const abortPromise = new Promise<typeof ABORTED>((resolve) => {
-      onAbort = () => resolve(ABORTED);
+      offAbort = onAbortOnce(signal, () => resolve(ABORTED));
     });
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
 
     try {
       for (;;) {
@@ -228,7 +227,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         }
       }
     } finally {
-      signal.removeEventListener("abort", onAbort);
+      offAbort();
     }
 
     // The nested session has its own trace (separate sessionId); record

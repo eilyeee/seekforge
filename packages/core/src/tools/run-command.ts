@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
+import { onAbortOnce } from "../util/abort.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
 export type CommandPermission = "readonly" | "execute" | "env" | "dangerous";
@@ -505,16 +506,13 @@ export function runShellCommand(
       }
     };
     let timer: ReturnType<typeof setTimeout>;
-    const onAbort = (): void => {
-      killTree();
-      settleTerminalError("cancelled");
-    };
+    let offAbort: () => void = () => {};
 
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      offAbort();
       child.removeAllListeners("error");
       child.removeAllListeners("close");
       child.stdout.removeAllListeners("data");
@@ -541,10 +539,12 @@ export function runShellCommand(
       killTree();
       settleTerminalError("timeout");
     }, timeoutMs);
-    signal?.addEventListener("abort", onAbort, { once: true });
-    // Close the check→subscribe race: the signal may abort after the early
-    // guard but before the listener is attached.
-    if (signal?.aborted) onAbort();
+    // onAbortOnce fires immediately on an already-aborted signal, closing the
+    // check→subscribe race.
+    offAbort = onAbortOnce(signal, () => {
+      killTree();
+      settleTerminalError("cancelled");
+    });
 
     child.on("error", (err) => settle(() => reject(new ToolError("spawn_failed", err.message))));
     child.on("close", (code) => {

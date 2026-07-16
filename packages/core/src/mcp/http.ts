@@ -1,5 +1,6 @@
 import type { McpClientOptions } from "./client.js";
 import { McpError } from "./errors.js";
+import { abortablePromise, onAbortOnce } from "../util/abort.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SSE_EVENT_CHARS = 1_048_576;
@@ -226,9 +227,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     if (disposed) throw new McpError("disposed", `MCP client "${options.name}" is disposed`);
     if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
     const controller = new AbortController();
-    const onAbort = (): void => controller.abort();
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) controller.abort();
+    const offAbort = onAbortOnce(signal, () => controller.abort());
     inflight.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -314,7 +313,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       }
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      offAbort();
       inflight.delete(controller);
     }
   }
@@ -374,24 +373,11 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   }
 
   async function waitUntilReady(method: string, signal?: AbortSignal): Promise<void> {
-    const ready = ensureReady();
-    if (!signal) {
-      await ready;
-      return;
-    }
-    let onAbort: (() => void) | undefined;
-    try {
-      await Promise.race([
-        ready,
-        new Promise<never>((_, reject) => {
-          onAbort = () => reject(new McpError("mcp_cancelled", `MCP ${method} request was cancelled`));
-          signal.addEventListener("abort", onAbort, { once: true });
-          if (signal.aborted) onAbort();
-        }),
-      ]);
-    } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort);
-    }
+    await abortablePromise(
+      ensureReady(),
+      signal,
+      () => new McpError("mcp_cancelled", `MCP ${method} request was cancelled`),
+    );
   }
 
   return {
