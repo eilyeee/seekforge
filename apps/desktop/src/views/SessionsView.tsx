@@ -12,6 +12,7 @@ import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChat, IconChevron, IconSessions, Input, Modal, type BadgeTone } from "../components/ui";
 import type { PruneResult, RewindResult, SessionMeta } from "../types";
 import { LatestRequest } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 /** Short, human time for a card corner: today → "10:24", else a compact date. */
 function formatWhen(iso: string): string {
@@ -34,6 +35,9 @@ const STATUS_TONE: Record<SessionStatus, BadgeTone> = {
 };
 
 type Detail = { meta: SessionMeta; messages: ChatMessage[]; events: AgentEvent[]; workspaceId: string };
+type RewindPreview = { sessionId: string; result: RewindResult; workspaceId: string };
+type PendingDelete = { session: SessionMeta; workspaceId: string };
+type Audit = { sessionId: string; markdown: string | null; error: string | null; workspaceId: string };
 
 export function SessionsView() {
   const t = useT();
@@ -45,25 +49,35 @@ export function SessionsView() {
   /** Client-side search over id and task text. */
   const [query, setQuery] = useState("");
   /** Dry-run result awaiting confirmation. */
-  const [rewindPreview, setRewindPreview] = useState<{ sessionId: string; result: RewindResult } | null>(null);
+  const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null);
   /** Per-session inline note ("no checkpoints" / result summary). */
   const [rewindNotes, setRewindNotes] = useState<Record<string, string>>({});
   /** Pending per-row delete confirmation. */
-  const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   /** Open "Prune old…" panel. */
   const [pruneOpen, setPruneOpen] = useState(false);
   /**
    * Read-only audit modal. `markdown === null && !error` = loading; `error`
    * holds a formatted failure message (404 → a short "no audit" note).
    */
-  const [audit, setAudit] = useState<{ sessionId: string; markdown: string | null; error: string | null } | null>(null);
+  const [audit, setAudit] = useState<Audit | null>(null);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const detailRequests = useRef(new LatestRequest());
 
-  const refresh = () =>
-    api
-      .sessions(ws)
-      .then(setSessions)
-      .catch((e: unknown) => setError(String(e)));
+  const refresh = (workspaceId = ws) => {
+    const request = requests.beginLatest(workspaceId);
+    if (!request) return Promise.resolve();
+    return api
+      .sessions(request.workspaceId)
+      .then((value) => {
+        if (!requests.isCurrent(request)) return;
+        setSessions(value);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(request)) setError(String(e));
+      });
+  };
 
   useEffect(() => {
     detailRequests.current.invalidate();
@@ -74,32 +88,46 @@ export function SessionsView() {
     setPendingDelete(null);
     setPruneOpen(false);
     setAudit(null);
-    void refresh();
+    void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [requests, ws]);
 
   const confirmDelete = () => {
     if (!pendingDelete) return;
-    const { id } = pendingDelete;
+    const operation = requests.capture(pendingDelete.workspaceId);
+    if (!operation) return;
+    const { id } = pendingDelete.session;
     setPendingDelete(null);
     api
-      .sessionDelete(id)
-      .then(refresh)
-      .catch((e: unknown) => setError(t("sessions.deleteError", { error: String(e) })));
+      .sessionDelete(id, operation.workspaceId)
+      .then(() => {
+        if (requests.isCurrent(operation)) return refresh(operation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("sessions.deleteError", { error: String(e) }));
+      });
+  };
+
+  const requestDelete = (session: SessionMeta) => {
+    const operation = requests.capture(ws);
+    if (operation) setPendingDelete({ session, workspaceId: operation.workspaceId });
   };
 
   /** Read-only preview of the transcript (the "View details" action). */
   const openSession = (id: string) => {
-    const workspaceId = ws;
-    const request = detailRequests.current.begin();
+    const operation = requests.capture(ws);
+    if (!operation) return;
+    const detailRequest = detailRequests.current.begin();
     setError(null);
     api
-      .session(id, workspaceId)
+      .session(id, operation.workspaceId)
       .then(({ meta, messages, events }) => {
-        if (detailRequests.current.isCurrent(request)) setDetail({ meta, messages, events, workspaceId });
+        if (requests.isCurrent(operation) && detailRequests.current.isCurrent(detailRequest)) {
+          setDetail({ meta, messages, events, workspaceId: operation.workspaceId });
+        }
       })
       .catch((e: unknown) => {
-        if (detailRequests.current.isCurrent(request)) setError(String(e));
+        if (requests.isCurrent(operation) && detailRequests.current.isCurrent(detailRequest)) setError(String(e));
       });
   };
 
@@ -113,16 +141,19 @@ export function SessionsView() {
    * to this session, so the user can keep asking questions (not a dead preview).
    */
   const doContinue = (id: string) => {
-    const workspaceId = ws;
+    const operation = requests.capture(ws);
+    if (!operation) return;
     setError(null);
     api
-      .session(id, workspaceId)
+      .session(id, operation.workspaceId)
       .then(({ meta, messages, events }) => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) {
-          continueSession(meta, messages, workspaceId, events);
+        if (requests.isCurrent(operation)) {
+          continueSession(meta, messages, operation.workspaceId, events);
         }
       })
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(String(e));
+      });
   };
 
   /**
@@ -131,59 +162,85 @@ export function SessionsView() {
    * TUI's `/fork`.
    */
   const doFork = (id: string) => {
-    const workspaceId = ws;
+    const operation = requests.capture(ws);
+    if (!operation) return;
     setError(null);
     api
-      .forkSession(id, workspaceId)
-      .then(({ id: newId }) => api.session(newId, workspaceId))
+      .forkSession(id, operation.workspaceId)
+      .then(({ id: newId }) => api.session(newId, operation.workspaceId))
       .then(({ meta, messages, events }) => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) {
-          continueSession(meta, messages, workspaceId, events);
+        if (requests.isCurrent(operation)) {
+          continueSession(meta, messages, operation.workspaceId, events);
         }
       })
-      .catch((e: unknown) => setError(t("sessions.forkError", { error: String(e) })));
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("sessions.forkError", { error: String(e) }));
+      });
   };
 
   const noteFor = (id: string, e: unknown): string =>
     e instanceof ApiError && e.status === 404 ? t("sessions.rewindNoCheckpoints") : String(e);
 
   const startRewind = (id: string) => {
+    const operation = requests.capture(ws);
+    if (!operation) return;
     setRewindNotes((n) => ({ ...n, [id]: "" }));
     api
-      .rewind(id, true)
-      .then((result) => setRewindPreview({ sessionId: id, result }))
-      .catch((e: unknown) => setRewindNotes((n) => ({ ...n, [id]: noteFor(id, e) })));
+      .rewind(id, true, operation.workspaceId)
+      .then((result) => {
+        if (requests.isCurrent(operation)) {
+          setRewindPreview({ sessionId: id, result, workspaceId: operation.workspaceId });
+        }
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setRewindNotes((n) => ({ ...n, [id]: noteFor(id, e) }));
+      });
   };
 
   const confirmRewind = () => {
     if (!rewindPreview) return;
+    const operation = requests.capture(rewindPreview.workspaceId);
+    if (!operation) return;
     const { sessionId } = rewindPreview;
     setRewindPreview(null);
     api
-      .rewind(sessionId)
-      .then((r) =>
+      .rewind(sessionId, false, operation.workspaceId)
+      .then((r) => {
+        if (!requests.isCurrent(operation)) return;
         setRewindNotes((n) => ({
           ...n,
           [sessionId]: t("sessions.rewindResult", { restored: r.restored.length, deleted: r.deleted.length, skipped: r.skipped.length }),
-        })),
-      )
-      .catch((e: unknown) => setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(sessionId, e) })));
+        }));
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) {
+          setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(sessionId, e) }));
+        }
+      });
   };
 
   /** Fetch and show the read-only per-turn audit for a session in a modal. */
   const openAudit = (id: string) => {
-    setAudit({ sessionId: id, markdown: null, error: null });
+    const operation = requests.capture(ws);
+    if (!operation) return;
+    setAudit({ sessionId: id, markdown: null, error: null, workspaceId: operation.workspaceId });
     api
-      .sessionAudit(id)
-      .then(({ markdown }) =>
-        setAudit((a) => (a && a.sessionId === id ? { ...a, markdown } : a)),
-      )
+      .sessionAudit(id, operation.workspaceId)
+      .then(({ markdown }) => {
+        if (!requests.isCurrent(operation)) return;
+        setAudit((a) =>
+          a && a.sessionId === id && a.workspaceId === operation.workspaceId ? { ...a, markdown } : a,
+        );
+      })
       .catch((e: unknown) => {
+        if (!requests.isCurrent(operation)) return;
         const msg =
           e instanceof ApiError && e.status === 404
             ? t("sessions.auditNotFound")
             : t("sessions.auditError", { error: String(e) });
-        setAudit((a) => (a && a.sessionId === id ? { ...a, error: msg } : a));
+        setAudit((a) =>
+          a && a.sessionId === id && a.workspaceId === operation.workspaceId ? { ...a, error: msg } : a,
+        );
       });
   };
 
@@ -308,7 +365,7 @@ export function SessionsView() {
                             className="text-tertiary hover:text-danger"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setPendingDelete(s);
+                              requestDelete(s);
                             }}
                           >
                             {t("sessions.deleteBtn")}
@@ -423,10 +480,12 @@ export function SessionsView() {
 
       {pruneOpen && (
         <PruneDialog
+          key={ws}
+          workspaceId={ws}
           onClose={() => setPruneOpen(false)}
-          onApplied={() => {
+          onApplied={(workspaceId) => {
             setPruneOpen(false);
-            void refresh();
+            void refresh(workspaceId);
           }}
         />
       )}
@@ -454,7 +513,15 @@ export function SessionsView() {
 }
 
 /** "Prune old sessions": olderThanDays / keepLast inputs, dry-run preview, apply. */
-function PruneDialog({ onClose, onApplied }: { onClose: () => void; onApplied: () => void }) {
+function PruneDialog({
+  workspaceId,
+  onClose,
+  onApplied,
+}: {
+  workspaceId: string;
+  onClose: () => void;
+  onApplied: (workspaceId: string) => void;
+}) {
   const t = useT();
   const [olderThanDays, setOlderThanDays] = useState("");
   const [keepLast, setKeepLast] = useState("");
@@ -462,6 +529,7 @@ function PruneDialog({ onClose, onApplied }: { onClose: () => void; onApplied: (
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const requests = useWorkspaceAsyncCoordinator(workspaceId, () => useStore.getState().activeWorkspaceId);
 
   const optsOf = (dryRun: boolean) => {
     const days = olderThanDays.trim();
@@ -474,27 +542,42 @@ function PruneDialog({ onClose, onApplied }: { onClose: () => void; onApplied: (
   };
 
   const runPreview = () => {
+    const operation = requests.capture(workspaceId);
+    if (!operation) return;
     setBusy("preview");
     setError(null);
     setNote(null);
     api
-      .sessionsPrune(optsOf(true))
-      .then(setPreview)
-      .catch((e: unknown) => setError(t("sessions.pruneError", { error: String(e) })))
-      .finally(() => setBusy(null));
+      .sessionsPrune(optsOf(true), operation.workspaceId)
+      .then((value) => {
+        if (requests.isCurrent(operation)) setPreview(value);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("sessions.pruneError", { error: String(e) }));
+      })
+      .finally(() => {
+        if (requests.isCurrent(operation)) setBusy(null);
+      });
   };
 
   const apply = () => {
+    const operation = requests.capture(workspaceId);
+    if (!operation) return;
     setBusy("apply");
     setError(null);
     api
-      .sessionsPrune(optsOf(false))
+      .sessionsPrune(optsOf(false), operation.workspaceId)
       .then((r) => {
+        if (!requests.isCurrent(operation)) return;
         setNote(t("sessions.pruneDone", { count: r.removed.length }));
-        onApplied();
+        onApplied(operation.workspaceId);
       })
-      .catch((e: unknown) => setError(t("sessions.pruneError", { error: String(e) })))
-      .finally(() => setBusy(null));
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("sessions.pruneError", { error: String(e) }));
+      })
+      .finally(() => {
+        if (requests.isCurrent(operation)) setBusy(null);
+      });
   };
 
   const hasPreview = preview !== null;

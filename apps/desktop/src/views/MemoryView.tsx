@@ -287,7 +287,7 @@ export function MemoryView() {
             <aside className="space-y-6 lg:col-span-1">
               <StatsPanel stats={stats} />
 
-              <CompactControl workspaceId={ws} onApplied={() => refresh(ws)} />
+              <CompactControl key={ws} workspaceId={ws} onApplied={() => refresh(ws)} />
 
               <section>
                 <div className="mb-3 flex items-center gap-2">
@@ -306,7 +306,7 @@ export function MemoryView() {
                       ))}
                     </ul>
                   )}
-                  <AddFactForm onAdd={addFact} />
+                  <AddFactForm key={ws} onAdd={addFact} />
                 </Card>
               </section>
 

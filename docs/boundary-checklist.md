@@ -730,6 +730,11 @@ during render lets an uncommitted render invalidate the state still on screen.
 - **Also caught:** workspace opens, memory mutations/statistics, and balance
   requests committed after their owning workspace changed; bind every completion
   and rollback to a generation or workspace identity.
+- **Also caught:** security, settings/MCP, agent, session, diagnostics,
+  evolution, skills, files, diff, todos, and nested memory controls let late
+  success, error, cleanup, or timer handlers mutate the newly active workspace
+  UI. Scope every completion, not only the request URL, and include browser-side
+  effects such as report downloads.
 
 ## 43. Fallback branches must preserve request predicates
 

@@ -5,6 +5,7 @@ import { diffTotals, splitDiffByFile, type FileDiff } from "../lib/diff-files";
 import { DiffBlock } from "../components/DiffBlock";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, EmptyState, IconChevron, IconDiff, IconSparkle } from "../components/ui";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 function FileSection({ file }: { file: FileDiff }) {
   const t = useT();
@@ -51,27 +52,32 @@ export function DiffView() {
   const [notGit, setNotGit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const refresh = useCallback(async () => {
+    const request = requests.beginLatest(ws);
+    if (!request) return;
     setError(null);
     setLoading(true);
     try {
       const res = await api.diff(staged);
+      if (!requests.isCurrent(request)) return;
       setFiles(splitDiffByFile(res.diff));
       setTruncated(res.truncated);
       setNotGit(res.notGit ?? false);
     } catch (err) {
+      if (!requests.isCurrent(request)) return;
       setError(err instanceof Error ? err.message : String(err));
       setFiles(null);
     } finally {
-      setLoading(false);
+      if (requests.isCurrent(request)) setLoading(false);
     }
-    // `ws` is read from the store closure by api.diff; it is a dep so the diff
-    // refreshes when the active workspace changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staged, ws]);
+  }, [requests, staged, ws]);
 
   useEffect(() => {
+    setFiles(null);
+    setTruncated(false);
+    setNotGit(false);
     void refresh();
   }, [refresh]);
 

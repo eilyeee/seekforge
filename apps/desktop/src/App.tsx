@@ -82,7 +82,7 @@ export function App() {
           </Suspense>
         </div>
       </main>
-      {todosOpen && <TodosPanel />}
+      {todosOpen && <TodosPanel key={activeWorkspaceId} />}
       <CommandPalette />
     </div>
   );

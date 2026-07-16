@@ -7,24 +7,31 @@ import { activeTab, useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
 import type { ConfigKey, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
+import type { WorkspaceAsyncCoordinator } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-function useFieldSave() {
+function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<string>) {
   const [states, setStates] = useState<Partial<Record<ConfigKey, SaveState>>>({});
   const save = async (key: ConfigKey, value: string, global: boolean): Promise<ServerConfig | null> => {
+    const operation = requests.capture(workspaceId);
+    if (!operation) return null;
     setStates((s) => ({ ...s, [key]: "saving" }));
     try {
       const config = await api.setConfig(key, value, global || undefined);
+      if (!requests.isCurrent(operation)) return null;
       setStates((s) => ({ ...s, [key]: "saved" }));
-      setTimeout(() => setStates((s) => ({ ...s, [key]: "idle" })), 2000);
+      setTimeout(() => {
+        if (requests.isCurrent(operation)) setStates((s) => ({ ...s, [key]: "idle" }));
+      }, 2000);
       return config;
     } catch {
-      setStates((s) => ({ ...s, [key]: "error" }));
+      if (requests.isCurrent(operation)) setStates((s) => ({ ...s, [key]: "error" }));
       return null;
     }
   };
-  return { states, save };
+  return { states, save, reset: () => setStates({}) };
 }
 
 function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void }) {
@@ -96,12 +103,22 @@ function McpSection() {
   const [editor, setEditor] = useState<McpServer | "new" | null>(null);
   const [pendingRemove, setPendingRemove] = useState<McpServer | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
-  const refresh = () =>
-    api
-      .mcp(ws)
-      .then(setServers)
-      .catch((e: unknown) => setLoadError(String(e)));
+  const refresh = (workspaceId = ws) => {
+    const operation = coordinator.beginLatest(workspaceId);
+    if (!operation) return Promise.resolve();
+    return api
+      .mcp(operation.workspaceId)
+      .then((result) => {
+        if (!coordinator.isCurrent(operation)) return;
+        setServers(result);
+        setLoadError(null);
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setLoadError(String(e));
+      });
+  };
 
   useEffect(() => {
     setServers(null);
@@ -110,36 +127,57 @@ function McpSection() {
     setConnections({});
     setEditor(null);
     setPendingRemove(null);
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+    void refresh(ws);
+  }, [coordinator, ws]);
 
   const listTools = (name: string) => {
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     setTools((t) => ({ ...t, [name]: "loading" }));
     api
-      .mcpTools(name, ws)
-      .then((list) => setTools((t) => ({ ...t, [name]: list })))
-      .catch((e: unknown) => setTools((t) => ({ ...t, [name]: { error: String(e) } })));
+      .mcpTools(name, operation.workspaceId)
+      .then((list) => {
+        if (coordinator.isCurrent(operation)) setTools((t) => ({ ...t, [name]: list }));
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) {
+          setTools((t) => ({ ...t, [name]: { error: String(e) } }));
+        }
+      });
   };
 
   const confirmRemove = () => {
     if (!pendingRemove) return;
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     const server = pendingRemove;
     setPendingRemove(null);
     api
-      .mcpRemove(server.name, server.source, ws)
-      .then(refresh)
-      .catch((e: unknown) => setLoadError(String(e)));
+      .mcpRemove(server.name, server.source, operation.workspaceId)
+      .then(() => {
+        if (coordinator.isCurrent(operation)) return refresh(operation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setLoadError(String(e));
+      });
   };
 
   const testConnection = (name: string) => {
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     setConnections((states) => ({ ...states, [name]: "testing" }));
     api
-      .mcpTest(name, ws)
-      .then((result) => setConnections((states) => ({ ...states, [name]: result })))
-      .catch((error: unknown) =>
-        setConnections((states) => ({ ...states, [name]: { ok: false, error: String(error) } })),
-      );
+      .mcpTest(name, operation.workspaceId)
+      .then((result) => {
+        if (coordinator.isCurrent(operation)) {
+          setConnections((states) => ({ ...states, [name]: result }));
+        }
+      })
+      .catch((error: unknown) => {
+        if (coordinator.isCurrent(operation)) {
+          setConnections((states) => ({ ...states, [name]: { ok: false, error: String(error) } }));
+        }
+      });
   };
 
   return (
@@ -350,6 +388,7 @@ export function McpEditorDialog({ initial, ws, onClose, onSaved }: {
   const [trusted, setTrusted] = useState(initial?.trusted ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const canSubmit =
     name.trim() !== "" &&
@@ -359,6 +398,8 @@ export function McpEditorDialog({ initial, ws, onClose, onSaved }: {
 
   const submit = () => {
     if (!canSubmit || busy) return;
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     setBusy(true);
     setError(null);
     const envValues = recordOf(env);
@@ -387,11 +428,17 @@ export function McpEditorDialog({ initial, ws, onClose, onSaved }: {
           trusted,
         };
     api
-      .mcpAdd(cfg, ws)
-      .then(onSaved)
+      .mcpAdd(cfg, operation.workspaceId)
+      .then(() => {
+        if (coordinator.isCurrent(operation)) onSaved();
+      })
       .catch((e: unknown) => {
-        setError(t("settings.mcpAddError", { error: String(e) }));
-        setBusy(false);
+        if (coordinator.isCurrent(operation)) {
+          setError(t("settings.mcpAddError", { error: String(e) }));
+        }
+      })
+      .finally(() => {
+        if (coordinator.isCurrent(operation)) setBusy(false);
       });
   };
 
@@ -522,20 +569,39 @@ function McpResourcesSection({ ws }: { ws: string }) {
   const t = useT();
   const [state, setState] = useState<McpResource[] | { error: string } | "loading" | null>(null);
   const [copiedUri, setCopiedUri] = useState<string | null>(null);
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
+
+  useEffect(() => {
+    setState(null);
+    setCopiedUri(null);
+  }, [coordinator, ws]);
 
   const load = () => {
+    const operation = coordinator.beginLatest(ws);
+    if (!operation) return;
     setState("loading");
     api
-      .mcpResources(ws)
-      .then((r) => setState(r.resources))
-      .catch((e: unknown) => setState({ error: String(e) }));
+      .mcpResources(operation.workspaceId)
+      .then((r) => {
+        if (coordinator.isCurrent(operation)) setState(r.resources);
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setState({ error: String(e) });
+      });
   };
 
   const copy = (server: string, uri: string) => {
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     const ref = `@mcp:${server}:${uri}`;
     void navigator.clipboard.writeText(ref).then(() => {
+      if (!coordinator.isCurrent(operation)) return;
       setCopiedUri(`${server}:${uri}`);
-      setTimeout(() => setCopiedUri(null), 2000);
+      setTimeout(() => {
+        if (coordinator.isCurrent(operation)) {
+          setCopiedUri((current) => current === `${server}:${uri}` ? null : current);
+        }
+      }, 2000);
     });
   };
 
@@ -595,12 +661,31 @@ function McpPromptsSection({ ws }: { ws: string }) {
   const [running, setRunning] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
+  const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
-  useEffect(() => () => requestRef.current?.abort(), []);
+  useEffect(() => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setState(null);
+    setSelected(null);
+    setArgs({});
+    setRunning(false);
+    setPromptError(null);
+    return () => requestRef.current?.abort();
+  }, [coordinator, ws]);
 
   const load = () => {
+    const operation = coordinator.beginLatest(ws);
+    if (!operation) return;
     setState("loading");
-    api.mcpPrompts(ws).then((r) => setState(r.prompts)).catch((e: unknown) => setState({ error: String(e) }));
+    api
+      .mcpPrompts(operation.workspaceId)
+      .then((r) => {
+        if (coordinator.isCurrent(operation)) setState(r.prompts);
+      })
+      .catch((e: unknown) => {
+        if (coordinator.isCurrent(operation)) setState({ error: String(e) });
+      });
   };
 
   const open = (prompt: McpPrompt) => {
@@ -613,27 +698,47 @@ function McpPromptsSection({ ws }: { ws: string }) {
 
   const usePrompt = async () => {
     if (!selected) return;
+    const operation = coordinator.capture(ws);
+    if (!operation) return;
     const origin = activeTab(useStore.getState().tabs);
-    if (origin.ws !== ws) return;
+    if (origin.ws !== operation.workspaceId) return;
+    const prompt = selected;
+    const submittedArgs = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== ""));
     const controller = new AbortController();
     requestRef.current?.abort();
     requestRef.current = controller;
     setPromptError(null);
     setRunning(true);
     try {
-      const submittedArgs = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== ""));
-      const result = await api.mcpPrompt(selected.server, selected.name, submittedArgs, ws, controller.signal);
+      const result = await api.mcpPrompt(
+        prompt.server,
+        prompt.name,
+        submittedArgs,
+        operation.workspaceId,
+        controller.signal,
+      );
+      if (!coordinator.isCurrent(operation) || requestRef.current !== controller) return;
       const current = useStore.getState();
       const currentTab = activeTab(current.tabs);
-      if (current.activeWorkspaceId !== ws || currentTab.tabId !== origin.tabId || currentTab.ws !== ws) return;
+      if (
+        current.activeWorkspaceId !== operation.workspaceId ||
+        currentTab.tabId !== origin.tabId ||
+        currentTab.ws !== operation.workspaceId
+      ) return;
       composeInChat(result.text);
       setSelected(null);
     } catch (e) {
-      if (!(e instanceof Error && e.name === "AbortError")) setPromptError(String(e));
+      if (
+        coordinator.isCurrent(operation) &&
+        requestRef.current === controller &&
+        !(e instanceof Error && e.name === "AbortError")
+      ) {
+        setPromptError(String(e));
+      }
     } finally {
       if (requestRef.current === controller) {
         requestRef.current = null;
-        setRunning(false);
+        if (coordinator.isCurrent(operation)) setRunning(false);
       }
     }
   };
@@ -739,10 +844,12 @@ function PreferencesSection() {
 
 export function SettingsView() {
   const t = useT();
+  const ws = useStore((s) => s.activeWorkspaceId);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [global, setGlobal] = useState(false);
-  const { states, save } = useFieldSave();
+  const { states, save, reset: resetSaveStates } = useFieldSave(ws, requests);
 
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -761,14 +868,17 @@ export function SettingsView() {
   const [planModel, setPlanModel] = useState("");
   const [escalateOnFailure, setEscalateOnFailure] = useState(false);
   const [memoryAutoApprove, setMemoryAutoApprove] = useState("");
-  const ws = useStore((s) => s.activeWorkspaceId);
-
   useEffect(() => {
+    const request = requests.beginLatest(ws);
+    if (!request) return;
     setError(null);
     setLoading(true);
+    setApiKey("");
+    resetSaveStates();
     api
       .config()
       .then((config) => {
+        if (!requests.isCurrent(request)) return;
         const list = config.models ?? [];
         setModelsList(list.join(", "));
         setModel(config.model ?? list[0] ?? "deepseek-v4-flash");
@@ -788,9 +898,14 @@ export function SettingsView() {
             : String(config.memoryAutoApproveConfidence),
         );
       })
-      .catch((e: unknown) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [ws]);
+      .catch((e: unknown) => {
+        if (requests.isCurrent(request)) setError(String(e));
+      })
+      .finally(() => {
+        if (requests.isCurrent(request)) setLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requests]);
 
   return (
     <div className="flex h-full flex-col">
@@ -1040,7 +1155,7 @@ export function SettingsView() {
               </SettingsRow>
             </SettingsGroup>
 
-            <McpSection />
+            <McpSection key={ws} />
           </div>
         )}
       </div>

@@ -15,6 +15,7 @@ import {
   type BadgeTone,
 } from "../components/ui";
 import type { EvolutionProposal, EvolutionProposalRisk, EvolutionProposalType } from "../types";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const TYPE_TONE: Record<EvolutionProposalType, BadgeTone> = {
   project_memory: "accent",
@@ -68,19 +69,29 @@ export function EvolutionView() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const ws = useStore((s) => s.activeWorkspaceId);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   useEffect(() => {
+    const request = requests.beginLatest(ws);
+    if (!request) return;
     setProposals(null);
     setChangedPaths({});
     setError(null);
+    setBusyId(null);
     api
       .evolution()
-      .then(setProposals)
-      .catch((e: unknown) => setError(String(e)));
-  }, [ws]);
+      .then((nextProposals) => {
+        if (requests.isCurrent(request)) setProposals(nextProposals);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(request)) setError(String(e));
+      });
+  }, [requests]);
 
   const act = async (id: string, action: EvolutionAction) => {
     if (!proposals || busyId) return;
+    const operation = requests.capture(ws);
+    if (!operation) return;
     const prev = proposals;
     const optimistic = transitionProposal(prev, id, action);
     if (!optimistic) return;
@@ -90,18 +101,21 @@ export function EvolutionView() {
     try {
       if (action === "apply") {
         const { proposal, changedPath } = await api.evolutionApply(id);
+        if (!requests.isCurrent(operation)) return;
         setChangedPaths((p) => ({ ...p, [id]: changedPath }));
         setProposals((cur) => (cur ?? optimistic).map((x) => (x.id === id ? proposal : x)));
       } else {
         const proposal = await api.evolutionAction(id, action);
+        if (!requests.isCurrent(operation)) return;
         setProposals((cur) => (cur ?? optimistic).map((x) => (x.id === id ? proposal : x)));
       }
     } catch (e) {
+      if (!requests.isCurrent(operation)) return;
       // Roll the optimistic transition back.
       setProposals(prev);
       setError(String(e));
     } finally {
-      setBusyId(null);
+      if (requests.isCurrent(operation)) setBusyId(null);
     }
   };
 

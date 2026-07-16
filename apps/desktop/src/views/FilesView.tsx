@@ -11,6 +11,7 @@ import { fuzzyRank } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
 import { Badge, Button, EmptyState, IconChevron, IconFiles, IconSearch, Input } from "../components/ui";
 import type { FileContent, SearchHit, SearchResult, TreeEntry } from "../types";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 /** A reveal target passed to the editor (1-based line + match span + nonce). */
 type Reveal = { line: number; col: number; len: number; nonce: number };
@@ -41,6 +42,7 @@ export function FilesView() {
   // A cross-view "open this file at a line" request (chat / diff / git links).
   const filesTarget = useStore((s) => s.filesTarget);
   const clearFilesTarget = useStore((s) => s.clearFilesTarget);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const openFile = (path: string, hit?: { line: number; col: number; len: number }) => {
     setSelected(path);
@@ -49,18 +51,22 @@ export function FilesView() {
   };
 
   const loadDir = (path: string) => {
+    const request = requests.capture(ws);
+    if (!request) return;
     setDirs((d) => ({ ...d, [path]: { loaded: false, loading: true, error: null, entries: [] } }));
     api
       .tree(path || undefined)
-      .then((res) =>
-        setDirs((d) => ({ ...d, [path]: { loaded: true, loading: false, error: null, entries: res.entries } })),
-      )
-      .catch((e: unknown) =>
+      .then((res) => {
+        if (!requests.isCurrent(request)) return;
+        setDirs((d) => ({ ...d, [path]: { loaded: true, loading: false, error: null, entries: res.entries } }));
+      })
+      .catch((e: unknown) => {
+        if (!requests.isCurrent(request)) return;
         setDirs((d) => ({
           ...d,
           [path]: { loaded: true, loading: false, error: String(e), entries: [] },
-        })),
-      );
+        }));
+      });
   };
 
   // (Re)load the root whenever the workspace changes; reset all state.
@@ -75,7 +81,7 @@ export function FilesView() {
     // view mounts, and clearing it on mount would immediately close the finder.
     loadDir("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [requests]);
 
   // Honor a cross-view "open file at line" request (chat / diff / git links).
   // It's a one-shot intent: consume then clear, so it doesn't re-fire when this
@@ -139,7 +145,7 @@ export function FilesView() {
           </div>
 
           {leftMode === "search" ? (
-            <SearchPanel onOpen={openFile} />
+            <SearchPanel key={ws} onOpen={openFile} />
           ) : (
             <div className="flex-1 overflow-y-auto py-2">
               {root === undefined || (root.loading && !root.loaded) ? (
@@ -176,13 +182,14 @@ export function FilesView() {
               description={t("files.noSelectionHint")}
             />
           ) : (
-            <FilePane key={selected} path={selected} reveal={reveal} wsPath={wsPath} />
+            <FilePane key={`${ws}:${selected}`} path={selected} reveal={reveal} wsPath={wsPath} />
           )}
         </section>
       </div>
 
       {finderOpen && (
         <FileFinder
+          key={ws}
           recent={recent}
           onClose={() => setFinderOpen(false)}
           onPick={(p) => {

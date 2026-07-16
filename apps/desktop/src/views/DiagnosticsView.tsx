@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import { Badge, Button, Card, IconSettings } from "../components/ui";
 import type { DoctorReport } from "../types";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 type Check = { label: string; value: string; ok: boolean };
 
@@ -54,30 +55,38 @@ export function DiagnosticsView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const ws = useStore((s) => s.activeWorkspaceId);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   const refresh = () => {
+    const request = requests.beginLatest(ws);
+    if (!request) return;
     setLoading(true);
     setError(null);
     api
       .doctor()
-      .then(setReport)
-      .catch((e: unknown) =>
+      .then((nextReport) => {
+        if (requests.isCurrent(request)) setReport(nextReport);
+      })
+      .catch((e: unknown) => {
+        if (!requests.isCurrent(request)) return;
         // An older server predates /api/doctor — say so plainly instead of a
         // raw ApiError (it means the running server needs updating).
         setError(
           e instanceof ApiError && e.status === 404
             ? t("diagnostics.unsupported")
             : t("diagnostics.error", { error: String(e) }),
-        ),
-      )
-      .finally(() => setLoading(false));
+        );
+      })
+      .finally(() => {
+        if (requests.isCurrent(request)) setLoading(false);
+      });
   };
 
   useEffect(() => {
     setReport(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [requests]);
 
   const checks = report ? toChecks(t, report) : [];
 

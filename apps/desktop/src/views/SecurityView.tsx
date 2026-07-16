@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, EmptyState, IconShield, Input, Select, TextArea, type BadgeTone } from "../components/ui";
 import type { FindingStatus, SecurityEvidencePackage, SecurityFinding } from "../types";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 type Section = "findings" | "threats" | "reports";
 type BusyAction = "scan" | "threat" | "export" | "status" | "fix" | null;
@@ -38,15 +39,33 @@ export function SecurityView() {
   const [selected, setSelected] = useState<SecurityFinding | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [fixOpen, setFixOpen] = useState(false);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
-  const refresh = () => api.security(ws).then(setData).catch((reason: unknown) => setError(String(reason)));
+  const refresh = async (workspaceId = ws): Promise<boolean> => {
+    const request = requests.beginLatest(workspaceId);
+    if (!request) return false;
+    try {
+      const result = await api.security(workspaceId);
+      if (!requests.isCurrent(request)) return false;
+      setData(result);
+      setError(null);
+      return true;
+    } catch (reason) {
+      if (requests.isCurrent(request)) setError(String(reason));
+      return false;
+    }
+  };
+
   useEffect(() => {
     setData(null);
     setError(null);
     setSelected(null);
-    void refresh();
+    setBusy(null);
+    setStatusOpen(false);
+    setFixOpen(false);
+    void refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [requests]);
 
   const counts = useMemo(() => {
     const findings = data?.findings ?? [];
@@ -57,26 +76,35 @@ export function SecurityView() {
     };
   }, [data]);
 
-  const run = async (action: Exclude<BusyAction, null>, operation: () => Promise<unknown>) => {
+  async function run<Result>(
+    action: Exclude<BusyAction, null>,
+    operation: (workspaceId: string) => Promise<Result>,
+    onSuccess?: (result: Result) => void,
+  ): Promise<boolean> {
+    const owner = requests.capture(ws);
+    if (!owner) return false;
     setBusy(action);
     setError(null);
     try {
-      await operation();
-      await refresh();
-      return true;
+      const result = await operation(owner.workspaceId);
+      if (!requests.isCurrent(owner)) return false;
+      onSuccess?.(result);
+      await refresh(owner.workspaceId);
+      return requests.isCurrent(owner);
     } catch (reason) {
-      setError(String(reason));
+      if (requests.isCurrent(owner)) setError(String(reason));
       return false;
     } finally {
-      setBusy(null);
+      if (requests.isCurrent(owner)) setBusy(null);
     }
-  };
+  }
 
   const exportReport = (format: "json" | "markdown" | "sarif") =>
-    run("export", async () => {
-      const report = await api.securityExport(format, ws);
-      downloadReport(report.filename, report.content);
-    });
+    run(
+      "export",
+      (workspaceId) => api.securityExport(format, workspaceId),
+      (report) => downloadReport(report.filename, report.content),
+    );
 
   return (
     <div className="flex h-full flex-col bg-surface">
@@ -86,10 +114,10 @@ export function SecurityView() {
             <h1 className="text-lg font-semibold text-primary">{t("security.title")}</h1>
             <p className="mt-1 text-xs text-tertiary">{t("security.subtitle")}</p>
           </div>
-          <Button disabled={busy !== null} onClick={() => void run("threat", () => api.securityThreatModel(ws))}>
+          <Button disabled={busy !== null} onClick={() => void run("threat", (workspaceId) => api.securityThreatModel(workspaceId))}>
             {busy === "threat" ? t("security.running") : t("security.threatModel")}
           </Button>
-          <Button variant="primary" disabled={busy !== null} onClick={() => void run("scan", () => api.securityScan(50, ws))}>
+          <Button variant="primary" disabled={busy !== null} onClick={() => void run("scan", (workspaceId) => api.securityScan(50, workspaceId))}>
             <IconShield size={14} />{busy === "scan" ? t("security.running") : t("security.scan")}
           </Button>
         </div>
@@ -190,8 +218,8 @@ export function SecurityView() {
         )}
       </div>
 
-      {selected && statusOpen && <FindingStatusDialog finding={selected} busy={busy === "status"} onClose={() => setStatusOpen(false)} onSubmit={(status, reason) => void run("status", () => api.securityFindingStatus(selected.id, status, reason, ws)).then((ok) => { if (ok) setStatusOpen(false); })} />}
-      {selected && fixOpen && <FindingFixDialog finding={selected} busy={busy === "fix"} onClose={() => setFixOpen(false)} onSubmit={(maxCost, verify, lint) => void run("fix", () => api.securityFix(selected.id, maxCost, verify, lint, ws)).then((ok) => { if (ok) setFixOpen(false); })} />}
+      {selected && statusOpen && <FindingStatusDialog finding={selected} busy={busy === "status"} onClose={() => setStatusOpen(false)} onSubmit={(status, reason) => void run("status", (workspaceId) => api.securityFindingStatus(selected.id, status, reason, workspaceId)).then((ok) => { if (ok) setStatusOpen(false); })} />}
+      {selected && fixOpen && <FindingFixDialog finding={selected} busy={busy === "fix"} onClose={() => setFixOpen(false)} onSubmit={(maxCost, verify, lint) => void run("fix", (workspaceId) => api.securityFix(selected.id, maxCost, verify, lint, workspaceId)).then((ok) => { if (ok) setFixOpen(false); })} />}
     </div>
   );
 }

@@ -241,8 +241,8 @@ export const api = {
     ),
   worktreeDelete: (id: string) =>
     request<{ deleted: true }>("DELETE", withWorkspace(`/api/worktrees/${encodeURIComponent(id)}`, id)),
-  rewind: (sessionId: string, dryRun?: boolean) =>
-    request<RewindResult>("POST", withWorkspace("/api/rewind"), {
+  rewind: (sessionId: string, dryRun?: boolean, ws?: string) =>
+    request<RewindResult>("POST", withWorkspace("/api/rewind", ws), {
       sessionId,
       ...(dryRun ? { dryRun: true } : {}),
     }),
@@ -271,10 +271,10 @@ export const api = {
       turn,
       files,
     }),
-  todos: () => request<Todo[]>("GET", withWorkspace("/api/todos")),
+  todos: (ws?: string) => request<Todo[]>("GET", withWorkspace("/api/todos", ws)),
   /** Every mutation returns the updated todo list. */
-  todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }) =>
-    request<Todo[]>("POST", withWorkspace("/api/todos"), op),
+  todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }, ws?: string) =>
+    request<Todo[]>("POST", withWorkspace("/api/todos", ws), op),
   balance: (ws?: string) => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance", ws)),
   mcpResources: (ws?: string) => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources", ws)),
   mcpPrompts: (ws?: string) => request<{ prompts: McpPrompt[] }>("GET", withWorkspace("/api/mcp/prompts", ws)),
@@ -308,10 +308,10 @@ export const api = {
     ),
 
   // Sessions lifecycle (workspace-scoped).
-  sessionDelete: (id: string) =>
-    request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/sessions/${encodeURIComponent(id)}`)),
-  sessionsPrune: (opts?: { olderThanDays?: number; keepLast?: number; dryRun?: boolean }) =>
-    request<PruneResult>("POST", withWorkspace("/api/sessions/prune"), opts ?? {}),
+  sessionDelete: (id: string, ws?: string) =>
+    request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws)),
+  sessionsPrune: (opts?: { olderThanDays?: number; keepLast?: number; dryRun?: boolean }, ws?: string) =>
+    request<PruneResult>("POST", withWorkspace("/api/sessions/prune", ws), opts ?? {}),
 
   // Agents import (workspace-scoped).
   agentImport: (path: string, global?: boolean, ws?: string) =>
@@ -420,9 +420,9 @@ export const api = {
 
   // Reviewable session audit (workspace-scoped): a rendered markdown timeline plus
   // the structured audit payload (treated as opaque). 404 for an unknown id.
-  sessionAudit: (id: string) =>
+  sessionAudit: (id: string, ws?: string) =>
     request<{ markdown: string; audit: unknown }>(
       "GET",
-      withWorkspace(`/api/sessions/${encodeURIComponent(id)}/audit`),
+      withWorkspace(`/api/sessions/${encodeURIComponent(id)}/audit`, ws),
     ),
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Markdown } from "../components/Markdown";
@@ -15,7 +15,7 @@ import {
   type BadgeTone,
 } from "../components/ui";
 import type { Skill, SkillScope } from "../types";
-import { LatestRequest } from "./async-coordination";
+import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 
 const SCOPE_TONE: Record<SkillScope, BadgeTone> = {
   builtin: "neutral",
@@ -59,17 +59,23 @@ export function SkillsView() {
   /** "new" / "import" form dialogs, and a pending delete confirmation. */
   const [dialog, setDialog] = useState<null | "new" | "import">(null);
   const [pendingDelete, setPendingDelete] = useState<Skill | null>(null);
-  const detailRequests = useRef(new LatestRequest());
   const ws = useStore((s) => s.activeWorkspaceId);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
-  const refresh = () =>
+  const refresh = (workspaceId = ws) => {
+    const request = requests.beginLatest(workspaceId);
+    if (!request) return;
     api
-      .skills()
-      .then(setSkills)
-      .catch((e: unknown) => setError(String(e)));
+      .skills(workspaceId)
+      .then((nextSkills) => {
+        if (requests.isCurrent(request)) setSkills(nextSkills);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(request)) setError(String(e));
+      });
+  };
 
   useEffect(() => {
-    detailRequests.current.invalidate();
     setSkills(null);
     setDetail(null);
     setError(null);
@@ -77,44 +83,57 @@ export function SkillsView() {
     setQuery("");
     setDialog(null);
     setPendingDelete(null);
-    void refresh();
+    refresh(ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws]);
+  }, [requests]);
 
   const openSkill = (id: string) => {
-    const request = detailRequests.current.begin();
+    const request = requests.beginLatest(ws);
+    if (!request) return;
     setError(null);
     api
       .skill(id)
       .then((skill) => {
-        if (detailRequests.current.isCurrent(request)) setDetail(skill);
+        if (requests.isCurrent(request)) setDetail(skill);
       })
       .catch((e: unknown) => {
-        if (detailRequests.current.isCurrent(request)) setError(String(e));
+        if (requests.isCurrent(request)) setError(String(e));
       });
   };
 
   const closeDetail = () => {
-    detailRequests.current.invalidate();
+    requests.invalidate();
     setDetail(null);
   };
 
   const toggleEnabled = (skill: Skill) => {
+    const operation = requests.capture(ws);
+    if (!operation) return;
     setError(null);
     api
       .skillSetEnabled(skill.id, !skill.enabled, skill.scope)
-      .then(refresh)
-      .catch((e: unknown) => setError(t("skills.actionError", { error: String(e) })));
+      .then(() => {
+        if (requests.isCurrent(operation)) refresh(operation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("skills.actionError", { error: String(e) }));
+      });
   };
 
   const confirmDelete = () => {
     if (!pendingDelete) return;
+    const operation = requests.capture(ws);
+    if (!operation) return;
     const { id, scope } = pendingDelete;
     setPendingDelete(null);
     api
       .skillDelete(id, scope)
-      .then(refresh)
-      .catch((e: unknown) => setError(t("skills.actionError", { error: String(e) })));
+      .then(() => {
+        if (requests.isCurrent(operation)) refresh(operation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("skills.actionError", { error: String(e) }));
+      });
   };
 
   const counts = useMemo(() => {
@@ -308,23 +327,29 @@ export function SkillsView() {
       {dialog === "new" && (
         <NewSkillDialog
           onClose={() => setDialog(null)}
-          onCreate={(id) =>
-            api.skillCreate(id).then(() => {
+          onCreate={(id) => {
+            const operation = requests.capture(ws);
+            if (!operation) return Promise.resolve();
+            return api.skillCreate(id).then(() => {
+              if (!requests.isCurrent(operation)) return;
               setDialog(null);
-              void refresh();
-            })
-          }
+              refresh(operation.workspaceId);
+            });
+          }}
         />
       )}
       {dialog === "import" && (
         <ImportSkillDialog
           onClose={() => setDialog(null)}
-          onImport={(path, global) =>
-            api.skillImport(path, global).then(() => {
+          onImport={(path, global) => {
+            const operation = requests.capture(ws);
+            if (!operation) return Promise.resolve();
+            return api.skillImport(path, global).then(() => {
+              if (!requests.isCurrent(operation)) return;
               setDialog(null);
-              void refresh();
-            })
-          }
+              refresh(operation.workspaceId);
+            });
+          }}
         />
       )}
       {pendingDelete && (

@@ -19,24 +19,40 @@ export function TodosPanel() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    let active = true;
     setTodos(null);
     setError(null);
+    setDraft("");
+    setBusy(false);
     api
-      .todos()
-      .then(setTodos)
-      .catch((e: unknown) => setError(String(e)));
+      .todos(ws)
+      .then((list) => {
+        if (active) setTodos(list);
+      })
+      .catch((e: unknown) => {
+        if (active) setError(String(e));
+      });
+    return () => {
+      active = false;
+    };
   }, [ws]);
 
   const run = (op: Parameters<typeof api.todosOp>[0]) => {
+    const workspaceId = ws;
     setBusy(true);
     api
-      .todosOp(op)
+      .todosOp(op, workspaceId)
       .then((list) => {
+        if (useStore.getState().activeWorkspaceId !== workspaceId) return;
         setTodos(list);
         setError(null);
       })
-      .catch((e: unknown) => setError(String(e)))
-      .finally(() => setBusy(false));
+      .catch((e: unknown) => {
+        if (useStore.getState().activeWorkspaceId === workspaceId) setError(String(e));
+      })
+      .finally(() => {
+        if (useStore.getState().activeWorkspaceId === workspaceId) setBusy(false);
+      });
   };
 
   const add = () => {
