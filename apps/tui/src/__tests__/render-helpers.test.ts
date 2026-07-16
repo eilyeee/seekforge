@@ -3,7 +3,7 @@ import type { DiffLine } from "../model.js";
 import {
   TIPS,
   diffStats,
-  formatDuration,
+  formatDurationPrecise,
   keyHints,
   layoutTable,
   numberDiffLines,
@@ -146,22 +146,22 @@ describe("toolResultSummary", () => {
   });
 });
 
-describe("formatDuration", () => {
+describe("formatDurationPrecise", () => {
   it("uses one decimal under 10s", () => {
-    expect(formatDuration(800)).toBe("0.8s");
-    expect(formatDuration(0)).toBe("0.0s");
-    expect(formatDuration(9_949)).toBe("9.9s");
+    expect(formatDurationPrecise(800)).toBe("0.8s");
+    expect(formatDurationPrecise(0)).toBe("0.0s");
+    expect(formatDurationPrecise(9_949)).toBe("9.9s");
   });
 
   it("uses whole seconds from 10s to 60s", () => {
-    expect(formatDuration(12_000)).toBe("12s");
-    expect(formatDuration(59_400)).toBe("59s");
+    expect(formatDurationPrecise(12_000)).toBe("12s");
+    expect(formatDurationPrecise(59_400)).toBe("59s");
   });
 
   it("uses m + zero-padded seconds beyond a minute", () => {
-    expect(formatDuration(124_000)).toBe("2m04s");
-    expect(formatDuration(60_000)).toBe("1m00s");
-    expect(formatDuration(59_700)).toBe("1m00s"); // rounds up across the boundary
+    expect(formatDurationPrecise(124_000)).toBe("2m04s");
+    expect(formatDurationPrecise(60_000)).toBe("1m00s");
+    expect(formatDurationPrecise(59_700)).toBe("1m00s"); // rounds up across the boundary
   });
 });
 

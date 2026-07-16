@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatDuration,
+  formatDurationCoarse,
   formatUsage,
   formatUsageDetail,
   kfmt,
@@ -52,16 +52,16 @@ describe("formatUsageDetail", () => {
   });
 });
 
-describe("formatDuration", () => {
+describe("formatDurationCoarse", () => {
   it("uses at most two units per magnitude", () => {
-    expect(formatDuration(45_000)).toBe("45s");
-    expect(formatDuration(192_000)).toBe("3m 12s");
-    expect(formatDuration(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
+    expect(formatDurationCoarse(45_000)).toBe("45s");
+    expect(formatDurationCoarse(192_000)).toBe("3m 12s");
+    expect(formatDurationCoarse(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
   });
 
   it("clamps negatives and sub-second values to 0s", () => {
-    expect(formatDuration(-5)).toBe("0s");
-    expect(formatDuration(800)).toBe("0s");
+    expect(formatDurationCoarse(-5)).toBe("0s");
+    expect(formatDurationCoarse(800)).toBe("0s");
   });
 });
 

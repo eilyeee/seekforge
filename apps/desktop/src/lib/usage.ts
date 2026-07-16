@@ -1,3 +1,4 @@
+import { formatCostUsd } from "@seekforge/shared/format";
 import type { TokenUsage } from "@seekforge/shared";
 
 export function emptyUsage(): TokenUsage {
@@ -14,9 +15,7 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
-export function formatUsd(costUsd: number): string {
-  return `$${costUsd.toFixed(4)}`;
-}
+export const formatUsd = formatCostUsd;
 
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;

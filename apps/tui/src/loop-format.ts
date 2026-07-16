@@ -9,6 +9,7 @@
  * inventing a new render surface: a passing verify / clean summary is dim with
  * a ✓ marker, a failing verify / non-passing summary is an error line with ✗.
  */
+import { clipLine, formatCostUsd, lastNonEmptyLine, loopOutcome } from "@seekforge/shared/format";
 import type { LoopEvent, LoopResult, LoopStatus } from "@seekforge/core";
 
 /** A single transcript line: the reducer stamps its id + appends it. */
@@ -19,33 +20,16 @@ const TAIL_MAX = 200;
 
 /** Last non-empty line of command output, trimmed and clipped — a compact tail. */
 export function loopOutputTail(output: string, max = TAIL_MAX): string {
-  const lines = output.split("\n");
-  let last = "";
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = (lines[i] ?? "").trimEnd();
-    if (line.trim() !== "") {
-      last = line;
-      break;
-    }
-  }
-  if (last.length <= max) return last;
-  // Back off one code unit if the cut lands mid surrogate pair, so we never
-  // append the ellipsis to a lone high surrogate (which renders as �).
-  let cut = max - 1;
-  const code = last.charCodeAt(cut - 1);
-  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-  return `${last.slice(0, cut)}…`;
+  return clipLine(lastNonEmptyLine(output), max);
 }
 
 /**
- * Notice tone for a finished loop: a clean pass or a user cancel is calm (dim);
- * every other terminal status (exhausted / no_progress / budget / verify_error)
- * failed to reach green and reads as an error. Mirrors desktop's loopStatusTone
- * (which additionally distinguishes cancelled as "warn"; the TUI has no warn
- * notice tone, so cancelled folds into dim).
+ * Notice tone for a finished loop. The pass/cancelled/fail classification is
+ * shared across surfaces (loopOutcome); the TUI has no warn notice tone, so
+ * cancelled folds into dim.
  */
 export function loopStatusTone(status: LoopStatus): "dim" | "error" {
-  return status === "passed" || status === "cancelled" ? "dim" : "error";
+  return loopOutcome(status) === "fail" ? "error" : "dim";
 }
 
 /**
@@ -60,7 +44,7 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
     case "run.completed":
       return [
         {
-          text: `  loop · iteration ${event.iteration} run complete · $${event.costUsd.toFixed(4)}`,
+          text: `  loop · iteration ${event.iteration} run complete · ${formatCostUsd(event.costUsd)}`,
           tone: "dim",
         },
       ];
@@ -95,7 +79,7 @@ export function formatLoopSummary(result: LoopResult): LoopNotice[] {
   const lines: LoopNotice[] = [
     { text: `⟳ loop done — ${result.status}`, tone },
     {
-      text: `  iterations: ${result.iterations} · cost: $${result.costUsd.toFixed(4)}`,
+      text: `  iterations: ${result.iterations} · cost: ${formatCostUsd(result.costUsd)}`,
       tone: "dim",
     },
   ];

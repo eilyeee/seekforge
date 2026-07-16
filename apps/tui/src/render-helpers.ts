@@ -5,6 +5,7 @@
  * layout, and diff line numbering. No Ink imports — everything here is
  * unit-testable plain data in / strings out.
  */
+import { formatCostUsd } from "@seekforge/shared/format";
 import type { DiffLine } from "./model.js";
 import { kfmt } from "./format.js";
 import { STRINGS, TIP_COUNT, t } from "./strings.js";
@@ -298,7 +299,7 @@ export function toolResultSummary(
         return typeof data["taskId"] === "string" ? `task ${data["taskId"]}` : null;
       }
       const dur = data["durationMs"];
-      return typeof dur === "number" ? `exit ${exit} in ${formatDuration(dur)}` : `exit ${exit}`;
+      return typeof dur === "number" ? `exit ${exit} in ${formatDurationPrecise(dur)}` : `exit ${exit}`;
     }
     case "search_text": {
       const count =
@@ -329,8 +330,12 @@ export function toolResultSummary(
   }
 }
 
-/** "0.8s" under 10s, "12s" under a minute, "2m04s" beyond. */
-export function formatDuration(ms: number): string {
+/**
+ * "0.8s" under 10s, "12s" under a minute, "2m04s" beyond — sub-second precision
+ * for short spans (command timing, turn footers). The coarse two-unit variant
+ * for long spans lives in format.ts as formatDurationCoarse.
+ */
+export function formatDurationPrecise(ms: number): string {
   if (ms < 0) ms = 0;
   if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
   const seconds = Math.round(ms / 1000);
@@ -342,7 +347,7 @@ export function formatDuration(ms: number): string {
 
 /** End-of-turn footer: "✓ 34s · $0.0123 · 12.4K tok". */
 export function turnSummaryLine(p: { durationMs: number; costUsd: number; totalTokens: number }): string {
-  return `✓ ${formatDuration(p.durationMs)} · $${p.costUsd.toFixed(4)} · ${kfmt(p.totalTokens)} tok`;
+  return `✓ ${formatDurationPrecise(p.durationMs)} · ${formatCostUsd(p.costUsd)} · ${kfmt(p.totalTokens)} tok`;
 }
 
 /**

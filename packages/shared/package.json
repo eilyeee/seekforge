@@ -9,7 +9,8 @@
     "./file-refs": "./src/file-refs.ts",
     "./config-layers": "./src/config-layers.ts",
     "./doctor": "./src/doctor.ts",
-    "./workspace-dirs": "./src/workspace-dirs.ts"
+    "./workspace-dirs": "./src/workspace-dirs.ts",
+    "./format": "./src/format.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

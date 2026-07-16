@@ -1,4 +1,5 @@
 /** Mock REST backend: same paths/shapes as SERVER-API.md. */
+import { formatCostUsd } from "@seekforge/shared/format";
 import {
   mockAgents,
   mockCandidates,
@@ -915,7 +916,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       "## Totals",
       "",
       "- Tokens: 4,210 in · 1,180 out",
-      `- Cost: ${meta.usage ? `$${meta.usage.costUsd.toFixed(4)}` : "$0.0000"}`,
+      `- Cost: ${meta.usage ? formatCostUsd(meta.usage.costUsd) : "$0.0000"}`,
     ].join("\n");
     return {
       markdown,

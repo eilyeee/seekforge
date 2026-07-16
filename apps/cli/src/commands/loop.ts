@@ -10,6 +10,7 @@ import {
   type LoopEvent,
   type LoopResult,
 } from "@seekforge/core";
+import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
 import { loadConfig } from "../config.js";
@@ -173,7 +174,7 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
     `status: ${state.status}`,
     `task: ${state.task}`,
     `iterations: ${state.iterations}/${state.maxIterations}`,
-    `cost: $${state.costUsd.toFixed(4)}${state.costBudgetUsd === null ? "" : ` / $${state.costBudgetUsd.toFixed(4)}`}`,
+    `cost: ${formatCostUsd(state.costUsd)}${state.costBudgetUsd === null ? "" : ` / ${formatCostUsd(state.costBudgetUsd)}`}`,
     `updated: ${state.updatedAt}`,
     `workspace: ${state.workspace}`,
     `verify: ${state.verifyCommand}`,

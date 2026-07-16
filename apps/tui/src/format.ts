@@ -1,3 +1,4 @@
+import { formatCostUsd } from "@seekforge/shared/format";
 import type { TokenUsage } from "@seekforge/shared";
 import type { ApprovalSetting, ContextUsage } from "./model.js";
 
@@ -10,12 +11,16 @@ export function kfmt(n: number): string {
 export function formatUsage(usage: TokenUsage): string {
   return (
     `Tokens: ${kfmt(usage.promptTokens)} prompt (${kfmt(usage.cacheHitTokens)} cache hit) / ` +
-    `${kfmt(usage.completionTokens)} completion   Cost: $${usage.costUsd.toFixed(4)}`
+    `${kfmt(usage.completionTokens)} completion   Cost: ${formatCostUsd(usage.costUsd)}`
   );
 }
 
-/** "2h 5m" / "3m 12s" / "45s" duration formatting (whole seconds, two units max). */
-export function formatDuration(ms: number): string {
+/**
+ * "2h 5m" / "3m 12s" / "45s" — whole seconds, two units max; for long spans
+ * (uptime, session age). The sub-second variant for short spans lives in
+ * render-helpers.ts as formatDurationPrecise.
+ */
+export function formatDurationCoarse(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -56,9 +61,9 @@ export function formatUsageDetail(usage: TokenUsage, opts?: { durationMs?: numbe
     `prompt      ${kfmt(usage.promptTokens)} tokens (${kfmt(usage.cacheHitTokens)} cache hit · ${hitRate}% hit rate)`,
     `completion  ${kfmt(usage.completionTokens)} tokens`,
     `total       ${kfmt(usage.promptTokens + usage.completionTokens)} tokens`,
-    `cost        $${usage.costUsd.toFixed(4)}`,
+    `cost        ${formatCostUsd(usage.costUsd)}`,
   ];
-  if (opts?.durationMs !== undefined) lines.push(`duration    ${formatDuration(opts.durationMs)}`);
+  if (opts?.durationMs !== undefined) lines.push(`duration    ${formatDurationCoarse(opts.durationMs)}`);
   if (opts?.turns !== undefined) lines.push(`turns       ${opts.turns}`);
   return lines;
 }
@@ -104,7 +109,7 @@ export function statusBarParts(m: StatusBarModel): StatusBarParts {
   return {
     model: m.model,
     context: m.context ? `ctx ${m.context.percent}%` : undefined,
-    cost: `$${m.usage.costUsd.toFixed(4)}`,
+    cost: `${formatCostUsd(m.usage.costUsd)}`,
     tokens: `${kfmt(totalTokens)} tok`,
     state: m.running ? "working" : "idle",
     ...(m.approval === "auto" ? { approval: "auto-approve" } : {}),

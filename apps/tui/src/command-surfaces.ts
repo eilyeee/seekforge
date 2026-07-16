@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HookEntry } from "@seekforge/core";
-import { formatDuration, kfmt } from "./format.js";
+import { formatDurationCoarse, kfmt } from "./format.js";
 import type { TuiConfig } from "./config.js";
 
 /**
@@ -87,7 +87,7 @@ export function formatStatusLines(s: StatusInput): string[] {
   pairs.push(["sandbox", s.sandbox ?? "off"]);
   pairs.push(["api key", keySourceLabel(s.keySource)]);
   pairs.push(["cost", `$${s.costUsd.toFixed(4)} · ${kfmt(s.totalTokens)} tokens`]);
-  if (s.uptimeMs !== undefined) pairs.push(["uptime", formatDuration(s.uptimeMs)]);
+  if (s.uptimeMs !== undefined) pairs.push(["uptime", formatDurationCoarse(s.uptimeMs)]);
   if (s.contextPercent !== undefined) pairs.push(["context", `${Math.round(s.contextPercent)}% used`]);
   if (s.mcpServers > 0) {
     pairs.push(["mcp", `${s.mcpServers} ${s.mcpServers === 1 ? "server" : "servers"}`]);

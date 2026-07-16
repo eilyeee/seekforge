@@ -8,6 +8,7 @@
  * Deliberately lossy: each section is deduped and capped so the brief stays
  * a one-screen read.
  */
+import { formatCostUsd } from "@seekforge/shared/format";
 import type { ChatItem } from "./events";
 
 /** Per-section entry caps; older entries beyond the cap are summarized away. */
@@ -45,7 +46,7 @@ export function buildHandoff(input: BuildHandoffInput): string {
   const out: string[] = ["# Session handoff", ""];
   out.push(`- Model: ${input.model}`);
   if (input.sessionId) out.push(`- Session: ${input.sessionId}`);
-  out.push(`- Cost: $${input.costUsd.toFixed(4)}`, "");
+  out.push(`- Cost: ${formatCostUsd(input.costUsd)}`, "");
 
   out.push("## Tasks", "");
   pushCapped(out, tasks, HANDOFF_CAPS.tasks, "(no user messages this session)");

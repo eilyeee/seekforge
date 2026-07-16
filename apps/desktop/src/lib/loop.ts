@@ -4,6 +4,7 @@
  * loop.test.ts. The panel renders straight from these so the component stays a
  * thin shell.
  */
+import { clipLine, formatCostUsd, lastNonEmptyLine, loopOutcome } from "@seekforge/shared/format";
 import type { LoopEvent, LoopResult, LoopStatus } from "../types";
 
 /** Per-tab loop progress: the streamed events plus the final result (once done). */
@@ -56,39 +57,24 @@ export function reduceLoopEvent(progress: LoopProgress, event: LoopEvent): LoopP
 export type LoopTone = "ok" | "warn" | "danger";
 
 export function loopStatusTone(status: LoopStatus): LoopTone {
-  switch (status) {
-    case "passed":
+  // The pass/cancelled/fail classification is shared across surfaces; only
+  // the palette mapping is desktop's.
+  switch (loopOutcome(status)) {
+    case "pass":
       return "ok";
     case "cancelled":
       return "warn";
     default:
-      // exhausted / no_progress / budget / verify_error all failed to pass.
       return "danger";
   }
 }
 
 /** Cost formatted as USD with 4 decimals (matches the chat usage footer style). */
-export function formatCost(costUsd: number): string {
-  return `$${costUsd.toFixed(4)}`;
-}
-
-/** Last non-empty line of a command's output, trimmed — a compact "tail". */
-function lastLine(output: string): string {
-  const lines = output.split("\n").map((l) => l.trimEnd());
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i]!.trim() !== "") return lines[i]!;
-  }
-  return "";
-}
-
-/** Truncate a single line to `max` chars with an ellipsis. */
-function clip(text: string, max = 120): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
+export const formatCost = formatCostUsd;
 
 /** A short tail of command output for the progress list (last line, clipped). */
 export function outputTail(output: string, max = 120): string {
-  return clip(lastLine(output), max);
+  return clipLine(lastNonEmptyLine(output), max);
 }
 
 /**
