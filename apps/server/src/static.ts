@@ -4,16 +4,7 @@
  * All resolved paths are confined to the static root (no path traversal).
  */
 
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  type Stats,
-} from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, type Stats } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,10 +47,7 @@ export function resolveStaticRoot(override?: string): string | undefined {
   for (const root of candidates) {
     try {
       const canonicalRoot = realpathSync(resolve(root));
-      if (
-        statSync(canonicalRoot).isDirectory() &&
-        openStaticFile(canonicalRoot, join(canonicalRoot, "index.html"))
-      ) {
+      if (statSync(canonicalRoot).isDirectory() && openStaticFile(canonicalRoot, join(canonicalRoot, "index.html"))) {
         return canonicalRoot;
       }
     } catch {
@@ -106,11 +94,7 @@ function openStaticFile(root: string, path: string): Buffer | undefined {
     const parentPathStat = statSync(parent);
     const filePathStat = statSync(path);
     const fileStat = fstatSync(fileFd);
-    if (
-      !sameFile(fstatSync(parentFd), parentPathStat) ||
-      !sameFile(fileStat, filePathStat) ||
-      !fileStat.isFile()
-    ) {
+    if (!sameFile(fstatSync(parentFd), parentPathStat) || !sameFile(fileStat, filePathStat) || !fileStat.isFile()) {
       return undefined;
     }
     return readFileSync(fileFd);
@@ -140,7 +124,10 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
   };
 
   if (!opts.root) {
-    if (opts.pathname !== "/") return notFound();
+    if (opts.pathname !== "/") {
+      notFound();
+      return;
+    }
     // Static pages are served without auth, so this page must NOT include
     // the token — `seekforge serve` prints the full token URL to the terminal.
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -157,16 +144,25 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
   }
 
   const target = safeJoin(opts.root, opts.pathname === "/" ? "/index.html" : opts.pathname);
-  if (!target) return notFound();
+  if (!target) {
+    notFound();
+    return;
+  }
 
   let file = target;
   let data = openStaticFile(opts.root, file);
   if (!data) {
     // SPA fallback: extension-less client-side routes get index.html.
-    if (extname(file) !== "") return notFound();
+    if (extname(file) !== "") {
+      notFound();
+      return;
+    }
     file = join(opts.root, "index.html");
     data = openStaticFile(opts.root, file);
-    if (!data) return notFound();
+    if (!data) {
+      notFound();
+      return;
+    }
   }
 
   const type = CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";

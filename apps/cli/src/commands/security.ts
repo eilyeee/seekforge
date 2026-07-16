@@ -36,7 +36,10 @@ function asError(error: unknown): string {
   return sanitizeSecurityText(error instanceof Error ? error.message : String(error), 2_000);
 }
 
-async function withSecurityAgent<T>(model: string | undefined, operation: (agent: ReturnType<typeof createAgentCore>) => Promise<T>): Promise<T> {
+async function withSecurityAgent<T>(
+  model: string | undefined,
+  operation: (agent: ReturnType<typeof createAgentCore>) => Promise<T>,
+): Promise<T> {
   const config = loadConfig(process.cwd());
   if (!config.apiKey) throw new Error("no provider API key configured; run `seekforge doctor` for setup help");
   const { deps, dispose } = createCliAgentDeps({
@@ -54,12 +57,14 @@ async function withSecurityAgent<T>(model: string | undefined, operation: (agent
 
 async function runScan(options: SecurityScanOptions): Promise<RepositoryScanResult> {
   const workspace = process.cwd();
-  return await withSecurityAgent(options.model, async (agent) =>
-    await scanRepository({
-      workspace,
-      agent,
-      ...(options.maxFindings !== undefined ? { maxFindings: options.maxFindings } : {}),
-    }),
+  return await withSecurityAgent(
+    options.model,
+    async (agent) =>
+      await scanRepository({
+        workspace,
+        agent,
+        ...(options.maxFindings !== undefined ? { maxFindings: options.maxFindings } : {}),
+      }),
   );
 }
 
@@ -148,8 +153,9 @@ export function securityStatusCommand(findingId: string, status: string, options
 
 export async function securityThreatModelCommand(options: { model?: string; json?: boolean } = {}): Promise<void> {
   try {
-    const model = await withSecurityAgent(options.model, async (agent) =>
-      await generateThreatModel({ workspace: process.cwd(), agent }),
+    const model = await withSecurityAgent(
+      options.model,
+      async (agent) => await generateThreatModel({ workspace: process.cwd(), agent }),
     );
     if (options.json) console.log(JSON.stringify(model, null, 2));
     else console.log(`threat model ${model.id}: ${model.threats.length} threat(s), ${model.assets.length} asset(s)`);
@@ -160,11 +166,7 @@ export async function securityThreatModelCommand(options: { model?: string; json
 
 const severityRank: Record<FindingSeverity, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
 
-function introducedBlockingFindings(
-  beforeIds: Set<string>,
-  target: Finding,
-  result: RepositoryScanResult,
-): string[] {
+function introducedBlockingFindings(beforeIds: Set<string>, target: Finding, result: RepositoryScanResult): string[] {
   return result.findings
     .filter((finding) => !beforeIds.has(finding.id))
     .filter((finding) => severityRank[finding.severity] >= severityRank[target.severity])
@@ -187,7 +189,7 @@ export async function securityFixCommand(findingId: string, options: SecurityFix
     return;
   }
   const beforeIds = new Set(buildSecurityState(workspace).findings.keys());
-  let fix;
+  let fix: ReturnType<typeof startFixAttempt>;
   try {
     fix = startFixAttempt(workspace, findingId);
   } catch (error) {
@@ -214,7 +216,11 @@ export async function securityFixCommand(findingId: string, options: SecurityFix
         ...(config.lintCommand ? { lintCommand: config.lintCommand } : {}),
       });
     }
-    if (agentCompleted && commands.length > 0 && commands.every((command) => command.exitCode === 0 && !command.timedOut)) {
+    if (
+      agentCompleted &&
+      commands.length > 0 &&
+      commands.every((command) => command.exitCode === 0 && !command.timedOut)
+    ) {
       rescan = await runScan({ ...(options.model ? { model: options.model } : {}) });
     }
   } catch (error) {
@@ -250,11 +256,13 @@ export async function securityVerifyCommand(findingId: string, options: { model?
       ...(config.verifyCommand ? { verifyCommand: config.verifyCommand } : {}),
       ...(config.lintCommand ? { lintCommand: config.lintCommand } : {}),
     });
-    const result = commands.length > 0 && commands.every((command) => command.exitCode === 0 && !command.timedOut)
-      ? await runScan({ ...(options.model ? { model: options.model } : {}) })
-      : undefined;
+    const result =
+      commands.length > 0 && commands.every((command) => command.exitCode === 0 && !command.timedOut)
+        ? await runScan({ ...(options.model ? { model: options.model } : {}) })
+        : undefined;
     const present = result ? findingStillPresent(finding, result.findings) : true;
-    const passed = result !== undefined && !present && commands.every((command) => command.exitCode === 0 && !command.timedOut);
+    const passed =
+      result !== undefined && !present && commands.every((command) => command.exitCode === 0 && !command.timedOut);
     changeFindingVerification(
       workspace,
       findingId,

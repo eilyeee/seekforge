@@ -13,6 +13,31 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: lint (biome)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.16.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Biome (lint + format check)
+        run: pnpm lint
+
   node:
     name: node 22 / ${{ matrix.os }} (typecheck / test / build)
     strategy:
@@ -129,8 +154,14 @@ jobs:
       # tauri::generate_context! macro requires a built frontend (apps/desktop/dist),
       # which is produced by the node build, not available in this job. The desktop
       # bundle is owned by a separate release workflow.
+      - name: Cargo fmt
+        run: cargo fmt --check
+
       - name: Cargo check
         run: cargo check --workspace --exclude seekforge-desktop
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --exclude seekforge-desktop --all-targets -- -D warnings
 
       - name: Cargo test
         run: cargo test --workspace --exclude seekforge-desktop

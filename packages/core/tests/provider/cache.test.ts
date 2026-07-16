@@ -145,7 +145,7 @@ describe("wrapProviderWithCache", () => {
     ["negative usage", { ...response("poisoned"), usage: { ...USAGE, costUsd: -1 } }],
     ["fractional token usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1.5 } }],
     ["impossible cache usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1, cacheHitTokens: 2 } }],
-    ["non-finite usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: 1e999 } }],
+    ["non-finite usage", { ...response("poisoned"), usage: { ...USAGE, promptTokens: Number.POSITIVE_INFINITY } }],
   ])("ignores cached %s", async (_label, poisoned) => {
     const inner = countingProvider();
     const cached = wrapProviderWithCache(inner, dir);

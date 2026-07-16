@@ -5,10 +5,49 @@ import { useStore } from "../store";
 
 /** Extensions that make a bare (slash-less) `code` span look like a file ref. */
 const FILE_EXTS = new Set([
-  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java", "kt", "c", "cc", "cpp",
-  "cxx", "h", "hpp", "cs", "rb", "php", "swift", "md", "markdown", "json", "jsonc", "yaml",
-  "yml", "toml", "ini", "css", "scss", "less", "html", "htm", "xml", "svg", "sh", "bash",
-  "sql", "txt", "lock", "vue", "svelte",
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "py",
+  "go",
+  "rs",
+  "java",
+  "kt",
+  "c",
+  "cc",
+  "cpp",
+  "cxx",
+  "h",
+  "hpp",
+  "cs",
+  "rb",
+  "php",
+  "swift",
+  "md",
+  "markdown",
+  "json",
+  "jsonc",
+  "yaml",
+  "yml",
+  "toml",
+  "ini",
+  "css",
+  "scss",
+  "less",
+  "html",
+  "htm",
+  "xml",
+  "svg",
+  "sh",
+  "bash",
+  "sql",
+  "txt",
+  "lock",
+  "vue",
+  "svelte",
 ]);
 
 /**
@@ -94,6 +133,8 @@ function Inlines({ inlines }: { inlines: MdInline[] }) {
                 <Inlines inlines={seg.children} />
               </a>
             );
+          default:
+            return null;
         }
       })}
     </>
@@ -116,15 +157,13 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         {known
           ? lines.map((tokens, i) => (
               <div key={i}>
-                {tokens.length === 0 ? (
-                  "\n"
-                ) : (
-                  tokens.map((t, j) => (
-                    <span key={j} className={t.cls ? TOKEN_CLASS[t.cls] : undefined}>
-                      {t.text}
-                    </span>
-                  ))
-                )}
+                {tokens.length === 0
+                  ? "\n"
+                  : tokens.map((t, j) => (
+                      <span key={j} className={t.cls ? TOKEN_CLASS[t.cls] : undefined}>
+                        {t.text}
+                      </span>
+                    ))}
               </div>
             ))
           : code}
@@ -146,9 +185,7 @@ function Block({ block }: { block: MdBlock }) {
     case "list": {
       const Tag = block.ordered ? "ol" : "ul";
       return (
-        <Tag
-          className={`ml-5 space-y-1 marker:text-tertiary ${block.ordered ? "list-decimal" : "list-disc"}`}
-        >
+        <Tag className={`ml-5 space-y-1 marker:text-tertiary ${block.ordered ? "list-decimal" : "list-disc"}`}>
           {block.items.map((item, j) => (
             <li key={j}>
               <Inlines inlines={item.inlines} />

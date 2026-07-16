@@ -38,7 +38,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | null | false {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "tool.started") {
-    return value.toolName === "dispatch_team" ? { type: "tool.started", toolName: "dispatch_team", args: value.args } : null;
+    return value.toolName === "dispatch_team"
+      ? { type: "tool.started", toolName: "dispatch_team", args: value.args }
+      : null;
   }
   if (value.type === "tool.completed") {
     if (value.toolName !== "dispatch_team") return null;
@@ -55,10 +57,26 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
     return { type: value.type, dispatchId, agentId, task, status: "running" };
   }
   if (value.type === "subagent.step" && value.status === "running" && typeof value.toolName === "string") {
-    return { type: value.type, dispatchId, agentId, task, status: "running", toolName: value.toolName, ...(subSessionId ? { subSessionId } : {}) };
+    return {
+      type: value.type,
+      dispatchId,
+      agentId,
+      task,
+      status: "running",
+      toolName: value.toolName,
+      ...(subSessionId ? { subSessionId } : {}),
+    };
   }
   if (value.type === "subagent.completed" && value.status === "done" && typeof value.resultSummary === "string") {
-    return { type: value.type, dispatchId, agentId, task, status: "done", resultSummary: value.resultSummary, ...(subSessionId ? { subSessionId } : {}) };
+    return {
+      type: value.type,
+      dispatchId,
+      agentId,
+      task,
+      status: "done",
+      resultSummary: value.resultSummary,
+      ...(subSessionId ? { subSessionId } : {}),
+    };
   }
   if (
     value.type === "subagent.failed" &&
@@ -80,7 +98,15 @@ function persistedOrchestrationEvent(value: unknown): HistoricalAgentEvent | nul
     };
   }
   if (value.type === "subagent.cancelled" && value.status === "cancelled" && typeof value.reason === "string") {
-    return { type: value.type, dispatchId, agentId, task, status: "cancelled", reason: value.reason, ...(subSessionId ? { subSessionId } : {}) };
+    return {
+      type: value.type,
+      dispatchId,
+      agentId,
+      task,
+      status: "cancelled",
+      reason: value.reason,
+      ...(subSessionId ? { subSessionId } : {}),
+    };
   }
   return false;
 }
@@ -104,11 +130,7 @@ function loadOrchestrationEvents(workspace: string, sessionId: string): Historic
   return events;
 }
 
-function sessionMutation<T>(
-  res: RouteCtx["res"],
-  sessionId: string,
-  mutate: () => T,
-): { value: T } | undefined {
+function sessionMutation<T>(res: RouteCtx["res"], sessionId: string, mutate: () => T): { value: T } | undefined {
   try {
     return { value: mutate() };
   } catch (error) {
@@ -146,10 +168,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     ) {
       return sendApiError(res, 400, "bad_request", "olderThanDays must be a non-negative number");
     }
-    if (
-      keepLast !== undefined &&
-      (typeof keepLast !== "number" || !Number.isInteger(keepLast) || keepLast < 0)
-    ) {
+    if (keepLast !== undefined && (typeof keepLast !== "number" || !Number.isInteger(keepLast) || keepLast < 0)) {
       return sendApiError(res, 400, "bad_request", "keepLast must be a non-negative integer");
     }
     if (dryRun !== undefined && typeof dryRun !== "boolean") {
@@ -279,7 +298,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
     if (typeof turn !== "number" || !Number.isInteger(turn)) {
       return sendApiError(res, 400, "bad_request", "body must be {turn: integer, files?: boolean}");
     }
-    let lease;
+    let lease: ReturnType<typeof acquireSessionLease>;
     try {
       // Acquire only after the request body is complete, immediately before
       // mutation, and hold through both trace truncation and file rewind.
@@ -332,7 +351,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 404, "not_found", `session ${sessionId} has no checkpoints to rewind`);
     }
     const result = sessionMutation(res, sessionId, () =>
-      rewindSession(workspace, sessionId, { dryRun: dryRun === true }));
+      rewindSession(workspace, sessionId, { dryRun: dryRun === true }),
+    );
     if (!result) return;
     return sendJson(res, 200, result.value);
   }

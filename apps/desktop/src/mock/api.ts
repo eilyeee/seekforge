@@ -124,16 +124,18 @@ function mockTree(dir: string): { name: string; path: string; type: "file" | "di
       dirs.add(rest.slice(0, slash));
     }
   }
-  const dirEntries = [...dirs]
-    .sort()
-    .map((name) => ({ name, path: `${prefix}${name}`, type: "dir" as const }));
+  const dirEntries = [...dirs].sort().map((name) => ({ name, path: `${prefix}${name}`, type: "dir" as const }));
   files.sort((a, b) => a.name.localeCompare(b.name));
   return [...dirEntries, ...files];
 }
 
 /** In-memory git working tree for the Source Control view. */
-type MockGitFile = { path: string; status: "modified" | "added" | "deleted" | "renamed" | "untracked"; staged: boolean };
-let mockGit: { notGit: boolean; branch: string; files: MockGitFile[] } = {
+type MockGitFile = {
+  path: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  staged: boolean;
+};
+const mockGit: { notGit: boolean; branch: string; files: MockGitFile[] } = {
   notGit: false,
   branch: "main",
   files: [
@@ -182,8 +184,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     ...mockWorkspaces,
     ...mockWorktrees.map((w) => ({ id: w.id, name: w.branch.split("/")[1]!, path: w.path })),
   ];
-  if (method === "GET" && path === "/api/workspaces")
-    return { workspaces: hostedWorkspaces(), recents: mockRecents };
+  if (method === "GET" && path === "/api/workspaces") return { workspaces: hostedWorkspaces(), recents: mockRecents };
   if (method === "POST" && path === "/api/workspaces") {
     const { path: p } = (body ?? {}) as { path?: string };
     if (!p) throw mockError(400, "bad_request", "body must be {path: string}");
@@ -210,7 +211,11 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
   if (method === "POST" && path === "/api/worktrees") {
     const { name } = (body ?? {}) as { name?: string };
-    const slug = (name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `session-${++mockWorktreeSeq}`;
+    const slug =
+      (name ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || `session-${++mockWorktreeSeq}`;
     const wt: MockWorktree = {
       id: `wt-${slug}`,
       branch: `seekforge/${slug}`,
@@ -393,19 +398,22 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     // never-used facts older than the cutoff are archived.
     const removed = before >= 2 ? [`- [convention] ${facts[before - 1]!.content}`] : [];
     const merged =
-      before >= 3
-        ? [{ kept: `- [tech] ${facts[0]!.content}`, dropped: `- [tech] ${facts[1]!.content}` }]
-        : [];
+      before >= 3 ? [{ kept: `- [tech] ${facts[0]!.content}`, dropped: `- [tech] ${facts[1]!.content}` }] : [];
     const archived =
       typeof pruneUnusedDays === "number"
-        ? facts.filter((f) => f.uses === 0).slice(0, 1).map((f) => `- [${f.type ?? "convention"}] ${f.content}`)
+        ? facts
+            .filter((f) => f.uses === 0)
+            .slice(0, 1)
+            .map((f) => `- [${f.type ?? "convention"}] ${f.content}`)
         : [];
     const after = before - removed.length - merged.length - archived.length;
     if (!dryRun) {
       // Reflect the compaction in the mock fact list so a refresh shows fewer.
       const drop = removed.length + merged.length + archived.length;
       facts.splice(facts.length - drop);
-      facts.forEach((f, i) => (f.index = i + 1));
+      facts.forEach((f, i) => {
+        f.index = i + 1;
+      });
     }
     return { before, after, removed, merged, archived };
   }
@@ -451,7 +459,9 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (pos === -1) throw mockError(400, "bad_request", "no matching fact");
     const [removed] = facts.splice(pos, 1);
     // Renumber so 1-based indexes stay contiguous, mirroring the server.
-    facts.forEach((f, i) => (f.index = i + 1));
+    facts.forEach((f, i) => {
+      f.index = i + 1;
+    });
     return { removed: `- [${removed!.type}] ${removed!.content}` };
   }
   m = /^\/api\/memory\/([^/]+)\/(approve|reject)$/.exec(path);
@@ -590,15 +600,16 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       if (at < 0) throw mockError(404, "not_found", `no todo at index ${String(index)}`);
       if (op === "toggle") todos[at]!.done = !todos[at]!.done;
       else todos.splice(at, 1);
-      todos.forEach((t, i) => (t.index = i + 1));
+      todos.forEach((t, i) => {
+        t.index = i + 1;
+      });
     } else {
       throw mockError(400, "bad_request", 'op must be "add", "toggle" or "remove"');
     }
     return todos.map((t) => ({ ...t }));
   }
 
-  if (method === "GET" && path === "/api/balance")
-    return { balance: { currency: "USD", totalBalance: "23.45" } };
+  if (method === "GET" && path === "/api/balance") return { balance: { currency: "USD", totalBalance: "23.45" } };
 
   if (method === "GET" && path === "/api/mcp/resources") {
     await delay(400); // spawning takes a moment
@@ -628,7 +639,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     const parts = path.split("/").map(decodeURIComponent);
     const server = parts[4] ?? "server";
     const name = parts[5] ?? "prompt";
-    const args = ((body as { arguments?: Record<string, unknown> } | undefined)?.arguments ?? {});
+    const args = (body as { arguments?: Record<string, unknown> } | undefined)?.arguments ?? {};
     return { text: `Use MCP prompt ${server}/${name}.\n\nArguments: ${JSON.stringify(args)}` };
   }
 
@@ -656,7 +667,9 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
       trusted: trusted ?? false,
       env: Object.fromEntries(Object.keys(env ?? {}).map((key) => [key, "********"])),
       headers: Object.fromEntries(Object.keys(headers ?? {}).map((key) => [key, "********"])),
-      ...(oauth ? { oauth: { ...oauth, refreshToken: "********", ...(oauth.clientSecret ? { clientSecret: "********" } : {}) } } : {}),
+      ...(oauth
+        ? { oauth: { ...oauth, refreshToken: "********", ...(oauth.clientSecret ? { clientSecret: "********" } : {}) } }
+        : {}),
       source: scope ?? "project",
       shadowedGlobal: false,
     };
@@ -689,14 +702,28 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
 
   if (method === "GET" && path === "/api/security") return structuredClone(security);
   if (method === "POST" && path === "/api/security/scan") {
-    const scan = { id: `scan-${security.scans.length + 1}`, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), status: "completed" as const, scanner: "mock", scannerVersion: "1", findingIds: [] };
+    const scan = {
+      id: `scan-${security.scans.length + 1}`,
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      status: "completed" as const,
+      scanner: "mock",
+      scannerVersion: "1",
+      findingIds: [],
+    };
     security.scans.push(scan);
     return { scan, findings: [] };
   }
-  if (method === "POST" && path === "/api/security/threat-model") throw mockError(502, "threat_model_failed", "mock threat model needs a configured provider");
+  if (method === "POST" && path === "/api/security/threat-model")
+    throw mockError(502, "threat_model_failed", "mock threat model needs a configured provider");
   if (method === "GET" && path === "/api/security/export") {
     const format = new URLSearchParams(fullPath.split("?")[1] ?? "").get("format") ?? "json";
-    return { format, filename: `seekforge-security-report.${format === "markdown" ? "md" : "json"}`, content: JSON.stringify(security, null, 2), disclaimer: security.disclaimer };
+    return {
+      format,
+      filename: `seekforge-security-report.${format === "markdown" ? "md" : "json"}`,
+      content: JSON.stringify(security, null, 2),
+      disclaimer: security.disclaimer,
+    };
   }
 
   if (method === "GET" && path === "/api/files") {
@@ -712,7 +739,10 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     if (q === "") return { hits: [], truncated: false };
     let re: RegExp;
     try {
-      re = new RegExp(params.get("regex") === "1" ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), params.get("case") === "1" ? "" : "i");
+      re = new RegExp(
+        params.get("regex") === "1" ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        params.get("case") === "1" ? "" : "i",
+      );
     } catch {
       return { hits: [], truncated: false, error: "invalid regex" };
     }
@@ -720,7 +750,8 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
     for (const [p, content] of Object.entries(mockFiles)) {
       content.split("\n").forEach((line, i) => {
         const m = re.exec(line);
-        if (m && m[0].length > 0) hits.push({ path: p, line: i + 1, text: line.slice(0, 240), col: m.index, len: m[0].length });
+        if (m && m[0].length > 0)
+          hits.push({ path: p, line: i + 1, text: line.slice(0, 240), col: m.index, len: m[0].length });
       });
     }
     return { hits, truncated: false };

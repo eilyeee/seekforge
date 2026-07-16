@@ -107,10 +107,7 @@ describe("permission flow", () => {
     const ws = makeWorkspace();
     const deny = scriptedConfirm(false);
     const ctx = makeCtx(ws, { policy: { approvalMode: "auto" }, confirm: deny.confirm });
-    const res = await dispatcher.execute(
-      call("run_command", { command: "pnpm install left-pad" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "pnpm install left-pad" }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_by_user");
     expect(deny.requests).toHaveLength(1);
@@ -122,10 +119,7 @@ describe("permission flow", () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(true);
     const ctx = makeCtx(ws, { policy: { approvalMode: "auto" }, confirm });
-    const res = await dispatcher.execute(
-      call("run_command", { command: "sudo rm -rf /" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "sudo rm -rf /" }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_dangerous");
     expect(requests).toHaveLength(0);
@@ -160,15 +154,10 @@ describe("permission rules", () => {
   it("deny by command prefix blocks one npm script but not another", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(false);
-    const rules: PermissionRule[] = [
-      { action: "deny", tool: "run_command", match: "npm run deploy" },
-    ];
+    const rules: PermissionRule[] = [{ action: "deny", tool: "run_command", match: "npm run deploy" }];
     const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
 
-    const blocked = await dispatcher.execute(
-      call("run_command", { command: "npm run deploy --prod" }),
-      ctx,
-    );
+    const blocked = await dispatcher.execute(call("run_command", { command: "npm run deploy --prod" }), ctx);
     expect(blocked.ok).toBe(false);
     expect(blocked.error?.code).toBe("denied_by_rule");
     expect(requests).toHaveLength(0);
@@ -184,16 +173,11 @@ describe("permission rules", () => {
   it("deny rule can't be evaded by inserting extra whitespace", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(false);
-    const rules: PermissionRule[] = [
-      { action: "deny", tool: "run_command", match: "npm run deploy" },
-    ];
+    const rules: PermissionRule[] = [{ action: "deny", tool: "run_command", match: "npm run deploy" }];
     const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
     // Extra spaces normalize away — the classifier collapses them the same way
     // before running, so the deny must still catch it.
-    const blocked = await dispatcher.execute(
-      call("run_command", { command: "npm   run  deploy --prod" }),
-      ctx,
-    );
+    const blocked = await dispatcher.execute(call("run_command", { command: "npm   run  deploy --prod" }), ctx);
     expect(blocked.ok).toBe(false);
     expect(blocked.error?.code).toBe("denied_by_rule");
     expect(requests).toHaveLength(0);
@@ -306,9 +290,7 @@ describe("permission rules", () => {
   it("env-level allow rule skips the prompt (web_fetch for a docs domain)", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(false);
-    const rules: PermissionRule[] = [
-      { action: "allow", tool: "web_fetch", match: "GET https://docs.example.com/" },
-    ];
+    const rules: PermissionRule[] = [{ action: "allow", tool: "web_fetch", match: "GET https://docs.example.com/" }];
     const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
     // enforcePermission directly: web_fetch.run would hit the real network.
     const allowed = await enforcePermission(
@@ -364,18 +346,12 @@ describe("permission rules", () => {
     const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
 
     // deny beats a matching allow that appears earlier in the array
-    const generated = await dispatcher.execute(
-      call("write_file", { path: "src/generated/x.ts", content: "x" }),
-      ctx,
-    );
+    const generated = await dispatcher.execute(call("write_file", { path: "src/generated/x.ts", content: "x" }), ctx);
     expect(generated.error?.code).toBe("denied_by_rule");
 
     // project allow matches before the broader global deny is relevant —
     // but deny is scanned first, so only non-matching denies let it through
-    const denied = await dispatcher.execute(
-      call("write_file", { path: "README.md", content: "x" }),
-      ctx,
-    );
+    const denied = await dispatcher.execute(call("write_file", { path: "README.md", content: "x" }), ctx);
     expect(denied.error?.code).toBe("denied_by_rule");
     expect(requests).toHaveLength(0);
   });
@@ -388,10 +364,7 @@ describe("permission rules", () => {
       { action: "allow", tool: "write_file", match: "docs/internal/" }, // global (redundant)
     ];
     const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
-    const res = await dispatcher.execute(
-      call("write_file", { path: "docs/internal/a.md", content: "x" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("write_file", { path: "docs/internal/a.md", content: "x" }), ctx);
     expect(res.ok).toBe(true);
     expect(requests).toHaveLength(0);
   });
@@ -403,10 +376,7 @@ describe("permission rules", () => {
       policy: { approvalMode: "confirm", rules: [] },
       confirm: withConfirm.confirm,
     });
-    const res = await dispatcher.execute(
-      call("write_file", { path: "a.txt", content: "x" }),
-      emptyRulesCtx,
-    );
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "x" }), emptyRulesCtx);
     expect(res.ok).toBe(true);
     expect(withConfirm.requests).toHaveLength(1); // still confirmed, as without rules
     expect(withConfirm.requests[0]?.permission).toBe("write");
@@ -439,10 +409,7 @@ describe("approvalMode acceptEdits", () => {
     const ws = makeWorkspace();
     const deny = scriptedConfirm(false);
     const ctx = makeCtx(ws, { policy: { approvalMode: "acceptEdits" }, confirm: deny.confirm });
-    const res = await dispatcher.execute(
-      call("run_command", { command: "pnpm install left-pad" }),
-      ctx,
-    );
+    const res = await dispatcher.execute(call("run_command", { command: "pnpm install left-pad" }), ctx);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("denied_by_user");
     expect(deny.requests[0]?.permission).toBe("env");
@@ -649,11 +616,12 @@ describe("dispatcher basics", () => {
       "lsp_diagnostics",
     ]);
     const readFileDef = defs.find((d) => d.name === "read_file");
-    expect(readFileDef?.parameters).toMatchObject({
+    if (!readFileDef) throw new Error("read_file tool definition missing");
+    expect(readFileDef.parameters).toMatchObject({
       type: "object",
       required: ["path"],
     });
-    const props = (readFileDef?.parameters as { properties: Record<string, unknown> }).properties;
+    const props = (readFileDef.parameters as { properties: Record<string, unknown> }).properties;
     expect(props.path).toMatchObject({ type: "string" });
     expect(props.offset).toMatchObject({ type: "number" });
   });

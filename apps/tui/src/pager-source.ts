@@ -25,7 +25,9 @@ export function pagerLines(items: readonly ChatItem[]): string[] {
       case "user": {
         blank();
         const userLines = item.text.replace(/\r\n/g, "\n").split("\n");
-        userLines.forEach((line, i) => out.push((i === 0 ? "❯ " : "  ") + line));
+        userLines.forEach((line, i) => {
+          out.push((i === 0 ? "❯ " : "  ") + line);
+        });
         break;
       }
       case "assistant":

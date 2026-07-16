@@ -70,7 +70,9 @@ function makeConfirm(rl: Interface): (req: PermissionRequest) => Promise<boolean
 function makeAskUser(rl: Interface): (q: { question: string; options: string[] }) => Promise<string> {
   return async (q) => {
     console.log(`\n${yellow(t("repl.question"))} ${q.question}`);
-    q.options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
+    q.options.forEach((opt, i) => {
+      console.log(`  ${i + 1}. ${opt}`);
+    });
     const answer = (await rl.question(t("repl.answerPrompt", { max: q.options.length }))).trim();
     const selected = parseNumberedChoice(answer, q.options.length);
     if (selected === null) return t("repl.userDeclined");
@@ -78,7 +80,12 @@ function makeAskUser(rl: Interface): (q: { question: string; options: string[] }
   };
 }
 
-export async function replCommand(opts: { model?: string; yes?: boolean; settingsFile?: string; profile?: string }): Promise<void> {
+export async function replCommand(opts: {
+  model?: string;
+  yes?: boolean;
+  settingsFile?: string;
+  profile?: string;
+}): Promise<void> {
   const projectPath = process.cwd();
   // Custom slash commands from .seekforge/commands/*.md (project + user).
   const userCommands = loadUserCommands(projectPath);
@@ -253,14 +260,25 @@ export async function replCommand(opts: { model?: string; yes?: boolean; setting
             console.log(t("repl.sessionTooShort"));
           } else {
             console.log(
-              t("repl.compacted", { dropped: result.droppedTurns, before: result.beforeTokens, after: result.afterTokens }),
+              t("repl.compacted", {
+                dropped: result.droppedTurns,
+                before: result.beforeTokens,
+                after: result.afterTokens,
+              }),
             );
           }
           break;
         }
         case "/sessions":
           for (const s of listSessions(projectPath).slice(0, 15)) {
-            console.log(t("cmd.sessions.output", { id: s.id, status: s.status, cost: "", task: s.task.replace(/\s+/g, " ").slice(0, 60) }));
+            console.log(
+              t("cmd.sessions.output", {
+                id: s.id,
+                status: s.status,
+                cost: "",
+                task: s.task.replace(/\s+/g, " ").slice(0, 60),
+              }),
+            );
           }
           break;
         case "/resume": {

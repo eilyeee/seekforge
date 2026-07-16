@@ -4,14 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AgentEvent } from "@seekforge/shared";
 import type { AgentCoreDeps } from "@seekforge/core";
 import { evaluateCheck, runTask } from "../src/task-runner.js";
-import {
-  FAKE_USAGE,
-  completedEvents,
-  fakeAgent,
-  makeTask,
-  makeTempFixture,
-  type TempFixture,
-} from "./helpers.js";
+import { FAKE_USAGE, completedEvents, fakeAgent, makeTask, makeTempFixture, type TempFixture } from "./helpers.js";
 
 let fixtures: TempFixture[] = [];
 
@@ -45,15 +38,9 @@ describe("evaluateCheck", () => {
   it("file_not_contains fails when the pattern is present (and on a missing file)", async () => {
     const fx = fileChecks();
     const ctx = { dir: fx.dir, answer: "" };
-    const pass = await evaluateCheck(
-      { type: "file_not_contains", path: "notes.txt", pattern: "deprecated" },
-      ctx,
-    );
+    const pass = await evaluateCheck({ type: "file_not_contains", path: "notes.txt", pattern: "deprecated" }, ctx);
     expect(pass.passed).toBe(true);
-    const fail = await evaluateCheck(
-      { type: "file_not_contains", path: "notes.txt", pattern: "v4\\d" },
-      ctx,
-    );
+    const fail = await evaluateCheck({ type: "file_not_contains", path: "notes.txt", pattern: "v4\\d" }, ctx);
     expect(fail.passed).toBe(false);
     expect(fail.detail).toContain("forbidden pattern");
     const missing = await evaluateCheck({ type: "file_not_contains", path: "nope.txt", pattern: "x" }, ctx);
@@ -68,10 +55,7 @@ describe("evaluateCheck", () => {
     const fail = await evaluateCheck({ type: "command_succeeds", command: "exit 3" }, ctx);
     expect(fail.passed).toBe(false);
     expect(fail.detail).toContain("exit 3");
-    const inSub = await evaluateCheck(
-      { type: "command_succeeds", command: "test -f marker", cwd: "sub" },
-      ctx,
-    );
+    const inSub = await evaluateCheck({ type: "command_succeeds", command: "test -f marker", cwd: "sub" }, ctx);
     expect(inSub.passed).toBe(true);
   });
 
@@ -125,16 +109,13 @@ describe("runTask", () => {
 
   it("fails when the session does not complete, even if all checks pass", async () => {
     const fx = fixture({ "file.txt": "ok" });
-    const result = await runTask(
-      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }] }),
-      {
-        fixturesDir: fx.fixturesDir,
-        createAgent: fakeAgent(() => [
-          { type: "session.created", sessionId: "s1" },
-          { type: "session.failed", error: { code: "boom", message: "model exploded" } },
-        ]),
-      },
-    );
+    const result = await runTask(makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "ok" }] }), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent(() => [
+        { type: "session.created", sessionId: "s1" },
+        { type: "session.failed", error: { code: "boom", message: "model exploded" } },
+      ]),
+    });
     expect(result.checks.every((c) => c.passed)).toBe(true);
     expect(result.success).toBe(false);
     expect(result.error).toContain("boom");
@@ -174,10 +155,10 @@ describe("runTask", () => {
         },
       },
     ];
-    const result = await runTask(
-      makeTask({ mode: "ask", checks: [{ type: "answer_matches", pattern: "npm test" }] }),
-      { fixturesDir: fx.fixturesDir, createAgent: fakeAgent(() => events) },
-    );
+    const result = await runTask(makeTask({ mode: "ask", checks: [{ type: "answer_matches", pattern: "npm test" }] }), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent(() => events),
+    });
     expect(result.success).toBe(true);
     expect(result.metrics.toolCalls).toBe(2);
     expect(result.metrics.failedToolCalls).toBe(1);
@@ -198,6 +179,7 @@ describe("runTask", () => {
       fixturesDir: fx.fixturesDir,
       createAgent: () => ({
         agent: {
+          // biome-ignore lint/correctness/useYield: fake stream must throw before yielding any event — a yield would change the tested error path
           async *runTask() {
             throw new Error("transport closed");
           },
@@ -236,22 +218,19 @@ describe("runTask", () => {
 
   it("captures skill usage written by the agent into the workspace before cleanup", async () => {
     const fx = fixture({ "file.txt": "x" });
-    const result = await runTask(
-      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }),
-      {
-        fixturesDir: fx.fixturesDir,
-        createAgent: fakeAgent((input) => {
-          const dir = join(input.projectPath, ".seekforge");
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(
-            join(dir, "skills-usage.jsonl"),
-            `${JSON.stringify({ sessionId: "s1", skillId: "bugfix", scope: "builtin", score: 4 })}\n` +
-              `${JSON.stringify({ sessionId: "s1", skillId: "verify-change", scope: "builtin", score: 2 })}\n`,
-          );
-          return completedEvents();
-        }),
-      },
-    );
+    const result = await runTask(makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent((input) => {
+        const dir = join(input.projectPath, ".seekforge");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, "skills-usage.jsonl"),
+          `${JSON.stringify({ sessionId: "s1", skillId: "bugfix", scope: "builtin", score: 4 })}\n` +
+            `${JSON.stringify({ sessionId: "s1", skillId: "verify-change", scope: "builtin", score: 2 })}\n`,
+        );
+        return completedEvents();
+      }),
+    });
     expect(result.skills.map((s) => s.skillId)).toEqual(["bugfix", "verify-change"]);
     expect(result.skills[0]).toEqual({ skillId: "bugfix", scope: "builtin", score: 4 });
   });
@@ -267,39 +246,36 @@ describe("runTask", () => {
 
   it("scores the session via core scoreSession when trace files exist", async () => {
     const fx = fixture({ "file.txt": "x" });
-    const result = await runTask(
-      makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }),
-      {
-        fixturesDir: fx.fixturesDir,
-        createAgent: fakeAgent((input) => {
-          const sessionDir = join(input.projectPath, ".seekforge", "sessions", "fake-session");
-          mkdirSync(sessionDir, { recursive: true });
-          const now = new Date().toISOString();
-          writeFileSync(
-            join(sessionDir, "session.json"),
-            JSON.stringify({
-              id: "fake-session",
-              task: input.task,
-              mode: "edit",
-              status: "completed",
-              createdAt: now,
-              updatedAt: now,
-              usage: FAKE_USAGE,
-            }),
-          );
-          writeFileSync(
-            join(sessionDir, "messages.jsonl"),
-            `${JSON.stringify({ role: "assistant", content: "fixing" })}\n` +
-              `${JSON.stringify({ role: "assistant", content: "fixed" })}\n`,
-          );
-          writeFileSync(
-            join(sessionDir, "tool-calls.jsonl"),
-            `${JSON.stringify({ toolName: "run_command", ok: true, args: { command: "npm test" } })}\n`,
-          );
-          return completedEvents();
-        }),
-      },
-    );
+    const result = await runTask(makeTask({ checks: [{ type: "file_contains", path: "file.txt", pattern: "x" }] }), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: fakeAgent((input) => {
+        const sessionDir = join(input.projectPath, ".seekforge", "sessions", "fake-session");
+        mkdirSync(sessionDir, { recursive: true });
+        const now = new Date().toISOString();
+        writeFileSync(
+          join(sessionDir, "session.json"),
+          JSON.stringify({
+            id: "fake-session",
+            task: input.task,
+            mode: "edit",
+            status: "completed",
+            createdAt: now,
+            updatedAt: now,
+            usage: FAKE_USAGE,
+          }),
+        );
+        writeFileSync(
+          join(sessionDir, "messages.jsonl"),
+          `${JSON.stringify({ role: "assistant", content: "fixing" })}\n` +
+            `${JSON.stringify({ role: "assistant", content: "fixed" })}\n`,
+        );
+        writeFileSync(
+          join(sessionDir, "tool-calls.jsonl"),
+          `${JSON.stringify({ toolName: "run_command", ok: true, args: { command: "npm test" } })}\n`,
+        );
+        return completedEvents();
+      }),
+    });
     expect(result.metrics.score).toBe(100);
     expect(result.metrics.turns).toBe(2);
   });
@@ -321,21 +297,33 @@ describe("runTask", () => {
       {
         fixturesDir: fx.fixturesDir,
         createAgent: () => ({
-          agent: { async *runTask() { /* auto-loop owns the agent in production */ } },
+          agent: {
+            async *runTask() {
+              /* auto-loop owns the agent in production */
+            },
+          },
           deps: {} as AgentCoreDeps,
         }),
         runLoop: async (_deps, options) => {
           calls.push(`run:${options.verifyCommand}:${options.maxIterations}`);
           return {
-            status: "exhausted", iterations: 1, costUsd: 0.01, sessionId: "s1",
-            finalVerify: { code: 1, output: "red" }, loopId: "loop-1",
+            status: "exhausted",
+            iterations: 1,
+            costUsd: 0.01,
+            sessionId: "s1",
+            finalVerify: { code: 1, output: "red" },
+            loopId: "loop-1",
           };
         },
         resumeLoop: async (_deps, loopId, options) => {
           calls.push(`resume:${loopId}:${options.additionalIterations}`);
           return {
-            status: "passed", iterations: 2, costUsd: 0.02, sessionId: "s1",
-            finalVerify: { code: 0, output: "green" }, loopId,
+            status: "passed",
+            iterations: 2,
+            costUsd: 0.02,
+            sessionId: "s1",
+            finalVerify: { code: 0, output: "green" },
+            loopId,
           };
         },
       },
@@ -343,7 +331,12 @@ describe("runTask", () => {
     expect(calls).toEqual(["run:npm test:1", "resume:loop-1:2"]);
     expect(result.success).toBe(true);
     expect(result.execution).toMatchObject({
-      runner: "loop", status: "passed", expectedStatus: "passed", iterations: 2, maxIterations: 3, resumed: true,
+      runner: "loop",
+      status: "passed",
+      expectedStatus: "passed",
+      iterations: 2,
+      maxIterations: 3,
+      resumed: true,
     });
     expect(result.metrics.costUsd).toBe(0.02);
   });
@@ -371,15 +364,15 @@ describe("runTask", () => {
       {
         fixturesDir: fx.fixturesDir,
         createAgent: fakeAgent((input) => {
-          inputs.push({ task: input.task, ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}) });
+          inputs.push({
+            task: input.task,
+            ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}),
+          });
           return completedEvents();
         }),
       },
     );
-    expect(inputs).toEqual([
-      { task: "do the thing" },
-      { task: "review it", resumeSessionId: "fake-session" },
-    ]);
+    expect(inputs).toEqual([{ task: "do the thing" }, { task: "review it", resumeSessionId: "fake-session" }]);
     expect(result.success).toBe(true);
     expect(result.execution).toMatchObject({ runner: "session_scenario", resumed: true, passed: true });
     expect(result.execution?.steps).toHaveLength(4);

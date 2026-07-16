@@ -92,7 +92,7 @@ describe("agent loop", () => {
     expect(dispatcher.calls[0]!.arguments).toEqual({ path: "a.ts" });
     // second request must contain the assistant tool-call msg + tool result msg
     const second = provider.requests[1]!.messages;
-    expect(second.at(-2)!.toolCalls?.[0]!.name).toBe("read_file");
+    expect(second.at(-2)!.toolCalls![0]!.name).toBe("read_file");
     expect(second.at(-1)!.role).toBe("tool");
     expect(events.some((e) => e.type === "tool.completed")).toBe(true);
   });
@@ -112,8 +112,7 @@ describe("agent loop", () => {
     // The dispatcher is never reached — the parse error short-circuits.
     expect(dispatcher.calls).toHaveLength(0);
     const completed = events.find((e) => e.type === "tool.completed");
-    const result =
-      completed && completed.type === "tool.completed" ? completed.result : undefined;
+    const result = completed && completed.type === "tool.completed" ? completed.result : undefined;
     expect(result?.ok).toBe(false);
     expect(result?.error?.code).toBe("invalid_json");
   });
@@ -150,9 +149,7 @@ describe("agent loop", () => {
       dispatcher: fakeDispatcher({ ok: true }),
       confirm: async () => true,
     });
-    const events = await collect(
-      agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }),
-    );
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
     const failed = events.find((e) => e.type === "session.failed");
     expect(failed && failed.type === "session.failed" && failed.error.code).toBe("cancelled");
     expect(listSessions(workspace)[0]!.status).toBe("cancelled");
@@ -179,9 +176,7 @@ describe("agent loop", () => {
       confirm: async () => true,
     });
 
-    const pending = collect(
-      agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }),
-    );
+    const pending = collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
     setTimeout(() => controller.abort(), 0);
     const events = await pending;
 
@@ -197,9 +192,7 @@ describe("agent loop", () => {
       dispatcher: fakeDispatcher({ ok: true }),
       confirm: async () => true,
     });
-    const firstEvents = await collect(
-      first.runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }),
-    );
+    const firstEvents = await collect(first.runTask({ ...baseInput, projectPath: workspace, mode: "ask", plan: true }));
     expect(planProvider.requests[0]!.messages[0]!.content).toContain("Mode: PLAN");
     const created = firstEvents.find((e) => e.type === "session.created");
     const sessionId = created && created.type === "session.created" ? created.sessionId : "";
@@ -248,9 +241,7 @@ describe("agent loop", () => {
     const sessionId = created && created.type === "session.created" ? created.sessionId : "";
     expect(firstEvents.some((e) => e.type === "session.failed")).toBe(true);
     // The interrupted task + first turn are persisted, so the session resumes.
-    expect(loadSessionMessages(workspace, sessionId).some((m) => m.content.includes("fix the parser bug"))).toBe(
-      true,
-    );
+    expect(loadSessionMessages(workspace, sessionId).some((m) => m.content.includes("fix the parser bug"))).toBe(true);
 
     // Resuming continues the SAME session and replays the prior history.
     const resumeProvider = fakeProvider([response({ content: "## Summary\nfixed" })]);
@@ -311,7 +302,9 @@ describe("agent loop", () => {
     ).rejects.toMatchObject({ code: "session_busy" });
 
     release(response({ content: "done" }));
-    await expect(first).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: "session.completed" })]));
+    await expect(first).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "session.completed" })]),
+    );
   });
 
   it("yields command.output events emitted via ctx.emitOutput BEFORE the tool.completed", async () => {
@@ -335,9 +328,7 @@ describe("agent loop", () => {
     const agent = createAgentCore({ provider, dispatcher, confirm: async () => true });
     const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
 
-    const outputIdx = events
-      .map((e, i) => (e.type === "command.output" ? i : -1))
-      .filter((i) => i >= 0);
+    const outputIdx = events.map((e, i) => (e.type === "command.output" ? i : -1)).filter((i) => i >= 0);
     const completedIdx = events.findIndex((e) => e.type === "tool.completed");
     expect(outputIdx).toHaveLength(2);
     expect(completedIdx).toBeGreaterThanOrEqual(0);
@@ -581,9 +572,7 @@ describe("agent loop: turn-budget wrap-up", () => {
     expect(provider.requests).toHaveLength(3);
     // The third request carries the transient verify nudge.
     expect(
-      provider.requests[2]!.messages.some(
-        (m) => m.content.includes("[harness]") && m.content.includes("exit 1"),
-      ),
+      provider.requests[2]!.messages.some((m) => m.content.includes("[harness]") && m.content.includes("exit 1")),
     ).toBe(true);
 
     // The run still finishes, and the nudge stayed out of the stored trace.
@@ -624,9 +613,7 @@ describe("agent loop: turn-budget wrap-up", () => {
 
     // Auto-verify ran exactly twice: once per edit, never spinning on the
     // unfixable failure when no further edit was made.
-    const autoVerifyNotices = events.filter(
-      (e) => e.type === "notice" && e.message.includes("Auto-verifying changes"),
-    );
+    const autoVerifyNotices = events.filter((e) => e.type === "notice" && e.message.includes("Auto-verifying changes"));
     expect(autoVerifyNotices).toHaveLength(2);
     expect(provider.requests).toHaveLength(5);
     expect(events.some((e) => e.type === "session.completed")).toBe(true);
@@ -841,9 +828,9 @@ describe("agent loop: LLM compaction", () => {
     const events = await collect(agent.runTask(resumeInput("s-mech")));
     expect(events.some((e) => e.type === "context.compacted")).toBe(true);
     expect(provider.requests).toHaveLength(1);
-    expect(
-      provider.requests[0]!.messages.some((m) => m.content.includes("Digest of the dropped earlier turns")),
-    ).toBe(true);
+    expect(provider.requests[0]!.messages.some((m) => m.content.includes("Digest of the dropped earlier turns"))).toBe(
+      true,
+    );
   });
 });
 
@@ -861,17 +848,20 @@ describe("agent loop: auxiliary usage accounting", () => {
         confirm: async () => true,
         extractMemory: true,
       });
-      const events = await collect(agent.runTask({
-        projectPath: workspace,
-        task: "complete the edit",
-        mode: "edit",
-        approvalMode: "auto",
-      }));
+      const events = await collect(
+        agent.runTask({
+          projectPath: workspace,
+          task: "complete the edit",
+          mode: "edit",
+          approvalMode: "auto",
+        }),
+      );
       const completed = events.find((event) => event.type === "session.completed");
       const created = events.find((event) => event.type === "session.created");
       expect(completed?.type === "session.completed" ? completed.report.usage.costUsd : 0).toBe(0.002);
-      expect(readSessionMeta(workspace, created?.type === "session.created" ? created.sessionId : "")?.usage?.costUsd)
-        .toBe(0.002);
+      expect(
+        readSessionMeta(workspace, created?.type === "session.created" ? created.sessionId : "")?.usage?.costUsd,
+      ).toBe(0.002);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -938,38 +928,38 @@ describe("auto-verify on completion", () => {
     ["failed foreground", { ok: true, data: { exitCode: 1 }, meta: { command: "true" } }],
     ["background", { ok: true, data: { taskId: "task-1" }, meta: { command: "true" } }],
     ["compound", { ok: true, data: { exitCode: 0 }, meta: { command: "true; true" } }],
-  ] satisfies Array<[string, ToolResult]>)
-  ("does not accept a %s run_command as verification", async (_label, commandResult) => {
-    const provider = fakeProvider([
-      response({
-        toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
-        finishReason: "tool_calls",
-      }),
-      response({
-        toolCalls: [{ id: "r1", name: "run_command", argumentsJson: '{"command":"true"}' }],
-        finishReason: "tool_calls",
-      }),
-      response({ content: "## Summary\ndone" }),
-      response({ content: "## Summary\nverified" }),
-    ]);
-    const dispatcher: ToolDispatcher = {
-      list: () => [
-        { name: "apply_patch", description: "d", parameters: {} },
-        { name: "run_command", description: "d", parameters: {} },
-      ],
-      execute: async (call) => call.name === "apply_patch"
-        ? { ok: true, meta: { path: "a.ts" } }
-        : commandResult,
-    };
-    const agent = createAgentCore({
-      provider,
-      dispatcher,
-      confirm: async () => true,
-      verifyCommand: "true",
-    });
-    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
-    expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying"))).toBe(true);
-  });
+  ] satisfies Array<[string, ToolResult]>)(
+    "does not accept a %s run_command as verification",
+    async (_label, commandResult) => {
+      const provider = fakeProvider([
+        response({
+          toolCalls: [{ id: "e1", name: "apply_patch", argumentsJson: '{"path":"a.ts"}' }],
+          finishReason: "tool_calls",
+        }),
+        response({
+          toolCalls: [{ id: "r1", name: "run_command", argumentsJson: '{"command":"true"}' }],
+          finishReason: "tool_calls",
+        }),
+        response({ content: "## Summary\ndone" }),
+        response({ content: "## Summary\nverified" }),
+      ]);
+      const dispatcher: ToolDispatcher = {
+        list: () => [
+          { name: "apply_patch", description: "d", parameters: {} },
+          { name: "run_command", description: "d", parameters: {} },
+        ],
+        execute: async (call) => (call.name === "apply_patch" ? { ok: true, meta: { path: "a.ts" } } : commandResult),
+      };
+      const agent = createAgentCore({
+        provider,
+        dispatcher,
+        confirm: async () => true,
+        verifyCommand: "true",
+      });
+      const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+      expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying"))).toBe(true);
+    },
+  );
 
   it("cancels an in-flight auto-verify command", async () => {
     const controller = new AbortController();
@@ -981,18 +971,22 @@ describe("auto-verify on completion", () => {
       verifyCommand: "sleep 10",
     });
     const started = Date.now();
-    const pending = collect(agent.runTask({
-      ...baseInput,
-      projectPath: workspace,
-      signal: controller.signal,
-    }));
+    const pending = collect(
+      agent.runTask({
+        ...baseInput,
+        projectPath: workspace,
+        signal: controller.signal,
+      }),
+    );
     setTimeout(() => controller.abort(), 100);
     const events = await pending;
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "session.failed",
-      error: expect.objectContaining({ code: "cancelled" }),
-    }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.failed",
+        error: expect.objectContaining({ code: "cancelled" }),
+      }),
+    );
   });
 
   it("degrades to the nudge when autoVerify is disabled", async () => {
@@ -1162,9 +1156,10 @@ describe("auto-lint on completion", () => {
         { name: "apply_patch", description: "d", parameters: {} },
         { name: "run_command", description: "d", parameters: {} },
       ],
-      execute: async (call) => call.name === "apply_patch"
-        ? { ok: true, meta: { path: "a.ts" } }
-        : { ok: true, data: { taskId: "task-1" }, meta: { command: "true" } },
+      execute: async (call) =>
+        call.name === "apply_patch"
+          ? { ok: true, meta: { path: "a.ts" } }
+          : { ok: true, data: { taskId: "task-1" }, meta: { command: "true" } },
     };
     const agent = createAgentCore({
       provider,

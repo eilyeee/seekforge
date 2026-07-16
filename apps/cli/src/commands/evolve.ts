@@ -29,9 +29,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
   let target = sessionId;
   if (!target) {
     // Default: the most recent session that actually finished.
-    const finished = listSessions(workspace).find(
-      (s) => s.status === "completed" || s.status === "failed",
-    );
+    const finished = listSessions(workspace).find((s) => s.status === "completed" || s.status === "failed");
     if (!finished) {
       console.error(t("err.noCompletedSessions"));
       process.exitCode = 1;
@@ -47,7 +45,7 @@ export async function evolveAnalyzeCommand(sessionId?: string): Promise<void> {
     return;
   }
 
-  let score;
+  let score: ReturnType<typeof scoreSession>;
   try {
     score = scoreSession(workspace, target);
   } catch (err) {
