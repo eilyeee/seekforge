@@ -26,9 +26,14 @@ export type LoopRepository = {
 
 /** Resolve a subdirectory or retained worktree back to the repository's base checkout. */
 export async function resolveLoopRepository(path: string): Promise<LoopRepository> {
-  const entries = await listGitWorktrees(path).catch((error: unknown) => {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (/not a git repository/i.test(detail)) {
+  const entries = await listGitWorktrees(path).catch(async (error: unknown) => {
+    // Classify by probing rather than matching git's (localized) error text.
+    const insideRepo = await execFileAsync(
+      "git",
+      ["rev-parse", "--is-inside-work-tree"],
+      { cwd: path, timeout: 60_000 },
+    ).then(() => true, () => false);
+    if (!insideRepo) {
       throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);
     }
     throw error;

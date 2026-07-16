@@ -42,10 +42,19 @@ export type GitWorktreeEntry = {
   head: string;
 };
 
-/** Spawns git (no shell) and returns trimmed stdout; failures carry stderr. */
+/**
+ * Spawns git (no shell) and returns trimmed stdout; failures carry stderr.
+ * LC_ALL=C keeps git's messages locale-independent so callers that classify
+ * failures by text are not broken on non-English systems.
+ */
 async function git(cwd: string, args: string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: 10_000_000, timeout: 60_000 });
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: 10_000_000,
+      timeout: 60_000,
+      env: { ...process.env, LC_ALL: "C" },
+    });
     return stdout.trim();
   } catch (err) {
     const e = err as { stderr?: string; stdout?: string; message?: string };
