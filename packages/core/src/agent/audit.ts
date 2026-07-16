@@ -12,7 +12,8 @@
  */
 
 import type { ChatMessage, TokenUsage } from "@seekforge/shared";
-import { loadSessionMessages, readCheckpoints, readSessionMeta } from "./trace.js";
+import { readCheckpoints } from "./session-rewind.js";
+import { loadSessionMessages, readSessionMeta } from "./trace.js";
 
 /** One tool call the assistant made, paired with its recorded outcome. */
 export type AuditToolCall = {

@@ -6,7 +6,12 @@ import type { AgentEvent, ChatResponse } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
-import { appendCheckpoint, readCheckpoints, rewindSession, rewindSessionToTurn } from "../../src/agent/trace.js";
+import {
+  appendCheckpoint,
+  readCheckpoints,
+  rewindSession,
+  rewindSessionToTurn,
+} from "../../src/agent/session-rewind.js";
 import { call, makeCtx, makeWorkspace } from "../tools/helpers.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };

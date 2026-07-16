@@ -256,7 +256,7 @@ describe("rewindSessionToTurn", () => {
    * only in turn 0. Current on-disk state reflects all three turns applied.
    */
   async function seed() {
-    const { appendCheckpoint } = await import("../../src/agent/trace.js");
+    const { appendCheckpoint } = await import("../../src/agent/session-rewind.js");
     writeFileSync(join(ws, "a.txt"), "a-final");
     writeFileSync(join(ws, "b.txt"), "b-created-turn2");
     writeFileSync(join(ws, "c.txt"), "c-modified-turn0");
@@ -267,7 +267,7 @@ describe("rewindSessionToTurn", () => {
   }
 
   it("restores each path to its earliest entry with turn >= turnIndex, leaving earlier-only paths alone", async () => {
-    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const { rewindSessionToTurn } = await import("../../src/agent/session-rewind.js");
     await seed();
     const res = rewindSessionToTurn(ws, sid, 2);
     expect(res.restored).toEqual(["a.txt"]);
@@ -279,7 +279,7 @@ describe("rewindSessionToTurn", () => {
   });
 
   it("turnIndex 0 rewinds everything to the oldest pre-content", async () => {
-    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const { rewindSessionToTurn } = await import("../../src/agent/session-rewind.js");
     await seed();
     const res = rewindSessionToTurn(ws, sid, 0);
     expect(res.restored.sort()).toEqual(["a.txt", "c.txt"]);
@@ -289,7 +289,7 @@ describe("rewindSessionToTurn", () => {
   });
 
   it("dryRun reports without touching files", async () => {
-    const { rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const { rewindSessionToTurn } = await import("../../src/agent/session-rewind.js");
     await seed();
     const res = rewindSessionToTurn(ws, sid, 2, { dryRun: true });
     expect(res.restored).toEqual(["a.txt"]);
@@ -299,7 +299,7 @@ describe("rewindSessionToTurn", () => {
   });
 
   it("refuses checkpoint paths that escape through a workspace symlink", async () => {
-    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/session-rewind.js");
     const outside = mkdtempSync(join(tmpdir(), "seekforge-rewind-outside-"));
     try {
       writeFileSync(join(outside, "target.txt"), "outside-current");
@@ -315,7 +315,7 @@ describe("rewindSessionToTurn", () => {
   });
 
   it("legacy entries without turn behave as turn 0", async () => {
-    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/trace.js");
+    const { appendCheckpoint, rewindSessionToTurn } = await import("../../src/agent/session-rewind.js");
     writeFileSync(join(ws, "legacy.txt"), "modified");
     appendCheckpoint(ws, sid, { ts: "t", path: "legacy.txt", before: "legacy-original" });
     expect(rewindSessionToTurn(ws, sid, 1).restored).toEqual([]); // turn 0 < 1: untouched
@@ -325,7 +325,7 @@ describe("rewindSessionToTurn", () => {
   });
 
   it("full rewindSession still restores the oldest state per path", async () => {
-    const { rewindSession } = await import("../../src/agent/trace.js");
+    const { rewindSession } = await import("../../src/agent/session-rewind.js");
     await seed();
     const res = rewindSession(ws, sid);
     expect(res.restored.sort()).toEqual(["a.txt", "c.txt"]);
@@ -345,8 +345,8 @@ describe("forkSession", () => {
   });
 
   it("copies messages + checkpoints into a new session with derived meta", async () => {
-    const { appendCheckpoint, createSessionTrace, forkSession, loadSessionMessages, readCheckpoints, readSessionMeta } =
-      await import("../../src/agent/trace.js");
+    const { appendCheckpoint, forkSession, readCheckpoints } = await import("../../src/agent/session-rewind.js");
+    const { createSessionTrace, loadSessionMessages, readSessionMeta } = await import("../../src/agent/trace.js");
     writeSessionMeta(ws, meta("orig", 5, { task: "fix the bug" }));
     const trace = createSessionTrace(ws, "orig");
     trace.message({ role: "system", content: "system prompt" });
@@ -374,7 +374,8 @@ describe("forkSession", () => {
   });
 
   it("works without a checkpoints file", async () => {
-    const { createSessionTrace, forkSession, readCheckpoints } = await import("../../src/agent/trace.js");
+    const { forkSession, readCheckpoints } = await import("../../src/agent/session-rewind.js");
+    const { createSessionTrace } = await import("../../src/agent/trace.js");
     writeSessionMeta(ws, meta("nockpt", 1));
     const trace = createSessionTrace(ws, "nockpt");
     trace.message({ role: "user", content: "t" });
@@ -384,7 +385,7 @@ describe("forkSession", () => {
   });
 
   it("returns null when the source session is missing or has no messages", async () => {
-    const { forkSession } = await import("../../src/agent/trace.js");
+    const { forkSession } = await import("../../src/agent/session-rewind.js");
     expect(forkSession(ws, "missing")).toBeNull();
     // Meta exists but messages.jsonl does not: still null.
     writeSessionMeta(ws, meta("metaonly", 1));

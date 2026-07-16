@@ -71,8 +71,8 @@ import { classifyAgentError } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { buildCommandRoster, loadUserCommands } from "./commands.js";
 import { collectProjectRules } from "./rules.js";
+import { appendCheckpoint } from "./session-rewind.js";
 import {
-  appendCheckpoint,
   createSessionTrace,
   loadSessionMessages,
   newSessionId,

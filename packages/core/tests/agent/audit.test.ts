@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendCheckpoint, createSessionTrace, writeSessionMeta } from "../../src/agent/trace.js";
+import { appendCheckpoint } from "../../src/agent/session-rewind.js";
+import { createSessionTrace, writeSessionMeta } from "../../src/agent/trace.js";
 import { buildSessionAudit, renderSessionAuditMarkdown } from "../../src/agent/audit.js";
 
 describe("buildSessionAudit / renderSessionAuditMarkdown", () => {
