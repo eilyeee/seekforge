@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopEvent, LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
+import { isRecord } from "../util/guards.js";
 
 export type PersistedLoopStatus = "running" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
@@ -35,8 +36,6 @@ const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "running", "passed", "exhausted", "no_progress", "budget", "cancelled", "verify_error",
 ]);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 const isIsoDate = (value: unknown): value is string =>

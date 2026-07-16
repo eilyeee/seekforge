@@ -14,9 +14,7 @@ import type {
 import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+import { isRecord } from "../util/guards.js";
 
 // --- wire types (only the fields we read/write) -----------------------------
 

@@ -78,6 +78,12 @@ const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 /** A read resource is capped at this many characters (text after flattening). */
 export const RESOURCE_READ_MAX_CHARS = 50_000;
 
+/** Cap resource/prompt text at RESOURCE_READ_MAX_CHARS with a truncation marker. */
+const capText = (text: string): string =>
+  text.length > RESOURCE_READ_MAX_CHARS
+    ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
+    : text;
+
 type ContentPart = { type: string; text?: string };
 type CallToolResult = { content?: ContentPart[]; isError?: boolean };
 type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
@@ -407,9 +413,7 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     async readResource(uri: string, signal?: AbortSignal): Promise<string> {
       const res = await transport.request<ReadResourceResult>("resources/read", { uri }, signal);
       const text = flattenResourceContents(res?.contents ?? []);
-      return text.length > RESOURCE_READ_MAX_CHARS
-        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
-        : text;
+      return capText(text);
     },
 
     async listPrompts(signal?: AbortSignal): Promise<McpPrompt[]> {
@@ -426,9 +430,7 @@ export function createMcpClient(options: McpClientOptions): McpClient {
         signal,
       );
       const text = flattenPromptMessages(res?.messages ?? []);
-      return text.length > RESOURCE_READ_MAX_CHARS
-        ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]`
-        : text;
+      return capText(text);
     },
 
     dispose(): void {

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { isRecord } from "../util/guards.js";
 
 /** Error thrown for runtime-reported failures; code mirrors PROTOCOL.md. */
 export class RuntimeError extends Error {
@@ -39,8 +40,6 @@ type Pending = {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const DISPOSE_GRACE_MS = 5_000;
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Line-delimited JSON client for seekforge-runtime (crates/runtime/PROTOCOL.md).

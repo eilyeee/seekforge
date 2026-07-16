@@ -26,6 +26,7 @@ import {
   SessionBusyError,
   type SessionLease,
 } from "./session-lease.js";
+import { isRecord } from "../util/guards.js";
 
 export type SessionTrace = {
   dir: string;
@@ -159,8 +160,6 @@ const SESSION_STATUSES = new Set<SessionStatus>([
   "idle", "running", "waiting_approval", "completed", "failed", "cancelled",
 ]);
 const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function requirePhysicalDirectory(path: string, create: boolean): boolean {
   let stat: ReturnType<typeof lstatSync>;

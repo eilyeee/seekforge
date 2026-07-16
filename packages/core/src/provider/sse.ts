@@ -5,6 +5,7 @@
 
 import type { ChatFinishReason, ProviderToolCall } from "@seekforge/shared";
 import { mapFinishReason, type WireUsage } from "./mapping.js";
+import { isRecord } from "../util/guards.js";
 
 /** Maximum decoded characters accepted for one SSE line, including fragments. */
 export const MAX_SSE_LINE_CHARS = 1024 * 1024;
@@ -48,9 +49,6 @@ export function createSseAccumulator(): SseAccumulator {
     done: false,
   };
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Feed a decoded text chunk. Chunks may split SSE lines anywhere; complete

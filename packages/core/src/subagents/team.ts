@@ -1,5 +1,6 @@
 import type { ToolDefinitionForModel } from "@seekforge/shared";
 import type { AgentDefinition } from "./types.js";
+import { isRecord } from "../util/guards.js";
 
 export const DISPATCH_TEAM_TOOL = "dispatch_team";
 export const MAX_TEAM_MEMBERS = 12;
@@ -21,9 +22,6 @@ export type AgentTeamPlan = {
 export type TeamPlanValidation =
   | { ok: true; plan: AgentTeamPlan }
   | { ok: false; message: string };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Parses and validates the complete dependency graph before any agent starts. */
 export function validateAgentTeam(raw: unknown, agents: AgentDefinition[]): TeamPlanValidation {

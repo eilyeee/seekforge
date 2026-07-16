@@ -14,6 +14,7 @@ import { formatFactBullet, projectMemoryPath } from "../memory/index.js";
 import { createSkillScaffold } from "../skills/index.js";
 import { readEvolutionProposal, setEvolutionProposalStatus } from "./store.js";
 import type { EvolutionProposal } from "./types.js";
+import { readFileIfExists } from "../util/fs.js";
 
 export type ApplyProposalResult = {
   proposal: EvolutionProposal;
@@ -25,14 +26,6 @@ const AGENT_RULES_HEADING_RE = /^##\s+Agent Rules\s*$/;
 
 const AGENTS_MD_TEMPLATE = (bullet: string): string =>
   `# AGENTS.md\n\n## Agent Rules\n\n${bullet}\n`;
-
-function readFileIfExists(filePath: string): string | undefined {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Appends `- <content>` under the "## Agent Rules" section of AGENTS.md.

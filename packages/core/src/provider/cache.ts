@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "./types.js";
+import { isRecord } from "../util/guards.js";
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -18,8 +19,6 @@ type CacheEntry = {
 };
 
 const FINISH_REASONS = new Set(["stop", "tool_calls", "length", "other"]);
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 const isTokenCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const isFiniteNonnegative = (value: unknown): value is number =>

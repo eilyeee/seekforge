@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ToolError } from "../errors.js";
+import { isRecord } from "../../util/guards.js";
 
 // ---------------------------------------------------------------------------
 // Pure JSON-RPC framing (Content-Length header + JSON body). No IO here.
@@ -55,8 +56,6 @@ export type ParseResult = {
  * otherwise grow the receive buffer without bound and OOM the process.
  */
 export const MAX_CONTENT_LENGTH = 64 * 1024 * 1024;
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function parseLspMessages(buffer: Buffer): ParseResult {
   const messages: unknown[] = [];

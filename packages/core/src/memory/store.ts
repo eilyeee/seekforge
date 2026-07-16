@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readFileIfExists } from "../util/fs.js";
 
 export type MemoryCandidateType = "command" | "path" | "convention" | "tech" | "task_pattern";
 
@@ -186,14 +187,6 @@ export function recordFactUse(workspace: string, briefText: string): void {
 /** Records facts returned by an explicit search_memory query. */
 export function recordFactRetrieval(workspace: string, briefText: string): void {
   recordFactActivity(workspace, briefText, "retrieval");
-}
-
-function readFileIfExists(filePath: string): string | undefined {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
 }
 
 // --- @import composition ----------------------------------------------------

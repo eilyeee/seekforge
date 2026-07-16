@@ -14,6 +14,7 @@ import {
   type EvolutionProposalStatus,
   type EvolutionProposalType,
 } from "./types.js";
+import { readFileIfExists } from "../util/fs.js";
 
 export function evolutionProposalsPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "evolution", "proposals.jsonl");
@@ -21,14 +22,6 @@ export function evolutionProposalsPath(workspace: string): string {
 
 export function sessionReflectionPath(workspace: string, sessionId: string): string {
   return path.join(workspace, ".seekforge", "sessions", sessionId, "reflection.md");
-}
-
-function readFileIfExists(filePath: string): string | undefined {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
 }
 
 const STATUSES: readonly EvolutionProposalStatus[] = ["pending", "accepted", "rejected", "applied"];
