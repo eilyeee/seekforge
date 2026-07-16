@@ -86,14 +86,16 @@ for backward compatibility.
 
 ## Settings layering
 
-`--settings <file>` loads a JSON file that slots between the project config
-(`.seekforge/config.json`) and env/CLI flags:
+`--settings <file>` loads a JSON file that slots between the local/project
+config layers and env/CLI flags:
 
 | Layer | Precedence |
 | --- | --- |
 | `DEEPSEEK_API_KEY` env var | highest |
 | CLI flags (`--model`, `-y`, …) | ↑ |
 | `--settings <file>` (JSON) | ↑ |
+| selected `--profile` overlay (if any) | ↑ |
+| `.seekforge/config.local.json` (personal, gitignored) | ↑ |
 | `.seekforge/config.json` (project) | ↑ |
 | `~/.seekforge/config.json` (global) | lowest |
 

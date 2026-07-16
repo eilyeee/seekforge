@@ -176,6 +176,7 @@ OS-level command sandboxing. When unset, sandboxing is off.
 | Value | Behaviour |
 | --- | --- |
 | `"off"` (or absent) | No sandboxing; commands run as the current user. |
+| `"read-only"` | Commands run inside a sandbox where the workspace is read-only (temp dirs remain writable). Network is accessible. Uses `seatbelt` (macOS) or `bwrap` (Linux). |
 | `"workspace-write"` | Commands run inside a sandbox that allows writes to the workspace directory. Network is accessible. Uses `seatbelt` (macOS) or `bwrap` (Linux). |
 | `"restricted"` | Like `workspace-write` but network access is blocked. |
 
@@ -187,8 +188,8 @@ denial-looking sandbox failure prompts once before retrying unsandboxed.
 { "sandbox": "workspace-write" }
 ```
 
-Settable via `config set`? **Yes** — validated against `off` / `workspace-write`
-/ `restricted`.
+Settable via `config set`? **Yes** — validated against `off` / `read-only` /
+`workspace-write` / `restricted`.
 
 ### `compaction`
 
@@ -626,6 +627,26 @@ behavior applies). Both the legacy shape and the Claude-Code shape are accepted:
 A `userPromptSubmit` (or `sessionStart`) hook contributes context via
 `additionalContext` — or, absent that, its trimmed stdout — which is appended to
 the task as a `<hook-context>…</hook-context>` block (capped at 8000 chars).
+
+### `locale`
+
+UI language for the CLI and TUI chrome (progress lines, summaries, error
+messages). `--help` / option text stays English.
+
+| Value | Behaviour |
+| --- | --- |
+| `"en"` | English (default). |
+| `"zh-CN"` | Simplified Chinese. |
+
+Resolved once at startup: `config.locale` > `SEEKFORGE_LANG` env var >
+`LC_ALL`/`LANG` > `en`.
+
+```json
+{ "locale": "zh-CN" }
+```
+
+Settable via `config set`? **No** — edit the file directly (or set
+`SEEKFORGE_LANG`).
 
 ### `statusLine` (TUI)
 
