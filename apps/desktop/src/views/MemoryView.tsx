@@ -179,9 +179,9 @@ export function MemoryView() {
   const addFact = (content: string, type: MemoryCandidateType): Promise<void> => {
     const operation = coordinator.capture(ws);
     if (!operation) return Promise.resolve();
-    return api.memoryAddFact(content, type, undefined, scope, operation.workspaceId).then(() => {
-      if (coordinator.isCurrent(operation)) return refresh(operation.workspaceId);
-    });
+    return api
+      .memoryAddFact(content, type, undefined, scope, operation.workspaceId)
+      .then(() => (coordinator.isCurrent(operation) ? refresh(operation.workspaceId) : undefined));
   };
 
   const fq = filter.trim().toLowerCase();

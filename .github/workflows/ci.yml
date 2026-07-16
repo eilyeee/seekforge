@@ -14,8 +14,16 @@ permissions:
 
 jobs:
   node:
-    name: node 22 (typecheck / test / build)
-    runs-on: ubuntu-latest
+    name: node 22 / ${{ matrix.os }} (typecheck / test / build)
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS catches darwin-only breakage (paths, seatbelt sandbox, spawn
+        # semantics) before release time — the CLI ships to npm and the
+        # desktop app targets macOS, but releases were the first place any
+        # non-Linux failure could surface.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -37,8 +45,9 @@ jobs:
 
       # The sandbox enforcement tests need bwrap; Ubuntu 24.04 additionally
       # restricts unprivileged user namespaces via AppArmor, which would make
-      # bwrap fail even when installed.
+      # bwrap fail even when installed. (macOS ships sandbox-exec natively.)
       - name: Install bubblewrap for sandbox enforcement tests
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap
@@ -71,6 +80,7 @@ jobs:
         run: pnpm test:coverage:ws
 
       - name: Upload CLI build
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: cli-dist

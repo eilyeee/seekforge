@@ -100,9 +100,7 @@ export function SessionsView() {
     setPendingDelete(null);
     api
       .sessionDelete(id, operation.workspaceId)
-      .then(() => {
-        if (requests.isCurrent(operation)) return refresh(operation.workspaceId);
-      })
+      .then(() => (requests.isCurrent(operation) ? refresh(operation.workspaceId) : undefined))
       .catch((e: unknown) => {
         if (requests.isCurrent(operation)) setError(t("sessions.deleteError", { error: String(e) }));
       });

@@ -17,10 +17,10 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "@types/node": "^22.10.0",
+    "typescript": "catalog:",
+    "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
-    "vitest": "^4.0.0",
-    "tsx": "^4.22.4"
+    "vitest": "catalog:",
+    "tsx": "catalog:"
   }
 }

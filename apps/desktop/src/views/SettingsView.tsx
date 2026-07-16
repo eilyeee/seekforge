@@ -154,9 +154,7 @@ function McpSection() {
     setPendingRemove(null);
     api
       .mcpRemove(server.name, server.source, operation.workspaceId)
-      .then(() => {
-        if (coordinator.isCurrent(operation)) return refresh(operation.workspaceId);
-      })
+      .then(() => (coordinator.isCurrent(operation) ? refresh(operation.workspaceId) : undefined))
       .catch((e: unknown) => {
         if (coordinator.isCurrent(operation)) setLoadError(String(e));
       });

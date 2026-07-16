@@ -4,6 +4,24 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@types/node':
+      specifier: ^22.10.0
+      version: 22.19.20
+    tsup:
+      specifier: ^8.5.1
+      version: 8.5.1
+    tsx:
+      specifier: ^4.22.4
+      version: 4.22.4
+    typescript:
+      specifier: ^5.7.0
+      version: 5.9.3
+    vitest:
+      specifier: ^4.0.0
+      version: 4.1.9
+
 overrides:
   esbuild: '>=0.28.1'
 
@@ -18,7 +36,7 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(vitest@4.1.9)
       tsx:
-        specifier: ^4.22.4
+        specifier: 'catalog:'
         version: 4.22.4
 
   apps/cli:
@@ -52,19 +70,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       tsup:
-        specifier: ^8.5.1
+        specifier: 'catalog:'
         version: 8.5.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)
       tsx:
-        specifier: ^4.22.4
+        specifier: 'catalog:'
         version: 4.22.4
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
 
   apps/desktop:
@@ -173,13 +191,13 @@ importers:
         specifier: ^3.4.0
         version: 3.4.19(tsx@4.22.4)
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vite:
         specifier: ^8.0.0
         version: 8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4)
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
 
   apps/server:
@@ -195,19 +213,19 @@ importers:
         version: 8.21.0
     devDependencies:
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
       tsx:
-        specifier: ^4.22.4
+        specifier: 'catalog:'
         version: 4.22.4
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
 
   apps/tui:
@@ -229,22 +247,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       '@types/react':
         specifier: ^18.3.0
         version: 18.3.31
       tsup:
-        specifier: ^8.5.1
+        specifier: 'catalog:'
         version: 8.5.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)
       tsx:
-        specifier: ^4.22.4
+        specifier: 'catalog:'
         version: 4.22.4
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
       zod:
         specifier: ^3.24.0
@@ -260,13 +278,13 @@ importers:
         version: 3.25.76
     devDependencies:
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
     optionalDependencies:
       tree-sitter-wasms:
@@ -286,25 +304,25 @@ importers:
         version: link:../shared
     devDependencies:
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       tsx:
-        specifier: ^4.22.4
+        specifier: 'catalog:'
         version: 4.22.4
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.0.0
+        specifier: 'catalog:'
         version: 4.1.9(@types/node@22.19.20)(@vitest/coverage-v8@4.1.9)(vite@8.0.16(@types/node@22.19.20)(esbuild@0.28.1)(jiti@1.21.7)(tsx@4.22.4))
 
   packages/shared:
     devDependencies:
       '@types/node':
-        specifier: ^22.10.0
+        specifier: 'catalog:'
         version: 22.19.20
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
 
 packages:

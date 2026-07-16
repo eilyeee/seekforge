@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "test:coverage:critical": "pnpm --filter @seekforge/core exec vitest run tests/tools/browser.test.ts tests/tools/web.test.ts tests/tools/run-command.test.ts tests/provider/cache.test.ts --coverage --coverage.include=src/tools/builtins/browser.ts --coverage.include=src/tools/builtins/web.ts --coverage.include=src/tools/run-command.ts --coverage.include=src/provider/cache.ts --coverage.thresholds.statements=64 --coverage.thresholds.branches=61 --coverage.thresholds.functions=66 --coverage.thresholds.lines=66",
-    "test:coverage:security": "pnpm --filter @seekforge/core exec vitest run tests/tools/permissions.test.ts tests/tools/os-sandbox.test.ts tests/tools/sandbox.test.ts tests/agent/loop.test.ts tests/agent/loop-logic.test.ts tests/agent/auto-loop.test.ts tests/agent/loop-state.test.ts tests/agent/resilience.test.ts tests/agent/checkpoint.test.ts --coverage --coverage.include=src/tools/permissions.ts --coverage.include=src/tools/os-sandbox.ts --coverage.include=src/tools/sandbox.ts --coverage.include=src/agent/loop.ts --coverage.include=src/agent/auto-loop.ts --coverage.include=src/agent/loop-state.ts --coverage.thresholds.statements=69 --coverage.thresholds.branches=60 --coverage.thresholds.functions=66 --coverage.thresholds.lines=71",
+    "test:coverage:security": "pnpm --filter @seekforge/core exec vitest run tests/tools/permissions.test.ts tests/tools/os-sandbox.test.ts tests/tools/sandbox.test.ts tests/agent/loop.test.ts tests/agent/loop-logic.test.ts tests/agent/auto-loop.test.ts tests/agent/loop-state.test.ts tests/agent/resilience.test.ts tests/agent/checkpoint.test.ts --coverage --coverage.include=src/tools/permissions.ts --coverage.include=src/tools/os-sandbox.ts --coverage.include=src/tools/sandbox.ts --coverage.include=src/agent/loop.ts --coverage.include=src/agent/dispatch-tools.ts --coverage.include=src/agent/auto-loop.ts --coverage.include=src/agent/loop-state.ts --coverage.thresholds.statements=69 --coverage.thresholds.branches=60 --coverage.thresholds.functions=66 --coverage.thresholds.lines=71",
     "test:coverage:ws": "pnpm --filter @seekforge/server exec vitest run tests/ws.test.ts tests/loop.test.ts tests/permission-rules.test.ts tests/runs.test.ts --coverage --coverage.include=src/ws.ts --coverage.thresholds.statements=84 --coverage.thresholds.branches=77 --coverage.thresholds.functions=85 --coverage.thresholds.lines=86",
     "typecheck": "pnpm -r typecheck",
     "tauri": "tauri",
@@ -20,7 +20,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2",
     "@vitest/coverage-v8": "4.1.9",
-    "tsx": "^4.22.4"
+    "tsx": "catalog:"
   },
   "pnpm": {
     "overrides": {

@@ -1,3 +1,12 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# Single source of truth for toolchain versions shared across the workspace;
+# packages reference these with the `catalog:` protocol.
+catalog:
+  "@types/node": ^22.10.0
+  tsup: ^8.5.1
+  tsx: ^4.22.4
+  typescript: ^5.7.0
+  vitest: ^4.0.0

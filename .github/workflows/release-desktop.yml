@@ -48,6 +48,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Serialize runs per ref: two rapid tag pushes/dispatches would otherwise run
+# overlapping macOS matrix builds racing to append assets to the same GitHub
+# Release. Never cancel a release mid-flight — queue instead.
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
