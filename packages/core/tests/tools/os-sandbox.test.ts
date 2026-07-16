@@ -201,12 +201,61 @@ const canWriteHome = (() => {
     return false;
   }
 })();
+const hasBwrap =
+  process.platform === "linux" && spawnSync("which", ["bwrap"]).status === 0;
+
+// The enforcement tests below skip when the OS mechanism is unavailable, so on
+// a runner that silently lost its sandbox binary a green suite would prove
+// nothing. CI sets SEEKFORGE_REQUIRE_SANDBOX_TESTS=1 to turn that silence into
+// a hard failure: the sentinel asserts the mechanism (and the environment the
+// integration tests need) is actually present.
+const requireSandboxTests = process.env.SEEKFORGE_REQUIRE_SANDBOX_TESTS === "1";
+describe.runIf(requireSandboxTests)("sandbox test environment (required by CI)", () => {
+  it("has the OS sandbox mechanism the enforcement tests need", () => {
+    if (process.platform === "darwin") {
+      expect(hasSeatbelt, "sandbox-exec missing — seatbelt enforcement tests would be skipped").toBe(true);
+      expect(canWriteHome, "home not writable — seatbelt enforcement tests would be skipped").toBe(true);
+    } else if (process.platform === "linux") {
+      expect(hasBwrap, "bwrap missing — bwrap enforcement tests would be skipped").toBe(true);
+    } else {
+      throw new Error(`SEEKFORGE_REQUIRE_SANDBOX_TESTS is set on unsupported platform ${process.platform}`);
+    }
+  });
+});
 
 describe("seatbelt integration (darwin only)", () => {
   it.skipIf(!hasSeatbelt || !canWriteHome)(
     "workspace-write allows writes inside the workspace and blocks them outside",
     () => {
       const ws = makeWorkspace();
+      const outside = fs.mkdtempSync(path.join(os.homedir(), ".seekforge-sbx-test-"));
+      try {
+        const inside = sandboxedShell(`echo ok > "${path.join(ws, "in.txt")}"`, "workspace-write", ws);
+        const resIn = spawnSync(inside.bin, inside.args, { cwd: ws });
+        expect(inside.sandboxed).toBe(true);
+        expect(resIn.status).toBe(0);
+        expect(fs.readFileSync(path.join(ws, "in.txt"), "utf8").trim()).toBe("ok");
+
+        const outsideFile = path.join(outside, "out.txt");
+        const out = sandboxedShell(`echo nope > "${outsideFile}"`, "workspace-write", ws);
+        const resOut = spawnSync(out.bin, out.args, { cwd: ws });
+        expect(resOut.status).not.toBe(0);
+        expect(fs.existsSync(outsideFile)).toBe(false);
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("bwrap integration (linux only)", () => {
+  it.skipIf(!hasBwrap || !canWriteHome)(
+    "workspace-write allows writes inside the workspace and blocks them outside",
+    () => {
+      const ws = makeWorkspace();
+      // Outside the workspace AND outside /tmp (which stays writable for
+      // temp files) — the home dir is bind-mounted read-only.
       const outside = fs.mkdtempSync(path.join(os.homedir(), ".seekforge-sbx-test-"));
       try {
         const inside = sandboxedShell(`echo ok > "${path.join(ws, "in.txt")}"`, "workspace-write", ws);
