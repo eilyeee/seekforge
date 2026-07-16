@@ -489,6 +489,11 @@ export function runShellCommand(
       }
       observe("stderr", text);
     });
+    // A pipe error (e.g. EPIPE during SIGKILL teardown) with no listener is an
+    // uncaught exception that takes down the whole process; the child's own
+    // error/close handlers below already report the failure.
+    child.stdout.on("error", () => {});
+    child.stderr.on("error", () => {});
 
     const killTree = (): void => {
       if (child.pid !== undefined) {

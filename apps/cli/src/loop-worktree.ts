@@ -28,12 +28,18 @@ export type LoopRepository = {
 export async function resolveLoopRepository(path: string): Promise<LoopRepository> {
   const entries = await listGitWorktrees(path).catch(async (error: unknown) => {
     // Classify by probing rather than matching git's (localized) error text.
+    // Only a clean non-zero exit means "not a repo"; a spawn failure (git
+    // missing from PATH) must surface the original error, not masquerade as
+    // a non-repo directory.
     const insideRepo = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
       cwd: path,
       timeout: 60_000,
     }).then(
       () => true,
-      () => false,
+      (probeError: unknown) => {
+        if ((probeError as NodeJS.ErrnoException).code === "ENOENT") throw error;
+        return false;
+      },
     );
     if (!insideRepo) {
       throw new WorktreeGitError("not_a_git_repo", `not a git repository: ${path}`);

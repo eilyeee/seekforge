@@ -175,8 +175,10 @@ export async function fetchWithRetry<T>(
     if (res.ok) {
       if (handleResponse) {
         // Parse non-streaming bodies inside the attempt so post-header failures
-        // participate in the same retry and fallback policy.
-        if (!options.timeoutBody) clearAttemptTimeout();
+        // participate in the same retry and fallback policy. The timer stays
+        // armed across the body read: disarming first would let a stalled body
+        // hang forever with no abort path (same reasoning as the error-body
+        // read below).
         try {
           const result = await handleResponse(res);
           clearAttemptTimeout();
