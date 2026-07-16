@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ToolError } from "../errors.js";
 import { abortablePromise, onAbortOnce } from "../../util/abort.js";
+import { installProcessTeardown } from "../../util/process-teardown.js";
 import { isRecord } from "../../util/guards.js";
 
 // ---------------------------------------------------------------------------
@@ -722,17 +723,14 @@ async function disposeWorkspaceLspServers(workspace: string): Promise<void> {
 function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
-  const close = (): void => {
-    void disposeLspServers();
-  };
-  process.once("beforeExit", close);
-  process.once("SIGINT", close);
-  process.once("SIGTERM", close);
-  // `exit` cannot await async work, so kill children SYNCHRONOUSLY here or they
-  // leak as orphaned processes on a hard exit.
-  process.once("exit", () => {
-    for (const s of sessions.values()) s.killSync();
-    sessions.clear();
+  installProcessTeardown({
+    onSignal: () => void disposeLspServers(),
+    // `exit` cannot await async work, so kill children SYNCHRONOUSLY here or
+    // they leak as orphaned processes on a hard exit.
+    onExit: () => {
+      for (const s of sessions.values()) s.killSync();
+      sessions.clear();
+    },
   });
 }
 

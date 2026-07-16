@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { ToolError } from "../errors.js";
+import { installProcessTeardown } from "../../util/process-teardown.js";
 import { resolveForWrite } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import { checkFetchUrl } from "./web.js";
@@ -75,6 +76,8 @@ type PlaywrightContext = {
 type PlaywrightBrowser = {
   newContext(opts?: unknown): Promise<PlaywrightContext>;
   close(): Promise<void>;
+  /** The spawned browser child process (chromium.launch always has one). */
+  process?(): { kill(signal?: NodeJS.Signals | number): boolean } | null;
 };
 type PlaywrightModule = {
   chromium: { launch(opts?: { headless?: boolean }): Promise<PlaywrightBrowser> };
@@ -215,13 +218,19 @@ let exitHookInstalled = false;
 function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
-  const close = (): void => {
-    void disposeBrowser();
-  };
-  process.once("beforeExit", close);
-  process.once("SIGINT", close);
-  process.once("SIGTERM", close);
-  process.once("exit", close);
+  installProcessTeardown({
+    onSignal: () => void disposeBrowser(),
+    // 'exit' cannot await the async close — the previous hook registered it
+    // anyway, so a hard exit silently leaked the headless browser. Kill the
+    // underlying child process synchronously instead.
+    onExit: () => {
+      try {
+        browser?.process?.()?.kill("SIGKILL");
+      } catch {
+        // best-effort: the process may already be gone
+      }
+    },
+  });
 }
 
 const navigateSchema = z.object({

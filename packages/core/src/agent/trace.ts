@@ -27,6 +27,7 @@ import {
   type SessionLease,
 } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
+import { installProcessTeardown } from "../util/process-teardown.js";
 
 export type SessionTrace = {
   dir: string;
@@ -94,15 +95,19 @@ function appendLineSync(file: string, line: string): void {
     fd = openSync(file, constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
     if (!appendFdsExitHookInstalled) {
       appendFdsExitHookInstalled = true;
-      process.on("exit", () => {
-        for (const openFd of appendFds.values()) {
-          try {
-            closeSync(openFd);
-          } catch {
-            // best-effort cleanup
+      // Only 'exit' is needed: O_APPEND writes hit the kernel immediately, so
+      // an unclosed fd loses no data — closing here is tidiness, not safety.
+      installProcessTeardown({
+        onExit: () => {
+          for (const openFd of appendFds.values()) {
+            try {
+              closeSync(openFd);
+            } catch {
+              // best-effort cleanup
+            }
           }
-        }
-        appendFds.clear();
+          appendFds.clear();
+        },
       });
     }
     if (appendFds.size >= APPEND_FD_MAX) {
