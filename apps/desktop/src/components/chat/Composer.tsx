@@ -35,6 +35,13 @@ export type ComposerProps = {
   /** Sends the task (the parent owns the store's send/queue semantics). */
   onSend: (task: string) => void;
   disabled: boolean;
+  /**
+   * Blocks sending (send button + Enter) without disabling the input, e.g. while
+   * the socket is reconnecting. Typing/editing stays enabled so the draft is
+   * preserved; `sendBlockedHint` explains why sending is unavailable.
+   */
+  sendBlocked?: boolean;
+  sendBlockedHint?: string;
   placeholder: string;
   /** Web-relevant slash commands; actions are the parent's callbacks. */
   commands: ComposerCommand[];
@@ -136,6 +143,8 @@ export function Composer({
   onChange,
   onSend,
   disabled,
+  sendBlocked = false,
+  sendBlockedHint,
   placeholder,
   commands,
   workspaceId,
@@ -255,7 +264,7 @@ export function Composer({
 
   const send = () => {
     const task = value.trim();
-    if (!task || disabled) return;
+    if (!task || disabled || sendBlocked) return;
     pushHistory(localStorage, workspaceId, task);
     navRef.current = null;
     onSend(task);
@@ -511,7 +520,13 @@ export function Composer({
             </span>
           )}
 
-          <span className="ml-auto hidden pr-1 text-2xs text-tertiary sm:inline">{t("chat.composer.sendHint")}</span>
+          {sendBlocked && sendBlockedHint ? (
+            <span className="ml-auto truncate pr-1 text-2xs text-warn" title={sendBlockedHint}>
+              {sendBlockedHint}
+            </span>
+          ) : (
+            <span className="ml-auto hidden pr-1 text-2xs text-tertiary sm:inline">{t("chat.composer.sendHint")}</span>
+          )}
           <button
             type="button"
             onClick={openFilePicker}
@@ -536,8 +551,8 @@ export function Composer({
           <button
             type="button"
             onClick={send}
-            disabled={disabled || value.trim().length === 0}
-            title={t("chat.composer.send")}
+            disabled={disabled || sendBlocked || value.trim().length === 0}
+            title={sendBlocked && sendBlockedHint ? sendBlockedHint : t("chat.composer.send")}
             aria-label={t("chat.composer.send")}
             className="focus-ring flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
           >

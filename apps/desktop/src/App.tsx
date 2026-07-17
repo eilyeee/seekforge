@@ -1,8 +1,10 @@
 import { lazy, Suspense } from "react";
-import { useStore } from "./store";
+import { activeTab, useStore } from "./store";
 import { useT } from "./lib/i18n";
 import { Button } from "./components/ui";
 import { CommandPalette } from "./components/CommandPalette";
+import { PermissionModal } from "./components/chat/PermissionModal";
+import { QuestionModal } from "./components/chat/QuestionModal";
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar } from "./components/Sidebar";
 import { TodosPanel } from "./components/TodosPanel";
@@ -29,6 +31,35 @@ const DiagnosticsView = lazy(() => import("./views/DiagnosticsView").then((m) =>
  *  draggable strip so its top chrome (tabs, toolbar) isn't covered by the
  *  click-eating title-bar zone. */
 const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
+/**
+ * Permission / ask_user prompts for the active tab, rendered at the App level so
+ * they stay reachable no matter which view is showing. A run can hit a
+ * permission gate or ask_user while the user has navigated to Files/Git/Settings
+ * — the modal must appear (and unblock the run) rather than only firing an OS
+ * notification. Modals are self-contained overlays, so mounting them outside the
+ * chat view has no layout impact.
+ */
+function PendingModals() {
+  const tabs = useStore((s) => s.tabs);
+  const respondPermission = useStore((s) => s.respondPermission);
+  const respondQuestion = useStore((s) => s.respondQuestion);
+  const tab = activeTab(tabs);
+  return (
+    <>
+      {tab.pendingPermission && (
+        <PermissionModal request={tab.pendingPermission.request} onRespond={respondPermission} />
+      )}
+      {!tab.pendingPermission && tab.pendingQuestion && (
+        <QuestionModal
+          question={tab.pendingQuestion.question}
+          options={tab.pendingQuestion.options}
+          onAnswer={respondQuestion}
+        />
+      )}
+    </>
+  );
+}
 
 export function App() {
   const t = useT();
@@ -82,6 +113,7 @@ export function App() {
       </main>
       {todosOpen && <TodosPanel key={activeWorkspaceId} />}
       <CommandPalette />
+      <PendingModals />
     </div>
   );
 }

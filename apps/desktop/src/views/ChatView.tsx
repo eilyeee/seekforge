@@ -15,8 +15,6 @@ import {
   expandCommand,
 } from "../components/chat/CommandArgsDialog";
 import { RunControls } from "../components/chat/RunControls";
-import { PermissionModal } from "../components/chat/PermissionModal";
-import { QuestionModal } from "../components/chat/QuestionModal";
 import { TabBar } from "../components/chat/TabBar";
 import { UsageFooter } from "../components/chat/UsageFooter";
 import { useT } from "../lib/i18n";
@@ -43,8 +41,7 @@ export function ChatView() {
   const tabsState = useStore((s) => s.tabs);
   const workspaces = useStore((s) => s.workspaces);
   const tab = activeTab(tabsState);
-  const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, respondPermission, respondQuestion, connect } =
-    useStore.getState();
+  const { sendTask, cancel, steerSubagent, cancelSubagent, newSession, connect } = useStore.getState();
   const { openTab, closeTab, setActiveTab, setMode, setApprovalMode, executePlan, setView } = useStore.getState();
   const { openWorktreeTab, mergeWorktree, discardWorktree } = useStore.getState();
   const {
@@ -273,8 +270,10 @@ export function ChatView() {
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
       return;
     }
-    sendTask(task);
-    setDraft("");
+    // Only clear the draft if the task actually left the client. When the
+    // socket is down sendTask returns false (and surfaces a wsError); keeping
+    // the draft lets the user resend once reconnected instead of losing it.
+    if (sendTask(task)) setDraft("");
   };
 
   // Resolve a chosen custom command into composer text. Bodies with a !`shell`
@@ -478,6 +477,10 @@ export function ChatView() {
             onChange={setDraft}
             onSend={submit}
             disabled={tab.chat.running}
+            // Gate sending (button + Enter) while the socket isn't connected so
+            // input isn't silently dropped mid-reconnect; typing stays enabled.
+            sendBlocked={tab.conn !== "connected"}
+            sendBlockedHint={t("chat.composerDisconnected")}
             placeholder={
               tab.chat.running
                 ? t("chat.composerRunningPlaceholder")
@@ -499,17 +502,8 @@ export function ChatView() {
 
       <UsageFooter usage={tab.chat.usage} context={tab.chat.contextUsage} conn={tab.conn} balance={balance} />
 
-      {tab.pendingPermission && (
-        <PermissionModal request={tab.pendingPermission.request} onRespond={respondPermission} />
-      )}
-
-      {!tab.pendingPermission && tab.pendingQuestion && (
-        <QuestionModal
-          question={tab.pendingQuestion.question}
-          options={tab.pendingQuestion.options}
-          onAnswer={respondQuestion}
-        />
-      )}
+      {/* Permission / ask_user modals are rendered globally in App so they stay
+          reachable when the user has navigated to a non-chat view mid-run. */}
 
       {backtrackTarget !== null && (
         <ConfirmDialog

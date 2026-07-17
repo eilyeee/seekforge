@@ -156,6 +156,97 @@ describe("store: rejected sends", () => {
     expect(tab.chat.items).toEqual([]);
     expect(sent).toEqual([]);
   });
+
+  it("sendTask reports failure (false) and surfaces a wsError when offline", () => {
+    useStore.getState().connect();
+    acceptSend = false;
+    const ok = useStore.getState().sendTask("offline task");
+    expect(ok).toBe(false);
+    expect(activeTab(useStore.getState().tabs).wsError).toBeTruthy();
+  });
+
+  it("sendTask reports success (true) on an accepted send", () => {
+    useStore.getState().connect();
+    const ok = useStore.getState().sendTask("do the thing");
+    expect(ok).toBe(true);
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(true);
+    expect(tab.wsError).toBeNull();
+  });
+
+  it("cancel surfaces a wsError when the socket rejects it (run keeps going server-side)", () => {
+    useStore.getState().connect();
+    acceptSend = false;
+    useStore.getState().cancel();
+    expect(activeTab(useStore.getState().tabs).wsError).toBeTruthy();
+    expect(sent).toEqual([]);
+  });
+
+  it("steer/cancelSubagent surface a wsError when the socket rejects them", () => {
+    useStore.getState().connect();
+    acceptSend = false;
+    useStore.getState().steerSubagent("ag-1", "look here");
+    expect(activeTab(useStore.getState().tabs).wsError).toBeTruthy();
+    // Reset the banner, then verify cancelSubagent surfaces its own failure.
+    useStore.setState((s) => ({ tabs: updateTab(s.tabs, s.tabs.activeTabId, { wsError: null }) }));
+    useStore.getState().cancelSubagent("ag-1");
+    expect(activeTab(useStore.getState().tabs).wsError).toBeTruthy();
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("store: control responses keep pending when the socket rejects them", () => {
+  beforeEach(() => {
+    resetStore();
+    // Inject both a pending permission and a pending question on the active tab.
+    useStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        tabs: s.tabs.tabs.map((t, i) =>
+          i === 0
+            ? {
+                ...t,
+                pendingPermission: {
+                  requestId: "p1",
+                  request: { toolName: "run_command", permission: "execute", description: "Run", command: "ls" },
+                },
+                pendingQuestion: { id: "q1", question: "Pick", options: ["a", "b"] },
+              }
+            : t,
+        ),
+      },
+    }));
+    useStore.getState().connect();
+  });
+
+  it("respondPermission keeps the modal up and surfaces a wsError when the send fails", () => {
+    acceptSend = false;
+    useStore.getState().respondPermission(true);
+    const tab = activeTab(useStore.getState().tabs);
+    // Pending is preserved: the server is still awaiting a response.
+    expect(tab.pendingPermission).not.toBeNull();
+    expect(tab.wsError).toBeTruthy();
+    expect(sent).toEqual([]);
+  });
+
+  it("respondPermission clears pending on an accepted send", () => {
+    useStore.getState().respondPermission(true);
+    expect(activeTab(useStore.getState().tabs).pendingPermission).toBeNull();
+  });
+
+  it("respondQuestion keeps the modal up and surfaces a wsError when the send fails", () => {
+    acceptSend = false;
+    useStore.getState().respondQuestion("a");
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.pendingQuestion).not.toBeNull();
+    expect(tab.wsError).toBeTruthy();
+    expect(sent).toEqual([]);
+  });
+
+  it("respondQuestion clears pending on an accepted send", () => {
+    useStore.getState().respondQuestion("a");
+    expect(activeTab(useStore.getState().tabs).pendingQuestion).toBeNull();
+  });
 });
 
 describe("store: session reset lifecycle", () => {

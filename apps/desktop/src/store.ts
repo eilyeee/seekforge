@@ -186,7 +186,8 @@ type AppStore = {
    * transcript (after a successful POST backtrack on the server).
    */
   truncateAtItem: (tabId: string, sessionId: string, itemId: number) => void;
-  sendTask: (task: string) => void;
+  /** Sends a chat task; returns false when the socket rejected it (offline). */
+  sendTask: (task: string) => boolean;
   /**
    * Starts loop mode on the active tab: sends a `loop` frame on the tab's WS,
    * marks the tab running, and resets the tab's loop progress. The server runs
@@ -213,6 +214,14 @@ type AppStore = {
  * connection). Lives outside the store: sockets are not state.
  */
 const wsByTab = new Map<string, WsClient>();
+
+/**
+ * Surfaced on a tab's `wsError` when a frame could not be sent because the
+ * socket is not OPEN (disconnected / reconnecting). Same raw `code: message`
+ * shape as protocol errors so the existing wsError banner renders it. The
+ * action is NOT queued — the user must retry once reconnected.
+ */
+const SEND_DISCONNECTED_ERROR = "disconnected: not sent — reconnect to continue";
 
 /**
  * Tells "the server is down" apart from "this is an old server missing the
@@ -506,7 +515,7 @@ export const useStore = create<AppStore>()((set, get) => {
 
     sendTask: (task) => {
       const tab = activeTab(get().tabs);
-      if (tab.chat.running || task.trim() === "") return;
+      if (tab.chat.running || task.trim() === "") return false;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
 
@@ -519,12 +528,19 @@ export const useStore = create<AppStore>()((set, get) => {
       const accepted = tab.chat.sessionId
         ? client.send(buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides))
         : client.send(buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides));
-      if (!accepted) return;
+      if (!accepted) {
+        // Socket is not OPEN: the task never left the client. Don't append a
+        // user bubble or mark running — surface the failure so the caller keeps
+        // the draft instead of silently dropping it.
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+        return false;
+      }
       if (!tab.chat.sessionId) {
         patch.title = titleFromTask(task);
         patch.planPending = tab.mode === "plan";
       }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, patch) }));
+      return true;
     },
 
     startLoop: ({ task, verifyCommand, maxIterations, budget }) => {
@@ -596,17 +612,28 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     cancel: () => {
-      wsByTab.get(get().tabs.activeTabId)?.send({ type: "cancel" });
+      const tabId = get().tabs.activeTabId;
+      // A dropped cancel is dangerous: the UI looks cancelled but the run keeps
+      // going server-side. Surface the failure so the user knows to retry.
+      if (wsByTab.get(tabId)?.send({ type: "cancel" }) !== true) {
+        set((s) => ({ tabs: updateTab(s.tabs, tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+      }
     },
 
     steerSubagent: (dispatchId, message) => {
       const trimmed = message.trim();
       if (!trimmed || trimmed.length > 4000) return;
-      wsByTab.get(get().tabs.activeTabId)?.send({ type: "subagent.steer", dispatchId, message: trimmed });
+      const tabId = get().tabs.activeTabId;
+      if (wsByTab.get(tabId)?.send({ type: "subagent.steer", dispatchId, message: trimmed }) !== true) {
+        set((s) => ({ tabs: updateTab(s.tabs, tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+      }
     },
 
     cancelSubagent: (dispatchId) => {
-      wsByTab.get(get().tabs.activeTabId)?.send({ type: "subagent.cancel", dispatchId });
+      const tabId = get().tabs.activeTabId;
+      if (wsByTab.get(tabId)?.send({ type: "subagent.cancel", dispatchId }) !== true) {
+        set((s) => ({ tabs: updateTab(s.tabs, tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+      }
     },
 
     newSession: () => {
@@ -631,7 +658,7 @@ export const useStore = create<AppStore>()((set, get) => {
       const tab = activeTab(get().tabs);
       const pending = tab.pendingPermission;
       if (!pending) return;
-      wsByTab.get(tab.tabId)?.send({
+      const sent = wsByTab.get(tab.tabId)?.send({
         type: "permission.response",
         requestId: pending.requestId,
         approved,
@@ -640,6 +667,12 @@ export const useStore = create<AppStore>()((set, get) => {
         // Per-hunk selection for multi-hunk apply_patch calls.
         ...(selectedHunks ? { selectedHunks } : {}),
       });
+      if (sent !== true) {
+        // The server is still awaiting this response — keep the modal up (don't
+        // clear pending) and surface the failure so the user can retry.
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+        return;
+      }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingPermission: null }) }));
     },
 
@@ -647,7 +680,12 @@ export const useStore = create<AppStore>()((set, get) => {
       const tab = activeTab(get().tabs);
       const pending = tab.pendingQuestion;
       if (!pending) return;
-      wsByTab.get(tab.tabId)?.send({ type: "question.answer", id: pending.id, answer });
+      const sent = wsByTab.get(tab.tabId)?.send({ type: "question.answer", id: pending.id, answer });
+      if (sent !== true) {
+        // Keep the question modal up — the server never received the answer.
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+        return;
+      }
       set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { pendingQuestion: null }) }));
     },
 

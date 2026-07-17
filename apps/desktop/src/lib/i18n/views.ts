@@ -60,6 +60,7 @@ export const views = {
     "chat.home.empty": "None yet",
     "chat.composerRunningPlaceholder": "agent is running…",
     "chat.composerPlaceholder": "What should the agent do? ({slash} commands · {at} files)",
+    "chat.composerDisconnected": "Connection lost — you can send once reconnected",
     "chat.backtrackTitle": "Rewind conversation to here?",
     "chat.backtrackConfirm": "Rewind",
     "chat.backtrackBody":
@@ -653,6 +654,7 @@ export const views = {
     "chat.home.empty": "暂无",
     "chat.composerRunningPlaceholder": "代理正在运行…",
     "chat.composerPlaceholder": "想让代理做什么？（{slash} 命令 · {at} 文件）",
+    "chat.composerDisconnected": "连接中断，重连后可发送",
     "chat.backtrackTitle": "将对话回滚到此处？",
     "chat.backtrackConfirm": "回滚",
     "chat.backtrackBody": "此消息及其之后的所有内容将从会话记录中移除。下一条消息将基于回滚前的状态继续。",
