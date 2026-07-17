@@ -60,10 +60,10 @@ Allow 规则与会话放行清单按*分隔符边界*匹配，而不是裸的 `s
 
 Shell 命令在允许执行前会被确定性地分类，逻辑位于 `packages/core/src/tools/run-command.ts::classifyCommand`（`run-command.ts:244`）：
 
-- **拒绝清单（L4 `dangerous`）**——最先匹配；从不执行，从不提示：`rm -rf`（recursive **加** force，不分先后顺序）、`sudo`、`chmod -R`、`chown`、`git reset --hard`、`git clean`、`git push --force`（含 `-f` / `--force-with-lease`）、`curl|wget … | sh`、嵌套 `sh -c`、`node -e`、`python -c`（`run-command.ts::DENYLIST`，`run-command.ts:23`；应用于 `:250`）。
+- **拒绝清单（L4 `dangerous`）**——最先匹配；从不执行，从不提示：`rm -rf`（recursive **加** force，不分先后顺序）、`sudo`、`chmod -R`、`chown`、`git reset --hard`、`git clean`、`git push --force`（含 `-f` / `--force-with-lease`）、`curl|wget … | sh`、嵌套 `sh -c`（任意 POSIX / 其他 shell）、`node -e`、`python -c`、`perl`/`ruby -e`、`deno eval`、`bun -e`（`run-command.ts::DENYLIST`）。`git` 与子命令之间的全局选项（`git -c core.pager=cat push --force`、`git -C <dir> …`）无法绕过破坏性 git 匹配模式。
 - **环境类（L3）**——始终需确认，哪怕在 "auto"/"acceptEdits" 下也是如此，无头（headless）运行时自动拒绝：软件包安装 / 依赖变更，以及普通的 `git push`（对外可见 → 强制人工批准，但强制推送在上一条中仍被直接拒绝）（`run-command.ts::ENV_PATTERNS`，`run-command.ts:45`）。
-- **Readonly 快速通道**——只有单条、无管道的 `git`/`gh` 查看类命令会自动执行。命令中只要含有任何可能注入或重定向的 shell 元字符（管道、`&`、`;`、`<`、`>`、换行、反引号或 `$(`）就丧失资格，降级为 `execute`（需确认）（`run-command.ts:279`，`classifyGit` `:216`，`classifyGh` `:164`）。
-- **放行清单（L2 自动执行）**——一小组内置命令（`pwd`、`ls`、`rg`、测试 / 构建运行器）加上用户自行添加的前缀，按 token 边界做前缀匹配。仅当引号感知的 shell 扫描器未发现任何生效的控制运算符或重定向时，这条路径才可用（`run-command.ts::hasShellControlSyntax`）。
+- **Readonly 快速通道**——只有单条、无管道的 `git`/`gh` 查看类命令会自动执行。命令中只要含有任何可能注入或重定向的 shell 元字符（管道、`&`、`;`、`<`、`>`、换行、反引号或 `$(`）就丧失资格，降级为 `execute`（需确认）。写文件类的 git flag（`git diff --output=<path>` / `-o`）同样丧失资格——一条“只读”查看命令绝不能在无确认下向工作区之外写文件（`classifyGit`、`classifyGh`）。
+- **放行清单（L2 自动执行）**——一小组内置命令（`pwd`、`ls`、`rg`、测试 / 构建运行器）加上用户自行添加的前缀，按 token 边界做前缀匹配。仅当引号感知的 shell 扫描器未发现任何生效的控制运算符或重定向时，这条路径才可用（`run-command.ts::hasShellControlSyntax`）。`rg` 携带其代码执行类（`--pre`、`--search-zip`、`--hostname-bin`）或无限制读取类（`--hidden`、`--no-ignore`、`-u`/`-uu`/`-uuu`）flag 时会被强制走确认流程，以防自动执行变成代码执行或读取受保护文件（`.env`、密钥）。
 - **其余一切默认归为 `execute`**——需确认，并展示原始命令（`run-command.ts:310`）。未知的 `git`/`gh` 子命令默认落到安全侧，不会自动执行。
 
 ---
