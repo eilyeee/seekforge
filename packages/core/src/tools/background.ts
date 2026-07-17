@@ -7,6 +7,16 @@ import { buildSandboxSpec, sandboxedShell, type SandboxLevel, type SandboxProfil
 /** Per-stream ring buffer: keep only the LAST N chars of stdout/stderr. */
 const RING_BUFFER_CHARS = 100_000;
 
+/**
+ * Cap on how many EXITED task records we retain. Running tasks are never
+ * evicted (they must stay queryable), but each record pins two ring buffers
+ * (~200KB), so without a bound a long run that repeatedly (re)starts dev
+ * servers/watchers grows the tasks Map — and its memory — without limit. We
+ * keep the most recently exited records so their final output stays readable
+ * and drop the oldest beyond this window.
+ */
+const MAX_EXITED_TASKS = 100;
+
 export type BackgroundTaskStatus = "running" | "exited";
 
 export type BackgroundTaskSnapshot = {
@@ -83,6 +93,8 @@ type TaskRecord = {
   exitCode: number | null;
   killed: boolean;
   error?: { code: string; message: string };
+  /** True once this record has been enqueued for exited-record eviction. */
+  retired?: boolean;
 };
 
 function appendRing(cur: string, text: string): string {
@@ -94,7 +106,22 @@ export function createBackgroundTasks(
   options: { onEvent?: (event: BackgroundTaskEvent) => void } = {},
 ): BackgroundTasks {
   const tasks = new Map<string, TaskRecord>();
+  // Ids of exited tasks in the order they exited (oldest first). Bounds the
+  // tasks Map: once it exceeds MAX_EXITED_TASKS, the oldest exited records are
+  // dropped. Running tasks are never enqueued here, so they are never evicted.
+  const exitedOrder: string[] = [];
   let nextId = 0;
+
+  /** Record that a task has exited and evict the oldest exited records past the cap. */
+  function retire(task: TaskRecord): void {
+    if (task.retired) return; // 'error' then 'close' can both fire — enqueue once
+    task.retired = true;
+    exitedOrder.push(task.id);
+    while (exitedOrder.length > MAX_EXITED_TASKS) {
+      const evicted = exitedOrder.shift();
+      if (evicted !== undefined) tasks.delete(evicted);
+    }
+  }
 
   function killTask(task: TaskRecord): void {
     if (task.status !== "running") return;
@@ -154,6 +181,7 @@ export function createBackgroundTasks(
           task.endedAt = Date.now();
         }
         task.error = { code: "spawn_failed", message: err.message };
+        retire(task);
       });
       child.on("close", (code) => {
         // Flush any bytes held back by the decoders (incomplete trailing seq).
@@ -162,6 +190,7 @@ export function createBackgroundTasks(
         task.status = "exited";
         task.exitCode = code;
         task.endedAt = task.endedAt ?? Date.now();
+        retire(task);
         options.onEvent?.({
           runId,
           taskId: id,

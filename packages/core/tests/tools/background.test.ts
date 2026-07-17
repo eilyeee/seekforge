@@ -111,6 +111,27 @@ describe("createBackgroundTasks", () => {
     expect(snap.stdout).not.toContain("1\n2\n3\n"); // head was dropped
   });
 
+  it("bounds the number of retained exited records without evicting running tasks", async () => {
+    const ws = makeWorkspace();
+    const bg = manager();
+
+    // A long-running task started first must survive every eviction.
+    const running = bg.start({ command: TICK_LOOP, cwd: ws });
+    await waitFor(() => (bg.get(running.id)?.stdout ?? "").includes("tick"));
+
+    // Start well over the retention cap of quick, exiting tasks.
+    const exiting = Array.from({ length: 130 }, () => bg.start({ command: "true", cwd: ws }));
+    await waitFor(() => exiting.every((t) => bg.get(t.id) === undefined || bg.get(t.id)!.status === "exited"), 15_000);
+
+    // The Map is bounded: at most the retention cap of exited records survive,
+    // so the oldest 30 of the 130 that ran were evicted rather than kept forever.
+    const retainedExiting = exiting.filter((t) => bg.get(t.id) !== undefined);
+    expect(retainedExiting.length).toBe(100);
+    expect(bg.list().filter((s) => s.status === "exited").length).toBe(100);
+    // The running task is never enqueued for eviction and remains queryable.
+    expect(bg.get(running.id)?.status).toBe("running");
+  });
+
   it("get and kill return undefined/false for unknown ids", () => {
     const bg = manager();
     expect(bg.get("bg-99")).toBeUndefined();

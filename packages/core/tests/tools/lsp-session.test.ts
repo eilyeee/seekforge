@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +9,52 @@ import {
   lspDiagnostics,
   lspReferences,
 } from "../../src/tools/lsp/client.js";
+
+// A language server that ignores SIGTERM and stays alive after stdin closes, so
+// only a SIGKILL escalation can take it down. Writes its pid for observation.
+const STUBBORN_SERVER = String.raw`#!/usr/bin/env node
+import fs from "node:fs";
+
+process.on("SIGTERM", () => {}); // ignore graceful shutdown
+if (process.env.STUBBORN_PID_FILE) fs.writeFileSync(process.env.STUBBORN_PID_FILE, String(process.pid));
+setInterval(() => {}, 1 << 30); // stay alive even once stdin reaches EOF
+
+let pending = Buffer.alloc(0);
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message));
+  process.stdout.write(Buffer.concat([Buffer.from("Content-Length: " + body.length + "\r\n\r\n"), body]));
+}
+function handle(message) {
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+  else if (message.method === "textDocument/definition" || message.method === "textDocument/references")
+    send({ jsonrpc: "2.0", id: message.id, result: [] });
+}
+process.stdin.on("data", (chunk) => {
+  pending = Buffer.concat([pending, chunk]);
+  for (;;) {
+    const separator = pending.indexOf("\r\n\r\n");
+    if (separator < 0) return;
+    const header = pending.subarray(0, separator).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) { pending = pending.subarray(separator + 4); continue; }
+    const length = Number(match[1]);
+    const start = separator + 4;
+    if (pending.length < start + length) return;
+    const message = JSON.parse(pending.subarray(start, start + length).toString("utf8"));
+    pending = pending.subarray(start + length);
+    handle(message);
+  }
+});
+`;
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const FAKE_SERVER = String.raw`#!/usr/bin/env node
 import fs from "node:fs";
@@ -269,6 +315,40 @@ describe("lsp document synchronization", () => {
 
     await expect(diagnostics).rejects.toMatchObject({ code: "cancelled" });
   });
+
+  it("escalates to SIGKILL when the server ignores SIGTERM on dispose", async () => {
+    const serverPath = path.join(root, "bin", "typescript-language-server");
+    const pidFile = path.join(root, "stubborn.pid");
+    fs.writeFileSync(serverPath, STUBBORN_SERVER, { mode: 0o755 });
+    const savedPidEnv = process.env.STUBBORN_PID_FILE;
+    process.env.STUBBORN_PID_FILE = pidFile;
+    try {
+      // Spawn + handshake a live session against the stubborn server.
+      await lspDefinition(workspace, source, { line: 0, character: 0 });
+      const pid = Number(fs.readFileSync(pidFile, "utf8"));
+      expect(isAlive(pid)).toBe(true);
+
+      // dispose() ends stdin + sends SIGTERM (ignored) and schedules a SIGKILL
+      // after the grace window. Fast-forward that timer rather than waiting it out.
+      vi.useFakeTimers();
+      try {
+        const disposed = disposeLspServers();
+        await vi.advanceTimersByTimeAsync(0); // let dispose() schedule the force-kill
+        expect(isAlive(pid)).toBe(true); // SIGTERM ignored — still alive
+        vi.advanceTimersByTime(5_000); // DISPOSE_GRACE_MS: escalate to SIGKILL
+        await disposed;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const deadline = Date.now() + 5_000;
+      while (isAlive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      if (savedPidEnv === undefined) delete process.env.STUBBORN_PID_FILE;
+      else process.env.STUBBORN_PID_FILE = savedPidEnv;
+    }
+  }, 20_000);
 
   it("keeps workspace sessions alive until the final run lease releases", async () => {
     const first = acquireLspServerLease(workspace);

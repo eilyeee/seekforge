@@ -58,6 +58,9 @@ type Pending = {
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+// After SIGTERM, wait this long for the child to exit on its own before
+// escalating to SIGKILL, so a server that ignores SIGTERM cannot orphan itself.
+const DISPOSE_GRACE_MS = 5_000;
 // npx-launched servers can take a long time to resolve/install on first start
 // (slow registries/proxies) — give the one-time handshake much more room.
 const HANDSHAKE_TIMEOUT_MS = 120_000;
@@ -148,6 +151,18 @@ async function listAll<T>(transport: McpTransport, method: string, field: string
     cursor = next;
   }
   throw new McpError("mcp_pagination_limit", `${method} exceeded ${MAX_LIST_PAGES} pages`);
+}
+
+/**
+ * SIGTERM the child, then schedule a SIGKILL if it has not exited within the
+ * grace window (mirrors runtime/client.ts). The timer is unref'd so it never
+ * keeps the event loop alive, and cleared the moment the process exits.
+ */
+function killWithGrace(proc: ChildProcessWithoutNullStreams): void {
+  proc.kill();
+  const forceKill = setTimeout(() => proc.kill("SIGKILL"), DISPOSE_GRACE_MS);
+  forceKill.unref();
+  proc.once("exit", () => clearTimeout(forceKill));
 }
 
 /** Minimal transport contract shared by the stdio and Streamable HTTP backends. */
@@ -325,7 +340,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
           if (child === proc) {
             child = undefined;
             handshake = undefined;
-            proc.kill();
+            killWithGrace(proc);
           }
           throw err;
         },
@@ -345,7 +360,7 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
       disposed = true;
       handshake = undefined;
       if (child) {
-        child.kill();
+        killWithGrace(child);
         child = undefined;
       }
       for (const p of pending.values()) {

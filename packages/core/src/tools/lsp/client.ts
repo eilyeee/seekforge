@@ -223,6 +223,9 @@ export function severityLabel(severity?: number): string {
 const REQUEST_TIMEOUT_MS = 15_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const DIAGNOSTICS_WAIT_MS = 4_000;
+// After SIGTERM on dispose, escalate to SIGKILL if the server has not exited
+// within this window, so a server that ignores SIGTERM cannot leave an orphan.
+const DISPOSE_GRACE_MS = 5_000;
 
 type Pending = {
   resolve: (v: unknown) => void;
@@ -558,6 +561,18 @@ class LspSession {
       try {
         c.stdin?.end();
         c.kill();
+        // A server that ignores SIGTERM would otherwise linger as an orphan;
+        // force-kill after a grace window. Unref'd so it never holds the loop
+        // open, and cleared as soon as the process exits.
+        const forceKill = setTimeout(() => {
+          try {
+            c.kill("SIGKILL");
+          } catch {
+            // already gone
+          }
+        }, DISPOSE_GRACE_MS);
+        forceKill.unref();
+        c.once("exit", () => clearTimeout(forceKill));
       } catch {
         // best-effort teardown
       }

@@ -1,6 +1,48 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpClient, McpError } from "../../src/mcp/client.js";
 import { writeFallbackServer, writeFixtureServer } from "./fixture.js";
+
+// SIGTERM-ignoring MCP server: completes the handshake, then refuses to die on
+// SIGTERM. Writes its pid so the test can observe the SIGKILL escalation.
+const STUBBORN_MCP_SERVER = `#!/usr/bin/env node
+const fs = require("node:fs");
+process.on("SIGTERM", () => {}); // ignore graceful shutdown
+if (process.env.STUBBORN_PID_FILE) fs.writeFileSync(process.env.STUBBORN_PID_FILE, String(process.pid));
+const rl = require("node:readline").createInterface({ input: process.stdin });
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+rl.on("line", (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: {}, serverInfo: { name: "stubborn", version: "0" } } });
+    return;
+  }
+  if (msg.method === "notifications/initialized") return;
+  if (msg.id === undefined) return;
+  if (msg.method === "tools/list") { send({ jsonrpc: "2.0", id: msg.id, result: { tools: [] } }); return; }
+  send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "nope" } });
+});
+`;
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(cond: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("waitFor timed out");
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 
 let serverPath: string;
 let cleanup: () => void;
@@ -263,6 +305,41 @@ describe("mcp client", () => {
     client.dispose();
     await expect(client.listTools()).rejects.toMatchObject({ code: "disposed" });
   });
+
+  it("force-kills a child that ignores SIGTERM on dispose", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "seekforge-mcp-stubborn-"));
+    const stubbornPath = join(dir, "stubborn-mcp.cjs");
+    const pidFile = join(dir, "pid");
+    writeFileSync(stubbornPath, STUBBORN_MCP_SERVER);
+    chmodSync(stubbornPath, 0o755);
+    const savedPidEnv = process.env.STUBBORN_PID_FILE;
+    process.env.STUBBORN_PID_FILE = pidFile;
+    const client = createMcpClient({ name: "stubborn", config: { command: process.execPath, args: [stubbornPath] } });
+    try {
+      await client.listTools(); // spawn + handshake so a live child exists
+      await waitFor(() => existsSync(pidFile));
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      expect(isAlive(pid)).toBe(true);
+
+      // dispose() sends SIGTERM (ignored) and schedules a SIGKILL after the
+      // grace window. Fast-forward that timer instead of waiting the full delay.
+      vi.useFakeTimers();
+      try {
+        client.dispose();
+        expect(isAlive(pid)).toBe(true); // SIGTERM ignored — still alive
+        vi.advanceTimersByTime(5_000); // DISPOSE_GRACE_MS: escalate to SIGKILL
+      } finally {
+        vi.useRealTimers();
+      }
+      await waitFor(() => !isAlive(pid));
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      client.dispose();
+      if (savedPidEnv === undefined) delete process.env.STUBBORN_PID_FILE;
+      else process.env.STUBBORN_PID_FILE = savedPidEnv;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("still connects when the server only speaks an older protocol revision", async () => {
     const old = writeFallbackServer();
