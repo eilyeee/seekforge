@@ -130,6 +130,13 @@ function parsePositiveInt(val: string): number {
   return n;
 }
 
+function parseRequirementMode(val: string): "quick" | "analyze" | "confirm" {
+  if (val !== "quick" && val !== "analyze" && val !== "confirm") {
+    throw new InvalidArgumentError('must be "quick", "analyze", or "confirm"');
+  }
+  return val;
+}
+
 /** Parse a positive-float option string (e.g. a USD budget); throws on bad input. */
 function parsePositiveFloat(val: string): number {
   if (!/^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(val)) {
@@ -419,6 +426,7 @@ program
   .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
   .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
+  .option("--requirements <mode>", "requirement gate: quick, analyze, or confirm", parseRequirementMode, "quick")
   .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
   .option("-m, --model <model>", "override model")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
@@ -435,6 +443,7 @@ program
         model?: string;
         profile?: string;
         worktree?: boolean | string;
+        requirements: "quick" | "analyze" | "confirm";
       },
     ) => {
       await loopCommand(task, {
@@ -445,6 +454,7 @@ program
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
         worktree: opts.worktree,
+        requirements: opts.requirements,
       });
     },
   );
@@ -456,18 +466,27 @@ program
   .option("-m, --model <model>", "override model")
   .option("--add-iters <n>", "add iterations to the persisted loop limit", parsePositiveInt)
   .option("--add-budget <usd>", "add USD to the persisted cost budget", parsePositiveFloat)
+  .option("--approve-requirements", "approve a persisted confirm-mode requirement specification")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("resume a persisted autonomous loop with its remaining limits and verification state")
   .action(
     async (
       loopId: string,
-      opts: { yes?: boolean; model?: string; addIters?: number; addBudget?: number; profile?: string },
+      opts: {
+        yes?: boolean;
+        model?: string;
+        addIters?: number;
+        addBudget?: number;
+        approveRequirements?: boolean;
+        profile?: string;
+      },
     ) => {
       await loopResumeCommand(loopId, {
         yes: opts.yes,
         model: opts.model,
         addIters: opts.addIters,
         addBudget: opts.addBudget,
+        approveRequirements: opts.approveRequirements,
         profile: opts.profile ?? rootProfile(),
       });
     },

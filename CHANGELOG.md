@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### round 56: requirement-aware autonomous Loop
+- Added `quick`, `analyze`, and `confirm` Loop requirement modes across Core,
+  CLI, TUI, Server, and Desktop. Analyzed modes freeze a bounded structured
+  specification before pre-checking and require a read-only evidence review in
+  addition to a green verifier; confirm mode persists and pauses for approval.
+- Requirement analysis/review usage counts toward the existing cost budget and
+  survives resume. Structured model output is strictly validated, aggregate
+  completion is derived from required criteria, and malformed output fails
+  closed with conservative fallbacks.
+- Added protocol validation, persisted-state compatibility, cross-surface UI,
+  regression coverage, and bilingual Loop architecture/tutorial/reference docs.
+
 ### round 55: full-project boundary/edge-case review — 16 verified fixes
 A parallel-subagent review of every subsystem for boundary bugs; each finding
 verified before fixing (a claimed AST byte-vs-char offset bug was disproved by a

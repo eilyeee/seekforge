@@ -208,6 +208,40 @@ describe("loop state persistence", () => {
     expect(loadLoopState(workspace, "numbers")).toBeNull();
   });
 
+  it("loads legacy records with verifier-only requirement defaults", () => {
+    const state = createLoopState({ loopId: "legacy", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const {
+      requirementMode: _requirementMode,
+      requirements: _requirements,
+      acceptanceReview: _acceptanceReview,
+      requirementsApprovedAt: _requirementsApprovedAt,
+      ...legacy
+    } = state;
+    writeFileSync(join(workspace, ".seekforge", "loops", "legacy.json"), JSON.stringify(legacy));
+    expect(loadLoopState(workspace, "legacy")).toMatchObject({
+      requirementMode: "quick",
+      requirements: null,
+      acceptanceReview: null,
+      requirementsApprovedAt: null,
+    });
+  });
+
+  it("rejects explicit malformed requirement data", () => {
+    const state = createLoopState({
+      loopId: "bad-requirements",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+      requirementMode: "analyze",
+    });
+    writeFileSync(
+      join(workspace, ".seekforge", "loops", "bad-requirements.json"),
+      JSON.stringify({ ...state, requirements: { version: 1, goal: "incomplete" } }),
+    );
+    expect(loadLoopState(workspace, state.loopId)).toBeNull();
+  });
+
   it("skips corrupt records and rejects records copied across workspaces", () => {
     const state = createLoopState({
       loopId: "valid",

@@ -128,6 +128,11 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
       case "loop.warning":
         // Warnings are rendered separately from iteration rows.
         break;
+      case "requirements.started":
+      case "requirements.completed":
+      case "requirements.reviewed":
+        // Requirement progress is rendered separately from iteration rows.
+        break;
     }
   }
   return order.map((i) => byIter.get(i)!);

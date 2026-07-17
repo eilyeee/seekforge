@@ -940,6 +940,18 @@ An async helper that catches an error and resolves normally makes downstream
 - **Caught:** failed Finding lifecycle/fix requests closed their Desktop dialogs,
   discarding the user's inputs while only showing an error behind the modal.
 
+## 62. Derive aggregate decisions from validated detail, not model assertions
+
+A structured model response can claim `complete: true` while its own criterion
+records are unmet, missing, duplicated, or unknown.
+
+- **Do:** validate exact identifier coverage and derive the aggregate outcome
+  from required detail records. Reject inconsistent aggregates and fail closed
+  when structured evidence cannot be parsed.
+- **Caught:** `packages/core/src/agent/loop-requirements.ts` — acceptance review
+  completion must be computed from the frozen required criteria, not trusted
+  from the model-provided boolean.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

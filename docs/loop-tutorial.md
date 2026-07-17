@@ -73,8 +73,11 @@ seekforge loop "Fix the failing parser tests without weakening assertions" --ver
 
 What happens:
 
-1. **Pre-check**: run `pnpm test` once. Already green? Finish as `passed`
-   without spending a single agent iteration.
+1. In default `quick` mode, **pre-check** runs `pnpm test` once and an already
+   green repository finishes without an agent iteration. With
+   `--requirements analyze` or `confirm`, Loop first performs read-only
+   repository analysis and freezes a structured specification; a green
+   pre-check still needs an evidence-backed acceptance review.
 2. Red → enter the loop: hand the task to the agent for one run
    (`acceptEdits` mode, file edits auto-approved).
 3. Run `pnpm test` again, streaming its output live.
@@ -88,6 +91,7 @@ Common options:
 seekforge loop "<task>" --verify "<command>" \
   [--max-iters <n>]     # max iterations, default 8, hard cap 100
   [--budget <usd>]      # stop once cumulative cost reaches this
+  [--requirements <quick|analyze|confirm>] # requirement and acceptance gate
   [--worktree [name]]   # run in an isolated git worktree (section 7)
   [-y]                  # only silences the "auto-approves edits" note
   [-m <model>]          # model override
@@ -100,7 +104,11 @@ seekforge loop "<task>" --verify "<command>" \
 > In other words: it will edit your files on its own. Run it on a clean git
 > state, or isolate it with `--worktree`.
 
-**Exit code**: 0 only when verify actually passed. Every other terminal
+`confirm` stops after analysis with `requirements_pending`. Inspect it with
+`loop-show`, then run `seekforge loop-resume <id> --approve-requirements`.
+
+**Exit code**: 0 only when verify passed and, in analyzed modes, all required
+acceptance criteria are met. Every other terminal
 status is non-zero.
 
 ## 4. Inside one iteration
@@ -125,7 +133,7 @@ Following the main loop in `auto-loop.ts`, each round does, in order:
    `verify.output` events.
 7. Parse diagnostics + fingerprint the workspace, persist atomically, emit
    the `verify` event.
-8. **Exit code 0 → `passed`, done.** Otherwise check the guardrails (next
+8. **Exit code 0 + acceptance complete → `passed`, done.** Otherwise check the guardrails (next
    section) and, if none tripped, enter the next round.
 
 > The iteration counter only advances **after** an agent run completes. If
@@ -133,14 +141,15 @@ Following the main loop in `auto-loop.ts`, each round does, in order:
 > consuming** an iteration slot — while reusing the session and accounting
 > for the spend already observed.
 
-## 5. Guardrails and the six terminal states
+## 5. Guardrails and terminal states
 
 The loop **never runs unbounded**. Before each round and after each
 verification, these stop conditions are checked in order:
 
 | Status | Trigger |
 |---|---|
-| `passed` | verify command exited 0 (success; process exit code 0) |
+| `passed` | verify exited 0 and analyzed requirements, when enabled, passed acceptance |
+| `requirements_pending` | a `confirm` specification is persisted and awaits explicit approval |
 | `cancelled` | abort signal (Ctrl-C / Stop button); cooperative stop, trace preserved |
 | `budget` | cumulative observed cost ≥ `--budget` (an in-flight request may make the final bill slightly exceed it) |
 | `no_progress` | **stuck**: structured diagnostics fingerprint unchanged **and** workspace content fingerprint unchanged |
@@ -209,7 +218,7 @@ Any terminal loop can be explicitly resumed — and resume starts with a
 **fresh pre-check**, which may pass outright:
 
 ```bash
-seekforge loop-resume <loop-id> [--add-iters <n>] [--add-budget <usd>]
+seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 ```
 
 - Resume loads state only from the workspace you give it, preserving the
@@ -319,7 +328,7 @@ const result = await runAutoLoop(deps, {
   // verify: injectable custom verifier (for tests); defaults to a real shell exec + sandbox
 });
 
-// result.status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error"
+// result.status also includes "requirements_pending" for confirm mode
 // result.iterations / result.costUsd / result.sessionId / result.finalVerify / result.loopId
 ```
 

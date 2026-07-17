@@ -158,6 +158,7 @@ export type SlashCommand =
       task?: string;
       maxIterations?: number;
       costBudgetUsd?: number;
+      requirementMode?: "quick" | "analyze" | "confirm";
       error?: string;
     }
   | {
@@ -165,6 +166,7 @@ export type SlashCommand =
       loopId?: string;
       addedIterations?: number;
       addedCostBudgetUsd?: number;
+      approveRequirements?: boolean;
       error?: string;
     }
   | { name: "approve"; arg?: string }
@@ -233,24 +235,38 @@ function parseLoopFirstLine(
   verify?: string;
   maxIterations?: number;
   costBudgetUsd?: number;
+  requirementMode?: "quick" | "analyze" | "confirm";
+  approveRequirements?: boolean;
   error?: string;
 } {
   let rest = input.trim();
   let maxIterations: number | undefined;
   let costBudgetUsd: number | undefined;
+  let requirementMode: "quick" | "analyze" | "confirm" | undefined;
+  let approveRequirements = false;
 
   const iterationFlag = resume ? "--add-iterations" : "--max-iterations";
   const budgetFlag = resume ? "--add-budget" : "--budget";
   const optionPattern = resume
-    ? /^--(?:add-iterations|add-budget)(?:=|\s|$)/
-    : /^--(?:max-iterations|budget)(?:=|\s|$)/;
+    ? /^--(?:add-iterations|add-budget|approve-requirements)(?:=|\s|$)/
+    : /^--(?:max-iterations|budget|requirements)(?:=|\s|$)/;
   const valuePattern = resume
     ? /^(--add-iterations|--add-budget)(?:=|\s+)(\S+)(?:\s+|$)/
-    : /^(--max-iterations|--budget)(?:=|\s+)(\S+)(?:\s+|$)/;
+    : /^(--max-iterations|--budget|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
   while (optionPattern.test(rest)) {
+    if (resume && /^--approve-requirements(?:\s+|$)/.test(rest)) {
+      if (approveRequirements) return { error: "--approve-requirements may only be specified once" };
+      approveRequirements = true;
+      rest = rest.replace(/^--approve-requirements(?:\s+|$)/, "").trimStart();
+      continue;
+    }
     const match = valuePattern.exec(rest);
     if (!match) {
-      const option = rest.startsWith(iterationFlag) ? iterationFlag : budgetFlag;
+      const option = rest.startsWith(iterationFlag)
+        ? iterationFlag
+        : rest.startsWith(budgetFlag)
+          ? budgetFlag
+          : "--requirements";
       return { error: `${option} requires a value` };
     }
     const option = match[1] ?? "";
@@ -262,11 +278,17 @@ function parseLoopFirstLine(
         return { error: `${iterationFlag} must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
       }
       maxIterations = value;
-    } else {
+    } else if (option === budgetFlag) {
       if (costBudgetUsd !== undefined) return { error: `${budgetFlag} may only be specified once` };
       if (!Number.isFinite(value) || value <= 0)
         return { error: `${budgetFlag} must be a finite number greater than 0` };
       costBudgetUsd = value;
+    } else {
+      if (requirementMode !== undefined) return { error: "--requirements may only be specified once" };
+      if (raw !== "quick" && raw !== "analyze" && raw !== "confirm") {
+        return { error: '--requirements must be "quick", "analyze", or "confirm"' };
+      }
+      requirementMode = raw;
     }
     rest = rest.slice(match[0].length).trimStart();
   }
@@ -275,6 +297,8 @@ function parseLoopFirstLine(
     ...(rest ? { verify: rest } : {}),
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+    ...(requirementMode !== undefined ? { requirementMode } : {}),
+    ...(approveRequirements ? { approveRequirements: true } : {}),
   };
 }
 
@@ -284,6 +308,7 @@ function parseLoopResume(input: string): Omit<Extract<SlashCommand, { name: "loo
     ...(parsed.verify ? { loopId: parsed.verify } : {}),
     ...(parsed.maxIterations !== undefined ? { addedIterations: parsed.maxIterations } : {}),
     ...(parsed.costBudgetUsd !== undefined ? { addedCostBudgetUsd: parsed.costBudgetUsd } : {}),
+    ...(parsed.approveRequirements ? { approveRequirements: true } : {}),
     ...(parsed.error ? { error: parsed.error } : {}),
   };
 }

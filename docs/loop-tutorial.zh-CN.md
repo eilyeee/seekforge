@@ -58,7 +58,9 @@ seekforge loop "修好 parser 的失败测试，不要削弱断言" --verify "pn
 
 发生的事：
 
-1. **预检**：先跑一次 `pnpm test`。如果已经是绿的，直接 `passed` 收工，一个 agent 迭代都不花。
+1. 默认 `quick` 模式先做**预检**：运行一次 `pnpm test`，已经是绿的就直接结束，
+   不花 agent 迭代。使用 `--requirements analyze` 或 `confirm` 时，会先只读分析仓库并冻结
+   结构化需求规格；即使预检为绿，也必须再通过有证据的验收审查。
 2. 没绿 → 进入循环：把任务交给 agent 跑一轮（`acceptEdits` 模式，自动应用文件编辑）。
 3. 跑完再跑一次 `pnpm test`，实时把输出流式打印出来。
 4. 还红 → 把失败信息塞进下一轮 prompt（“`pnpm test` 仍然失败：…，修根因让它通过”），继续。
@@ -70,6 +72,7 @@ seekforge loop "修好 parser 的失败测试，不要削弱断言" --verify "pn
 seekforge loop "<任务>" --verify "<命令>" \
   [--max-iters <n>]     # 最多迭代几轮，默认 8，硬上限 100
   [--budget <usd>]      # 累计花费达到这个数就停
+  [--requirements <quick|analyze|confirm>] # 需求分析与验收门禁
   [--worktree [name]]   # 在隔离的 git worktree 里跑（见第 7 节）
   [-y]                  # 只是消掉“会自动批准编辑”的提示，不改变行为
   [-m <model>]          # 覆盖模型
@@ -79,7 +82,11 @@ seekforge loop "<任务>" --verify "<命令>" \
 > 不会逐个弹确认。危险命令仍被 denylist 拒绝，工作目录的访问授权仍要过（和 `run` 同一道门）。
 > 换句话说：它会自己改你的文件。要么在干净的 git 状态下跑，要么用 `--worktree` 隔离。
 
-**退出码**：只有 `verify` 真的通过了才返回 0。其它终态都是非 0。
+`confirm` 会在分析后以 `requirements_pending` 暂停。先用 `loop-show` 查看，
+再执行 `seekforge loop-resume <id> --approve-requirements`。
+
+**退出码**：只有 `verify` 通过，且分析模式下所有必需验收标准都满足时才返回 0。
+其它终态都是非 0。
 
 ## 4. 一次迭代内部发生了什么
 
@@ -95,18 +102,19 @@ seekforge loop "<任务>" --verify "<命令>" \
 5. **迭代计数 +1，落盘**，发 `run.completed`（带本轮花费）。
 6. **验证**：再跑一次 verify 命令，输出通过 `verify.output` 事件流式吐出。
 7. 解析诊断 + 计算工作区指纹，原子落盘，发 `verify` 事件。
-8. **退出码 0 → `passed`，收工。** 否则继续检查护栏（见下节），没踩线就进入下一轮。
+8. **退出码 0 且验收完整 → `passed`，收工。** 否则继续检查护栏（见下节）。
 
 > 迭代计数只在 agent run **完成后**才 +1。所以如果在一轮中途崩溃，resume 会重跑这一轮而
 > **不消耗**一个迭代额度——同时复用已有 session、并把已观测到的花费算进账。
 
-## 5. 护栏与六种终态
+## 5. 护栏与终态
 
 循环**不会无限跑**。每轮开始前、以及每次验证后，按顺序检查这些停止条件：
 
 | 状态 | 触发条件 |
 |---|---|
-| `passed` | verify 命令退出 0（成功，退出码 0） |
+| `passed` | verify 退出 0，且启用需求分析时验收通过 |
+| `requirements_pending` | `confirm` 规格已持久化，等待显式批准 |
 | `cancelled` | 收到中止信号（Ctrl-C / Stop 按钮），协作式停止，trace 保留 |
 | `budget` | 累计观测花费 ≥ `--budget`（已在途的请求可能让最终账单略微超一点） |
 | `no_progress` | **卡住了**：结构化诊断指纹没变 **且** 工作区内容指纹没变 |
@@ -159,7 +167,7 @@ CLI 会新建一个分支（前缀 `seekforge/loop-*`）和对应的 git worktre
 任何终态的循环都能显式 resume——但 resume 会先跑一次**全新预检**，可能直接就绿了：
 
 ```bash
-seekforge loop-resume <loop-id> [--add-iters <n>] [--add-budget <usd>]
+seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 ```
 
 - resume 只从你给的工作区加载状态，保留原任务、verify 命令、最大迭代、累计花费、session id。
@@ -244,7 +252,7 @@ const result = await runAutoLoop(deps, {
   // verify: 可注入自定义验证器（测试用），默认走真实 shell 执行 + 沙箱
 });
 
-// result.status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error"
+// result.status 还包括 confirm 模式的 "requirements_pending"
 // result.iterations / result.costUsd / result.sessionId / result.finalVerify / result.loopId
 ```
 

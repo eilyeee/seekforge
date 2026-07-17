@@ -64,12 +64,13 @@ describe("runLoop", () => {
       mcpToolSpecs: [],
       maxIterations: 12,
       costBudgetUsd: 0.75,
+      requirementMode: "analyze",
       onEvent: vi.fn(),
     });
 
     expect(runAutoLoop).toHaveBeenCalledWith(
       { marker: "agent-deps" },
-      expect.objectContaining({ maxIterations: 12, costBudgetUsd: 0.75 }),
+      expect.objectContaining({ maxIterations: 12, costBudgetUsd: 0.75, requirementMode: "analyze" }),
     );
   });
 });
@@ -91,6 +92,7 @@ describe("resumeLoop", () => {
       mcpToolSpecs: [],
       addedIterations: 3,
       addedCostBudgetUsd: 0.5,
+      approveRequirements: true,
       onEvent,
     });
     expect(resumeAutoLoop).toHaveBeenCalledWith(
@@ -100,6 +102,7 @@ describe("resumeLoop", () => {
         workspace: "/workspace",
         additionalIterations: 3,
         additionalCostBudgetUsd: 0.5,
+        approveRequirements: true,
         signal,
         onEvent,
       }),

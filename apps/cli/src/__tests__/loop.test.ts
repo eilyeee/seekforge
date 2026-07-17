@@ -132,9 +132,10 @@ test("loop resume adapter exposes core support or fails clearly", () => {
 });
 
 test("loop resume extensions map to core options without adding absent limits", () => {
-  assert.deepEqual(resumeExtensionOptions({ addIters: 3, addBudget: 1.25 }), {
+  assert.deepEqual(resumeExtensionOptions({ addIters: 3, addBudget: 1.25, approveRequirements: true }), {
     additionalIterations: 3,
     additionalCostBudgetUsd: 1.25,
+    approveRequirements: true,
   });
   assert.deepEqual(resumeExtensionOptions({}), {});
 });
@@ -159,6 +160,29 @@ test("formatLoopState includes management-relevant fields", () => {
   assert.match(text, /3\/8/);
   assert.match(text, /\$0\.2500 \/ \$2\.0000/);
   assert.match(text, /pnpm test/);
+  assert.match(text, /requirements: quick/);
+});
+
+test("requirement events expose analysis and acceptance progress", () => {
+  const spec = {
+    version: 1 as const,
+    goal: "complete feature",
+    deliverables: [],
+    requirements: [{ id: "REQ-1", text: "feature", required: true }],
+    constraints: [],
+    outOfScope: [],
+    assumptions: [],
+    acceptanceCriteria: [{ id: "AC-1", text: "works", requirementIds: ["REQ-1"] }],
+    unresolvedQuestions: [],
+  };
+  assert.match(formatLoopEvent({ type: "requirements.completed", spec, approvalRequired: true }), /approval required/);
+  assert.match(
+    formatLoopEvent({
+      type: "requirements.reviewed",
+      review: { complete: false, criteria: [{ id: "AC-1", status: "unmet", evidence: [] }], gaps: ["missing"] },
+    }),
+    /missing/,
+  );
 });
 
 test("cleanup safety accepts only seekforge branches inside retained root", () => {

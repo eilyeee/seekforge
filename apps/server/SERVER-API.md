@@ -95,7 +95,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/runs/:id/events?afterSeq=N | persisted WS events with `seq > N` |
 | POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
-| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?}`; loops require `verifyCommand`; returns `202 RunRecord` immediately |
+| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`; returns `202 RunRecord` immediately |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
@@ -200,9 +200,10 @@ continue independently when subscribers disconnect.
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
-{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "ws": "<id>"?,
+{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "requirementMode": "quick"|"analyze"|"confirm"?, "ws": "<id>"?,
                  "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?}
-                 // auto-loop: run → verify → continue until verifyCommand exits 0 (acceptEdits; guardrails)
+                 // quick: verifier-only; analyzed modes also require acceptance evidence
+{"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "ws": "<id>"?}
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
 {"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
 {"type": "cancel"}                                            // cancel the running session OR loop
@@ -215,8 +216,9 @@ that run/loop only (a fresh agent/provider is assembled; nothing is written to
 config). Omitted fields fall back to config. Invalid values (empty model,
 non-boolean thinking, an effort other than `"high"`/`"max"`) →
 `{"type":"error","code":"bad_frame"}`. On `loop`, `maxIterations` must be a
-positive integer and `budget` a finite positive number when present (else
-`bad_frame`).
+positive integer, `budget` a finite positive number, and `requirementMode` one
+of `quick|analyze|confirm` when present (else `bad_frame`). Resume cannot change
+the persisted mode; `approveRequirements: true` releases a confirm-mode gate.
 
 `ws` selects the workspace id (default: first workspace when omitted). The run
 executes in that workspace's path; `send` looks the session up in that
@@ -239,7 +241,7 @@ return `bad_frame`.
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
 {"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
-{"type": "loop.event", "event": <LoopEvent>}                  // auto-loop progress (iteration.start/run.completed/verify/loop.done)
+{"type": "loop.event", "event": <LoopEvent>}                  // includes requirements.*, iteration.*, verify, and loop.done
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```

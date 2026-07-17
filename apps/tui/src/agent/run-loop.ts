@@ -5,6 +5,7 @@ import {
   resumeAutoLoop,
   type LoopEvent,
   type LoopResult,
+  type LoopRequirementMode,
   type ToolSpec,
 } from "@seekforge/core";
 import type { TuiConfig } from "../config.js";
@@ -20,6 +21,7 @@ export type RunLoopDeps = {
   maxIterations: number;
   /** Optional command-level override; otherwise inherits config.costBudgetUsd. */
   costBudgetUsd?: number;
+  requirementMode?: LoopRequirementMode;
   /** Forwards each LoopEvent to the caller for transcript rendering. */
   onEvent: (event: LoopEvent) => void;
 };
@@ -58,6 +60,7 @@ export async function runLoop(
       verifyCommand,
       maxIterations: deps.maxIterations,
       ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+      ...(deps.requirementMode !== undefined ? { requirementMode: deps.requirementMode } : {}),
       approvalMode: "acceptEdits",
       signal,
       onEvent: deps.onEvent,
@@ -73,6 +76,7 @@ export async function resumeLoop(
   deps: Omit<RunLoopDeps, "maxIterations" | "costBudgetUsd"> & {
     addedIterations?: number;
     addedCostBudgetUsd?: number;
+    approveRequirements?: boolean;
   },
 ): Promise<LoopResult> {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
@@ -93,6 +97,7 @@ export async function resumeLoop(
       onEvent: deps.onEvent,
       ...(deps.addedIterations !== undefined ? { additionalIterations: deps.addedIterations } : {}),
       ...(deps.addedCostBudgetUsd !== undefined ? { additionalCostBudgetUsd: deps.addedCostBudgetUsd } : {}),
+      ...(deps.approveRequirements !== undefined ? { approveRequirements: deps.approveRequirements } : {}),
     });
   } finally {
     dispose();

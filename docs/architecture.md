@@ -65,7 +65,10 @@ runs. Automatic context compaction writes a fingerprinted derivative snapshot;
 resume uses it only while its source prefix still matches. Context admission
 budgets the complete provider request, including advertised tool schemas.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
-session; see [Loop engineering](loop-engineering.md).
+session and owns the frozen requirement specification, acceptance evidence, and
+optional approval gate. Requirement analysis and acceptance review run through
+read-only Agent phases; only edit iterations mutate the workspace. See
+[Loop engineering](loop-engineering.md).
 
 Server-managed execution has a second append-only control plane:
 `.seekforge/runs.jsonl` stores run state and `.seekforge/run-events/<id>.jsonl`

@@ -88,7 +88,13 @@ describe("loop.resume", () => {
       },
     });
     const { ws, rx } = await open(server.port);
-    sendFrame(ws, { type: "loop.resume", loopId: "loop-abc", addedIterations: 3, addedBudget: 0.75 });
+    sendFrame(ws, {
+      type: "loop.resume",
+      loopId: "loop-abc",
+      addedIterations: 3,
+      addedBudget: 0.75,
+      approveRequirements: true,
+    });
     await rx.waitFor((f) => f.type === "loop.event");
     await rx.waitFor((f) => f.type === "idle");
     expect(seenId).toBe("loop-abc");
@@ -96,6 +102,7 @@ describe("loop.resume", () => {
       workspace,
       additionalIterations: 3,
       additionalCostBudgetUsd: 0.75,
+      approveRequirements: true,
       approvalMode: "acceptEdits",
     });
   });
@@ -109,6 +116,7 @@ describe("loop.resume", () => {
       { type: "loop.resume", loopId: "loop-1", addedIterations: 0 },
       { type: "loop.resume", loopId: "loop-1", addedIterations: 1.5 },
       { type: "loop.resume", loopId: "loop-1", addedBudget: Number.POSITIVE_INFINITY },
+      { type: "loop.resume", loopId: "loop-1", approveRequirements: "yes" },
     ]) {
       sendFrame(ws, frame);
       expect((await rx.waitFor((f) => f.type === "error")).code).toBe("bad_frame");
@@ -138,6 +146,7 @@ describe("loop -> loop.event -> idle", () => {
       verifyCommand: "pnpm test",
       maxIterations: 4,
       budget: 1.5,
+      requirementMode: "analyze",
     });
 
     const start = await rx.waitFor(
@@ -160,6 +169,7 @@ describe("loop -> loop.event -> idle", () => {
       verifyCommand: "pnpm test",
       maxIterations: 4,
       costBudgetUsd: 1.5,
+      requirementMode: "analyze",
       approvalMode: "acceptEdits",
     });
   });
@@ -208,6 +218,7 @@ describe("loop -> loop.event -> idle", () => {
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 101 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: 0 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: -1 });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", requirementMode: "analysis" });
 
     sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", ws: "unknown-ws" });
     const err = await rx.waitFor((f) => f.type === "error");

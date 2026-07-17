@@ -138,7 +138,8 @@ security details.
 ## Autonomous verification loop
 
 `seekforge loop <task> --verify <command>` repeatedly runs the agent and the
-verification command until it passes or a guardrail stops the loop. Verification
+verification command until completion or a guardrail stops the loop. Optional
+requirement analysis prevents a green verifier from masking unfinished scope. Verification
 uses the shared shell executor with the configured OS sandbox and responds to
 cooperative cancellation.
 
@@ -147,13 +148,14 @@ cooperative cancellation.
 | `--verify <command>` | Required success criterion; exit code 0 passes. |
 | `--max-iters <n>` | Maximum agent iterations; defaults to 8 and cannot exceed 100. |
 | `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
+| `--requirements quick\|analyze\|confirm` | `quick` uses verifier-only completion; `analyze` freezes requirements and performs acceptance reviews; `confirm` pauses for explicit approval after analysis. |
 | `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
 | `-m, --model <model>` | Override the configured model. |
 | `--profile <name>` | Apply a named configuration profile. |
 
 Every invocation persists orchestration state in `.seekforge/loops/`. Use
-`seekforge loop-resume <loop-id> [--add-iters N] [--add-budget USD]` to continue with the saved session, cost, and
+`seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters N] [--add-budget USD]` to continue with the saved session, cost, frozen requirements, and
 remaining iterations. For `--worktree` loops, run that command inside the
 retained worktree shown at startup. Verification output streams while checks run;
 the interactive TUI exposes the same workflow through `/loop`.

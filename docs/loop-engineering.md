@@ -2,9 +2,10 @@
 
 > **English** | [简体中文](loop-engineering.zh-CN.md)
 
-Drive **one** task to "green" across multiple agent runs, fully autonomously:
-`run → verify → continue`, stopping when a verification command passes or a
-budget guardrail trips. This is a layer *above* a single run — the in-run
+Drive **one** task to completion across multiple agent runs:
+`analyze → run → verify → accept → continue`, stopping when the fixed verifier
+passes and required acceptance criteria are met, or a guardrail trips. The
+default `quick` mode preserves verifier-only completion. This is a layer *above* a single run — the in-run
 tool loop (`packages/core/src/agent/loop.ts`) is unchanged.
 
 ## Architecture
@@ -42,8 +43,9 @@ flowchart LR
 
 The two persisted stores have different ownership:
 
-- Loop JSON stores orchestration state: task, verifier, limits, iteration,
-  cumulative cost, session id, last verification, and terminal status.
+- Loop JSON stores orchestration state: task, verifier, frozen requirements,
+  acceptance review, approval, limits, iteration, cumulative cost, session id,
+  last verification, and terminal status.
 - Session JSONL remains the source of truth for the agent conversation and tool
   trace. Loop state points to that session; it does not duplicate the trace.
 
@@ -59,10 +61,19 @@ sequenceDiagram
 
   C->>L: task + verify command + guardrails
   L->>S: create state (running)
+  opt analyze or confirm mode
+    L->>A: read-only requirement analysis
+    A-->>L: bounded structured specification
+    L->>S: save frozen requirements and analysis cost
+  end
   L->>V: pre-check
   V-->>C: verify.output chunks
   V-->>L: exit code + bounded output tail
-  alt pre-check passes
+  alt pre-check passes and requirements exist
+    L->>A: read-only acceptance review
+    A-->>L: criterion status and repository evidence
+  end
+  alt verifier passes and acceptance is complete
     L->>S: save passed
     L-->>C: loop.done
   else pre-check fails
@@ -103,7 +114,9 @@ and does not replace the verification result.
 ```mermaid
 stateDiagram-v2
   [*] --> running: loop state created
-  running --> passed: verifier exits 0
+  running --> passed: verifier exits 0 and acceptance passes
+  running --> requirements_pending: confirm specification awaits approval
+  requirements_pending --> running: explicit approval on loop-resume
   running --> exhausted: iteration limit reached
   running --> no_progress: diagnostics and workspace unchanged
   running --> budget: observed cost reaches budget
@@ -150,10 +163,14 @@ state.
 ## CLI
 
 ```
-seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
+seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
 - `--verify <cmd>` (required): success = the command exits 0.
+- `--requirements quick|analyze|confirm`: `quick` keeps verifier-only behavior;
+  `analyze` performs read-only repository analysis and acceptance review;
+  `confirm` persists the specification and stops with `requirements_pending`
+  until it is explicitly approved.
 - `--max-iters <n>`: cap on run iterations (default 8, hard maximum 100).
 - `--worktree [name]`: create and run in an isolated retained git worktree.
   An optional name selects the branch suffix; without one a unique name is used.
@@ -168,10 +185,11 @@ seekforge loop "<task>" --verify "<cmd>" [--max-iters <n>] [--budget <usd>] [--w
   saved under `.seekforge/loops/<loop-id>.json`; continue it with
   `seekforge loop-resume <loop-id>`. Session-level `resume` and `rewind` remain
   available for manual intervention.
-- Exit code 0 only when the verify command passed.
+- Exit code 0 only when the verifier passed and, in analyzed modes, every
+  required acceptance criterion was evidenced as met.
 
 ```bash
-seekforge loop-resume <loop-id> [--add-iters <n>] [--add-budget <usd>]
+seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 seekforge loop-list
 seekforge loop-show <loop-id>
 seekforge loop-delete <loop-id>
@@ -192,7 +210,9 @@ worktree directory when the original loop used `--worktree`.
 type LoopOptions = {
   task: string;
   workspace: string;
-  verifyCommand: string;        // exit 0 = done
+  verifyCommand: string;        // fixed verifier; analyzed modes also require acceptance
+  requirementMode?: "quick" | "analyze" | "confirm"; // default quick
+  approveRequirements?: boolean; // resume a confirm-mode loop
   maxIterations?: number;       // default 8
   costBudgetUsd?: number;       // stop after observed cumulative usage reaches it
   approvalMode?: ApprovalMode;  // default "acceptEdits"
@@ -203,15 +223,16 @@ type LoopOptions = {
   verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
-  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error";
+  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "requirements_pending";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
-  loopId?: string;
+  loopId?: string; requirements?: LoopRequirementSpec;
+  acceptanceReview?: LoopAcceptanceReview;
 };
 ```
 
-`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?,
-additionalCostBudgetUsd? })` restores the iteration count, cost, session,
+`resumeAutoLoop(deps, loopId, { workspace, approveRequirements?, additionalIterations?,
+additionalCostBudgetUsd? })` restores the frozen requirements, iteration count, cost, session,
 command, and guardrails, then applies optional additive limits.
 
 ## Guardrails (all on by default)
@@ -281,16 +302,17 @@ prompt response remain non-terminal because the active server run may continue.
 verification command; following lines are the task.
 
 ```text
-/loop --max-iterations 12 --budget 1.50 pnpm test
+/loop --requirements analyze --max-iterations 12 --budget 1.50 pnpm test
 Fix the failing parser tests without weakening assertions.
 ```
 
-Both options are optional. `--max-iterations` accepts `1-100`; `--budget` must
+All options are optional. `--requirements` accepts `quick|analyze|confirm`;
+`--max-iterations` accepts `1-100`; `--budget` must
 be a finite positive USD value and overrides `costBudgetUsd` from config. Without
 an explicit budget, the TUI inherits the configured value. The default iteration
 limit is 8.
 
-Resume from the TUI with `/loop-resume [--add-iterations N] [--add-budget USD]
+Resume from the TUI with `/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD]
 <loop-id>`. Desktop exposes the same additive controls beside a completed Loop.
 
 ## Relation to existing features
