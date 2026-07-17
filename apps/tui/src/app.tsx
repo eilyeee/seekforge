@@ -381,9 +381,13 @@ export function App({
   const bgRef = useRef<BackgroundTasks | null>(null);
   if (bgRef.current === null) bgRef.current = createBackgroundTasks();
 
-  const syncBg = useCallback(() => {
+  // Background tasks are process-level but stored per tab (ChatState.bgTasks).
+  // A run started in tab A must sync its snapshot back into tab A even after
+  // the user switches away, so callers on a run path pass the run's tab id;
+  // active-tab callers (slash commands) omit it and default to the active tab.
+  const syncBg = useCallback((tabId?: number) => {
     const tasks = (bgRef.current?.list() ?? []).map((t) => ({ id: t.id, command: t.command, status: t.status }));
-    dispatch({ type: "bg-sync", tasks });
+    tabsDispatch({ type: "chat", tabId: tabId ?? activeIdRef.current, action: { type: "bg-sync", tasks } });
   }, []);
 
   const quit = useCallback(() => {
@@ -569,11 +573,13 @@ export function App({
         reservation?: RunReservation;
         model?: string;
         approval?: ChatState["approval"];
+        /** Target tab (defaults to active) — used to drain a background tab. */
+        tabId?: number;
       },
     ) => {
       // The run belongs to the tab it started in: every dispatch below
       // routes there by ID, surviving tab switches.
-      const runTabId = opts?.reservation?.tabId ?? activeIdRef.current;
+      const runTabId = opts?.reservation?.tabId ?? opts?.tabId ?? activeIdRef.current;
       const reservation = opts?.reservation ?? reserveRun(runsByTabRef.current, runTabId, ++runIdCounterRef.current);
       if (!reservation || !ownsRun(runsByTabRef.current, reservation)) return;
       if (reservation.controller.signal.aborted) {
@@ -715,7 +721,7 @@ export function App({
             if (budget.warning) dispatchTab({ type: "notice", tone: "error", text: budget.warning });
           }
         }
-        syncBg();
+        syncBg(runTabId);
         ring(`Task finished: ${task.slice(0, 60)}`);
       }
     },
@@ -769,11 +775,11 @@ export function App({
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
           dispatchTab({ type: "run-detach-done", runId });
-          syncBg();
+          syncBg(runTabId);
           ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
         } else if (releaseRun(runsByTabRef.current, reservation)) {
           dispatchTab({ type: "run-end" });
-          syncBg();
+          syncBg(runTabId);
           ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
         }
       }
@@ -817,11 +823,11 @@ export function App({
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
           dispatchTab({ type: "run-detach-done", runId });
-          syncBg();
+          syncBg(runTabId);
           ring(`Loop finished: ${loopId.slice(0, 60)}`);
         } else if (releaseRun(runsByTabRef.current, reservation)) {
           dispatchTab({ type: "run-end" });
-          syncBg();
+          syncBg(runTabId);
           ring(`Loop finished: ${loopId.slice(0, 60)}`);
         }
       }
@@ -857,14 +863,18 @@ export function App({
   }, [notice, dispatch]);
 
   const submitTask = useCallback(
-    (task: string) => {
+    (task: string, tabId?: number) => {
       // Inline files referenced from /add-dir extra roots (workspace-level
       // @ expansion happens inside run-session).
       const expanded = extraDirsRef.current.length > 0 ? expandExtraFileRefs(task, extraDirsRef.current) : task;
-      if (approvalRef.current === "plan") {
-        void runTask(expanded, { mode: "ask", plan: true });
+      // Draining a background tab's queue targets that tab; honour its own
+      // approval mode rather than the active tab's.
+      const targetId = tabId ?? activeIdRef.current;
+      const approval = tabsStateRef.current.tabs.find((t) => t.id === targetId)?.chat.approval ?? approvalRef.current;
+      if (approval === "plan") {
+        void runTask(expanded, { mode: "ask", plan: true, tabId: targetId });
       } else {
-        void runTask(expanded);
+        void runTask(expanded, { tabId: targetId });
       }
     },
     [runTask],
@@ -1902,14 +1912,23 @@ export function App({
     submitTask(parsed.text);
   }, [editor.text, applyEditor, historyFile, handleSlash, runBash, submitTask]);
 
-  // Drain the steering queue between runs.
+  // Drain the steering queue between runs — for EVERY tab, not just the
+  // active one. A message queued in a background tab must be sent when that
+  // tab's run ends, so the effect keys off the whole tabsState (which changes
+  // when any tab's run finishes) and dispatches into the tab that owns the
+  // queue. One send per pass; the resulting state change re-runs the effect.
   useEffect(() => {
-    if (state.running || state.planPending || state.permission || state.queue.length === 0) return;
-    const next = state.queue[0];
-    if (next === undefined) return;
-    dispatch({ type: "dequeue" });
-    submitTask(next);
-  }, [state.running, state.planPending, state.permission, state.queue, submitTask]);
+    for (const tab of tabsState.tabs) {
+      const c = tab.chat;
+      if (c.running || c.planPending || c.permission || c.queue.length === 0) continue;
+      if (runsByTabRef.current.has(tab.id)) continue; // a run is (re)starting here
+      const next = c.queue[0];
+      if (next === undefined) continue;
+      tabsDispatch({ type: "chat", tabId: tab.id, action: { type: "dequeue" } });
+      submitTask(next, tab.id);
+      break;
+    }
+  }, [tabsState, submitTask]);
 
   // ---------------------------------------------------------------------
   // Key routing: permission → plan decision → Ctrl+C → overlay → global →

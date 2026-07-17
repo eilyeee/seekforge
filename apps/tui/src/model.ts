@@ -453,11 +453,18 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
     case "toggle-verbose":
       return { ...state, verbose: !state.verbose };
 
-    case "run-detach":
+    case "run-detach": {
+      // Detach means "this run goes background, I stop interacting with it in
+      // the foreground". Any messages queued for the (now-detached) turn must
+      // be dropped: keeping them would let the drain effect start an unrelated
+      // fresh foreground session in this tab. Clear the queue and say so.
+      const dropped = state.queue.length;
+      const suffix = dropped > 0 ? `, ${dropped} queued message${dropped === 1 ? "" : "s"} discarded` : "";
       return {
         ...state,
         running: false,
         sessionId: undefined,
+        queue: [],
         detached: [...state.detached, { runId: action.runId, label: action.label }],
         items: [
           ...state.items,
@@ -465,10 +472,11 @@ function innerReducer(state: ChatState, action: ChatAction): ChatState {
             kind: "notice",
             id: nextId("n"),
             tone: "dim",
-            text: `⚒ task continues in the background — new messages start a fresh session`,
+            text: `⚒ task continues in the background${suffix} — new messages start a fresh session`,
           },
         ],
       };
+    }
 
     case "run-detach-done":
       return { ...state, detached: state.detached.filter((entry) => entry.runId !== action.runId) };

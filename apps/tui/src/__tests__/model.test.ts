@@ -29,6 +29,28 @@ describe("chatReducer detached run identity", () => {
 
     expect(s.detached).toEqual([{ runId: 2, label: "task" }]);
   });
+
+  it("clears the steering queue on detach so it can't spawn a fresh foreground session", () => {
+    let s = base();
+    s = chatReducer(s, { type: "queue", text: "one" });
+    s = chatReducer(s, { type: "queue", text: "two" });
+    s = chatReducer(s, { type: "run-detach", runId: 1, label: "task" });
+
+    expect(s.queue).toEqual([]);
+    expect(s.running).toBe(false);
+    expect(s.sessionId).toBeUndefined();
+    const notice = s.items[s.items.length - 1] as ChatItem & { kind: "notice" };
+    expect(notice.kind).toBe("notice");
+    expect(notice.text).toContain("2 queued messages discarded");
+  });
+
+  it("detach with no queued messages omits the discarded-messages note", () => {
+    let s = base();
+    s = chatReducer(s, { type: "run-detach", runId: 1, label: "task" });
+    const notice = s.items[s.items.length - 1] as ChatItem & { kind: "notice" };
+    expect(notice.text).not.toContain("discarded");
+    expect(notice.text).toContain("continues in the background");
+  });
 });
 
 describe("chatReducer streaming deltas", () => {
