@@ -12,8 +12,12 @@ backend in `crates/runtime`.
 
 - Language: TypeScript (strict, NodeNext modules — relative imports need `.js` extension)
 - Runtime: Node >= 20
-- Package manager: pnpm workspace
-- Test framework: vitest (core/server/tui/desktop/eval); CLI script tests; Rust `cargo test`
+- Package manager: pnpm workspace; shared toolchain versions (typescript, vitest,
+  tsx, tsup, @types/node) live in the `catalog:` section of `pnpm-workspace.yaml` —
+  bump them there, not in individual package.json files
+- Test framework: vitest everywhere (core/server/tui/desktop/eval/cli); Rust `cargo test`
+- Lint/format: Biome (`biome.json` is strict JSON — comments break the whole
+  config silently); Rust uses `cargo fmt` + `clippy -D warnings`. All enforced in CI.
 - Validation: zod (in packages/core only; never add deps to packages/shared)
 
 ## Commands
@@ -21,9 +25,14 @@ backend in `crates/runtime`.
 - Install: `pnpm install`
 - Test: `pnpm test` (or `pnpm --filter @seekforge/core test`)
 - Typecheck: `pnpm typecheck`
-- Rust test: `cargo test --workspace`
-- Rust format check: `cargo fmt --check` (or `rustfmt --check <touched-file>` when
-  unrelated pre-existing workspace formatting prevents a clean full check)
+- Lint + format check: `pnpm lint` (biome ci; `pnpm lint:fix` to apply)
+- Coverage gates (CI-enforced; run when touching the covered modules):
+  `pnpm test:coverage:critical` / `test:coverage:security` (permissions, sandbox,
+  agent loop, dispatch-tools) / `test:coverage:ws` (server ws.ts). Thresholds sit
+  slightly below measured coverage — if a gate trips, improve tests or re-measure,
+  don't blindly lower numbers.
+- Rust: `cargo test --workspace`, `cargo fmt --check`,
+  `cargo clippy --workspace --exclude seekforge-desktop --all-targets -- -D warnings`
 - CLI dev run: `pnpm --filter seekforge dev`
 
 ## Key Design Decisions (do not re-litigate)
@@ -57,6 +66,16 @@ backend in `crates/runtime`.
   boundary bug *classes* already found here. When you fix a new boundary defect,
   add its pattern there.
 - Always inspect relevant files before editing.
+- Use the shared utilities instead of re-rolling them:
+  `packages/core/src/util/abort.ts` (`onAbortOnce`, `abortablePromise`) for
+  AbortSignal plumbing; `util/process-teardown.ts` for exit hooks (async work on
+  signals, sync-only on 'exit'); `util/guards.ts` (`isRecord`) and `util/fs.ts`
+  (`readFileIfExists`); `@seekforge/shared/format` for cost/tail/clip/loop-outcome
+  formatting shared across CLI/TUI/desktop.
+- Parse git output locale-independently: go through `worktree.ts`'s `git()`
+  helper (pins `LC_ALL=C`) or classify by exit codes / `rev-parse` probes, never
+  by matching English error text. Distinguish spawn failure (ENOENT — surface the
+  original error) from a clean non-zero exit.
 - Do not modify `packages/shared/src/index.ts` types without explicit instruction —
   other work streams build against them.
 - Run `pnpm typecheck` and `pnpm test` after changes.
@@ -64,6 +83,11 @@ backend in `crates/runtime`.
   `cargo test --workspace` before delivery.
 - When public behavior, configuration, commands, security guarantees, protocols,
   or REST/WS contracts change, update the corresponding user/architecture docs.
+- Docs are bilingual: every file in `docs/` (and the root README) has a
+  `<name>.zh-CN.md` counterpart with a language-switcher line under the H1.
+  When you change an English doc, apply the same change to its Chinese twin
+  (and vice versa); a new doc must be created in both languages. Chinese pages
+  link to Chinese pages. `CHANGELOG.md` and this file are exempt.
 - Commit messages: English, conventional commits (feat/fix/chore/test/docs).
 - Report changed files and verification results at the end.
 
