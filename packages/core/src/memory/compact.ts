@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { projectMemoryPath, readFactMeta, readRawProjectMemory, reconcileFactMeta } from "./store.js";
+import { writeFileAtomic } from "../util/fs.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
 const NEAR_DUP_JACCARD = 0.8;
@@ -215,7 +216,7 @@ export function compactProjectMemory(workspace: string, opts: CompactOptions = {
   }
   const changed = result.removed.length > 0 || result.merged.length > 0 || result.archived.length > 0;
   if (!opts.dryRun && changed) {
-    fs.writeFileSync(projectMemoryPath(workspace), finalContent, "utf8");
+    writeFileAtomic(projectMemoryPath(workspace), finalContent);
     // Drop fact-meta entries orphaned by the rewrite (dropped dup/merge/prune).
     reconcileFactMeta(workspace, finalContent);
   }

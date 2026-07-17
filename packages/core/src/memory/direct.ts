@@ -7,7 +7,6 @@
  * candidates.jsonl for audit.
  */
 
-import * as fs from "node:fs";
 import { INJECTION_PATTERN } from "./extract.js";
 import {
   appendCandidates,
@@ -21,6 +20,7 @@ import {
   type MemoryCandidate,
   type MemoryCandidateType,
 } from "./store.js";
+import { writeFileAtomic } from "../util/fs.js";
 
 export type AddMemoryFactOptions = {
   content: string;
@@ -134,7 +134,7 @@ export function removeProjectFact(workspace: string, selector: ProjectFactSelect
   const lines = raw.split("\n");
   lines.splice(target.lineNo, 1);
   const content = lines.join("\n");
-  fs.writeFileSync(projectMemoryPath(workspace), content, "utf8");
+  writeFileAtomic(projectMemoryPath(workspace), content);
   // Drop the removed fact's sidecar meta so a later re-add starts fresh instead
   // of resurrecting stale addedAt/uses (which pruneUnused could then misjudge).
   reconcileFactMeta(workspace, content);

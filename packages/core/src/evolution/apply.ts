@@ -87,22 +87,35 @@ function applyProjectMemory(workspace: string, content: string): string {
   return file;
 }
 
-/** Scaffolds the skill and overwrites SKILL.md with the proposed body. */
+/**
+ * Scaffolds the skill and overwrites SKILL.md with the proposed body. Atomic on
+ * failure: if the scaffold or write throws after we started creating the skill
+ * directory, the whole directory is removed and the error rethrown. Otherwise a
+ * half-built skill dir would survive and every retry would fail `skill_exists`,
+ * leaving the accepted proposal permanently stuck.
+ */
 function applySkill(workspace: string, proposal: EvolutionProposal): string {
   const skillId = proposal.proposal.skillId;
   if (!skillId) {
     throw new Error(`skill proposal ${proposal.id} has no skillId`);
   }
-  if (fs.existsSync(path.join(workspace, ".seekforge", "skills", skillId))) {
+  const skillDir = path.join(workspace, ".seekforge", "skills", skillId);
+  if (fs.existsSync(skillDir)) {
     throw new Error("skill_exists");
   }
-  const dir = createSkillScaffold(workspace, skillId);
-  const skillMd = path.join(dir, "SKILL.md");
-  const content = proposal.proposal.content.endsWith("\n")
-    ? proposal.proposal.content
-    : `${proposal.proposal.content}\n`;
-  fs.writeFileSync(skillMd, content, "utf8");
-  return skillMd;
+  try {
+    const dir = createSkillScaffold(workspace, skillId);
+    const skillMd = path.join(dir, "SKILL.md");
+    const content = proposal.proposal.content.endsWith("\n")
+      ? proposal.proposal.content
+      : `${proposal.proposal.content}\n`;
+    fs.writeFileSync(skillMd, content, "utf8");
+    return skillMd;
+  } catch (error) {
+    // Roll back the partially-created skill directory so a retry starts clean.
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export function applyProposal(workspace: string, id: string): ApplyProposalResult {

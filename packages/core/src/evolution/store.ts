@@ -14,7 +14,7 @@ import {
   type EvolutionProposalStatus,
   type EvolutionProposalType,
 } from "./types.js";
-import { readFileIfExists } from "../util/fs.js";
+import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
 
 export function evolutionProposalsPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "evolution", "proposals.jsonl");
@@ -90,7 +90,7 @@ function writeProposals(workspace: string, proposals: EvolutionProposal[]): void
   const file = evolutionProposalsPath(workspace);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = proposals.map((p) => `${JSON.stringify(p)}\n`).join("");
-  fs.writeFileSync(file, lines, "utf8");
+  writeFileAtomic(file, lines);
 }
 
 /**

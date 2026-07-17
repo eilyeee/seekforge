@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readFileIfExists } from "../util/fs.js";
+import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
 
 export type MemoryCandidateType = "command" | "path" | "convention" | "tech" | "task_pattern";
 
@@ -93,7 +93,7 @@ function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void 
   try {
     const file = factMetaPath(workspace);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+    writeFileAtomic(file, `${JSON.stringify(meta, null, 2)}\n`);
   } catch {
     /* ignore */
   }
@@ -410,7 +410,7 @@ export function writeCandidates(workspace: string, candidates: MemoryCandidate[]
   const file = candidatesPath(workspace);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-  fs.writeFileSync(file, lines, "utf8");
+  writeFileAtomic(file, lines);
 }
 
 export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "content">): string {
