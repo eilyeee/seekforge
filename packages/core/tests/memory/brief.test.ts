@@ -131,6 +131,28 @@ describe("buildMemoryBrief", () => {
     expect(brief).toContain("kebab-case");
   });
 
+  it("a fact too long to fit is skipped, not a wall that drops the shorter ones after it", () => {
+    const ws = makeWorkspace();
+    // One oversized top-relevance fact (>MAX_CHARS=1200) followed by short,
+    // still-relevant facts. The long one must be skipped while the rest inject.
+    const huge = `- [convention] login validation ${"x".repeat(1300)}`;
+    writeProjectMemory(
+      ws,
+      [
+        "# Project Memory",
+        huge,
+        "- [convention] login validation helper is in src/auth/login.ts",
+        "- [convention] login errors surface via the toast component",
+        "",
+      ].join("\n"),
+    );
+    const brief = buildMemoryBrief(ws, "fix login validation");
+    expect(brief).toBeDefined();
+    expect(brief).toContain("src/auth/login.ts");
+    expect(brief).toContain("toast component");
+    expect(brief!.length).toBeLessThan(1300); // the huge bullet was skipped
+  });
+
   it("large corpus: a fully unrelated task yields no brief (floor drops weak matches)", () => {
     const ws = makeWorkspace();
     // >SMALL_CORPUS facts, none [command]/[tech], none overlapping the task.

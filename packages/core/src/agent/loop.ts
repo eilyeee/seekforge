@@ -861,12 +861,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 usage = addUsage(usage, compacted.usage);
                 yield emit({ type: "usage.updated", usage });
               }
-              // Last resort: when the whole history is one assistant turn plus its
-              // tool results, nothing can be dropped without orphaning a tool call
-              // (compactMessages returns null) — shrink the oversized tool payloads
-              // in place so the provider isn't handed an over-budget request.
-              if (!compacted && estimateMessagesTokens(messages) > messageBudgetTokens) {
-                compacted = shrinkToolResultsToFit(messages, messageBudgetTokens);
+              // Last resort: shrink oversized tool payloads in place so the
+              // provider is never handed an over-budget request. This covers
+              // BOTH cases where compaction alone is insufficient: nothing could
+              // be dropped without orphaning a tool call (compactMessages returned
+              // null), AND a digest was produced but the retained tail still holds
+              // a huge tool result that keeps the total over budget.
+              const afterCompaction = compacted?.messages ?? messages;
+              if (estimateMessagesTokens(afterCompaction) > messageBudgetTokens) {
+                const shrunk = shrinkToolResultsToFit(afterCompaction, messageBudgetTokens);
+                // Keep the digest's reporting/usage fields (already accounted
+                // above); only its message list is replaced by the shrunk one.
+                if (shrunk) compacted = compacted ? { ...compacted, messages: shrunk.messages } : shrunk;
               }
               if (compacted) {
                 // Advisory heads-up before compaction mutates the conversation.

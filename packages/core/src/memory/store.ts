@@ -414,7 +414,12 @@ export function writeCandidates(workspace: string, candidates: MemoryCandidate[]
 }
 
 export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "content">): string {
-  return `- [${candidate.type}] ${candidate.content}`;
+  // A fact bullet MUST stay on one line: project.md is line-oriented, and the
+  // append dedupe (and memory brief) compare whole lines. Embedded newlines
+  // would orphan the tail onto its own line and make the exact-line dedupe never
+  // match, re-appending the same fact on every write.
+  const line = candidate.content.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  return `- [${candidate.type}] ${line}`;
 }
 
 /** Appends a fact bullet to project.md, creating it with a header if needed. */

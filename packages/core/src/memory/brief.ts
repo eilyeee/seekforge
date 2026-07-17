@@ -278,7 +278,10 @@ export function buildMemoryBrief(workspace: string, task: string): string | unde
     // whole (bounded by MAX_CHARS regardless).
     if (!smallCorpus && lines.length - 1 >= MAX_BULLETS) break;
     const cost = line.length + 1; // joining "\n"
-    if (chars + cost > MAX_CHARS) break;
+    // Skip a bullet that doesn't fit and keep trying shorter ones (they are
+    // score-ordered, so `break` here would drop every remaining bullet — and a
+    // single oversized top bullet would suppress the whole brief).
+    if (chars + cost > MAX_CHARS) continue;
     lines.push(line);
     chars += cost;
   }

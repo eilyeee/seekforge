@@ -33,7 +33,9 @@ const AGENTS_MD_TEMPLATE = (bullet: string): string => `# AGENTS.md\n\n## Agent 
  */
 function applyAgentRule(workspace: string, content: string): string {
   const file = path.join(workspace, "AGENTS.md");
-  const bullet = `- ${content}`;
+  // Collapse to a single line so the exact-line dedupe below can never miss and
+  // the rule stays a well-formed bullet (mirrors formatFactBullet).
+  const bullet = `- ${content.replace(/\s*[\r\n]+\s*/g, " ").trim()}`;
   const existing = readFileIfExists(file);
   if (existing === undefined) {
     fs.writeFileSync(file, AGENTS_MD_TEMPLATE(bullet), "utf8");

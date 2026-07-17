@@ -34,6 +34,22 @@ describe("memory fact lifecycle (P2)", () => {
     expect(typeof meta[key]!.addedAt).toBe("string");
   });
 
+  it("collapses newlines in a fact so project.md stays line-oriented and dedupe holds", () => {
+    const ws = makeWorkspace();
+    const multiline = fact("first line\nsecond line\n  third");
+    appendProjectFact(ws, multiline);
+    appendProjectFact(ws, multiline); // identical content must NOT re-append
+    const memory = readProjectMemory(ws) ?? "";
+    const bulletLines = memory.split("\n").filter((l) => l.startsWith("- ["));
+    expect(bulletLines).toHaveLength(1);
+    expect(bulletLines[0]).toBe("- [convention] first line second line third");
+    // No orphan line: every non-empty, non-heading line is a bullet.
+    for (const l of memory.split("\n")) {
+      if (l.trim() === "" || l.startsWith("#")) continue;
+      expect(l.startsWith("- ["), l).toBe(true);
+    }
+  });
+
   it("recordFactUse bumps uses + lastUsedAt for every fact in an injected brief", () => {
     const ws = makeWorkspace();
     appendProjectFact(ws, fact("login validation lives in src/auth.ts"));
