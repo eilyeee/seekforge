@@ -61,6 +61,17 @@ export {
   type LoopEvent,
   type LoopStatus,
 } from "./auto-loop.js";
+export {
+  isLoopRequirementMode,
+  parseLoopAcceptanceReview,
+  parseLoopRequirementSpec,
+  type LoopAcceptanceReview,
+  type LoopAcceptanceStatus,
+  type LoopRequirement,
+  type LoopAcceptanceCriterion,
+  type LoopRequirementMode,
+  type LoopRequirementSpec,
+} from "./loop-requirements.js";
 export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 export {
   appendLoopLog,

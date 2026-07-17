@@ -9,6 +9,7 @@ import {
   runAutoLoop,
   type LoopEvent,
   type LoopResult,
+  type LoopRequirementMode,
 } from "@seekforge/core";
 import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
@@ -39,11 +40,13 @@ export type LoopOptions = {
   profile?: string;
   /** Run in a retained isolated worktree, optionally with a user-facing name. */
   worktree?: boolean | string;
+  requirements?: LoopRequirementMode;
 };
 
 export type LoopResumeOptions = Omit<LoopOptions, "verify" | "worktree" | "maxIters" | "budget"> & {
   addIters?: number;
   addBudget?: number;
+  approveRequirements?: boolean;
 };
 
 const TAIL_LINES = 6;
@@ -74,6 +77,14 @@ export function formatLoopEvent(event: LoopEvent): string {
       const tail = outputTail(event.output);
       return tail ? `${head}\n${tail}` : head;
     }
+    case "requirements.started":
+      return event.phase === "analysis" ? "Analyzing requirements..." : "Reviewing acceptance criteria...";
+    case "requirements.completed":
+      return `Requirements analyzed: ${event.spec.requirements.length} requirements, ${event.spec.acceptanceCriteria.length} acceptance criteria${event.approvalRequired ? " (approval required)" : ""}`;
+    case "requirements.reviewed":
+      return event.review.complete
+        ? "Acceptance review passed."
+        : `Acceptance review incomplete: ${event.review.gaps.join("; ") || "evidence missing"}`;
     case "loop.warning":
       return `Warning: ${event.message}`;
     case "loop.done":
@@ -146,6 +157,7 @@ type ResumeAutoLoop = (
     escalateOnFailure?: boolean;
     additionalIterations?: number;
     additionalCostBudgetUsd?: number;
+    approveRequirements?: boolean;
   },
 ) => Promise<LoopResult>;
 
@@ -165,6 +177,7 @@ export function resumeExtensionOptions(opts: LoopResumeOptions): {
   return {
     ...(opts.addIters !== undefined ? { additionalIterations: opts.addIters } : {}),
     ...(opts.addBudget !== undefined ? { additionalCostBudgetUsd: opts.addBudget } : {}),
+    ...(opts.approveRequirements !== undefined ? { approveRequirements: opts.approveRequirements } : {}),
   };
 }
 
@@ -178,6 +191,7 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
     `updated: ${state.updatedAt}`,
     `workspace: ${state.workspace}`,
     `verify: ${state.verifyCommand}`,
+    `requirements: ${state.requirementMode ?? "quick"}${state.requirements ? ` (${state.requirements.requirements.length} requirements, ${state.acceptanceReview?.complete ? "accepted" : "pending acceptance"})` : ""}`,
   ].join("\n");
 }
 
@@ -346,6 +360,7 @@ async function runPreparedLoop(
           maxIterations: (opts as LoopOptions).maxIters ?? 8,
           ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
           approvalMode: "acceptEdits",
+          ...((opts as LoopOptions).requirements ? { requirementMode: (opts as LoopOptions).requirements } : {}),
           ...common,
         });
     if (result.status !== "passed") process.exitCode = 1;

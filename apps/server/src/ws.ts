@@ -377,6 +377,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       verifyCommand: string;
       maxIterations?: number;
       budget?: number;
+      requirementMode?: "quick" | "analyze" | "confirm";
       overrides?: RunOverrides;
     },
   ): Promise<void> => {
@@ -407,6 +408,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           verifyCommand: input.verifyCommand,
           ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
           ...(input.budget !== undefined ? { costBudgetUsd: input.budget } : {}),
+          ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
           approvalMode: "acceptEdits",
           signal: controller.signal,
           onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
@@ -444,6 +446,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       loopId: string;
       addedIterations?: number;
       addedBudget?: number;
+      approveRequirements?: boolean;
       overrides?: RunOverrides;
     },
   ): Promise<void> => {
@@ -466,6 +469,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           workspace: input.workspace,
           ...(input.addedIterations !== undefined ? { additionalIterations: input.addedIterations } : {}),
           ...(input.addedBudget !== undefined ? { additionalCostBudgetUsd: input.addedBudget } : {}),
+          ...(input.approveRequirements !== undefined ? { approveRequirements: input.approveRequirements } : {}),
           approvalMode: "acceptEdits",
           signal: controller.signal,
           onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
@@ -592,7 +596,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "loop": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { task, verifyCommand, maxIterations, budget, ws: wsId } = frame;
+        const { task, verifyCommand, maxIterations, budget, requirementMode, ws: wsId } = frame;
         if (typeof task !== "string" || task.length === 0) {
           return fail("bad_frame", "loop.task must be a non-empty string");
         }
@@ -611,6 +615,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         if (budget !== undefined && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)) {
           return fail("bad_frame", "loop.budget must be a finite positive number when present");
         }
+        if (
+          requirementMode !== undefined &&
+          requirementMode !== "quick" &&
+          requirementMode !== "analyze" &&
+          requirementMode !== "confirm"
+        ) {
+          return fail("bad_frame", 'loop.requirementMode must be "quick", "analyze", or "confirm"');
+        }
         if (wsId !== undefined && typeof wsId !== "string") {
           return fail("bad_frame", "loop.ws must be a string when present");
         }
@@ -627,6 +639,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
             verifyCommand,
             ...(maxIterations !== undefined ? { maxIterations } : {}),
             ...(budget !== undefined ? { budget } : {}),
+            ...(requirementMode !== undefined ? { requirementMode } : {}),
             ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
           }),
         );
@@ -635,7 +648,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "loop.resume": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { loopId, addedIterations, addedBudget, ws: wsId } = frame;
+        const { loopId, addedIterations, addedBudget, approveRequirements, ws: wsId } = frame;
         if (typeof loopId !== "string" || !isValidLoopId(loopId)) {
           return fail("bad_frame", "loop.resume.loopId must be a safe non-empty id");
         }
@@ -647,6 +660,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
             addedIterations > MAX_LOOP_ITERATIONS)
         ) {
           return fail("bad_frame", `loop.resume.addedIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
+        }
+        if (approveRequirements !== undefined && typeof approveRequirements !== "boolean") {
+          return fail("bad_frame", "loop.resume.approveRequirements must be a boolean when present");
         }
         if (
           addedBudget !== undefined &&
@@ -669,6 +685,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
             loopId,
             ...(addedIterations !== undefined ? { addedIterations } : {}),
             ...(addedBudget !== undefined ? { addedBudget } : {}),
+            ...(approveRequirements !== undefined ? { approveRequirements } : {}),
             ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
           }),
         );

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useT } from "../../lib/i18n";
 import { loopRows, loopStatusTone, loopWarnings, formatCost, type LoopProgress } from "../../lib/loop";
 import { MAX_LOOP_ITERATIONS, parseBudgetInput, parseIterationInput } from "../../lib/loop-input";
-import { Badge, Button, Card, IconChevron, Input, TextArea } from "../ui";
+import { Badge, Button, Card, IconChevron, Input, Select, TextArea } from "../ui";
 
 type Props = {
   /** The active tab's live loop feed + final result. */
@@ -12,8 +12,19 @@ type Props = {
   /** True only while the active operation is a Loop — controls Stop/progress UI. */
   loopRunning: boolean;
   /** Starts a loop run (sends the `loop` frame via the store). */
-  onRun: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
-  onResume: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
+  onRun: (opts: {
+    task: string;
+    verifyCommand: string;
+    maxIterations?: number;
+    budget?: number;
+    requirementMode?: "quick" | "analyze" | "confirm";
+  }) => void;
+  onResume: (opts: {
+    loopId: string;
+    addedIterations?: number;
+    addedBudget?: number;
+    approveRequirements?: boolean;
+  }) => void;
   /** Stops a running loop (sends `cancel` via the store). */
   onStop: () => void;
 };
@@ -32,6 +43,7 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
   const [verify, setVerify] = useState("");
   const [maxIterations, setMaxIterations] = useState(String(DEFAULT_MAX_ITERATIONS));
   const [budget, setBudget] = useState("");
+  const [requirementMode, setRequirementMode] = useState<"quick" | "analyze" | "confirm">("quick");
   const [addedIterations, setAddedIterations] = useState("");
   const [addedBudget, setAddedBudget] = useState("");
 
@@ -49,12 +61,17 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
       verifyCommand: verify.trim(),
       ...(max.value !== undefined ? { maxIterations: max.value } : {}),
       ...(bud.value !== undefined ? { budget: bud.value } : {}),
+      requirementMode,
     });
   };
 
   const rows = loopRows(progress.events);
   const warnings = loopWarnings(progress.events);
   const result = progress.result;
+  const requirementSpec = [...progress.events].reverse().find((event) => event.type === "requirements.completed")?.spec;
+  const acceptanceReview = [...progress.events]
+    .reverse()
+    .find((event) => event.type === "requirements.reviewed")?.review;
 
   return (
     <div className="border-b border-subtle bg-surface-raised/40">
@@ -96,6 +113,22 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
             </label>
 
             <div className="flex flex-wrap items-end gap-2">
+              <label className="flex w-40 flex-col gap-1">
+                <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
+                  {t("chat.loop.requirements")}
+                </span>
+                <Select
+                  value={requirementMode}
+                  onChange={(value) => setRequirementMode(value as "quick" | "analyze" | "confirm")}
+                  disabled={running}
+                  ariaLabel={t("chat.loop.requirements")}
+                  options={[
+                    { value: "quick", label: t("chat.loop.requirements.quick") },
+                    { value: "analyze", label: t("chat.loop.requirements.analyze") },
+                    { value: "confirm", label: t("chat.loop.requirements.confirm") },
+                  ]}
+                />
+              </label>
               <label className="flex min-w-48 flex-1 flex-col gap-1">
                 <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
                   {t("chat.loop.verify")}
@@ -163,6 +196,24 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                   {warning}
                 </div>
               ))}
+              {requirementSpec && (
+                <div className="mb-1 border-b border-subtle pb-2 text-xs text-secondary">
+                  <div className="font-semibold text-primary">{requirementSpec.goal}</div>
+                  <div className="mt-1 text-2xs">
+                    {t("chat.loop.requirementSummary", {
+                      requirements: requirementSpec.requirements.length,
+                      criteria: requirementSpec.acceptanceCriteria.length,
+                    })}
+                  </div>
+                  {acceptanceReview && !acceptanceReview.complete && acceptanceReview.gaps.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4 text-2xs text-warn">
+                      {acceptanceReview.gaps.map((gap) => (
+                        <li key={gap}>{gap}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               {rows.map((row) => (
                 <div key={row.iteration} className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge tone="neutral">{t("chat.loop.iteration", { n: row.iteration })}</Badge>
@@ -241,10 +292,13 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                             loopId: result.loopId!,
                             ...(addedIters.value !== undefined ? { addedIterations: addedIters.value } : {}),
                             ...(addedBud.value !== undefined ? { addedBudget: addedBud.value } : {}),
+                            ...(result.status === "requirements_pending" ? { approveRequirements: true } : {}),
                           })
                         }
                       >
-                        {t("chat.loop.resume")}
+                        {result.status === "requirements_pending"
+                          ? t("chat.loop.approveRequirements")
+                          : t("chat.loop.resume")}
                       </Button>
                     </div>
                   )}

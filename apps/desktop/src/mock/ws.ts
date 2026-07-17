@@ -232,7 +232,14 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
    * couple of loop.event frames (fail then pass) so the LoopPanel and its
    * progress reduction are exercisable without the real server.
    */
-  async function runLoop(verifyCommand: string): Promise<void> {
+  let persistedLoopVerify = "pnpm test";
+  let persistedLoopMode: "quick" | "analyze" | "confirm" = "quick";
+
+  async function runLoop(
+    verifyCommand: string,
+    requirementMode: "quick" | "analyze" | "confirm" = "quick",
+    requirementsApproved = false,
+  ): Promise<void> {
     running = true;
     cancelled = false;
     const loop = (event: LoopEvent) => emit({ type: "loop.event", event });
@@ -241,6 +248,42 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
     try {
       sessionId = `s-mock-loop-${++sessionCounter}`;
       ev({ type: "session.created", sessionId });
+      persistedLoopVerify = verifyCommand;
+      persistedLoopMode = requirementMode;
+      const spec = {
+        version: 1 as const,
+        goal: "Complete the requested loop task",
+        deliverables: ["Working implementation and tests"],
+        requirements: [{ id: "REQ-1", text: "Implement the requested behavior", required: true }],
+        constraints: ["Keep the verifier unchanged"],
+        outOfScope: [],
+        assumptions: [],
+        acceptanceCriteria: [
+          { id: "AC-1", text: "Code and tests demonstrate the behavior", requirementIds: ["REQ-1"] },
+        ],
+        unresolvedQuestions: [],
+      };
+      if (requirementMode !== "quick") {
+        loop({ type: "requirements.started", phase: "analysis" });
+        if (!(await stepLoop(250))) return;
+        loop({ type: "requirements.completed", spec, approvalRequired: requirementMode === "confirm" });
+        if (requirementMode === "confirm" && !requirementsApproved) {
+          loop({
+            type: "loop.done",
+            result: {
+              status: "requirements_pending",
+              iterations: 0,
+              costUsd: 0.001,
+              sessionId,
+              loopId: "loop-mock",
+              finalVerify: { code: -1, output: "requirements await approval" },
+              requirements: spec,
+            },
+          });
+          emit({ type: "idle" });
+          return;
+        }
+      }
 
       // Iteration 1: run, then verify fails.
       loop({ type: "iteration.start", iteration: 1 });
@@ -256,6 +299,17 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
       loop({ type: "run.completed", iteration: 2, costUsd: 0.0051 });
       if (!(await stepLoop(300))) return;
       loop({ type: "verify", iteration: 2, code: 0, passed: true, output: out(true) });
+      if (requirementMode !== "quick") {
+        loop({ type: "requirements.started", phase: "review" });
+        loop({
+          type: "requirements.reviewed",
+          review: {
+            complete: true,
+            criteria: [{ id: "AC-1", status: "met", evidence: ["src/mock.ts and tests"] }],
+            gaps: [],
+          },
+        });
+      }
 
       loop({
         type: "loop.done",
@@ -299,7 +353,14 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
             emit({ type: "error", code: "busy", message: "a session is already running" });
             return true;
           }
-          void runLoop(frame.verifyCommand);
+          void runLoop(frame.verifyCommand, frame.requirementMode);
+          break;
+        case "loop.resume":
+          if (running) {
+            emit({ type: "error", code: "busy", message: "a session is already running" });
+            return true;
+          }
+          void runLoop(persistedLoopVerify, persistedLoopMode, frame.approveRequirements === true);
           break;
         case "start":
           if (running) {

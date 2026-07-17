@@ -432,7 +432,13 @@ describe("store: loop mode", () => {
   });
 
   it("startLoop sends a loop frame, marks running, and clears prior progress", () => {
-    useStore.getState().startLoop({ task: "fix it", verifyCommand: "pnpm test", maxIterations: 5, budget: 1.5 });
+    useStore.getState().startLoop({
+      task: "fix it",
+      verifyCommand: "pnpm test",
+      maxIterations: 5,
+      budget: 1.5,
+      requirementMode: "confirm",
+    });
     const loop = sent.find((f) => f.type === "loop");
     expect(loop).toMatchObject({
       type: "loop",
@@ -440,6 +446,7 @@ describe("store: loop mode", () => {
       verifyCommand: "pnpm test",
       maxIterations: 5,
       budget: 1.5,
+      requirementMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);
@@ -470,12 +477,15 @@ describe("store: loop mode", () => {
       },
     });
     const completed = activeTab(useStore.getState().tabs).loop;
-    useStore.getState().resumeLoop({ loopId: "loop-abc", addedIterations: 3, addedBudget: 0.5 });
+    useStore
+      .getState()
+      .resumeLoop({ loopId: "loop-abc", addedIterations: 3, addedBudget: 0.5, approveRequirements: true });
     expect(sent.find((f) => (f as { type: string }).type === "loop.resume")).toMatchObject({
       type: "loop.resume",
       loopId: "loop-abc",
       addedIterations: 3,
       addedBudget: 0.5,
+      approveRequirements: true,
     });
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);

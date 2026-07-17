@@ -19,6 +19,14 @@ import type { LoopEvent, LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
 import { isRecord } from "../util/guards.js";
+import {
+  isLoopRequirementMode,
+  parseLoopAcceptanceReview,
+  parseLoopRequirementSpec,
+  type LoopAcceptanceReview,
+  type LoopRequirementMode,
+  type LoopRequirementSpec,
+} from "./loop-requirements.js";
 
 export type PersistedLoopStatus = "running" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
@@ -33,6 +41,11 @@ export type LoopState = {
   costUsd: number;
   sessionId: string;
   lastVerify: LoopVerifyResult | null;
+  /** Optional in the type so callers can still represent legacy persisted records. */
+  requirementMode?: LoopRequirementMode;
+  requirements?: LoopRequirementSpec | null;
+  acceptanceReview?: LoopAcceptanceReview | null;
+  requirementsApprovedAt?: string | null;
   status: PersistedLoopStatus;
   createdAt: string;
   updatedAt: string;
@@ -42,6 +55,7 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   costBudgetUsd?: number | null;
   sessionId?: string;
   lastVerify?: LoopVerifyResult | null;
+  requirementMode?: LoopRequirementMode;
 };
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -53,6 +67,7 @@ const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "budget",
   "cancelled",
   "verify_error",
+  "requirements_pending",
 ]);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -281,6 +296,13 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   if (!isRecord(value)) return null;
   const budget = value.costBudgetUsd;
   const verify = value.lastVerify;
+  const requirementMode = value.requirementMode === undefined ? "quick" : value.requirementMode;
+  const requirements = value.requirements === undefined ? null : parseLoopRequirementSpec(value.requirements);
+  const acceptanceReview =
+    value.acceptanceReview === undefined || value.acceptanceReview === null || requirements === null
+      ? null
+      : parseLoopAcceptanceReview(value.acceptanceReview, requirements);
+  const requirementsApprovedAt = value.requirementsApprovedAt === undefined ? null : value.requirementsApprovedAt;
   if (
     typeof value.loopId !== "string" ||
     !isValidLoopId(value.loopId) ||
@@ -305,6 +327,12 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
         !Number.isInteger(verify.code) ||
         !isFiniteNumber(verify.code) ||
         typeof verify.output !== "string")) ||
+    !isLoopRequirementMode(requirementMode) ||
+    (value.requirements !== undefined && value.requirements !== null && requirements === null) ||
+    (value.acceptanceReview !== undefined && value.acceptanceReview !== null && acceptanceReview === null) ||
+    (requirementsApprovedAt !== null && !isIsoDate(requirementsApprovedAt)) ||
+    (requirementMode === "quick" && (requirements !== null || acceptanceReview !== null)) ||
+    (requirementMode !== "quick" && acceptanceReview !== null && requirements === null) ||
     typeof value.status !== "string" ||
     !LOOP_STATUSES.has(value.status as PersistedLoopStatus) ||
     !isIsoDate(value.createdAt) ||
@@ -325,6 +353,10 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     costUsd: value.costUsd,
     sessionId: value.sessionId,
     lastVerify: verify === null ? null : { code: verify.code as number, output: verify.output as string },
+    requirementMode,
+    requirements,
+    acceptanceReview,
+    requirementsApprovedAt,
     status: value.status as PersistedLoopStatus,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
@@ -351,6 +383,10 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     costUsd: 0,
     sessionId: input.sessionId ?? "",
     lastVerify: input.lastVerify ?? null,
+    requirementMode: input.requirementMode ?? "quick",
+    requirements: null,
+    acceptanceReview: null,
+    requirementsApprovedAt: null,
     status: "running",
     createdAt: now,
     updatedAt: now,

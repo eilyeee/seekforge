@@ -29,7 +29,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "run body must be an object");
       return true;
     }
-    const { kind = "agent", task, mode = "ask", maxCostUsd, verifyCommand, maxIterations } = body;
+    const { kind = "agent", task, mode = "ask", maxCostUsd, verifyCommand, maxIterations, requirementMode } = body;
     if (kind !== "agent" && kind !== "loop") {
       sendApiError(res, 400, "bad_request", 'kind must be "agent" or "loop"');
       return true;
@@ -57,6 +57,15 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         (maxIterations as number) > MAX_LOOP_ITERATIONS)
     ) {
       sendApiError(res, 400, "bad_request", `maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
+      return true;
+    }
+    if (
+      requirementMode !== undefined &&
+      requirementMode !== "quick" &&
+      requirementMode !== "analyze" &&
+      requirementMode !== "confirm"
+    ) {
+      sendApiError(res, 400, "bad_request", 'requirementMode must be "quick", "analyze", or "confirm"');
       return true;
     }
 
@@ -90,6 +99,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               task,
               verifyCommand: verifyCommand as string,
               ...(maxIterations !== undefined ? { maxIterations: maxIterations as number } : {}),
+              ...(requirementMode !== undefined ? { requirementMode } : {}),
               costBudgetUsd: maxCostUsd,
               approvalMode: "acceptEdits",
               signal: controller.signal,

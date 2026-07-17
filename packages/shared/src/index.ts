@@ -723,8 +723,33 @@ export type SearchResult = { hits: SearchHit[]; truncated: boolean; error?: stri
  * - budget: the USD budget was exceeded.
  * - cancelled: the user stopped the loop (cancel frame / closed socket).
  * - verify_error: the verify command itself could not be run.
+ * - requirements_pending: confirm-mode requirements await explicit approval.
  */
-export type LoopStatus = "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error";
+export type LoopStatus =
+  | "passed"
+  | "exhausted"
+  | "no_progress"
+  | "budget"
+  | "cancelled"
+  | "verify_error"
+  | "requirements_pending";
+export type LoopRequirementMode = "quick" | "analyze" | "confirm";
+export type LoopRequirementSpec = {
+  version: 1;
+  goal: string;
+  deliverables: string[];
+  requirements: Array<{ id: string; text: string; required: boolean }>;
+  constraints: string[];
+  outOfScope: string[];
+  assumptions: string[];
+  acceptanceCriteria: Array<{ id: string; text: string; requirementIds: string[] }>;
+  unresolvedQuestions: string[];
+};
+export type LoopAcceptanceReview = {
+  complete: boolean;
+  criteria: Array<{ id: string; status: "met" | "unmet" | "unknown"; evidence: string[] }>;
+  gaps: string[];
+};
 
 /** Final summary of a loop run (server LoopResult). */
 export type LoopResult = {
@@ -739,6 +764,8 @@ export type LoopResult = {
   finalVerify: { code: number; output: string };
   /** Stable persisted orchestration id when persistence is enabled. */
   loopId?: string;
+  requirements?: LoopRequirementSpec;
+  acceptanceReview?: LoopAcceptanceReview;
 };
 
 /** A single streamed loop event (server LoopEvent). */
@@ -747,7 +774,10 @@ export type LoopEvent =
   | { type: "run.completed"; iteration: number; costUsd: number }
   | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
-  | { type: "loop.warning"; warning: "persistence"; message: string }
+  | { type: "requirements.started"; phase: "analysis" | "review" }
+  | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
+  | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
+  | { type: "loop.warning"; warning: "persistence" | "requirements"; message: string }
   | { type: "loop.done"; result: LoopResult };
 
 /**
@@ -855,6 +885,7 @@ export type ClientFrame =
       maxIterations?: number;
       /** Optional total USD budget; the loop stops once exceeded. */
       budget?: number;
+      requirementMode?: LoopRequirementMode;
       ws?: string;
     } & RunOverrides)
   | ({
@@ -865,6 +896,8 @@ export type ClientFrame =
       addedIterations?: number;
       /** Additional USD added on top of the persisted cumulative budget. */
       addedBudget?: number;
+      /** Approve a persisted confirm-mode requirement specification. */
+      approveRequirements?: boolean;
       ws?: string;
     } & RunOverrides)
   | { type: "subagent.cancel"; dispatchId: string }

@@ -62,6 +62,29 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
       const tail = loopOutputTail(event.output);
       return tail ? [head, { text: `    ${tail}`, tone: "dim" }] : [head];
     }
+    case "requirements.started":
+      return [
+        {
+          text: `  loop · ${event.phase === "analysis" ? "analyzing requirements" : "reviewing acceptance"}`,
+          tone: "dim",
+        },
+      ];
+    case "requirements.completed":
+      return [
+        {
+          text: `  loop · ${event.spec.requirements.length} requirements · ${event.spec.acceptanceCriteria.length} acceptance criteria${event.approvalRequired ? " · approval required" : ""}`,
+          tone: "dim",
+        },
+      ];
+    case "requirements.reviewed":
+      return [
+        {
+          text: event.review.complete
+            ? "  ✓ loop · acceptance review passed"
+            : `  ✗ loop · acceptance incomplete: ${event.review.gaps.join("; ") || "evidence missing"}`,
+          tone: event.review.complete ? "dim" : "error",
+        },
+      ];
     case "loop.warning":
       return [{ text: `  ! loop persistence warning: ${event.message}`, tone: "error" }];
     case "loop.done":

@@ -112,6 +112,21 @@ describe("parseInput /loop", () => {
     });
   });
 
+  it("parses requirement analysis and confirmation options", () => {
+    expect(parseInput("/loop --requirements=confirm pnpm test\nBuild the whole feature")).toEqual({
+      kind: "slash",
+      command: {
+        name: "loop",
+        verify: "pnpm test",
+        task: "Build the whole feature",
+        requirementMode: "confirm",
+      },
+    });
+    expect(parseInput("/loop --requirements invalid pnpm test\nFix it")).toMatchObject({
+      command: { error: '--requirements must be "quick", "analyze", or "confirm"' },
+    });
+  });
+
   it("keeps unknown leading options as part of the verify command for compatibility", () => {
     expect(parseInput("/loop --runInBand npm test\nFix tests")).toEqual({
       kind: "slash",
@@ -153,6 +168,13 @@ describe("parseInput /loop-resume", () => {
     expect(parseInput("/loop-resume --add-iterations 4 --add-budget=0.75 loop-abc")).toEqual({
       kind: "slash",
       command: { name: "loop-resume", loopId: "loop-abc", addedIterations: 4, addedCostBudgetUsd: 0.75 },
+    });
+  });
+
+  it("parses explicit requirement approval", () => {
+    expect(parseInput("/loop-resume --approve-requirements loop-abc")).toEqual({
+      kind: "slash",
+      command: { name: "loop-resume", loopId: "loop-abc", approveRequirements: true },
     });
   });
 

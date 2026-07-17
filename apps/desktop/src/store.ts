@@ -193,9 +193,20 @@ type AppStore = {
    * marks the tab running, and resets the tab's loop progress. The server runs
    * the task→verify→fix cycle autonomously and streams `loop.event` frames.
    */
-  startLoop: (opts: { task: string; verifyCommand: string; maxIterations?: number; budget?: number }) => void;
+  startLoop: (opts: {
+    task: string;
+    verifyCommand: string;
+    maxIterations?: number;
+    budget?: number;
+    requirementMode?: "quick" | "analyze" | "confirm";
+  }) => void;
   /** Resumes the persisted loop represented by the active tab's completed result. */
-  resumeLoop: (opts: { loopId: string; addedIterations?: number; addedBudget?: number }) => void;
+  resumeLoop: (opts: {
+    loopId: string;
+    addedIterations?: number;
+    addedBudget?: number;
+    approveRequirements?: boolean;
+  }) => void;
   executePlan: () => void;
   cancel: () => void;
   /** Queue guidance for one running subagent at its next model-turn boundary. */
@@ -543,7 +554,7 @@ export const useStore = create<AppStore>()((set, get) => {
       return true;
     },
 
-    startLoop: ({ task, verifyCommand, maxIterations, budget }) => {
+    startLoop: ({ task, verifyCommand, maxIterations, budget, requirementMode }) => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || task.trim() === "" || verifyCommand.trim() === "") return;
       const client = ensureWs(tab.tabId);
@@ -554,6 +565,7 @@ export const useStore = create<AppStore>()((set, get) => {
         verifyCommand,
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         ...(budget !== undefined ? { budget } : {}),
+        ...(requirementMode !== undefined ? { requirementMode } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
         ...overridesOf(tab),
@@ -572,7 +584,7 @@ export const useStore = create<AppStore>()((set, get) => {
       }));
     },
 
-    resumeLoop: ({ loopId, addedIterations, addedBudget }) => {
+    resumeLoop: ({ loopId, addedIterations, addedBudget, approveRequirements }) => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || loopId.trim() === "") return;
       const client = ensureWs(tab.tabId);
@@ -582,6 +594,7 @@ export const useStore = create<AppStore>()((set, get) => {
         loopId,
         ...(addedIterations !== undefined ? { addedIterations } : {}),
         ...(addedBudget !== undefined ? { addedBudget } : {}),
+        ...(approveRequirements !== undefined ? { approveRequirements } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         ...overridesOf(tab),
       };

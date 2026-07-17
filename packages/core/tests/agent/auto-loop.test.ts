@@ -38,6 +38,35 @@ function alwaysDone(model: string) {
   return p;
 }
 
+function scripted(model: string, contents: string[]) {
+  const provider = alwaysDone(model);
+  provider.chat = async (req: ChatRequest): Promise<ChatResponse> => {
+    provider.chats++;
+    provider.seen.push(req.messages);
+    return text(contents.shift() ?? "done");
+  };
+  return provider;
+}
+
+const REQUIREMENT_SPEC = JSON.stringify({
+  version: 1,
+  goal: "make it green and complete",
+  deliverables: ["working implementation"],
+  requirements: [{ id: "REQ-1", text: "implement the feature", required: true }],
+  constraints: ["keep the verifier unchanged"],
+  outOfScope: [],
+  assumptions: [],
+  acceptanceCriteria: [{ id: "AC-1", text: "feature exists with evidence", requirementIds: ["REQ-1"] }],
+  unresolvedQuestions: [],
+});
+
+const acceptance = (status: "met" | "unmet" | "unknown") =>
+  JSON.stringify({
+    complete: status === "met",
+    criteria: [{ id: "AC-1", status, evidence: status === "met" ? ["src/feature.ts"] : [] }],
+    gaps: status === "met" ? [] : ["feature is missing"],
+  });
+
 /** A no-op dispatcher (the loop's agent never calls tools in these tests). */
 const noopDispatcher: ToolDispatcher = {
   list: () => [],
@@ -158,6 +187,79 @@ describe("runAutoLoop", () => {
     expect(result.sessionId).toBe("");
     // No run happened.
     expect(provider.chats).toBe(0);
+  });
+
+  it("analyzes requirements before a green pre-check and requires acceptance evidence", async () => {
+    const provider = scripted("flash", [REQUIREMENT_SPEC, acceptance("met")]);
+    const deps: AgentCoreDeps = { provider, dispatcher: noopDispatcher, confirm: async () => true };
+    const order: string[] = [];
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        order.push("verify");
+        return { code: 0, output: "ok" };
+      }),
+      requirementMode: "analyze",
+      onEvent: (event) => order.push(event.type),
+    });
+    expect(order.indexOf("requirements.completed")).toBeLessThan(order.indexOf("verify"));
+    expect(result).toMatchObject({ status: "passed", iterations: 0, costUsd: 0.002 });
+    expect(result.requirements?.goal).toBe("make it green and complete");
+    expect(result.acceptanceReview?.complete).toBe(true);
+    expect(provider.chats).toBe(2);
+  });
+
+  it("continues when the verifier is green but required acceptance remains unmet", async () => {
+    const provider = scripted("flash", [
+      REQUIREMENT_SPEC,
+      acceptance("unmet"),
+      "implementation done",
+      acceptance("met"),
+    ]);
+    const deps: AgentCoreDeps = { provider, dispatcher: noopDispatcher, confirm: async () => true };
+    let verifies = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        verifies++;
+        return { code: 0, output: "ok" };
+      }),
+      requirementMode: "analyze",
+    });
+    expect(result.status).toBe("passed");
+    expect(result.iterations).toBe(1);
+    expect(verifies).toBe(2);
+    expect(
+      provider.seen.some((messages) =>
+        messages.some((message) => String(message.content).includes("feature is missing")),
+      ),
+    ).toBe(true);
+  });
+
+  it("persists confirm-mode requirements and resumes only after explicit approval", async () => {
+    const firstProvider = scripted("flash", [REQUIREMENT_SPEC]);
+    const first = await runAutoLoop(
+      { provider: firstProvider, dispatcher: noopDispatcher, confirm: async () => true },
+      { ...baseOpts(workspace, failNTimes(0)), requirementMode: "confirm" },
+    );
+    expect(first.status).toBe("requirements_pending");
+    expect(first.iterations).toBe(0);
+    expect(loadLoopState(workspace, first.loopId!)?.requirementsApprovedAt).toBeNull();
+
+    const secondProvider = scripted("flash", [acceptance("met")]);
+    const resumedEvents: string[] = [];
+    const resumed = await resumeAutoLoop(
+      { provider: secondProvider, dispatcher: noopDispatcher, confirm: async () => true },
+      first.loopId!,
+      {
+        workspace,
+        approveRequirements: true,
+        verify: failNTimes(0),
+        onEvent: (event) => resumedEvents.push(event.type),
+      },
+    );
+    expect(resumed.status).toBe("passed");
+    expect(resumed.iterations).toBe(0);
+    expect(resumedEvents).toContain("requirements.completed");
+    expect(loadLoopState(workspace, first.loopId!)?.requirementsApprovedAt).not.toBeNull();
   });
 
   it("uses the provider selected by LoopOptions.model", async () => {

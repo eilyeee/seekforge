@@ -735,7 +735,15 @@ export function App({
    * notices. The loop forces acceptEdits internally (see run-loop.ts).
    */
   const runLoopTask = useCallback(
-    async (task: string, verifyCommand: string, options: { maxIterations?: number; costBudgetUsd?: number } = {}) => {
+    async (
+      task: string,
+      verifyCommand: string,
+      options: {
+        maxIterations?: number;
+        costBudgetUsd?: number;
+        requirementMode?: "quick" | "analyze" | "confirm";
+      } = {},
+    ) => {
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
@@ -755,6 +763,7 @@ export function App({
           mcpToolSpecs,
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
+          ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
           onEvent: (event) => {
             if (!ownsThisRun()) return;
             for (const line of formatLoopEvent(event)) {
@@ -788,7 +797,10 @@ export function App({
   );
 
   const resumeLoopTask = useCallback(
-    async (loopId: string, options: { addedIterations?: number; addedCostBudgetUsd?: number } = {}) => {
+    async (
+      loopId: string,
+      options: { addedIterations?: number; addedCostBudgetUsd?: number; approveRequirements?: boolean } = {},
+    ) => {
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
@@ -1009,6 +1021,7 @@ export function App({
           void runLoopTask(task, verifyCommand, {
             ...(command.maxIterations !== undefined ? { maxIterations: command.maxIterations } : {}),
             ...(command.costBudgetUsd !== undefined ? { costBudgetUsd: command.costBudgetUsd } : {}),
+            ...(command.requirementMode !== undefined ? { requirementMode: command.requirementMode } : {}),
           });
           break;
         }
@@ -1022,12 +1035,16 @@ export function App({
             break;
           }
           if (!command.loopId || !isValidLoopId(command.loopId)) {
-            notice("usage: /loop-resume [--add-iterations N] [--add-budget USD] <loop-id>", "error");
+            notice(
+              "usage: /loop-resume [--add-iterations N] [--add-budget USD] [--approve-requirements] <loop-id>",
+              "error",
+            );
             break;
           }
           void resumeLoopTask(command.loopId, {
             ...(command.addedIterations !== undefined ? { addedIterations: command.addedIterations } : {}),
             ...(command.addedCostBudgetUsd !== undefined ? { addedCostBudgetUsd: command.addedCostBudgetUsd } : {}),
+            ...(command.approveRequirements ? { approveRequirements: true } : {}),
           });
           break;
         }
