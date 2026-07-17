@@ -12,7 +12,6 @@ const ALLOWED_KEYS = [
   "provider",
   "runtimeBin",
   "commandAllowlist",
-  "models",
   "sandbox",
   "compaction",
   "thinking",
@@ -69,7 +68,7 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
       return;
     }
   }
-  if (key === "commandAllowlist" || key === "models") {
+  if (key === "commandAllowlist") {
     // Array of strings: accept comma-separated.
     current[key] = value
       .split(",")

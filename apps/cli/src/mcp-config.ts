@@ -48,15 +48,41 @@ export function removeMcpServer(doc: ConfigDoc, name: string): ConfigDoc {
   return out;
 }
 
-/** Read a config.json document, tolerating a missing/corrupt file (→ {}). */
-export function readConfigDoc(path: string): ConfigDoc {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (!isObjectRecord(parsed)) return {};
-    return parsed as ConfigDoc;
-  } catch {
-    return {};
+/**
+ * Thrown when a config.json EXISTS but cannot be used as a config object
+ * (syntactically invalid JSON, a non-object root, or otherwise unreadable).
+ * Callers surface this and refuse to write, rather than silently replacing a
+ * config they couldn't parse — which would drop apiKey/permissionRules/hooks/…
+ */
+export class ConfigParseError extends Error {
+  constructor(public readonly path: string) {
+    super(`config file exists but is not a valid JSON object: ${path}`);
+    this.name = "ConfigParseError";
   }
+}
+
+/**
+ * Read a config.json document. A MISSING file yields an empty doc ({}); a file
+ * that exists but can't be parsed as a JSON object throws {@link ConfigParseError}
+ * so callers abort rather than clobber it (mirrors `config set`'s behavior).
+ */
+export function readConfigDoc(path: string): ConfigDoc {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    // Exists but unreadable (EACCES, EISDIR, …): don't risk overwriting it.
+    throw new ConfigParseError(path);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new ConfigParseError(path);
+  }
+  if (!isObjectRecord(parsed)) throw new ConfigParseError(path);
+  return parsed as ConfigDoc;
 }
 
 /** Extract --mcp-config servers from either {mcpServers:{...}} or a bare map. */

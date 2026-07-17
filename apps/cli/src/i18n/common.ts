@@ -35,6 +35,8 @@ export const common = {
     "err.configSetBadValue": 'Invalid value for "{key}". Allowed: {allowed}',
     "err.mcpConfigRead": "could not read --mcp-config file: {path}",
     "err.mcpConfigReadHint": 'expected JSON: {"mcpServers": {…}} or a {name: server} map',
+    "err.mcpConfigInvalidJson":
+      "refusing to write: {path} exists but is not valid JSON (fix it by hand first, so config isn't clobbered)",
     "err.configInvalidJson": "warning: {path} contained invalid JSON, rewriting",
     "err.excludedDirSkipped": 'warning: --add-dir "{dir}" skipped (not an existing dir outside the project)',
     "err.streamJsonNoTurns": "stream-json input: no user turns received on stdin",
@@ -138,6 +140,7 @@ export const common = {
     "err.configSetBadValue": '"{key}" 的值无效。允许的值：{allowed}',
     "err.mcpConfigRead": "无法读取 --mcp-config 文件：{path}",
     "err.mcpConfigReadHint": '需要 JSON：{"mcpServers": {…}} 或 {名称: 服务器} 映射',
+    "err.mcpConfigInvalidJson": "拒绝写入：{path} 存在但不是有效 JSON（请先手动修复，以免覆盖配置）",
     "err.configInvalidJson": "警告：{path} 包含无效 JSON，正在重写",
     "err.excludedDirSkipped": '警告：--add-dir "{dir}" 已跳过（不是项目外存在的目录）',
     "err.streamJsonNoTurns": "stream-json 输入：stdin 中未收到用户轮次",

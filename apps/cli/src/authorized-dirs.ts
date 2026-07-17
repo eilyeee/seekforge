@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { writeFileAtomic } from "@seekforge/core";
 
 /**
  * Real, case-canonical absolute path. Canonicalizing BOTH the stored dirs and
@@ -68,5 +69,9 @@ export function authorizeDir(dir: string, storePath: string = authorizedStorePat
   }
   dirs.push(target);
   mkdirSync(dirname(storePath), { recursive: true });
-  writeFileSync(storePath, `${JSON.stringify({ dirs }, null, 2)}\n`);
+  // Atomic write: two concurrent processes (a run + a scheduler tick) authorizing
+  // different dirs, or a crash mid-write, must not truncate or corrupt the store —
+  // readDirs swallows a parse error to [], which would silently drop ALL prior
+  // authorizations.
+  writeFileAtomic(storePath, `${JSON.stringify({ dirs }, null, 2)}\n`);
 }

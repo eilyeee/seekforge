@@ -2,7 +2,14 @@ import { createMcpClient } from "@seekforge/core";
 import { dim, fail } from "../colors.js";
 import { t } from "../i18n.js";
 import { loadConfig } from "../config.js";
-import { addMcpServer, mcpConfigPath, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
+import {
+  addMcpServer,
+  ConfigParseError,
+  mcpConfigPath,
+  readConfigDoc,
+  removeMcpServer,
+  writeConfigDoc,
+} from "../mcp-config.js";
 
 /**
  * `seekforge mcp list` — spawn each configured server, handshake, and list
@@ -64,6 +71,10 @@ export function mcpAddCommand(name: string, commandTokens: string[], opts: { glo
     const next = addMcpServer(readConfigDoc(path), name, command ?? "", args);
     writeConfigDoc(path, next);
   } catch (err) {
+    if (err instanceof ConfigParseError) {
+      fail(t("err.mcpConfigInvalidJson", { path: err.path }));
+      return;
+    }
     fail(err instanceof Error ? err.message : String(err));
     return;
   }
@@ -82,6 +93,10 @@ export function mcpRemoveCommand(name: string, opts: { global?: boolean }): void
     const next = removeMcpServer(readConfigDoc(path), name);
     writeConfigDoc(path, next);
   } catch (err) {
+    if (err instanceof ConfigParseError) {
+      fail(t("err.mcpConfigInvalidJson", { path: err.path }));
+      return;
+    }
     fail(err instanceof Error ? err.message : String(err));
     return;
   }

@@ -8,7 +8,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
-import { addMcpServer, extractMcpServersDoc, readConfigDoc, removeMcpServer, writeConfigDoc } from "../mcp-config.js";
+import {
+  addMcpServer,
+  ConfigParseError,
+  extractMcpServersDoc,
+  readConfigDoc,
+  removeMcpServer,
+  writeConfigDoc,
+} from "../mcp-config.js";
 import type { AgentEvent } from "@seekforge/shared";
 import {
   buildResultEnvelope,
@@ -325,18 +332,23 @@ test("removeMcpServer: keeps siblings", () => {
 test("removeMcpServer: missing throws", () => {
   assert.throws(() => removeMcpServer({}, "nope"));
 });
-test("readConfigDoc: non-object JSON falls back to empty doc", () => {
+test("readConfigDoc: a present-but-unparseable config throws (never silently clobbered)", () => {
   const dir = mkdtempSync(join(tmpdir(), "seekforge-mcp-config-"));
   try {
+    // Non-object roots and invalid JSON are NOT a valid config — throwing lets
+    // callers (mcp add/remove) abort instead of overwriting the file.
     for (const [name, content] of [
       ["null.json", "null"],
       ["array.json", "[]"],
       ["string.json", '"x"'],
+      ["broken.json", "{ not valid json"],
     ] as const) {
       const file = join(dir, name);
       writeFileSync(file, content);
-      assert.deepEqual(readConfigDoc(file), {});
+      assert.throws(() => readConfigDoc(file), ConfigParseError, name);
     }
+    // A genuinely absent file still yields an empty doc.
+    assert.deepEqual(readConfigDoc(join(dir, "missing.json")), {});
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

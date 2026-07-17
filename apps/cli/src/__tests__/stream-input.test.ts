@@ -135,22 +135,27 @@ test("malformed JSON throws with 1-based line number", async () => {
   });
 });
 
-test("user envelope with no extractable text throws", async () => {
+test("user envelope with no content is skipped, not an error", async () => {
   const input = JSON.stringify({ type: "user", message: { role: "user" } }) + "\n";
-  await assert.rejects(collect([input]), (err: unknown) => {
-    assert.ok(err instanceof Error);
-    assert.match(err.message, /no extractable text/);
-    assert.match(err.message, /line 1/);
-    return true;
-  });
+  assert.deepEqual(await collect([input]), []);
 });
 
-test("user envelope with empty text content throws", async () => {
+test("structured user turn with only non-text blocks (tool_result/image) is skipped", async () => {
+  // A replayed transcript legitimately carries user turns whose content is a
+  // tool_result or image — skip them rather than aborting the whole run.
   const input =
     JSON.stringify({
       type: "user",
-      message: { role: "user", content: [{ type: "image", source: "x" }] },
-    }) + "\n";
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "x" }] },
+    }) +
+    "\n" +
+    JSON.stringify({ type: "user", text: "after the tool result" }) +
+    "\n";
+  assert.deepEqual(await collect([input]), ["after the tool result"]);
+});
+
+test("an EXPLICIT empty-text simple form is still an error", async () => {
+  const input = JSON.stringify({ type: "user", text: "" }) + "\n";
   await assert.rejects(collect([input]), (err: unknown) => {
     assert.ok(err instanceof Error);
     assert.match(err.message, /no extractable text/);

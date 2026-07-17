@@ -13,7 +13,7 @@ export function registerConfigCommands(program: Command): void {
     .command("set")
     .argument(
       "<key>",
-      "apiKey | model | baseUrl | runtimeBin | commandAllowlist | models | sandbox | compaction | thinking | reasoningEffort",
+      "apiKey | model | baseUrl | runtimeBin | commandAllowlist | sandbox | compaction | thinking | reasoningEffort",
     )
     .argument("<value>")
     .option("-g, --global", "write to your user config (~/.seekforge/config.json) instead of the project")

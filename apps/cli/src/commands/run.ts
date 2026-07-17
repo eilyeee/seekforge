@@ -83,6 +83,14 @@ export type RunOptions = {
    * are absent/non-positive.
    */
   maxCostUsd?: number;
+  /**
+   * Suppress the final result envelope on stdout even in a machine format.
+   * The scheduler uses `outputFormat: "json"` only to force confirm-auto-deny
+   * (headless ticks must never block on a prompt) — it does NOT want the
+   * envelope printed into its own output, which would corrupt `schedule run
+   * --json` (two JSON objects per job) and clutter the human view.
+   */
+  suppressResult?: boolean;
 };
 
 /**
@@ -400,6 +408,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
   // Emits the final Claude-compatible result envelope: pretty-printed for `json`,
   // one JSONL line (via the stream mapper) for `stream-json`. No-op otherwise.
   const emitResult = (sessionId: string | undefined): void => {
+    if (opts.suppressResult) return;
     if (format !== "json" && format !== "stream-json") return;
     const input = {
       ...(finalReport ? { report: finalReport } : {}),

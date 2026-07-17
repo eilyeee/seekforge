@@ -43,10 +43,12 @@ function snippet(line: string): string {
 
 /**
  * Extract the user text from a parsed envelope, or `null` if the envelope is
- * not a user turn (and should therefore be skipped silently).
+ * not a user turn OR is a structured user turn with no text block (e.g. a
+ * replayed transcript's `tool_result` user turn) — both are skipped silently.
  *
- * Returns the empty string for a user envelope that has no extractable text;
- * the caller turns that into a thrown error (empty user text is invalid).
+ * The empty string is only returned for an EXPLICIT empty-text simple form
+ * (`{type:"user", text:""}` or string content ""), which the caller treats as
+ * a thrown error.
  */
 function extractUserText(value: unknown): string | null {
   if (typeof value !== "object" || value === null) return null;
@@ -71,12 +73,14 @@ function extractUserText(value: unknown): string | null {
         const b = block as ContentBlock;
         if (b.type === "text" && typeof b.text === "string") out += b.text;
       }
-      return out;
+      // A structured user turn with only non-text blocks (tool_result, image, …)
+      // is valid in a replayed transcript — skip it rather than erroring.
+      return out === "" ? null : out;
     }
   }
 
-  // A user envelope, but nothing we can read out of it.
-  return "";
+  // A user envelope, but nothing we can read out of it — skip.
+  return null;
 }
 
 /**
