@@ -1,9 +1,10 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import * as config from "../src/config.js";
 import { RunManager, startServer, type RunningServer } from "../src/index.js";
+import { RUNS_LEDGER_COMPACTION_THRESHOLD, RUNS_LEDGER_MAX_RETAINED } from "../src/run-ledger.js";
 import { collectFrames, connectWs, emptyReport, fakeAgentFactory, makeWorkspace, waitUntil } from "./helpers.js";
 
 const TOKEN = "run-test-token";
@@ -75,10 +76,13 @@ describe("append-only run ledger", () => {
     expect(manager.get(workspace, run.runId)).toMatchObject({ status: "queued" });
     expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual([1]);
 
-    // The runs.jsonl ledger repairs its corrupt suffix on the next append (its
-    // longest valid prefix wins), so record state is not frozen after a torn write.
-    manager.update(workspace, run.runId, { status: "running" });
-    expect(manager.get(workspace, run.runId)).toMatchObject({ status: "running" });
+    // The runs.jsonl ledger recovers its corrupt suffix on RESTART (a fresh
+    // RunManager validates the file once on first touch), not on every hot
+    // append — the append path no longer re-scans the whole file (O(N^2)). Its
+    // longest valid prefix wins, so record state is not frozen after a torn write.
+    const restartedLedger = new RunManager();
+    restartedLedger.update(workspace, run.runId, { status: "running" });
+    expect(restartedLedger.get(workspace, run.runId)).toMatchObject({ status: "running" });
 
     // The event log's corrupt suffix is repaired on RESTART: a fresh RunManager
     // (empty in-memory seq) recovers the last seq from the longest valid prefix
@@ -113,6 +117,87 @@ describe("append-only run ledger", () => {
     expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual(
       Array.from({ length: 25 }, (_, i) => i + 1),
     );
+  });
+
+  it("SCH6: appends to runs.jsonl without re-reading+re-validating the whole file each time", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const actualRead = config.readProjectFile;
+    let ledgerReads = 0;
+    const spy = vi.spyOn(config, "readProjectFile").mockImplementation((ws, rel) => {
+      if (rel === ".seekforge/runs.jsonl") ledgerReads++;
+      return actualRead(ws, rel);
+    });
+    try {
+      for (let i = 0; i < 40; i++) manager.create({ workspace, source: "background" });
+    } finally {
+      spy.mockRestore();
+    }
+    // The old append re-read + re-validated the ENTIRE ledger on every append
+    // (O(N^2)). Now only the first touch validates/counts; the other 39 appends
+    // just bump the in-memory line count. Keep ledger reads O(1).
+    expect(ledgerReads).toBeLessThanOrEqual(3);
+    expect(manager.list(workspace).length).toBe(40);
+  });
+
+  it("SCH6: compacts runs.jsonl to the latest record per run once it grows past the threshold", () => {
+    const workspace = makeWorkspace();
+    const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
+    // Seed the append log up to the threshold with distinct, valid records
+    // (increasing updatedAt), so a single further append trips compaction.
+    const base = Date.parse("2020-01-01T00:00:00.000Z");
+    const seeded = Array.from({ length: RUNS_LEDGER_COMPACTION_THRESHOLD }, (_, i) => {
+      const ts = new Date(base + i * 1000).toISOString();
+      return JSON.stringify({
+        runId: `run-seed-${i}`,
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    });
+    mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+    writeFileSync(ledgerPath, `${seeded.join("\n")}\n`);
+
+    const manager = new RunManager();
+    // This create is the (threshold+1)th line → compaction fires.
+    const created = manager.create({ workspace, source: "background" });
+
+    const lines = readFileSync(ledgerPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "").length;
+    // Compaction bounds the log at the retention cap, well below what was written.
+    expect(lines).toBe(RUNS_LEDGER_MAX_RETAINED);
+    expect(lines).toBeLessThan(RUNS_LEDGER_COMPACTION_THRESHOLD);
+    // The newest run (highest updatedAt) is retained and queryable...
+    expect(manager.get(workspace, created.runId)).toMatchObject({ runId: created.runId, status: "queued" });
+    // ...while the oldest seed was evicted as least-recently-updated.
+    expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
+    // Every retained line still parses as a valid ledger record.
+    expect(manager.list(workspace).length).toBe(lines);
+  });
+
+  it("drops the in-memory seq entry once a run reaches a terminal state", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const seqMap = (manager as unknown as { seq: Map<string, number> }).seq;
+
+    const run = manager.create({ workspace, source: "background" });
+    manager.appendFrame(workspace, run.runId, { type: "one" });
+    expect(seqMap.has(run.runId)).toBe(true);
+
+    manager.update(workspace, run.runId, { status: "succeeded" });
+    // Terminal runs must not accumulate forever in the long-lived singleton.
+    expect(seqMap.has(run.runId)).toBe(false);
+
+    // A cancelled run is likewise dropped.
+    const cancelled = manager.create({ workspace, source: "background" });
+    manager.appendFrame(workspace, cancelled.runId, { type: "one" });
+    manager.start(cancelled.runId, workspace, new AbortController());
+    manager.cancel(workspace, cancelled.runId);
+    expect(seqMap.has(cancelled.runId)).toBe(false);
   });
 });
 

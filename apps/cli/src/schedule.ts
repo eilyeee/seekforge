@@ -307,7 +307,8 @@ function parseCronField(raw: string, [lo, hi]: readonly [number, number]): CronF
   for (const part of raw.split(",")) {
     const stepSplit = part.split("/");
     if (stepSplit.length > 2) return null;
-    const step = stepSplit.length === 2 ? decimal(stepSplit[1]!) : 1;
+    const hasExplicitStep = stepSplit.length === 2;
+    const step = hasExplicitStep ? decimal(stepSplit[1]!) : 1;
     if (step === null || step <= 0) return null;
     const rangeRaw = stepSplit[0]!;
     let start: number;
@@ -326,7 +327,11 @@ function parseCronField(raw: string, [lo, hi]: readonly [number, number]): CronF
       const parsed = decimal(rangeRaw);
       if (parsed === null) return null;
       start = parsed;
-      end = start;
+      // Standard cron: a bare number WITH an explicit `/step` means "from N to
+      // the field maximum, stepping" (e.g. `5/15` on minutes = 5,20,35,50). A
+      // bare number with NO step is the single value {N}. The old code always
+      // set end=start, so `5/15` silently collapsed to just {5}.
+      end = hasExplicitStep ? hi : start;
     }
     if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
     if (start < lo || end > hi || start > end) return null;
@@ -391,6 +396,17 @@ function floorMinute(ms: number): number {
 }
 
 /**
+ * A per-job dedup key for the LOCAL wall-clock minute of `date`. Cron fires are
+ * deduped by this key (not by absolute ms) so a DST fall-back — where a given
+ * wall-clock minute like 01:30 recurs at two DIFFERENT absolute instants — does
+ * not fire the same nominal cron time twice. Absolute-ms flooring saw the two
+ * 01:30s as distinct minutes and double-triggered.
+ */
+function wallClockMinuteKey(date: Date): string {
+  return [date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes()].join("-");
+}
+
+/**
  * Whether `job` should run at `now`.
  * - Interval jobs: due when never run, or when `now - lastRunAt >= interval`.
  * - Cron jobs: due when the expression fires at `now` and we haven't already
@@ -414,7 +430,10 @@ export function isDue(job: Job, now: Date): boolean {
   if (!job.lastRunAt) return true;
   const last = Date.parse(job.lastRunAt);
   if (Number.isNaN(last)) return true;
-  return floorMinute(now.getTime()) !== floorMinute(last);
+  // Dedup by LOCAL wall-clock minute, not absolute ms: during a DST fall-back
+  // the same wall-clock minute recurs at two absolute instants, and absolute
+  // flooring would let the cron fire twice for one nominal time.
+  return wallClockMinuteKey(now) !== wallClockMinuteKey(new Date(last));
 }
 
 /** The enabled jobs due at `now`, in registry order. */
@@ -509,12 +528,22 @@ export function removeJob(jobs: Job[], id: string): { jobs: Job[]; removed: bool
   return { jobs: next, removed: next.length !== jobs.length };
 }
 
-/** Set the enabled flag on `id`; returns the new list and the updated job. */
+/**
+ * Set the enabled flag on `id`; returns the new list and the updated job.
+ * Enabling clears any accumulated retry/failure state so a job the user
+ * re-enables (e.g. after fixing what made it fail) starts from a clean slate
+ * rather than immediately tripping the auto-disable failure cap again.
+ */
 export function setEnabled(jobs: Job[], id: string, enabled: boolean): { jobs: Job[]; job?: Job } {
   let updated: Job | undefined;
   const next = jobs.map((j) => {
     if (j.id !== id) return j;
-    updated = { ...j, enabled };
+    if (enabled) {
+      const { failureCount: _failureCount, nextRetryAt: _nextRetryAt, ...rest } = j;
+      updated = { ...rest, enabled: true };
+    } else {
+      updated = { ...j, enabled: false };
+    }
     return updated;
   });
   return { jobs: next, job: updated };
@@ -527,6 +556,15 @@ export function markRun(jobs: Job[], id: string, at: Date): Job[] {
 
 export const MAX_RETRY_BACKOFF_MS = 60 * 60_000;
 
+/**
+ * Consecutive failures after which a job is AUTO-DISABLED instead of retried
+ * again. Without a ceiling a permanently-broken job retried every hour forever,
+ * burning its `maxCostUsd` budget on every tick with no bound on total spend.
+ * Once auto-disabled it only runs again after the user re-enables it (which
+ * also clears the failure counter — see {@link setEnabled}).
+ */
+export const MAX_FAILURE_COUNT = 5;
+
 /** Persist attempt outcome and apply exponential retry backoff after failures. */
 export function markRunResult(jobs: Job[], id: string, at: Date, succeeded: boolean): Job[] {
   return jobs.map((job) => {
@@ -536,6 +574,12 @@ export function markRunResult(jobs: Job[], id: string, at: Date, succeeded: bool
       return { ...rest, lastRunAt: at.toISOString() };
     }
     const failureCount = (job.failureCount ?? 0) + 1;
+    if (failureCount >= MAX_FAILURE_COUNT) {
+      // Give up: stop scheduling retries and disable the job so it can no longer
+      // spend on its own. The failure count is retained for audit/`schedule list`.
+      const { nextRetryAt: _nextRetryAt, ...rest } = job;
+      return { ...rest, lastRunAt: at.toISOString(), failureCount, enabled: false };
+    }
     const delay = Math.min(MAX_RETRY_BACKOFF_MS, 60_000 * 2 ** Math.min(failureCount - 1, 10));
     return {
       ...job,

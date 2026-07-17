@@ -232,8 +232,11 @@ export async function scheduleRunCommand(opts: ScheduleRunOptions, projectPath: 
           mode: job.mode,
           maxCostUsd: job.maxCostUsd,
           // Machine format → confirm auto-denies: no interactive prompt can hang a
-          // headless tick, dangerous stays denied, execute/env auto-deny.
+          // headless tick, dangerous stays denied, execute/env auto-deny. But
+          // suppress its result envelope: the scheduler owns stdout (its own
+          // human lines, or one JSON object per job under --json).
           outputFormat: "json",
+          suppressResult: true,
           // Edit jobs must apply edits without a human; acceptEdits auto-approves
           // ONLY file edits (writes still refuse dangerous, execute/env still deny).
           ...(job.mode === "edit" ? { permissionMode: "acceptEdits" } : {}),

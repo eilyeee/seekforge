@@ -30,6 +30,7 @@ import {
   loadRegistry,
   markRun,
   markRunResult,
+  MAX_FAILURE_COUNT,
   nextRunAt,
   parseCron,
   parseInterval,
@@ -210,6 +211,78 @@ test("failed runs back off exponentially and success clears retry state", () => 
   const passedJob = markRunResult([failedTwice], "j1", new Date("2026-01-01T00:03:00.000Z"), true)[0]!;
   assert.equal(passedJob.failureCount, undefined);
   assert.equal(passedJob.nextRetryAt, undefined);
+});
+
+test("SCH1: a job that keeps failing is auto-disabled once it hits the failure cap", () => {
+  const at = new Date("2026-01-01T00:00:00.000Z");
+  let jobs = [baseJob({ schedule: "0 9 * * *" })];
+  // Fail one short of the cap: still enabled, still retrying.
+  for (let i = 0; i < MAX_FAILURE_COUNT - 1; i++) {
+    jobs = markRunResult(jobs, "j1", at, false);
+    assert.equal(jobs[0]!.enabled, true, `still enabled after ${i + 1} failures`);
+    assert.equal(jobs[0]!.failureCount, i + 1);
+  }
+  // The failure that reaches the cap disables the job and stops scheduling retries.
+  jobs = markRunResult(jobs, "j1", at, false);
+  assert.equal(jobs[0]!.failureCount, MAX_FAILURE_COUNT);
+  assert.equal(jobs[0]!.enabled, false, "auto-disabled at the cap");
+  assert.equal(jobs[0]!.nextRetryAt, undefined, "no further retry scheduled");
+  // A disabled job is never due, so it can no longer spend on its own.
+  assert.equal(isDue(jobs[0]!, new Date("2030-01-01T09:00:00.000Z")), false);
+});
+
+test("SCH1: re-enabling a failed job clears its failure/retry state", () => {
+  const at = new Date("2026-01-01T00:00:00.000Z");
+  let jobs = [baseJob()];
+  for (let i = 0; i < MAX_FAILURE_COUNT; i++) jobs = markRunResult(jobs, "j1", at, false);
+  assert.equal(jobs[0]!.enabled, false);
+  const { jobs: reenabled, job } = setEnabled(jobs, "j1", true);
+  assert.equal(job?.enabled, true);
+  assert.equal(reenabled[0]!.failureCount, undefined, "failure count reset on re-enable");
+  assert.equal(reenabled[0]!.nextRetryAt, undefined);
+});
+
+test("SCH2: a bare number with an explicit /step expands to the field maximum", () => {
+  // Standard cron: `5/15` on minutes = 5-59/15 = 5,20,35,50 (not just {5}).
+  assert.deepEqual(parseCron("5/15 * * * *")!.minute, [5, 20, 35, 50]);
+  assert.equal(cronMatches("5/15 * * * *", new Date(2024, 0, 1, 12, 5)), true);
+  assert.equal(cronMatches("5/15 * * * *", new Date(2024, 0, 1, 12, 20)), true);
+  assert.equal(cronMatches("5/15 * * * *", new Date(2024, 0, 1, 12, 50)), true);
+  assert.equal(cronMatches("5/15 * * * *", new Date(2024, 0, 1, 12, 35)), true);
+  assert.equal(cronMatches("5/15 * * * *", new Date(2024, 0, 1, 12, 6)), false);
+  // Hours field: `2/6` = 2,8,14,20.
+  assert.deepEqual(parseCron("0 2/6 * * *")!.hour, [2, 8, 14, 20]);
+  // A bare number WITHOUT a step is still the single value.
+  assert.deepEqual(parseCron("5 * * * *")!.minute, [5]);
+  assert.equal(isValidSchedule("5/15 * * * *"), true);
+});
+
+test("SCH3: a cron fire is not repeated for the same wall-clock minute across a DST fall-back", () => {
+  const priorTz = process.env["TZ"];
+  process.env["TZ"] = "America/New_York";
+  try {
+    // 2024-11-03: clocks fall back 02:00→01:00, so local 01:30 occurs twice —
+    // once at 05:30Z (EDT, -4) and again at 06:30Z (EST, -5).
+    const firstOccurrence = new Date("2024-11-03T05:30:00.000Z");
+    const secondOccurrence = new Date("2024-11-03T06:30:00.000Z");
+    // Guard: only meaningful if this runtime honors the TZ override.
+    assert.equal(firstOccurrence.getHours(), 1);
+    assert.equal(secondOccurrence.getHours(), 1);
+    assert.notEqual(firstOccurrence.getTime(), secondOccurrence.getTime());
+
+    const job = baseJob({ schedule: "30 1 * * *", lastRunAt: undefined });
+    assert.equal(isDue(job, firstOccurrence), true);
+    const ranOnce = markRunResult([job], "j1", firstOccurrence, true)[0]!;
+    // The second, absolutely-distinct 01:30 must NOT fire again (same wall clock).
+    assert.equal(isDue(ranOnce, secondOccurrence), false);
+    // A genuinely different wall-clock minute (next day 01:30, now EST = 06:30Z)
+    // still fires.
+    assert.equal(new Date("2024-11-04T06:30:00.000Z").getHours(), 1);
+    assert.equal(isDue(ranOnce, new Date("2024-11-04T06:30:00.000Z")), true);
+  } finally {
+    if (priorTz === undefined) delete process.env["TZ"];
+    else process.env["TZ"] = priorTz;
+  }
 });
 
 test("nextRunAt handles intervals, cron, disabled jobs, and retry floors", () => {

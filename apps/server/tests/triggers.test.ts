@@ -357,6 +357,47 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
     expect(duplicate.status).toBe(409);
   });
 
+  it("SCH7: dedups a GitHub delivery id even after a server restart (persisted store)", async () => {
+    const payload = JSON.stringify({ action: "opened", repository: { full_name: "acme/widgets" } });
+    const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
+    const headers = {
+      "content-type": "application/json",
+      "x-hub-signature-256": signature,
+      "x-github-delivery": "delivery-persisted-across-restart",
+      "x-github-event": "pull_request",
+    };
+    const first = await fetch(`${base}/api/triggers/ci`, { method: "POST", headers, body: payload });
+    expect(first.status).toBe(202);
+
+    // A brand-new server instance (fresh in-memory state) on the SAME workspace
+    // must still reject the already-processed delivery — the dedup record is
+    // persisted under .seekforge/, not held only in memory.
+    const restartAgent = fakeAgentFactory(async function* () {
+      yield { type: "session.created", sessionId: "trig-session-restart" };
+      yield {
+        type: "session.completed",
+        report: {
+          summary: "done",
+          changedFiles: [],
+          commandsRun: [],
+          verification: "no commands were run",
+          usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        },
+      };
+    });
+    const restarted = await startServer({ workspace, port: 0, token: TOKEN, createAgent: restartAgent });
+    try {
+      const replayAfterRestart = await fetch(`http://127.0.0.1:${restarted.port}/api/triggers/ci`, {
+        method: "POST",
+        headers,
+        body: payload,
+      });
+      expect(replayAfterRestart.status).toBe(409);
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it("accepts a signed GitHub delivery whose body exceeds the default 1 MB cap", async () => {
     // Real GitHub deliveries (large pushes / PRs) can reach 25 MB; the default
     // readBody cap of 1 MB used to 413 them before the HMAC even ran.

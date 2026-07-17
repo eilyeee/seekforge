@@ -151,9 +151,23 @@ export function readRunEvents(workspace: string, id: string, afterSeq = 0): RunE
   return events;
 }
 
+/**
+ * Once the append log for a workspace exceeds this many lines we compact it —
+ * the ledger is append-only, so a long-lived server would otherwise grow it
+ * without bound (every status change writes a fresh line).
+ */
+export const RUNS_LEDGER_COMPACTION_THRESHOLD = 1000;
+
+/** After compaction, retain at most this many runs (most-recently-updated). */
+export const RUNS_LEDGER_MAX_RETAINED = 500;
+
+type LedgerState = { lines: number };
+
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
   private readonly seq = new Map<string, number>();
+  /** Per-workspace validated line count; absence means "not yet touched this process". */
+  private readonly ledger = new Map<string, LedgerState>();
   private started = 0;
   private completed = 0;
   private failed = 0;
@@ -204,6 +218,9 @@ export class RunManager {
     this.append(next);
     if (patch.status && patch.status !== "queued" && patch.status !== "running") {
       this.active.delete(id);
+      // Terminal run: drop its in-memory seq so the map does not grow without
+      // bound over the server's lifetime (one entry per runId ever seen).
+      this.seq.delete(id);
       if (current.status === "queued" || current.status === "running") {
         if (patch.status === "succeeded") this.completed += 1;
         if (patch.status === "failed") this.failed += 1;
@@ -287,8 +304,49 @@ export class RunManager {
   }
 
   private append(record: RunRecord): void {
-    repairJsonLines(record.workspace, ".seekforge/runs.jsonl", (value) => parseRecord(value) !== undefined);
+    // Hot path: trust the in-memory validated line count and only append. The
+    // one-time validation happens on this process's FIRST touch of the
+    // workspace ledger (see ensureLedger), which also handles crash recovery —
+    // after a restart the cache is empty, so we repair any torn/forged suffix
+    // before continuing. Re-reading + re-validating the whole file on every
+    // append made an N-record ledger O(N^2).
+    const state = this.ensureLedger(record.workspace);
     appendProjectFile(record.workspace, ".seekforge/runs.jsonl", `${JSON.stringify(record)}\n`);
+    state.lines += 1;
+    if (state.lines > RUNS_LEDGER_COMPACTION_THRESHOLD) this.compactLedger(record.workspace, state);
+  }
+
+  /** Validate/repair the append log once per process, caching its line count. */
+  private ensureLedger(workspace: string): LedgerState {
+    let state = this.ledger.get(workspace);
+    if (state === undefined) {
+      repairJsonLines(workspace, ".seekforge/runs.jsonl", (value) => parseRecord(value) !== undefined);
+      state = { lines: this.countLedgerLines(workspace) };
+      this.ledger.set(workspace, state);
+    }
+    return state;
+  }
+
+  private countLedgerLines(workspace: string): number {
+    const raw = readProjectFile(workspace, ".seekforge/runs.jsonl");
+    if (raw === undefined) return 0;
+    let count = 0;
+    for (const line of raw.split("\n")) if (line.trim() !== "") count += 1;
+    return count;
+  }
+
+  /**
+   * Collapse the append log to one record per run (its latest state), keeping
+   * only the most-recently-updated {@link RUNS_LEDGER_MAX_RETAINED} runs, then
+   * rewrite it chronologically. Crash-recovery semantics are preserved: the
+   * rewritten file is exactly the latest valid state readRunLedger would report.
+   */
+  private compactLedger(workspace: string, state: LedgerState): void {
+    const retained = readRunLedger(workspace).slice(0, RUNS_LEDGER_MAX_RETAINED);
+    const ordered = [...retained].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+    const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
+    writeProjectFileAtomic(workspace, ".seekforge/runs.jsonl", serialized);
+    state.lines = ordered.length;
   }
 
   private lastSeq(workspace: string, id: string): number {

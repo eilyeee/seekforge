@@ -135,6 +135,77 @@ export function buildWorktreeReuseArgs(path: string, branch: string): string[] {
   return ["worktree", "add", path, branch];
 }
 
+/** PURE: enumerate every registered worktree in a machine-readable form. */
+export function buildWorktreeListArgs(): string[] {
+  return ["worktree", "list", "--porcelain"];
+}
+
+/** PURE: drop worktree registrations whose directories no longer exist. */
+export function buildWorktreePruneArgs(): string[] {
+  return ["worktree", "prune"];
+}
+
+/** The mkdtemp prefix for the isolated worktrees `seekforge resolve` creates. */
+export const TEMP_WORKTREE_PREFIX = "seekforge-resolve-";
+
+/** A single entry of `git worktree list --porcelain` (branch sans refs/heads/). */
+export interface WorktreeEntry {
+  path: string;
+  branch?: string;
+}
+
+/**
+ * PURE: parse `git worktree list --porcelain` into entries. Blocks are blank
+ * line separated; each has a `worktree <path>` line and optionally a
+ * `branch refs/heads/<name>` line (detached checkouts have none). The branch is
+ * normalized to drop the `refs/heads/` prefix.
+ */
+export function parseWorktreeList(porcelain: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let current: WorktreeEntry | undefined;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length).trim() };
+      entries.push(current);
+    } else if (current && line.startsWith("branch ")) {
+      current.branch = line
+        .slice("branch ".length)
+        .trim()
+        .replace(/^refs\/heads\//, "");
+    }
+  }
+  return entries;
+}
+
+/** PURE: is `path` one of resolve's own temp worktrees (safe to force-remove)? */
+export function isSeekforgeTempWorktree(path: string): boolean {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  return base.startsWith(TEMP_WORKTREE_PREFIX);
+}
+
+/**
+ * PURE: the paths of resolve's OWN stale temp worktrees that still hold
+ * `branch` checked out. Reusing an issue branch fails ("branch already checked
+ * out") until these are removed; we only ever target our own temp worktrees so
+ * a user's real worktree of that branch is never touched.
+ */
+export function staleWorktreesForBranch(entries: readonly WorktreeEntry[], branch: string): string[] {
+  return entries.filter((e) => e.branch === branch && isSeekforgeTempWorktree(e.path)).map((e) => e.path);
+}
+
+/** How long `--wait-ci` waits on `gh pr checks --watch` before giving up (ms). */
+export const PR_CHECKS_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * PURE: does `gh pr checks` output mean "this PR has NO checks configured"
+ * (as opposed to a check actually failing)? `gh` exits non-zero in both cases,
+ * so the message is the only signal — a PR with zero checks must not be treated
+ * as a CI failure.
+ */
+export function isNoChecksReported(output: string): boolean {
+  return /no checks reported/i.test(output);
+}
+
 /** PURE: test whether the issue branch already exists locally. */
 export function buildBranchExistsArgs(branch: string): string[] {
   return ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`];

@@ -30,10 +30,18 @@ import {
   buildReviewTaskPrompt,
   buildTaskPrompt,
   buildWorktreeAddArgs,
+  buildWorktreeListArgs,
+  buildWorktreePruneArgs,
   buildWorktreeRemoveArgs,
   buildWorktreeReuseArgs,
   formatCommand,
+  isNoChecksReported,
+  isSeekforgeTempWorktree,
   parseIssueNumber,
+  parseWorktreeList,
+  staleWorktreesForBranch,
+  PR_CHECKS_TIMEOUT_MS,
+  TEMP_WORKTREE_PREFIX,
   type IssueRef,
 } from "../resolve.js";
 
@@ -107,6 +115,52 @@ test("bounds CI feedback and fetches only failed logs", () => {
   assert.ok(prompt.includes("[truncated]"));
   assert.ok(prompt.length < 21_000);
   assert.ok(prompt.includes("untrusted-ci-log"));
+});
+
+// --- SCH4: stale worktree detection for branch reuse ------------------------
+test("SCH4: parses git worktree list --porcelain into path+branch entries", () => {
+  assert.deepEqual(buildWorktreeListArgs(), ["worktree", "list", "--porcelain"]);
+  assert.deepEqual(buildWorktreePruneArgs(), ["worktree", "prune"]);
+  const porcelain = [
+    "worktree /repo",
+    "HEAD 1111111111111111111111111111111111111111",
+    "branch refs/heads/main",
+    "",
+    `worktree /tmp/${TEMP_WORKTREE_PREFIX}abc123`,
+    "HEAD 2222222222222222222222222222222222222222",
+    "branch refs/heads/seekforge/issue-42",
+    "",
+    "worktree /tmp/detached-review",
+    "HEAD 3333333333333333333333333333333333333333",
+    "detached",
+    "",
+  ].join("\n");
+  assert.deepEqual(parseWorktreeList(porcelain), [
+    { path: "/repo", branch: "main" },
+    { path: `/tmp/${TEMP_WORKTREE_PREFIX}abc123`, branch: "seekforge/issue-42" },
+    { path: "/tmp/detached-review" },
+  ]);
+});
+
+test("SCH4: only resolve's own temp worktrees for the branch are flagged stale", () => {
+  assert.equal(isSeekforgeTempWorktree(`/tmp/${TEMP_WORKTREE_PREFIX}xyz`), true);
+  assert.equal(isSeekforgeTempWorktree("/home/me/my-checkout"), false);
+  const entries = [
+    { path: "/repo", branch: "main" },
+    { path: `/tmp/${TEMP_WORKTREE_PREFIX}stale`, branch: "seekforge/issue-42" },
+    // A user's OWN worktree of the same branch must never be flagged for removal.
+    { path: "/home/me/issue-42-checkout", branch: "seekforge/issue-42" },
+  ];
+  assert.deepEqual(staleWorktreesForBranch(entries, "seekforge/issue-42"), [`/tmp/${TEMP_WORKTREE_PREFIX}stale`]);
+  assert.deepEqual(staleWorktreesForBranch(entries, "seekforge/issue-99"), []);
+});
+
+// --- SCH5: wait-ci timeout + "no checks" is not a failure -------------------
+test("SCH5: distinguishes 'no checks reported' from a real check failure", () => {
+  assert.equal(isNoChecksReported("no checks reported on the 'seekforge/issue-42' branch"), true);
+  assert.equal(isNoChecksReported("Some checks were not successful"), false);
+  assert.equal(isNoChecksReported(""), false);
+  assert.ok(PR_CHECKS_TIMEOUT_MS > 0 && Number.isFinite(PR_CHECKS_TIMEOUT_MS));
 });
 
 // --- branch name ------------------------------------------------------------

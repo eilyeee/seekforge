@@ -29,10 +29,16 @@ import {
   buildReviewTaskPrompt,
   buildTaskPrompt,
   buildWorktreeAddArgs,
+  buildWorktreeListArgs,
+  buildWorktreePruneArgs,
   buildWorktreeRemoveArgs,
   buildWorktreeReuseArgs,
   formatCommand,
+  isNoChecksReported,
   parseIssueNumber,
+  parseWorktreeList,
+  staleWorktreesForBranch,
+  PR_CHECKS_TIMEOUT_MS,
   type IssueRef,
   type ReviewContext,
 } from "../resolve.js";
@@ -56,19 +62,38 @@ export type ResolveReviewOptions = {
   waitCi?: boolean;
 };
 
-type Result = { code: number; stdout: string; stderr: string; missing: boolean };
+type Result = { code: number; stdout: string; stderr: string; missing: boolean; timedOut: boolean };
 
-function run(bin: string, args: string[], cwd = process.cwd()): Result {
-  const result = spawnSync(bin, args, { cwd, encoding: "utf8" });
+function run(bin: string, args: string[], cwd = process.cwd(), timeoutMs?: number): Result {
+  const result = spawnSync(bin, args, { cwd, encoding: "utf8", ...(timeoutMs ? { timeout: timeoutMs } : {}) });
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    return { code: 127, stdout: "", stderr: "", missing: true };
+    return { code: 127, stdout: "", stderr: "", missing: true, timedOut: false };
   }
+  const timedOut = Boolean(result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT");
   return {
     code: result.status ?? 1,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     missing: false,
+    timedOut,
   };
+}
+
+/**
+ * Remove resolve's OWN stale temp worktrees still holding `branch` checked out.
+ * A previous failed / `--dry-run` run leaves a temp worktree registered with the
+ * issue branch checked out; `git worktree add <path> <branch>` (the reuse path)
+ * then fails with "branch already checked out". We prune vanished registrations,
+ * then force-remove any lingering seekforge temp worktree for this branch so the
+ * reuse can proceed. A user's own worktree of the branch is never touched.
+ */
+function pruneStaleIssueWorktrees(projectPath: string, branch: string): void {
+  run("git", buildWorktreePruneArgs(), projectPath);
+  const listed = run("git", buildWorktreeListArgs(), projectPath);
+  if (listed.code !== 0) return;
+  for (const path of staleWorktreesForBranch(parseWorktreeList(listed.stdout), branch)) {
+    removeWorktree(projectPath, path, true);
+  }
 }
 
 function prerequisites(projectPath: string): boolean {
@@ -200,6 +225,10 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
   const useWorktree = opts.worktree ?? true;
   const workPath = useWorktree ? createTempWorktreePath() : projectPath;
   const reuseBranch = existingBranch(projectPath, branch);
+  // A retained temp worktree from a prior failed/dry run keeps this branch
+  // checked out, which blocks the reuse `git worktree add`. Clear our own stale
+  // worktrees for the branch first (SCH4).
+  if (useWorktree && reuseBranch) pruneStaleIssueWorktrees(projectPath, branch);
   const branchResult = useWorktree
     ? run(
         "git",
@@ -272,16 +301,29 @@ export async function resolveCommand(issueArg: string, opts: ResolveOptions): Pr
     const url = pr.stdout.trim();
     console.log(`\n✓ opened PR for issue #${issue.number}${url ? `: ${url}` : ""}`);
     if (opts.waitCi) {
-      const checks = run("gh", buildPrChecksArgs(url || branch), workPath);
-      if (checks.code !== 0) {
+      const checks = run("gh", buildPrChecksArgs(url || branch), workPath, PR_CHECKS_TIMEOUT_MS);
+      if (checks.timedOut) {
+        console.log(
+          `\n⚠ timed out after ${PR_CHECKS_TIMEOUT_MS / 60_000}m waiting for PR checks; the PR is already open.`,
+        );
+        console.log(`  inspect its checks with: gh pr checks ${url || branch}`);
+      } else if (checks.code !== 0 && isNoChecksReported(`${checks.stdout}\n${checks.stderr}`)) {
+        // No checks configured is NOT a failure — do not enter CI repair.
+        console.log("\n✓ PR opened; no CI checks are configured for this PR.");
+      } else if (checks.code !== 0) {
         console.error("PR checks failed; attempting one bounded repair from failed-step logs.");
         const repaired = await repairFailedCi(projectPath, workPath, branch, opts.maxCost, opts.model);
-        if (!repaired || run("gh", buildPrChecksArgs(url || branch), workPath).code !== 0) {
+        const recheck = repaired
+          ? run("gh", buildPrChecksArgs(url || branch), workPath, PR_CHECKS_TIMEOUT_MS)
+          : undefined;
+        if (!repaired || recheck!.timedOut || recheck!.code !== 0) {
           fail("PR checks failed after the bounded repair attempt", { hint: checks.stderr.trim() || undefined });
           return;
         }
+        console.log("✓ PR checks passed");
+      } else {
+        console.log("✓ PR checks passed");
       }
-      console.log("✓ PR checks passed");
     }
     removeOnExit = useWorktree;
   } finally {
@@ -356,8 +398,12 @@ export async function resolveReviewCommand(prArg: string, opts: ResolveReviewOpt
       }
     }
     if (opts.waitCi) {
-      const checks = run("gh", buildPrChecksArgs(prArg), workPath);
-      if (checks.code !== 0) {
+      const checks = run("gh", buildPrChecksArgs(prArg), workPath, PR_CHECKS_TIMEOUT_MS);
+      if (checks.timedOut) {
+        console.log(
+          `\n⚠ timed out after ${PR_CHECKS_TIMEOUT_MS / 60_000}m waiting for PR checks; review fixes are pushed.`,
+        );
+      } else if (checks.code !== 0 && !isNoChecksReported(`${checks.stdout}\n${checks.stderr}`)) {
         fail("PR checks failed or could not be completed", { hint: checks.stderr.trim() || undefined });
         return;
       }
