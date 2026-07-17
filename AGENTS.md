@@ -96,7 +96,6 @@ backend in `crates/runtime`.
 - Unless the user explicitly asks otherwise, finish verified modifications with
   a commit, merge them into `main` when working on another branch, and push when
   a remote is configured.
-- Never add `Co-Authored-By` trailers to commit messages.
 
 ### Commit discipline
 
