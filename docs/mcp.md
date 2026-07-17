@@ -1,5 +1,7 @@
 # MCP (Model Context Protocol) Guide
 
+> **English** | [简体中文](mcp.zh-CN.md)
+
 SeekForge implements both sides of the Model Context Protocol (MCP):
 
 - **Client mode** — connect to external MCP servers (stdio or Streamable HTTP)

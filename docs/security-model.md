@@ -1,5 +1,7 @@
 # Security Model
 
+> **English** | [简体中文](security-model.zh-CN.md)
+
 SeekForge runs an autonomous agent against a real workspace, so its value rests
 on a security and auditability moat: the model may *propose* anything, but a
 deterministic policy layer decides what actually runs, and every action is

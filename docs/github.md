@@ -1,5 +1,7 @@
 # Autonomous GitHub issue → PR (`seekforge resolve`)
 
+> **English** | [简体中文](github.zh-CN.md)
+
 `seekforge resolve <issue>` reads a GitHub issue, fixes it on a fresh work
 branch with a headless, cost-bounded agent run, verifies the result, and opens a
 draft pull request — the OpenHands-style "give it an issue, get a PR" flow.

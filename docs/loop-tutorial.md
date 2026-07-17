@@ -1,284 +1,375 @@
-# 循环模式教程（Auto-Loop）
+# Loop Mode Tutorial (Auto-Loop)
 
-> 面向使用者与二次开发者的实操教程。想看架构与不变量约束，读
-> [`loop-engineering.md`](./loop-engineering.md)；本文只讲“怎么用、每一步在发生什么、
-> 出问题怎么办”。
+> **English** | [简体中文](loop-tutorial.zh-CN.md)
 
-## 1. 循环模式是什么
+> A hands-on tutorial for users and integrators. For the architecture and its
+> invariants, read [`loop-engineering.md`](./loop-engineering.md); this page
+> covers how to use loops, what happens at each step, and how to recover when
+> something goes wrong.
 
-普通一次 `run` 是「跑一遍 agent，结束」。**循环模式**在它之上加了一层编排：
+## 1. What loop mode is
+
+A plain `run` executes the agent once and stops. **Loop mode** adds an
+orchestration layer on top:
 
 ```
-run → verify → 还没绿？带着失败信息再 run → verify → …  直到通过或触发护栏
+run → verify → still red? run again with the failure details → verify → …
+until it passes or a guardrail trips
 ```
 
-一句话：**给一个任务和一条“怎样算成功”的命令，让 agent 自己反复改直到那条命令退出码为 0。**
+In one sentence: **give it a task and a command that defines success, and the
+agent keeps editing until that command exits 0.**
 
-它适合“有明确成功判据、需要多轮试错”的活：
+It fits work with an objective success criterion that needs several rounds of
+trial and error:
 
-- 把一批失败的测试改绿：`--verify "pnpm test"`
-- 修到类型检查通过：`--verify "pnpm typecheck"`
-- 修到构建成功：`--verify "cargo build"`
-- 修到 lint 干净：`--verify "pnpm lint"`
+- Turn a batch of failing tests green: `--verify "pnpm test"`
+- Fix until the type check passes: `--verify "pnpm typecheck"`
+- Fix until the build succeeds: `--verify "cargo build"`
+- Fix until lint is clean: `--verify "pnpm lint"`
 
-不适合没有客观判据的活（“把文档写好看点”）——因为循环靠 `verify` 命令的退出码来判断是否结束，没有判据就没有终止条件。
+It does not fit work without an objective criterion ("make the docs nicer") —
+the loop decides completion by the verify command's exit code, and without a
+criterion there is no termination condition.
 
-它**不是**什么：
+What it is **not**:
 
-- 不是 `loop.ts` 里那个「一次 run 内部的工具调用循环」。那是单次运行的内循环，本文说的是它**外面**的编排层（`packages/core/src/agent/auto-loop.ts`）。
-- 不是 Evolution（那个是提议规则/技能变更给人审）。循环模式只干一件事：把一个任务推到绿。
+- Not the tool-call loop inside `loop.ts` — that is the inner loop of a single
+  run. This page is about the orchestration layer *around* it
+  (`packages/core/src/agent/auto-loop.ts`).
+- Not Evolution (which proposes rule/skill changes for a human to accept).
+  Loop mode does exactly one thing: drive one task to green.
 
-## 2. 心智模型：一个任务、一个 session、多次迭代
+## 2. Mental model: one task, one session, many iterations
 
-关键设计：**整个循环是同一个 agent session**，每次迭代都 resume 上一次的会话。
+The key design: **the whole loop is one agent session**; every iteration
+resumes the previous conversation.
 
-- 好处：完整上下文连续，全过程是**一条可审计的 trace**（存在 `.seekforge/sessions/<id>/`）。
-- 编排状态（任务、verify 命令、迭代数、累计花费、session id、终态）单独存在
-  `.seekforge/loops/<loop-id>.json`，它只**指向**那条 session，不复制对话内容。
+- Benefit: the context stays continuous, and the entire process is **one
+  auditable trace** (stored under `.seekforge/sessions/<id>/`).
+- The orchestration state (task, verify command, iteration count, cumulative
+  cost, session id, terminal status) lives separately in
+  `.seekforge/loops/<loop-id>.json` — it **points at** the session and never
+  duplicates the conversation.
 
-三份存储，各管各的：
+Three stores, each with its own job:
 
-| 存储 | 路径 | 内容 |
+| Store | Path | Contents |
 |---|---|---|
-| Loop 状态 | `.seekforge/loops/<id>.json` | 编排层**快照**：任务、verify、迭代/预算/花费、终态（每次进展后覆盖写） |
-| Loop 日志 | `.seekforge/loops/<id>.log` | 事件流的**追加式** JSONL 历史（每行一个带时间戳的事件，resume 续写同一份） |
-| Session trace | `.seekforge/sessions/<id>/` | agent 对话与工具调用的真相来源 |
+| Loop state | `.seekforge/loops/<id>.json` | Orchestration **snapshot**: task, verify, iterations/budget/cost, terminal status (overwritten on each step of progress) |
+| Loop log | `.seekforge/loops/<id>.log` | **Append-only** JSONL history of the event stream (one timestamped event per line; resume keeps appending to the same file) |
+| Session trace | `.seekforge/sessions/<id>/` | Source of truth for the agent conversation and tool calls |
 
-> 状态 JSON 是快照（只有当前值），Loop 日志是历史（能逐行回放每一轮跑了什么）。两者互补。
+> The state JSON is a snapshot (current values only); the loop log is history
+> (replay what every iteration did, line by line). They complement each other.
 
-## 3. 快速上手（CLI）
+## 3. Quick start (CLI)
 
-最小用法——一个任务 + 一条判据命令：
-
-```bash
-seekforge loop "修好 parser 的失败测试，不要削弱断言" --verify "pnpm test"
-```
-
-发生的事：
-
-1. **预检**：先跑一次 `pnpm test`。如果已经是绿的，直接 `passed` 收工，一个 agent 迭代都不花。
-2. 没绿 → 进入循环：把任务交给 agent 跑一轮（`acceptEdits` 模式，自动应用文件编辑）。
-3. 跑完再跑一次 `pnpm test`，实时把输出流式打印出来。
-4. 还红 → 把失败信息塞进下一轮 prompt（“`pnpm test` 仍然失败：…，修根因让它通过”），继续。
-5. 直到通过，或者撞上护栏（见第 5 节）。
-
-常用参数：
+The minimal form — one task plus one success-criterion command:
 
 ```bash
-seekforge loop "<任务>" --verify "<命令>" \
-  [--max-iters <n>]     # 最多迭代几轮，默认 8，硬上限 100
-  [--budget <usd>]      # 累计花费达到这个数就停
-  [--worktree [name]]   # 在隔离的 git worktree 里跑（见第 7 节）
-  [-y]                  # 只是消掉“会自动批准编辑”的提示，不改变行为
-  [-m <model>]          # 覆盖模型
+seekforge loop "Fix the failing parser tests without weakening assertions" --verify "pnpm test"
 ```
 
-> ⚠️ **循环天生是自主的**：每轮都用 `approvalMode: "acceptEdits"`，文件编辑自动批准，
-> 不会逐个弹确认。危险命令仍被 denylist 拒绝，工作目录的访问授权仍要过（和 `run` 同一道门）。
-> 换句话说：它会自己改你的文件。要么在干净的 git 状态下跑，要么用 `--worktree` 隔离。
+What happens:
 
-**退出码**：只有 `verify` 真的通过了才返回 0。其它终态都是非 0。
+1. **Pre-check**: run `pnpm test` once. Already green? Finish as `passed`
+   without spending a single agent iteration.
+2. Red → enter the loop: hand the task to the agent for one run
+   (`acceptEdits` mode, file edits auto-approved).
+3. Run `pnpm test` again, streaming its output live.
+4. Still red → feed the failure into the next round's prompt
+   ("`pnpm test` still fails: …, fix the root cause"), continue.
+5. Until it passes, or a guardrail trips (see section 5).
 
-## 4. 一次迭代内部发生了什么
+Common options:
 
-对照 `auto-loop.ts` 的主循环，每一轮按顺序做这些事：
+```bash
+seekforge loop "<task>" --verify "<command>" \
+  [--max-iters <n>]     # max iterations, default 8, hard cap 100
+  [--budget <usd>]      # stop once cumulative cost reaches this
+  [--worktree [name]]   # run in an isolated git worktree (section 7)
+  [-y]                  # only silences the "auto-approves edits" note
+  [-m <model>]          # model override
+```
 
-1. **进入前检查护栏**：收到中止信号→`cancelled`；累计花费已达预算→`budget`。
-2. 发 `iteration.start` 事件。
-3. **构造 prompt**：第一轮用原始任务；之后用「verify 仍失败 + 结构化诊断 + 输出尾巴 + 修根因」。
-4. **跑一轮 agent**（resume 同一 session）。期间：
-   - `session.created`：第一次拿到 session id，落盘。
-   - `usage.updated`：累计花费实时落盘；**一旦达到预算立刻 abort 当前这轮**（失败的
-     run 不发 FinalReport，但它烧的钱也算数，所以在这里就掐，避免反复昂贵失败悄悄超支）。
-5. **迭代计数 +1，落盘**，发 `run.completed`（带本轮花费）。
-6. **验证**：再跑一次 verify 命令，输出通过 `verify.output` 事件流式吐出。
-7. 解析诊断 + 计算工作区指纹，原子落盘，发 `verify` 事件。
-8. **退出码 0 → `passed`，收工。** 否则继续检查护栏（见下节），没踩线就进入下一轮。
+> ⚠️ **The loop is inherently autonomous**: every run uses
+> `approvalMode: "acceptEdits"` — file edits are auto-approved with no
+> per-edit prompt. Dangerous commands are still refused by the denylist, and
+> the workspace access consent gate (the same one `run` uses) still applies.
+> In other words: it will edit your files on its own. Run it on a clean git
+> state, or isolate it with `--worktree`.
 
-> 迭代计数只在 agent run **完成后**才 +1。所以如果在一轮中途崩溃，resume 会重跑这一轮而
-> **不消耗**一个迭代额度——同时复用已有 session、并把已观测到的花费算进账。
+**Exit code**: 0 only when verify actually passed. Every other terminal
+status is non-zero.
 
-## 5. 护栏与六种终态
+## 4. Inside one iteration
 
-循环**不会无限跑**。每轮开始前、以及每次验证后，按顺序检查这些停止条件：
+Following the main loop in `auto-loop.ts`, each round does, in order:
 
-| 状态 | 触发条件 |
+1. **Guardrail check on entry**: abort signal received → `cancelled`;
+   cumulative cost reached the budget → `budget`.
+2. Emit the `iteration.start` event.
+3. **Build the prompt**: the original task on the first round; afterwards
+   "verify still fails + structured diagnostics + output tail + fix the root
+   cause".
+4. **Run the agent once** (resuming the same session). Meanwhile:
+   - `session.created`: capture the session id on first sight, persist it.
+   - `usage.updated`: persist cumulative cost as it updates; **the moment the
+     budget is reached, abort the in-flight run** (a failed run emits no
+     FinalReport but its spend still counts, so the cut happens here — repeated
+     expensive failures cannot silently overshoot).
+5. **Increment the iteration counter, persist**, emit `run.completed` (with
+   this round's cost).
+6. **Verify**: run the verify command again, streaming output through
+   `verify.output` events.
+7. Parse diagnostics + fingerprint the workspace, persist atomically, emit
+   the `verify` event.
+8. **Exit code 0 → `passed`, done.** Otherwise check the guardrails (next
+   section) and, if none tripped, enter the next round.
+
+> The iteration counter only advances **after** an agent run completes. If
+> the process crashes mid-round, resume re-runs that round **without
+> consuming** an iteration slot — while reusing the session and accounting
+> for the spend already observed.
+
+## 5. Guardrails and the six terminal states
+
+The loop **never runs unbounded**. Before each round and after each
+verification, these stop conditions are checked in order:
+
+| Status | Trigger |
 |---|---|
-| `passed` | verify 命令退出 0（成功，退出码 0） |
-| `cancelled` | 收到中止信号（Ctrl-C / Stop 按钮），协作式停止，trace 保留 |
-| `budget` | 累计观测花费 ≥ `--budget`（已在途的请求可能让最终账单略微超一点） |
-| `no_progress` | **卡住了**：结构化诊断指纹没变 **且** 工作区内容指纹没变 |
-| `exhausted` | 达到 `--max-iters` 上限 |
-| `verify_error` | verify 命令根本跑不起来 / 超时 / 在执行器边界失败 |
+| `passed` | verify command exited 0 (success; process exit code 0) |
+| `cancelled` | abort signal (Ctrl-C / Stop button); cooperative stop, trace preserved |
+| `budget` | cumulative observed cost ≥ `--budget` (an in-flight request may make the final bill slightly exceed it) |
+| `no_progress` | **stuck**: structured diagnostics fingerprint unchanged **and** workspace content fingerprint unchanged |
+| `exhausted` | reached the `--max-iters` cap |
+| `verify_error` | verify command could not run at all / timed out / failed at the executor boundary |
 
-检查顺序（进入下一轮前）：`aborted` → `budget` → `no_progress`（诊断与工作区都没变）→ `exhausted`。
+Check order (before spending another round): `aborted` → `budget` →
+`no_progress` (diagnostics and workspace both unchanged) → `exhausted`.
 
-`no_progress` 是防死循环的核心：光看诊断文本容易被计时、格式噪声骗过，所以它把**结构化诊断
-指纹**和**工作区文件内容指纹**配对判断——只要 agent 改了任何文件，就算它没把测试改好，也算
-“有进展”，会继续给机会；只有诊断和文件都纹丝不动才判定卡死。
+`no_progress` is the core anti-livelock mechanism: raw diagnostic text is
+easily fooled by timing and formatting noise, so the loop pairs the
+**structured diagnostics fingerprint** with a **workspace content
+fingerprint**. If the agent changed any file — even without fixing the
+tests — that still counts as progress and the loop keeps going; only when
+both diagnostics and files are byte-identical is it declared stuck.
 
-## 6. 验证与诊断解析
+## 6. Verification and diagnostics parsing
 
-`verify` 命令默认通过项目共用的 shell 执行器 + OS 沙箱在工作区里跑，**120 秒超时**，捕获
-stdout+stderr 的尾部（约 4 KB）。取消验证会停掉命令并返回 `cancelled`。
+The verify command runs in the workspace through the project's shared shell
+executor + OS sandbox, with a **120-second timeout**, capturing a tail
+(~4 KB) of stdout+stderr. Cancelling during verification stops the command
+and returns `cancelled`.
 
-失败时，输出会被喂回下一轮 prompt。而且对主流测试框架会做**结构化解析**（`verify-diagnostics.ts`）：
+On failure the output is fed into the next round's prompt, and mainstream
+test frameworks get **structured parsing** (`verify-diagnostics.ts`):
 
-- 支持 **Vitest / Jest / Pytest / Cargo**，自动识别框架。
-- 提取失败测试名（去重、有上限）和诊断位置（`文件:行: 消息`）。
-- 剥掉计时/格式/ANSI 噪声，只留下稳定的“失败身份”，用来算收敛指纹（判断 `no_progress`）。
-- 识别不出框架时退化为原始输出尾巴。
+- **Vitest / Jest / Pytest / Cargo** are auto-detected.
+- Failed test names (deduplicated, bounded) and diagnostic locations
+  (`file:line: message`) are extracted.
+- Timing/format/ANSI noise is stripped, leaving stable "failure identities"
+  used for the convergence fingerprint (the `no_progress` decision).
+- Unknown frameworks degrade to the raw output tail.
 
-**工作区指纹**：在 git 仓库里，哈希所有改动/暂存/未跟踪文件的完整内容；非 git 工作区则哈希
-全部文件。会排除 SeekForge 自己的运行时状态（`.seekforge/loops|sessions|uploads`）。符号链接
-按链接本身哈希，绝不跟随到工作区外。
+**Workspace fingerprint**: in a git repository, the full content of changed,
+staged, and untracked files is hashed; a non-git workspace hashes all files.
+SeekForge's own runtime state (`.seekforge/loops|sessions|uploads`) is
+excluded. Symbolic links are hashed as links and never followed outside the
+workspace.
 
-## 7. 隔离运行：`--worktree`
+## 7. Isolated runs: `--worktree`
 
-不想让循环直接改你当前的工作目录？用 worktree：
+Don't want the loop editing your current working directory? Use a worktree:
 
 ```bash
-seekforge loop "<任务>" --verify "pnpm test" --worktree            # 自动取名
-seekforge loop "<任务>" --verify "pnpm test" --worktree my-fix     # 指定分支后缀
+seekforge loop "<task>" --verify "pnpm test" --worktree            # auto-named
+seekforge loop "<task>" --verify "pnpm test" --worktree my-fix     # branch suffix
 ```
 
-CLI 会新建一个分支（前缀 `seekforge/loop-*`）和对应的 git worktree，然后把那个目录当作循环
-的工作区。Loop 状态和 session trace 都存在 worktree 内部。
+The CLI creates a branch (prefixed `seekforge/loop-*`) with a matching git
+worktree and uses that directory as the loop's workspace. Loop state and the
+session trace both live inside the worktree.
 
-要点：
+Key points:
 
-- **worktree 不会自动删除**，故意保留给你检查。
-- 从 worktree 目录里 `loop-resume` 可以继续。
-- 检查完用 `seekforge loop-cleanup <name>` 清理；有脏改动时会拒绝，除非显式 `--force`。
-- 只要还有活跃的 lease（循环正在跑），cleanup 一律被拒，`--force` 也不行。
+- **Worktrees are never removed automatically** — deliberately retained for
+  inspection.
+- Run `loop-resume` from inside the worktree directory to continue.
+- Clean up with `seekforge loop-cleanup <name>` when done; dirty worktrees
+  are refused unless `--force` is explicit.
+- While a live lease exists (the loop is running), cleanup is always
+  refused — even with `--force`.
 
-## 8. 恢复（Resume）
+## 8. Resume
 
-任何终态的循环都能显式 resume——但 resume 会先跑一次**全新预检**，可能直接就绿了：
+Any terminal loop can be explicitly resumed — and resume starts with a
+**fresh pre-check**, which may pass outright:
 
 ```bash
 seekforge loop-resume <loop-id> [--add-iters <n>] [--add-budget <usd>]
 ```
 
-- resume 只从你给的工作区加载状态，保留原任务、verify 命令、最大迭代、累计花费、session id。
-- 已经耗尽迭代/预算的终态循环，resume 后**只能靠预检通过**——否则同一条护栏会立刻再次拦住它，
-  不会白花 agent 迭代。
-- `--add-iters`：加到已存最大值上，硬顶 100。
-- `--add-budget`：在已存预算上叠加；若原本没预算，则从**已花费**起算，历史花费永不清零。结果
-  预算必须有限，数值溢出会被拒绝（而不是当成“没有预算”）。
+- Resume loads state only from the workspace you give it, preserving the
+  original task, verify command, max iterations, cumulative cost, and
+  session id.
+- A terminal loop whose iterations/budget are already exhausted can **only
+  pass via the pre-check** — otherwise the same guardrail stops it again
+  without wasting agent iterations.
+- `--add-iters`: added to the stored maximum, hard-capped at 100.
+- `--add-budget`: extends the stored budget; with no prior budget it starts
+  from the cost already incurred, so historical spend is never reset. The
+  resulting budget must be finite — numeric overflow is rejected rather
+  than treated as "no limit".
 
-管理命令：
-
-```bash
-seekforge loop-list                    # 列出所有持久化的循环
-seekforge loop-show <loop-id>          # 看单个循环的状态
-seekforge loop-delete <loop-id>        # 删除持久化状态
-seekforge loop-cleanup <name> [--force] # 清理 worktree
-```
-
-从基础检出目录运行这些管理命令时，会自动发现保留 worktree 里的循环状态。同一个 loop id 在多个
-工作区里出现会被判为**歧义**并拒绝，而不是随便挑一个。管理命令在非 git 目录下也能用；旧版本存
-的路径会被规范化到物理路径，让符号链接/平台路径别名解析到同一份状态。
-
-## 9. 崩溃恢复、锁与持久化（原理）
-
-这部分你不需要手动管，但了解一下有助于排查：
-
-- **原子写入**：状态在“可观测进展”后原子落盘（写临时文件再 rename）。所以崩溃不会留下半截状态。
-- **独占租约（lease）**：同一个持久化循环同一时刻只能被一个进程拥有。状态文件旁有个 token 保护的
-  锁，记录 owner 的进程身份和 PID，拒绝并发运行；进程退出或 PID 复用后能回收锁。刚写坏的锁在短暂
-  宽限期内 fail-closed，防止半写的锁被别人抢走。
-- **持久化失败降级**：落盘失败只报一次 `loop.warning`，不会顶替掉验证结果本身。
-- **花费与 session 随事件 checkpoint**：session id 和累计用量在事件到达时就落盘，崩溃后 resume 能
-  复用 session 并把已花的钱算进账。
-- **事件日志追加落盘**：每个 `LoopEvent`（迭代开始、run 花费、流式验证输出、通过/失败、汇总）都
-  以 JSONL 追加进 `.seekforge/loops/<id>.log`。这是**尽力而为的可观测记录**：写日志失败会被吞掉、
-  绝不打断循环（真正坏掉的目录会通过上面的持久化告警暴露）。`persist: false` 时不写日志；`loop-delete`
-  会连同状态一起删掉它。日志文件在 `.seekforge/loops/` 前缀内，不参与工作区指纹，因此不会干扰
-  `no_progress` 判断。
-
-看日志的方式：
+Management commands:
 
 ```bash
-tail -f .seekforge/loops/<loop-id>.log        # 实时跟一个正在跑的循环
-cat .seekforge/loops/<loop-id>.log | jq .      # 结构化回放（每行一个事件）
+seekforge loop-list                    # list all persisted loops
+seekforge loop-show <loop-id>          # inspect one loop's state
+seekforge loop-delete <loop-id>        # delete persisted state
+seekforge loop-cleanup <name> [--force] # remove a worktree
 ```
 
-CLI 每次循环结束的汇总里也会打印这条日志的路径。
+Run from the base checkout, these commands also discover loop state inside
+retained worktrees. A loop id appearing in multiple workspaces is rejected
+as **ambiguous** instead of picking one silently. Management works outside
+git repositories too; paths stored by older versions are canonicalized to
+their physical form so symlink and platform path aliases resolve to the
+same state.
 
-## 10. 桌面端 / TUI 用法
+## 9. Crash recovery, locking, and persistence (internals)
 
-**桌面端**：聊天窗口顶部有个可折叠的 **Loop 面板**——任务 + verify 命令输入框、最大迭代 + 预算、
-一个 Run/Stop 按钮。进度实时流式显示：每轮一行（本轮花费 + 实时验证输出 + 通过/失败），结束时给
-一段状态汇总和 loop id。工具栏里的模型/思考档位会一起带上，和普通 run 一样。断线时运行会被标记为
-中断，挂起的确认框清空，排给失败连接的请求丢弃而不是重连后重放。
+You never manage this by hand, but knowing it helps with debugging:
 
-**TUI**：`/loop` 用多行命令——第一行是循环选项 + verify 命令，后面几行是任务：
+- **Atomic writes**: state is persisted after observable progress via
+  write-temp-then-rename, so a crash never leaves a half-written state file.
+- **Exclusive lease**: one process owns a persisted loop at a time. A
+  token-protected lock next to the state file records the owner's process
+  identity and PID, rejects concurrent runs, and recovers locks after
+  process exit or PID reuse. A freshly malformed lock fails closed for a
+  short grace period so a partially written lock cannot be stolen.
+- **Persistence failure degrades gracefully**: a failed write is reported
+  once as `loop.warning` and never replaces the verification result.
+- **Cost and session checkpoint as events arrive**: the session id and
+  cumulative usage are persisted the moment their events land, so a resume
+  after a crash reuses the session and accounts for spend already observed.
+- **Append-only event log**: every `LoopEvent` (iteration start, run cost,
+  streamed verify output, pass/fail, summary) is appended as JSONL to
+  `.seekforge/loops/<id>.log`. This is **best-effort observability**: a
+  failed log write is swallowed and never interrupts the loop (a genuinely
+  broken directory still surfaces through the persistence warning above).
+  With `persist: false` no log is written; `loop-delete` removes it together
+  with the state. The log lives under the `.seekforge/loops/` prefix, which
+  is excluded from the workspace fingerprint, so it cannot disturb the
+  `no_progress` decision.
+
+Reading the log:
+
+```bash
+tail -f .seekforge/loops/<loop-id>.log        # follow a running loop live
+cat .seekforge/loops/<loop-id>.log | jq .      # structured replay (one event per line)
+```
+
+The CLI also prints this log's path in every end-of-loop summary.
+
+## 10. Desktop / TUI usage
+
+**Desktop**: a collapsible **Loop panel** at the top of the chat window —
+task + verify-command inputs, max-iterations + budget, and a Run/Stop
+button. Progress streams live (one row per iteration: run cost + live
+verify output + pass/fail; a status summary and loop id at the end). The
+toolbar's model/thinking overrides ride along, same as a normal run. If the
+connection drops, the run is marked interrupted, pending prompts are
+cleared, and requests queued for the failed connection are discarded rather
+than replayed on reconnect.
+
+**TUI**: `/loop` takes a multi-line command — loop options and the verify
+command on the first line, the task on the following lines:
 
 ```text
 /loop --max-iterations 12 --budget 1.50 pnpm test
-修好失败的 parser 测试，不要削弱断言。
+Fix the failing parser tests without weakening assertions.
 ```
 
-`--max-iterations` 接受 1–100；`--budget` 必须是有限正数 USD，会覆盖配置里的值。不给预算就继承
-配置默认。默认迭代上限 8。TUI 恢复：`/loop-resume [--add-iterations N] [--add-budget USD] <loop-id>`。
+`--max-iterations` accepts 1–100; `--budget` must be a finite positive USD
+value and overrides the configured default. Without an explicit budget the
+TUI inherits the configured value. The default iteration cap is 8. Resume
+from the TUI with `/loop-resume [--add-iterations N] [--add-budget USD]
+<loop-id>`.
 
-## 11. Core API（二次开发）
+## 11. Core API (integrators)
 
-从 `@seekforge/core` 引入 `runAutoLoop` / `resumeAutoLoop`：
+Import `runAutoLoop` / `resumeAutoLoop` from `@seekforge/core`:
 
 ```ts
 import { runAutoLoop } from "@seekforge/core";
 
 const result = await runAutoLoop(deps, {
-  task: "修好失败的测试",
-  workspace: "/abs/path/to/project",   // 必须是绝对路径
-  verifyCommand: "pnpm test",           // 退出 0 == 成功
-  maxIterations: 8,                     // 默认 8，硬顶 100
-  costBudgetUsd: 2.0,                   // 累计观测花费达到就停（可选）
-  approvalMode: "acceptEdits",          // 默认就是它
-  signal: controller.signal,            // 协作式中止（可选）
+  task: "Fix the failing tests",
+  workspace: "/abs/path/to/project",   // must be absolute
+  verifyCommand: "pnpm test",           // exit 0 == success
+  maxIterations: 8,                     // default 8, hard cap 100
+  costBudgetUsd: 2.0,                   // stop at cumulative observed cost (optional)
+  approvalMode: "acceptEdits",          // the default
+  signal: controller.signal,            // cooperative abort (optional)
   onEvent: (e) => { /* iteration.start | run.completed | verify.output | verify | loop.warning | loop.done */ },
-  // verify: 可注入自定义验证器（测试用），默认走真实 shell 执行 + 沙箱
+  // verify: injectable custom verifier (for tests); defaults to a real shell exec + sandbox
 });
 
 // result.status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error"
 // result.iterations / result.costUsd / result.sessionId / result.finalVerify / result.loopId
 ```
 
-事件流类型（`LoopEvent`）：
+Event stream types (`LoopEvent`):
 
-- `iteration.start` — 第 n 轮开始
-- `run.completed` — 第 n 轮 agent 跑完，带累计花费
-- `verify.output` — 验证命令的流式输出块（每次验证有事件数和块大小上限）
-- `verify` — 验证结果（退出码 + 是否通过 + 输出尾巴）
-- `loop.warning` — 目前只有持久化失败告警
-- `loop.done` — 最终 `LoopResult`
+- `iteration.start` — round n begins
+- `run.completed` — round n's agent run finished, with cumulative cost
+- `verify.output` — streamed verify output chunk (per-verification event
+  count and chunk size are capped)
+- `verify` — verification result (exit code + passed + output tail)
+- `loop.warning` — currently only the persistence-failure warning
+- `loop.done` — the final `LoopResult`
 
-`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?, additionalCostBudgetUsd? })`
-恢复迭代数、花费、session、命令、护栏，再叠加可选的追加额度。
+`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?,
+additionalCostBudgetUsd? })` restores iterations, cost, session, command,
+and guardrails, then applies the optional additive limits.
 
-## 12. 实践建议与 FAQ
+## 12. Practical advice and FAQ
 
-**verify 命令怎么选？** 越快越好、越确定越好。它每轮都要跑，慢命令直接拖慢整个循环，还容易撞
-120 秒超时。能只跑相关子集就别跑全量（比如只跑改动涉及的测试文件）。
+**How do I pick a verify command?** Fast and deterministic. It runs every
+round — a slow command drags the whole loop and risks the 120-second
+timeout. Run the relevant subset instead of the full suite when you can
+(e.g. only the test files your change touches).
 
-**为什么它跑了几轮就说 `no_progress`？** agent 连续两轮既没改出不同的诊断、也没动任何文件——
-判定卡死。通常意味着任务描述不够具体，或者根因超出 agent 能力。把任务写得更明确、或换更强的
-模型（`-m`）再 resume。
+**Why did it stop with `no_progress` after a few rounds?** Two consecutive
+rounds produced neither different diagnostics nor any file change — declared
+stuck. Usually the task description is too vague, or the root cause exceeds
+the agent's ability. Sharpen the task, or resume with a stronger model
+(`-m`).
 
-**为什么 `verify_error`？** verify 命令根本没跑起来——命令名拼错、依赖没装、超时。终态输出里带
-着 stdout/stderr 诊断，照着排。
+**Why `verify_error`?** The verify command never ran — misspelled command,
+missing dependency, timeout. The terminal output carries stdout/stderr
+diagnostics; follow those.
 
-**会不会烧很多钱？** 会。务必设 `--budget`。预算是在每次用量更新后检查的硬线，达到就掐掉在途
-请求；但已经发出的那一个请求可能让最终账单略微超一点。
+**Will it burn a lot of money?** It can. Always set `--budget`. The budget
+is a hard line checked on every usage update, cutting the in-flight request
+when reached; the one request already sent may make the final bill slightly
+exceed it.
 
-**怎么中途停？** Ctrl-C（CLI）或 Stop 按钮（桌面）。协作式停止，状态 `cancelled`，trace 保留，
-之后能 `loop-resume`。再按一次 Ctrl-C 强制退出。
+**How do I stop it mid-run?** Ctrl-C (CLI) or the Stop button (desktop).
+Cooperative stop, status `cancelled`, trace preserved — `loop-resume` works
+afterwards. A second Ctrl-C force-exits.
 
-**它改乱了怎么办？** 因为是同一条 git 工作区，直接 `git restore` / `git checkout` 回退即可；这也
-正是推荐 `--worktree` 隔离、或在干净 git 状态下跑的原因。
+**It made a mess — now what?** It is a plain git workspace: `git restore` /
+`git checkout` rolls it back. That is exactly why `--worktree` isolation, or
+a clean git state, is recommended.
 
-**和普通 run/session 的关系？** 循环复用 `runTask` + session resume + 同一套权限模型；验证复用
-`run_command` 的 shell 执行器和 OS 沙箱；也复用 `escalateOnFailure`（失败的 run 交给 planModel）。
-整个循环是**一条 session**，随时能用 session 级的 `resume` / `rewind` 手动介入。
+**How does it relate to a normal run/session?** The loop reuses `runTask` +
+session resume and the same permission model; verification reuses
+`run_command`'s shell executor and OS sandbox; it also reuses
+`escalateOnFailure` (hand failing runs to `planModel`). The whole loop is
+**one session**, so session-level `resume` / `rewind` remain available for
+manual intervention at any time.

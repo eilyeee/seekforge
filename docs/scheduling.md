@@ -1,5 +1,7 @@
 # Scheduled jobs
 
+> **English** | [简体中文](scheduling.zh-CN.md)
+
 SeekForge can run a task on a schedule — a nightly code review, a periodic
 dependency check, a "summarize what changed today" digest. Scheduling is
 **local-first**: there is no cloud, no daemon, and no external service. You

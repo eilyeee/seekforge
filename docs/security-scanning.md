@@ -1,5 +1,7 @@
 # Security scanning
 
+> **English** | [简体中文](security-scanning.zh-CN.md)
+
 SeekForge can run a repository-wide, read-only Agent review and maintain an
 auditable Finding queue. The scanner covers architecture, trust boundaries,
 entry points, authentication and authorization, command and filesystem access,

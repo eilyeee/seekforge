@@ -1,5 +1,7 @@
 # SeekForge documentation
 
+> **English** | [简体中文](README.zh-CN.md)
+
 A local-first, DeepSeek-powered coding agent: CLI, terminal UI, desktop app, and
 an embeddable core. Start with the [project README](../README.md) for the pitch
 and quick start; this folder holds the reference docs.

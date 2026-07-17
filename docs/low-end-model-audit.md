@@ -1,5 +1,7 @@
 # Lower-Capability Model Bug Audit Procedure
 
+> **English** | [简体中文](low-end-model-audit.zh-CN.md)
+
 This document is a step-by-step testing procedure for auditing SeekForge with a lower-capability model. Run each section as a separate task. Do not ask the model to audit the whole repository in one prompt.
 
 ## 0. Baseline Collection

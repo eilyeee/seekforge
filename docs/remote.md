@@ -1,5 +1,7 @@
 # Remote / isolated execution (Track E)
 
+> **English** | [简体中文](remote.zh-CN.md)
+
 SeekForge can run the **same task** on your local machine or inside an isolated
 environment (a Docker container today; a remote workstation or VM behind the
 same contract later). The goal: run risky or long tasks in a sandbox that can

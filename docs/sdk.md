@@ -1,5 +1,7 @@
 # Embedding SeekForge (`@seekforge/core`)
 
+> **English** | [简体中文](sdk.zh-CN.md)
+
 `@seekforge/core` is the engine behind the CLI, TUI, and desktop app. It is
 currently a **private workspace package**, not a published or semver-stable npm
 SDK: `packages/core/package.json` has `"private": true` and exports TypeScript

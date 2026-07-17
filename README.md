@@ -1,5 +1,7 @@
 # SeekForge
 
+> **English** | [简体中文](README.zh-CN.md)
+
 **A local-first coding agent powered by DeepSeek.**
 
 SeekForge is a coding agent for real-world projects: it reads your codebase,

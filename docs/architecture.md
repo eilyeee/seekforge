@@ -1,5 +1,7 @@
 # Architecture
 
+> **English** | [简体中文](architecture.zh-CN.md)
+
 SeekForge is a local-first monorepo with one agent engine and several adapters.
 The adapters own interaction and transport concerns; `packages/core` owns agent
 behavior, policy, persistence, and tool execution.

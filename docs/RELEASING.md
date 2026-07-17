@@ -1,5 +1,7 @@
 # Releasing the desktop app (DMG)
 
+> **English** | [简体中文](RELEASING.zh-CN.md)
+
 The desktop bundle is self-contained: it embeds the CLI's server as a Tauri
 sidecar (see [`apps/desktop/src-tauri/README.md`](../apps/desktop/src-tauri/README.md)),
 so an end user installs only the DMG — no system `seekforge`.

@@ -1,5 +1,7 @@
 # Configuration
 
+> **English** | [简体中文](configuration.zh-CN.md)
+
 SeekForge reads configuration from two JSON files and supports overriding via
 environment variables, CLI flags, and a `--settings` file. All config keys are
 optional — the tool works out of the box with just an API key.

@@ -1,5 +1,7 @@
 # Event-triggered automation (webhooks)
 
+> **English** | [简体中文](automation.zh-CN.md)
+
 SeekForge's server can run a task when an **external event** arrives — a GitHub
 push or pull request, a CI job finishing, any system that can send an HTTP POST.
 This is the webhook counterpart to [scheduled jobs](scheduling.md): scheduling

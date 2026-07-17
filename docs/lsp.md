@@ -1,5 +1,7 @@
 # LSP / precise symbol intelligence
 
+> **English** | [简体中文](lsp.zh-CN.md)
+
 SeekForge can talk to a real **Language Server** (LSP) so the agent gets
 **precise** symbol information — go-to-definition, find-all-references, and
 diagnostics — straight from the compiler/type-checker rather than from a lexical

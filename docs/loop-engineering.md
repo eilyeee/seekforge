@@ -1,5 +1,7 @@
 # Loop engineering (auto-loop)
 
+> **English** | [简体中文](loop-engineering.zh-CN.md)
+
 Drive **one** task to "green" across multiple agent runs, fully autonomously:
 `run → verify → continue`, stopping when a verification command passes or a
 budget guardrail trips. This is a layer *above* a single run — the in-run

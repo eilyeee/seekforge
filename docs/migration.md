@@ -1,5 +1,7 @@
 # Migrating from Aider / Cline / Claude Code / Codex
 
+> **English** | [简体中文](migration.zh-CN.md)
+
 A factual mapping of concepts from other coding agents to their SeekForge
 equivalents. This is not a claim of parity — it's a lookup table so you can find
 the SeekForge feature you already know from another tool.

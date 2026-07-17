@@ -1,5 +1,7 @@
 # Roadmap and capability maturity
 
+> **English** | [简体中文](roadmap.zh-CN.md)
+
 SeekForge already has a broad local-first coding-agent surface. This roadmap
 separates shipped capability from production maturity so implemented features
 are not repeatedly treated as missing. Status reflects the repository today,

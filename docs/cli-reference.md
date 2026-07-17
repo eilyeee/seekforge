@@ -1,5 +1,7 @@
 # CLI reference
 
+> **English** | [简体中文](cli-reference.zh-CN.md)
+
 Flag reference for `seekforge run`, `seekforge ask`, and `-p` headless mode.
 
 ## Legend

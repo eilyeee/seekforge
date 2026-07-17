@@ -1,5 +1,7 @@
 # Evals & the regression gate
 
+> **English** | [简体中文](EVALS.zh-CN.md)
+
 Two layers protect against regressions:
 
 1. **Deterministic CI gate** (`.github/workflows/ci.yml`, runs on every push/PR):

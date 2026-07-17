@@ -1,5 +1,7 @@
 # Cookbook
 
+> **English** | [简体中文](cookbook.zh-CN.md)
+
 Task-oriented recipes. Each is a **goal → steps → tips** block using only real
 commands and flags. For the full flag list see the
 [CLI reference](cli-reference.md); for config keys see

@@ -1,5 +1,7 @@
 # Boundary-defect checklist
 
+> **English** | [简体中文](boundary-checklist.zh-CN.md)
+
 A running list of the boundary/edge-case bug *classes* found in this repo, so we
 stop reintroducing them. Each entry is a reusable pattern: the anti-pattern, the
 fix, and the real site it was caught. Use it two ways:

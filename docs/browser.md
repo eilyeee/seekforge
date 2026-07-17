@@ -1,5 +1,7 @@
 # Browser / visual verification
 
+> **English** | [简体中文](browser.zh-CN.md)
+
 SeekForge can drive a real headless browser so the agent can **verify a frontend
 change**: open your dev server, read the console for errors, snapshot the DOM,
 and capture a screenshot. This is powered by [Playwright], which is an
