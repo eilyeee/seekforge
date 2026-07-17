@@ -65,6 +65,65 @@ describe("classifyCommand", () => {
     }
   });
 
+  it("denylists destructive git even with global options between git and the subcommand", () => {
+    for (const cmd of [
+      "git -c core.pager=cat push --force origin main",
+      "git -c x=y reset --hard HEAD~1",
+      "git --git-dir=/tmp/.git clean -fd",
+      "git -C /repo push -f origin main",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
+    }
+  });
+
+  it("denylists shell/interpreter evasion variants", () => {
+    for (const cmd of [
+      "zsh -c 'echo hi'",
+      "dash -c 'echo hi'",
+      "python3.11 -c 'print(1)'",
+      "python3.12 -c 'x'",
+      "perl -e 'print 1'",
+      "ruby -e 'puts 1'",
+      "deno eval 'console.log(1)'",
+      "bun -e 'console.log(1)'",
+    ]) {
+      expect(classifyCommand(cmd).permission, cmd).toBe("dangerous");
+    }
+  });
+
+  it("keeps rg off the auto-run path when it carries exec / unrestricted-read flags", () => {
+    for (const cmd of [
+      "rg --pre bash -e . file",
+      "rg --pre=/tmp/x.sh -e . .",
+      "rg --search-zip foo",
+      "rg --hostname-bin echo foo",
+      "rg --hidden foo",
+      "rg --no-ignore foo",
+      "rg -uuu foo .env",
+      "rg -u --hidden foo",
+    ]) {
+      expect(classifyCommand(cmd).allowlisted, cmd).toBe(false);
+    }
+    // A plain search still auto-runs.
+    expect(classifyCommand("rg loginButton src/").allowlisted).toBe(true);
+    expect(classifyCommand("rg -n --glob '*.ts' pattern").allowlisted).toBe(true);
+  });
+
+  it("keeps git --output writes off the read-only fast-path", () => {
+    for (const cmd of [
+      "git diff --output=/tmp/x HEAD~1",
+      "git diff --output /tmp/x",
+      "git diff -o /tmp/x",
+      "git log --output=/tmp/x",
+    ]) {
+      const cls = classifyCommand(cmd);
+      expect(cls.permission, cmd).toBe("execute");
+      expect(cls.allowlisted, cmd).toBe(false);
+    }
+    // A plain diff stays read-only + auto-run.
+    expect(classifyCommand("git diff HEAD~1").permission).toBe("readonly");
+  });
+
   it("does NOT denylist rm without both recursive and force", () => {
     // force-only or recursive-only rm is destructive-but-confirmable, not denied.
     for (const cmd of ["rm file.txt", "rm -f file.txt", "rm --force file.txt", "rm -r build"]) {

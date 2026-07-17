@@ -95,8 +95,11 @@ Shell commands are classified deterministically before they can run, in
 - **Denylist (L4 `dangerous`)** — matched first; never run, never prompted:
   `rm -rf` (recursive **and** force, order-independent), `sudo`, `chmod -R`,
   `chown`, `git reset --hard`, `git clean`, `git push --force` (incl. `-f` /
-  `--force-with-lease`), `curl|wget … | sh`, nested `sh -c`, `node -e`,
-  `python -c` (`run-command.ts::DENYLIST`, `run-command.ts:23`; applied `:250`).
+  `--force-with-lease`), `curl|wget … | sh`, nested `sh -c` (any POSIX/alt
+  shell), `node -e`, `python -c`, `perl`/`ruby -e`, `deno eval`, `bun -e`
+  (`run-command.ts::DENYLIST`). Git global options between `git` and the
+  subcommand (`git -c core.pager=cat push --force`, `git -C <dir> …`) do not
+  evade the destructive-git patterns.
 - **Env (L3)** — always confirm, even in "auto"/"acceptEdits", and auto-denied
   headless: package installs / dependency changes, and a plain `git push`
   (outward-facing → mandatory human approval, but force-push stays denied above)
@@ -104,12 +107,18 @@ Shell commands are classified deterministically before they can run, in
 - **Readonly fast-path** — only single, unpiped `git`/`gh` inspection commands
   auto-run. A command containing any shell metacharacter that could inject or
   redirect (pipe, `&`, `;`, `<`, `>`, newline, backtick, or `$(`) is disqualified
-  and falls through to `execute` (confirm)
-  (`run-command.ts:279`, `classifyGit` `:216`, `classifyGh` `:164`).
+  and falls through to `execute` (confirm). File-writing git flags
+  (`git diff --output=<path>` / `-o`) are also disqualified — a "read-only"
+  inspection command must not write outside the workspace unprompted
+  (`classifyGit`, `classifyGh`).
 - **Allowlist (L2 auto-run)** — a small built-in set (`pwd`, `ls`, `rg`, test /
   build runners) plus any user-added prefixes, prefix-matched on a token
   boundary. This path is available only when the quote-aware shell scanner finds
   no active control operator or redirection (`run-command.ts::hasShellControlSyntax`).
+  `rg` carrying its code-execution (`--pre`, `--search-zip`, `--hostname-bin`) or
+  unrestricted-read (`--hidden`, `--no-ignore`, `-u`/`-uu`/`-uuu`) flags is forced
+  onto the confirmation path so an auto-run cannot become code execution or a
+  read of protected files (`.env`, keys).
 - **Everything else defaults to `execute`** — confirm and surface the raw
   command (`run-command.ts:310`). Unknown `git`/`gh` subcommands default to the
   safe side, not auto-run.

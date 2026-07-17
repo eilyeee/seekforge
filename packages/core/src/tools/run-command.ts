@@ -67,6 +67,24 @@ export function commandInvokes(ran: string, configured: string): boolean {
   return a === b || a.startsWith(b + " ");
 }
 
+/**
+ * A run of git global options that may appear between `git` and its
+ * subcommand: `-c key=val` (separate value arg), short flags (`-C`, `-p`),
+ * and long `--flag` / `--flag=value`. The `-c\s+\S+` alternative is listed
+ * first so it consumes its value argument instead of a bare `-c` swallowing it.
+ */
+const GIT_GLOBAL_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--[a-z][\w-]*(?:=\S+)?|-[A-Za-z]\S*))*`;
+
+/**
+ * ripgrep flags that turn a search into code execution (`--pre`, `--search-zip`,
+ * `--hostname-bin`) or an unrestricted read of ignored/hidden files such as
+ * `.env` (`--hidden`, `--no-ignore*`, `-u`/`-uu`/`-uuu`). Their presence forces
+ * `rg` off the auto-run path and onto the confirmation flow — a plain
+ * `rg <pattern> <path>` still auto-runs.
+ */
+const RG_UNSAFE_FLAGS =
+  /(?:^|\s)(?:--pre(?:=|\b)|--pre-glob\b|--search-zip\b|--hostname-bin\b|--hidden\b|--no-ignore(?:-[a-z]+)?\b|--unrestricted\b|-z\b|-[A-Za-z]*u[A-Za-z]*\b)/;
+
 /** Destructive / escape-hatch commands. Never run, never prompt. */
 const DENYLIST: Array<{ re: RegExp; reason: string }> = [
   // rm with BOTH a recursive flag (-r/-R/-rf/--recursive, any case/order) AND a
@@ -80,15 +98,29 @@ const DENYLIST: Array<{ re: RegExp; reason: string }> = [
   { re: /\bsudo\b/, reason: "sudo" },
   { re: /\bchmod\s+(-[^\s]+\s+)*-R\b/, reason: "chmod -R" },
   { re: /\bchown\b/, reason: "chown" },
-  { re: /\bgit\s+reset\s+--hard\b/, reason: "git reset --hard" },
-  { re: /\bgit\s+clean\b/, reason: "git clean" },
+  // Global options (`-c key=val`, `-C <dir>`, `--git-dir=…`) may sit between
+  // `git` and the destructive subcommand — `git -c core.pager=cat push --force`
+  // must not slip past. GIT_GLOBAL_OPTS below consumes any run of them.
+  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+reset\s+--hard\b`), reason: "git reset --hard" },
+  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+clean\b`), reason: "git clean" },
   // Force-push rewrites remote history — stays absolutely denied. A plain
   // `git push` is reclassified to env below (always human-confirmed, never auto).
-  { re: /\bgit\s+push\b(?=.*(?:--force|\s-f\b))/, reason: "git push --force" },
-  { re: /\b(curl|wget)\b[^|;&]*\|\s*([^\s|;&]+\s+)*(sh|bash|zsh)\b/, reason: "download piped to shell" },
-  { re: /\b(bash|sh)\s+-c\b/, reason: "nested shell -c" },
+  {
+    re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+push\b(?=.*(?:--force|\s-f\b))`),
+    reason: "git push --force",
+  },
+  {
+    re: /\b(curl|wget)\b[^|;&]*\|\s*([^\s|;&]+\s+)*(sh|bash|zsh|dash|ksh|fish|ash)\b/,
+    reason: "download piped to shell",
+  },
+  // Any POSIX/alt shell invoked with -c runs an arbitrary nested command.
+  { re: /\b(bash|sh|zsh|dash|ksh|fish|ash|csh|tcsh)\s+-c\b/, reason: "nested shell -c" },
   { re: /\bnode\s+(-[^\s]+\s+)*(-e|--eval)\b/, reason: "node -e" },
-  { re: /\bpython3?\s+(-[^\s]+\s+)*-c\b/, reason: "python -c" },
+  // Match versioned interpreters too (python3.11, python3.12, …).
+  { re: /\bpython[\d.]*\s+(-[^\s]+\s+)*-c\b/, reason: "python -c" },
+  { re: /\b(perl|ruby)\s+(-[^\s]+\s+)*-e\b/, reason: "perl/ruby -e" },
+  { re: /\bdeno\s+eval\b/, reason: "deno eval" },
+  { re: /\bbun\s+(-[^\s]+\s+)*(-e|--eval)\b/, reason: "bun -e" },
 ];
 
 /** Dependency / environment changes: always require confirmation (L3). */
@@ -107,9 +139,10 @@ export const BUILTIN_COMMAND_ALLOWLIST: readonly string[] = [
   "pwd",
   "ls",
   "rg",
-  "git status",
-  "git diff",
-  "git log",
+  // Read-only git (status / diff / log / …) is auto-allowed via the classifyGit
+  // fast-path, which — unlike a bare prefix match — rejects output-writing forms
+  // like `git diff --output=<path>`. Do not re-add git prefixes here: that would
+  // re-allowlist those writes.
   "npm test",
   "pnpm test",
   "pnpm lint",
@@ -286,6 +319,13 @@ function classifyGit(tokens: string[]): CommandPermission {
   const sub = tokens[1];
   if (sub === undefined) return "execute";
 
+  // `git diff --output=/abs/path` (and -o) writes an arbitrary file even though
+  // diff is "read-only" — keep it off the auto-run fast-path so the write is
+  // confirmed. `--output` never appears in a genuine inspection command.
+  if (tokens.some((t) => t === "--output" || t.startsWith("--output=") || t === "-o")) {
+    return "execute";
+  }
+
   if (GIT_READONLY_SUBCOMMANDS.has(sub)) return "readonly";
 
   // `git branch`/`git tag`/`git stash`/`git remote`: read-only only in their
@@ -364,8 +404,13 @@ export function classifyCommand(command: string, extraAllowlist: readonly string
     }
   }
 
+  // `rg` is allowlisted, but its preprocessor / unrestricted-read flags would
+  // make an auto-run into code execution or a protected-file read — those forms
+  // must confirm instead.
+  const rgUnsafe = tokens[0] === "rg" && RG_UNSAFE_FLAGS.test(normalized);
   const allowlisted =
     !injectsCommands &&
+    !rgUnsafe &&
     (BUILTIN_COMMAND_ALLOWLIST.some((p) => matchesPrefix(normalized, p)) ||
       extraAllowlist.some((p) => matchesPrefix(normalized, normalizeCommand(p))));
 
