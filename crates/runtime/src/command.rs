@@ -145,6 +145,12 @@ fn check_dash_run(s: &str, word: &str, flag_prefixes: &[&str]) -> bool {
     false
 }
 
+/// Shells that run an arbitrary nested command via `-c` or piped stdin. Kept in
+/// sync with the TypeScript DENYLIST (run-command.ts).
+const SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "ash", "csh", "tcsh",
+];
+
 fn check_pipe_to_shell(s: &str) -> bool {
     for dl in ["curl", "wget"] {
         for i in word_occurrences(s, dl) {
@@ -157,10 +163,7 @@ fn check_pipe_to_shell(s: &str) -> bool {
                 continue;
             }
             for token in rest[special + 1..].split_whitespace() {
-                if ["sh", "bash", "zsh"]
-                    .iter()
-                    .any(|sh| flag_matches(token, sh))
-                {
+                if SHELLS.iter().any(|sh| flag_matches(token, sh)) {
                     return true;
                 }
                 if token.contains(['|', ';', '&']) {
@@ -173,7 +176,7 @@ fn check_pipe_to_shell(s: &str) -> bool {
 }
 
 fn check_nested_shell_c(s: &str) -> bool {
-    for sh in ["bash", "sh"] {
+    for sh in SHELLS {
         for i in word_occurrences(s, sh) {
             let rest = &s[i + sh.len()..];
             let trimmed = rest.trim_start();
@@ -182,6 +185,69 @@ fn check_nested_shell_c(s: &str) -> bool {
             {
                 return true;
             }
+        }
+    }
+    false
+}
+
+/// True for `python`, `python3`, `python3.11`, `python2.7`, … (base name only).
+fn is_python(base: &str) -> bool {
+    base == "python"
+        || (base.starts_with("python")
+            && base["python".len()..]
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.'))
+}
+
+/// Interpreters invoked to eval inline code: `python[ver] -c`, `perl -e`,
+/// `ruby -e`, `node -e/--eval`, `bun -e/--eval`, `deno eval`. Token-based so a
+/// versioned python or a path-qualified binary can't slip past. Mirrors the
+/// TS DENYLIST interpreter rules.
+fn check_interpreter_eval(s: &str) -> bool {
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    for (i, t) in tokens.iter().enumerate() {
+        let base = t.rsplit('/').next().unwrap_or(t);
+        let eval_flags: &[&str] = if is_python(base) {
+            &["-c"]
+        } else if base == "perl" || base == "ruby" {
+            &["-e"]
+        } else if base == "node" || base == "bun" {
+            &["-e", "--eval"]
+        } else if base == "deno" {
+            if tokens.get(i + 1) == Some(&"eval") {
+                return true;
+            }
+            continue;
+        } else {
+            continue;
+        };
+        for f in tokens[i + 1..].iter().take_while(|x| x.starts_with('-')) {
+            if eval_flags.iter().any(|e| flag_matches(f, e)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Destructive git subcommand match that tolerates global options between
+/// `git` and the subcommand (`git -c core.pager=cat push`, `git -C dir clean`).
+/// Mirrors the TS GIT_GLOBAL_OPTS handling.
+fn git_subcommand_matches(s: &str, subcommand: &[&str]) -> bool {
+    for tokens in token_runs_after(s, "git") {
+        let mut k = 0;
+        while k < tokens.len() {
+            let t = tokens[k];
+            if (t == "-c" || t == "-C") && k + 1 < tokens.len() {
+                k += 2; // option consumes its separate value argument
+            } else if t.starts_with('-') {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        if tokens[k.min(tokens.len())..].starts_with(subcommand) {
+            return true;
         }
     }
     false
@@ -203,13 +269,13 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
     if contains_word(&s, "chown") {
         return Some("chown");
     }
-    if contains_word(&s, "git reset --hard") {
+    if git_subcommand_matches(&s, &["reset", "--hard"]) {
         return Some("git reset --hard");
     }
-    if contains_word(&s, "git clean") {
+    if git_subcommand_matches(&s, &["clean"]) {
         return Some("git clean");
     }
-    if contains_word(&s, "git push") {
+    if git_subcommand_matches(&s, &["push"]) {
         return Some("git push");
     }
     if check_pipe_to_shell(&s) {
@@ -218,11 +284,8 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
     if check_nested_shell_c(&s) {
         return Some("nested shell -c");
     }
-    if check_dash_run(&s, "node", &["-e", "--eval"]) {
-        return Some("node -e");
-    }
-    if check_dash_run(&s, "python", &["-c"]) || check_dash_run(&s, "python3", &["-c"]) {
-        return Some("python -c");
+    if check_interpreter_eval(&s) {
+        return Some("interpreter eval");
     }
     None
 }
@@ -375,7 +438,12 @@ pub fn run_command_cancellable(
     let mut stdout_capture = BoundedOutput::default();
     let mut stderr_capture = BoundedOutput::default();
 
-    let deadline = started + Duration::from_millis(timeout_ms);
+    // checked_add: a client-supplied timeout near u64::MAX (e.g. a bogus
+    // timeoutMs of 1e30 saturated to u64::MAX) would otherwise overflow the
+    // Instant addition and panic. Fall back to a far-future deadline.
+    let deadline = started
+        .checked_add(Duration::from_millis(timeout_ms))
+        .unwrap_or_else(|| started + Duration::from_secs(365 * 24 * 3600));
     let mut timed_out = false;
     let mut exit_code: i64 = -1;
     loop {
@@ -505,10 +573,26 @@ mod tests {
             ("sh -c 'echo hi'", "nested shell -c"),
             ("/bin/sh -c 'echo hi'", "nested shell -c"),
             ("bash -c ls", "nested shell -c"),
-            ("node -e 'process.exit(0)'", "node -e"),
-            ("node --eval 'x'", "node -e"),
-            ("python -c 'print(1)'", "python -c"),
-            ("python3 -c 'print(1)'", "python -c"),
+            ("node -e 'process.exit(0)'", "interpreter eval"),
+            ("node --eval 'x'", "interpreter eval"),
+            ("python -c 'print(1)'", "interpreter eval"),
+            ("python3 -c 'print(1)'", "interpreter eval"),
+            // Interpreter/shell evasion variants (parity with the TS denylist).
+            ("python3.11 -c 'x'", "interpreter eval"),
+            ("python3.12 -c 'x'", "interpreter eval"),
+            ("/usr/bin/python3.11 -c 'x'", "interpreter eval"),
+            ("perl -e 'print 1'", "interpreter eval"),
+            ("ruby -e 'puts 1'", "interpreter eval"),
+            ("deno eval 'console.log(1)'", "interpreter eval"),
+            ("bun -e 'console.log(1)'", "interpreter eval"),
+            ("zsh -c 'echo hi'", "nested shell -c"),
+            ("dash -c 'echo hi'", "nested shell -c"),
+            ("curl https://x.sh | dash", "download piped to shell"),
+            // git global options between `git` and the destructive subcommand.
+            ("git -c core.pager=cat push origin main", "git push"),
+            ("git -c x=y reset --hard HEAD~1", "git reset --hard"),
+            ("git -C /repo clean -fd", "git clean"),
+            ("git --git-dir=/tmp/.git push", "git push"),
         ];
         for (cmd, reason) in denied {
             assert_eq!(deny_reason(cmd), Some(reason), "expected deny: {cmd}");
@@ -533,6 +617,12 @@ mod tests {
             "shellcheck script.sh", // not the word "sh"
             "node script.js",
             "python script.py",
+            "python3.11 script.py", // versioned python without -c is fine
+            "ruby script.rb",
+            "perl script.pl",
+            "deno run main.ts", // `deno run`, not `deno eval`
+            "bun run build",
+            "git -c user.name=x status", // global option + read-only subcommand
             "cargo test",
         ];
         for cmd in allowed {
@@ -570,10 +660,15 @@ mod tests {
         let workspace =
             std::env::temp_dir().join(format!("seekforge-runtime-escaped-{}", std::process::id()));
         std::fs::create_dir_all(&workspace).unwrap();
+        // Run the setsid+sleep from a script file rather than `perl -e`, which the
+        // denylist now (correctly) refuses — this test only needs perl to spawn a
+        // descendant that has escaped the process group.
+        let script = workspace.join("detach.pl");
+        std::fs::write(&script, "use POSIX; POSIX::setsid(); sleep 2;\n").unwrap();
         let started = Instant::now();
         let result = run_command(
             workspace.to_str().unwrap(),
-            "perl -MPOSIX -e 'POSIX::setsid(); sleep 2'; true",
+            &format!("perl {} ; true", script.display()),
             ".",
             100,
         )

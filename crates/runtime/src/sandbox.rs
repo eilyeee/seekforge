@@ -88,6 +88,20 @@ pub fn resolve_inside_workspace(workspace: &str, rel: &str) -> RtResult<PathBuf>
     let mut resolved = fs::canonicalize(&probe).unwrap_or(probe);
     for name in tail.iter().rev() {
         resolved.push(name);
+        // The existence probe above uses `exists()`, which FOLLOWS symlinks — so a
+        // dangling symlink (one whose target does not exist) is treated as a plain
+        // missing tail name and its literal path passes the containment check,
+        // after which `fs::write` would follow the link and escape the workspace.
+        // Reject any symlink tail component outright (lstat, no follow). A genuinely
+        // new path component simply doesn't exist here and is left alone.
+        if let Ok(meta) = fs::symlink_metadata(&resolved) {
+            if meta.file_type().is_symlink() {
+                return Err(RtError::new(
+                    codes::OUTSIDE_WORKSPACE,
+                    format!("path escapes the workspace (symlink): {rel}"),
+                ));
+            }
+        }
     }
 
     if !resolved.starts_with(&ws) {
@@ -183,6 +197,20 @@ mod tests {
         assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
         fs::remove_dir_all(&ws).ok();
         fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn rejects_dangling_symlink_escape() {
+        // A symlink whose target does NOT exist: exists() follows it and reports
+        // false, so the old code treated `link` as a plain missing tail and let
+        // `link` (and a following write) escape. Must be rejected.
+        let ws = tmpdir("dangling");
+        let target = tmpdir("dangling-target");
+        fs::remove_dir_all(&target).unwrap(); // make the symlink target non-existent
+        std::os::unix::fs::symlink(target.join("evil.txt"), ws.join("link")).unwrap();
+        let err = resolve_inside_workspace(ws_str(&ws), "link").unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        fs::remove_dir_all(&ws).ok();
     }
 
     #[test]

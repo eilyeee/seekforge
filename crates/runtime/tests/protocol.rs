@@ -199,13 +199,20 @@ fn cancellation_interrupts_output_drain_after_the_shell_exits() {
         return;
     }
     let ws = TempWorkspace::new("cancel-drain");
+    // Spawn the escaped descendant from a script file: `perl -e` is denylisted, but
+    // this test only needs perl to fork a setsid child that holds the pipes open.
+    std::fs::write(
+        ws.0.join("holder.pl"),
+        "use POSIX; if (fork() == 0) { POSIX::setsid(); open(F, \">escaped.pid\"); print F $$; close F; sleep 10; exit 0 }\n",
+    )
+    .unwrap();
     let mut rt = Runtime::spawn();
     rt.send(
         "draining",
         "run_command",
         json!({
             "workspace": ws.path(),
-            "command": "perl -MPOSIX -e 'if (fork() == 0) { POSIX::setsid(); open(F, \">escaped.pid\"); print F $$; close F; sleep 10; exit 0 }'",
+            "command": "perl holder.pl",
             "timeoutMs": 5000
         }),
     );

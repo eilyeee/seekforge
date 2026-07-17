@@ -208,14 +208,28 @@ fn main() {
     let immediate_response_tx = response_tx.clone();
     drop(response_tx);
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
+    // Read raw bytes and lossy-decode per line rather than `.lines()`: a line
+    // with invalid UTF-8 makes `.lines()` yield an Err, and the old code treated
+    // ANY line error as fatal and shut the runtime down — losing every
+    // subsequent request. With lossy decode a bad line simply fails to parse and
+    // is answered with `bad_request` (id null), per the protocol; only a genuine
+    // IO error stops the loop.
+    let mut reader = stdin.lock();
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        raw.clear();
+        match reader.read_until(b'\n', &mut raw) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("seekforge-runtime: stdin read error: {e}");
                 break;
             }
-        };
+        }
+        while matches!(raw.last(), Some(b'\n' | b'\r')) {
+            raw.pop();
+        }
+        let line = String::from_utf8_lossy(&raw).into_owned();
         if line.trim().is_empty() {
             continue;
         }
