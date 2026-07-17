@@ -214,15 +214,28 @@ export class RunManager {
   }
 
   appendFrame(workspace: string, id: string, frame: Record<string, unknown>): RunEvent {
-    let previousSeq = 0;
-    repairJsonLines(workspace, `.seekforge/run-events/${id}.jsonl`, (value) => {
-      if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
-      const seq = value["seq"] as number;
-      if (seq <= previousSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) return false;
-      previousSeq = seq;
-      return true;
-    });
-    const nextSeq = (this.seq.get(id) ?? this.lastSeq(workspace, id)) + 1;
+    // Fast path: once we have the run's seq in memory we trust it and only
+    // increment — no per-frame full-file reparse (that made an N-event run
+    // O(N^2)). The one-time validation below happens on first touch of the run
+    // in this process, which also covers crash recovery: after a restart the
+    // cache is empty, so we repair any torn suffix and recover the last seq
+    // from the file before continuing the sequence.
+    const cached = this.seq.get(id);
+    let nextSeq: number;
+    if (cached !== undefined) {
+      nextSeq = cached + 1;
+    } else {
+      let previousSeq = 0;
+      repairJsonLines(workspace, `.seekforge/run-events/${id}.jsonl`, (value) => {
+        if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
+        const seq = value["seq"] as number;
+        if (seq <= previousSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"]))
+          return false;
+        previousSeq = seq;
+        return true;
+      });
+      nextSeq = this.lastSeq(workspace, id) + 1;
+    }
     this.seq.set(id, nextSeq);
     const event = { runId: id, seq: nextSeq, ts: new Date().toISOString(), frame };
     appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${JSON.stringify(event)}\n`);

@@ -1,7 +1,8 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
+import * as config from "../src/config.js";
 import { RunManager, startServer, type RunningServer } from "../src/index.js";
 import { collectFrames, connectWs, emptyReport, fakeAgentFactory, makeWorkspace, waitUntil } from "./helpers.js";
 
@@ -74,12 +75,44 @@ describe("append-only run ledger", () => {
     expect(manager.get(workspace, run.runId)).toMatchObject({ status: "queued" });
     expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual([1]);
 
-    // A later append repairs the corrupt suffix to the longest valid prefix,
-    // so the ledger does not remain permanently frozen after a torn write.
+    // The runs.jsonl ledger repairs its corrupt suffix on the next append (its
+    // longest valid prefix wins), so record state is not frozen after a torn write.
     manager.update(workspace, run.runId, { status: "running" });
-    manager.appendFrame(workspace, run.runId, { type: "after-recovery" });
     expect(manager.get(workspace, run.runId)).toMatchObject({ status: "running" });
-    expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual([1, 2]);
+
+    // The event log's corrupt suffix is repaired on RESTART: a fresh RunManager
+    // (empty in-memory seq) recovers the last seq from the longest valid prefix
+    // and continues, so replay is not permanently frozen after a torn write.
+    const restarted = new RunManager();
+    restarted.appendFrame(workspace, run.runId, { type: "after-recovery" });
+    expect(restarted.events(workspace, run.runId).map((event) => event.seq)).toEqual([1, 2]);
+  });
+
+  it("increments seq in memory without re-scanning the whole event file per append", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "background" });
+
+    const eventRel = `.seekforge/run-events/${run.runId}.jsonl`;
+    const actualReadProjectFile = config.readProjectFile;
+    let eventReads = 0;
+    const spy = vi.spyOn(config, "readProjectFile").mockImplementation((ws, rel) => {
+      if (rel === eventRel) eventReads++;
+      return actualReadProjectFile(ws, rel);
+    });
+    try {
+      for (let i = 0; i < 25; i++) manager.appendFrame(workspace, run.runId, { type: `f${i}` });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Only the first append (cache miss) reads the event file back to recover the
+    // seq; the other 24 just bump the in-memory counter. The old code re-read and
+    // re-parsed the whole file on every append (O(N^2)). Keep reads O(1).
+    expect(eventReads).toBeLessThanOrEqual(2);
+    expect(manager.events(workspace, run.runId).map((event) => event.seq)).toEqual(
+      Array.from({ length: 25 }, (_, i) => i + 1),
+    );
   });
 });
 

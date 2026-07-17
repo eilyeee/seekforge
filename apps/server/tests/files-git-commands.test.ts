@@ -267,6 +267,36 @@ describe("GET /api/git/status", () => {
   });
 });
 
+describe("GET /api/diff (oversized output)", () => {
+  it("returns a truncated result instead of a 500 when the diff exceeds execFile's maxBuffer", async () => {
+    // An isolated repo so the huge staged file does not pollute the shared suite.
+    const ws = makeWorkspace();
+    git(ws, "init", "-q");
+    git(ws, "config", "user.email", "t@example.com");
+    git(ws, "config", "user.name", "Tester");
+    // A staged file whose `git diff --cached` output is well over the 10 MB
+    // maxBuffer (each added line is echoed with a leading "+"). Before the fix
+    // this overflowed execFile and fell through to a 500.
+    const line = "const filler = 0; // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+    writeFileSync(join(ws, "big.ts"), line.repeat(220_000)); // ~13 MB
+    git(ws, "add", "big.ts");
+
+    const local = await startServer({ workspace: ws, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
+    try {
+      const res = await fetch(`http://127.0.0.1:${local.port}/api/diff?staged=1`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await jsonOf(res);
+      expect(body.truncated).toBe(true);
+      expect(body.diff.length).toBe(2_000_000);
+      expect(body.diff).toContain("diff --git a/big.ts");
+    } finally {
+      await local.close();
+    }
+  });
+});
+
 describe("git stage / unstage / commit", () => {
   it("rejects every Git mutation while the workspace has an active session", async () => {
     const lease = acquireSessionLease(workspace, "git-route-busy");

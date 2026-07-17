@@ -33,12 +33,12 @@ async function gitDiff(
   // core.quotepath=false: emit non-ASCII paths verbatim (UTF-8) rather than
   // octal-escaped and double-quoted, matching the discard endpoint's probe.
   const args = ["-c", "core.quotepath=false", ...(staged ? ["diff", "--cached"] : ["diff"])];
+  const MAX = 2_000_000;
   try {
     const { stdout } = await execFileAsync("git", args, GIT_EXEC(workspace));
-    const MAX = 2_000_000;
     return stdout.length > MAX ? { diff: stdout.slice(0, MAX), truncated: true } : { diff: stdout, truncated: false };
   } catch (err) {
-    const e = err as { stderr?: string; message?: string };
+    const e = err as { stderr?: string; message?: string; code?: string; stdout?: string };
     const stderr = e.stderr ?? e.message ?? "";
     // A workspace that isn't a git repo is a normal, expected state (e.g. the
     // desktop hosting a plain folder) — report it as an empty, non-error result
@@ -47,6 +47,15 @@ async function gitDiff(
     // learns git isn't installed rather than seeing a misleading empty diff.)
     if (/not a git repository/i.test(stderr)) {
       return { diff: "", truncated: false, notGit: true };
+    }
+    // A diff bigger than execFile's maxBuffer rejects before it can resolve;
+    // Node still hands us the captured prefix on err.stdout. Treat that exactly
+    // like the >MAX case above so a huge diff returns a truncated result rather
+    // than a misleading 500 (the buffer overflow can never reach the >MAX slice
+    // on the success path, so without this it was unrecoverable).
+    if (e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer/i.test(e.message ?? "")) {
+      const captured = typeof e.stdout === "string" ? e.stdout : "";
+      return { diff: captured.slice(0, MAX), truncated: true };
     }
     throw new Error(`git diff failed: ${stderr.slice(0, 500)}`);
   }

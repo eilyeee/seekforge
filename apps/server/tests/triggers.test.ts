@@ -357,6 +357,30 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
     expect(duplicate.status).toBe(409);
   });
 
+  it("accepts a signed GitHub delivery whose body exceeds the default 1 MB cap", async () => {
+    // Real GitHub deliveries (large pushes / PRs) can reach 25 MB; the default
+    // readBody cap of 1 MB used to 413 them before the HMAC even ran.
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/widgets" },
+      filler: "x".repeat(2_000_000),
+    });
+    expect(payload.length).toBeGreaterThan(1_000_000);
+    const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
+    const res = await fetch(`${base}/api/triggers/ci`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signature,
+        "x-github-delivery": "delivery-large-body",
+        "x-github-event": "pull_request",
+      },
+      body: payload,
+    });
+    expect(res.status).toBe(202);
+    expect((await jsonOf(res)).triggerId).toBe("ci");
+  });
+
   it("rejects a bad GitHub signature and unsupported events", async () => {
     const payload = "{}";
     const common = { "x-github-delivery": "delivery-2", "x-github-event": "pull_request" };

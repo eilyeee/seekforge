@@ -25,6 +25,11 @@ const DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_SEEN_DELIVERIES = 10_000;
 const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment", "workflow_run"]);
 const UNKNOWN_TRIGGER_SECRET = "seekforge-unknown-trigger-secret";
+// GitHub caps webhook payloads at 25 MB; a large push / PR / many-commit
+// delivery routinely exceeds readBody's default 1 MB cap. The whole body must
+// be read (for HMAC verification) before it can be accepted, so raise the cap
+// for THIS route only — other routes keep their tighter defaults.
+const MAX_TRIGGER_BODY_BYTES = 26_214_400; // 25 MiB
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   await routes(ctx);
@@ -68,7 +73,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     // this route's parse-error message mentions the body being optional.
     let rawPayload: string;
     try {
-      rawPayload = await readBody(req);
+      rawPayload = await readBody(req, MAX_TRIGGER_BODY_BYTES);
     } catch (err) {
       if (isBodyTooLarge(err)) return sendApiError(res, 413, "too_large", "request body too large");
       throw err;
