@@ -73,7 +73,7 @@ export function commandInvokes(ran: string, configured: string): boolean {
  * and long `--flag` / `--flag=value`. The `-c\s+\S+` alternative is listed
  * first so it consumes its value argument instead of a bare `-c` swallowing it.
  */
-const GIT_GLOBAL_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--[a-z][\w-]*(?:=\S+)?|-[A-Za-z]\S*))*`;
+const GIT_GLOBAL_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--[a-z][\w-]*(?:=\S+|\s+\S+)?|-[A-Za-z]\S*))*`;
 
 /**
  * ripgrep flags that turn a search into code execution (`--pre`, `--search-zip`,
@@ -131,7 +131,7 @@ const ENV_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   // Pushing to a remote is outward-facing: always require explicit human
   // approval (env never auto-runs, even in "auto" mode, and auto-denies
   // headless). Force-push is denied outright by the denylist above.
-  { re: /\bgit\s+push\b/, reason: "git push" },
+  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+push\b`), reason: "git push" },
 ];
 
 /** Commands safe to auto-run without confirmation (prefix match, normalized). */

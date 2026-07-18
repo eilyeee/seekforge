@@ -68,6 +68,7 @@ flowchart TD
 持续 eval 场景选择一个显式的 runner（`agent`、`loop` 或 `session_scenario`）。因此 Loop、恢复与记忆行为执行的是真实生命周期，而确定性检查仍是评分的权威。多样本 A/B 按任务与样本配对、交替两臂顺序，并发布置信区间、成本分布与恢复后的 CI 趋势。
 
 来自 Agent、REST、Git、worktree 与桌面端的工作区变更必须使用相应的共享会话或仓库协调守护。UI 请求还必须在活动工作区切换时拒绝过期的完成结果。仅靠一个请求计数器是不够的，因为两个工作区可能复用相同的本地代次编号。
+在同一个 Server 内，repository coordinator 按仓库物理身份串行化会修改内容的 WS Agent、Loop、后台运行、webhook 运行、安全修复、Git 与 worktree 操作；只读 ask 运行不参与串行化。
 
 ## 安全边界
 

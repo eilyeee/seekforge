@@ -258,7 +258,7 @@ describe("mcp prompt-injection data boundary", () => {
 describe("loadMcpToolSpecs", () => {
   it("builds specs from a config record and disposes all clients", async () => {
     const { specs, dispose } = await loadMcpToolSpecs({
-      fake: { command: process.execPath, args: [serverPath] },
+      fake: { command: process.execPath, args: [serverPath], trusted: true },
       broken: { command: "/nonexistent/seekforge-no-such-binary", trusted: true },
     });
     try {
@@ -268,10 +268,22 @@ describe("loadMcpToolSpecs", () => {
     }
   });
 
+  it("does not connect untrusted servers during automatic discovery", async () => {
+    const { specs, entries, dispose } = await loadMcpToolSpecs({
+      untrusted: { command: "/nonexistent/seekforge-must-not-spawn" },
+    });
+    try {
+      expect(specs).toEqual([]);
+      expect(entries).toEqual([]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("skips a malformed server entry without blocking healthy servers", async () => {
     const { specs, entries, dispose } = await loadMcpToolSpecs({
       malformed: null as never,
-      fake: { command: process.execPath, args: [serverPath] },
+      fake: { command: process.execPath, args: [serverPath], trusted: true },
     });
     try {
       expect(entries.map((entry) => entry.serverName)).toEqual(["fake"]);
@@ -283,7 +295,7 @@ describe("loadMcpToolSpecs", () => {
 
   it("exposes the live connections for resource access via entries", async () => {
     const { entries, dispose } = await loadMcpToolSpecs({
-      fake: { command: process.execPath, args: [serverPath] },
+      fake: { command: process.execPath, args: [serverPath], trusted: true },
     });
     try {
       expect(entries.map((e) => e.serverName)).toEqual(["fake"]);

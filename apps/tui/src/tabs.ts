@@ -75,6 +75,8 @@ export function tabsReducer(s: TabsState, a: TabsAction): TabsState {
 
     case "tab-close": {
       if (s.tabs.length <= 1) return s; // always keep one tab
+      const active = s.tabs[s.active];
+      if (active?.chat.running || (active?.chat.detached.length ?? 0) > 0) return s;
       const tabs = s.tabs.filter((_, i) => i !== s.active);
       return { ...s, tabs, active: Math.min(s.active, tabs.length - 1) };
     }

@@ -99,6 +99,29 @@ describe("apply_patch", () => {
     expect(res.error?.code).toBe("not_found");
   });
 
+  it("refuses a symlink swapped in after checkpointing", async () => {
+    const { ws, file } = setup();
+    const outside = fs.mkdtempSync(path.join(path.dirname(ws), "seekforge-outside-"));
+    const external = path.join(outside, "external.js");
+    fs.writeFileSync(external, FILE);
+    const ctx = makeCtx(ws, {
+      checkpoint: () => {
+        fs.rmSync(file);
+        fs.symlinkSync(external, file);
+      },
+    });
+    const res = await dispatcher.execute(
+      call("apply_patch", {
+        path: "math.js",
+        edits: [{ oldString: "return a + b;", newString: "return a * b;" }],
+      }),
+      ctx,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("outside_workspace");
+    expect(fs.readFileSync(external, "utf8")).toBe(FILE);
+  });
+
   describe("per-hunk selection", () => {
     const MULTI_EDITS = [
       { oldString: "  return a + b;", newString: "  return a + b + 0;" }, // index 0

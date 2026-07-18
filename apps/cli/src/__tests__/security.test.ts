@@ -81,6 +81,20 @@ test("registers every security subcommand", () => {
   );
 });
 
+test("security fix cost accepts only a complete decimal number", async () => {
+  for (const value of ["0x10", "0b10", "Infinity", "1usd"]) {
+    const program = new Command().exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerSecurityCommands(program);
+    await assert.rejects(
+      program.parseAsync(["security", "fix", "sf-test", "--verify", "pnpm test", "--max-cost", value], {
+        from: "user",
+      }),
+      /positive number/,
+    );
+  }
+});
+
 test("lists, shows, and transitions a Finding", () => {
   const workspace = mkdtempSync(join(tmpdir(), "seekforge-security-cli-"));
   seed(workspace);

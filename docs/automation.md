@@ -99,6 +99,8 @@ Signed GitHub requests do not require the server bearer token or
 `x-seekforge-trigger-secret`. Accepted events are `push`, `pull_request`,
 `issues`, `issue_comment`, and `workflow_run`. Deliveries are deduplicated by
 workspace, trigger, and delivery ID for 24 hours; a duplicate returns `409`.
+The persisted claim is protected by a cross-process workspace lease, so two
+Server instances sharing one workspace cannot both accept the same delivery.
 
 An optional JSON request body (e.g. a GitHub webhook payload) is distilled into
 a short summary — action, repo, ref, PR/issue number + title, sender, head

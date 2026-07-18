@@ -400,6 +400,7 @@ describe("run API and WS replay", () => {
   it("starts and cancels a headless background loop", async () => {
     const workspace = makeWorkspace();
     let observedAbort = false;
+    let loopStarted = false;
     server = await startServer({
       workspace,
       port: 0,
@@ -407,6 +408,7 @@ describe("run API and WS replay", () => {
       logger: { log: () => {} },
       createAgent: fakeAgentFactory(async function* () {}),
       runLoop: async (_deps, opts) => {
+        loopStarted = true;
         opts.onEvent?.({ type: "iteration.start", iteration: 1 });
         await new Promise<void>((resolve) => {
           const done = () => {
@@ -434,6 +436,7 @@ describe("run API and WS replay", () => {
       body: JSON.stringify({ kind: "loop", task: "loop", verifyCommand: "pnpm test", maxCostUsd: 1 }),
     });
     const run = (await response.json()) as { runId: string };
+    await waitUntil(() => loopStarted);
     const cancelled = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}`, {
       method: "DELETE",
       headers,

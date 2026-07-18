@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
+import { resolveForWrite } from "../tools/sandbox.js";
 
 export type MemoryCandidateType = "command" | "path" | "convention" | "tech" | "task_pattern";
 
@@ -76,6 +77,10 @@ export function factMetaPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "memory", "fact-meta.json");
 }
 
+function memoryFileForWrite(workspace: string, name: string): string {
+  return resolveForWrite(workspace, path.join(".seekforge", "memory", name));
+}
+
 /** Metadata keyed by bullet body ("[type] content" — matches brief bullets). */
 export function readFactMeta(workspace: string): Record<string, FactMeta> {
   const raw = readFileIfExists(factMetaPath(workspace));
@@ -91,7 +96,7 @@ export function readFactMeta(workspace: string): Record<string, FactMeta> {
 function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void {
   // Best-effort: never break a run on a metadata write failure.
   try {
-    const file = factMetaPath(workspace);
+    const file = memoryFileForWrite(workspace, "fact-meta.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     writeFileAtomic(file, `${JSON.stringify(meta, null, 2)}\n`);
   } catch {
@@ -399,7 +404,7 @@ export function listMemoryCandidates(workspace: string): MemoryCandidate[] {
 
 export function appendCandidates(workspace: string, candidates: MemoryCandidate[]): void {
   if (candidates.length === 0) return;
-  const file = candidatesPath(workspace);
+  const file = memoryFileForWrite(workspace, "candidates.jsonl");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
   fs.appendFileSync(file, lines, "utf8");
@@ -407,7 +412,7 @@ export function appendCandidates(workspace: string, candidates: MemoryCandidate[
 
 /** Module-internal (used by direct.ts); not part of the public barrel. */
 export function writeCandidates(workspace: string, candidates: MemoryCandidate[]): void {
-  const file = candidatesPath(workspace);
+  const file = memoryFileForWrite(workspace, "candidates.jsonl");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
   writeFileAtomic(file, lines);
@@ -424,7 +429,7 @@ export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "cont
 
 /** Appends a fact bullet to project.md, creating it with a header if needed. */
 export function appendProjectFact(workspace: string, candidate: MemoryCandidate): void {
-  const file = projectMemoryPath(workspace);
+  const file = memoryFileForWrite(workspace, "project.md");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const bullet = formatFactBullet(candidate);
   const existing = readFileIfExists(file);
@@ -458,7 +463,7 @@ function setCandidateStatus(workspace: string, id: string, status: MemoryCandida
  * fact-meta tracking (that sidecar is project-scoped).
  */
 export function appendGlobalFact(candidate: MemoryCandidate): void {
-  const file = globalMemoryPath();
+  const file = resolveForWrite(seekforgeHome(), path.join(".seekforge", "memory", "project.md"));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const bullet = formatFactBullet(candidate);
   const existing = readFileIfExists(file);

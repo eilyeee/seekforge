@@ -49,6 +49,45 @@ describe("WS auth", () => {
 });
 
 describe("start -> events -> idle", () => {
+  it("serializes edit runs from separate connections targeting the same workspace", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { server } = await boot(
+      fakeAgentFactory(async function* () {
+        const invocation = ++started;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        try {
+          yield { type: "session.created", sessionId: `serialized-${invocation}` };
+          if (invocation === 1) await firstGate;
+          yield { type: "session.completed", report: emptyReport() };
+        } finally {
+          active -= 1;
+        }
+      }),
+    );
+    const first = await open(server.port);
+    const second = await open(server.port);
+
+    sendFrame(first.ws, { type: "start", task: "first edit", mode: "edit", approvalMode: "auto" });
+    await first.rx.waitFor((f) => f.type === "event" && (f.event as { type: string }).type === "session.created");
+    sendFrame(second.ws, { type: "start", task: "second edit", mode: "edit", approvalMode: "auto" });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(started).toBe(1);
+    expect(maxActive).toBe(1);
+
+    releaseFirst();
+    await first.rx.waitFor((f) => f.type === "idle");
+    await second.rx.waitFor((f) => f.type === "idle");
+    expect(started).toBe(2);
+    expect(maxActive).toBe(1);
+  });
+
   it("streams scripted events (incl. model.delta) and finishes with idle", async () => {
     let seenInput: Record<string, unknown> = {};
     const { server, workspace } = await boot(
@@ -927,6 +966,28 @@ describe("cancel", () => {
     sendFrame(ws, { type: "cancel" });
     const err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("not_running");
+  });
+
+  it("reports cancelled when an aborted agent throws instead of yielding a terminal event", async () => {
+    const { server } = await boot(
+      fakeAgentFactory(async function* (_opts, input) {
+        yield { type: "session.created", sessionId: "cancel-throw" };
+        await new Promise<void>((resolve) => {
+          if (input.signal?.aborted) return resolve();
+          input.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new Error("provider aborted");
+      }),
+    );
+    const { ws, rx } = await open(server.port);
+
+    sendFrame(ws, { type: "start", task: "long job", mode: "edit", approvalMode: "auto" });
+    await rx.waitFor((f) => f.type === "event" && (f.event as { type: string }).type === "session.created");
+    sendFrame(ws, { type: "cancel" });
+
+    const error = await rx.waitFor((f) => f.type === "error");
+    expect(error.code).toBe("cancelled");
+    await rx.waitFor((f) => f.type === "idle");
   });
 });
 

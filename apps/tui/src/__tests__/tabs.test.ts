@@ -22,6 +22,21 @@ describe("tabsReducer", () => {
     expect(s).toBe(before);
   });
 
+  it("keeps a tab alive until its detached run finishes", () => {
+    let s = initialTabs("m");
+    const tab1 = activeTabId(s);
+    s = tabsReducer(s, { type: "chat", tabId: tab1, action: { type: "run-detach", runId: 7, label: "loop" } });
+    s = tabsReducer(s, { type: "tab-new", model: "m" });
+    s = tabsReducer(s, { type: "tab-switch", index: 0 });
+
+    const blocked = tabsReducer(s, { type: "tab-close" });
+    expect(blocked).toBe(s);
+
+    s = tabsReducer(s, { type: "chat", tabId: tab1, action: { type: "run-detach-done", runId: 7 } });
+    s = tabsReducer(s, { type: "tab-close" });
+    expect(s.tabs).toHaveLength(1);
+  });
+
   it("names a tab from its first user message, capped", () => {
     let s = initialTabs("m");
     const id = activeTabId(s);

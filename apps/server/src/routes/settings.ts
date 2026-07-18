@@ -301,8 +301,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand like POST /api/mcp/:name/tools. A server that fails or lacks
   // resource support contributes zero entries (listMcpResources never throws).
   if (method === "GET" && path === "/api/mcp/resources") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) =>
-      isMcpServerConfig(entry[1]),
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter(
+      (entry) => isMcpServerConfig(entry[1]) && entry[1].trusted === true,
     );
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,
@@ -320,8 +320,8 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
   // demand. Mirrors /api/mcp/resources: a server that fails or lacks prompt
   // support contributes zero entries (listMcpPrompts never throws).
   if (method === "GET" && path === "/api/mcp/prompts") {
-    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter((entry) =>
-      isMcpServerConfig(entry[1]),
+    const servers = Object.entries(loadConfig(workspace).mcpServers ?? {}).filter(
+      (entry) => isMcpServerConfig(entry[1]) && entry[1].trusted === true,
     );
     const entries: McpClientEntry[] = servers.map(([serverName, config]) => ({
       serverName,

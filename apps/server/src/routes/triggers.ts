@@ -6,6 +6,7 @@
  */
 
 import { readProjectFile, writeProjectFileAtomic } from "../config.js";
+import { acquireSessionLease, SessionBusyError } from "@seekforge/core";
 import { isBodyTooLarge, readBody, readJsonBody, sendApiError, sendJson } from "../http.js";
 import { startManagedTriggerRun } from "../trigger-run.js";
 import {
@@ -29,6 +30,8 @@ const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment"
 // delivery fire a second cost-bounded run. Entries are evicted by EXPIRY (TTL),
 // with a large hard cap as a safety valve that drops the soonest-to-expire first.
 const DELIVERY_FILE = ".seekforge/trigger-deliveries.json";
+const DELIVERY_LOCK_ID = "coord-trigger-delivery-store";
+const DELIVERY_LOCK_RETRIES = 200;
 
 /** deliveryKey → epoch-ms expiry. Only unexpired entries survive a load. */
 type DeliveryStore = Record<string, number>;
@@ -63,6 +66,42 @@ function capDeliveries(store: DeliveryStore): void {
   if (keys.length <= MAX_SEEN_DELIVERIES) return;
   keys.sort((a, b) => store[a]! - store[b]!);
   for (const key of keys.slice(0, keys.length - MAX_SEEN_DELIVERIES)) delete store[key];
+}
+
+async function withDeliveryLock<T>(workspace: string, operation: () => T): Promise<T> {
+  for (let attempt = 0; attempt < DELIVERY_LOCK_RETRIES; attempt += 1) {
+    try {
+      const lease = acquireSessionLease(workspace, DELIVERY_LOCK_ID);
+      try {
+        return operation();
+      } finally {
+        lease.release();
+      }
+    } catch (error) {
+      if (!(error instanceof SessionBusyError) || attempt === DELIVERY_LOCK_RETRIES - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("could not acquire GitHub delivery store lock");
+}
+
+async function claimDelivery(workspace: string, key: string): Promise<boolean> {
+  return withDeliveryLock(workspace, () => {
+    const deliveries = loadDeliveries(workspace);
+    if (key in deliveries) return false;
+    deliveries[key] = Date.now() + DELIVERY_TTL_MS;
+    capDeliveries(deliveries);
+    saveDeliveries(workspace, deliveries);
+    return true;
+  });
+}
+
+async function releaseDelivery(workspace: string, key: string): Promise<void> {
+  await withDeliveryLock(workspace, () => {
+    const deliveries = loadDeliveries(workspace);
+    delete deliveries[key];
+    saveDeliveries(workspace, deliveries);
+  });
 }
 const UNKNOWN_TRIGGER_SECRET = "seekforge-unknown-trigger-secret";
 // GitHub caps webhook payloads at 25 MB; a large push / PR / many-commit
@@ -136,7 +175,6 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 409, "conflict", `trigger is disabled: ${id}`);
     }
     let deliveryKey: string | undefined;
-    let deliveries: DeliveryStore | undefined;
     if (githubSigned) {
       if (typeof githubDelivery !== "string" || githubDelivery.length === 0) {
         return sendApiError(res, 400, "bad_request", "missing x-github-delivery");
@@ -144,15 +182,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       if (typeof githubEvent !== "string" || !GITHUB_EVENTS.has(githubEvent)) {
         return sendApiError(res, 400, "bad_request", "unsupported x-github-event");
       }
-      // Load-check-then-set runs entirely synchronously (no await between here
-      // and the set below), so two concurrent deliveries of the same id cannot
-      // both pass the check — the first completes its save before the event loop
-      // yields at the run's `await`. loadDeliveries already evicted expired ids.
-      deliveries = loadDeliveries(workspace);
       deliveryKey = `${id}\0${githubDelivery}`;
-      if (deliveryKey in deliveries) {
-        return sendApiError(res, 409, "conflict", "duplicate GitHub delivery");
-      }
     }
     let payload: unknown;
     try {
@@ -161,10 +191,8 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", "body must be valid JSON when present");
     }
     const task = buildTriggerTask(trigger.task, payload);
-    if (deliveryKey !== undefined && deliveries !== undefined) {
-      deliveries[deliveryKey] = Date.now() + DELIVERY_TTL_MS;
-      capDeliveries(deliveries);
-      saveDeliveries(workspace, deliveries);
+    if (deliveryKey !== undefined && !(await claimDelivery(workspace, deliveryKey))) {
+      return sendApiError(res, 409, "conflict", "duplicate GitHub delivery");
     }
     try {
       const ledgerRun = rest.runManager.create({
@@ -180,6 +208,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         maxCostUsd: trigger.maxCostUsd,
         runManager: rest.runManager,
         runId: ledgerRun.runId,
+        ...(trigger.mode === "edit"
+          ? { schedule: (operation: () => Promise<void>) => rest.coordinator.withRepository(workspace, operation) }
+          : {}),
       });
       rest.triggerRuns?.add(run);
       void run.completion.then(
@@ -189,13 +220,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       const { sessionId } = await run.started;
       return sendJson(res, 202, { runId: ledgerRun.runId, sessionId, triggerId: id });
     } catch (err) {
-      // Free the delivery id so the webhook can be retried. Reload first: a
-      // concurrent delivery may have persisted its own key while this run was
-      // starting, and we must not clobber it with our stale snapshot.
+      // Free the delivery id under the same cross-process lock so the webhook
+      // can be retried without clobbering concurrent delivery claims.
       if (deliveryKey !== undefined) {
-        const fresh = loadDeliveries(workspace);
-        delete fresh[deliveryKey];
-        saveDeliveries(workspace, fresh);
+        await releaseDelivery(workspace, deliveryKey);
       }
       return sendApiError(res, 500, "internal", err instanceof Error ? err.message : String(err));
     }

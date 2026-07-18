@@ -34,9 +34,11 @@ export type McpServerConfig = {
     scope?: string;
   };
   /**
-   * SeekForge-specific (default false). Untrusted servers' tools run at the
-   * "env" permission level (always confirmed, even with -y); trusted servers'
-   * tools run at "write" (auto-approved with -y, confirmed otherwise).
+   * SeekForge-specific connection authorization (default false). Automatic
+   * agent discovery connects only trusted servers; their tools run at the
+   * "write" permission level (auto-approved with -y, confirmed otherwise).
+   * Explicit management actions such as testing a configured server may still
+   * connect an untrusted entry because the user initiated that exact action.
    */
   trusted?: boolean;
 };

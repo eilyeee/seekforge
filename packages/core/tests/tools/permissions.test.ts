@@ -264,6 +264,30 @@ describe("permission rules", () => {
     expect(sibling.allowed).toBe(false);
   });
 
+  it("normalizes path aliases before applying allow and deny rules", async () => {
+    const ws = makeWorkspace();
+    const { confirm } = scriptedConfirm(false);
+    const rules: PermissionRule[] = [
+      { action: "allow", tool: "write_file", match: "src" },
+      { action: "deny", tool: "write_file", match: "secrets" },
+    ];
+    const ctx = makeCtx(ws, { policy: { approvalMode: "confirm", rules }, confirm });
+
+    const escapedAllow = await enforcePermission(
+      "write_file",
+      { permission: "write", description: "write root file", path: "src/../README.md" },
+      ctx,
+    );
+    expect(escapedAllow).toMatchObject({ allowed: false, decision: "user_denied" });
+
+    const aliasedDeny = await enforcePermission(
+      "write_file",
+      { permission: "write", description: "write secret", path: "src/../secrets/key.txt" },
+      ctx,
+    );
+    expect(aliasedDeny).toMatchObject({ allowed: false, decision: "deny_rule" });
+  });
+
   it("allow rule does NOT rescue a dangerous command", async () => {
     const ws = makeWorkspace();
     const { confirm, requests } = scriptedConfirm(true);

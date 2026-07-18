@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendEvolutionProposals,
@@ -19,6 +22,16 @@ describe("evolution store", () => {
     appendEvolutionProposals(ws, [makeProposal({ id: "ep-sess1-1" }), makeProposal({ id: "ep-sess1-2" })]);
     expect(readEvolutionProposals(ws).map((p) => p.id)).toEqual(["ep-sess1-1", "ep-sess1-2"]);
     expect(listEvolutionProposals(ws).map((p) => p.id)).toEqual(["ep-sess1-2", "ep-sess1-1"]);
+  });
+
+  it("refuses proposal directories symlinked outside the workspace", () => {
+    const ws = makeWorkspace();
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-evolution-outside-"));
+    mkdirSync(join(ws, ".seekforge"), { recursive: true });
+    symlinkSync(outside, join(ws, ".seekforge", "evolution"));
+
+    expect(() => appendEvolutionProposals(ws, [makeProposal()])).toThrow(/escapes the workspace/);
+    expect(() => readFileSync(join(outside, "proposals.jsonl"), "utf8")).toThrow();
   });
 
   it("skips corrupt and invalid lines", () => {

@@ -92,14 +92,18 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         maxCostUsd,
         runManager: rest.runManager,
         runId: ledgerRun.runId,
+        ...(mode === "edit"
+          ? { schedule: (operation: () => Promise<void>) => rest.coordinator.withRepository(workspace, operation) }
+          : {}),
       });
       trackRun(rest, run);
     } else {
       const controller = new AbortController();
       rest.runManager.start(ledgerRun.runId, workspace, controller);
       let finalSessionId = "";
-      const completion = (async () => {
+      const execute = async (): Promise<void> => {
         try {
+          controller.signal.throwIfAborted();
           const result = await rest.runLoop(
             {
               workspace,
@@ -142,7 +146,8 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
             error: { code: "loop_error", message: err instanceof Error ? err.message : String(err) },
           });
         }
-      })();
+      };
+      const completion = rest.coordinator.withRepository(workspace, execute);
       trackRun(rest, {
         started: completion.then(() => ({ sessionId: finalSessionId })),
         completion,

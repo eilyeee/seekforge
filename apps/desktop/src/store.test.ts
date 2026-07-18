@@ -540,6 +540,36 @@ describe("store: loop mode", () => {
     expect(tab.wsError).toContain("interrupted");
   });
 
+  it("subscribes from the last run sequence after reconnect and applies the terminal replay", () => {
+    useStore.getState().sendTask("work");
+    lastHandlers!.onFrame({ type: "run.accepted", runId: "run-replay", status: "queued", seq: 1 });
+    lastHandlers!.onFrame({
+      type: "event",
+      runId: "run-replay",
+      seq: 2,
+      sessionId: "replay-session",
+      event: { type: "session.created", sessionId: "replay-session" },
+    });
+
+    lastHandlers!.onState("disconnected");
+    lastHandlers!.onState("connected");
+    expect(sent.at(-1)).toMatchObject({ type: "subscribe", runId: "run-replay", afterSeq: 2 });
+    expect(activeTab(useStore.getState().tabs).chat.running).toBe(true);
+
+    lastHandlers!.onFrame({
+      type: "event",
+      runId: "run-replay",
+      seq: 3,
+      sessionId: "replay-session",
+      event: { type: "session.failed", error: { code: "cancelled", message: "socket closed" } },
+    });
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(false);
+    expect(tab.activeRunId).toBeNull();
+    expect(tab.runSeq).toBe(0);
+    expect(tab.wsError).toBeNull();
+  });
+
   it("generic chat runs do not put LoopPanel into its running state", () => {
     useStore.getState().sendTask("ordinary chat task");
     const tab = activeTab(useStore.getState().tabs);

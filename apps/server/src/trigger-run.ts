@@ -33,6 +33,8 @@ export type StartTriggerRunInput = {
   maxCostUsd: number;
   runManager?: RunManager;
   runId?: string;
+  /** Optional workspace mutation scheduler shared with other server surfaces. */
+  schedule?: (operation: () => Promise<void>) => Promise<void>;
 };
 
 export type TriggerRunHandle = {
@@ -56,11 +58,12 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
     rejectStarted = reject;
   });
   let settled = false;
-  const completion = (async () => {
+  const execute = async (): Promise<void> => {
     let handle: Awaited<ReturnType<CreateAgentFn>> | undefined;
     let terminalStatus: RunStatus | undefined;
     let sessionId = "";
     try {
+      controller.signal.throwIfAborted();
       handle = await input.createAgent({
         workspace: input.workspace,
         // Headless: auto-deny every confirmation. Combined with approvalMode
@@ -147,7 +150,8 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
         }
       }
     }
-  })();
+  };
+  const completion = input.schedule ? input.schedule(execute) : execute();
   return { started, completion, abort: () => controller.abort() };
 }
 

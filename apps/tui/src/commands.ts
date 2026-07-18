@@ -93,7 +93,12 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "list project memory facts (candidates reviews pending; edit opens a memory file)",
     group: "context",
   },
-  { name: "tasks", args: "[kill <id>]", summary: "background tasks (live; kill stops one)", group: "tools" },
+  {
+    name: "tasks",
+    args: "[kill <id>]",
+    summary: "background and detached tasks (live; kill stops one)",
+    group: "tools",
+  },
   { name: "agents", summary: "list dispatchable subagents", group: "tools" },
   {
     name: "agent-steer",

@@ -66,7 +66,7 @@ export const common = {
     "status.removedMcp": 'removed MCP server "{name}" from {path}',
     "status.addedMcp": 'added MCP server "{name}" ({cmd}) to {path}',
     "status.mcpUntrustedNote":
-      'note: new servers are untrusted by default — set "trusted": true in config to auto-approve their tools',
+      'note: new servers are untrusted by default — review them, then set "trusted": true to allow Agent connection',
     "status.restoredFile": "restore  {path}",
     "status.deletedFile": "delete   {path}",
     "status.skippedFile": "skip     {path} ({reason})",
@@ -169,7 +169,7 @@ export const common = {
     "status.updateNote2": " 例如 pnpm add -g seekforge。SeekForge 不会自动更新全局二进制文件。）",
     "status.removedMcp": '已从 {path} 移除 MCP 服务器 "{name}"',
     "status.addedMcp": '已将 MCP 服务器 "{name}"（{cmd}）添加到 {path}',
-    "status.mcpUntrustedNote": '注意：新服务器默认为不受信任 — 请在配置中设置 "trusted": true 以自动批准其工具',
+    "status.mcpUntrustedNote": '注意：新服务器默认为不受信任 — 请先审查，再设置 "trusted": true 允许 Agent 连接',
     "status.restoredFile": "恢复    {path}",
     "status.deletedFile": "删除    {path}",
     "status.skippedFile": "跳过    {path}（{reason}）",

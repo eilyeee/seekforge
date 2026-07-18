@@ -285,7 +285,20 @@ export const useStore = create<AppStore>()((set, get) => {
       client = createWsClient({
         getToken: () => get().token,
         onFrame: (frame) => handleFrame(tabId, frame),
-        onState: (conn) => set((s) => ({ tabs: routeConnectionState(s.tabs, tabId, conn) })),
+        onState: (conn) => {
+          set((s) => ({ tabs: routeConnectionState(s.tabs, tabId, conn) }));
+          if (conn === "connected") {
+            const tab = get().tabs.tabs.find((candidate) => candidate.tabId === tabId);
+            if (tab?.activeRunId) {
+              client?.send({
+                type: "subscribe",
+                runId: tab.activeRunId,
+                afterSeq: tab.runSeq,
+                ...(tab.ws ? { ws: tab.ws } : {}),
+              });
+            }
+          }
+        },
       });
       wsByTab.set(tabId, client);
     }
@@ -663,6 +676,8 @@ export const useStore = create<AppStore>()((set, get) => {
           loop: emptyLoopProgress(),
           loopRunning: false,
           loopResetPending: false,
+          activeRunId: null,
+          runSeq: 0,
         }),
       }));
     },

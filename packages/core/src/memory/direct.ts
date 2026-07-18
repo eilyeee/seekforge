@@ -7,6 +7,7 @@
  * candidates.jsonl for audit.
  */
 
+import { randomUUID } from "node:crypto";
 import { INJECTION_PATTERN } from "./extract.js";
 import {
   appendCandidates,
@@ -46,10 +47,8 @@ export type ProjectFact = {
 
 export type ProjectFactSelector = { index: number } | { match: string };
 
-function nextUserFactId(existing: MemoryCandidate[]): string {
-  const prefix = `mc-user-${Date.now()}-`;
-  const taken = existing.filter((c) => c.id.startsWith(prefix)).length;
-  return `${prefix}${taken + 1}`;
+function nextUserFactId(_existing: MemoryCandidate[]): string {
+  return `mc-user-${randomUUID()}`;
 }
 
 /**

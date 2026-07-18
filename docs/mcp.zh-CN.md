@@ -83,8 +83,8 @@ filesystem  (npx -y ..., untrusted)  2 tool(s)
 向项目配置的 `mcpServers` 追加一个 **stdio** 服务器（加 `--global` 则写入
 `~/.seekforge/`）。`<name>` 之后的第一个 token 是命令，其余成为 `args`。
 
-新增服务器**默认不受信任（untrusted）** —— CLI 会打印提示：若需要自动批准，
-请设置 `"trusted": true`。
+新增服务器**默认不受信任（untrusted）** —— CLI 会提示先审查该条目，再设置
+`"trusted": true` 以允许 Agent 自动连接。
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
@@ -157,16 +157,18 @@ stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true
 
 ### 1.7 信任模型
 
-每个服务器条目有一个可选的 `trusted` 布尔值（默认 `false`），
-它决定该服务器工具的权限分类：
+每个服务器条目有一个可选的 `trusted` 布尔值（默认 `false`）。Agent 自动发现
+只连接显式设置为 `trusted: true` 的条目，因为连接本身就可能启动本地进程或访问
+远程端点。已信任服务器的工具随后按 `write` 权限级别分类：
 
-| `trusted` | 权限       | 使用 `-y`（自动批准）时  | 未使用 `-y` 时 |
-|---|---|---|---|
-| `false`   | `"env"`    | 始终需确认（从不自动批准） | 需确认     |
-| `true`    | `"write"`  | 自动批准                 | 需确认     |
+| `trusted` | 自动连接 | 工具权限 | 使用 `-y` 时 | 未使用 `-y` 时 |
+|---|---|---|---|---|
+| `false` | 禁用 | 不适用 | 不适用 | 不适用 |
+| `true` | 启用 | `"write"` | 自动批准 | 需确认 |
 
-也就是说，**不受信任的服务器始终需要确认**，即使在 `-y` 运行中也一样。
-只有你显式标记为 `trusted` 的服务器才能免提示运行。
+`seekforge mcp list`、Desktop 的服务器测试/工具查看等显式管理操作仍可连接用户
+主动选择的未信任条目，因为用户已经发起了这一次准确的连接。只有审查过命令或
+URL 及其配置后，才应把服务器标记为已信任。
 
 ### 1.8 Resources
 

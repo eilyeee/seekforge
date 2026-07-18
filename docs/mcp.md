@@ -86,8 +86,8 @@ Appends a **stdio** server to `mcpServers` in the project config (add
 `--global` for `~/.seekforge/`). The first token after `<name>` is the command;
 the rest become `args`.
 
-New servers are **untrusted by default** — the CLI prints a reminder to set
-`"trusted": true` if you want auto-approval.
+New servers are **untrusted by default** — the CLI prints a reminder to review
+the entry and set `"trusted": true` before automatic Agent connection.
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
@@ -169,16 +169,20 @@ loop or unbounded catalog allocation.
 
 ### 1.7 Trust Model
 
-Each server entry has an optional `trusted` boolean (default `false`). This
-controls the tool's permission classification:
+Each server entry has an optional `trusted` boolean (default `false`). Automatic
+agent discovery connects only entries explicitly marked `trusted: true`, because
+the connection itself can start a local process or contact a remote endpoint.
+The trusted server's tools are then classified at the `write` permission level:
 
-| `trusted` | Permission | With `-y` (auto-approve) | Without `-y` |
-|---|---|---|---|
-| `false`   | `"env"`    | Always confirmed (never) | Confirmed     |
-| `true`    | `"write"`  | Auto-approved            | Confirmed     |
+| `trusted` | Automatic connection | Tool permission | With `-y` | Without `-y` |
+|---|---|---|---|---|
+| `false`   | Disabled | N/A | N/A | N/A |
+| `true`    | Enabled | `"write"` | Auto-approved | Confirmed |
 
-This means **untrusted servers always require confirmation**, even in `-y`
-runs. Only servers you explicitly mark as `trusted` can run without prompting.
+Explicit management commands such as `seekforge mcp list` and Desktop's server
+test/tool inspection can connect the selected untrusted entry because that exact
+connection was initiated by the user. Mark a server trusted only after reviewing
+its command or URL and configuration.
 
 ### 1.8 Resources
 

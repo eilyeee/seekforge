@@ -189,6 +189,9 @@ export async function loadMcpToolSpecs(
       continue;
     }
     const config = value as McpServerConfig;
+    // Discovery itself starts a local process or contacts a remote endpoint.
+    // Tool-level confirmation happens too late to authorize that side effect.
+    if (config.trusted !== true) continue;
     entries.push({
       serverName,
       client: createMcpClient({
@@ -196,7 +199,7 @@ export async function loadMcpToolSpecs(
         config,
         ...(workspaceRoots !== undefined ? { workspaceRoots } : {}),
       }),
-      trusted: config.trusted === true,
+      trusted: true,
     });
   }
   const dispose = () => {

@@ -114,7 +114,10 @@ Workspace mutations from Agent, REST, Git, worktree, and desktop surfaces must
 use the relevant shared session or repository coordination guard. UI requests
 must also reject stale completion when the active workspace changes. A request
 counter alone is insufficient because two workspaces can reuse the same local
-generation number.
+generation number. Within one Server, the repository coordinator serializes
+mutating WS Agents, Loops, background runs, webhook runs, security fixes, Git,
+and worktree operations by physical repository identity; read-only ask runs are
+not serialized.
 
 ## Security boundaries
 

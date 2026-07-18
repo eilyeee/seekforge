@@ -498,7 +498,7 @@ type McpServerConfig = {
     refreshToken: string;
     scope?: string;
   };
-  /** SeekForge-specific: trusted servers' tools run at "write" level (default false). */
+  /** Authorizes automatic connection; trusted tools run at "write" level (default false). */
   trusted?: boolean;
 };
 ```

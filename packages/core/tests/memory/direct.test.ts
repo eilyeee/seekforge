@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -25,7 +26,7 @@ describe("addMemoryFact", () => {
     const ws = makeWorkspace();
     const candidate = addMemoryFact(ws, { content: "use pnpm, never npm", type: "command" });
 
-    expect(candidate.id).toMatch(/^mc-user-\d+-1$/);
+    expect(candidate.id).toMatch(/^mc-user-[0-9a-f-]{36}$/);
     expect(candidate.status).toBe("approved");
     expect(candidate.sourceSessionId).toBe("manual");
     expect(candidate.confidence).toBe(1);
@@ -108,6 +109,17 @@ describe("addMemoryFact", () => {
     const a = addMemoryFact(ws, { content: "fact a" });
     const b = addMemoryFact(ws, { content: "fact b" });
     expect(a.id).not.toBe(b.id);
+  });
+
+  it("refuses project memory directories symlinked outside the workspace", () => {
+    const ws = makeWorkspace();
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-memory-outside-"));
+    mkdirSync(join(ws, ".seekforge"), { recursive: true });
+    symlinkSync(outside, join(ws, ".seekforge", "memory"));
+
+    expect(() => addMemoryFact(ws, { content: "must stay inside" })).toThrow(/escapes the workspace/);
+    expect(() => readFileSync(join(outside, "project.md"), "utf8")).toThrow();
+    expect(() => readFileSync(join(outside, "candidates.jsonl"), "utf8")).toThrow();
   });
 });
 

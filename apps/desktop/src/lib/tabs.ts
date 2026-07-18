@@ -86,6 +86,10 @@ export type ChatTab = {
   loopRunning: boolean;
   /** A resume was sent; retain the old result until the server accepts it. */
   loopResetPending: boolean;
+  /** Server ledger identity retained across transient WebSocket reconnects. */
+  activeRunId: string | null;
+  /** Highest ledger sequence applied for activeRunId. */
+  runSeq: number;
 };
 
 export type TabsState = {
@@ -134,6 +138,8 @@ function makeTab(tabId: string, ws = ""): ChatTab {
     loop: emptyLoopProgress(),
     loopRunning: false,
     loopResetPending: false,
+    activeRunId: null,
+    runSeq: 0,
   };
 }
 
@@ -204,7 +210,7 @@ export function updateTab(
  * Routes a server frame to its tab (frames arrive on per-tab WS connections,
  * so the tabId is known from the connection, not the frame).
  */
-export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame): TabsState {
+function routeFrameContent(state: TabsState, tabId: string, frame: ServerFrame): TabsState {
   switch (frame.type) {
     case "event":
       return updateTab(state, tabId, (tab) => {
@@ -236,7 +242,16 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         return {
           loop,
           loopResetPending: false,
-          ...(resultSessionId ? { chat: { ...tab.chat, sessionId: resultSessionId } } : {}),
+          ...(frame.event.type === "loop.done" ? { loopRunning: false } : {}),
+          ...(frame.event.type === "loop.done" || resultSessionId
+            ? {
+                chat: {
+                  ...tab.chat,
+                  ...(frame.event.type === "loop.done" ? { running: false } : {}),
+                  ...(resultSessionId ? { sessionId: resultSessionId } : {}),
+                },
+              }
+            : {}),
         };
       });
 
@@ -258,6 +273,7 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         return {
           wsError: `${frame.code}: ${frame.message}`,
           chat: nonfatal ? tab.chat : { ...tab.chat, running: false },
+          ...(nonfatal ? {} : { activeRunId: null, runSeq: 0 }),
           loopRunning: nonfatal ? tab.loopRunning : false,
           loopResetPending: nonfatal ? tab.loopResetPending : false,
           pendingPermission: nonfatal ? tab.pendingPermission : null,
@@ -272,6 +288,8 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
         pendingQuestion: null,
         loopRunning: false,
         loopResetPending: false,
+        activeRunId: null,
+        runSeq: 0,
       }));
 
     default:
@@ -280,9 +298,44 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
   }
 }
 
+/** Routes one frame and advances its durable replay cursor exactly once. */
+export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame): TabsState {
+  const current = state.tabs.find((tab) => tab.tabId === tabId);
+  if (!current) return state;
+  if (frame.type === "run.accepted") {
+    return updateTab(state, tabId, { activeRunId: frame.runId, runSeq: frame.seq ?? 0 });
+  }
+  const frameRunId = "runId" in frame && typeof frame.runId === "string" ? frame.runId : undefined;
+  if (frameRunId && current.activeRunId && frameRunId !== current.activeRunId) return state;
+  if (
+    frameRunId === current.activeRunId &&
+    "seq" in frame &&
+    typeof frame.seq === "number" &&
+    frame.seq <= current.runSeq
+  ) {
+    return state;
+  }
+
+  const routed = routeFrameContent(state, tabId, frame);
+  if (!frameRunId || frameRunId !== current.activeRunId) return routed;
+  const seq = "seq" in frame && typeof frame.seq === "number" ? Math.max(current.runSeq, frame.seq) : current.runSeq;
+  const terminal =
+    (frame.type === "event" && (frame.event.type === "session.completed" || frame.event.type === "session.failed")) ||
+    (frame.type === "loop.event" && frame.event.type === "loop.done") ||
+    frame.type === "error";
+  return updateTab(
+    routed,
+    tabId,
+    terminal ? { activeRunId: null, runSeq: 0, wsError: null } : { runSeq: seq, wsError: null },
+  );
+}
+
 /** Applies connection state and exposes interruption when a live run loses its socket. */
 export function routeConnectionState(state: TabsState, tabId: string, conn: ConnState): TabsState {
   return updateTab(state, tabId, (tab) => {
+    if (conn === "connected" && tab.activeRunId) {
+      return { conn, chat: { ...tab.chat, running: true } };
+    }
     if (conn !== "disconnected" || !tab.chat.running) return { conn };
     return {
       conn,

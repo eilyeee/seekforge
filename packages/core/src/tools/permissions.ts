@@ -1,4 +1,4 @@
-import { sep } from "node:path";
+import { normalize, sep } from "node:path";
 import { PERMISSION_LEVEL, type PermissionRule } from "@seekforge/shared";
 import type { ToolContext } from "./index.js";
 import type { ClassifiedCall } from "./registry.js";
@@ -112,6 +112,11 @@ function boundaryPrefix(subject: string, match: string, seps: readonly string[])
   return seps.includes(subject[match.length] ?? "");
 }
 
+function normalizeRulePath(value: string): string {
+  const trimmed = value.trim();
+  return trimmed === "" ? "" : normalize(trimmed);
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall): boolean {
   if (rule.tool !== "*" && rule.tool !== toolName) return false;
   if (rule.match === undefined) return true;
@@ -129,8 +134,11 @@ function ruleMatches(rule: PermissionRule, toolName: string, cls: ClassifiedCall
     const shellTool = toolName === "run_command" || toolName === "task_kill";
     return boundary && shellTool ? boundaryPrefix(subject, match, [" "]) : subject.startsWith(match);
   }
-  const subject = (cls.path ?? "").trim();
-  const match = rule.match.trim();
+  // Permission rules must see the same lexical identity as the filesystem.
+  // Otherwise an allow for `src` also grants `src/../outside.ts`, while a deny
+  // for `secrets` misses `src/../secrets/key.txt`.
+  const subject = normalizeRulePath(cls.path ?? "");
+  const match = normalizeRulePath(rule.match);
   return boundary ? boundaryPrefix(subject, match, ["/", sep]) : subject.startsWith(match);
 }
 

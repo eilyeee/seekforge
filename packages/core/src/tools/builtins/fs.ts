@@ -640,6 +640,62 @@ const writeFileSchema = z.object({
   overwrite: z.boolean().optional().describe("Allow replacing an existing file (default false)."),
 });
 
+function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function openVerifiedWrite(
+  workspace: string,
+  relPath: string,
+  resolved: string,
+  options: { create: boolean; exclusive: boolean; expected?: fs.Stats },
+): number {
+  const parent = path.dirname(resolved);
+  const parentBefore = fs.statSync(parent);
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  const flags =
+    fs.constants.O_WRONLY |
+    noFollow |
+    (options.create ? fs.constants.O_CREAT : 0) |
+    (options.exclusive ? fs.constants.O_EXCL : 0);
+  let fd: number;
+  try {
+    fd = fs.openSync(resolved, flags, 0o600);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      throw new ToolError("outside_workspace", `Refusing symlinked write target: ${relPath}`);
+    }
+    if (code === "EEXIST" && options.exclusive) {
+      throw new ToolError("exists", `File already exists: ${relPath} (pass overwrite:true to replace)`);
+    }
+    throw error;
+  }
+  try {
+    const currentResolved = resolveForWrite(workspace, relPath);
+    const opened = fs.fstatSync(fd);
+    const current = fs.statSync(currentResolved);
+    const parentAfter = fs.statSync(parent);
+    if (
+      currentResolved !== resolved ||
+      !sameFileIdentity(parentBefore, parentAfter) ||
+      !sameFileIdentity(opened, current) ||
+      (options.expected !== undefined && !sameFileIdentity(opened, options.expected))
+    ) {
+      throw new ToolError("outside_workspace", `Write target changed during validation: ${relPath}`);
+    }
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function replaceFileContents(fd: number, content: string): void {
+  fs.ftruncateSync(fd, 0);
+  fs.writeFileSync(fd, content, "utf8");
+}
+
 const writeFile = defineTool({
   name: "write_file",
   description:
@@ -671,9 +727,19 @@ const writeFile = defineTool({
     if (exists && !args.overwrite) {
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
     }
+    const expected = exists ? fs.statSync(resolved) : undefined;
     ctx.checkpoint?.(args.path, exists ? fs.readFileSync(resolved, "utf8") : null);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
-    fs.writeFileSync(resolved, args.content, "utf8");
+    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, {
+      create: true,
+      exclusive: !args.overwrite && !exists,
+      ...(expected ? { expected } : {}),
+    });
+    try {
+      replaceFileContents(fd, args.content);
+    } finally {
+      fs.closeSync(fd);
+    }
     return { data: { path: args.path, bytesWritten: Buffer.byteLength(args.content, "utf8") } };
   },
 });
@@ -752,11 +818,17 @@ const applyPatch = defineTool({
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new ToolError("not_found", `File not found: ${args.path}`);
     }
+    const expected = fs.statSync(resolved);
     const content = fs.readFileSync(resolved, "utf8");
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
     ctx.checkpoint?.(args.path, content);
-    fs.writeFileSync(resolved, next, "utf8");
+    const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, { create: false, exclusive: false, expected });
+    try {
+      replaceFileContents(fd, next);
+    } finally {
+      fs.closeSync(fd);
+    }
     return { data: { path: args.path, editsApplied: args.edits.length } };
   },
 });

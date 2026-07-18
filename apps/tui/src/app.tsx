@@ -1125,7 +1125,14 @@ export function App({
           const mgr = bgRef.current as BackgroundTasks;
           const [verb, taskId] = (command.arg ?? "").split(/\s+/);
           if (verb === "kill" && taskId) {
-            const killed = mgr.kill(taskId);
+            let killed = mgr.kill(taskId);
+            if (!killed && /^[1-9][0-9]*$/.test(taskId)) {
+              const detached = detachedControllersRef.current.get(Number(taskId));
+              if (detached) {
+                detached.abort();
+                killed = true;
+              }
+            }
             notice(killed ? `killed ${taskId}` : `unknown task ${taskId}`, killed ? "dim" : "error");
             syncBg();
             break;
@@ -1133,7 +1140,13 @@ export function App({
           syncBg();
           const live = mgr.list().map((t) => ({ id: t.id, command: t.command, status: t.status }));
           for (const line of formatBgTaskLines(live)) notice(line);
-          if (live.some((t) => t.status === "running")) notice("  /tasks kill <id> stops one; all are killed on exit");
+          const detached = tabsStateRef.current.tabs.flatMap((tab) =>
+            tab.chat.detached.map((run) => ({ ...run, tab: tab.name })),
+          );
+          for (const run of detached) notice(`  ${run.runId}  detached  ${run.label}  (${run.tab})`);
+          if (live.some((t) => t.status === "running") || detached.length > 0) {
+            notice("  /tasks kill <id> stops one; all are killed on exit");
+          }
           break;
         }
         case "memory": {
@@ -1200,6 +1213,11 @@ export function App({
             const entry = runsByTabRef.current.get(closing);
             if (entry) {
               notice("this tab has a running task — Esc cancels it or Ctrl+B detaches it first", "error");
+              break;
+            }
+            const closingTab = tabsStateRef.current.tabs.find((tab) => tab.id === closing);
+            if (closingTab && closingTab.chat.detached.length > 0) {
+              notice("this tab has a detached task — wait for it to finish before closing", "error");
               break;
             }
             runsByTabRef.current.delete(closing);

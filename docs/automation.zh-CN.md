@@ -62,7 +62,7 @@ webhook 可能被外部系统在无人盯守的情况下调用，因此被触发
 - `X-GitHub-Delivery: <unique-delivery-id>`，以及
 - `X-GitHub-Event: <event-name>`。
 
-签名有效的 GitHub 请求不需要服务器 bearer token 或 `x-seekforge-trigger-secret`。接受的事件为 `push`、`pull_request`、`issues`、`issue_comment` 和 `workflow_run`。投递按工作区、触发器和 delivery ID 去重，去重窗口 24 小时；重复投递返回 `409`。
+签名有效的 GitHub 请求不需要服务器 bearer token 或 `x-seekforge-trigger-secret`。接受的事件为 `push`、`pull_request`、`issues`、`issue_comment` 和 `workflow_run`。投递按工作区、触发器和 delivery ID 去重，去重窗口 24 小时；重复投递返回 `409`。持久 claim 由跨进程工作区 lease 保护，因此共享同一工作区的两个 Server 实例也不能同时接受同一投递。
 
 可选的 JSON 请求体（例如 GitHub webhook payload）会被提炼成一段简短摘要——action、仓库、ref、PR/issue 编号 + 标题、发起者、head commit——并追加到任务描述中，让本次运行拥有上下文。请求体大小有上限；未知结构只贡献其顶层键名（不含值）。
 

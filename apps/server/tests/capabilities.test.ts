@@ -119,8 +119,8 @@ beforeAll(async () => {
       thinking: true,
       reasoningEffort: "max",
       mcpServers: {
-        fake: { command: process.execPath, args: [mcpFixture.serverPath] },
-        broken: { command: "/definitely/not/a/real/binary" },
+        fake: { command: process.execPath, args: [mcpFixture.serverPath], trusted: true },
+        broken: { command: "/definitely/not/a/real/binary", trusted: true },
       },
     }),
   );

@@ -1021,6 +1021,115 @@ new lock.
 - **Caught:** `packages/core/src/agent/loop-state.ts` — concurrent recovery of a
   dead Loop lease could admit two owners.
 
+## 69. Normalize aliases before applying path permission rules
+
+Lexical aliases such as `src/../secrets/key` can cross an allow/deny boundary
+while preserving a misleading prefix.
+
+- **Do:** normalize both the classified path and configured rule path before
+  exact-or-descendant matching.
+- **Caught:** `packages/core/src/tools/permissions.ts` — an allowed `src` prefix
+  could authorize an aliased path outside `src`, or hide a denied directory.
+
+## 70. Revalidate a filesystem target at the mutation boundary
+
+Path validation and file mutation are separate operations. A target can become
+an external symlink after validation but before a pathname-based write.
+
+- **Do:** open with no-follow semantics, compare parent/file identities around
+  the final checkpoint, and mutate through the verified file descriptor.
+- **Caught:** `write_file` and `apply_patch` could follow a leaf symlink swapped
+  in after workspace validation.
+
+## 71. Internal persistence needs the same physical confinement as tools
+
+A workspace-local state pathname is not workspace-local when an intermediate
+state directory is a symlink.
+
+- **Do:** resolve every persistence write through the physical write-target
+  guard, including append and atomic-rewrite paths.
+- **Caught:** memory and evolution stores could write through symlinked
+  `.seekforge/memory` or `.seekforge/evolution` directories.
+
+## 72. Tool approval cannot authorize an earlier plugin startup
+
+Discovering a plugin can itself spawn a process or contact a remote endpoint.
+A later permission prompt around a tool call does not authorize that startup.
+
+- **Do:** require connection trust before automatic discovery; keep explicit
+  management probes separate and user initiated.
+- **Caught:** untrusted MCP stdio servers started while assembling an Agent,
+  before any tool-level confirmation was possible.
+
+## 73. One terminal cause must map to one protocol status
+
+Recording cancellation in durable state while emitting a generic failure on
+the live channel gives reconnecting and connected clients different outcomes.
+
+- **Do:** derive ledger state and emitted error codes from the same terminal
+  cause.
+- **Caught:** an aborted WS Agent that threw was stored as `cancelled` but sent
+  to the active client as `agent_error`.
+
+## 74. Wrapper options must not hide a classified subcommand
+
+Command classifiers that inspect only the first positional token miss dangerous
+subcommands preceded by global options, especially options with separate values.
+
+- **Do:** consume the wrapper's complete global-option grammar before matching
+  the effective subcommand.
+- **Caught:** `git -C . push` and `git -c core.pager=cat push --force` bypassed
+  push/force-push classification.
+
+## 75. Process-local counters do not create persistent identifiers
+
+Timestamps combined with an in-memory count can collide when separate processes
+append to the same persistent store in the same clock tick.
+
+- **Do:** use a collision-resistant process-independent identifier for durable
+  records.
+- **Caught:** manually added memory facts could receive the same id across CLI
+  processes.
+
+## 76. Independent mutation surfaces must join one repository coordinator
+
+Per-connection busy flags prevent overlap only inside that connection. A WS
+Agent, background Loop, webhook, and security fix can still target one checkout.
+
+- **Do:** schedule every server-owned mutating operation through the same
+  physical-repository coordinator, while registering cancellation before queueing.
+- **Caught:** separate WS connections and background REST runs could edit the
+  same workspace concurrently with security/Git operations.
+
+## 77. Persisted deduplication still needs an atomic claim
+
+A read-check-write JSON file survives restart but two processes can both read
+the absent key before either atomic rename becomes visible.
+
+- **Do:** protect the entire claim/rollback transaction with a cross-process,
+  stale-recoverable lease.
+- **Caught:** two Server instances could both accept one GitHub delivery id.
+
+## 78. Reconnectable clients must retain the server replay cursor
+
+Automatic socket reconnection alone cannot recover frames lost after a run was
+accepted. The client needs the durable run identity and last applied sequence.
+
+- **Do:** persist `runId + seq` in workflow state, subscribe with `afterSeq` on
+  reconnect, and ignore stale or duplicate run frames.
+- **Caught:** Desktop could lose a terminal Agent/Loop event during disconnect
+  and leave the result or session identity incomplete.
+
+## 79. Detached work retains ownership of its result destination
+
+Detaching execution from foreground control does not detach its terminal output
+from the tab or document that receives it.
+
+- **Do:** keep the destination alive until detached completion, or explicitly
+  migrate ownership before allowing it to close.
+- **Caught:** TUI allowed the originating tab to close after detaching a Loop,
+  so its final outcome was silently dropped.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

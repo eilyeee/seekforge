@@ -216,6 +216,19 @@ const TOKEN = "test-token-triggers";
 let workspace: string;
 let server: RunningServer;
 let base: string;
+const triggerAgent = fakeAgentFactory(async function* () {
+  yield { type: "session.created", sessionId: "trig-session-1" };
+  yield {
+    type: "session.completed",
+    report: {
+      summary: "done",
+      changedFiles: [],
+      commandsRun: [],
+      verification: "no commands were run",
+      usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+    },
+  };
+});
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${base}${path}`, {
@@ -236,20 +249,7 @@ beforeAll(async () => {
   writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456", model: "deepseek-chat" }));
   // A fake agent that immediately reports a created + completed session, so the
   // fire endpoint can resolve with a session id without any real run.
-  const createAgent = fakeAgentFactory(async function* () {
-    yield { type: "session.created", sessionId: "trig-session-1" };
-    yield {
-      type: "session.completed",
-      report: {
-        summary: "done",
-        changedFiles: [],
-        commandsRun: [],
-        verification: "no commands were run",
-        usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
-      },
-    };
-  });
-  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent });
+  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: triggerAgent });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -395,6 +395,27 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
       expect(replayAfterRestart.status).toBe(409);
     } finally {
       await restarted.close();
+    }
+  });
+
+  it("dedups one GitHub delivery atomically across concurrent server instances", async () => {
+    const payload = JSON.stringify({ action: "opened", repository: { full_name: "acme/widgets" } });
+    const signature = `sha256=${createHmac("sha256", "trigger-secret-1").update(payload).digest("hex")}`;
+    const headers = {
+      "content-type": "application/json",
+      "x-hub-signature-256": signature,
+      "x-github-delivery": "delivery-concurrent-servers",
+      "x-github-event": "pull_request",
+    };
+    const peer = await startServer({ workspace, port: 0, token: TOKEN, createAgent: triggerAgent });
+    try {
+      const responses = await Promise.all([
+        fetch(`${base}/api/triggers/ci`, { method: "POST", headers, body: payload }),
+        fetch(`http://127.0.0.1:${peer.port}/api/triggers/ci`, { method: "POST", headers, body: payload }),
+      ]);
+      expect(responses.map((response) => response.status).sort()).toEqual([202, 409]);
+    } finally {
+      await peer.close();
     }
   });
 

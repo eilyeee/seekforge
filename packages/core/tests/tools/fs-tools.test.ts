@@ -34,6 +34,25 @@ describe("write_file", () => {
     expect(res.ok).toBe(true);
     expect(fs.readFileSync(path.join(ws, "a.txt"), "utf8")).toBe("new");
   });
+
+  it("refuses a symlink swapped in after checkpointing", async () => {
+    const ws = makeWorkspace();
+    const outside = fs.mkdtempSync(path.join(path.dirname(ws), "seekforge-outside-"));
+    const target = path.join(ws, "a.txt");
+    const external = path.join(outside, "external.txt");
+    fs.writeFileSync(target, "old");
+    fs.writeFileSync(external, "outside");
+    const ctx = makeCtx(ws, {
+      checkpoint: () => {
+        fs.rmSync(target);
+        fs.symlinkSync(external, target);
+      },
+    });
+    const res = await dispatcher.execute(call("write_file", { path: "a.txt", content: "new", overwrite: true }), ctx);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("outside_workspace");
+    expect(fs.readFileSync(external, "utf8")).toBe("outside");
+  });
 });
 
 describe("search_text", () => {

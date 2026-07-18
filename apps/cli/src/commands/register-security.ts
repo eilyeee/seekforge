@@ -20,6 +20,9 @@ function positiveInt(value: string): number {
 }
 
 function positiveFloat(value: string): number {
+  if (!/^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(value)) {
+    throw new InvalidArgumentError("must be a positive number");
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) throw new InvalidArgumentError("must be a positive number");
   return parsed;

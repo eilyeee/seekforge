@@ -329,6 +329,9 @@ describe("classifyCommand: git read vs write", () => {
       "git push --force",
       "git push -f origin main",
       "git push --force-with-lease",
+      "git -C . push --force",
+      "git -c core.pager=cat push -f origin main",
+      "git --namespace foo push --force",
       "git reset --hard HEAD~1",
       "git clean -fd",
     ]) {
@@ -337,7 +340,14 @@ describe("classifyCommand: git read vs write", () => {
   });
 
   it("classifies a plain git push as env (always human-confirmed, never auto)", () => {
-    for (const cmd of ["git push", "git push origin main", "git push -u origin feature"]) {
+    for (const cmd of [
+      "git push",
+      "git push origin main",
+      "git push -u origin feature",
+      "git -C . push",
+      "git -c core.pager=cat push",
+      "git --namespace foo push",
+    ]) {
       expect(classifyCommand(cmd).permission, cmd).toBe("env");
     }
   });

@@ -86,9 +86,9 @@ seekforge mcp remove fs                                                  # remov
 ```
 
 Everything after the server name is the command + its args verbatim (so its own
-flags like `-y` are kept). New servers are **untrusted** by default — set
-`"trusted": true` on the entry in `.seekforge/config.json` to auto-approve their
-tools with `-y`.
+flags like `-y` are kept). New servers are **untrusted** by default and are not
+connected during Agent startup. Review the command, then set `"trusted": true`
+on the entry in `.seekforge/config.json` to enable automatic connection.
 
 ### Updating
 

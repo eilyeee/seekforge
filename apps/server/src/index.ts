@@ -167,6 +167,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         resumeLoop,
         runManager,
         trackOperation: (operation) => coordinator.track(operation),
+        withRepository: (workspace, operation) => coordinator.withRepository(workspace, operation),
       }),
     );
   });
