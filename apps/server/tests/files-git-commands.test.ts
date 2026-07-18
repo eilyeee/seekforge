@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { acquireSessionLease } from "@seekforge/core";
 import { clearFilesCacheForTests } from "../src/files.js";
 import { startServer, type RunningServer } from "../src/index.js";
@@ -264,6 +264,21 @@ describe("GET /api/git/status", () => {
     expect(byPath.get("src/app.ts")).toContainEqual({ status: "modified", staged: false });
     expect(byPath.get("src/new.ts")).toContainEqual({ status: "added", staged: true });
     expect(byPath.get("draft -> final.txt")).toContainEqual({ status: "modified", staged: false });
+  });
+
+  it("surfaces a missing Git executable instead of reporting a non-repository", async () => {
+    const savedPath = process.env.PATH;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.PATH = join(makeWorkspace(), "missing-bin");
+    try {
+      const res = await authed("/api/git/status");
+      expect(res.status).toBe(500);
+      expect(await jsonOf(res)).toEqual({ error: { code: "internal", message: "internal error" } });
+    } finally {
+      errorLog.mockRestore();
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
   });
 });
 
@@ -605,6 +620,22 @@ describe("POST /api/commands/expand", () => {
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
     expect(body.text).toBe("task: do it; out: hi");
+  });
+
+  it("rejects shell expansion while another session owns the workspace", async () => {
+    writeFileIn(workspace, ".seekforge/commands/busy.md", "out: !`echo should-not-run`");
+    const lease = acquireSessionLease(workspace, "command-expansion-busy");
+    try {
+      const res = await authed("/api/commands/expand", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "busy", args: "" }),
+      });
+      expect(res.status).toBe(409);
+      expect((await jsonOf(res)).error.code).toBe("session_busy");
+    } finally {
+      lease.release();
+    }
   });
 
   it("404 for an unknown command", async () => {

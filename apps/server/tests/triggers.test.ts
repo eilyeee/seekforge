@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acquireSessionLease } from "@seekforge/core";
 import { startServer, type RunningServer } from "../src/index.js";
 import { startManagedTriggerRun } from "../src/trigger-run.js";
 import {
@@ -278,6 +279,29 @@ describe("trigger management endpoints", () => {
     expect(loadTriggers(workspace).find((t) => t.id === "ci")?.secret).toBe("trigger-secret-1");
   });
 
+  it("waits for the cross-process registry lease before mutating", async () => {
+    const lease = acquireSessionLease(workspace, "coord-trigger-registry");
+    const request = authed("/api/triggers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "serialized-registry",
+        task: "review",
+        mode: "ask",
+        maxCostUsd: 0.1,
+        secret: "serialized-secret",
+      }),
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(loadTriggers(workspace).some((trigger) => trigger.id === "serialized-registry")).toBe(false);
+    } finally {
+      lease.release();
+    }
+    expect((await request).status).toBe(201);
+    expect(loadTriggers(workspace).some((trigger) => trigger.id === "serialized-registry")).toBe(true);
+  });
+
   it("POST /api/triggers rejects a trigger with no budget", async () => {
     const res = await authed("/api/triggers", {
       method: "POST",
@@ -526,6 +550,31 @@ describe("trigger fire endpoint (dual auth + headless run)", () => {
 });
 
 describe("server shutdown", () => {
+  it("settles started when a queued trigger is cancelled before execution", async () => {
+    const run = startManagedTriggerRun({
+      workspace: makeWorkspace(),
+      task: "queued",
+      mode: "edit",
+      maxCostUsd: 1,
+      createAgent: triggerAgent,
+      schedule: async (_operation, signal) => {
+        if (signal.aborted) throw new Error("queue cancelled");
+        await new Promise<void>((_resolve, reject) => {
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(new Error("queue cancelled"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        });
+      },
+    });
+
+    run.abort();
+    await expect(run.started).rejects.toThrow("queue cancelled");
+    await expect(run.completion).resolves.toBeUndefined();
+  });
+
   it("keeps trigger completion fulfilled when disposal throws", async () => {
     const run = startManagedTriggerRun({
       workspace: makeWorkspace(),

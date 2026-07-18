@@ -47,6 +47,7 @@ export type ConnectionDeps = {
   permissionTimeoutMs?: number;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
   withRepository?: <T>(workspace: string, operation: () => Promise<T>) => Promise<T>;
+  withAgentMutation?: <T>(workspace: string, signal: AbortSignal, operation: () => Promise<T>) => Promise<T>;
   runManager: RunManager;
 };
 
@@ -253,7 +254,13 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     activeWorkspace = workspace;
     deps.runManager.start(runId, workspace, runController);
     const execute = () => operation(runController);
-    launch(serialize && deps.withRepository ? deps.withRepository(workspace, execute) : execute());
+    launch(
+      serialize && deps.withAgentMutation
+        ? deps.withAgentMutation(workspace, runController.signal, execute)
+        : serialize && deps.withRepository
+          ? deps.withRepository(workspace, execute)
+          : execute(),
+    );
   };
 
   const run = async (runId: string, input: RunInput, runController: AbortController): Promise<void> => {

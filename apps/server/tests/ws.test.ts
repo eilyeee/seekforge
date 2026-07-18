@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import type { RunAgentTaskInput } from "@seekforge/core";
 import type { ConfirmResult } from "@seekforge/shared";
-import { startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
+import { MAX_WS_PAYLOAD_BYTES, startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
 import {
   collectFrames,
   connectWs,
@@ -46,6 +46,15 @@ describe("WS auth", () => {
     const { server } = await boot(fakeAgentFactory(async function* () {}));
     await expect(connectWs(server.port, "wrong")).rejects.toThrow(/401/);
   });
+
+  it("closes authenticated connections that exceed the inbound frame limit", async () => {
+    const { server } = await boot(fakeAgentFactory(async function* () {}));
+    const ws = await connectWs(server.port, TOKEN);
+    sockets.push(ws);
+    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
+    ws.send(Buffer.alloc(MAX_WS_PAYLOAD_BYTES + 1));
+    await expect(closed).resolves.toBe(1009);
+  });
 });
 
 describe("start -> events -> idle", () => {
@@ -86,6 +95,42 @@ describe("start -> events -> idle", () => {
     await second.rx.waitFor((f) => f.type === "idle");
     expect(started).toBe(2);
     expect(maxActive).toBe(1);
+  });
+
+  it("serializes edit runs across independent server instances", async () => {
+    const workspace = makeWorkspace();
+    let started = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const factory = fakeAgentFactory(async function* () {
+      const invocation = ++started;
+      yield { type: "session.created", sessionId: `cross-server-${invocation}` };
+      if (invocation === 1) await firstGate;
+      yield { type: "session.completed", report: emptyReport() };
+    });
+    const primary = await boot(factory, workspace);
+    const peer = await startServer({ workspace, port: 0, token: TOKEN, createAgent: factory });
+    let released = false;
+    try {
+      const first = await open(primary.server.port);
+      const second = await open(peer.port);
+      sendFrame(first.ws, { type: "start", task: "first", mode: "edit", approvalMode: "auto" });
+      await first.rx.waitFor((frame) => frame.type === "event");
+      sendFrame(second.ws, { type: "start", task: "second", mode: "edit", approvalMode: "auto" });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(started).toBe(1);
+
+      released = true;
+      releaseFirst();
+      await first.rx.waitFor((frame) => frame.type === "idle");
+      await second.rx.waitFor((frame) => frame.type === "idle");
+      expect(started).toBe(2);
+    } finally {
+      if (!released) releaseFirst();
+      await peer.close();
+    }
   });
 
   it("streams scripted events (incl. model.delta) and finishes with idle", async () => {

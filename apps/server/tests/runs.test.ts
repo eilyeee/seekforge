@@ -352,6 +352,56 @@ describe("run API and WS replay", () => {
     await rx.waitFor((frame) => frame.type === "idle");
   });
 
+  it("does not report success when another server process owns cancellation", async () => {
+    const workspace = makeWorkspace();
+    let observedAbort = false;
+    const factory = fakeAgentFactory(async function* (_opts, input) {
+      yield { type: "session.created", sessionId: "remote-owner-session" };
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          observedAbort = true;
+          resolve();
+        };
+        input.signal?.addEventListener("abort", done, { once: true });
+        if (input.signal?.aborted) done();
+      });
+      yield { type: "session.failed", error: { code: "cancelled", message: "cancelled" } };
+    });
+    server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: factory });
+    const peer = await startServer({ workspace, port: 0, token: TOKEN, createAgent: factory });
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    try {
+      const started = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "wait", mode: "ask", maxCostUsd: 1 }),
+      });
+      const run = (await started.json()) as { runId: string };
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const response = await fetch(`http://127.0.0.1:${server!.port}/api/runs/${run.runId}`, { headers });
+        if (((await response.json()) as { status: string }).status === "running") break;
+        if (attempt === 99) throw new Error("owned run did not start");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const remoteCancel = await fetch(`http://127.0.0.1:${peer.port}/api/runs/${run.runId}/cancel`, {
+        method: "POST",
+        headers,
+      });
+      expect(remoteCancel.status).toBe(409);
+      expect(observedAbort).toBe(false);
+
+      const ownerCancel = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}/cancel`, {
+        method: "POST",
+        headers,
+      });
+      expect(ownerCancel.status).toBe(200);
+      await waitUntil(() => observedAbort);
+    } finally {
+      await peer.close();
+    }
+  });
+
   it("starts a headless background agent that survives subscriber disconnect and replays events", async () => {
     const workspace = makeWorkspace();
     let release!: () => void;

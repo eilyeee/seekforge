@@ -31,6 +31,7 @@ const GITHUB_EVENTS = new Set(["push", "pull_request", "issues", "issue_comment"
 // with a large hard cap as a safety valve that drops the soonest-to-expire first.
 const DELIVERY_FILE = ".seekforge/trigger-deliveries.json";
 const DELIVERY_LOCK_ID = "coord-trigger-delivery-store";
+const TRIGGER_STORE_LOCK_ID = "coord-trigger-registry";
 const DELIVERY_LOCK_RETRIES = 200;
 
 /** deliveryKey → epoch-ms expiry. Only unexpired entries survive a load. */
@@ -68,10 +69,10 @@ function capDeliveries(store: DeliveryStore): void {
   for (const key of keys.slice(0, keys.length - MAX_SEEN_DELIVERIES)) delete store[key];
 }
 
-async function withDeliveryLock<T>(workspace: string, operation: () => T): Promise<T> {
+async function withStoreLock<T>(workspace: string, lockId: string, operation: () => T): Promise<T> {
   for (let attempt = 0; attempt < DELIVERY_LOCK_RETRIES; attempt += 1) {
     try {
-      const lease = acquireSessionLease(workspace, DELIVERY_LOCK_ID);
+      const lease = acquireSessionLease(workspace, lockId);
       try {
         return operation();
       } finally {
@@ -86,7 +87,7 @@ async function withDeliveryLock<T>(workspace: string, operation: () => T): Promi
 }
 
 async function claimDelivery(workspace: string, key: string): Promise<boolean> {
-  return withDeliveryLock(workspace, () => {
+  return withStoreLock(workspace, DELIVERY_LOCK_ID, () => {
     const deliveries = loadDeliveries(workspace);
     if (key in deliveries) return false;
     deliveries[key] = Date.now() + DELIVERY_TTL_MS;
@@ -97,7 +98,7 @@ async function claimDelivery(workspace: string, key: string): Promise<boolean> {
 }
 
 async function releaseDelivery(workspace: string, key: string): Promise<void> {
-  await withDeliveryLock(workspace, () => {
+  await withStoreLock(workspace, DELIVERY_LOCK_ID, () => {
     const deliveries = loadDeliveries(workspace);
     delete deliveries[key];
     saveDeliveries(workspace, deliveries);
@@ -128,13 +129,13 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (body === undefined) return;
     const result = validateTrigger(body);
     if ("error" in result) return sendApiError(res, 400, "bad_request", result.error);
-    const added = addTrigger(workspace, result.trigger);
+    const added = await withStoreLock(workspace, TRIGGER_STORE_LOCK_ID, () => addTrigger(workspace, result.trigger));
     if ("error" in added) return sendApiError(res, 409, "conflict", added.error);
     return sendJson(res, 201, maskTrigger(added.trigger));
   }
 
   if (method === "DELETE" && segs.length === 3 && segs[1] === "triggers") {
-    const removed = removeTrigger(workspace, segs[2]!);
+    const removed = await withStoreLock(workspace, TRIGGER_STORE_LOCK_ID, () => removeTrigger(workspace, segs[2]!));
     if (!removed) return sendApiError(res, 404, "not_found", `trigger not found: ${segs[2]}`);
     return sendJson(res, 200, { deleted: true });
   }
@@ -209,7 +210,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         runManager: rest.runManager,
         runId: ledgerRun.runId,
         ...(trigger.mode === "edit"
-          ? { schedule: (operation: () => Promise<void>) => rest.coordinator.withRepository(workspace, operation) }
+          ? {
+              schedule: (operation: () => Promise<void>, signal: AbortSignal) =>
+                rest.coordinator.withAgentMutation(workspace, signal, operation),
+            }
           : {}),
       });
       rest.triggerRuns?.add(run);

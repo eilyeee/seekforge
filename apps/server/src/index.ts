@@ -79,6 +79,9 @@ export type RunningServer = {
   close(): Promise<void>;
 };
 
+/** Bound authenticated WS input before JSON parsing can amplify memory use. */
+export const MAX_WS_PAYLOAD_BYTES = 1_000_000;
+
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
   const paths = opts.workspaces ?? (opts.workspace !== undefined ? [opts.workspace] : []);
   if (paths.length === 0) {
@@ -146,7 +149,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     serveStatic(res, { root: staticRoot, pathname: url.pathname, port, workspace: registry.default.path });
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD_BYTES });
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname !== "/ws") {
@@ -168,6 +171,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         runManager,
         trackOperation: (operation) => coordinator.track(operation),
         withRepository: (workspace, operation) => coordinator.withRepository(workspace, operation),
+        withAgentMutation: (workspace, signal, operation) =>
+          coordinator.withAgentMutation(workspace, signal, operation),
       }),
     );
   });

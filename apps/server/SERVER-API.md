@@ -93,7 +93,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/runs | latest snapshot of every append-only run in the selected workspace |
 | GET /api/runs/:id | one run snapshot (`runId/source/status/attempt/sessionId/costUsd/error`) |
 | GET /api/runs/:id/events?afterSeq=N | persisted WS events with `seq > N` |
-| POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged |
+| POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged. Returns 409 when the run is owned by another server process, because this process cannot signal its `AbortController` |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
 | POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
@@ -117,8 +117,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
 | POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — mutates `.seekforge/todos.md`, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range |
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
-| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks resource support contributes zero entries |
-| GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every configured MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). A server that fails or lacks prompt support contributes zero entries. Mirrors GET /api/mcp/resources |
+| GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every explicitly trusted MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). An untrusted, failed, or unsupported server contributes zero entries |
+| GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every explicitly trusted MCP server (spawned on demand, then disposed). An untrusted, failed, or unsupported server contributes zero entries. Mirrors GET /api/mcp/resources |
 | POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one MCP prompt in the selected workspace; 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
@@ -126,7 +126,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
-| POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
+| POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the project hooks block from `.seekforge/config.json` (`{}` when none) |
 | PUT /api/hooks | body `{hooks}` — replaces the project `.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped from the file), returns `{hooks}`. Validated against the 9 stages (`preToolUse`, `postToolUse`, `sessionStart`, `userPromptSubmit`, `preCompact`, `stop`, `subagentStop`, `notification`, `sessionEnd`); each entry needs a non-empty `command` plus optional string `match`/`pattern`. 400 on an unknown stage or malformed shape |
 | GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` (always present, with effective defaults `"off"` / `"mechanical"` / `false` / `null`); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
@@ -165,8 +165,8 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
   trigger secret; secret comparison is constant-time.
 - **Native GitHub auth.** GitHub signs the exact body with the trigger secret in
   `X-Hub-Signature-256`. Signed deliveries require a unique
-  `X-GitHub-Delivery`, are deduplicated for 24 hours with a bounded in-memory
-  cache, and accept only `push`, `pull_request`, `issues`, `issue_comment`, and
+  `X-GitHub-Delivery`, are deduplicated for 24 hours with a bounded persisted
+  store protected by a cross-process lease, and accept only `push`, `pull_request`, `issues`, `issue_comment`, and
   `workflow_run`. No server bearer token is required for this one fire route;
   management routes remain bearer-protected.
 - **Bounded + headless.** `maxCostUsd` is mandatory (unbounded triggers are
@@ -179,7 +179,8 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
 ## WebSocket (path /ws?token=...)
 
 One WS connection drives at most one *running* session at a time.
-All frames are JSON objects with a `type` field.
+All frames are JSON objects with a `type` field and are capped at 1 MB before
+JSON parsing. A larger frame closes the connection with WebSocket code 1009.
 
 The server first sends `{"type":"hello","protocolVersion":1,"capabilities":[...],"disconnectPolicy":"cancel","backgroundDisconnectPolicy":"continue"}`.
 Every accepted run receives a stable `runId`; persisted run frames carry a
@@ -190,6 +191,10 @@ active run, denies pending prompts, and retains emitted frames for replay.
 This cancel-on-disconnect rule applies only to runs started by that WS. Runs
 started through `POST /api/runs` are headless, deny interactive approvals, and
 continue independently when subscribers disconnect.
+
+Writable Agent, Loop, background, webhook, and Security runs are serialized by
+a cancellable cross-process workspace lease. Separate server instances cannot
+edit the same workspace concurrently; read-only ask runs remain parallel.
 
 ### client → server
 

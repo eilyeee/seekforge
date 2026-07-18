@@ -34,7 +34,7 @@ export type StartTriggerRunInput = {
   runManager?: RunManager;
   runId?: string;
   /** Optional workspace mutation scheduler shared with other server surfaces. */
-  schedule?: (operation: () => Promise<void>) => Promise<void>;
+  schedule?: (operation: () => Promise<void>, signal: AbortSignal) => Promise<void>;
 };
 
 export type TriggerRunHandle = {
@@ -151,7 +151,23 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
       }
     }
   };
-  const completion = input.schedule ? input.schedule(execute) : execute();
+  const scheduled = Promise.resolve().then(() =>
+    input.schedule ? input.schedule(execute, controller.signal) : execute(),
+  );
+  const completion = scheduled.catch((error: unknown) => {
+    const cancelled = controller.signal.aborted;
+    input.runManager?.update(input.workspace, input.runId ?? "", {
+      status: cancelled ? "cancelled" : "failed",
+      error: {
+        code: cancelled ? "cancelled" : "trigger_schedule_error",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+    if (!settled) {
+      settled = true;
+      rejectStarted(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
   return { started, completion, abort: () => controller.abort() };
 }
 

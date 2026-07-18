@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
+  acquireWorkspaceSessionGuard,
   createMcpClient,
   expandShellInjections,
   expandUserCommand,
@@ -31,6 +32,7 @@ import {
   loadUserCommands,
   MODEL_PRICING,
   resolveProviderPreset,
+  SessionBusyError,
   type HookConfig,
   type HookEntry,
   type McpClientEntry,
@@ -224,7 +226,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   return ctx.res.headersSent;
 }
 
-async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Promise<void> {
+async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx): Promise<void> {
   const path = url.pathname;
 
   // Custom user-defined slash commands (project + user layers; project wins).
@@ -251,8 +253,20 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
       return sendApiError(res, 404, "not_found", `unknown command: ${name}`);
     }
     const expanded = expandUserCommand(command, typeof args === "string" ? args : "");
-    const text = await expandShellInjections(expanded, (cmd) => runShellCommand(cmd, workspace));
-    return sendJson(res, 200, { text });
+    try {
+      const text = await rest.coordinator.withRepository(workspace, async () => {
+        const guard = acquireWorkspaceSessionGuard(workspace);
+        try {
+          return await expandShellInjections(expanded, (cmd) => runShellCommand(cmd, workspace));
+        } finally {
+          guard.release();
+        }
+      });
+      return sendJson(res, 200, { text });
+    } catch (error) {
+      if (!(error instanceof SessionBusyError)) throw error;
+      return sendApiError(res, 409, "session_busy", "cannot run command expansions while the workspace is active");
+    }
   }
 
   // Cross-session todo list (.seekforge/todos.md, TUI-compatible format).

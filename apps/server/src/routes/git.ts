@@ -108,9 +108,10 @@ async function gitStatus(workspace: string): Promise<GitStatusResult> {
       GIT_EXEC(workspace),
     ));
   } catch (err) {
-    const e = err as { stderr?: string; message?: string };
+    const e = err as { code?: string | number; stderr?: string; message?: string };
+    if (e.code === "ENOENT") throw err;
     const stderr = e.stderr ?? e.message ?? "";
-    if (/not a git repository/i.test(stderr) || /spawn git ENOENT/i.test(stderr)) {
+    if (/not a git repository/i.test(stderr)) {
       return { notGit: true, branch: "", files: [] };
     }
     throw new Error(`git status failed: ${stderr.slice(0, 500)}`);

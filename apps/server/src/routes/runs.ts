@@ -10,7 +10,10 @@ function object(value: unknown): value is Record<string, unknown> {
 function trackRun(rest: RouteCtx["rest"], run: TriggerRunHandle): void {
   rest.triggerRuns?.add(run);
   void run.started.catch(() => {});
-  void run.completion.finally(() => rest.triggerRuns?.delete(run));
+  void run.completion.then(
+    () => rest.triggerRuns?.delete(run),
+    () => rest.triggerRuns?.delete(run),
+  );
 }
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
@@ -93,7 +96,10 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         runManager: rest.runManager,
         runId: ledgerRun.runId,
         ...(mode === "edit"
-          ? { schedule: (operation: () => Promise<void>) => rest.coordinator.withRepository(workspace, operation) }
+          ? {
+              schedule: (operation: () => Promise<void>, signal: AbortSignal) =>
+                rest.coordinator.withAgentMutation(workspace, signal, operation),
+            }
           : {}),
       });
       trackRun(rest, run);
@@ -147,7 +153,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
           });
         }
       };
-      const completion = rest.coordinator.withRepository(workspace, execute);
+      const completion = rest.coordinator.withAgentMutation(workspace, controller.signal, execute);
       trackRun(rest, {
         started: completion.then(() => ({ sessionId: finalSessionId })),
         completion,
@@ -182,11 +188,19 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   }
 
   if (method === "POST" && segs.length === 4 && segs[3] === "cancel") {
+    if ((run.status === "queued" || run.status === "running") && !rest.runManager.ownsActiveRun(workspace, id)) {
+      sendApiError(res, 409, "conflict", "run is active in another server process and cannot be cancelled here");
+      return true;
+    }
     const cancelled = rest.runManager.cancel(workspace, id);
     sendJson(res, 200, cancelled);
     return true;
   }
   if (method === "DELETE" && segs.length === 3) {
+    if ((run.status === "queued" || run.status === "running") && !rest.runManager.ownsActiveRun(workspace, id)) {
+      sendApiError(res, 409, "conflict", "run is active in another server process and cannot be cancelled here");
+      return true;
+    }
     sendJson(res, 200, rest.runManager.cancel(workspace, id));
     return true;
   }

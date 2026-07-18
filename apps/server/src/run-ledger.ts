@@ -281,6 +281,10 @@ export class RunManager {
     return record;
   }
 
+  ownsActiveRun(workspace: string, id: string): boolean {
+    return this.active.get(id)?.workspace === workspace;
+  }
+
   get(workspace: string, id: string): RunRecord | undefined {
     return readRunLedger(workspace).find((record) => record.runId === id);
   }

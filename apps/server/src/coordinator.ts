@@ -1,28 +1,31 @@
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { acquireSessionLease, SessionBusyError, type SessionLease } from "@seekforge/core";
 
 const execFileAsync = promisify(execFile);
+const AGENT_MUTATION_LOCK_ID = "coord-server-agent-edit";
 
 /** Physical identity shared by a repository and all of its linked worktrees. */
 export async function canonicalRepositoryKey(workspace: string): Promise<string> {
+  let commonDir: string;
   try {
     const { stdout } = await execFileAsync("git", ["rev-parse", "--git-common-dir"], {
       cwd: workspace,
       timeout: 10_000,
       maxBuffer: 1_000_000,
     });
-    return `git:${await realpath(resolve(workspace, stdout.trim()))}`;
-  } catch {
-    // Non-Git workspaces still need a stable serialization key for failed or
-    // partially initialized repository operations.
-    try {
-      return `workspace:${await realpath(workspace)}`;
-    } catch {
-      return `workspace:${resolve(workspace)}`;
-    }
+    commonDir = stdout.trim();
+  } catch (error) {
+    // A clean git exit means this is an ordinary non-repository workspace.
+    // Spawn, timeout, and transport failures must not silently choose a weaker
+    // lock key that can run concurrently with another linked worktree.
+    if (typeof (error as NodeJS.ErrnoException).code !== "number") throw error;
+    return `workspace:${await realpath(workspace)}`;
   }
+  return `git:${await realpath(resolve(workspace, commonDir))}`;
 }
 
 /** Shared repository serialization and lifecycle tracking for one server. */
@@ -53,6 +56,29 @@ export class ServerCoordinator {
         return result;
       })(),
     );
+  }
+
+  /** Serialize writable Agent/Loop runs across server processes for one workspace. */
+  withAgentMutation<T>(workspace: string, signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
+    return this.withRepository(workspace, async () => {
+      let lease: SessionLease;
+      for (;;) {
+        signal?.throwIfAborted();
+        try {
+          lease = acquireSessionLease(workspace, AGENT_MUTATION_LOCK_ID);
+          break;
+        } catch (error) {
+          if (!(error instanceof SessionBusyError)) throw error;
+          await delay(25, undefined, signal ? { signal } : undefined);
+        }
+      }
+      try {
+        signal?.throwIfAborted();
+        return await operation();
+      } finally {
+        lease.release();
+      }
+    });
   }
 
   async drain(): Promise<void> {

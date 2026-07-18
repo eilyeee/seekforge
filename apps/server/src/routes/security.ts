@@ -70,7 +70,7 @@ async function routes(ctx: RouteCtx): Promise<void> {
       return sendApiError(res, 400, "bad_request", "maxFindings must be an integer from 1 to 100");
     }
     try {
-      const result = await rest.coordinator.withRepository(workspace, async () => {
+      const result = await rest.coordinator.withAgentMutation(workspace, undefined, async () => {
         const handle = await rest.createAgent(agentOptions(workspace));
         try {
           return await scanRepository({ workspace, agent: handle.agent, ...(maxFindings ? { maxFindings } : {}) });
@@ -86,7 +86,7 @@ async function routes(ctx: RouteCtx): Promise<void> {
 
   if (method === "POST" && path === "/api/security/threat-model") {
     try {
-      const threatModel = await rest.coordinator.withRepository(workspace, async () => {
+      const threatModel = await rest.coordinator.withAgentMutation(workspace, undefined, async () => {
         const handle = await rest.createAgent(agentOptions(workspace));
         try {
           return await generateThreatModel({ workspace, agent: handle.agent });
@@ -121,7 +121,7 @@ async function routes(ctx: RouteCtx): Promise<void> {
       return sendApiError(res, 404, "not_found", `finding not found: ${findingId}`);
     }
     try {
-      const finding = await rest.coordinator.withRepository(workspace, async () =>
+      const finding = await rest.coordinator.withAgentMutation(workspace, undefined, async () =>
         changeFindingStatus(
           workspace,
           findingId,
@@ -157,7 +157,8 @@ async function routes(ctx: RouteCtx): Promise<void> {
     if (!target) return sendApiError(res, 404, "not_found", `finding not found: ${findingId}`);
 
     try {
-      const result = await rest.coordinator.withRepository(workspace, async () => {
+      const controller = new AbortController();
+      const result = await rest.coordinator.withAgentMutation(workspace, controller.signal, async () => {
         const before = buildSecurityEvidencePackage(workspace);
         const beforeIds = new Set(before.findings.map((finding) => finding.id));
         const fix = startFixAttempt(workspace, findingId);
@@ -166,7 +167,6 @@ async function routes(ctx: RouteCtx): Promise<void> {
         let commands: Awaited<ReturnType<typeof runProjectSecurityChecks>> = [];
         let verificationScan: Awaited<ReturnType<typeof scanRepository>> | undefined;
         try {
-          const controller = new AbortController();
           const handle = await rest.createAgent({ ...agentOptions(workspace), signal: controller.signal });
           try {
             for await (const event of handle.agent.runTask({
