@@ -106,6 +106,8 @@ seekforge loop "<task>" --verify "<command>" \
 
 `confirm` stops after analysis with `requirements_pending`. Inspect it with
 `loop-show`, then run `seekforge loop-resume <id> --approve-requirements`.
+The approval flag only approves that already-persisted specification; it never
+silently approves requirements generated in the same invocation.
 
 **Exit code**: 0 only when verify passed and, in analyzed modes, all required
 acceptance criteria are met. Every other terminal
@@ -299,14 +301,15 @@ than replayed on reconnect.
 command on the first line, the task on the following lines:
 
 ```text
-/loop --max-iterations 12 --budget 1.50 pnpm test
+/loop --requirements analyze --max-iterations 12 --budget 1.50 pnpm test
 Fix the failing parser tests without weakening assertions.
 ```
 
-`--max-iterations` accepts 1–100; `--budget` must be a finite positive USD
+`--requirements` accepts `quick|analyze|confirm`; `--max-iterations` accepts
+1–100; `--budget` must be a finite positive USD
 value and overrides the configured default. Without an explicit budget the
 TUI inherits the configured value. The default iteration cap is 8. Resume
-from the TUI with `/loop-resume [--add-iterations N] [--add-budget USD]
+from the TUI with `/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD]
 <loop-id>`.
 
 ## 11. Core API (integrators)

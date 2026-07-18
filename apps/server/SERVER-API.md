@@ -95,7 +95,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/runs/:id/events?afterSeq=N | persisted WS events with `seq > N` |
 | POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
-| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`; returns `202 RunRecord` immediately |
+| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
@@ -248,7 +248,10 @@ return `bad_frame`.
 
 Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
 are stored under `.seekforge/run-events/<runId>.jsonl`. Terminal history remains
-queryable after restart. `seq` is scoped to one run.
+queryable after restart. `seq` is scoped to one run. Snapshot status is one of
+`queued`, `running`, `waiting`, `succeeded`, `failed`, or `cancelled`;
+`waiting` is a non-failure terminal snapshot used when a confirm-mode Loop has
+persisted requirements and awaits an explicit resume approval.
 
 Dispatched children are observable through structured `AgentEvent` variants:
 

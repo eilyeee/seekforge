@@ -230,10 +230,15 @@ export function routeFrame(state: TabsState, tabId: string, frame: ServerFrame):
       });
 
     case "loop.event":
-      return updateTab(state, tabId, (tab) => ({
-        loop: reduceLoopEvent(tab.loopResetPending ? emptyLoopProgress() : tab.loop, frame.event),
-        loopResetPending: false,
-      }));
+      return updateTab(state, tabId, (tab) => {
+        const loop = reduceLoopEvent(tab.loopResetPending ? emptyLoopProgress() : tab.loop, frame.event);
+        const resultSessionId = frame.event.type === "loop.done" ? frame.event.result.sessionId.trim() : "";
+        return {
+          loop,
+          loopResetPending: false,
+          ...(resultSessionId ? { chat: { ...tab.chat, sessionId: resultSessionId } } : {}),
+        };
+      });
 
     case "subagent.control":
       return updateTab(state, tabId, (tab) => ({

@@ -841,6 +841,9 @@ same visual authority as the user's request, even when tool permissions remain g
   omit untrusted transport errors from prompts, and reinforce the system rule.
 - **Caught:** `apps/server/src/agent.ts` and `apps/tui/src/app.tsx` — MCP Resource
   content was concatenated directly onto the task message.
+- **Also caught:** `packages/core/src/agent/auto-loop.ts` — verifier output was
+  concatenated into Loop continuation prompts without an explicit untrusted-data
+  envelope, so repository-controlled diagnostics looked like user instructions.
 
 ## 53. Startup cancellation and cleanup begin before the main operation
 
@@ -951,6 +954,72 @@ records are unmet, missing, duplicated, or unknown.
 - **Caught:** `packages/core/src/agent/loop-requirements.ts` — acceptance review
   completion must be computed from the frozen required criteria, not trusted
   from the model-provided boolean.
+
+## 63. Intermediate output is not a completed phase result
+
+A model can emit plausible text and then fail during a later tool/provider turn.
+Retaining the earlier text without the terminal event turns an incomplete phase
+into a false success.
+
+- **Do:** accept analysis/review output only after the same run emits its
+  successful terminal event; cancellation, budget abort, and `session.failed`
+  must leave the phase incomplete.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — failed requirement reviews
+  could still pass from an earlier `model.message`, and cancelled analysis could
+  persist fallback requirements that a resume would never re-analyze.
+
+## 64. Approval applies only to a previously observable artifact
+
+An approval flag sent before an artifact exists cannot prove that the caller saw
+the exact artifact being approved.
+
+- **Do:** bind approval to an identifier/version loaded from persisted state;
+  newly generated artifacts must be surfaced before a later approval call.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — confirm-mode requirements
+  could be generated and approved in one invocation.
+
+## 65. Progress fingerprints must include clean committed changes
+
+Working-tree status is unchanged before and after a run that edits and commits.
+A fingerprint limited to dirty paths therefore misclassifies real progress as a
+no-op.
+
+- **Do:** include repository `HEAD`/tree identity as well as dirty and untracked
+  content; keep a non-Git content fallback.
+- **Caught:** `packages/core/src/agent/auto-loop.ts` — a committed fix with
+  unchanged verifier diagnostics could trigger `no_progress`.
+
+## 66. Bounded event feeds are not durable UI state
+
+Evicting old progress events must not erase the current specification, result,
+or session identity needed for later actions.
+
+- **Do:** reduce durable workflow fields independently from the capped display
+  feed and rehydrate them from terminal snapshots.
+- **Caught:** `apps/desktop/src/lib/loop.ts` and `tabs.ts` — long Loop output
+  could evict requirements and leave follow-up chat detached from the Loop
+  session.
+
+## 67. Equivalent numeric values do not imply equivalent input grammar
+
+`Number()` accepts hexadecimal and other syntaxes that a CLI's documented
+decimal parser rejects, producing cross-surface behavior drift.
+
+- **Do:** validate the complete textual grammar before numeric conversion, then
+  enforce finite/range constraints.
+- **Caught:** TUI and Desktop Loop controls accepted `0x10` iterations while the
+  CLI rejected them.
+
+## 68. Stale-lock recovery is itself a coordination operation
+
+Comparing lock contents and deleting the path are separate filesystem actions.
+Two recoverers can both validate the old owner, then one can delete the other's
+new lock.
+
+- **Do:** serialize stale recovery with an exclusive recovery marker, re-read
+  under that ownership, and make new candidates yield while recovery is active.
+- **Caught:** `packages/core/src/agent/loop-state.ts` — concurrent recovery of a
+  dead Loop lease could admit two owners.
 
 ---
 

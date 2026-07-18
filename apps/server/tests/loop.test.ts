@@ -209,7 +209,9 @@ describe("loop -> loop.event -> idle", () => {
     };
 
     await expectBadFrame({ type: "loop", task: "", verifyCommand: "pnpm test" });
+    await expectBadFrame({ type: "loop", task: "   ", verifyCommand: "pnpm test" });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "" });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "   " });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: "nope" });
     // Non-positive / non-integer limits are rejected at the protocol entry.
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", maxIterations: 0 });
@@ -223,6 +225,29 @@ describe("loop -> loop.event -> idle", () => {
     sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", ws: "unknown-ws" });
     const err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("unknown_workspace");
+  });
+
+  it("records confirm requirements as waiting instead of failed", async () => {
+    const { server } = await boot({
+      runLoop: fakeLoopFactory(async (_agentOpts, loopOpts) => {
+        const result = loopResult({ status: "requirements_pending", loopId: "loop-wait", iterations: 0 });
+        loopOpts.onEvent?.({ type: "loop.done", result });
+        return result;
+      }),
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", requirementMode: "confirm" });
+    const accepted = await rx.waitFor((frame) => frame.type === "run.accepted");
+    await rx.waitFor((frame) => frame.type === "idle");
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runs/${accepted.runId}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const record = (await response.json()) as { status: string; sessionId?: string; error?: unknown };
+    expect(record).toMatchObject({
+      status: "waiting",
+      sessionId: "loop-1",
+    });
+    expect(record.error).toBeUndefined();
   });
 });
 

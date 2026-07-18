@@ -150,9 +150,13 @@ const selfProcessIdentity = processIdentity(process.pid);
 
 function readLockSnapshot(target: string): LockSnapshot {
   const content = readFileSync(target, "utf8");
-  let owner: { pid?: unknown; token?: unknown; processIdentity?: unknown; createdAt?: unknown };
+  let owner: Record<string, unknown>;
   try {
-    owner = JSON.parse(content) as typeof owner;
+    const parsed = JSON.parse(content) as unknown;
+    if (!isRecord(parsed)) {
+      return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
+    }
+    owner = parsed;
   } catch {
     return { content, alive: Date.now() - statSync(target).mtimeMs < MALFORMED_LOCK_GRACE_MS };
   }
@@ -194,12 +198,7 @@ export function isLoopLeaseActive(workspace: string, loopId: string): boolean {
   if (activeLeases.has(leaseKey(workspace, loopId))) return true;
   const target = leaseFile(workspace, loopId);
   try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const snapshot = readLockSnapshot(target);
-      if (snapshot.alive) return true;
-      if (removeStaleLock(target, snapshot.content)) return false;
-    }
-    return true;
+    return readLockSnapshot(target).alive;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
@@ -253,7 +252,14 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
       createdAt: new Date().toISOString(),
       ...(selfProcessIdentity ? { processIdentity: selfProcessIdentity } : {}),
     });
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const recoveryTarget = `${target}.recovery`;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (existsSync(recoveryTarget)) {
+        const recovery = readLockSnapshot(recoveryTarget);
+        if (recovery.alive) throw new Error(`Loop lease recovery is already running: ${loopId}`);
+        removeStaleLock(recoveryTarget, recovery.content);
+        continue;
+      }
       try {
         const fd = openSync(target, "wx", 0o600);
         try {
@@ -267,6 +273,15 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
           throw error;
         }
         closeSync(fd);
+        if (existsSync(recoveryTarget)) {
+          try {
+            const owner = JSON.parse(readFileSync(target, "utf8")) as { token?: unknown };
+            if (owner.token === token) rmSync(target);
+          } catch {
+            /* A recovery contender replaced or removed this candidate. */
+          }
+          continue;
+        }
         return {
           release: () => {
             activeLeases.delete(key);
@@ -282,7 +297,31 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         const snapshot = readLockSnapshot(target);
         if (snapshot.alive) throw new Error(`Loop is already running: ${loopId}`);
-        if (!removeStaleLock(target, snapshot.content)) continue;
+        let recoveryFd: number;
+        try {
+          recoveryFd = openSync(recoveryTarget, "wx", 0o600);
+        } catch (recoveryError) {
+          if ((recoveryError as NodeJS.ErrnoException).code === "EEXIST") continue;
+          throw recoveryError;
+        }
+        try {
+          writeFileSync(recoveryFd, payload, "utf8");
+        } finally {
+          closeSync(recoveryFd);
+        }
+        try {
+          const current = readLockSnapshot(target);
+          if (!current.alive && current.content === snapshot.content) removeStaleLock(target, current.content);
+        } catch (recoveryError) {
+          if ((recoveryError as NodeJS.ErrnoException).code !== "ENOENT") throw recoveryError;
+        } finally {
+          try {
+            const owner = JSON.parse(readFileSync(recoveryTarget, "utf8")) as { token?: unknown };
+            if (owner.token === token) rmSync(recoveryTarget);
+          } catch {
+            /* A missing/replaced recovery marker no longer belongs to this process. */
+          }
+        }
       }
     }
     throw new Error(`Could not acquire loop lease: ${loopId}`);
@@ -332,6 +371,13 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     (value.acceptanceReview !== undefined && value.acceptanceReview !== null && acceptanceReview === null) ||
     (requirementsApprovedAt !== null && !isIsoDate(requirementsApprovedAt)) ||
     (requirementMode === "quick" && (requirements !== null || acceptanceReview !== null)) ||
+    (requirementsApprovedAt !== null && (requirementMode !== "confirm" || requirements === null)) ||
+    (requirementMode === "confirm" && acceptanceReview !== null && requirementsApprovedAt === null) ||
+    (value.status === "requirements_pending" &&
+      (requirementMode !== "confirm" ||
+        requirements === null ||
+        requirementsApprovedAt !== null ||
+        acceptanceReview !== null)) ||
     (requirementMode !== "quick" && acceptanceReview !== null && requirements === null) ||
     typeof value.status !== "string" ||
     !LOOP_STATUSES.has(value.status as PersistedLoopStatus) ||

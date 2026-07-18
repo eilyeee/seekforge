@@ -160,7 +160,8 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
 - `--verify <cmd>`（必需）：成功 = 该命令以 0 退出。
 - `--requirements quick|analyze|confirm`：`quick` 保留仅验证命令的行为；
   `analyze` 先只读分析仓库并做验收；`confirm` 会持久化规格并以
-  `requirements_pending` 暂停，等待显式批准。
+  `requirements_pending` 暂停，等待显式批准。批准只作用于从持久化状态加载的
+  规格；当前调用中新生成的规格一定会先返回供检查，不能在同一次调用中预先批准。
 - `--max-iters <n>`：运行迭代上限（默认 8，硬上限 100）。
 - `--worktree [name]`：创建并运行在一个隔离的、保留的 git worktree 中。
   可选的 name 用作分支后缀；不提供时使用一个唯一名称。

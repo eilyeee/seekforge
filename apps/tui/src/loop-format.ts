@@ -15,6 +15,11 @@ import type { LoopEvent, LoopResult, LoopStatus } from "@seekforge/core";
 /** A single transcript line: the reducer stamps its id + appends it. */
 export type LoopNotice = { text: string; tone: "dim" | "error" };
 
+/** Foreground Loops stream all progress; detached Loops write back only their terminal summary. */
+export function shouldRenderLoopEvent(event: LoopEvent, ownsRun: boolean, detached: boolean): boolean {
+  return ownsRun || (detached && event.type === "loop.done");
+}
+
 /** Max characters kept from a verify-output tail line (compact progress). */
 const TAIL_MAX = 200;
 
@@ -86,7 +91,12 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
         },
       ];
     case "loop.warning":
-      return [{ text: `  ! loop persistence warning: ${event.message}`, tone: "error" }];
+      return [
+        {
+          text: `  ! loop ${event.warning === "persistence" ? "persistence" : "requirement"} warning: ${event.message}`,
+          tone: "error",
+        },
+      ];
     case "loop.done":
       return formatLoopSummary(event.result);
     default:
@@ -107,7 +117,11 @@ export function formatLoopSummary(result: LoopResult): LoopNotice[] {
     },
   ];
   if (result.loopId) {
-    lines.push({ text: `  loop: ${result.loopId} (/loop-resume ${result.loopId})`, tone: "dim" });
+    const resume =
+      result.status === "requirements_pending"
+        ? `/loop-resume --approve-requirements ${result.loopId}`
+        : `/loop-resume ${result.loopId}`;
+    lines.push({ text: `  loop: ${result.loopId} (${resume})`, tone: "dim" });
   }
   if (result.sessionId) {
     lines.push({

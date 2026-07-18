@@ -13,7 +13,7 @@ export const SERVER_CAPABILITIES = [
 ] as const;
 
 export type RunSource = "ws" | "loop" | "schedule" | "trigger" | "background";
-export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
 
 export type RunRecord = {
   runId: string;
@@ -48,7 +48,12 @@ function plainObject(value: unknown): value is Record<string, unknown> {
 
 function validStatus(value: unknown): value is RunStatus {
   return (
-    value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled"
+    value === "queued" ||
+    value === "running" ||
+    value === "waiting" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === "cancelled"
   );
 }
 
@@ -210,7 +215,11 @@ export class RunManager {
   ): RunRecord | undefined {
     const current = this.get(workspace, id);
     if (!current) return undefined;
-    const terminal = current.status === "succeeded" || current.status === "failed" || current.status === "cancelled";
+    const terminal =
+      current.status === "waiting" ||
+      current.status === "succeeded" ||
+      current.status === "failed" ||
+      current.status === "cancelled";
     if (terminal && patch.status !== undefined && patch.status !== current.status) {
       return current;
     }

@@ -173,7 +173,7 @@ describe("runTask", () => {
     expect(result.metrics.turns).toBeUndefined();
   });
 
-  it("records thrown streams and missing terminal events as session errors", async () => {
+  it("records thrown streams as session errors", async () => {
     const fx = fixture({ "file.txt": "ok" });
     const thrown = await runTask(makeTask(), {
       fixturesDir: fx.fixturesDir,
@@ -188,7 +188,10 @@ describe("runTask", () => {
     });
     expect(thrown.success).toBe(false);
     expect(thrown.error).toBe("transport closed");
+  });
 
+  it("records missing terminal events as session errors", async () => {
+    const fx = fixture({ "file.txt": "ok" });
     const missing = await runTask(makeTask(), {
       fixturesDir: fx.fixturesDir,
       createAgent: fakeAgent(() => [{ type: "session.created", sessionId: "s1" }]),

@@ -115,6 +115,10 @@ test("formatSummary exposes the persisted loop resume id", () => {
   const s = formatSummary({ ...result, loopId: "loop-abc" });
   assert.match(s, /seekforge loop-resume loop-abc/);
 });
+test("formatSummary includes approval when requirements are pending", () => {
+  const s = formatSummary({ ...result, status: "requirements_pending", loopId: "loop-abc" });
+  assert.match(s, /seekforge loop-resume loop-abc --approve-requirements/);
+});
 
 test("formatLoopWorktree exposes the retained path and branch", () => {
   const text = formatLoopWorktree({ path: "/repo/.seekforge/worktrees/loop-fix", branch: "seekforge/loop-fix" });

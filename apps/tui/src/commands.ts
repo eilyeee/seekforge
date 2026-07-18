@@ -271,15 +271,22 @@ function parseLoopFirstLine(
     }
     const option = match[1] ?? "";
     const raw = match[2] ?? "";
-    const value = Number(raw);
     if (option === iterationFlag) {
       if (maxIterations !== undefined) return { error: `${iterationFlag} may only be specified once` };
+      if (!/^[0-9]+$/.test(raw)) {
+        return { error: `${iterationFlag} must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
+      }
+      const value = Number(raw);
       if (!Number.isInteger(value) || value < 1 || value > LOOP_MAX_ITERATIONS) {
         return { error: `${iterationFlag} must be an integer from 1 to ${LOOP_MAX_ITERATIONS}` };
       }
       maxIterations = value;
     } else if (option === budgetFlag) {
       if (costBudgetUsd !== undefined) return { error: `${budgetFlag} may only be specified once` };
+      if (!/^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(raw)) {
+        return { error: `${budgetFlag} must be a finite number greater than 0` };
+      }
+      const value = Number(raw);
       if (!Number.isFinite(value) || value <= 0)
         return { error: `${budgetFlag} must be a finite number greater than 0` };
       costBudgetUsd = value;

@@ -106,6 +106,35 @@ describe("live output bounds", () => {
     }
     expect(progress.events.length).toBeLessThanOrEqual(500);
   });
+
+  it("retains requirement state after its source events are evicted", () => {
+    const spec = {
+      version: 1 as const,
+      goal: "ship it",
+      deliverables: ["implementation"],
+      requirements: [{ id: "REQ-1", text: "implement it", required: true }],
+      constraints: [],
+      outOfScope: [],
+      assumptions: [],
+      acceptanceCriteria: [{ id: "AC-1", text: "it works", requirementIds: ["REQ-1"] }],
+      unresolvedQuestions: [],
+    };
+    let progress = reduceLoopEvent(emptyLoopProgress(), {
+      type: "requirements.completed",
+      spec,
+      approvalRequired: false,
+    });
+    progress = reduceLoopEvent(progress, {
+      type: "requirements.reviewed",
+      review: { complete: false, criteria: [{ id: "AC-1", status: "unmet", evidence: [] }], gaps: ["missing"] },
+    });
+    for (let i = 0; i < 600; i++) {
+      progress = reduceLoopEvent(progress, { type: "iteration.start", iteration: i });
+    }
+    expect(progress.events.some((event) => event.type === "requirements.completed")).toBe(false);
+    expect(progress.requirements).toEqual(spec);
+    expect(progress.acceptanceReview?.gaps).toEqual(["missing"]);
+  });
 });
 
 describe("loopStatusTone", () => {

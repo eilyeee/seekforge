@@ -29,7 +29,16 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "run body must be an object");
       return true;
     }
-    const { kind = "agent", task, mode = "ask", maxCostUsd, verifyCommand, maxIterations, requirementMode } = body;
+    const {
+      kind = "agent",
+      task,
+      mode: requestedMode,
+      maxCostUsd,
+      verifyCommand,
+      maxIterations,
+      requirementMode,
+    } = body;
+    const mode = requestedMode ?? (kind === "loop" ? "edit" : "ask");
     if (kind !== "agent" && kind !== "loop") {
       sendApiError(res, 400, "bad_request", 'kind must be "agent" or "loop"');
       return true;
@@ -44,6 +53,10 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     }
     if (mode !== "ask" && mode !== "edit") {
       sendApiError(res, 400, "bad_request", 'mode must be "ask" or "edit"');
+      return true;
+    }
+    if (kind === "loop" && mode !== "edit") {
+      sendApiError(res, 400, "bad_request", 'loop mode must be "edit"');
       return true;
     }
     if (kind === "loop" && (typeof verifyCommand !== "string" || verifyCommand.trim() === "")) {
@@ -109,10 +122,17 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
           );
           finalSessionId = result.sessionId;
           rest.runManager.update(workspace, ledgerRun.runId, {
-            status: result.status === "passed" ? "succeeded" : result.status === "cancelled" ? "cancelled" : "failed",
+            status:
+              result.status === "passed"
+                ? "succeeded"
+                : result.status === "cancelled"
+                  ? "cancelled"
+                  : result.status === "requirements_pending"
+                    ? "waiting"
+                    : "failed",
             sessionId: result.sessionId,
             costUsd: result.costUsd,
-            ...(result.status !== "passed"
+            ...(result.status !== "passed" && result.status !== "requirements_pending"
               ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
               : {}),
           });

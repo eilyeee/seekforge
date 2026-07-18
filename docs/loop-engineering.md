@@ -170,7 +170,9 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
 - `--requirements quick|analyze|confirm`: `quick` keeps verifier-only behavior;
   `analyze` performs read-only repository analysis and acceptance review;
   `confirm` persists the specification and stops with `requirements_pending`
-  until it is explicitly approved.
+  until it is explicitly approved. Approval applies only to a specification
+  loaded from persisted state; a specification generated in the current call
+  is always returned for inspection first.
 - `--max-iters <n>`: cap on run iterations (default 8, hard maximum 100).
 - `--worktree [name]`: create and run in an isolated retained git worktree.
   An optional name selects the branch suffix; without one a unique name is used.

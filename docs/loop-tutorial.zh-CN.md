@@ -83,7 +83,8 @@ seekforge loop "<任务>" --verify "<命令>" \
 > 换句话说：它会自己改你的文件。要么在干净的 git 状态下跑，要么用 `--worktree` 隔离。
 
 `confirm` 会在分析后以 `requirements_pending` 暂停。先用 `loop-show` 查看，
-再执行 `seekforge loop-resume <id> --approve-requirements`。
+再执行 `seekforge loop-resume <id> --approve-requirements`。批准参数只批准这份已经
+持久化的规格，不会静默批准同一次调用里刚生成的需求。
 
 **退出码**：只有 `verify` 通过，且分析模式下所有必需验收标准都满足时才返回 0。
 其它终态都是非 0。
@@ -226,12 +227,13 @@ CLI 每次循环结束的汇总里也会打印这条日志的路径。
 **TUI**：`/loop` 用多行命令——第一行是循环选项 + verify 命令，后面几行是任务：
 
 ```text
-/loop --max-iterations 12 --budget 1.50 pnpm test
+/loop --requirements analyze --max-iterations 12 --budget 1.50 pnpm test
 修好失败的 parser 测试，不要削弱断言。
 ```
 
-`--max-iterations` 接受 1–100；`--budget` 必须是有限正数 USD，会覆盖配置里的值。不给预算就继承
-配置默认。默认迭代上限 8。TUI 恢复：`/loop-resume [--add-iterations N] [--add-budget USD] <loop-id>`。
+`--requirements` 接受 `quick|analyze|confirm`；`--max-iterations` 接受 1–100；
+`--budget` 必须是有限正数 USD，会覆盖配置里的值。不给预算就继承配置默认。默认迭代上限 8。
+TUI 恢复：`/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD] <loop-id>`。
 
 ## 11. Core API（二次开发）
 

@@ -68,10 +68,8 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
   const rows = loopRows(progress.events);
   const warnings = loopWarnings(progress.events);
   const result = progress.result;
-  const requirementSpec = [...progress.events].reverse().find((event) => event.type === "requirements.completed")?.spec;
-  const acceptanceReview = [...progress.events]
-    .reverse()
-    .find((event) => event.type === "requirements.reviewed")?.review;
+  const requirementSpec = progress.requirements;
+  const acceptanceReview = progress.acceptanceReview;
 
   return (
     <div className="border-b border-subtle bg-surface-raised/40">

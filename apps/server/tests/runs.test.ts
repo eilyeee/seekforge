@@ -46,6 +46,21 @@ describe("append-only run ledger", () => {
     expect(manager.get(workspace, run.runId)?.status).toBe("cancelled");
   });
 
+  it("persists waiting as a terminal non-failure state", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "loop" });
+    manager.start(run.runId, workspace, new AbortController());
+    manager.update(workspace, run.runId, { status: "waiting", sessionId: "loop-session" });
+    expect(manager.get(workspace, run.runId)).toMatchObject({ status: "waiting", sessionId: "loop-session" });
+    expect(manager.metrics()).toMatchObject({
+      seekforge_runs_failed_total: 0,
+      seekforge_runs_active: 0,
+    });
+    manager.update(workspace, run.runId, { status: "failed" });
+    expect(manager.get(workspace, run.runId)?.status).toBe("waiting");
+  });
+
   it("ignores malformed JSONL boundaries, forged optionals, and non-increasing seq", () => {
     const workspace = makeWorkspace();
     const manager = new RunManager();
@@ -202,6 +217,71 @@ describe("append-only run ledger", () => {
 });
 
 describe("run API and WS replay", () => {
+  it("defaults Loop runs to edit mode and rejects ask mode", async () => {
+    const workspace = makeWorkspace();
+    let extractMemory: boolean | undefined;
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      logger: { log: () => {} },
+      createAgent: fakeAgentFactory(async function* () {}),
+      runLoop: async (agentOpts, opts) => {
+        extractMemory = agentOpts.extractMemory;
+        const result = {
+          status: "requirements_pending" as const,
+          iterations: 0,
+          costUsd: 0.001,
+          sessionId: "loop-session",
+          loopId: "loop-rest",
+          finalVerify: { code: -1, output: "requirements await approval" },
+        };
+        opts.onEvent?.({ type: "loop.done", result });
+        return result;
+      },
+    });
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        kind: "loop",
+        task: "loop",
+        verifyCommand: "pnpm test",
+        maxCostUsd: 1,
+        requirementMode: "confirm",
+      }),
+    });
+    expect(response.status).toBe(202);
+    const run = (await response.json()) as { runId: string };
+    let record: { status: string; error?: unknown } | undefined;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const current = await fetch(`http://127.0.0.1:${server?.port}/api/runs/${run.runId}`, { headers });
+      record = (await current.json()) as { status: string; error?: unknown };
+      if (record.status === "waiting") break;
+      if (attempt === 99) throw new Error("Loop run did not reach waiting status");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(extractMemory).toBe(true);
+    expect(record?.error).toBeUndefined();
+
+    const rejected = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        kind: "loop",
+        task: "loop",
+        mode: "ask",
+        verifyCommand: "pnpm test",
+        maxCostUsd: 1,
+      }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({
+      error: { code: "bad_request", message: 'loop mode must be "edit"' },
+    });
+  });
+
   it("advertises capabilities, queries a run, and replays afterSeq", async () => {
     const workspace = makeWorkspace();
     server = await startServer({

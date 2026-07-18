@@ -161,6 +161,24 @@ describe("routeFrame", () => {
     expect(next.tabs.find((t) => t.tabId === "t3")!.chat.sessionId).toBeNull();
   });
 
+  it("adopts the Loop result session for the next follow-up", () => {
+    const next = routeFrame(threeTabs(), "t2", {
+      type: "loop.event",
+      event: {
+        type: "loop.done",
+        result: {
+          status: "passed",
+          iterations: 1,
+          costUsd: 0.01,
+          sessionId: "loop-session",
+          finalVerify: { code: 0, output: "ok" },
+        },
+      },
+    });
+    expect(next.tabs.find((tab) => tab.tabId === "t2")!.chat.sessionId).toBe("loop-session");
+    expect(next.tabs.find((tab) => tab.tabId === "t1")!.chat.sessionId).toBeNull();
+  });
+
   it("ignores frames for unknown tabs", () => {
     const s = threeTabs();
     expect(routeFrame(s, "gone", { type: "idle" })).toBe(s);

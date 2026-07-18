@@ -234,11 +234,16 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
    */
   let persistedLoopVerify = "pnpm test";
   let persistedLoopMode: "quick" | "analyze" | "confirm" = "quick";
+  let persistedLoopSessionId = "";
+  let persistedLoopIterations = 0;
+  let persistedLoopCostUsd = 0;
+  const persistedLoopId = "loop-mock";
 
   async function runLoop(
     verifyCommand: string,
     requirementMode: "quick" | "analyze" | "confirm" = "quick",
     requirementsApproved = false,
+    resuming = false,
   ): Promise<void> {
     running = true;
     cancelled = false;
@@ -246,10 +251,14 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
     const out = (passed: boolean) =>
       passed ? `> ${verifyCommand}\nTest Files  1 passed (1)` : `> ${verifyCommand}\nTest Files  1 failed (1)`;
     try {
-      sessionId = `s-mock-loop-${++sessionCounter}`;
-      ev({ type: "session.created", sessionId });
-      persistedLoopVerify = verifyCommand;
-      persistedLoopMode = requirementMode;
+      if (!resuming) {
+        persistedLoopSessionId = `s-mock-loop-${++sessionCounter}`;
+        persistedLoopIterations = 0;
+        persistedLoopCostUsd = 0;
+        persistedLoopVerify = verifyCommand;
+        persistedLoopMode = requirementMode;
+      }
+      sessionId = persistedLoopSessionId;
       const spec = {
         version: 1 as const,
         goal: "Complete the requested loop task",
@@ -263,7 +272,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
         ],
         unresolvedQuestions: [],
       };
-      if (requirementMode !== "quick") {
+      if (requirementMode !== "quick" && !resuming) {
         loop({ type: "requirements.started", phase: "analysis" });
         if (!(await stepLoop(250))) return;
         loop({ type: "requirements.completed", spec, approvalRequired: requirementMode === "confirm" });
@@ -275,7 +284,30 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
               iterations: 0,
               costUsd: 0.001,
               sessionId,
-              loopId: "loop-mock",
+              loopId: persistedLoopId,
+              finalVerify: { code: -1, output: "requirements await approval" },
+              requirements: spec,
+            },
+          });
+          persistedLoopCostUsd = 0.001;
+          emit({ type: "idle" });
+          return;
+        }
+      } else if (requirementMode !== "quick") {
+        loop({
+          type: "requirements.completed",
+          spec,
+          approvalRequired: requirementMode === "confirm" && !requirementsApproved,
+        });
+        if (requirementMode === "confirm" && !requirementsApproved) {
+          loop({
+            type: "loop.done",
+            result: {
+              status: "requirements_pending",
+              iterations: persistedLoopIterations,
+              costUsd: persistedLoopCostUsd,
+              sessionId,
+              loopId: persistedLoopId,
               finalVerify: { code: -1, output: "requirements await approval" },
               requirements: spec,
             },
@@ -285,20 +317,25 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
         }
       }
 
-      // Iteration 1: run, then verify fails.
-      loop({ type: "iteration.start", iteration: 1 });
+      const firstIteration = persistedLoopIterations + 1;
+      const secondIteration = firstIteration + 1;
+      const firstCost = persistedLoopCostUsd + 0.0042;
+      const finalCost = persistedLoopCostUsd + 0.0093;
+
+      // First iteration: run, then verify fails.
+      loop({ type: "iteration.start", iteration: firstIteration });
       if (!(await stepLoop(400))) return;
-      loop({ type: "run.completed", iteration: 1, costUsd: 0.0042 });
+      loop({ type: "run.completed", iteration: firstIteration, costUsd: firstCost });
       if (!(await stepLoop(300))) return;
-      loop({ type: "verify", iteration: 1, code: 1, passed: false, output: out(false) });
+      loop({ type: "verify", iteration: firstIteration, code: 1, passed: false, output: out(false) });
       if (!(await stepLoop(400))) return;
 
-      // Iteration 2: run again, then verify passes.
-      loop({ type: "iteration.start", iteration: 2 });
+      // Second iteration: run again, then verify passes.
+      loop({ type: "iteration.start", iteration: secondIteration });
       if (!(await stepLoop(400))) return;
-      loop({ type: "run.completed", iteration: 2, costUsd: 0.0051 });
+      loop({ type: "run.completed", iteration: secondIteration, costUsd: finalCost });
       if (!(await stepLoop(300))) return;
-      loop({ type: "verify", iteration: 2, code: 0, passed: true, output: out(true) });
+      loop({ type: "verify", iteration: secondIteration, code: 0, passed: true, output: out(true) });
       if (requirementMode !== "quick") {
         loop({ type: "requirements.started", phase: "review" });
         loop({
@@ -315,12 +352,16 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
         type: "loop.done",
         result: {
           status: "passed",
-          iterations: 2,
-          costUsd: 0.0093,
+          iterations: secondIteration,
+          costUsd: finalCost,
           sessionId,
+          loopId: persistedLoopId,
           finalVerify: { code: 0, output: out(true) },
+          ...(requirementMode !== "quick" ? { requirements: spec } : {}),
         },
       });
+      persistedLoopIterations = secondIteration;
+      persistedLoopCostUsd = finalCost;
       emit({ type: "idle" });
     } finally {
       if (cancelled) {
@@ -328,9 +369,10 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
           type: "loop.done",
           result: {
             status: "cancelled",
-            iterations: 1,
-            costUsd: 0.0042,
+            iterations: persistedLoopIterations,
+            costUsd: persistedLoopCostUsd,
             sessionId,
+            loopId: persistedLoopId,
             finalVerify: { code: 1, output: out(false) },
           },
         });
@@ -360,7 +402,7 @@ export function createMockWs(handlers: WsClientHandlers): WsClient {
             emit({ type: "error", code: "busy", message: "a session is already running" });
             return true;
           }
-          void runLoop(persistedLoopVerify, persistedLoopMode, frame.approveRequirements === true);
+          void runLoop(persistedLoopVerify, persistedLoopMode, frame.approveRequirements === true, true);
           break;
         case "start":
           if (running) {

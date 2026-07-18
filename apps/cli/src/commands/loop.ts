@@ -101,7 +101,11 @@ export function formatSummary(result: LoopResult): string {
     t("cmd.loop.summaryCost", { cost: result.costUsd.toFixed(4) }),
   ];
   if (result.loopId) {
-    lines.push(`loop: ${result.loopId} (seekforge loop-resume ${result.loopId})`);
+    const resume =
+      result.status === "requirements_pending"
+        ? `seekforge loop-resume ${result.loopId} --approve-requirements`
+        : `seekforge loop-resume ${result.loopId}`;
+    lines.push(`loop: ${result.loopId} (${resume})`);
     lines.push(`log: .seekforge/loops/${result.loopId}.log`);
   }
   if (result.sessionId) {
@@ -114,6 +118,16 @@ export function formatSummary(result: LoopResult): string {
 }
 
 export async function loopCommand(task: string, opts: LoopOptions): Promise<void> {
+  if (task.trim() === "") {
+    fail("Loop task must be non-empty");
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.verify.trim() === "") {
+    fail("Loop verify command must be non-empty");
+    process.exitCode = 1;
+    return;
+  }
   if (opts.maxIters !== undefined && opts.maxIters > MAX_LOOP_ITERATIONS) {
     fail(`--max-iters must be between 1 and ${MAX_LOOP_ITERATIONS}`);
     process.exitCode = 1;

@@ -166,6 +166,20 @@ describe("loop state persistence", () => {
     expect(isLoopLeaseActive(workspace, "malformed")).toBe(false);
   });
 
+  it("treats JSON scalar locks as malformed without throwing", () => {
+    const root = join(workspace, ".seekforge", "loops");
+    mkdirSync(root, { recursive: true });
+    const lock = join(root, ".scalar.lock");
+    writeFileSync(lock, "null");
+    expect(isLoopLeaseActive(workspace, "scalar")).toBe(true);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(isLoopLeaseActive(workspace, "scalar")).toBe(false);
+    const lease = acquireLoopLease(workspace, "scalar", true);
+    expect(isLoopLeaseActive(workspace, "scalar")).toBe(true);
+    lease.release();
+  });
+
   it("recovers a lock when the live PID belongs to a different process identity", () => {
     const lease = acquireLoopLease(workspace, "reused-pid", true);
     const lock = join(workspace, ".seekforge", "loops", ".reused-pid.lock");
@@ -240,6 +254,44 @@ describe("loop state persistence", () => {
       JSON.stringify({ ...state, requirements: { version: 1, goal: "incomplete" } }),
     );
     expect(loadLoopState(workspace, state.loopId)).toBeNull();
+  });
+
+  it("rejects inconsistent requirement approval lifecycle states", () => {
+    const state = createLoopState({
+      loopId: "bad-approval",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+      requirementMode: "confirm",
+    });
+    const requirements = {
+      version: 1 as const,
+      goal: "ship it",
+      deliverables: ["implementation"],
+      requirements: [{ id: "REQ-1", text: "implement it", required: true }],
+      constraints: [],
+      outOfScope: [],
+      assumptions: [],
+      acceptanceCriteria: [{ id: "AC-1", text: "it works", requirementIds: ["REQ-1"] }],
+      unresolvedQuestions: [],
+    };
+    const acceptanceReview = {
+      complete: true,
+      criteria: [{ id: "AC-1", status: "met" as const, evidence: ["src/feature.ts"] }],
+      gaps: [],
+    };
+    const file = join(workspace, ".seekforge", "loops", "bad-approval.json");
+    const invalid = [
+      { ...state, requirementsApprovedAt: new Date().toISOString() },
+      { ...state, requirementMode: "analyze", requirements, status: "requirements_pending" },
+      { ...state, requirements, acceptanceReview, requirementsApprovedAt: null },
+      { ...state, requirements, requirementsApprovedAt: new Date().toISOString(), status: "requirements_pending" },
+    ];
+    for (const candidate of invalid) {
+      writeFileSync(file, JSON.stringify(candidate));
+      expect(loadLoopState(workspace, state.loopId)).toBeNull();
+    }
   });
 
   it("skips corrupt records and rejects records copied across workspaces", () => {

@@ -13,6 +13,9 @@ export type LoopProgress = {
   events: LoopEvent[];
   /** Set once a loop.done event arrives; null while running / before any loop. */
   result: LoopResult | null;
+  /** Retained independently because the bounded event feed may evict early analysis events. */
+  requirements: Extract<LoopEvent, { type: "requirements.completed" }>["spec"] | null;
+  acceptanceReview: Extract<LoopEvent, { type: "requirements.reviewed" }>["review"] | null;
 };
 
 export function loopWarnings(events: LoopEvent[]): string[] {
@@ -25,7 +28,7 @@ const MAX_LOOP_EVENTS = 500;
 const MAX_LIVE_OUTPUT = 12_000;
 
 export function emptyLoopProgress(): LoopProgress {
-  return { events: [], result: null };
+  return { events: [], result: null, requirements: null, acceptanceReview: null };
 }
 
 /**
@@ -47,9 +50,22 @@ export function reduceLoopEvent(progress: LoopProgress, event: LoopEvent): LoopP
     events = [...progress.events, event];
   }
   if (events.length > MAX_LOOP_EVENTS) events = events.slice(-MAX_LOOP_EVENTS);
+  const result = event.type === "loop.done" ? event.result : progress.result;
   return {
     events,
-    result: event.type === "loop.done" ? event.result : progress.result,
+    result,
+    requirements:
+      event.type === "requirements.completed"
+        ? event.spec
+        : event.type === "loop.done"
+          ? (event.result.requirements ?? progress.requirements)
+          : progress.requirements,
+    acceptanceReview:
+      event.type === "requirements.reviewed"
+        ? event.review
+        : event.type === "loop.done"
+          ? (event.result.acceptanceReview ?? progress.acceptanceReview)
+          : progress.acceptanceReview,
   };
 }
 

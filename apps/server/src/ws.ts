@@ -19,9 +19,8 @@ import {
   readSessionMeta,
   resolveOutputStyle,
   type DispatchManager,
-  type LoopEvent,
 } from "@seekforge/core";
-import type { AgentEvent, ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
+import type { ApiErrorCode, ApprovalMode, ConfirmResult, PermissionRequest, ServerFrame } from "@seekforge/shared";
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
@@ -39,27 +38,6 @@ export const DELTA_FLUSH_MS = 25;
 
 /** Answer reported to the core when the user never answers an ask_user question. */
 export const DECLINED_ANSWER = "(the user declined to answer)";
-
-/** Server-level events: model/reasoning deltas streamed via core callbacks. */
-type ModelDeltaEvent = { type: "model.delta"; chunk: string };
-type ReasoningDeltaEvent = { type: "reasoning.delta"; chunk: string };
-
-type ServerFrame =
-  | {
-      type: "hello";
-      protocolVersion: number;
-      capabilities: readonly string[];
-      disconnectPolicy: "cancel";
-      backgroundDisconnectPolicy: "continue";
-    }
-  | { type: "run.accepted"; runId: string; status: "queued" }
-  | { type: "event"; sessionId: string; event: AgentEvent | ModelDeltaEvent | ReasoningDeltaEvent }
-  | { type: "permission.request"; requestId: string; request: PermissionRequest }
-  | { type: "question.request"; id: string; question: string; options: string[] }
-  | { type: "loop.event"; event: LoopEvent }
-  | { type: "subagent.control"; dispatchId: string; operation: "steer" | "cancel"; status: "accepted" }
-  | { type: "error"; code: string; message: string }
-  | { type: "idle" };
 
 export type ConnectionDeps = {
   registry: WorkspaceRegistry;
@@ -153,7 +131,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     const stored = deps.runManager.appendFrame(workspace, runId, frame as unknown as Record<string, unknown>);
     send({ ...frame, runId, seq: stored.seq } as unknown as ServerFrame);
   };
-  const fail = (code: string, message: string): void => send({ type: "error", code, message });
+  const fail = (code: string, message: string): void => send({ type: "error", code: code as ApiErrorCode, message });
   const launch = (operation: Promise<void>): void => {
     const tracked = deps.trackOperation?.(operation) ?? operation;
     void tracked.catch(() => {});
@@ -415,10 +393,17 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         },
       );
       deps.runManager.update(input.workspace, runId, {
-        status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
+        status:
+          result.status === "cancelled"
+            ? "cancelled"
+            : result.status === "passed"
+              ? "succeeded"
+              : result.status === "requirements_pending"
+                ? "waiting"
+                : "failed",
         sessionId: result.sessionId,
         costUsd: result.costUsd,
-        ...(result.status !== "passed"
+        ...(result.status !== "passed" && result.status !== "requirements_pending"
           ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
           : {}),
       });
@@ -476,10 +461,17 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         },
       );
       deps.runManager.update(input.workspace, runId, {
-        status: result.status === "cancelled" ? "cancelled" : result.status === "passed" ? "succeeded" : "failed",
+        status:
+          result.status === "cancelled"
+            ? "cancelled"
+            : result.status === "passed"
+              ? "succeeded"
+              : result.status === "requirements_pending"
+                ? "waiting"
+                : "failed",
         sessionId: result.sessionId,
         costUsd: result.costUsd,
-        ...(result.status !== "passed"
+        ...(result.status !== "passed" && result.status !== "requirements_pending"
           ? { error: { code: result.status, message: `loop ended with status ${result.status}` } }
           : {}),
       });
@@ -517,7 +509,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { task, mode, approvalMode, plan, ws: wsId } = frame;
-        if (typeof task !== "string" || task.length === 0) {
+        if (typeof task !== "string" || task.trim().length === 0) {
           return fail("bad_frame", "start.task must be a non-empty string");
         }
         if (mode !== "edit" && mode !== "ask") {
@@ -547,7 +539,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { sessionId, task, mode, approvalMode, ws: wsId } = frame;
-        if (typeof sessionId !== "string" || typeof task !== "string" || task.length === 0) {
+        if (typeof sessionId !== "string" || typeof task !== "string" || task.trim().length === 0) {
           return fail("bad_frame", "send needs sessionId and a non-empty task");
         }
         if (mode !== undefined && mode !== "edit" && mode !== "ask") {
@@ -597,10 +589,10 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "loop": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { task, verifyCommand, maxIterations, budget, requirementMode, ws: wsId } = frame;
-        if (typeof task !== "string" || task.length === 0) {
+        if (typeof task !== "string" || task.trim().length === 0) {
           return fail("bad_frame", "loop.task must be a non-empty string");
         }
-        if (typeof verifyCommand !== "string" || verifyCommand.length === 0) {
+        if (typeof verifyCommand !== "string" || verifyCommand.trim().length === 0) {
           return fail("bad_frame", "loop.verifyCommand must be a non-empty string");
         }
         if (

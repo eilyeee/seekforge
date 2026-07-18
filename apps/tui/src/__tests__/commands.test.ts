@@ -144,9 +144,12 @@ describe("parseInput /loop", () => {
   it.each([
     ["--max-iterations 0", "--max-iterations must be an integer from 1 to 100"],
     ["--max-iterations 1.5", "--max-iterations must be an integer from 1 to 100"],
+    ["--max-iterations 0x10", "--max-iterations must be an integer from 1 to 100"],
+    ["--max-iterations 1e1", "--max-iterations must be an integer from 1 to 100"],
     ["--max-iterations 101", "--max-iterations must be an integer from 1 to 100"],
     ["--budget 0", "--budget must be a finite number greater than 0"],
     ["--budget 1e999", "--budget must be a finite number greater than 0"],
+    ["--budget 0x10", "--budget must be a finite number greater than 0"],
     ["--budget", "--budget requires a value"],
   ])("rejects invalid loop option %s", (option, error) => {
     expect(parseInput(`/loop ${option}\nnothing`)).toEqual({

@@ -819,6 +819,7 @@ export type ApiErrorCode =
   | "busy"
   | "unknown_workspace"
   | "unknown_session"
+  | "unknown_run"
   | "unknown_request"
   | "not_running"
   | "agent_error"
@@ -900,6 +901,7 @@ export type ClientFrame =
       approveRequirements?: boolean;
       ws?: string;
     } & RunOverrides)
+  | { type: "subscribe"; runId: string; afterSeq?: number; ws?: string }
   | { type: "subagent.cancel"; dispatchId: string }
   | { type: "subagent.steer"; dispatchId: string; message: string }
   | { type: "cancel" };
@@ -907,6 +909,14 @@ export type ClientFrame =
 /** WS server → client frames (path /ws). */
 export type ServerFrame =
   | {
+      type: "hello";
+      protocolVersion: number;
+      capabilities: readonly string[];
+      disconnectPolicy: "cancel";
+      backgroundDisconnectPolicy: "continue";
+    }
+  | ({ type: "run.accepted"; runId: string; status: "queued" } & { seq?: number })
+  | ({
       type: "event";
       sessionId: string;
       /**
@@ -914,9 +924,21 @@ export type ServerFrame =
        * streaming events (see SERVER-API.md).
        */
       event: AgentEvent | { type: "model.delta"; chunk: string } | { type: "reasoning.delta"; chunk: string };
-    }
-  | { type: "permission.request"; requestId: string; request: PermissionRequest }
-  | { type: "question.request"; id: string; question: string; options: string[] }
-  | { type: "loop.event"; event: LoopEvent }
-  | { type: "error"; code: ApiErrorCode; message: string }
-  | { type: "idle" };
+    } & { runId?: string; seq?: number })
+  | ({ type: "permission.request"; requestId: string; request: PermissionRequest } & {
+      runId?: string;
+      seq?: number;
+    })
+  | ({ type: "question.request"; id: string; question: string; options: string[] } & {
+      runId?: string;
+      seq?: number;
+    })
+  | ({ type: "loop.event"; event: LoopEvent } & { runId?: string; seq?: number })
+  | ({
+      type: "subagent.control";
+      dispatchId: string;
+      operation: "steer" | "cancel";
+      status: "accepted";
+    } & { runId?: string; seq?: number })
+  | ({ type: "error"; code: ApiErrorCode; message: string } & { runId?: string; seq?: number })
+  | ({ type: "idle" } & { runId?: string; seq?: number });

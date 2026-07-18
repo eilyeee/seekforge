@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### round 57: requirement-aware Loop deep audit
+- Hardened persisted requirement lifecycle validation so forged approval,
+  acceptance, and pending-status combinations fail closed instead of bypassing
+  confirm-mode approval.
+- Wrapped repository-controlled verifier diagnostics in an explicit untrusted
+  data envelope before adding them to continuation prompts.
+- Retained Desktop requirement state independently of its bounded live event
+  feed, and corrected pending-approval hints and warning labels across CLI/TUI.
+- Required completed requirement-analysis/review sessions before accepting model
+  output, prevented same-call pre-approval, and stopped cancellation from
+  consuming an edit iteration.
+- Made stale lease recovery serialized, included committed `HEAD` changes in
+  no-progress detection, and rejected whitespace-only Loop inputs centrally.
+- Unified the shared WS frame contract, represented confirm-mode pauses as
+  non-failure `waiting` runs, and preserved Loop session identity across
+  Desktop follow-ups, mock resumes, and detached TUI completion.
+- Aligned decimal input grammar across CLI/TUI/Desktop and made REST Loop runs
+  explicitly edit-only with an edit default.
+- Added regression coverage and corrected stale bilingual TUI Loop examples.
+
 ### round 56: requirement-aware autonomous Loop
 - Added `quick`, `analyze`, and `confirm` Loop requirement modes across Core,
   CLI, TUI, Server, and Desktop. Analyzed modes freeze a bounded structured

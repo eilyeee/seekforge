@@ -95,7 +95,7 @@ import { keyHints, turnSummaryLine } from "./render-helpers.js";
 import { t } from "./strings.js";
 import { runSession } from "./agent/run-session.js";
 import { resumeLoop, runLoop } from "./agent/run-loop.js";
-import { formatLoopEvent } from "./loop-format.js";
+import { formatLoopEvent, shouldRenderLoopEvent } from "./loop-format.js";
 import {
   cancelRun,
   ownsRun,
@@ -765,7 +765,7 @@ export function App({
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
           ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
           onEvent: (event) => {
-            if (!ownsThisRun()) return;
+            if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
             for (const line of formatLoopEvent(event)) {
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
             }
@@ -819,7 +819,7 @@ export function App({
           mcpToolSpecs,
           ...options,
           onEvent: (event) => {
-            if (!ownsThisRun()) return;
+            if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
             for (const line of formatLoopEvent(event))
               dispatchTab({ type: "notice", text: line.text, tone: line.tone });
           },

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LoopEvent, LoopResult } from "@seekforge/core";
-import { formatLoopEvent, formatLoopSummary, loopOutputTail, loopStatusTone } from "../loop-format.js";
+import {
+  formatLoopEvent,
+  formatLoopSummary,
+  loopOutputTail,
+  loopStatusTone,
+  shouldRenderLoopEvent,
+} from "../loop-format.js";
 
 function result(overrides: Partial<LoopResult> = {}): LoopResult {
   return {
@@ -18,6 +24,23 @@ describe("formatLoopEvent warnings", () => {
     expect(formatLoopEvent({ type: "loop.warning", warning: "persistence", message: "disk full" })).toEqual([
       { text: "  ! loop persistence warning: disk full", tone: "error" },
     ]);
+  });
+
+  it("labels requirement warnings separately", () => {
+    expect(formatLoopEvent({ type: "loop.warning", warning: "requirements", message: "invalid review" })).toEqual([
+      { text: "  ! loop requirement warning: invalid review", tone: "error" },
+    ]);
+  });
+});
+
+describe("detached Loop events", () => {
+  it("streams foreground progress but only the final event after detach", () => {
+    const progress = { type: "iteration.start", iteration: 1 } as const;
+    const done = { type: "loop.done", result: result() } as const;
+    expect(shouldRenderLoopEvent(progress, true, false)).toBe(true);
+    expect(shouldRenderLoopEvent(progress, false, true)).toBe(false);
+    expect(shouldRenderLoopEvent(done, false, true)).toBe(true);
+    expect(shouldRenderLoopEvent(done, false, false)).toBe(false);
   });
 });
 
@@ -130,6 +153,11 @@ describe("formatLoopSummary", () => {
   it("shows the persisted loop resume id", () => {
     const lines = formatLoopSummary(result({ loopId: "loop-abc" }));
     expect(lines.some((line) => line.text.includes("/loop-resume loop-abc"))).toBe(true);
+  });
+
+  it("shows the approval flag when confirm-mode requirements are pending", () => {
+    const lines = formatLoopSummary(result({ status: "requirements_pending", loopId: "loop-abc" }));
+    expect(lines.some((line) => line.text.includes("/loop-resume --approve-requirements loop-abc"))).toBe(true);
   });
 
   it("marks a budget-exhausted summary as an error", () => {
