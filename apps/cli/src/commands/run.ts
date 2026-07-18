@@ -217,8 +217,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     console.error(t("render.cancelling"));
     controller.abort();
   };
-  process.on("SIGINT", onSigint);
-
   // --max-cost (or config.maxCostUsd): stop the run once cumulative cost
   // reaches the budget by aborting the same controller Ctrl+C uses (graceful
   // cancel, trace kept). Off when unset/non-positive. costUsd reported on
@@ -332,8 +330,6 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     // strict with no --mcp-config means: no MCP servers at all.
     mcpConfigForRun = { ...config, mcpServers: {} };
   }
-  const mcp = await prepareMcp(mcpConfigForRun, projectPath);
-
   // --allowedTools/--disallowedTools synthesize per-run permission rules,
   // prepended to any config rules. undefined when neither flag is used.
   const permissionRules = buildToolGatingRules({
@@ -342,22 +338,31 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     base: config.permissionRules,
   });
 
-  const { agent, dispose } = createCliAgent({
-    config,
-    model,
-    mcpToolSpecs: mcp.specs,
-    // stream-json input consumes process.stdin as an async generator; a live
-    // terminal prompt would race it for the same fd and corrupt the next
-    // envelope. Deny automatically in that mode (as `machine` output already does).
-    confirm: machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal,
-    onModelDelta: emitPartial ?? renderer?.modelDelta,
-    onReasoningDelta: renderer?.reasoningDelta,
-    extractMemory: mode === "edit",
-    subagents: loadAgentDefinitions(projectPath),
-    ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
-    ...(permissionRules ? { permissionRules } : {}),
-    ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
-  });
+  const mcp = await prepareMcp(mcpConfigForRun, projectPath);
+  let created: ReturnType<typeof createCliAgent>;
+  try {
+    created = createCliAgent({
+      config,
+      model,
+      mcpToolSpecs: mcp.specs,
+      // stream-json input consumes process.stdin as an async generator; a live
+      // terminal prompt would race it for the same fd and corrupt the next
+      // envelope. Deny automatically in that mode (as `machine` output already does).
+      confirm: machine || opts.inputFormat === "stream-json" ? async () => false : confirmInTerminal,
+      onModelDelta: emitPartial ?? renderer?.modelDelta,
+      onReasoningDelta: renderer?.reasoningDelta,
+      extractMemory: mode === "edit",
+      subagents: loadAgentDefinitions(projectPath),
+      ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
+      ...(permissionRules ? { permissionRules } : {}),
+      ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
+    });
+  } catch (error) {
+    mcp.dispose();
+    throw error;
+  }
+  const { agent, dispose } = created;
+  process.on("SIGINT", onSigint);
 
   // @-references resolve against the workspace first, then any extra dirs.
   const expand = (t: string): string => expandExtraFileRefs(expandFileRefs(t, projectPath), extraDirs);

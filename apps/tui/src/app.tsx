@@ -46,6 +46,7 @@ import {
   type ToolSpec,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
+import { clipLine } from "@seekforge/shared/format";
 import type { TuiConfig } from "./config.js";
 import { configParseErrors, unknownConfigKeys } from "./config.js";
 import {
@@ -590,7 +591,7 @@ export function App({
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
       const tabChat = (): ChatState =>
         tabsStateRef.current.tabs.find((t) => t.id === runTabId)?.chat ?? stateRef.current;
-      const label = task.replace(/\s+/g, " ").slice(0, 48);
+      const label = clipLine(task.replace(/\s+/g, " "), 48);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       // Detached runs stay silent except for their final outcome.
       const dispatchRun = (a: ChatAction): void => {
@@ -600,7 +601,7 @@ export function App({
         }
         if (a.type === "event" && a.event.type === "session.completed") {
           const summary = a.event.report.summary.split("\n")[0] ?? "done";
-          dispatchTab({ type: "notice", text: `⚒ background task done: ${summary.slice(0, 100)}` });
+          dispatchTab({ type: "notice", text: `⚒ background task done: ${clipLine(summary, 100)}` });
         } else if (a.type === "event" && a.event.type === "session.failed") {
           dispatchTab({ type: "notice", tone: "error", text: `⚒ background task failed: ${a.event.error.message}` });
         }
@@ -665,7 +666,7 @@ export function App({
               }
               pendingPermissionByTabRef.current.set(runTabId, { runId, request: req, resolve });
               dispatchTab({ type: "permission", request: req });
-              ring(`Permission needed: ${req.toolName}${req.command ? ` — ${req.command.slice(0, 60)}` : ""}`);
+              ring(`Permission needed: ${req.toolName}${req.command ? ` — ${clipLine(req.command, 60)}` : ""}`);
             }),
           askUser: (q) =>
             new Promise<string>((resolve) => {
@@ -678,7 +679,7 @@ export function App({
                 type: "overlay",
                 overlay: { kind: "question", question: q.question, options: [...q.options], index: 0 },
               });
-              ring(`Question: ${q.question.slice(0, 60)}`);
+              ring(`Question: ${clipLine(q.question, 60)}`);
             }),
         });
         if (opts?.plan && !controller.signal.aborted && !detached()) {
@@ -722,7 +723,7 @@ export function App({
           }
         }
         syncBg(runTabId);
-        ring(`Task finished: ${task.slice(0, 60)}`);
+        ring(`Task finished: ${clipLine(task, 60)}`);
       }
     },
     [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd],
@@ -753,7 +754,7 @@ export function App({
       const ownsThisRun = (): boolean => ownsRun(runsByTabRef.current, reservation);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
-      dispatchTab({ type: "notice", text: `loop task: ${task.replace(/\s+/g, " ").slice(0, 120)}` });
+      dispatchTab({ type: "notice", text: `loop task: ${clipLine(task.replace(/\s+/g, " "), 120)}` });
       dispatchTab({ type: "run-start" });
       try {
         const result = await runLoop(task, verifyCommand, controller.signal, {
@@ -785,11 +786,11 @@ export function App({
           detachedControllersRef.current.delete(runId);
           dispatchTab({ type: "run-detach-done", runId });
           syncBg(runTabId);
-          ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+          ring(`Loop finished: ${clipLine(verifyCommand, 60)}`);
         } else if (releaseRun(runsByTabRef.current, reservation)) {
           dispatchTab({ type: "run-end" });
           syncBg(runTabId);
-          ring(`Loop finished: ${verifyCommand.slice(0, 60)}`);
+          ring(`Loop finished: ${clipLine(verifyCommand, 60)}`);
         }
       }
     },
@@ -1313,7 +1314,7 @@ export function App({
         case "diff": {
           const r = spawnSync("git", ["diff"], { cwd: projectPath, encoding: "utf8", maxBuffer: 4_000_000 });
           if (r.status !== 0 && r.stderr) {
-            notice(`git diff failed: ${r.stderr.trim().slice(0, 200)}`, "error");
+            notice(`git diff failed: ${clipLine(r.stderr.trim(), 200)}`, "error");
             break;
           }
           const text = (r.stdout ?? "").trim();
@@ -1750,7 +1751,9 @@ export function App({
           if (command.arg === "list") {
             const drafts = stashList(projectPath);
             if (drafts.length === 0) notice("stash is empty");
-            for (const [i, d] of drafts.entries()) notice(`  ${i + 1}. ${d.replace(/\s+/g, " ").slice(0, 60)}`);
+            for (const [i, d] of drafts.entries()) {
+              notice(`  ${i + 1}. ${clipLine(d.replace(/\s+/g, " "), 60)}`);
+            }
             break;
           }
           if (editor.text.trim() === "") {
@@ -2336,7 +2339,7 @@ export function App({
             notice(`memory ${key === "a" ? "approve" : "reject"} failed: ${message}`, "error");
             return;
           }
-          const gist = candidate.content.replace(/\s+/g, " ").slice(0, 60);
+          const gist = clipLine(candidate.content.replace(/\s+/g, " "), 60);
           notice(key === "a" ? `approved → ${overlay.scope}: ${gist}` : `rejected: ${gist}`);
           const next = removeCandidateAt(overlay.candidates, overlay.index);
           if (next.candidates.length === 0) {
@@ -2750,9 +2753,7 @@ export function App({
         {state.overlay?.kind === "backtrack" ? (
           <ListOverlay
             title={t("picker.titleBacktrack")}
-            lines={state.overlay.targets.map(
-              (t) => `turn ${t.turn}: ${t.text.replace(/\s+/g, " ").slice(0, 64)}${t.text.length > 64 ? "…" : ""}`,
-            )}
+            lines={state.overlay.targets.map((t) => `turn ${t.turn}: ${clipLine(t.text.replace(/\s+/g, " "), 64)}`)}
             index={state.overlay.index}
             footer={t("picker.rewind")}
           />
@@ -2808,8 +2809,8 @@ export function App({
         ) : null}
         {state.queue.length > 0 ? (
           <Text dimColor>
-            queued ({state.queue.length}): {state.queue[0]?.slice(0, 60)}
-            {state.queue.length > 1 || (state.queue[0]?.length ?? 0) > 60 ? "…" : ""}
+            queued ({state.queue.length}): {state.queue[0] ? clipLine(state.queue[0], 60) : undefined}
+            {state.queue.length > 1 && (state.queue[0]?.length ?? 0) <= 60 ? "…" : ""}
           </Text>
         ) : null}
         <MultilineComposer
@@ -2831,7 +2832,7 @@ export function App({
         ) : null}
         {runningShell || bgRunning > 0 || state.detached.length > 0 ? (
           <Text dimColor>
-            {runningShell ? `⚙ running: ${runningShell.slice(0, 60)}` : null}
+            {runningShell ? `⚙ running: ${clipLine(runningShell, 60)}` : null}
             {runningShell && (bgRunning > 0 || state.detached.length > 0) ? "  ·  " : null}
             {bgRunning > 0 ? `${bgRunning} background task${bgRunning > 1 ? "s" : ""}` : null}
             {bgRunning > 0 && state.detached.length > 0 ? "  ·  " : null}

@@ -8,6 +8,7 @@ import {
   relativeAge,
   statusBarParts,
   summarizeArgs,
+  tailText,
 } from "../format.js";
 
 describe("kfmt", () => {
@@ -90,10 +91,26 @@ describe("summarizeArgs", () => {
   it("truncates long args with an ellipsis", () => {
     const out = summarizeArgs({ x: "a".repeat(200) });
     expect(out.endsWith("…")).toBe(true);
-    expect(out.length).toBeLessThanOrEqual(121);
+    expect(out.length).toBeLessThanOrEqual(120);
   });
+
+  it("does not split a surrogate pair", () => {
+    const out = summarizeArgs({ x: "😀".repeat(100) });
+    const beforeEllipsis = out.charCodeAt(out.length - 2);
+    expect(beforeEllipsis >= 0xd800 && beforeEllipsis <= 0xdbff).toBe(false);
+  });
+
   it("passes short args verbatim", () => {
     expect(summarizeArgs({ a: 1 })).toBe('{"a":1}');
+  });
+});
+
+describe("tailText", () => {
+  it("keeps a bounded suffix without a lone low surrogate", () => {
+    const out = tailText(`x${"😀".repeat(250)}`, 400);
+    expect(out.length).toBeLessThanOrEqual(400);
+    const first = out.charCodeAt(0);
+    expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
   });
 });
 

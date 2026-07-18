@@ -446,6 +446,15 @@ describe("chatReducer live command output", () => {
     expect(row.outputTail?.length).toBe(400);
   });
 
+  it("does not split a surrogate pair when trimming the rolling tail", () => {
+    let s = base();
+    s = reduce(s, { type: "tool.started", toolName: "run_command", args: {} });
+    s = reduce(s, { type: "command.output", stream: "stdout", chunk: `x${"😀".repeat(250)}` });
+    const row = s.items[0] as ChatItem & { kind: "tool" };
+    const first = row.outputTail?.charCodeAt(0) ?? 0;
+    expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+  });
+
   it("ignores output with no running command row", () => {
     let s = base();
     s = reduce(s, { type: "command.output", stream: "stdout", chunk: "noise" });

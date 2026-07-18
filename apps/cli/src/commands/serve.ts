@@ -46,15 +46,25 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
   for (const ws of workspaces) console.log(`  - ${ws}`);
   console.log(t("cmd.serve.pressCtrlC"));
 
-  await new Promise<void>((resolve) => {
-    let closing = false;
-    const shutdown = () => {
+  let closing = false;
+  let shutdownPromiseCleanup = (): void => {};
+  const shutdownPromise = new Promise<void>((resolve, reject) => {
+    const shutdown = (): void => {
       if (closing) process.exit(130);
       closing = true;
       console.error(t("render.shuttingDown"));
-      void close().then(resolve);
+      void Promise.resolve().then(close).then(resolve, reject);
+    };
+    shutdownPromiseCleanup = () => {
+      process.removeListener("SIGINT", shutdown);
+      process.removeListener("SIGTERM", shutdown);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   });
+  try {
+    await shutdownPromise;
+  } finally {
+    shutdownPromiseCleanup();
+  }
 }

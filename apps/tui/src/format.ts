@@ -1,4 +1,4 @@
-import { formatCostUsd } from "@seekforge/shared/format";
+import { clipLine, formatCostUsd } from "@seekforge/shared/format";
 import type { TokenUsage } from "@seekforge/shared";
 import type { ApprovalSetting, ContextUsage } from "./model.js";
 
@@ -71,7 +71,17 @@ export function formatUsageDetail(usage: TokenUsage, opts?: { durationMs?: numbe
 /** Dimmed JSON arg preview for a tool row (port of render.ts summarizeArgs). */
 export function summarizeArgs(args: unknown): string {
   const text = JSON.stringify(args) ?? "";
-  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+  return clipLine(text, 120);
+}
+
+/** Keep the end of streaming output without starting on a lone low surrogate. */
+export function tailText(text: string, max: number): string {
+  if (max <= 0) return "";
+  if (text.length <= max) return text;
+  let start = text.length - max;
+  const code = text.charCodeAt(start);
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+  return text.slice(start);
 }
 
 export type StatusBarModel = {

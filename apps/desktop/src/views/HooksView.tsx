@@ -65,7 +65,7 @@ export function HooksView() {
     setNote(null);
     setSaving(false);
     api
-      .hooks()
+      .hooks(request.workspaceId)
       .then((r) => {
         if (requests.isCurrent(request)) setDraft(toDraft(r.hooks));
       })
@@ -91,7 +91,7 @@ export function HooksView() {
     setError(null);
     setNote(null);
     api
-      .saveHooks(toConfig(draft))
+      .saveHooks(toConfig(draft), request.workspaceId)
       .then((r) => {
         if (!requests.isCurrent(request)) return;
         setDraft(toDraft(r.hooks));

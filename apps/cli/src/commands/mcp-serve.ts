@@ -24,9 +24,21 @@ export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
 
   const server = serveMcp({ workspace, readOnly, input: process.stdin, output: process.stdout });
 
-  await new Promise<void>((resolve) => {
-    process.stdin.on("end", resolve);
-    process.stdin.on("close", resolve);
-  });
-  server.close();
+  try {
+    await new Promise<void>((resolve) => {
+      const done = (): void => {
+        process.stdin.removeListener("end", done);
+        process.stdin.removeListener("close", done);
+        resolve();
+      };
+      if (process.stdin.readableEnded || process.stdin.destroyed) {
+        done();
+        return;
+      }
+      process.stdin.on("end", done);
+      process.stdin.on("close", done);
+    });
+  } finally {
+    server.close();
+  }
 }

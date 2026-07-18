@@ -79,7 +79,7 @@ export function EvolutionView() {
     setError(null);
     setBusyId(null);
     api
-      .evolution()
+      .evolution(request.workspaceId)
       .then((nextProposals) => {
         if (requests.isCurrent(request)) setProposals(nextProposals);
       })
@@ -100,12 +100,12 @@ export function EvolutionView() {
     setError(null);
     try {
       if (action === "apply") {
-        const { proposal, changedPath } = await api.evolutionApply(id);
+        const { proposal, changedPath } = await api.evolutionApply(id, operation.workspaceId);
         if (!requests.isCurrent(operation)) return;
         setChangedPaths((p) => ({ ...p, [id]: changedPath }));
         setProposals((cur) => (cur ?? optimistic).map((x) => (x.id === id ? proposal : x)));
       } else {
-        const proposal = await api.evolutionAction(id, action);
+        const proposal = await api.evolutionAction(id, action, operation.workspaceId);
         if (!requests.isCurrent(operation)) return;
         setProposals((cur) => (cur ?? optimistic).map((x) => (x.id === id ? proposal : x)));
       }

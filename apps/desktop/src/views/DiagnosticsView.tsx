@@ -60,7 +60,7 @@ export function DiagnosticsView() {
     setLoading(true);
     setError(null);
     api
-      .doctor()
+      .doctor(request.workspaceId)
       .then((nextReport) => {
         if (requests.isCurrent(request)) setReport(nextReport);
       })

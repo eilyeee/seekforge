@@ -34,7 +34,7 @@ export function GitView() {
     const request = requests.beginLatest(workspaceId);
     if (!request) return Promise.resolve();
     return api
-      .gitStatus()
+      .gitStatus(request.workspaceId)
       .then((s) => {
         if (!requests.isCurrent(request)) return;
         setStatus(s);
@@ -57,7 +57,7 @@ export function GitView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
-  const mutate = (fn: () => Promise<unknown>) => {
+  const mutate = (fn: (workspaceId: string) => Promise<unknown>) => {
     const workspaceId = ws;
     const mutation = requests.capture(workspaceId);
     if (!mutation) return;
@@ -66,7 +66,7 @@ export function GitView() {
     setBusy(true);
     setNote(null);
     Promise.resolve()
-      .then(fn)
+      .then(() => fn(mutation.workspaceId))
       .then(() => refresh(workspaceId))
       .catch((e: unknown) => {
         if (requests.isCurrent(mutation)) setError(String(e));
@@ -76,12 +76,12 @@ export function GitView() {
       });
   };
 
-  const stage = (paths: string[]) => mutate(() => api.gitStage(paths));
-  const unstage = (paths: string[]) => mutate(() => api.gitUnstage(paths));
+  const stage = (paths: string[]) => mutate((workspaceId) => api.gitStage(paths, workspaceId));
+  const unstage = (paths: string[]) => mutate((workspaceId) => api.gitUnstage(paths, workspaceId));
 
   const discard = (path: string) => {
     setDiscardTarget(null);
-    mutate(() => api.gitDiscard([path]));
+    mutate((workspaceId) => api.gitDiscard([path], workspaceId));
   };
 
   const commit = () => {
@@ -95,7 +95,7 @@ export function GitView() {
     setCommitting(true);
     setNote(null);
     api
-      .gitCommit(msg)
+      .gitCommit(msg, mutation.workspaceId)
       .then((r) => {
         if (!requests.isCurrent(mutation)) return;
         setMessage("");

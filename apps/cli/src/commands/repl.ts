@@ -110,8 +110,8 @@ export async function replCommand(opts: {
     return;
   }
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   const mcp = await prepareMcp(config, projectPath); // MCP servers live for the whole REPL
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
   let model = opts.model ?? config.model ?? "deepseek-v4-flash";
   let sessionId: string | undefined;
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
@@ -174,224 +174,225 @@ export async function replCommand(opts: {
     }
   };
 
-  for (;;) {
-    let line: string;
-    try {
-      line = (await rl.question(t("repl.prompt"))).trim();
-    } catch {
-      break; // Ctrl+D / closed stdin
-    }
-    if (line === "") continue;
-
-    // "# fact" is a shortcut to save a fact to project memory (like Claude Code).
-    if (line.startsWith("#")) {
-      const fact = line.slice(1).trim();
-      if (!fact) {
-        console.log(t("repl.rememberUsage"));
-        continue;
-      }
+  try {
+    for (;;) {
+      let line: string;
       try {
-        const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
-        console.log(t("repl.remembered", { content: c.content }));
-      } catch (err) {
-        console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+        line = (await rl.question(t("repl.prompt"))).trim();
+      } catch {
+        break; // Ctrl+D / closed stdin
       }
-      continue;
-    }
+      if (line === "") continue;
 
-    if (line.startsWith("/")) {
-      const [cmd, ...rest] = line.split(/\s+/);
-      // Custom slash commands (.seekforge/commands/<name>.md) take priority over
-      // built-ins on a name clash: expand the body with the trailing args
-      // ($ARGUMENTS) and run it as a task.
-      const customName = (cmd ?? "").replace(/^\//, "");
-      const custom = customName ? userCommands.find((c) => c.name === customName) : undefined;
-      if (custom) {
-        let task = expandUserCommand(custom, rest.join(" ").trim());
-        // !`cmd` injections run in the workspace and their output is inlined.
-        if (commandHasShellInjection(task)) {
-          task = await expandShellInjections(task, (c) => runShellCapture(c, projectPath));
+      // "# fact" is a shortcut to save a fact to project memory (like Claude Code).
+      if (line.startsWith("#")) {
+        const fact = line.slice(1).trim();
+        if (!fact) {
+          console.log(t("repl.rememberUsage"));
+          continue;
         }
-        // Frontmatter model / allowed-tools apply just to this invocation.
-        const permissionRules = custom.allowedTools
-          ? buildToolGatingRules({ allowedTools: custom.allowedTools, base: config.permissionRules })
-          : undefined;
         try {
-          await runOnce(task, {
-            ...(custom.model ? { model: custom.model } : {}),
-            ...(permissionRules ? { permissionRules } : {}),
-          });
+          const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+          console.log(t("repl.remembered", { content: c.content }));
         } catch (err) {
           console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
         }
         continue;
       }
-      switch (cmd) {
-        case "/help":
-          console.log(HELP);
-          break;
-        case "/quit":
-        case "/exit":
-          rl.close();
-          mcp.dispose();
-          return;
-        case "/new":
-          sessionId = undefined;
-          console.log(t("repl.nextMessageFresh"));
-          break;
-        case "/clear":
-          // clear terminal and reset on-screen history
-          process.stdout.write("\x1b[2J\x1b[H");
-          console.log(`SeekForge — ${dim(t("repl.screenCleared"))}`);
-          break;
-        case "/diff":
-          spawn("git", ["diff"], { stdio: "inherit" });
-          break;
-        case "/status":
-          statusCommand();
-          break;
-        case "/compact": {
-          if (!sessionId) {
-            console.log(t("repl.noActiveSession"));
-            break;
+
+      if (line.startsWith("/")) {
+        const [cmd, ...rest] = line.split(/\s+/);
+        // Custom slash commands (.seekforge/commands/<name>.md) take priority over
+        // built-ins on a name clash: expand the body with the trailing args
+        // ($ARGUMENTS) and run it as a task.
+        const customName = (cmd ?? "").replace(/^\//, "");
+        const custom = customName ? userCommands.find((c) => c.name === customName) : undefined;
+        if (custom) {
+          let task = expandUserCommand(custom, rest.join(" ").trim());
+          // !`cmd` injections run in the workspace and their output is inlined.
+          if (commandHasShellInjection(task)) {
+            task = await expandShellInjections(task, (c) => runShellCapture(c, projectPath));
           }
-          const result = compactSessionNow(projectPath, sessionId);
-          if (!result) {
-            console.log(t("repl.sessionTooShort"));
-          } else {
-            console.log(
-              t("repl.compacted", {
-                dropped: result.droppedTurns,
-                before: result.beforeTokens,
-                after: result.afterTokens,
-              }),
-            );
-          }
-          break;
-        }
-        case "/sessions":
-          for (const s of listSessions(projectPath).slice(0, 15)) {
-            console.log(
-              t("cmd.sessions.output", {
-                id: s.id,
-                status: s.status,
-                cost: "",
-                task: s.task.replace(/\s+/g, " ").slice(0, 60),
-              }),
-            );
-          }
-          break;
-        case "/resume": {
-          const id = rest[0];
-          if (!id || !readSessionMeta(projectPath, id)) {
-            console.log(t("repl.resumeUsage"));
-            break;
-          }
-          sessionId = id;
-          console.log(t("repl.continuingSession", { id }));
-          break;
-        }
-        case "/plan": {
-          const planTask = rest.join(" ").trim();
-          if (!planTask) {
-            console.log(t("repl.planUsage"));
-            break;
-          }
+          // Frontmatter model / allowed-tools apply just to this invocation.
+          const permissionRules = custom.allowedTools
+            ? buildToolGatingRules({ allowedTools: custom.allowedTools, base: config.permissionRules })
+            : undefined;
           try {
-            await runOnce(planTask, { mode: "ask", plan: true });
-            const answer = (await rl.question(t("repl.executeQuestion"))).trim().toLowerCase();
-            if (answer === "y") {
-              await runOnce(
-                "Execute the plan you produced above, step by step. Make the changes and run the verification.",
-                { mode: "edit" },
-              );
-            } else {
-              console.log(t("repl.planKept"));
-            }
+            await runOnce(task, {
+              ...(custom.model ? { model: custom.model } : {}),
+              ...(permissionRules ? { permissionRules } : {}),
+            });
           } catch (err) {
             console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
           }
-          break;
+          continue;
         }
-        case "/model":
-          if (rest[0] === "deepseek-reasoner") {
-            console.log(t("repl.reasonerBlocked"));
+        switch (cmd) {
+          case "/help":
+            console.log(HELP);
+            break;
+          case "/quit":
+          case "/exit":
+            return;
+          case "/new":
+            sessionId = undefined;
+            console.log(t("repl.nextMessageFresh"));
+            break;
+          case "/clear":
+            // clear terminal and reset on-screen history
+            process.stdout.write("\x1b[2J\x1b[H");
+            console.log(`SeekForge — ${dim(t("repl.screenCleared"))}`);
+            break;
+          case "/diff":
+            spawn("git", ["diff"], { stdio: "inherit" });
+            break;
+          case "/status":
+            statusCommand();
+            break;
+          case "/compact": {
+            if (!sessionId) {
+              console.log(t("repl.noActiveSession"));
+              break;
+            }
+            const result = compactSessionNow(projectPath, sessionId);
+            if (!result) {
+              console.log(t("repl.sessionTooShort"));
+            } else {
+              console.log(
+                t("repl.compacted", {
+                  dropped: result.droppedTurns,
+                  before: result.beforeTokens,
+                  after: result.afterTokens,
+                }),
+              );
+            }
             break;
           }
-          if (!rest[0]) {
-            console.log(t("repl.modelCurrent", { model }));
+          case "/sessions":
+            for (const s of listSessions(projectPath).slice(0, 15)) {
+              console.log(
+                t("cmd.sessions.output", {
+                  id: s.id,
+                  status: s.status,
+                  cost: "",
+                  task: s.task.replace(/\s+/g, " ").slice(0, 60),
+                }),
+              );
+            }
+            break;
+          case "/resume": {
+            const id = rest[0];
+            if (!id || !readSessionMeta(projectPath, id)) {
+              console.log(t("repl.resumeUsage"));
+              break;
+            }
+            sessionId = id;
+            console.log(t("repl.continuingSession", { id }));
             break;
           }
-          model = rest[0];
-          console.log(t("repl.modelSet", { model }));
-          break;
-        case "/think": {
-          const arg = rest[0];
-          if (!arg) {
+          case "/plan": {
+            const planTask = rest.join(" ").trim();
+            if (!planTask) {
+              console.log(t("repl.planUsage"));
+              break;
+            }
+            try {
+              await runOnce(planTask, { mode: "ask", plan: true });
+              const answer = (await rl.question(t("repl.executeQuestion"))).trim().toLowerCase();
+              if (answer === "y") {
+                await runOnce(
+                  "Execute the plan you produced above, step by step. Make the changes and run the verification.",
+                  { mode: "edit" },
+                );
+              } else {
+                console.log(t("repl.planKept"));
+              }
+            } catch (err) {
+              console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+            }
+            break;
+          }
+          case "/model":
+            if (rest[0] === "deepseek-reasoner") {
+              console.log(t("repl.reasonerBlocked"));
+              break;
+            }
+            if (!rest[0]) {
+              console.log(t("repl.modelCurrent", { model }));
+              break;
+            }
+            model = rest[0];
+            console.log(t("repl.modelSet", { model }));
+            break;
+          case "/think": {
+            const arg = rest[0];
+            if (!arg) {
+              const state = config.thinking === false ? "off" : "on";
+              const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
+              console.log(t("repl.thinkingCurrent", { state, effortSuffix }));
+              break;
+            }
+            if (arg === "on") config.thinking = true;
+            else if (arg === "off") {
+              config.thinking = false;
+              // Clear any effort set by a prior `/think high|max`; otherwise a
+              // stale effort leaks into the next run (and a later `/think on`).
+              delete (config as { reasoningEffort?: string }).reasoningEffort;
+            } else if (arg === "high" || arg === "max") {
+              config.thinking = true;
+              config.reasoningEffort = arg;
+            } else {
+              console.log(t("repl.modelUsage"));
+              break;
+            }
             const state = config.thinking === false ? "off" : "on";
             const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
-            console.log(t("repl.thinkingCurrent", { state, effortSuffix }));
+            const modelSuffix = model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)";
+            console.log(t("repl.thinkingSet", { state, effortSuffix, modelSuffix }));
             break;
           }
-          if (arg === "on") config.thinking = true;
-          else if (arg === "off") {
-            config.thinking = false;
-            // Clear any effort set by a prior `/think high|max`; otherwise a
-            // stale effort leaks into the next run (and a later `/think on`).
-            delete (config as { reasoningEffort?: string }).reasoningEffort;
-          } else if (arg === "high" || arg === "max") {
-            config.thinking = true;
-            config.reasoningEffort = arg;
-          } else {
-            console.log(t("repl.modelUsage"));
+          case "/remember": {
+            const fact = rest.join(" ").trim();
+            if (!fact) {
+              console.log(t("repl.rememberUsage"));
+              break;
+            }
+            try {
+              const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+              console.log(t("repl.remembered", { content: c.content }));
+            } catch (err) {
+              console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+            }
             break;
           }
-          const state = config.thinking === false ? "off" : "on";
-          const effortSuffix = config.reasoningEffort ? ` · effort ${config.reasoningEffort}` : "";
-          const modelSuffix = model.startsWith("deepseek-v4") ? "" : " (needs a deepseek-v4 model: /model)";
-          console.log(t("repl.thinkingSet", { state, effortSuffix, modelSuffix }));
-          break;
-        }
-        case "/remember": {
-          const fact = rest.join(" ").trim();
-          if (!fact) {
-            console.log(t("repl.rememberUsage"));
+          case "/usage":
+            console.log(`${formatUsage(totalUsage)}${formatContextSuffix(lastContext, { always: true })}`);
+            break;
+          case "/context": {
+            if (lastContext) {
+              const { usedTokens, budgetTokens, percent } = lastContext;
+              const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
+              console.log(t("repl.contextInfo", { used: k(usedTokens), budget: k(budgetTokens), percent }));
+            } else {
+              console.log(t("repl.contextNone"));
+            }
+            console.log(dim(t("repl.contextAutoCompaction")));
             break;
           }
-          try {
-            const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
-            console.log(t("repl.remembered", { content: c.content }));
-          } catch (err) {
-            console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
-          }
-          break;
+          default:
+            console.log(t("err.unknownCommand", { cmd: cmd ?? "" }));
         }
-        case "/usage":
-          console.log(`${formatUsage(totalUsage)}${formatContextSuffix(lastContext, { always: true })}`);
-          break;
-        case "/context": {
-          if (lastContext) {
-            const { usedTokens, budgetTokens, percent } = lastContext;
-            const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
-            console.log(t("repl.contextInfo", { used: k(usedTokens), budget: k(budgetTokens), percent }));
-          } else {
-            console.log(t("repl.contextNone"));
-          }
-          console.log(dim(t("repl.contextAutoCompaction")));
-          break;
-        }
-        default:
-          console.log(t("err.unknownCommand", { cmd: cmd ?? "" }));
+        continue;
       }
-      continue;
-    }
 
-    try {
-      await runOnce(line);
-    } catch (err) {
-      console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+      try {
+        await runOnce(line);
+      } catch (err) {
+        console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
+      }
     }
+  } finally {
+    rl.close();
+    mcp.dispose();
   }
-  rl.close();
-  mcp.dispose();
 }

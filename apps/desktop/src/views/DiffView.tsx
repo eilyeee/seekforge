@@ -60,7 +60,7 @@ export function DiffView() {
     setError(null);
     setLoading(true);
     try {
-      const res = await api.diff(staged);
+      const res = await api.diff(staged, request.workspaceId);
       if (!requests.isCurrent(request)) return;
       setFiles(splitDiffByFile(res.diff));
       setTruncated(res.truncated);

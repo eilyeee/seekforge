@@ -185,7 +185,7 @@ export const api = {
       withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws),
     ),
   skills: (ws?: string) => request<Skill[]>("GET", withWorkspace("/api/skills", ws)),
-  skill: (id: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`)),
+  skill: (id: string, ws?: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`, ws)),
   memory: (ws?: string) => request<MemoryResponse>("GET", withWorkspace("/api/memory", ws)),
   memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user", ws?: string) =>
     request<MemoryCandidate>(
@@ -207,10 +207,10 @@ export const api = {
     }),
   memoryDeleteFact: (selector: { index: number } | { match: string }, ws?: string) =>
     request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact", ws), selector),
-  diff: (staged?: boolean) =>
+  diff: (staged?: boolean, ws?: string) =>
     request<{ diff: string; truncated: boolean; notGit?: boolean }>(
       "GET",
-      withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`),
+      withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`, ws),
     ),
   config: (ws?: string) => request<ServerConfig>("GET", withWorkspace("/api/config", ws)),
   setConfig: (key: ConfigKey, value: string, global?: boolean, ws?: string) =>
@@ -222,13 +222,13 @@ export const api = {
   agents: (ws?: string) => request<AgentInfo[]>("GET", withWorkspace("/api/agents", ws)),
   agent: (id: string, ws?: string) =>
     request<AgentInfo>("GET", withWorkspace(`/api/agents/${encodeURIComponent(id)}`, ws)),
-  evolution: () => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution")),
-  evolutionAction: (id: string, action: "accept" | "reject") =>
-    request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`)),
-  evolutionApply: (id: string) =>
+  evolution: (ws?: string) => request<EvolutionProposal[]>("GET", withWorkspace("/api/evolution", ws)),
+  evolutionAction: (id: string, action: "accept" | "reject", ws?: string) =>
+    request<EvolutionProposal>("POST", withWorkspace(`/api/evolution/${encodeURIComponent(id)}/${action}`, ws)),
+  evolutionApply: (id: string, ws?: string) =>
     request<{ proposal: EvolutionProposal; changedPath: string }>(
       "POST",
-      withWorkspace(`/api/evolution/${encodeURIComponent(id)}/apply`),
+      withWorkspace(`/api/evolution/${encodeURIComponent(id)}/apply`, ws),
     ),
   mcp: (ws?: string) => request<McpServer[]>("GET", withWorkspace("/api/mcp", ws)),
   mcpTools: (name: string, ws?: string) =>
@@ -297,18 +297,18 @@ export const api = {
     request<CompactResult>("POST", withWorkspace("/api/memory/compact", ws), opts ?? {}),
 
   // Skills lifecycle (workspace-scoped). Builtin skills are read-only.
-  skillSetEnabled: (id: string, enabled: boolean, scope?: SkillScope) =>
-    request<Skill>("PUT", withWorkspace(`/api/skills/${encodeURIComponent(id)}`), {
+  skillSetEnabled: (id: string, enabled: boolean, scope?: SkillScope, ws?: string) =>
+    request<Skill>("PUT", withWorkspace(`/api/skills/${encodeURIComponent(id)}`, ws), {
       enabled,
       ...(scope ? { scope } : {}),
     }),
-  skillCreate: (id: string) => request<Skill>("POST", withWorkspace("/api/skills"), { id }),
-  skillImport: (path: string, global?: boolean) =>
-    request<Skill>("POST", withWorkspace("/api/skills/import"), { path, ...(global ? { global: true } : {}) }),
-  skillDelete: (id: string, scope?: SkillScope) =>
+  skillCreate: (id: string, ws?: string) => request<Skill>("POST", withWorkspace("/api/skills", ws), { id }),
+  skillImport: (path: string, global?: boolean, ws?: string) =>
+    request<Skill>("POST", withWorkspace("/api/skills/import", ws), { path, ...(global ? { global: true } : {}) }),
+  skillDelete: (id: string, scope?: SkillScope, ws?: string) =>
     request<{ deleted: boolean }>(
       "DELETE",
-      withWorkspace(`/api/skills/${encodeURIComponent(id)}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`),
+      withWorkspace(`/api/skills/${encodeURIComponent(id)}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, ws),
     ),
 
   // Sessions lifecycle (workspace-scoped).
@@ -383,22 +383,26 @@ export const api = {
     ),
 
   // Environment diagnostics (workspace-scoped).
-  doctor: () => request<DoctorReport>("GET", withWorkspace("/api/doctor")),
+  doctor: (ws?: string) => request<DoctorReport>("GET", withWorkspace("/api/doctor", ws)),
 
   // Files browser + editor (workspace-scoped). `path` is workspace-relative.
-  tree: (path?: string) =>
-    request<TreeResponse>("GET", withWorkspace(`/api/tree${path ? `?path=${encodeURIComponent(path)}` : ""}`)),
-  readFile: (path: string) => request<FileContent>("GET", withWorkspace(`/api/file?path=${encodeURIComponent(path)}`)),
-  writeFile: (path: string, content: string) =>
-    request<{ ok: true }>("PUT", withWorkspace("/api/file"), { path, content }),
+  tree: (path?: string, ws?: string) =>
+    request<TreeResponse>("GET", withWorkspace(`/api/tree${path ? `?path=${encodeURIComponent(path)}` : ""}`, ws)),
+  readFile: (path: string, ws?: string) =>
+    request<FileContent>("GET", withWorkspace(`/api/file?path=${encodeURIComponent(path)}`, ws)),
+  writeFile: (path: string, content: string, ws?: string) =>
+    request<{ ok: true }>("PUT", withWorkspace("/api/file", ws), { path, content }),
 
   // Source control (workspace-scoped).
-  gitStatus: () => request<GitStatus>("GET", withWorkspace("/api/git/status")),
-  gitStage: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/stage"), { paths }),
-  gitUnstage: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/unstage"), { paths }),
-  gitDiscard: (paths: string[]) => request<{ ok: boolean }>("POST", withWorkspace("/api/git/discard"), { paths }),
-  gitCommit: (message: string) =>
-    request<{ ok: boolean; commit: string }>("POST", withWorkspace("/api/git/commit"), { message }),
+  gitStatus: (ws?: string) => request<GitStatus>("GET", withWorkspace("/api/git/status", ws)),
+  gitStage: (paths: string[], ws?: string) =>
+    request<{ ok: boolean }>("POST", withWorkspace("/api/git/stage", ws), { paths }),
+  gitUnstage: (paths: string[], ws?: string) =>
+    request<{ ok: boolean }>("POST", withWorkspace("/api/git/unstage", ws), { paths }),
+  gitDiscard: (paths: string[], ws?: string) =>
+    request<{ ok: boolean }>("POST", withWorkspace("/api/git/discard", ws), { paths }),
+  gitCommit: (message: string, ws?: string) =>
+    request<{ ok: boolean; commit: string }>("POST", withWorkspace("/api/git/commit", ws), { message }),
 
   // Custom slash commands surfaced in the composer (workspace-scoped).
   commands: (ws?: string) => request<CommandsResponse>("GET", withWorkspace("/api/commands", ws)),
@@ -409,8 +413,9 @@ export const api = {
   outputStyles: (ws?: string) =>
     request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>("GET", withWorkspace("/api/output-styles", ws)),
   /** Project hooks config (the editable .seekforge/config.json layer). */
-  hooks: () => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks")),
-  saveHooks: (hooks: HooksConfig) => request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks"), { hooks }),
+  hooks: (ws?: string) => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks", ws)),
+  saveHooks: (hooks: HooksConfig, ws?: string) =>
+    request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks", ws), { hooks }),
 
   // Manual session compaction (workspace-scoped). Result is treated as opaque.
   sessionCompact: (id: string, ws?: string) =>

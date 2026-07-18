@@ -19,7 +19,7 @@ function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<s
     if (!operation) return null;
     setStates((s) => ({ ...s, [key]: "saving" }));
     try {
-      const config = await api.setConfig(key, value, global || undefined);
+      const config = await api.setConfig(key, value, global || undefined, operation.workspaceId);
       if (!requests.isCurrent(operation)) return null;
       setStates((s) => ({ ...s, [key]: "saved" }));
       setTimeout(() => {

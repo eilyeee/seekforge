@@ -108,6 +108,19 @@ describe("formatLoopEvent", () => {
     expect(formatLoopEvent(e)).toEqual([{ text: "  ! boom", tone: "dim" }]);
   });
 
+  it("does not split a surrogate pair in live verification output", () => {
+    const e: LoopEvent = {
+      type: "verify.output",
+      iteration: 1,
+      stream: "stdout",
+      chunk: "😀".repeat(200),
+    };
+    const [notice] = formatLoopEvent(e);
+    expect(notice?.text.endsWith("…")).toBe(true);
+    const beforeEllipsis = notice?.text.charCodeAt((notice?.text.length ?? 0) - 2) ?? 0;
+    expect(beforeEllipsis >= 0xd800 && beforeEllipsis <= 0xdbff).toBe(false);
+  });
+
   it("formats a passing verify as a dim head plus an output tail", () => {
     const e: LoopEvent = { type: "verify", iteration: 1, code: 0, passed: true, output: "All good\n" };
     expect(formatLoopEvent(e)).toEqual([

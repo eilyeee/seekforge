@@ -1,6 +1,7 @@
 import type React from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
+import { clipLine } from "@seekforge/shared/format";
 import { toolResultSummary, toolTitle } from "../render-helpers.js";
 import { ACCENT } from "./Header.js";
 
@@ -63,7 +64,7 @@ export function ToolRow({
             .map((line, i) => (
               <Text key={`t${i}`} dimColor>
                 {"    "}
-                {line.slice(0, 100)}
+                {clipLine(line, 100)}
               </Text>
             ))
         : null}

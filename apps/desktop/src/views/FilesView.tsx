@@ -55,7 +55,7 @@ export function FilesView() {
     if (!request) return;
     setDirs((d) => ({ ...d, [path]: { loaded: false, loading: true, error: null, entries: [] } }));
     api
-      .tree(path || undefined)
+      .tree(path || undefined, request.workspaceId)
       .then((res) => {
         if (!requests.isCurrent(request)) return;
         setDirs((d) => ({ ...d, [path]: { loaded: true, loading: false, error: null, entries: res.entries } }));
@@ -140,7 +140,7 @@ export function FilesView() {
           </div>
 
           {leftMode === "search" ? (
-            <SearchPanel key={ws} onOpen={openFile} />
+            <SearchPanel key={ws} workspaceId={ws} onOpen={openFile} />
           ) : (
             <div className="flex-1 overflow-y-auto py-2">
               {root === undefined || (root.loading && !root.loaded) ? (
@@ -177,7 +177,7 @@ export function FilesView() {
               description={t("files.noSelectionHint")}
             />
           ) : (
-            <FilePane key={`${ws}:${selected}`} path={selected} reveal={reveal} wsPath={wsPath} />
+            <FilePane key={`${ws}:${selected}`} path={selected} reveal={reveal} wsPath={wsPath} workspaceId={ws} />
           )}
         </section>
       </div>
@@ -185,6 +185,7 @@ export function FilesView() {
       {finderOpen && (
         <FileFinder
           key={ws}
+          workspaceId={ws}
           recent={recent}
           onClose={() => setFinderOpen(false)}
           onPick={(p) => {
@@ -213,7 +214,7 @@ function HitLine({ text, col, len }: { text: string; col: number; len: number })
 }
 
 /** Project-wide content search (GET /api/search): debounced, grouped by file. */
-function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => void }) {
+function SearchPanel({ workspaceId, onOpen }: { workspaceId: string; onOpen: (path: string, hit: SearchHit) => void }) {
   const t = useT();
   const [q, setQ] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -235,7 +236,7 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => voi
     setLoading(true);
     const h = window.setTimeout(() => {
       api
-        .searchContent(term, { caseSensitive, regex })
+        .searchContent(term, { caseSensitive, regex }, workspaceId)
         .then((r) => {
           if (mine === seq.current) setRes(r); // ignore out-of-order responses
         })
@@ -247,7 +248,7 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => voi
         });
     }, 250);
     return () => window.clearTimeout(h);
-  }, [q, caseSensitive, regex]);
+  }, [q, caseSensitive, regex, workspaceId]);
 
   // Group hits by file, preserving first-seen order.
   const groups: { path: string; hits: SearchHit[] }[] = [];
@@ -335,10 +336,12 @@ function SearchPanel({ onOpen }: { onOpen: (path: string, hit: SearchHit) => voi
 
 /** ⌘P fuzzy "go to file" finder: loads the file index once, ranks client-side. */
 function FileFinder({
+  workspaceId,
   recent,
   onClose,
   onPick,
 }: {
+  workspaceId: string;
   recent: string[];
   onClose: () => void;
   onPick: (path: string) => void;
@@ -351,10 +354,10 @@ function FileFinder({
 
   useEffect(() => {
     api
-      .files("")
+      .files("", workspaceId)
       .then((r) => setFiles(r.files))
       .catch(() => setFiles([]));
-  }, []);
+  }, [workspaceId]);
 
   const term = q.trim();
   // Empty query → recent first (then the index); otherwise fuzzy-rank the index.
@@ -544,7 +547,17 @@ function TreeNode({
 const MARKDOWN_RE = /\.(md|markdown)$/i;
 
 /** Views one file with an Edit/Save toggle (PUT /api/file). */
-function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | null; wsPath: string }) {
+function FilePane({
+  path,
+  reveal,
+  wsPath,
+  workspaceId,
+}: {
+  path: string;
+  reveal: Reveal | null;
+  wsPath: string;
+  workspaceId: string;
+}) {
   const t = useT();
   const [file, setFile] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -583,13 +596,13 @@ function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | nul
     setSaveError(null);
     setSaved(false);
     api
-      .readFile(path)
+      .readFile(path, workspaceId)
       .then((f) => {
         setFile(f);
         setDraft(f.content);
       })
       .catch((e: unknown) => setError(String(e)));
-  }, [path]);
+  }, [path, workspaceId]);
 
   const startEdit = () => {
     if (!file) return;
@@ -603,7 +616,7 @@ function FilePane({ path, reveal, wsPath }: { path: string; reveal: Reveal | nul
     setSaving(true);
     setSaveError(null);
     api
-      .writeFile(path, draft)
+      .writeFile(path, draft, workspaceId)
       .then(() => {
         setFile((f) => (f ? { ...f, content: draft } : f));
         setEditing(false);

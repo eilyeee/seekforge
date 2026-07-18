@@ -54,7 +54,7 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
         },
       ];
     case "verify.output": {
-      const text = event.chunk.replace(/\s+$/, "").split("\n").at(-1)?.slice(0, 240) ?? "";
+      const text = clipLine(event.chunk.replace(/\s+$/, "").split("\n").at(-1) ?? "", 240);
       return text ? [{ text: `  ${event.stream === "stderr" ? "!" : "·"} ${text}`, tone: "dim" }] : [];
     }
     case "verify": {

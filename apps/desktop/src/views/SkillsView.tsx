@@ -83,7 +83,7 @@ export function SkillsView() {
     if (!request) return;
     setError(null);
     api
-      .skill(id)
+      .skill(id, request.workspaceId)
       .then((skill) => {
         if (requests.isCurrent(request)) setDetail(skill);
       })
@@ -102,7 +102,7 @@ export function SkillsView() {
     if (!operation) return;
     setError(null);
     api
-      .skillSetEnabled(skill.id, !skill.enabled, skill.scope)
+      .skillSetEnabled(skill.id, !skill.enabled, skill.scope, operation.workspaceId)
       .then(() => {
         if (requests.isCurrent(operation)) refresh(operation.workspaceId);
       })
@@ -118,7 +118,7 @@ export function SkillsView() {
     const { id, scope } = pendingDelete;
     setPendingDelete(null);
     api
-      .skillDelete(id, scope)
+      .skillDelete(id, scope, operation.workspaceId)
       .then(() => {
         if (requests.isCurrent(operation)) refresh(operation.workspaceId);
       })
@@ -310,7 +310,7 @@ export function SkillsView() {
           onCreate={(id) => {
             const operation = requests.capture(ws);
             if (!operation) return Promise.resolve();
-            return api.skillCreate(id).then(() => {
+            return api.skillCreate(id, operation.workspaceId).then(() => {
               if (!requests.isCurrent(operation)) return;
               setDialog(null);
               refresh(operation.workspaceId);
@@ -324,7 +324,7 @@ export function SkillsView() {
           onImport={(path, global) => {
             const operation = requests.capture(ws);
             if (!operation) return Promise.resolve();
-            return api.skillImport(path, global).then(() => {
+            return api.skillImport(path, global, operation.workspaceId).then(() => {
               if (!requests.isCurrent(operation)) return;
               setDialog(null);
               refresh(operation.workspaceId);

@@ -1,5 +1,6 @@
 import type { AgentEvent, FinalReport, PermissionRequest, TokenUsage } from "@seekforge/shared";
 import type { MemoryCandidate } from "@seekforge/core";
+import { tailText } from "./format.js";
 import type { CandidateScope } from "./memory-candidates.js";
 
 /**
@@ -722,7 +723,7 @@ function applyEvent(state: ChatState, e: AgentEvent): ChatState {
       if (idx < 0) return state;
       const next = state.items.slice();
       const row = next[idx] as ChatItem & { kind: "tool" };
-      const merged = ((row.outputTail ?? "") + e.chunk).slice(-400);
+      const merged = tailText((row.outputTail ?? "") + e.chunk, 400);
       next[idx] = { ...row, outputTail: merged };
       return { ...state, items: next };
     }

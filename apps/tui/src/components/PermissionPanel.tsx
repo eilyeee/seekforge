@@ -1,6 +1,7 @@
 import type React from "react";
 import { Box, Text } from "ink";
 import type { PermissionRequest } from "@seekforge/shared";
+import { clipLine } from "@seekforge/shared/format";
 import { classifyUnifiedDiff } from "../diff.js";
 import { t } from "../strings.js";
 import { DiffCard } from "./DiffCard.js";
@@ -51,10 +52,7 @@ export function PermissionPanel({
                 </Text>
               </Text>
               <Box paddingLeft={4}>
-                <Text dimColor>
-                  {hunk.preview.slice(0, 200)}
-                  {hunk.preview.length > 200 ? "…" : ""}
-                </Text>
+                <Text dimColor>{clipLine(hunk.preview, 200)}</Text>
               </Box>
             </Box>
           );
