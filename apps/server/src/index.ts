@@ -133,6 +133,8 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         runLoop,
         triggerRuns,
         runManager,
+        logger,
+        requestId,
       }).catch((e: unknown) => {
         // Defense-in-depth: handleApi answers its own errors, but never leave a
         // request hanging on an unexpected rejection.

@@ -156,8 +156,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
     }
     // Anything else is an internal failure. Log the full error server-side but
     // answer a generic message — raw internal error text (paths, stack
-    // fragments, stderr) is not for clients.
-    console.error(`[api] ${method} ${path} failed:`, err);
+    // fragments, stderr) is not for clients. Log through the structured logger
+    // with the requestId so the 500 can be joined to its http.request line.
+    if (ctx.logger) {
+      ctx.logger.log("error", "api.error", {
+        requestId: ctx.requestId,
+        method,
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } else {
+      console.error(`[api] ${method} ${path} failed:`, err);
+    }
     return sendApiError(res, 500, "internal", "internal error");
   }
 }

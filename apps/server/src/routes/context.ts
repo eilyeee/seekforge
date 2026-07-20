@@ -16,6 +16,7 @@ import type { Workspace, WorkspaceRegistry } from "../workspaces.js";
 import type { WorktreeManager } from "../worktrees.js";
 import type { TriggerRunHandle } from "../trigger-run.js";
 import type { RunManager } from "../run-ledger.js";
+import type { StructuredLogger } from "../logger.js";
 
 export type RestContext = {
   registry: WorkspaceRegistry;
@@ -31,6 +32,10 @@ export type RestContext = {
   /** Active headless runs, owned by startServer and drained during shutdown. */
   triggerRuns?: Set<TriggerRunHandle>;
   runManager: RunManager;
+  /** Structured logger + per-request id, so an internal 500 can be correlated
+   * back to its http.request log line. */
+  logger?: StructuredLogger;
+  requestId?: string;
 };
 
 /** Context for the global (non-workspace-scoped) routes. */
