@@ -608,7 +608,7 @@ behavior applies). Both the legacy shape and the Claude-Code shape are accepted:
 | `decision` | top-level (`"allow"` / `"deny"`) | `deny` blocks the call (`reason` becomes the block reason). `allow` explicitly allows it and **skips the remaining `preToolUse` hooks**. |
 | `hookSpecificOutput.permissionDecision` | nested (`"allow"` / `"deny"` / `"ask"`) | Same as `decision`, plus `"ask"` — explicitly defer to the normal permission flow and keep running later hooks. Also read at the top level as `permissionDecision`. |
 | `permissionDecisionReason` / `reason` | nested / top-level | The human-readable reason shown when denying. |
-| `updatedInput` | top-level or under `hookSpecificOutput` | Replacement tool arguments. The dispatcher applies them before the tool runs, **re-validating against the tool schema and re-running permission checks** on the new args. `preToolUse` only. |
+| `updatedInput` | top-level or under `hookSpecificOutput` | Replacement tool arguments. The dispatcher applies them before the tool runs, **re-validating against the tool schema and re-running permission checks** on the new args. An invalid replacement fails the call with `invalid_hook_args`; it never falls back to executing the original input. `preToolUse` only. |
 | `continue` | top-level (boolean) | `false` blocks the call (treated like a deny), using `systemMessage` as the reason. Parsed on all stages but only blocks on `preToolUse` and `userPromptSubmit`. |
 | `systemMessage` | top-level (string) | Shown to the user as a notice; also the block reason when `continue: false` blocks. Parsed on all stages. |
 | `additionalContext` / `hookSpecificOutput.additionalContext` | top-level / nested (string) | Injected into the prompt as context — used by `userPromptSubmit` and `sessionStart`. When absent, those stages fall back to the hook's raw stdout. |
@@ -669,7 +669,9 @@ JSON on stdin, and the same fields as `SEEKFORGE_*` environment variables:
 
 Only the first line of stdout is used, capped at 80 characters (ANSI escapes are
 allowed through). A non-zero exit, a timeout (default 1.5s), or empty output
-yields nothing and the TUI falls back to its built-in status line.
+yields nothing and the TUI falls back to its built-in status line. Evaluation
+is asynchronous so a slow command cannot freeze rendering; output is capped at
+4 KiB and a timeout/overflow terminates the command's process group.
 
 ```json
 { "statusLine": "echo \"$SEEKFORGE_MODEL | $SEEKFORGE_CONTEXT_PERCENT% ctx\"" }

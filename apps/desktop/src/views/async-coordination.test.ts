@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   createSerialQueue,
+  EditRevisions,
   ExclusiveOperation,
   LatestRequest,
   valueForWorkspace,
   WorkspaceAsyncCoordinator,
 } from "./async-coordination";
+
+describe("EditRevisions", () => {
+  it("rejects an async result after newer input for the same resource", () => {
+    const revisions = new EditRevisions<string>();
+    const request = revisions.capture("tab-a");
+    revisions.advance("tab-a");
+    expect(revisions.isCurrent("tab-a", request)).toBe(false);
+    expect(revisions.isCurrent("tab-b", 0)).toBe(true);
+  });
+});
 
 describe("LatestRequest", () => {
   it("rejects stale selections and closed details", () => {

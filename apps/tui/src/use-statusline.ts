@@ -35,10 +35,10 @@ export function useStatusLine(command: string | undefined, projectPath: string, 
     const compute = (): void => {
       if (busyRef.current) return;
       busyRef.current = true;
-      setImmediate(() => {
+      setImmediate(async () => {
         try {
           if (cancelled) return;
-          const result = tick(schedulerRef.current, command, statusLineInput(stateRef.current, projectPath));
+          const result = await tick(schedulerRef.current, command, statusLineInput(stateRef.current, projectPath));
           schedulerRef.current = result.state;
           if (!cancelled && result.recomputed) setText(result.state.lastOutput);
         } finally {
@@ -51,7 +51,6 @@ export function useStatusLine(command: string | undefined, projectPath: string, 
     const id = setInterval(compute, 5000);
     return () => {
       cancelled = true;
-      busyRef.current = false;
       clearInterval(id);
     };
   }, [command, projectPath, state.model, state.approval, state.sessionId, state.totalUsage, state.context]);

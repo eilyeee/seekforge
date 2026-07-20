@@ -26,7 +26,7 @@ import {
   type StartMode,
   type TabsState,
 } from "./lib/tabs";
-import { createWsClient, type ClientFrame, type ServerFrame, type WsClient } from "./lib/ws";
+import { createWsClient, encodeClientFrame, type ClientFrame, type ServerFrame, type WsClient } from "./lib/ws";
 import { emptyUsage } from "./lib/usage";
 import type { RecentWorkspace, SessionMeta, Workspace, WorktreeMergeResult } from "./types";
 
@@ -233,6 +233,7 @@ const wsByTab = new Map<string, WsClient>();
  * action is NOT queued — the user must retry once reconnected.
  */
 const SEND_DISCONNECTED_ERROR = "disconnected: not sent — reconnect to continue";
+const SEND_TOO_LARGE_ERROR = "too_large: task exceeds the 1 MB WebSocket frame limit";
 
 /**
  * Tells "the server is down" apart from "this is an old server missing the
@@ -549,9 +550,14 @@ export const useStore = create<AppStore>()((set, get) => {
         wsError: null,
         planReady: false,
       };
-      const accepted = tab.chat.sessionId
-        ? client.send(buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides))
-        : client.send(buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides));
+      const frame = tab.chat.sessionId
+        ? buildSendFrame(tab.chat.sessionId, task, tab.approvalMode, tab.mode, tab.ws, overrides)
+        : buildStartFrame(task, tab.mode, tab.approvalMode, tab.ws, overrides);
+      if (encodeClientFrame(frame) === null) {
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_TOO_LARGE_ERROR }) }));
+        return false;
+      }
+      const accepted = client.send(frame);
       if (!accepted) {
         // Socket is not OPEN: the task never left the client. Don't append a
         // user bubble or mark running — surface the failure so the caller keeps
@@ -572,7 +578,7 @@ export const useStore = create<AppStore>()((set, get) => {
       if (tab.chat.running || task.trim() === "" || verifyCommand.trim() === "") return;
       const client = ensureWs(tab.tabId);
       requestNotifyPermission();
-      const accepted = client.send({
+      const frame: ClientFrame = {
         type: "loop",
         task,
         verifyCommand,
@@ -582,8 +588,15 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
         ...overridesOf(tab),
-      });
-      if (!accepted) return;
+      };
+      if (encodeClientFrame(frame) === null) {
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_TOO_LARGE_ERROR }) }));
+        return;
+      }
+      if (!client.send(frame)) {
+        set((s) => ({ tabs: updateTab(s.tabs, tab.tabId, { wsError: SEND_DISCONNECTED_ERROR }) }));
+        return;
+      }
       set((s) => ({
         tabs: updateTab(s.tabs, tab.tabId, {
           // Mark running so every Run control (chat + loop) is disabled, and

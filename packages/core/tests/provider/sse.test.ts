@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createSseAccumulator, feedSseChunk, finalizeSse, MAX_SSE_LINE_CHARS } from "../../src/provider/sse.js";
+import { ProviderProtocolError } from "../../src/provider/mapping.js";
+
+function deltaLine(delta: Record<string, unknown>): string {
+  return `data: ${JSON.stringify({ choices: [{ delta }] })}\n`;
+}
 
 const TRANSCRIPT = [
   'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}',
@@ -141,6 +146,69 @@ describe("SSE accumulation", () => {
 
     expect(finalizeSse(acc).content).toBe("bounded");
     expect(acc.buffer).toBe("");
+  });
+
+  it("rejects aggregate decoded text before appending the excess chunk", () => {
+    const acc = createSseAccumulator({ decodedChars: 5 });
+    feedSseChunk(acc, "12345");
+
+    expect(() => feedSseChunk(acc, "6")).toThrow(ProviderProtocolError);
+    expect(acc.decodedChars).toBe(5);
+  });
+
+  it("bounds accumulated content and reasoning independently", () => {
+    const content = createSseAccumulator({ decodedChars: 10_000, contentChars: 3 });
+    const contentDeltas: string[] = [];
+    feedSseChunk(content, deltaLine({ content: "ab" }), (value) => contentDeltas.push(value));
+    expect(() => feedSseChunk(content, deltaLine({ content: "cd" }), (value) => contentDeltas.push(value))).toThrow(
+      /SSE content exceeds 3/,
+    );
+    expect(content.content).toBe("ab");
+    expect(contentDeltas).toEqual(["ab"]);
+
+    const reasoning = createSseAccumulator({ decodedChars: 10_000, reasoningChars: 3 });
+    const reasoningDeltas: string[] = [];
+    feedSseChunk(reasoning, deltaLine({ reasoning_content: "ab" }), undefined, (value) => reasoningDeltas.push(value));
+    expect(() =>
+      feedSseChunk(reasoning, deltaLine({ reasoning_content: "cd" }), undefined, (value) =>
+        reasoningDeltas.push(value),
+      ),
+    ).toThrow(/SSE reasoning content exceeds 3/);
+    expect(reasoning.reasoningContent).toBe("ab");
+    expect(reasoningDeltas).toEqual(["ab"]);
+  });
+
+  it("bounds per-call and aggregate tool arguments", () => {
+    const toolDelta = (index: number, argumentsJson: string) =>
+      deltaLine({ tool_calls: [{ index, function: { arguments: argumentsJson } }] });
+
+    const perCall = createSseAccumulator({
+      decodedChars: 10_000,
+      toolArgumentChars: 3,
+      totalToolArgumentChars: 10,
+    });
+    feedSseChunk(perCall, toolDelta(0, "ab"));
+    expect(() => feedSseChunk(perCall, toolDelta(0, "cd"))).toThrow(/SSE tool arguments exceeds 3/);
+    expect(perCall.toolCallsByIndex.get(0)?.argumentsJson).toBe("ab");
+
+    const aggregate = createSseAccumulator({
+      decodedChars: 10_000,
+      toolArgumentChars: 10,
+      totalToolArgumentChars: 3,
+    });
+    feedSseChunk(aggregate, toolDelta(0, "ab"));
+    expect(() => feedSseChunk(aggregate, toolDelta(1, "cd"))).toThrow(/SSE total tool arguments exceeds 3/);
+    expect(aggregate.totalToolArgumentChars).toBe(2);
+  });
+
+  it("bounds the number of distinct streamed tool calls", () => {
+    const acc = createSseAccumulator({ decodedChars: 10_000, toolCalls: 1 });
+    feedSseChunk(acc, deltaLine({ tool_calls: [{ index: 0, function: { name: "first" } }] }));
+
+    expect(() => feedSseChunk(acc, deltaLine({ tool_calls: [{ index: 1, function: { name: "second" } }] }))).toThrow(
+      /SSE tool call count exceeds 1/,
+    );
+    expect(acc.toolCallsByIndex.size).toBe(1);
   });
 });
 

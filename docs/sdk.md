@@ -37,6 +37,12 @@ surfaces today.
 | `loadMcpToolSpecs(servers, roots?)` | Spawn configured MCP servers and return their `ToolSpec[]` (+ `dispose`). |
 | `loadAgentDefinitions(workspace)` / `loadSkills(workspace)` | Load subagents and skills from `.seekforge/`. |
 
+Provider responses are bounded before mapping: both streaming and non-streaming
+bodies have a 32 MiB raw limit, with tighter content/reasoning/tool-argument
+limits and validated usage integers. Streaming additionally enforces a 120 s
+idle timeout and a 600 s total timeout; internal embedders can override these
+with `ProviderConfig.streamIdleTimeoutMs` and `streamTimeoutMs`.
+
 ## Minimal example
 
 ```ts

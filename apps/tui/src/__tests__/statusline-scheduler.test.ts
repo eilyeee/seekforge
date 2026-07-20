@@ -37,52 +37,52 @@ describe("shouldRecompute", () => {
 });
 
 describe("tick", () => {
-  it("runs and caches output on the first tick", () => {
-    const r = tick(initialSchedulerState, "cmd", base, { now: 0, run: () => "line one" });
+  it("runs and caches output on the first tick", async () => {
+    const r = await tick(initialSchedulerState, "cmd", base, { now: 0, run: async () => "line one" });
     expect(r.recomputed).toBe(true);
     expect(r.state.lastOutput).toBe("line one");
     expect(r.state.lastComputedAt).toBe(0);
   });
 
-  it("does not run again when nothing changed", () => {
+  it("does not run again when nothing changed", async () => {
     let calls = 0;
-    const run = (): string => {
+    const run = async (): Promise<string> => {
       calls += 1;
       return "out";
     };
-    let r = tick(initialSchedulerState, "cmd", base, { now: 0, run });
-    r = tick(r.state, "cmd", base, { now: 10000, run });
+    let r = await tick(initialSchedulerState, "cmd", base, { now: 0, run });
+    r = await tick(r.state, "cmd", base, { now: 10000, run });
     expect(r.recomputed).toBe(false);
     expect(calls).toBe(1);
   });
 
-  it("recomputes when the command changes and the input does not", () => {
+  it("recomputes when the command changes and the input does not", async () => {
     const commands: string[] = [];
-    const run = (command: string): string => {
+    const run = async (command: string): Promise<string> => {
       commands.push(command);
       return command;
     };
-    let result = tick(initialSchedulerState, "first", base, { now: 0, run });
-    result = tick(result.state, "second", base, { now: 2000, run });
+    let result = await tick(initialSchedulerState, "first", base, { now: 0, run });
+    result = await tick(result.state, "second", base, { now: 2000, run });
     expect(result.recomputed).toBe(true);
     expect(result.state.lastOutput).toBe("second");
     expect(commands).toEqual(["first", "second"]);
   });
 
-  it("keeps the previous cached output when a recompute fails", () => {
-    let r = tick(initialSchedulerState, "cmd", base, { now: 0, run: () => "good" });
-    r = tick(r.state, "cmd", { ...base, costUsd: 0.5 }, { now: 5000, run: () => null });
+  it("keeps the previous cached output when a recompute fails", async () => {
+    let r = await tick(initialSchedulerState, "cmd", base, { now: 0, run: async () => "good" });
+    r = await tick(r.state, "cmd", { ...base, costUsd: 0.5 }, { now: 5000, run: async () => null });
     expect(r.recomputed).toBe(true);
     expect(r.state.lastOutput).toBe("good");
   });
 
-  it("recomputes once input changes and the interval has elapsed", () => {
+  it("recomputes once input changes and the interval has elapsed", async () => {
     const outputs = ["a", "b"];
     let i = 0;
-    const run = (): string => outputs[i++] as string;
-    let r = tick(initialSchedulerState, "cmd", base, { now: 0, minIntervalMs: 1000, run });
+    const run = async (): Promise<string> => outputs[i++] as string;
+    let r = await tick(initialSchedulerState, "cmd", base, { now: 0, minIntervalMs: 1000, run });
     expect(r.state.lastOutput).toBe("a");
-    r = tick(r.state, "cmd", { ...base, costUsd: 0.9 }, { now: 2000, minIntervalMs: 1000, run });
+    r = await tick(r.state, "cmd", { ...base, costUsd: 0.9 }, { now: 2000, minIntervalMs: 1000, run });
     expect(r.recomputed).toBe(true);
     expect(r.state.lastOutput).toBe("b");
   });

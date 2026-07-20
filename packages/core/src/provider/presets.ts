@@ -91,6 +91,7 @@ export function resolveProviderConfig(input: {
   thinking?: boolean;
   reasoningEffort?: "high" | "max";
   streamIdleTimeoutMs?: number;
+  streamTimeoutMs?: number;
   onRetry?: (info: RetryInfo) => void;
   fallbackModel?: string;
   modelPricing?: Record<string, ModelPricing>;
@@ -107,6 +108,7 @@ export function resolveProviderConfig(input: {
     ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: input.streamIdleTimeoutMs } : {}),
+    ...(input.streamTimeoutMs !== undefined ? { streamTimeoutMs: input.streamTimeoutMs } : {}),
     ...(input.onRetry !== undefined ? { onRetry: input.onRetry } : {}),
     ...(input.fallbackModel !== undefined ? { fallbackModel: input.fallbackModel } : {}),
   };

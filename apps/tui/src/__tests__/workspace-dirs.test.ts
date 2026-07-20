@@ -29,11 +29,17 @@ afterEach(() => {
 
 describe("normalizeExtraDir", () => {
   it("resolves relative paths against the project path", () => {
-    expect(normalizeExtraDir("../extra", project)).toBe(extra);
+    expect(normalizeExtraDir("../extra", project)).toBe(fs.realpathSync(extra));
   });
 
   it("accepts absolute paths to existing directories", () => {
-    expect(normalizeExtraDir(extra, project)).toBe(extra);
+    expect(normalizeExtraDir(extra, project)).toBe(fs.realpathSync(extra));
+  });
+
+  it("pins a symlink alias to the physical directory that was approved", () => {
+    const alias = path.join(base, "extra-alias");
+    fs.symlinkSync(extra, alias);
+    expect(normalizeExtraDir(alias, project)).toBe(fs.realpathSync(extra));
   });
 
   it("expands ~ against the home directory", () => {

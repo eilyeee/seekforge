@@ -278,24 +278,36 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     const { op, text, index } = (body ?? {}) as { op?: unknown; text?: unknown; index?: unknown };
-    if (op === "add") {
-      if (typeof text !== "string" || text.trim() === "") {
-        return sendApiError(res, 400, "bad_request", 'op "add" needs a non-empty text');
-      }
-      addTodo(workspace, text.trim());
-    } else if (op === "toggle" || op === "remove") {
-      if (typeof index !== "number" || !Number.isInteger(index)) {
-        return sendApiError(res, 400, "bad_request", `op "${op}" needs an integer index (1-based)`);
-      }
-      const result = op === "toggle" ? toggleTodo(workspace, index) : removeTodo(workspace, index);
-      if (result === null) {
-        return sendApiError(res, 404, "not_found", `no todo at index ${index}`);
-      }
-    } else {
+    if (op !== "add" && op !== "toggle" && op !== "remove") {
       return sendApiError(res, 400, "bad_request", 'op must be "add", "toggle" or "remove"');
     }
-    // Every mutation returns the updated list (what the UI re-renders).
-    return sendJson(res, 200, loadTodos(workspace));
+    if (op === "add" && (typeof text !== "string" || text.trim() === "")) {
+      return sendApiError(res, 400, "bad_request", 'op "add" needs a non-empty text');
+    }
+    if (op !== "add" && (typeof index !== "number" || !Number.isInteger(index))) {
+      return sendApiError(res, 400, "bad_request", `op "${op}" needs an integer index (1-based)`);
+    }
+    try {
+      const todos = await rest.coordinator.withRepository(workspace, async () => {
+        const guard = acquireWorkspaceSessionGuard(workspace);
+        try {
+          if (op === "add") addTodo(workspace, (text as string).trim());
+          else {
+            const result =
+              op === "toggle" ? toggleTodo(workspace, index as number) : removeTodo(workspace, index as number);
+            if (result === null) return null;
+          }
+          return loadTodos(workspace);
+        } finally {
+          guard.release();
+        }
+      });
+      if (todos === null) return sendApiError(res, 404, "not_found", `no todo at index ${index}`);
+      return sendJson(res, 200, todos);
+    } catch (error) {
+      if (!(error instanceof SessionBusyError)) throw error;
+      return sendApiError(res, 409, "session_busy", "cannot mutate todos while the workspace is active");
+    }
   }
 
   // DeepSeek account balance via the server's key. Null-safe by contract:

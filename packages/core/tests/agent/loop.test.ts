@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
-import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
+import { createDefaultDispatcher, type ToolContext, type ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
 import {
   createSessionTrace,
@@ -363,7 +363,8 @@ describe("agent loop", () => {
     await started;
 
     let returned = false;
-    const closing = iterator.return!().then(() => {
+    const closing = iterator.return!().then((result) => {
+      expect(result.done).toBe(true);
       returned = true;
     });
     await aborted;
@@ -1191,6 +1192,47 @@ describe("auto-verify on completion", () => {
       expect(events.some((e) => e.type === "notice" && e.message.includes("Auto-verifying"))).toBe(true);
     },
   );
+
+  it("uses hook-rewritten command metadata for verification and the final report", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [
+          {
+            id: "e1",
+            name: "write_file",
+            argumentsJson: JSON.stringify({ path: "a.ts", content: "export const value = 1;\n" }),
+          },
+        ],
+        finishReason: "tool_calls",
+      }),
+      response({
+        toolCalls: [{ id: "r1", name: "run_command", argumentsJson: JSON.stringify({ command: "true" }) }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "## Summary\ndone" }),
+      response({ content: "## Summary\nverified" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: createDefaultDispatcher(),
+      confirm: async () => true,
+      verifyCommand: "true",
+      hooks: {
+        preToolUse: [{ match: "run_command", command: `echo '{"updatedInput":{"command":"echo skipped"}}'` }],
+      },
+    });
+
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const completed = events.find((event) => event.type === "session.completed");
+
+    expect(
+      events.some((event) => event.type === "notice" && event.message.includes("Auto-verifying changes: true")),
+    ).toBe(true);
+    expect(completed && completed.type === "session.completed" && completed.report.commandsRun).toContain(
+      "echo skipped",
+    );
+    expect(completed && completed.type === "session.completed" && completed.report.commandsRun).not.toContain("true");
+  });
 
   it("cancels an in-flight auto-verify command", async () => {
     const controller = new AbortController();

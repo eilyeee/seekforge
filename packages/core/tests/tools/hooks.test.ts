@@ -109,15 +109,29 @@ describe("dispatcher hook integration", () => {
 
   it("preToolUse updatedInput replaces the tool args when it re-validates", async () => {
     writeFileSync(join(workspace, "b.txt"), "replaced content\n");
+    const auditEntries: Record<string, unknown>[] = [];
     const ctx = makeCtx(workspace, {
+      log: (entry) => auditEntries.push(entry),
       hooks: {
         preToolUse: [{ match: "read_file", command: `echo '{"updatedInput":{"path":"b.txt"}}'` }],
+        postToolUse: [{ match: "read_file", command: "cat > post-rewrite.json" }],
       },
     });
     const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
     expect(result.ok).toBe(true);
     // The hook redirected the read from a.txt to b.txt.
     expect((result.data as { content: string }).content).toContain("replaced content");
+    expect(result.meta?.path).toBe("b.txt");
+    expect(JSON.parse(readFileSync(join(workspace, "post-rewrite.json"), "utf8"))).toMatchObject({
+      args: { path: "b.txt" },
+      path: "b.txt",
+    });
+    expect(auditEntries).toContainEqual(
+      expect.objectContaining({
+        args: { path: "b.txt" },
+        originalArgs: { path: "a.txt" },
+      }),
+    );
   });
 
   it("preToolUse updatedInput is re-permission-checked: a denied rewrite blocks the call", async () => {
@@ -137,18 +151,18 @@ describe("dispatcher hook integration", () => {
     expect(existsSync(join(workspace, "ok.txt"))).toBe(false);
   });
 
-  it("preToolUse updatedInput is ignored when it fails schema validation", async () => {
+  it("rejects preToolUse updatedInput when it fails schema validation", async () => {
     const ctx = makeCtx(workspace, {
       hooks: {
         preToolUse: [
-          // `path` must be a string; a number fails validation → original args kept.
+          // `path` must be a string; a number must not fall back to the original call.
           { match: "read_file", command: `echo '{"updatedInput":{"path":123}}'` },
         ],
       },
     });
     const result = await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
-    expect(result.ok).toBe(true);
-    expect((result.data as { content: string }).content).toContain("hello");
+    expect(result).toMatchObject({ ok: false, error: { code: "invalid_hook_args" } });
+    expect(result.data).toBeUndefined();
   });
 
   it("preToolUse continue:false blocks the tool with systemMessage as the reason", async () => {

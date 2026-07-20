@@ -19,6 +19,9 @@ basename. The **first** workspace is the default.
   omitted = first workspace. The session runs in that workspace's path. One
   connection still drives at most one running session, but different
   connections/tabs may target different workspaces.
+- WebSocket frames are capped at 1,000,000 serialized bytes. The desktop checks
+  the same shared limit before sending and preserves the draft when a task or
+  loop request is too large.
 
 The single-workspace contract is unchanged: starting with one workspace and
 omitting `?ws=`/`ws` behaves exactly as before.
@@ -115,7 +118,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/sessions/:id/turns | `[{turn, text, backtrackable}]` — every `role:"user"` message of messages.jsonl in file order, numbered 0..N-1 (the same all-user-messages indexing the core's truncateSessionAtUserTurn / rewindSessionToTurn use). Turn 0 (the original task) has `backtrackable: false`; `[]` when no messages.jsonl exists yet; 404 unknown session |
 | POST /api/sessions/:id/backtrack | body `{turn: integer, files?: boolean}` — truncates the conversation to just before user turn `turn` (truncateSessionAtUserTurn) and, when `files` is true, restores the file checkpoints of turns >= `turn` (rewindSessionToTurn). Returns `{removedMessages, keptMessages, files}` where `files` is `{restored, deleted, skipped}` counts, or `null` when file restore was not requested. 400 when `turn` is 0 or out of range, 404 unknown session |
 | GET /api/todos | `[{index, text, done}]` — checklist lines of `.seekforge/todos.md` (same format contract as the TUI; 1-based indices count checklist lines only) |
-| POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — mutates `.seekforge/todos.md`, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range |
+| POST /api/todos | body `{op: "add", text}` \| `{op: "toggle"\|"remove", index}` — atomically mutates `.seekforge/todos.md` without following project symlinks, preserving every non-checklist line (headings/prose) verbatim; returns the updated todo list. 400 bad op/args, 404 index out of range, 409 while the workspace is active |
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
 | GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every explicitly trusted MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). An untrusted, failed, or unsupported server contributes zero entries |
 | GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every explicitly trusted MCP server (spawned on demand, then disposed). An untrusted, failed, or unsupported server contributes zero entries. Mirrors GET /api/mcp/resources |

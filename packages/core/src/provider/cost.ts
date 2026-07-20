@@ -16,10 +16,10 @@ export function estimateCostUsd(usage: UsageTokens, model: string, pricing?: Rec
   if (!rates) return 0;
   const cacheHit = Math.min(usage.cacheHitTokens, usage.promptTokens);
   const cacheMiss = usage.promptTokens - cacheHit;
-  return (
+  const cost =
     (cacheMiss * rates.inputCacheMissPer1M +
       cacheHit * rates.inputCacheHitPer1M +
       usage.completionTokens * rates.outputPer1M) /
-    1_000_000
-  );
+    1_000_000;
+  return Number.isFinite(cost) && cost >= 0 ? cost : 0;
 }

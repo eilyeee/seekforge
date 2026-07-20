@@ -1,5 +1,6 @@
 /** WebSocket client with exponential-backoff reconnect. */
 import { isMock } from "../mock";
+import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import { createMockWs } from "../mock/ws";
 import type { ClientFrame, ConnState, WsClient, WsClientHandlers } from "./ws-types";
 
@@ -7,6 +8,11 @@ export type { ClientFrame, ConnState, ServerFrame, WsClient } from "./ws-types";
 
 const MAX_BACKOFF_MS = 8000;
 const BASE_BACKOFF_MS = 500;
+
+export function encodeClientFrame(frame: ClientFrame): string | null {
+  const payload = JSON.stringify(frame);
+  return new TextEncoder().encode(payload).byteLength <= MAX_WS_PAYLOAD_BYTES ? payload : null;
+}
 
 export function createWsClient(handlers: WsClientHandlers & { getToken: () => string }): WsClient {
   if (isMock()) return createMockWs(handlers);
@@ -16,7 +22,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
   let closed = false;
   let initialConnection = true;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const queue: ClientFrame[] = [];
+  const queue: string[] = [];
 
   const wsUrl = () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -29,7 +35,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
 
   function flush() {
     while (queue.length > 0 && sock && sock.readyState === WebSocket.OPEN) {
-      sock.send(JSON.stringify(queue.shift()));
+      sock.send(queue.shift() as string);
     }
   }
 
@@ -79,12 +85,14 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
 
   return {
     send(frame: ClientFrame) {
+      const payload = encodeClientFrame(frame);
+      if (payload === null) return false;
       if (sock && sock.readyState === WebSocket.OPEN) {
-        sock.send(JSON.stringify(frame));
+        sock.send(payload);
         return true;
       }
       if (initialConnection && sock) {
-        queue.push(frame);
+        queue.push(payload);
         return true;
       }
       return false;

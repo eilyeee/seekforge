@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activeTab, useStore } from "../store";
 import { api } from "../lib/api";
 import { mapToServerTurn, userTurnOf } from "../lib/backtrack";
@@ -21,7 +21,7 @@ import { useT } from "../lib/i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button } from "../components/ui";
 import type { AccountBalance, ServerConfig, SlashCommand } from "../types";
-import { valueForWorkspace } from "./async-coordination";
+import { EditRevisions, valueForWorkspace } from "./async-coordination";
 
 /** Worktree dialog state: discard confirm, post-merge delete confirm, conflict report. */
 type WorktreeDialog =
@@ -57,19 +57,23 @@ export function ChatView() {
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftRevisions = useRef(new EditRevisions<string>());
   const draft = drafts[tab.tabId] ?? "";
-  const setDraft = (text: string) => setDrafts((d) => ({ ...d, [tab.tabId]: text }));
+  const setDraftForTab = useCallback((tabId: string, text: string): void => {
+    draftRevisions.current.advance(tabId);
+    setDrafts((d) => ({ ...d, [tabId]: text }));
+  }, []);
+  const setDraft = (text: string) => setDraftForTab(tab.tabId, text);
 
   // A seed from another view ("Ask this subagent") prefills the active tab once.
   const chatDraft = useStore((s) => s.chatDraft);
   const clearChatDraft = useStore((s) => s.clearChatDraft);
   useEffect(() => {
     if (chatDraft != null) {
-      setDrafts((d) => ({ ...d, [tab.tabId]: chatDraft }));
+      setDraftForTab(tab.tabId, chatDraft);
       clearChatDraft();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatDraft]);
+  }, [chatDraft, clearChatDraft, setDraftForTab, tab.tabId]);
 
   /** Tab id pending close confirmation (running tab — closing cancels the run). */
   const [confirmClose, setConfirmClose] = useState<string | null>(null);
@@ -281,9 +285,13 @@ export function ChatView() {
   // everything else interpolates args locally.
   const insertCommand = (c: SlashCommand, args: string): void => {
     if (commandHasShell(c.body)) {
+      const tabId = tab.tabId;
+      const revision = draftRevisions.current.capture(tabId);
       api
         .expandCommand(c.name, args, tab.ws)
-        .then((r) => setDraft(r.text))
+        .then((r) => {
+          if (draftRevisions.current.isCurrent(tabId, revision)) setDraftForTab(tabId, r.text);
+        })
         .catch((err) => showToast(err instanceof Error ? err.message : String(err)));
     } else {
       setDraft(expandCommand(c, args));

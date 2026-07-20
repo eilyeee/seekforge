@@ -6,6 +6,8 @@
  * (apps must not import across each other).
  */
 
+import { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+
 /** A web-relevant slash command; the registry is built by ChatView. */
 export type ComposerCommand = {
   /** Name without the leading slash, e.g. "new". */
@@ -294,4 +296,7 @@ export function atTopEdge(text: string, selStart: number): boolean {
 /** True when ↓ should walk history forward: the caret sits on the last line. */
 export function atBottomEdge(text: string, selEnd: number): boolean {
   return !text.slice(selEnd).includes("\n");
+}
+export function imageUploadSizeError(size: number): string | null {
+  return size > MAX_UPLOAD_BYTES ? `image exceeds ${MAX_UPLOAD_BYTES} bytes` : null;
 }

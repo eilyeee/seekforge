@@ -7,6 +7,7 @@ import {
   filterCommands,
   fuzzyScore,
   historyKey,
+  imageUploadSizeError,
   imageMarker,
   insertAtPath,
   insertImageMarker,
@@ -21,6 +22,14 @@ import {
   type ComposerCommand,
   type KVStorage,
 } from "./composer";
+import { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+
+describe("imageUploadSizeError", () => {
+  it("rejects oversized images before FileReader allocates a base64 copy", () => {
+    expect(imageUploadSizeError(MAX_UPLOAD_BYTES)).toBeNull();
+    expect(imageUploadSizeError(MAX_UPLOAD_BYTES + 1)).toMatch(/exceeds/);
+  });
+});
 
 const cmd = (name: string): ComposerCommand => ({ name, hint: name, run: () => {} });
 

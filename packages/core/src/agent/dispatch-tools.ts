@@ -112,7 +112,12 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
 
   function observeDispatch(dispatchId: string, promise: Promise<ToolResult>): void {
     terminalDispatches.delete(dispatchId);
-    void rt.trackOperation(promise).then((result) => emitDispatchTerminal(dispatchId, result));
+    void rt.trackOperation(
+      promise.then((result) => {
+        emitDispatchTerminal(dispatchId, result);
+        return result;
+      }),
+    );
   }
 
   /**

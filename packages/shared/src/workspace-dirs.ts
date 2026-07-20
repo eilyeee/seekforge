@@ -44,7 +44,9 @@ export function normalizeExtraDir(input: string, projectPath: string): string | 
     const physicalProject = fs.realpathSync(projectPath);
     if (!fs.statSync(physical).isDirectory()) return null;
     if (isInside(physical, physicalProject)) return null;
-    return abs;
+    // Persist the physical directory that was approved. Keeping the logical
+    // alias would let a symlink be rebound to a different directory later.
+    return physical;
   } catch {
     return null;
   }

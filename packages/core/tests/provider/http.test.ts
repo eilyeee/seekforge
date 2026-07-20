@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchWithRetry, parseRetryAfter } from "../../src/provider/http.js";
+import {
+  fetchWithRetry,
+  parseRetryAfter,
+  ProviderResponseTooLargeError,
+  readJsonResponseBounded,
+} from "../../src/provider/http.js";
 import type { RetryInfo } from "../../src/provider/index.js";
 
 /** Builds a minimal Response-like stub for the retry loop. */
@@ -31,6 +36,33 @@ describe("parseRetryAfter", () => {
     expect(parseRetryAfter("soon")).toBeUndefined();
     const now = 1_000_000;
     expect(parseRetryAfter(new Date(now - 5000).toUTCString(), now)).toBeUndefined();
+  });
+});
+
+describe("bounded response bodies", () => {
+  it("rejects a successful body before buffering past its byte limit", async () => {
+    const response = new Response(JSON.stringify({ value: "x".repeat(100) }));
+    await expect(readJsonResponseBounded(response, 32)).rejects.toBeInstanceOf(ProviderResponseTooLargeError);
+  });
+
+  it("cancels an oversized error body after collecting only a snippet", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("x".repeat(4096)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(body, { status: 400 })) as unknown as typeof fetch;
+    try {
+      await expect(fetchWithRetry("https://x/y", { method: "POST" })).rejects.toThrow(/HTTP 400/);
+      expect(cancelled).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
 

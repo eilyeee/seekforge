@@ -10,7 +10,8 @@
     "./config-layers": "./src/config-layers.ts",
     "./doctor": "./src/doctor.ts",
     "./workspace-dirs": "./src/workspace-dirs.ts",
-    "./format": "./src/format.ts"
+    "./format": "./src/format.ts",
+    "./protocol-limits": "./src/protocol-limits.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

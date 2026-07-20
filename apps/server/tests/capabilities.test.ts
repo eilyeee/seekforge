@@ -6,9 +6,10 @@
  * ~/.seekforge/config.json can never bleed into these assertions
  * (loadConfig merges the global file).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { acquireSessionLease } from "@seekforge/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
@@ -236,6 +237,34 @@ describe("todos endpoints", () => {
     expect((await post("/api/todos", { op: "toggle" })).status).toBe(400);
     expect((await post("/api/todos", { op: "toggle", index: 99 })).status).toBe(404);
     expect((await post("/api/todos", { op: "remove", index: 0 })).status).toBe(404);
+  });
+
+  it("rejects mutations while another session owns the workspace", async () => {
+    const lease = acquireSessionLease(workspace, "todo-busy");
+    try {
+      const res = await post("/api/todos", { op: "add", text: "must wait" });
+      expect(res.status).toBe(409);
+      expect((await jsonOf(res)).error.code).toBe("session_busy");
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("does not read or overwrite a symlinked todo file", async () => {
+    const file = join(workspace, ".seekforge", "todos.md");
+    const outside = join(dirname(workspace), `${basename(workspace)}-outside-todos.md`);
+    unlinkSync(file);
+    writeFileSync(outside, "- [ ] outside secret\n");
+    symlinkSync(outside, file);
+    try {
+      expect(await jsonOf(await authed("/api/todos"))).toEqual([]);
+      expect((await post("/api/todos", { op: "add", text: "inside" })).status).toBe(500);
+      expect(readFileSync(outside, "utf8")).toBe("- [ ] outside secret\n");
+    } finally {
+      unlinkSync(file);
+      writeFileSync(file, TODOS_SEED);
+      rmSync(outside, { force: true });
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWsClient } from "./ws";
+import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
+import { createWsClient, encodeClientFrame } from "./ws";
 
 class FakeWebSocket {
   static readonly OPEN = 1;
@@ -55,6 +56,23 @@ describe("createWsClient reconnect queue", () => {
 
     expect(replacement.sent).toEqual([]);
     expect(states).toContain("disconnected");
+    client.close();
+  });
+
+  it("rejects frames above the server payload limit before sending", () => {
+    const client = createWsClient({ getToken: () => "", onState: vi.fn(), onFrame: vi.fn() });
+    const socket = FakeWebSocket.instances[0]!;
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.onopen?.();
+    const frame = {
+      type: "start",
+      task: "x".repeat(MAX_WS_PAYLOAD_BYTES),
+      mode: "edit",
+      approvalMode: "confirm",
+    } as const;
+    expect(encodeClientFrame(frame)).toBeNull();
+    expect(client.send(frame)).toBe(false);
+    expect(socket.sent).toEqual([]);
     client.close();
   });
 });

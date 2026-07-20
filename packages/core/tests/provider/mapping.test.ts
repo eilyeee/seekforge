@@ -5,9 +5,16 @@ import {
   mapChatResponse,
   mapFinishReason,
   mapUsage,
+  MAX_PROVIDER_USAGE_TOKENS,
+  ProviderProtocolError,
   toWireMessages,
   toWireTools,
 } from "../../src/provider/mapping.js";
+import {
+  MAX_SSE_CONTENT_CHARS,
+  MAX_SSE_TOOL_ARGUMENT_CHARS,
+  MAX_SSE_TOOL_CALLS,
+} from "../../src/provider/protocol-limits.js";
 
 describe("toWireMessages", () => {
   it("maps assistant toolCalls to OpenAI-style tool_calls", () => {
@@ -192,22 +199,31 @@ describe("mapUsage", () => {
     });
   });
 
-  it("normalizes invalid wire token counts before cost accounting", () => {
-    expect(
-      mapUsage(
-        {
-          prompt_tokens: Number.POSITIVE_INFINITY,
-          completion_tokens: -5,
-          prompt_cache_hit_tokens: 2.9,
-        },
-        "deepseek-chat",
-      ),
-    ).toEqual({
-      promptTokens: 0,
-      completionTokens: 0,
-      cacheHitTokens: 0,
-      costUsd: 0,
-    });
+  it.each([
+    ["prompt_tokens", Number.POSITIVE_INFINITY],
+    ["completion_tokens", -1],
+    ["prompt_cache_hit_tokens", 2.9],
+    ["prompt_cache_miss_tokens", Number.MAX_SAFE_INTEGER + 1],
+    ["prompt_tokens", MAX_PROVIDER_USAGE_TOKENS + 1],
+  ] as const)("rejects invalid usage.%s values", (field, value) => {
+    expect(() => mapUsage({ [field]: value }, "deepseek-chat")).toThrow(ProviderProtocolError);
+  });
+
+  it("accepts the usage protocol ceiling", () => {
+    expect(mapUsage({ prompt_tokens: MAX_PROVIDER_USAGE_TOKENS }, "deepseek-chat").promptTokens).toBe(
+      MAX_PROVIDER_USAGE_TOKENS,
+    );
+  });
+
+  it("validates cache token fields even when cache-hit accounting is disabled", () => {
+    expect(() =>
+      mapUsage({ prompt_cache_hit_tokens: Number.NaN }, "ark-model", {
+        thinking: false,
+        cacheHitTokens: false,
+        costAccounting: false,
+        balance: false,
+      }),
+    ).toThrow(ProviderProtocolError);
   });
 
   it("clamps cache-hit tokens to prompt tokens", () => {
@@ -368,6 +384,43 @@ describe("provider capabilities gating", () => {
     );
     expect(usage.cacheHitTokens).toBe(600);
     expect(usage.costUsd).toBeCloseTo((400 * 0.28 + 600 * 0.028 + 500 * 0.42) / 1_000_000, 12);
+  });
+});
+
+describe("non-streaming response limits", () => {
+  const responseWith = (message: Record<string, unknown>) => ({
+    choices: [{ message, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1 },
+  });
+
+  it("rejects oversized content", () => {
+    expect(() => mapChatResponse(responseWith({ content: "x".repeat(MAX_SSE_CONTENT_CHARS + 1) }), "m")).toThrow(
+      ProviderProtocolError,
+    );
+  });
+
+  it("rejects oversized tool arguments", () => {
+    expect(() =>
+      mapChatResponse(
+        responseWith({
+          content: "",
+          tool_calls: [
+            { id: "c1", function: { name: "tool", arguments: "x".repeat(MAX_SSE_TOOL_ARGUMENT_CHARS + 1) } },
+          ],
+        }),
+        "m",
+      ),
+    ).toThrow(ProviderProtocolError);
+  });
+
+  it("rejects too many tool calls", () => {
+    const toolCalls = Array.from({ length: MAX_SSE_TOOL_CALLS + 1 }, (_, index) => ({
+      id: `c${index}`,
+      function: { name: "tool", arguments: "{}" },
+    }));
+    expect(() => mapChatResponse(responseWith({ content: "", tool_calls: toolCalls }), "m")).toThrow(
+      ProviderProtocolError,
+    );
   });
 });
 

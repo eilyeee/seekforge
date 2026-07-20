@@ -27,6 +27,7 @@ import {
   resolveOutputFormat,
 } from "../output-format.js";
 import { MAX_STDIN_PROMPT_BYTES, composePrompt, readStdin } from "../stdin-prompt.js";
+import { MAX_SHELL_CAPTURE_BYTES, runShellCapture } from "../shell-capture.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { isCacheFresh } from "../version-check.js";
@@ -42,6 +43,31 @@ test("readStdin rejects oversized piped prompts", async () => {
   assert.equal(stream.listenerCount("data"), 0);
   assert.equal(stream.listenerCount("end"), 0);
   assert.equal(stream.listenerCount("error"), 0);
+});
+
+test("readStdin rejects an I/O error instead of executing partial input", async () => {
+  const stream = new Readable({
+    read() {
+      this.push("partial task");
+      this.destroy(new Error("simulated EIO"));
+    },
+  }) as NodeJS.ReadStream;
+  await assert.rejects(readStdin(stream), /simulated EIO/);
+});
+
+test("custom-command shell capture bounds output", async () => {
+  const command = `${JSON.stringify(process.execPath)} -e 'process.stdout.write("x".repeat(${MAX_SHELL_CAPTURE_BYTES + 1}))'`;
+  assert.match(await runShellCapture(command, process.cwd()), /output exceeded/);
+});
+
+test("custom-command shell capture marks non-zero exits as failures", async () => {
+  assert.match(await runShellCapture("printf bad-output; exit 7", process.cwd()), /command failed: exit 7: bad-output/);
+});
+
+test("custom-command shell capture settles on timeout even when a descendant owns the pipe", async () => {
+  const started = Date.now();
+  assert.match(await runShellCapture("sleep 10 &", process.cwd(), 50), /timed out/);
+  assert.ok(Date.now() - started < 2_000);
 });
 
 test("version cache rejects non-finite timestamps and intervals", () => {

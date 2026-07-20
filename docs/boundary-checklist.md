@@ -1419,6 +1419,112 @@ credential in the parent process relevant to that command.
 - **Caught:** hooks inherited the complete `process.env`, exposing provider API
   keys before any tool permission boundary.
 
+## 106. Authorization must pin the physical resource identity
+
+Approving a logical path does not approve every future target of a symlink at
+that path.
+
+- **Do:** canonicalize an authorized directory once and retain that physical
+  path for later reads instead of resolving the logical alias again.
+- **Caught:** an `/add-dir` symlink could be rebound after approval, allowing
+  `@` references to read from a different external directory.
+
+## 107. Auxiliary workspace state needs confinement and coordination
+
+Small convenience files are still mutation surfaces: plain read-modify-write
+can follow repository symlinks, expose external content, or race active runs.
+
+- **Do:** reject symlinked state parents and leaves, read through no-follow file
+  descriptors, replace complete files atomically, and acquire the shared
+  workspace/repository guard at every UI or API mutation surface.
+- **Caught:** TUI and Server todo operations could read or overwrite an external
+  `.seekforge/todos.md` target and mutate without the Agent workspace guard;
+  the TUI also reported failed writes as successful changes.
+
+## 108. Configured subprocesses need bounded tree ownership
+
+A timeout on the direct shell is incomplete when descendants retain pipes, and
+an error event is not successful EOF.
+
+- **Do:** run owned process groups asynchronously, cap captured bytes, destroy
+  pipes on failure, terminate then escalate the complete group, and cancel any
+  delayed force-kill timer only after confirming the complete group is gone.
+- **Caught:** REPL shell expansion and TUI status-line commands could hang on
+  descendant pipes or consume unbounded output; stdin errors returned partial
+  prompts and status-line execution blocked rendering.
+
+## 109. Enforce wire limits before destructive client state changes
+
+Server-only frame limits let a client clear or append local state for a request
+that can never cross the transport boundary.
+
+- **Do:** share protocol constants, measure the exact serialized frame, reject
+  before sending or clearing drafts, and preflight binary size before encoding.
+- **Caught:** oversized Desktop task/Loop frames cleared drafts before the
+  WebSocket rejected them, while oversized images were base64-expanded first.
+
+## 110. Bind asynchronous UI results to an edit revision
+
+Tab identity alone does not prove that delayed transformed text still belongs
+to the current draft.
+
+- **Do:** capture a per-resource revision before async work and apply the result
+  only when both identity and revision still match.
+- **Caught:** delayed custom-command expansion overwrote text typed later in the
+  same Desktop tab.
+
+## 111. Own a child from the instant spawn succeeds
+
+A process is live before readiness succeeds; recording it only after startup
+creates a window where exit/cleanup cannot find it.
+
+- **Do:** register a starting state under the lifecycle lock immediately after
+  spawn, then transition that same owned child to running or terminate it.
+- **Caught:** Desktop startup could leak the sidecar when Exit raced readiness.
+
+## 112. Terminal events require cleanup-safe iterator closure
+
+Yielding from an async generator's `finally` can make `return()` resolve with
+`done:false`, suspending release work indefinitely.
+
+- **Do:** await cleanup without yielding in `finally`; explicitly drain child
+  events before success/failure so the terminal session event remains last.
+- **Caught:** background dispatch usage/files could miss the final report or
+  arrive after completion, and early consumers could strand leases and hooks.
+
+## 113. Rewritten tool input is the effective security subject
+
+Validating and authorizing only the original tool arguments makes hook-rewritten
+paths and commands disagree with execution, audit, and verification.
+
+- **Do:** schema-validate, reclassify, reauthorize, execute, report, and audit
+  the replacement as one effective input; reject invalid replacements.
+- **Caught:** `preToolUse.updatedInput` retained original permission metadata and
+  verification commands, while malformed replacements silently ran originals.
+
+## 114. Structured state needs validation, serialization, and physical writes
+
+JSON parse success does not make persisted values finite or bounded, and a
+logical path check does not survive concurrent writers or symlink rebinding.
+
+- **Do:** validate every persisted field, saturate counters, serialize
+  read-modify-write transactions across processes, read through verified
+  no-follow descriptors, and atomically replace through a revalidated parent.
+- **Caught:** memory metadata accepted non-finite values, concurrent updates were
+  lost, and memory/candidate/archive/summary writes retained symlink TOCTOU gaps.
+
+## 115. Streaming protocols need cumulative and temporal budgets
+
+Per-line limits do not bound a progressing response, and numeric JSON fields can
+still carry unsafe integers or non-finite arithmetic.
+
+- **Do:** cap raw bytes and every accumulated field, bound item counts, enforce
+  both idle and total deadlines, cancel the reader on failure, and validate
+  usage before cost arithmetic.
+- **Caught:** provider SSE could grow indefinitely across valid lines or run
+  forever while progressing; non-streaming/error bodies buffered without a
+  byte cap, and malformed token usage produced unsafe costs.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 /**
  * User-configurable statusline: `statusLine` in config is a shell command
@@ -25,7 +25,9 @@ export type StatusLineInput = {
 };
 
 const MAX_LINE_CHARS = 80;
+const MAX_OUTPUT_BYTES = 4096;
 const DEFAULT_TIMEOUT_MS = 1500;
+const FORCE_KILL_DELAY_MS = 250;
 
 /** Maps the structured input onto SEEKFORGE_* env vars for the script. */
 function statusLineEnv(input: StatusLineInput): Record<string, string> {
@@ -50,26 +52,95 @@ function inheritedStatusLineEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+function processGroupAlive(child: ChildProcess): boolean {
+  if (child.pid === undefined || process.platform === "win32") return child.pid !== undefined;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 /**
  * Runs `command` via /bin/sh -c (cwd = input.cwd) with the JSON payload on
  * stdin and SEEKFORGE_* env vars set, returning the trimmed first line of
  * stdout (cap 80 chars), or null on non-zero exit, timeout (default 1.5s),
  * or empty output. Never throws.
  */
-export function runStatusLine(command: string, input: StatusLineInput, opts?: { timeoutMs?: number }): string | null {
-  try {
-    const result = spawnSync("/bin/sh", ["-c", command], {
-      input: JSON.stringify(input),
-      cwd: input.cwd,
-      env: { ...inheritedStatusLineEnv(), ...statusLineEnv(input) },
-      timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      encoding: "utf8",
+export function runStatusLine(
+  command: string,
+  input: StatusLineInput,
+  opts?: { timeoutMs?: number },
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn("/bin/sh", ["-c", command], {
+        cwd: input.cwd,
+        detached: process.platform !== "win32",
+        env: { ...inheritedStatusLineEnv(), ...statusLineEnv(input) },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    let output = Buffer.alloc(0);
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      resolve(value);
+    };
+    const killGroup = (signal: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        if (process.platform === "win32") child.kill(signal);
+        else process.kill(-child.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
+    const terminate = (): void => {
+      try {
+        killGroup("SIGTERM");
+      } catch {
+        // Status-line failures are deliberately non-fatal to the TUI.
+      }
+      child.stdout?.destroy();
+      forceKillTimer = setTimeout(() => {
+        try {
+          killGroup("SIGKILL");
+        } catch {
+          // Best-effort escalation after returning the fallback status line.
+        }
+      }, FORCE_KILL_DELAY_MS);
+      forceKillTimer.unref();
+      finish(null);
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      if (output.length + chunk.length > MAX_OUTPUT_BYTES) {
+        terminate();
+        return;
+      }
+      output = Buffer.concat([output, chunk]);
     });
-    if (result.error || result.signal || result.status !== 0) return null;
-    const first = (result.stdout ?? "").split("\n")[0]?.trim() ?? "";
-    if (first === "") return null;
-    return first.length > MAX_LINE_CHARS ? first.slice(0, MAX_LINE_CHARS) : first;
-  } catch {
-    return null;
-  }
+    child.once("error", () => finish(null));
+    child.once("close", (code) => {
+      if (forceKillTimer !== undefined && !processGroupAlive(child)) clearTimeout(forceKillTimer);
+      if (settled || code !== 0) return finish(null);
+      const first = output.toString("utf8").split("\n")[0]?.trim() ?? "";
+      if (first === "") return finish(null);
+      finish(first.length > MAX_LINE_CHARS ? first.slice(0, MAX_LINE_CHARS) : first);
+    });
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(JSON.stringify(input));
+    const timeoutTimer = setTimeout(terminate, opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  });
 }

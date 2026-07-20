@@ -15,6 +15,25 @@ export class LatestRequest {
   }
 }
 
+/** Per-resource edit revisions for rejecting async results after newer input. */
+export class EditRevisions<Key> {
+  private readonly revisions = new Map<Key, number>();
+
+  capture(key: Key): number {
+    return this.revisions.get(key) ?? 0;
+  }
+
+  advance(key: Key): number {
+    const revision = this.capture(key) + 1;
+    this.revisions.set(key, revision);
+    return revision;
+  }
+
+  isCurrent(key: Key, revision: number): boolean {
+    return this.capture(key) === revision;
+  }
+}
+
 export interface WorkspaceOperation<WorkspaceId> {
   readonly workspaceId: WorkspaceId;
   readonly workspaceGeneration: number;

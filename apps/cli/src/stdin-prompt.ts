@@ -47,7 +47,10 @@ export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Prom
       resolve(Buffer.concat(chunks).toString("utf8"));
     };
     const onEnd = (): void => finish();
-    const onError = (): void => finish();
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
     const onData = (chunk: Buffer | string): void => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += bytes.length;

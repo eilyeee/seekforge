@@ -72,23 +72,23 @@ const DEFAULT_MIN_INTERVAL_MS = 1000;
  * the real runStatusLine), caches a non-null result, and stamps the time.
  * A null result from `run` leaves the previous cached output untouched.
  */
-export function tick(
+export async function tick(
   state: SchedulerState,
   command: string,
   input: StatusLineInput,
   opts?: {
     now?: number;
     minIntervalMs?: number;
-    run?: (command: string, input: StatusLineInput) => string | null;
+    run?: (command: string, input: StatusLineInput) => Promise<string | null>;
   },
-): TickResult {
+): Promise<TickResult> {
   const now = opts?.now ?? Date.now();
   const minIntervalMs = opts?.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
   if (!shouldRecompute(state, command, input, now, minIntervalMs)) {
     return { state, recomputed: false };
   }
   const run = opts?.run ?? runStatusLine;
-  const out = run(command, input);
+  const out = await run(command, input);
   return {
     state: {
       lastOutput: out ?? state.lastOutput,

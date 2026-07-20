@@ -4,16 +4,8 @@
  * longer survivor. No model call — auditable and reproducible (docs/09).
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import {
-  projectMemoryPath,
-  readFactMeta,
-  readRawProjectMemory,
-  reconcileFactMeta,
-  withMemoryTransaction,
-} from "./store.js";
-import { writeFileAtomic } from "../util/fs.js";
+import { readFactMeta, readRawProjectMemory, reconcileFactMeta, withMemoryTransaction } from "./store.js";
+import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
 const NEAR_DUP_JACCARD = 0.8;
@@ -209,10 +201,11 @@ function compactProjectMemoryUnlocked(workspace: string, opts: CompactOptions): 
   }
 
   if (!opts.dryRun && result.archived.length > 0) {
-    const archiveFile = path.join(path.dirname(projectMemoryPath(workspace)), "project-archive.md");
     const block = `${result.archived.join("\n")}\n`;
     try {
-      fs.appendFileSync(archiveFile, block, "utf8");
+      const archiveRel = ".seekforge/memory/project-archive.md";
+      const existingArchive = readWorkspaceStateFile(workspace, archiveRel) ?? "";
+      writeWorkspaceStateFileAtomic(workspace, archiveRel, `${existingArchive}${block}`);
     } catch {
       // Preserve facts in project.md unless their archive write succeeded.
       finalContent = content;
@@ -222,7 +215,7 @@ function compactProjectMemoryUnlocked(workspace: string, opts: CompactOptions): 
   }
   const changed = result.removed.length > 0 || result.merged.length > 0 || result.archived.length > 0;
   if (!opts.dryRun && changed) {
-    writeFileAtomic(projectMemoryPath(workspace), finalContent);
+    writeWorkspaceStateFileAtomic(workspace, ".seekforge/memory/project.md", finalContent);
     // Drop fact-meta entries orphaned by the rewrite (dropped dup/merge/prune).
     reconcileFactMeta(workspace, finalContent);
   }

@@ -25,6 +25,11 @@
 | `loadMcpToolSpecs(servers, roots?)` | 启动已配置的 MCP 服务器并返回其 `ToolSpec[]`（附带 `dispose`）。 |
 | `loadAgentDefinitions(workspace)` / `loadSkills(workspace)` | 从 `.seekforge/` 加载 subagents 和 skills。 |
 
+Provider 响应会在映射前受限：流式和非流式 body 都有 32 MiB 原始上限，并对
+content、reasoning、工具参数设置更严格的上限，同时验证 usage 整数。流式响应还执行
+120 秒 idle 超时和 600 秒总超时；内部嵌入方可通过
+`ProviderConfig.streamIdleTimeoutMs` 与 `streamTimeoutMs` 覆盖。
+
 ## 最小示例
 
 ```ts

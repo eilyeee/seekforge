@@ -18,6 +18,7 @@ import {
   filterCommands,
   insertAtPath,
   insertImageMarker,
+  imageUploadSizeError,
   listImageMarkers,
   loadHistory,
   pushHistory,
@@ -67,6 +68,8 @@ function uploadName(file: File): string | null {
 }
 
 function fileToBase64(file: File): Promise<string> {
+  const sizeError = imageUploadSizeError(file.size);
+  if (sizeError) return Promise.reject(new Error(sizeError));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     // readAsDataURL yields "data:<mime>;base64,<data>" — strip the prefix.

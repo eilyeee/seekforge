@@ -10,6 +10,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
+import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   createDefaultAgent,
   resumeDefaultLoop,
@@ -80,7 +81,7 @@ export type RunningServer = {
 };
 
 /** Bound authenticated WS input before JSON parsing can amplify memory use. */
-export const MAX_WS_PAYLOAD_BYTES = 1_000_000;
+export { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
   const paths = opts.workspaces ?? (opts.workspace !== undefined ? [opts.workspace] : []);

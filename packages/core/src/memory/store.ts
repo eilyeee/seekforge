@@ -8,8 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
-import { resolveForWrite } from "../tools/sandbox.js";
+import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { withMemoryTransaction } from "./lease.js";
 
 export { withMemoryTransaction } from "./lease.js";
@@ -124,13 +123,13 @@ export function factMetaPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "memory", "fact-meta.json");
 }
 
-function memoryFileForWrite(workspace: string, name: string): string {
-  return resolveForWrite(workspace, path.join(".seekforge", "memory", name));
+function memoryRelPath(name: string): string {
+  return path.join(".seekforge", "memory", name);
 }
 
 /** Metadata keyed by bullet body ("[type] content" — matches brief bullets). */
 export function readFactMeta(workspace: string): Record<string, FactMeta> {
-  const raw = readFileIfExists(factMetaPath(workspace));
+  const raw = readWorkspaceStateFile(workspace, memoryRelPath("fact-meta.json"));
   if (!raw) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -149,9 +148,7 @@ export function readFactMeta(workspace: string): Record<string, FactMeta> {
 function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void {
   // Best-effort: never break a run on a metadata write failure.
   try {
-    const file = memoryFileForWrite(workspace, "fact-meta.json");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    writeFileAtomic(file, `${JSON.stringify(meta, null, 2)}\n`);
+    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("fact-meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
   } catch {
     /* ignore */
   }
@@ -297,7 +294,7 @@ function expandImports(
     }
     if (physical !== rootReal && !physical.startsWith(`${rootReal}${path.sep}`)) continue;
     if (visited.has(physical)) continue; // cycle guard
-    const included = readFileIfExists(physical);
+    const included = readWorkspaceStateFile(rootReal, path.relative(rootReal, physical));
     if (included === undefined) continue; // missing → skip silently
     if (budget.remaining <= 0) continue; // size cap reached
     visited.add(physical);
@@ -316,7 +313,7 @@ function readMemoryFileExpanded(filePath: string, allowedRoot: string): string |
     const inside = (root: string, target: string): boolean =>
       target === root || target.startsWith(`${root}${path.sep}`);
     if (!inside(allowedReal, memoryRoot) || !inside(memoryRoot, physicalFile)) return undefined;
-    const raw = readFileIfExists(physicalFile);
+    const raw = readWorkspaceStateFile(allowedReal, path.relative(allowedReal, physicalFile));
     if (raw === undefined) return undefined;
     const visited = new Set<string>([physicalFile]);
     return expandImports(raw, path.dirname(physicalFile), memoryRoot, 0, visited, {
@@ -338,7 +335,7 @@ export function readProjectMemory(workspace: string): string | undefined {
  * directives and duplicate the imported content into the root file.
  */
 export function readRawProjectMemory(workspace: string): string | undefined {
-  return readFileIfExists(projectMemoryPath(workspace));
+  return readWorkspaceStateFile(workspace, memoryRelPath("project.md"));
 }
 
 // --- Subdirectory memory cascade (monorepo per-package facts) ----------------
@@ -441,7 +438,7 @@ function assertCandidateRecord(value: unknown): asserts value is MemoryCandidate
 
 /** Candidates in file (append) order; corrupt lines are skipped. */
 export function readCandidates(workspace: string): MemoryCandidate[] {
-  const raw = readFileIfExists(candidatesPath(workspace));
+  const raw = readWorkspaceStateFile(workspace, memoryRelPath("candidates.jsonl"));
   if (!raw) return [];
   const candidates: MemoryCandidate[] = [];
   for (const line of raw.split("\n")) {
@@ -466,10 +463,9 @@ export function appendCandidates(workspace: string, candidates: MemoryCandidate[
   if (candidates.length === 0) return;
   withMemoryTransaction(workspace, () => {
     for (const candidate of candidates) assertCandidateRecord(candidate);
-    const file = memoryFileForWrite(workspace, "candidates.jsonl");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-    fs.appendFileSync(file, lines, "utf8");
+    const existing = readWorkspaceStateFile(workspace, memoryRelPath("candidates.jsonl")) ?? "";
+    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("candidates.jsonl"), `${existing}${lines}`);
   });
 }
 
@@ -477,10 +473,8 @@ export function appendCandidates(workspace: string, candidates: MemoryCandidate[
 export function writeCandidates(workspace: string, candidates: MemoryCandidate[]): void {
   withMemoryTransaction(workspace, () => {
     for (const candidate of candidates) assertCandidateRecord(candidate);
-    const file = memoryFileForWrite(workspace, "candidates.jsonl");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-    writeFileAtomic(file, lines);
+    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("candidates.jsonl"), lines);
   });
 }
 
@@ -497,19 +491,17 @@ export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "cont
 export function appendProjectFact(workspace: string, candidate: MemoryCandidate): void {
   withMemoryTransaction(workspace, () => {
     assertCandidateRecord(candidate);
-    const file = memoryFileForWrite(workspace, "project.md");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     const bullet = formatFactBullet(candidate);
-    const existing = readFileIfExists(file);
+    const existing = readWorkspaceStateFile(workspace, memoryRelPath("project.md"));
     if (existing === undefined) {
-      fs.writeFileSync(file, `# Project Memory\n${bullet}\n`, "utf8");
+      writeWorkspaceStateFileAtomic(workspace, memoryRelPath("project.md"), `# Project Memory\n${bullet}\n`);
       recordFactAdded(workspace, bullet);
       return;
     }
     // Dedupe: skip when an identical content line already exists.
     if (existing.split("\n").some((line) => line.trim() === bullet)) return;
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-    fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
+    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`);
     recordFactAdded(workspace, bullet);
   });
 }
@@ -537,17 +529,15 @@ export function appendGlobalFact(candidate: MemoryCandidate): void {
   const home = seekforgeHome();
   withMemoryTransaction(home, () => {
     assertCandidateRecord(candidate);
-    const file = resolveForWrite(home, path.join(".seekforge", "memory", "project.md"));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     const bullet = formatFactBullet(candidate);
-    const existing = readFileIfExists(file);
+    const existing = readWorkspaceStateFile(home, memoryRelPath("project.md"));
     if (existing === undefined) {
-      fs.writeFileSync(file, `# Global Memory\n${bullet}\n`, "utf8");
+      writeWorkspaceStateFileAtomic(home, memoryRelPath("project.md"), `# Global Memory\n${bullet}\n`);
       return;
     }
     if (existing.split("\n").some((line) => line.trim() === bullet)) return;
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-    fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
+    writeWorkspaceStateFileAtomic(home, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`);
   });
 }
 

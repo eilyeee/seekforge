@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { acquireSessionLease, SessionBusyError } from "@seekforge/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addTodo, formatTodoLines, loadTodos, removeTodo, toggleTodo } from "../todos.js";
 
@@ -49,6 +50,29 @@ describe("addTodo", () => {
     writeFile("# Plan\nintro prose\n- [ ] a\n");
     addTodo(workspace, "b");
     expect(fs.readFileSync(todosPath(), "utf8")).toBe("# Plan\nintro prose\n- [ ] a\n- [ ] b\n");
+  });
+
+  it("does not follow a symlinked todo file outside the workspace", () => {
+    const outside = path.join(workspace, "..", `${path.basename(workspace)}-outside.md`);
+    fs.mkdirSync(path.dirname(todosPath()), { recursive: true });
+    fs.writeFileSync(outside, "outside\n");
+    fs.symlinkSync(outside, todosPath());
+    try {
+      expect(() => addTodo(workspace, "must stay inside")).toThrow(/regular file/);
+      expect(fs.readFileSync(outside, "utf8")).toBe("outside\n");
+      expect(loadTodos(workspace)).toEqual([]);
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  it("rejects mutation while another session owns the workspace", () => {
+    const lease = acquireSessionLease(workspace, "active-session");
+    try {
+      expect(() => addTodo(workspace, "racing write")).toThrow(SessionBusyError);
+    } finally {
+      lease.release();
+    }
   });
 });
 

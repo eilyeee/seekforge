@@ -7,6 +7,7 @@
 
 import type { RetryInfo } from "./types.js";
 import { onAbortOnce } from "../util/abort.js";
+import { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
@@ -69,6 +70,77 @@ export class DeepSeekApiError extends Error {
     super(message);
     this.name = "DeepSeekApiError";
   }
+}
+
+export class ProviderResponseTooLargeError extends DeepSeekApiError {
+  constructor(limit: number) {
+    super(`provider response body exceeds ${limit} bytes`, 413);
+    this.name = "ProviderResponseTooLargeError";
+  }
+}
+
+/** Reads and parses a successful JSON body without allowing unbounded buffering. */
+export async function readJsonResponseBounded(
+  response: Response,
+  limit = MAX_PROVIDER_RESPONSE_BYTES,
+): Promise<unknown> {
+  if (!response.body) return await response.json();
+  const declared = Number(response.headers?.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body.cancel().catch(() => {});
+    throw new ProviderResponseTooLargeError(limit);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > limit - bytes) {
+        await reader.cancel().catch(() => {});
+        throw new ProviderResponseTooLargeError(limit);
+      }
+      bytes += value.byteLength;
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const data = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(data)) as unknown;
+}
+
+async function readErrorSnippet(response: Response): Promise<string> {
+  if (!response.body) return (await response.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (bytes < BODY_SNIPPET_CHARS * 4) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = BODY_SNIPPET_CHARS * 4 - bytes;
+      chunks.push(value.subarray(0, remaining));
+      bytes += Math.min(value.byteLength, remaining);
+      if (value.byteLength > remaining) break;
+    }
+    await reader.cancel().catch(() => {});
+  } finally {
+    reader.releaseLock();
+  }
+  const data = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(data).slice(0, BODY_SNIPPET_CHARS);
 }
 
 /**
@@ -211,6 +283,7 @@ export async function fetchWithRetry<T>(
         } catch (err) {
           clearAttemptTimeout();
           if (init.signal?.aborted) throw init.signal.reason;
+          if (err instanceof ProviderResponseTooLargeError) throw err;
           const timedOut = err === timeoutErr;
           lastError = new DeepSeekApiError(
             timedOut
@@ -230,7 +303,7 @@ export async function fetchWithRetry<T>(
     // body. clearing it first would leave the read with no abort path, so a
     // server that sends error headers but stalls the body would hang forever.
     const retryAfter = parseRetryAfter(res.headers?.get("retry-after") ?? null);
-    const snippet = (await res.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
+    const snippet = await readErrorSnippet(res).catch(() => "");
     clearAttemptTimeout();
     if (init.signal?.aborted) throw init.signal.reason;
     const message = `DeepSeek API error HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`;

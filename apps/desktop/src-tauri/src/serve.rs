@@ -384,6 +384,10 @@ impl ServeChild {
         Ok(Self { child })
     }
 
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Reads child stdout line-by-line until a URL line shows up or
     /// `timeout` elapses. On failure returns the output captured so far.
     pub fn wait_for_url(&mut self, timeout: Duration) -> Result<String, String> {
@@ -429,6 +433,20 @@ impl ServeChild {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Terminates a starting server before ownership moves into `ServerState`.
+pub fn kill_process_tree(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
     }
 }
 

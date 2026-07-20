@@ -180,8 +180,8 @@ describe("background dispatch + agent_result", () => {
     expect(snap.result!.error!.code).toBe("subagent_cancelled");
   });
 
-  it("keeps usage billed before a background dispatch is aborted", async () => {
-    const nestedBilled = deferred<void>();
+  it("settles background dispatches before the final report and terminal event", async () => {
+    const nestedEdited = deferred<void>();
     let parentRequests = 0;
     let nestedRequests = 0;
     const provider = routedProvider(async (req) => {
@@ -192,20 +192,30 @@ describe("background dispatch + agent_result", () => {
             toolCall("d1", "dispatch_agent", { agentId: "worker", task: "bill then hang", background: true }),
           );
         }
-        await nestedBilled.promise;
+        await nestedEdited.promise;
         return response({ content: "done" });
       }
       nestedRequests++;
       if (nestedRequests === 1) {
-        nestedBilled.resolve();
-        return toolCallsResponse(toolCall("n1", "read_file", { path: "a.ts" }));
+        return toolCallsResponse(toolCall("n1", "write_file", { path: "nested.ts", content: "fixed" }));
       }
       return new Promise(() => {});
     });
 
+    const dispatcher = fakeDispatcher();
+    const execute = dispatcher.execute.bind(dispatcher);
+    dispatcher.execute = async (call, ctx) => {
+      const result = await execute(call, ctx);
+      if (call.name === "write_file") {
+        nestedEdited.resolve();
+        return { ...result, meta: { path: "nested.ts" } };
+      }
+      return result;
+    };
+
     const agent = createAgentCore({
       provider,
-      dispatcher: fakeDispatcher(),
+      dispatcher,
       confirm: async () => true,
       subagents: [worker],
     });
@@ -213,6 +223,11 @@ describe("background dispatch + agent_result", () => {
     const completed = events.find((event) => event.type === "session.completed");
 
     expect(completed && completed.type === "session.completed" && completed.report.usage.promptTokens).toBe(30);
+    expect(completed && completed.type === "session.completed" && completed.report.changedFiles).toEqual(["nested.ts"]);
+    expect(events.findIndex((event) => event.type === "subagent.cancelled")).toBeLessThan(
+      events.findIndex((event) => event.type === "session.completed"),
+    );
+    expect(events.at(-1)?.type).toBe("session.completed");
   });
 
   it("read-only parent guard applies to background dispatches too", async () => {

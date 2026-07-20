@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { constants, mkdirSync, readSync, writeSync } from "node:fs";
 import { extname } from "node:path";
+import { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   closeVerifiedFile,
   FilePathChangedError,
@@ -10,7 +11,7 @@ import {
 } from "./file-security.js";
 
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
-export const MAX_UPLOAD_BYTES = 4_000_000;
+export { MAX_UPLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 export const MAX_RAW_BYTES = 8_000_000;
 
 const RAW_CONTENT_TYPES: Record<string, string> = {

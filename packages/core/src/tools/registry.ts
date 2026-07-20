@@ -74,6 +74,8 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
       let decision: PermissionDecision | "not_evaluated" = "not_evaluated";
       let permission: PermissionName | undefined;
       let classified: ClassifiedCall | undefined;
+      let effectiveArgs: unknown = call.arguments;
+      let inputRewritten = false;
       let result: ToolResult;
 
       const fail = (code: string, message: string, detail?: unknown): ToolResult => ({
@@ -89,6 +91,7 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
         if (!parsed.success) {
           result = fail("invalid_args", `Invalid arguments for ${call.name}`, parsed.error.issues);
         } else {
+          effectiveArgs = parsed.data;
           classified = tool.classify(parsed.data as never, ctx);
           permission = classified.permission;
           const outcome = await enforcePermission(call.name, classified, ctx);
@@ -125,20 +128,31 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
               );
             } else {
               // A non-denying preToolUse hook may rewrite the tool's arguments
-              // via updatedInput. Re-validate against the schema first; on any
-              // validation failure keep the original args rather than crash.
+              // via updatedInput. Re-validate against the schema first; an
+              // invalid rewrite must not silently execute the original call.
               let runArgs: unknown = parsed.data;
               let updatedDenied: ToolResult | undefined;
               const updated = preOutcomes.find((o) => o.updatedInput !== undefined)?.updatedInput;
               if (updated !== undefined) {
                 const reparsed = tool.schema.safeParse(updated);
-                if (reparsed.success) {
+                if (!reparsed.success) {
+                  updatedDenied = fail(
+                    "invalid_hook_args",
+                    `preToolUse hook returned invalid arguments for ${call.name}`,
+                    reparsed.error.issues,
+                  );
+                } else {
                   runArgs = reparsed.data;
+                  effectiveArgs = reparsed.data;
+                  inputRewritten = true;
                   // The rewritten args can change the path/command, so re-classify
                   // and re-enforce permission — a hook must not be able to smuggle
                   // a denylisted/forbidden call past the gate via updatedInput.
                   const reClassified = tool.classify(reparsed.data as never, ctx);
                   const reCheck = await enforcePermission(call.name, reClassified, ctx);
+                  classified = reClassified;
+                  permission = reClassified.permission;
+                  decision = reCheck.decision;
                   if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
                   else ctx.selectedHunks = reCheck.selectedHunks;
                 }
@@ -163,8 +177,12 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                   "postToolUse",
                   ctx.hooks?.postToolUse,
                   {
-                    ...hookPayload,
+                    sessionId: ctx.sessionId,
+                    workspace: ctx.workspace,
+                    toolName: call.name,
                     args: runArgs,
+                    ...(classified?.command !== undefined ? { command: classified.command } : {}),
+                    ...(classified?.path !== undefined ? { path: classified.path } : {}),
                     result: { ok: result.ok, errorCode: result.error?.code ?? null },
                   },
                   { signal: ctx.signal },
@@ -189,7 +207,8 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
 
       ctx.log?.({
         toolName: call.name,
-        args: call.arguments,
+        args: effectiveArgs,
+        ...(inputRewritten ? { originalArgs: call.arguments } : {}),
         ok: result.ok,
         errorCode: result.error?.code ?? null,
         durationMs: ended - started,

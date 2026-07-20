@@ -15,6 +15,13 @@ import type { ModelPricing } from "./constants.js";
 import { estimateCostUsd } from "./cost.js";
 import type { ChatRequest, ProviderCapabilities } from "./types.js";
 import { isRecord } from "../util/guards.js";
+import {
+  MAX_SSE_CONTENT_CHARS,
+  MAX_SSE_REASONING_CHARS,
+  MAX_SSE_TOOL_ARGUMENT_CHARS,
+  MAX_SSE_TOOL_CALLS,
+  MAX_SSE_TOTAL_TOOL_ARGUMENT_CHARS,
+} from "./protocol-limits.js";
 
 // --- wire types (only the fields we read/write) -----------------------------
 
@@ -62,6 +69,9 @@ export class ProviderProtocolError extends Error {
     this.name = "ProviderProtocolError";
   }
 }
+
+/** Generous protocol ceiling that still keeps arithmetic and persisted usage bounded. */
+export const MAX_PROVIDER_USAGE_TOKENS = 1_000_000_000;
 
 /** thinking.{type,reasoning_effort} is only valid on deepseek-v4-* models. */
 export function supportsThinking(model: string): boolean {
@@ -180,17 +190,26 @@ export function mapUsage(
   capabilities?: ProviderCapabilities,
   modelPricing?: Record<string, ModelPricing>,
 ): TokenUsage {
-  const tokenCount = (value: unknown): number =>
-    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  const tokenCount = (field: keyof WireUsage): number => {
+    const value = raw?.[field];
+    if (value === undefined) return 0;
+    if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROVIDER_USAGE_TOKENS) {
+      throw new ProviderProtocolError(
+        `Provider protocol error: usage.${field} must be a non-negative safe integer no greater than ${MAX_PROVIDER_USAGE_TOKENS}`,
+      );
+    }
+    return value;
+  };
+  // Validate every token field the wire protocol can report, including the
+  // miss count that cost accounting derives from prompt minus cache-hit tokens.
+  tokenCount("prompt_cache_miss_tokens");
+  const cacheHitTokens = tokenCount("prompt_cache_hit_tokens");
   const tokens = {
-    promptTokens: tokenCount(raw?.prompt_tokens),
-    completionTokens: tokenCount(raw?.completion_tokens),
+    promptTokens: tokenCount("prompt_tokens"),
+    completionTokens: tokenCount("completion_tokens"),
     cacheHitTokens: 0,
   };
-  tokens.cacheHitTokens =
-    (capabilities?.cacheHitTokens ?? true)
-      ? Math.min(tokenCount(raw?.prompt_cache_hit_tokens), tokens.promptTokens)
-      : 0;
+  tokens.cacheHitTokens = (capabilities?.cacheHitTokens ?? true) ? Math.min(cacheHitTokens, tokens.promptTokens) : 0;
   // A user-supplied price for this model always wins — it enables cost/budget
   // tracking on providers whose preset sets costAccounting: false (Ark, OpenAI).
   // Otherwise keep the built-in behavior: priced when costAccounting, else 0.
@@ -204,14 +223,29 @@ export function mapUsage(
 }
 
 export function mapWireToolCalls(raw: WireToolCall[] | undefined): ProviderToolCall[] {
-  return (Array.isArray(raw) ? raw : []).flatMap((value, i) => {
+  const values = Array.isArray(raw) ? raw : [];
+  if (values.length > MAX_SSE_TOOL_CALLS) {
+    throw new ProviderProtocolError(`Provider protocol error: tool call count exceeds ${MAX_SSE_TOOL_CALLS}`);
+  }
+  let totalArgumentChars = 0;
+  return values.flatMap((value, i) => {
     if (!isRecord(value)) return [];
     const fn = isRecord(value["function"]) ? value["function"] : undefined;
+    const argumentsJson = typeof fn?.["arguments"] === "string" ? fn["arguments"] : "";
+    if (argumentsJson.length > MAX_SSE_TOOL_ARGUMENT_CHARS) {
+      throw new ProviderProtocolError(`Provider protocol error: tool arguments exceed ${MAX_SSE_TOOL_ARGUMENT_CHARS}`);
+    }
+    totalArgumentChars += argumentsJson.length;
+    if (totalArgumentChars > MAX_SSE_TOTAL_TOOL_ARGUMENT_CHARS) {
+      throw new ProviderProtocolError(
+        `Provider protocol error: total tool arguments exceed ${MAX_SSE_TOTAL_TOOL_ARGUMENT_CHARS}`,
+      );
+    }
     return [
       {
         id: typeof value["id"] === "string" ? value["id"] : `call-${i + 1}`,
         name: typeof fn?.["name"] === "string" ? fn["name"] : "",
-        argumentsJson: typeof fn?.["arguments"] === "string" ? fn["arguments"] : "",
+        argumentsJson,
       },
     ];
   });
@@ -242,8 +276,15 @@ export function mapChatResponse(
     throw new ProviderProtocolError("Provider protocol error: first choice has no message");
   }
   const reasoning = message?.["reasoning_content"];
+  const content = typeof message?.["content"] === "string" ? message["content"] : "";
+  if (content.length > MAX_SSE_CONTENT_CHARS) {
+    throw new ProviderProtocolError(`Provider protocol error: content exceeds ${MAX_SSE_CONTENT_CHARS}`);
+  }
+  if (typeof reasoning === "string" && reasoning.length > MAX_SSE_REASONING_CHARS) {
+    throw new ProviderProtocolError(`Provider protocol error: reasoning content exceeds ${MAX_SSE_REASONING_CHARS}`);
+  }
   return {
-    content: typeof message?.["content"] === "string" ? message["content"] : "",
+    content,
     toolCalls: mapWireToolCalls(message?.["tool_calls"] as WireToolCall[] | undefined),
     finishReason: mapFinishReason(typeof choice?.["finish_reason"] === "string" ? choice["finish_reason"] : undefined),
     usage: mapUsage(

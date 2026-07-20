@@ -13,6 +13,16 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+function processGroupAlive(child: ChildProcess): boolean {
+  if (child.pid === undefined || process.platform === "win32") return child.pid !== undefined;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 /** Runs one custom-command shell injection with an owned, bounded process group. */
 export function runShellCommand(command: string, cwd: string, timeoutMs = 10_000): Promise<string> {
   return new Promise<string>((resolve, reject) => {
@@ -68,8 +78,8 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 10_000
     child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
     child.once("error", (error) => finish(error));
     child.once("close", (code, signal) => {
+      if (forceKillTimer !== undefined && !processGroupAlive(child)) clearTimeout(forceKillTimer);
       if (settled) return;
-      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
       if (code === 0) {
         finish();
         return;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientFrame, WsClient, WsClientHandlers } from "./lib/ws-types";
+import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 
 // Capture every frame the store sends, and let tests drive the onFrame handler.
 const sent: ClientFrame[] = [];
@@ -8,6 +9,10 @@ let acceptSend = true;
 const openWorkspaceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./lib/ws", () => ({
+  encodeClientFrame: (frame: ClientFrame): string | null => {
+    const payload = JSON.stringify(frame);
+    return new TextEncoder().encode(payload).byteLength <= MAX_WS_PAYLOAD_BYTES ? payload : null;
+  },
   createWsClient: (handlers: WsClientHandlers & { getToken: () => string }): WsClient => {
     lastHandlers = handlers;
     return {
@@ -172,6 +177,18 @@ describe("store: rejected sends", () => {
     const tab = activeTab(useStore.getState().tabs);
     expect(tab.chat.running).toBe(true);
     expect(tab.wsError).toBeNull();
+  });
+
+  it("rejects an oversized task without appending or clearing client state", () => {
+    useStore.getState().connect();
+    const beforeItems = activeTab(useStore.getState().tabs).chat.items;
+    const ok = useStore.getState().sendTask("x".repeat(MAX_WS_PAYLOAD_BYTES));
+    expect(ok).toBe(false);
+    const tab = activeTab(useStore.getState().tabs);
+    expect(tab.chat.running).toBe(false);
+    expect(tab.chat.items).toEqual(beforeItems);
+    expect(tab.wsError).toMatch(/too_large/);
+    expect(sent).toEqual([]);
   });
 
   it("cancel surfaces a wsError when the socket rejects it (run keeps going server-side)", () => {

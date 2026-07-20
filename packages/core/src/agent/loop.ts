@@ -8,7 +8,6 @@ import {
   type PermissionRequest,
   type PermissionRule,
   type ProviderToolCall,
-  type TokenUsage,
   type ToolResult,
 } from "@seekforge/shared";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -81,7 +80,7 @@ import {
   writeSessionMeta,
 } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
-import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
+import { acquireSessionLease } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 
@@ -359,7 +358,7 @@ function toolResultForModel(result: ToolResult, maxChars: number): string {
 
 /** Appends a user-supplied system-prompt suffix (CLI --append-system-prompt). */
 function appendUserPrompt(base: string, append?: string): string {
-  return append && append.trim() ? `${base}\n\n${append.trim()}` : base;
+  return append?.trim() ? `${base}\n\n${append.trim()}` : base;
 }
 
 export function createAgentCore(deps: AgentCoreDeps): AgentCore {
@@ -826,8 +825,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           });
         const dispatchManager: DispatchManager | undefined =
           roster.length > 0 ? (deps.dispatchManager ?? deps._dispatchManager ?? createDispatchManager()) : undefined;
-        const terminalDispatches = new Set<string>();
-
         const dispatchTools =
           dispatchManager !== undefined
             ? createDispatchTools({
@@ -851,6 +848,29 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 createCore: createAgentCore,
               })
             : undefined;
+        let dispatchCleanupComplete = false;
+
+        async function cleanupDispatches(): Promise<AgentEvent[]> {
+          if (dispatchCleanupComplete) return [];
+          dispatchManager?.disposeAll();
+          while (activeOperations.size > 0) {
+            await Promise.allSettled([...activeOperations]);
+          }
+          for (const rec of dispatchManager?.list() ?? []) {
+            if (rec.status === "cancelled") {
+              dispatchTools?.emitDispatchTerminal(
+                rec.id,
+                rec.result ?? {
+                  ok: false,
+                  error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
+                },
+              );
+            }
+          }
+          const finalDispatchEvents = queue.drainNow();
+          dispatchCleanupComplete = true;
+          return finalDispatchEvents;
+        }
 
         try {
           throwIfCancelled();
@@ -1417,6 +1437,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
           throwIfCancelled();
 
+          // A final report is a stable snapshot. Stop and await background
+          // dispatches first so their last usage/file events are included and
+          // no child event can appear after the session terminal event.
+          for (const ev of await cleanupDispatches()) yield ev;
+          throwIfCancelled();
+
           let report: FinalReport = {
             summary: finalContent,
             changedFiles: [...changedFiles],
@@ -1485,6 +1511,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // failed session or leak a non-string value into the event contract.
           const code = runSignal.aborted ? "cancelled" : typeof e.code === "string" ? e.code : "agent_error";
           sessionEndStatus = code === "cancelled" ? "cancelled" : "failed";
+          for (const ev of await cleanupDispatches()) yield ev;
           writeSessionMeta(input.projectPath, {
             ...meta,
             status: code === "cancelled" ? "cancelled" : "failed",
@@ -1492,7 +1519,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             usage: addUsage(priorUsage, usage),
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
-          for (const ev of queue.drainNow()) yield ev;
           const cancelled = code === "cancelled";
           yield emit({
             type: "session.failed",
@@ -1511,20 +1537,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           });
         } finally {
           if (sessionEndStatus === undefined) runController.abort();
-          dispatchManager?.disposeAll();
-          await Promise.allSettled([...activeOperations]);
-          for (const rec of dispatchManager?.list() ?? []) {
-            if (rec.status === "cancelled") {
-              dispatchTools?.emitDispatchTerminal(
-                rec.id,
-                rec.result ?? {
-                  ok: false,
-                  error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
-                },
-              );
-            }
-          }
-          for (const ev of queue.drainNow()) yield ev;
+          // AsyncIterator.return() can enter this block while the consumer is
+          // closing the stream. Do not yield from cleanup: doing so would make
+          // return() resolve with done=false and suspend the generator before
+          // leases and lifecycle hooks are released.
+          await cleanupDispatches();
           queue.end();
           // A caller-provided manager outlives the run (multi-turn sessions).
           if (!deps.background) ctx.background?.disposeAll();

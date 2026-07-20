@@ -126,11 +126,13 @@ describe("resolveProviderConfig", () => {
       thinking: false,
       reasoningEffort: "max",
       streamIdleTimeoutMs: 5000,
+      streamTimeoutMs: 50_000,
       fallbackModel: "deepseek-v4-pro",
     });
     expect(config.thinking).toBe(false);
     expect(config.reasoningEffort).toBe("max");
     expect(config.streamIdleTimeoutMs).toBe(5000);
+    expect(config.streamTimeoutMs).toBe(50_000);
     expect(config.fallbackModel).toBe("deepseek-v4-pro");
     expect(config.capabilities).toBeUndefined();
   });

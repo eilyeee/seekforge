@@ -71,4 +71,23 @@ describe("estimateCostUsd", () => {
     const usage = { promptTokens: 1_000_000, completionTokens: 0, cacheHitTokens: 0 };
     expect(estimateCostUsd(usage, "deepseek-chat", pricing)).toBe(estimateCostUsd(usage, "deepseek-chat"));
   });
+
+  it("never returns a non-finite or negative cost", () => {
+    const usage = {
+      promptTokens: Number.MAX_SAFE_INTEGER,
+      completionTokens: Number.MAX_SAFE_INTEGER,
+      cacheHitTokens: 0,
+    };
+    const invalidPricing = {
+      huge: {
+        inputCacheMissPer1M: Number.MAX_VALUE,
+        inputCacheHitPer1M: Number.MAX_VALUE,
+        outputPer1M: Number.MAX_VALUE,
+      },
+      negative: { inputCacheMissPer1M: -1, inputCacheHitPer1M: -1, outputPer1M: -1 },
+    };
+
+    expect(estimateCostUsd(usage, "huge", invalidPricing)).toBe(0);
+    expect(estimateCostUsd(usage, "negative", invalidPricing)).toBe(0);
+  });
 });

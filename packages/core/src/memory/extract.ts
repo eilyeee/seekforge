@@ -6,18 +6,16 @@
  * built from the final report, with zero candidates.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { ChatMessage, FinalReport, TokenUsage } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import { abortablePromise } from "../util/abort.js";
+import { writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import {
   appendCandidates,
   appendProjectFact,
   MEMORY_CANDIDATE_TYPES,
   readCandidates,
   readProjectMemory,
-  sessionSummaryPath,
   withMemoryTransaction,
   type MemoryCandidate,
   type MemoryCandidateType,
@@ -210,9 +208,7 @@ function buildMinimalSummary(input: ExtractMemoryInput): string {
 }
 
 function writeSummary(input: ExtractMemoryInput, markdown: string): void {
-  const file = sessionSummaryPath(input.workspace, input.sessionId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, markdown, "utf8");
+  writeWorkspaceStateFileAtomic(input.workspace, `.seekforge/sessions/${input.sessionId}/summary.md`, markdown);
 }
 
 type ParsedExtraction = {

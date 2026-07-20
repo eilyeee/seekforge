@@ -578,7 +578,7 @@ hook 条目在各配置层之间对**所有**阶段按阶段拼接（`loadConfig
 | `decision` | 顶层（`"allow"` / `"deny"`） | `deny` 阻止本次调用（`reason` 作为阻止原因）。`allow` 显式放行，并**跳过剩余的 `preToolUse` hook**。 |
 | `hookSpecificOutput.permissionDecision` | 嵌套（`"allow"` / `"deny"` / `"ask"`） | 与 `decision` 相同，外加 `"ask"` —— 显式交回正常权限流程，并继续运行后续 hook。顶层的 `permissionDecision` 也会被读取。 |
 | `permissionDecisionReason` / `reason` | 嵌套 / 顶层 | 拒绝时向用户展示的可读原因。 |
-| `updatedInput` | 顶层或 `hookSpecificOutput` 之下 | 替换工具参数。分发器在工具运行前应用它们，并**对新参数重新做工具 schema 校验和权限检查**。仅限 `preToolUse`。 |
+| `updatedInput` | 顶层或 `hookSpecificOutput` 之下 | 替换工具参数。分发器在工具运行前应用它们，并**对新参数重新做工具 schema 校验和权限检查**。无效替换会让调用以 `invalid_hook_args` 失败，绝不会退回执行原始输入。仅限 `preToolUse`。 |
 | `continue` | 顶层（布尔值） | `false` 阻止本次调用（等同于 deny），以 `systemMessage` 作为原因。所有阶段都会解析，但只在 `preToolUse` 和 `userPromptSubmit` 上起阻断作用。 |
 | `systemMessage` | 顶层（字符串） | 作为提示展示给用户；`continue: false` 阻断时也作为阻止原因。所有阶段都会解析。 |
 | `additionalContext` / `hookSpecificOutput.additionalContext` | 顶层 / 嵌套（字符串） | 作为上下文注入提示词——由 `userPromptSubmit` 和 `sessionStart` 使用。缺省时，这些阶段回退为使用 hook 的原始 stdout。 |
@@ -638,7 +638,8 @@ JSON 格式的状态负载，同时以 `SEEKFORGE_*` 环境变量提供相同字
 
 只使用 stdout 的第一行，上限 80 个字符（允许 ANSI 转义序列通过）。
 非零退出、超时（默认 1.5 秒）或输出为空时不产生任何内容，TUI 回退到
-内置状态栏行。
+内置状态栏行。命令会异步求值，因此慢命令不会冻结渲染；输出上限为 4 KiB，
+超时或超限时会终止该命令的整个进程组。
 
 ```json
 { "statusLine": "echo \"$SEEKFORGE_MODEL | $SEEKFORGE_CONTEXT_PERCENT% ctx\"" }

@@ -9,10 +9,15 @@ use std::sync::Mutex;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-use serve::{Diagnostics, Resolution, ServeChild, ServeCommand, URL_TIMEOUT};
+use serve::{kill_process_tree, Diagnostics, Resolution, ServeChild, ServeCommand, URL_TIMEOUT};
 
-/// Holds the running serve child so the exit handler can kill it.
-struct ServerState(Mutex<Option<ServeChild>>);
+enum ServerProcess {
+    Starting(u32),
+    Running(ServeChild),
+}
+
+/// Tracks the serve child from the instant spawn succeeds through app exit.
+struct ServerState(Mutex<Option<ServerProcess>>);
 
 fn main() {
     let app = tauri::Builder::default()
@@ -33,9 +38,11 @@ fn main() {
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             let state = app_handle.state::<ServerState>();
-            let child = state.0.lock().unwrap().take();
-            if let Some(mut child) = child {
-                child.kill();
+            let process = state.0.lock().unwrap().take();
+            match process {
+                Some(ServerProcess::Starting(pid)) => kill_process_tree(pid),
+                Some(ServerProcess::Running(mut child)) => child.kill(),
+                None => {}
             }
         }
     });
@@ -182,7 +189,18 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
         Resolution::EnvPathOrDev
     };
 
-    let mut child = match ServeChild::spawn(&cmd, &workspace, &extra_env) {
+    let spawned = {
+        // Hold the state lock across spawn + registration so the Exit handler
+        // can never observe an empty slot after a child has been created.
+        let state = handle.state::<ServerState>();
+        let mut process = state.0.lock().unwrap();
+        let spawned = ServeChild::spawn(&cmd, &workspace, &extra_env);
+        if let Ok(child) = &spawned {
+            process.replace(ServerProcess::Starting(child.id()));
+        }
+        spawned
+    };
+    let mut child = match spawned {
         Ok(child) => child,
         Err(e) => {
             let msg = format!(
@@ -205,16 +223,26 @@ fn boot_server(handle: &tauri::AppHandle) -> Result<String, String> {
 
     match child.wait_for_url(URL_TIMEOUT) {
         Ok(url) => {
-            handle
-                .state::<ServerState>()
-                .0
-                .lock()
-                .unwrap()
-                .replace(child);
+            let state = handle.state::<ServerState>();
+            let mut process = state.0.lock().unwrap();
+            if matches!(process.as_ref(), Some(ServerProcess::Starting(pid)) if *pid == child.id())
+            {
+                process.replace(ServerProcess::Running(child));
+            } else {
+                // Exit already consumed the startup registration.
+                child.kill();
+                return Err("desktop exited while the server was starting".to_string());
+            }
             Ok(url)
         }
         Err(captured) => {
+            let pid = child.id();
             child.kill();
+            let state = handle.state::<ServerState>();
+            let mut process = state.0.lock().unwrap();
+            if matches!(process.as_ref(), Some(ServerProcess::Starting(active)) if *active == pid) {
+                process.take();
+            }
             let msg = format!(
                 "the server did not print its URL within {}s.\n\nCaptured output:\n{}",
                 URL_TIMEOUT.as_secs(),
@@ -370,7 +398,7 @@ fn augmented_path(path_var: Option<&str>, home: Option<&std::path::Path>) -> Str
 fn discover_repo_root() -> Option<PathBuf> {
     let from_exe = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().and_then(|d| serve::find_repo_root(d)));
+        .and_then(|exe| exe.parent().and_then(serve::find_repo_root));
     from_exe.or_else(|| {
         std::env::current_dir()
             .ok()

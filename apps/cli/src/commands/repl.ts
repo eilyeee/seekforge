@@ -23,6 +23,7 @@ import { t } from "../i18n.js";
 import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
 import { parseNumberedChoice } from "../input-selection.js";
+import { runShellCapture } from "../shell-capture.js";
 
 const HELP = t("repl.help");
 
@@ -33,25 +34,6 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
     costUsd: a.costUsd + b.costUsd,
   };
-}
-
-/** Runs a `!`cmd`` injection from a custom command: capture stdout, 10s cap. */
-function runShellCapture(command: string, cwd: string): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn("/bin/sh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
-    child.stdout?.on("data", (c: Buffer) => (out += c.toString("utf8")));
-    child.stderr?.on("data", (c: Buffer) => (out += c.toString("utf8")));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve(`[command failed: ${err.message}]`);
-    });
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(out);
-    });
-  });
 }
 
 /** Permission prompt sharing the REPL's readline (no competing stdin readers). */
