@@ -15,8 +15,11 @@ export function readFileIfExists(filePath: string): string | undefined {
  * Atomically (re)writes a whole file: write a uniquely-named sibling temp file,
  * then `rename` it over the target. The rename is atomic on POSIX, so a reader
  * (or a process killed mid-write) never sees a truncated/partial file, and two
- * concurrent writers can't interleave into a corrupt result. Mirrors the atomic
- * write in agent/loop-state.ts `saveLoopState` (0o600, temp cleaned in finally).
+ * concurrent writers can't interleave into a corrupt result. The single home
+ * for plain full-file atomic writes (0o600, temp cleaned in finally); callers
+ * like loop-state/trace/subagent-import all route through here. The server's
+ * writeProjectFileAtomic is a deliberately stronger variant (fsync + symlink
+ * TOCTOU guards) and is intentionally NOT this.
  *
  * Only for full-file rewrites — append-only writes (`appendFileSync`) must NOT
  * use this, as it would replace rather than extend the file. The caller is

@@ -8,16 +8,12 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
-  rmdirSync,
   rmSync,
-  writeFileSync,
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join, resolve, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
-import { resolveForWrite } from "../tools/sandbox.js";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
 import {
   acquireSessionLease,
@@ -26,6 +22,7 @@ import {
   SessionBusyError,
   type SessionLease,
 } from "./session-lease.js";
+import { writeFileAtomic } from "../util/fs.js";
 import { isRecord } from "../util/guards.js";
 import { installProcessTeardown } from "../util/process-teardown.js";
 
@@ -234,15 +231,11 @@ export function readSessionText(workspace: string, sessionId: string, name: stri
 
 export function writeSessionText(workspace: string, sessionId: string, name: string, content: string): void {
   const target = sessionFile(workspace, sessionId, name, true);
-  const dir = sessionDir(workspace, sessionId, true);
-  const temp = join(dir, `.${name}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    writeFileSync(temp, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    closeAppendFd(target);
-    renameSync(temp, target);
-  } finally {
-    rmSync(temp, { force: true });
-  }
+  sessionDir(workspace, sessionId, true); // ensure the session dir exists
+  // Drop any cached append fd for this target before the atomic rename replaces
+  // the file underneath it.
+  closeAppendFd(target);
+  writeFileAtomic(target, content);
 }
 
 export function withSessionMutation<T>(
