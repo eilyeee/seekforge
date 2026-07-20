@@ -138,7 +138,15 @@ export function createDispatchManager(): DispatchManager {
       takeSteering: () => rec.steering.splice(0),
     };
     return Promise.resolve()
-      .then(() => run(controller.signal, hooks))
+      .then(() => {
+        if (controller.signal.aborted) {
+          return {
+            ok: false,
+            error: { code: "subagent_cancelled", message: rec.cancelReason ?? "dispatch cancelled" },
+          } satisfies ToolResult;
+        }
+        return run(controller.signal, hooks);
+      })
       .then(
         (result) => {
           unbindParent();
@@ -200,7 +208,9 @@ export function createDispatchManager(): DispatchManager {
     resume({ id, task, signal, run }) {
       const rec = records.get(id);
       if (!rec) throw new Error(`unknown dispatch "${id}"`);
-      if (rec.status === "running") throw new Error(`dispatch "${id}" is still running`);
+      if (rec.status === "running" || rec.controller !== undefined) {
+        throw new Error(`dispatch "${id}" is still running`);
+      }
       rec.task = task;
       return execute(rec, signal, run);
     },

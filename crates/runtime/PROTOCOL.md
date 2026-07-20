@@ -9,6 +9,10 @@ Requests run on a fixed-size worker pool behind a bounded input queue. A request
 received while that queue is full gets a `runtime_busy` error. EOF cancels
 unfinished requests, waits for their responses, and then exits.
 
+Each request line is limited to 8 MiB. An oversized line receives a `too_large`
+response with a null id, is discarded through its newline, and does not prevent
+subsequent requests from being processed.
+
 Cancellation is an optional notification with no response of its own:
 
 ```json
@@ -59,14 +63,23 @@ Unparseable request lines get a response with `"id": null`, code
 - Canonicalized path must stay under canonicalized workspace; for paths that
   do not exist yet, canonicalize the deepest existing ancestor.
 - Read denial for sensitive basenames: `.env`, `.env.*`, `*.pem`, `*.key`,
-  `id_rsa*`, `id_ed25519*` → error `sensitive_path`.
+  `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `.pgpass`, and
+  `.git-credentials` → error `sensitive_path`. The workspace-relative paths
+  `.seekforge/config.json`, `.seekforge/triggers.json`, and `.git/config` are
+  denied as well.
 - Write denial under `.git/`.
 - Ignore list for list_files: `.git node_modules dist build .next .nuxt
   .cache coverage target vendor`.
 - run_command denylist (error `denied_dangerous`, never execute):
   `rm -rf`, `sudo`, `chmod -R`, `chown`, `git reset --hard`, `git clean`,
-  `git push`, `curl|sh` / `wget|sh` pipes, `bash -c`, `sh -c`, `node -e`,
-  `python -c`.
+  force push (`git push --force`, `--force-with-lease`, or `-f`),
+  `curl|sh` / `wget|sh` pipes, nested shell `-c`, and inline interpreter eval
+  (`node`, `python`, `perl`, `ruby`, `deno`, or `bun`). Git global options and
+  their separate values are consumed before classifying the subcommand.
+- Plain `git push` is not runtime-denied. The TypeScript dispatcher classifies
+  it as an environment-level operation that always requires human approval;
+  the runtime then accepts the already-approved command while still rejecting
+  force push.
 - Permissions/approval live in the TypeScript dispatcher. The runtime's
   checks are a second line of defense, not the policy source.
 

@@ -56,6 +56,12 @@ special network targets remain blocked, including RFC-1918 addresses,
 `169.254.169.254`, IPv6 ULA/link-local addresses, IPv4-mapped private forms, and
 non-`http(s)` schemes. This exception is local to `browser_navigate`;
 `web_fetch` continues to reject loopback targets.
+The policy is reapplied to every navigation and subresource request, including
+DNS answers, so ordinary redirects or split public/private DNS answers are
+blocked after the initial confirmation. Chromium resolves the host again when
+the approved request continues; Playwright cannot pin that connection to the
+checked address, so a narrow TTL-0 DNS-rebinding race remains. The mandatory
+`env` confirmation is the compensating control for that residual risk.
 
 The three inspect tools act only on the **already-loaded** page and take no new
 outward action, so they are `readonly` (snapshot/console) or `execute`

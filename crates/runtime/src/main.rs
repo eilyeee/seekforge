@@ -26,9 +26,62 @@ use protocol::{codes, err_response, ok_response, parse_params, RtError, RtResult
 const MIN_WORKERS: usize = 2;
 const MAX_WORKERS: usize = 8;
 const QUEUED_REQUESTS_PER_WORKER: usize = 2;
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, Eq, PartialEq)]
+enum BoundedLine {
+    Eof,
+    Line,
+    TooLarge,
+}
+
+/// Read one newline-delimited request without ever buffering more than `max` bytes.
+/// An oversized line is discarded through its newline so the next request remains usable.
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    output: &mut Vec<u8>,
+    max: usize,
+) -> io::Result<BoundedLine> {
+    output.clear();
+    let mut too_large = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(if output.is_empty() && !too_large {
+                BoundedLine::Eof
+            } else if too_large {
+                BoundedLine::TooLarge
+            } else {
+                BoundedLine::Line
+            });
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        if !too_large {
+            if output.len().saturating_add(consumed) > max {
+                too_large = true;
+                output.clear();
+            } else {
+                output.extend_from_slice(&available[..consumed]);
+            }
+        }
+        reader.consume(consumed);
+        if newline.is_some() {
+            return Ok(if too_large {
+                BoundedLine::TooLarge
+            } else {
+                BoundedLine::Line
+            });
+        }
+    }
+}
 
 struct WorkItem {
-    line: String,
+    /// The request, parsed ONCE by the reader thread. The worker dispatches this
+    /// directly rather than re-parsing the raw line (request lines can be up to
+    /// 8 MiB, so re-parsing on the throughput-serializing reader/worker path is
+    /// the runtime's dominant cost on edit-heavy runs).
+    value: Value,
     id: Option<String>,
     cancelled: Arc<AtomicBool>,
 }
@@ -87,16 +140,7 @@ fn dispatch(method: &str, params: Value, cancelled: &AtomicBool) -> RtResult<Val
     }
 }
 
-fn handle_line(line: &str, cancelled: &AtomicBool) -> String {
-    let value: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(e) => {
-            return err_response(
-                &Value::Null,
-                &RtError::new(codes::BAD_REQUEST, format!("unparseable request: {e}")),
-            );
-        }
-    };
+fn handle_value(value: Value, cancelled: &AtomicBool) -> String {
     let id = value.get("id").cloned().unwrap_or(Value::Null);
     let method = match value.get("method").and_then(Value::as_str) {
         Some(m) => m.to_string(),
@@ -124,16 +168,11 @@ fn handle_line(line: &str, cancelled: &AtomicBool) -> String {
     }
 }
 
-fn request_id(line: &str) -> Option<String> {
-    serde_json::from_str::<Value>(line)
-        .ok()?
-        .get("id")?
-        .as_str()
-        .map(str::to_owned)
+fn request_id(value: &Value) -> Option<String> {
+    value.get("id")?.as_str().map(str::to_owned)
 }
 
-fn cancellation_target(line: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(line).ok()?;
+fn cancellation_target(value: &Value) -> Option<String> {
     if value.get("id").is_some_and(|id| !id.is_null())
         || value.get("method").and_then(Value::as_str) != Some("cancel")
     {
@@ -188,7 +227,7 @@ fn main() {
                 Ok(work) => work,
                 Err(_) => break,
             };
-            let response = handle_line(&work.line, &work.cancelled);
+            let response = handle_value(work.value, &work.cancelled);
             if let Some(id) = &work.id {
                 let mut active = active
                     .lock()
@@ -218,9 +257,19 @@ fn main() {
     let mut raw: Vec<u8> = Vec::new();
     loop {
         raw.clear();
-        match reader.read_until(b'\n', &mut raw) {
-            Ok(0) => break, // EOF
-            Ok(_) => {}
+        match read_bounded_line(&mut reader, &mut raw, MAX_REQUEST_LINE_BYTES) {
+            Ok(BoundedLine::Eof) => break,
+            Ok(BoundedLine::Line) => {}
+            Ok(BoundedLine::TooLarge) => {
+                let response = err_response(
+                    &Value::Null,
+                    &RtError::new(codes::TOO_LARGE, "request line exceeds 8 MiB"),
+                );
+                if immediate_response_tx.send(response).is_err() {
+                    break;
+                }
+                continue;
+            }
             Err(e) => {
                 eprintln!("seekforge-runtime: stdin read error: {e}");
                 break;
@@ -229,11 +278,26 @@ fn main() {
         while matches!(raw.last(), Some(b'\n' | b'\r')) {
             raw.pop();
         }
-        let line = String::from_utf8_lossy(&raw).into_owned();
+        let line = String::from_utf8_lossy(&raw);
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(target) = cancellation_target(&line) {
+        // Parse the request ONCE here on the reader thread; the worker dispatches
+        // the parsed Value directly instead of re-parsing (the line can be 8 MiB).
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                let response = err_response(
+                    &Value::Null,
+                    &RtError::new(codes::BAD_REQUEST, format!("unparseable request: {e}")),
+                );
+                if immediate_response_tx.send(response).is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+        if let Some(target) = cancellation_target(&value) {
             let active = active
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -243,7 +307,7 @@ fn main() {
             continue;
         }
 
-        let id = request_id(&line);
+        let id = request_id(&value);
         let cancelled = Arc::new(AtomicBool::new(false));
         if let Some(id) = &id {
             let mut active = active
@@ -263,7 +327,7 @@ fn main() {
         }
 
         let work = WorkItem {
-            line,
+            value,
             id: id.clone(),
             cancelled,
         };
@@ -301,4 +365,41 @@ fn main() {
         let _ = worker.join();
     }
     let _ = writer.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_bounded_line, BoundedLine};
+    use std::io::Cursor;
+
+    #[test]
+    fn bounded_line_discards_an_oversized_request_and_recovers() {
+        let mut input = Cursor::new(b"123456\nnext\n".to_vec());
+        let mut output = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut input, &mut output, 5).unwrap(),
+            BoundedLine::TooLarge
+        );
+        assert!(output.is_empty());
+        assert_eq!(
+            read_bounded_line(&mut input, &mut output, 5).unwrap(),
+            BoundedLine::Line
+        );
+        assert_eq!(output, b"next\n");
+        assert_eq!(
+            read_bounded_line(&mut input, &mut output, 5).unwrap(),
+            BoundedLine::Eof
+        );
+    }
+
+    #[test]
+    fn bounded_line_handles_an_unterminated_final_request() {
+        let mut input = Cursor::new(b"final".to_vec());
+        let mut output = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut input, &mut output, 5).unwrap(),
+            BoundedLine::Line
+        );
+        assert_eq!(output, b"final");
+    }
 }

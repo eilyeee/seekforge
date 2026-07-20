@@ -55,6 +55,27 @@ describe("loop state persistence", () => {
     expect(removeLoopState(workspace, created.loopId)).toBe(false);
   });
 
+  it("sorts offset timestamps by instant instead of source text", () => {
+    const older = createLoopState({
+      loopId: "offset-older",
+      task: "older",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    const newer = createLoopState({
+      loopId: "offset-newer",
+      task: "newer",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...older, updatedAt: "2026-07-18T23:30:00+01:00" });
+    saveLoopState(workspace, { ...newer, updatedAt: "2026-07-18T22:45:00Z" });
+
+    expect(listLoopStates(workspace).map((state) => state.loopId)).toEqual(["offset-newer", "offset-older"]);
+  });
+
   it("does not overwrite an existing explicit loop id", () => {
     const first = createLoopState({
       loopId: "same-id",

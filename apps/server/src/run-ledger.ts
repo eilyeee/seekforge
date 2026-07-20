@@ -1,8 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { redactSecrets } from "@seekforge/core";
-import { appendProjectFile, readProjectFile, writeProjectFileAtomic } from "./config.js";
+import { appendProjectFile, readProjectFile, removeProjectFile, writeProjectFileAtomic } from "./config.js";
 
 export const SERVER_PROTOCOL_VERSION = 1;
 export const SERVER_CAPABILITIES = [
@@ -47,6 +45,22 @@ function runId(): string {
 
 function plainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function redactStructuredSecrets(value: unknown, ancestors = new WeakSet<object>()): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (typeof value !== "object" || value === null) return value;
+  if (ancestors.has(value)) throw new TypeError("run event frame contains a circular value");
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((entry) => redactStructuredSecrets(entry, ancestors));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [redactSecrets(key), redactStructuredSecrets(entry, ancestors)]),
+    );
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function validStatus(value: unknown): value is RunStatus {
@@ -269,9 +283,11 @@ export class RunManager {
     const event = { runId: id, seq: nextSeq, ts: new Date().toISOString(), frame };
     // Redact before persisting: frames carry raw model/reasoning deltas and tool
     // results, any of which can contain a secret that would otherwise land on
-    // disk in cleartext (and be readable via read_file). The mask is JSON-safe,
-    // so the persisted line still parses. runId/seq/ts are not secret-shaped.
-    appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${redactSecrets(JSON.stringify(event))}\n`);
+    // disk in cleartext (and be readable via read_file). Redact string leaves
+    // while the frame is still structured so multiline masks are escaped by the
+    // final JSON serialization and cannot split the JSONL record.
+    const persisted = { ...event, frame: redactStructuredSecrets(frame) };
+    appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${JSON.stringify(persisted)}\n`);
     return event;
   }
 
@@ -390,7 +406,7 @@ export class RunManager {
       // path from one containing a separator or traversal.
       if (/[/\\]|\.\./.test(record.runId)) continue;
       try {
-        rmSync(join(workspace, ".seekforge", "run-events", `${record.runId}.jsonl`), { force: true });
+        removeProjectFile(workspace, `.seekforge/run-events/${record.runId}.jsonl`);
       } catch {
         // best-effort: an events file that can't be removed is harmless garbage
       }

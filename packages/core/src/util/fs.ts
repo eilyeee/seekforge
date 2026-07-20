@@ -2,6 +2,18 @@ import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+type SyncWriter = (fd: number, buffer: Uint8Array, offset: number, length: number) => number;
+
+/** Write every byte, retrying short writes and rejecting a zero-progress writer. */
+export function writeAllSync(fd: number, data: Uint8Array, writer: SyncWriter = writeSync): void {
+  let offset = 0;
+  while (offset < data.length) {
+    const written = writer(fd, data, offset, data.length - offset);
+    if (written <= 0) throw new Error("write made no progress");
+    offset += written;
+  }
+}
+
 /** Read a UTF-8 file, or undefined when it is missing/unreadable. */
 export function readFileIfExists(filePath: string): string | undefined {
   try {
@@ -32,7 +44,8 @@ export function writeFileAtomic(filePath: string, data: string): void {
   let fd: number | undefined;
   try {
     fd = openSync(temp, "wx", 0o600);
-    writeSync(fd, data, null, "utf8");
+    const bytes = Buffer.from(data, "utf8");
+    writeAllSync(fd, bytes);
     fsyncSync(fd); // flush the data to disk before the rename
     closeSync(fd);
     fd = undefined;

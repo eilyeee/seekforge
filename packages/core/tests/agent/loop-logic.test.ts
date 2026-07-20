@@ -6,6 +6,7 @@ import {
   classifyAutoGateResult,
   commandResultSatisfiesGate,
   detectActionCycle,
+  recordProgressFingerprint,
   selectAutoGate,
   subtractUsage,
 } from "../../src/agent/loop-logic.js";
@@ -48,6 +49,21 @@ describe("action cycle detection", () => {
     expect(detectActionCycle(["read", "search", "read", "search"])).toBe(2);
     expect(detectActionCycle(["read", "search", "edit"])).toBeNull();
     expect(detectActionCycle([])).toBeNull();
+  });
+
+  it("breaks progress-cycle history when the workspace fingerprint is unknown", () => {
+    const history: string[] = [];
+    expect(recordProgressFingerprint(history, "same:workspace-a")).toBeNull();
+    expect(recordProgressFingerprint(history, null)).toBeNull();
+    expect(history).toEqual([]);
+    expect(recordProgressFingerprint(history, "same:workspace-a")).toBeNull();
+    expect(recordProgressFingerprint(history, "same:workspace-a")).toBe(1);
+  });
+
+  it("keeps only the bounded progress history", () => {
+    const history: string[] = [];
+    for (let i = 0; i < 12; i++) recordProgressFingerprint(history, `step-${i}`);
+    expect(history).toEqual(["step-4", "step-5", "step-6", "step-7", "step-8", "step-9", "step-10", "step-11"]);
   });
 });
 

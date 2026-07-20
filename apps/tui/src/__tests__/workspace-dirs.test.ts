@@ -120,6 +120,12 @@ describe("expandExtraFileRefs", () => {
     expect(expandExtraFileRefs(task, [extra])).toBe(task);
   });
 
+  it("skips sensitive relative paths", () => {
+    touch(extra, ".seekforge/config.json", "provider-secret");
+    const task = "read @.seekforge/config.json";
+    expect(expandExtraFileRefs(task, [extra])).toBe(task);
+  });
+
   it("skips binary files", () => {
     touch(extra, "blob.bin", "bin\0ary");
     const task = "read @blob.bin";

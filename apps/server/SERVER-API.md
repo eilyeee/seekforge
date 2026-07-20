@@ -253,7 +253,9 @@ return `bad_frame`.
 
 Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
 are stored under `.seekforge/run-events/<runId>.jsonl`. Terminal history remains
-queryable after restart. `seq` is scoped to one run. Snapshot status is one of
+queryable after restart. Nested frame strings are redacted before JSON
+serialization, and ledger writes and compaction cleanup reject symlinked project
+path components. `seq` is scoped to one run. Snapshot status is one of
 `queued`, `running`, `waiting`, `succeeded`, `failed`, or `cancelled`;
 `waiting` is a non-failure terminal snapshot used when a confirm-mode Loop has
 persisted requirements and awaits an explicit resume approval.

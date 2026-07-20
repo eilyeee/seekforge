@@ -1,3 +1,8 @@
+import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { DEFAULT_LIMITS } from "@seekforge/shared";
 import { ToolError } from "../errors.js";
@@ -7,6 +12,12 @@ import { defineTool, type ToolSpec } from "../registry.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_REDIRECTS = 5;
+
+type ResolvedAddress = { address: string; family: number };
+export type LookupAll = (hostname: string) => Promise<readonly ResolvedAddress[]>;
+
+const lookupAll: LookupAll = (hostname) => lookup(hostname, { all: true, verbatim: true });
 
 /**
  * SSRF guard: refuse non-http(s) schemes and private/loopback/link-local
@@ -28,6 +39,86 @@ function mappedIpv4(host: string): string | null {
     return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
   }
   return null;
+}
+
+/** True when a resolved IP is not a globally-routable fetch target. */
+export function isPrivateAddress(address: string): boolean {
+  const host = address.toLowerCase().split("%")[0]!;
+  const mapped = mappedIpv4(host);
+  if (mapped !== null) return isPrivateAddress(mapped);
+
+  if (isIP(host) === 4) {
+    const octets = host.split(".").map(Number);
+    const a = octets[0]!;
+    const b = octets[1]!;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && (b === 0 || b === 168)) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+
+  if (isIP(host) === 6) {
+    return (
+      host === "::" ||
+      host === "::1" ||
+      host.startsWith("fc") ||
+      host.startsWith("fd") ||
+      /^fe[89ab]/.test(host) ||
+      host.startsWith("ff")
+    );
+  }
+  return false;
+}
+
+/**
+ * Validate that `url` resolves only to public addresses and return the
+ * validated set so the caller can PIN the socket to one of them.
+ *
+ * Returns `null` for an IP-literal host (nothing to pin — the connect target is
+ * the literal itself). For a hostname, returns the resolved public addresses;
+ * the caller must connect to one of these exact IPs rather than re-resolving,
+ * otherwise a TTL-0 attacker DNS can answer public here and private at connect
+ * time (DNS rebinding).
+ */
+export async function assertPublicResolvedUrl(
+  url: URL,
+  resolver: LookupAll = lookupAll,
+): Promise<readonly ResolvedAddress[] | null> {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (isIP(host) !== 0) {
+    if (isPrivateAddress(host)) {
+      throw new ToolError("private_address", `Refusing to fetch a private/loopback address: ${host}`);
+    }
+    return null;
+  }
+
+  let addresses: readonly ResolvedAddress[];
+  try {
+    addresses = await resolver(host);
+  } catch (err) {
+    throw new ToolError(
+      "fetch_failed",
+      `DNS lookup failed for ${host}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (addresses.length === 0) {
+    throw new ToolError("fetch_failed", `DNS lookup returned no addresses for ${host}`);
+  }
+  const blocked = addresses.find(({ address }) => isPrivateAddress(address));
+  if (blocked) {
+    throw new ToolError(
+      "private_address",
+      `Refusing to fetch ${host}: it resolves to a private/loopback address (${blocked.address})`,
+    );
+  }
+  return addresses;
 }
 
 /**
@@ -111,23 +202,126 @@ export function checkFetchUrl(raw: string): URL {
   const ipv4 = numeric ?? mappedIpv4(host) ?? host;
   const isPrivate =
     host === "localhost" ||
+    host.endsWith(".localhost") ||
     host.endsWith(".local") ||
     host.endsWith(".internal") ||
-    ipv4 === "0.0.0.0" ||
-    /^127\./.test(ipv4) ||
-    /^10\./.test(ipv4) ||
-    /^192\.168\./.test(ipv4) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(ipv4) ||
-    /^169\.254\./.test(ipv4) ||
-    host === "::1" ||
-    (isIpv6Literal &&
-      (host.startsWith("fe80:") || // link-local
-        host.startsWith("fc") || // unique-local fc00::/7
-        host.startsWith("fd")));
+    isPrivateAddress(ipv4);
   if (isPrivate) {
     throw new ToolError("private_address", `Refusing to fetch a private/loopback address: ${host}`);
   }
   return url;
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * A single non-redirect-following GET. `addresses` (from assertPublicResolvedUrl)
+ * pins the socket to a pre-validated IP; null means the host is already an IP
+ * literal and needs no pinning.
+ */
+export type PinnedTransport = (
+  url: URL,
+  addresses: readonly ResolvedAddress[] | null,
+  signal: AbortSignal,
+) => Promise<Response>;
+
+/**
+ * Connect to the exact validated IP instead of letting the HTTP stack resolve
+ * the hostname a second time. Uses node:http(s) with a `lookup` override that
+ * always returns the pinned address — the URL's hostname still drives SNI and
+ * certificate validation, so TLS is unaffected. `fetch()` (undici) offers no
+ * way to pin without the undici package, hence the native client here.
+ */
+export const pinnedTransport: PinnedTransport = async (url, addresses, signal) => {
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const pinned = addresses?.[0];
+  const lookupOverride: LookupFunction | undefined =
+    pinned === undefined
+      ? undefined
+      : (_hostname, options, callback) => {
+          if (options.all) {
+            (callback as (err: NodeJS.ErrnoException | null, addrs: ResolvedAddress[]) => void)(null, [
+              { address: pinned.address, family: pinned.family },
+            ]);
+          } else {
+            callback(null, pinned.address, pinned.family);
+          }
+        };
+  return await new Promise<Response>((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        method: "GET",
+        headers: { "user-agent": "seekforge-agent", host: url.host },
+        signal,
+        ...(lookupOverride ? { lookup: lookupOverride } : {}),
+      },
+      (res) => {
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (Array.isArray(value)) for (const v of value) headers.append(key, v);
+          else if (value !== undefined) headers.set(key, value);
+        }
+        const status = res.statusCode ?? 502;
+        // 204/304 must have a null body per the Response constructor contract.
+        const body = status === 204 || status === 304 ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
+        resolve(new Response(body, { status, headers }));
+      },
+    );
+    req.on("error", (err) => reject(new ToolError("fetch_failed", `Fetch failed: ${err.message}`)));
+    req.end();
+  });
+};
+
+/** Fetch one public URL, validating DNS and every redirect target before use. */
+export async function fetchPublicResponse(
+  initialUrl: URL,
+  signal: AbortSignal,
+  deps: { resolver?: LookupAll; transport?: PinnedTransport } = {},
+): Promise<{ response: Response; finalUrl: URL }> {
+  const transport = deps.transport ?? pinnedTransport;
+  let current = initialUrl;
+  for (let redirects = 0; ; redirects++) {
+    const addresses = await assertPublicResolvedUrl(current, deps.resolver);
+    const response = await transport(current, addresses, signal);
+    const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+    if (location === null) return { response, finalUrl: current };
+    await response.body?.cancel().catch(() => undefined);
+    if (redirects >= MAX_REDIRECTS) {
+      throw new ToolError("too_many_redirects", `Fetch exceeded ${MAX_REDIRECTS} redirects`);
+    }
+    let next: URL;
+    try {
+      next = new URL(location, current);
+    } catch {
+      throw new ToolError("invalid_url", `Redirect returned an invalid URL: ${location}`);
+    }
+    current = checkFetchUrl(next.toString());
+  }
+}
+
+/** Read a response incrementally so the size cap applies before buffering it all. */
+export async function readResponseBody(response: Response, maxBytes = MAX_BODY_BYTES): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new ToolError("too_large", `Response body exceeds ${maxBytes} bytes`);
+  }
+  if (response.body === null) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new ToolError("too_large", `Response body exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
 }
 
 /** Crude readable-text extraction for HTML pages (no DOM dependency). */
@@ -239,47 +433,39 @@ const webFetch = defineTool({
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let res: Response;
     try {
-      res = await fetch(url, {
-        signal: controller.signal,
-        redirect: "follow",
-        headers: { "user-agent": "seekforge-agent" },
-      });
+      const { response: res, finalUrl } = await fetchPublicResponse(url, controller.signal);
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!/text\/|json|xml|javascript/i.test(contentType)) {
+        throw new ToolError("unsupported_content", `Unsupported content-type: ${contentType || "unknown"}`);
+      }
+
+      const buf = await readResponseBody(res);
+      let text = buf.toString("utf8");
+      if (/text\/html/i.test(contentType)) text = htmlToText(text);
+
+      // With an `extract` query, bias the truncation toward matching lines so
+      // the relevant part survives the cap; otherwise plain head+tail.
+      const extract = args.extract?.trim();
+      const { text: capped, truncated } =
+        extract !== undefined && extract !== ""
+          ? extractRelevant(text, extract, DEFAULT_LIMITS.toolOutputMaxChars)
+          : truncateHeadTail(text, DEFAULT_LIMITS.toolOutputMaxChars);
+      return {
+        data: {
+          url: finalUrl.toString(),
+          status: res.status,
+          contentType,
+          content: redactSecrets(capped),
+        },
+        meta: { truncated },
+      };
     } catch (err) {
+      if (err instanceof ToolError) throw err;
       throw new ToolError("fetch_failed", `Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
     }
-
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!/text\/|json|xml|javascript/i.test(contentType)) {
-      throw new ToolError("unsupported_content", `Unsupported content-type: ${contentType || "unknown"}`);
-    }
-
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_BODY_BYTES) {
-      throw new ToolError("too_large", `Response body exceeds ${MAX_BODY_BYTES} bytes`);
-    }
-    let text = buf.toString("utf8");
-    if (/text\/html/i.test(contentType)) text = htmlToText(text);
-
-    // With an `extract` query, bias the truncation toward matching lines so
-    // the relevant part survives the cap; otherwise plain head+tail.
-    const extract = args.extract?.trim();
-    const { text: capped, truncated } =
-      extract !== undefined && extract !== ""
-        ? extractRelevant(text, extract, DEFAULT_LIMITS.toolOutputMaxChars)
-        : truncateHeadTail(text, DEFAULT_LIMITS.toolOutputMaxChars);
-    return {
-      data: {
-        url: args.url,
-        status: res.status,
-        contentType,
-        content: redactSecrets(capped),
-      },
-      meta: { truncated },
-    };
   },
 });
 
@@ -399,6 +585,7 @@ const webSearch = defineTool({
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let res: Response;
+    let buf: Buffer;
     try {
       res = await fetch(url, {
         method: "GET",
@@ -406,20 +593,17 @@ const webSearch = defineTool({
         redirect: "follow",
         headers: { "user-agent": "seekforge-agent" },
       });
+      if (!res.ok) {
+        throw new ToolError("search_failed", `Search failed: HTTP ${res.status}`);
+      }
+      buf = await readResponseBody(res);
     } catch (err) {
+      if (err instanceof ToolError && err.code === "search_failed") throw err;
       throw new ToolError("search_failed", `Search failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
     }
 
-    if (!res.ok) {
-      throw new ToolError("search_failed", `Search failed: HTTP ${res.status}`);
-    }
-
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_BODY_BYTES) {
-      throw new ToolError("search_failed", `Search response exceeds ${MAX_BODY_BYTES} bytes`);
-    }
     const html = buf.toString("utf8");
 
     const parsed = parseDdgResults(html, count);

@@ -13,17 +13,24 @@ import type { RouteCtx } from "./context.js";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * execFile options for git, forcing the C locale so stderr messages (e.g.
- * "not a git repository") are in English regardless of the host's language —
- * our notGit detection matches on those English strings.
- */
+/** Locale-stable Git execution; classification still uses exit codes/probes. */
 const GIT_EXEC = (cwd: string): { cwd: string; timeout: number; maxBuffer: number; env: NodeJS.ProcessEnv } => ({
   cwd,
   timeout: 30_000,
   maxBuffer: 10_000_000,
   env: { ...process.env, LC_ALL: "C", LANG: "C" },
 });
+
+async function isGitRepository(workspace: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["rev-parse", "--git-dir"], GIT_EXEC(workspace));
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || typeof code !== "number") throw error;
+    return false;
+  }
+}
 
 /** Current git diff of the workspace (no shell; capped at 2 MB). */
 async function gitDiff(
@@ -45,7 +52,7 @@ async function gitDiff(
     // so the UI shows a friendly "not a git repository" notice, not a red error.
     // (Git missing entirely, "spawn git ENOENT", stays a real error so the user
     // learns git isn't installed rather than seeing a misleading empty diff.)
-    if (/not a git repository/i.test(stderr)) {
+    if (!(await isGitRepository(workspace))) {
       return { diff: "", truncated: false, notGit: true };
     }
     // A diff bigger than execFile's maxBuffer rejects before it can resolve;
@@ -108,10 +115,9 @@ async function gitStatus(workspace: string): Promise<GitStatusResult> {
       GIT_EXEC(workspace),
     ));
   } catch (err) {
-    const e = err as { code?: string | number; stderr?: string; message?: string };
-    if (e.code === "ENOENT") throw err;
+    const e = err as { stderr?: string; message?: string };
     const stderr = e.stderr ?? e.message ?? "";
-    if (/not a git repository/i.test(stderr)) {
+    if (!(await isGitRepository(workspace))) {
       return { notGit: true, branch: "", files: [] };
     }
     throw new Error(`git status failed: ${stderr.slice(0, 500)}`);

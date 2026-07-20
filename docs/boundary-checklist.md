@@ -305,6 +305,10 @@ open after navigation begins.
   redirects and subresources as well as the initial navigation.
 - **Caught:** `packages/core/src/tools/builtins/browser.ts` — the initial URL was
   checked, but Playwright followed later requests without reapplying the policy.
+- **Also caught:** `web_fetch` delegated redirects to `fetch(..., redirect:
+  "follow")` and checked no DNS answers, so a public-looking URL could resolve or
+  redirect to loopback after its one lexical check. Resolve and reject every
+  non-public answer, and manually validate every redirect before following it.
 
 ## 17. Enforce guardrails at the finest observable boundary
 
@@ -367,6 +371,8 @@ also permit non-finite values unless checked separately.
 - **Also caught:** CLI permission-hunk and `ask_user` selections accepted trailing
   junk such as `1abc`; validate every token completely and against the offered
   indices before approving or selecting it.
+- **Also caught:** eval `--repeat` used `Number()`, accepting hexadecimal and
+  exponent forms even though the option is a decimal iteration count.
 
 ## 20. Lifecycle cleanup must prove ownership before deleting shared state
 
@@ -1129,6 +1135,146 @@ from the tab or document that receives it.
   migrate ownership before allowing it to close.
 - **Caught:** TUI allowed the originating tab to close after detaching a Loop,
   so its final outcome was silently dropped.
+
+## 80. A size check after full buffering is not a memory limit
+
+Reading `arrayBuffer()` or `text()` and checking its length afterward allows an
+untrusted peer to consume arbitrary memory before the guard runs.
+
+- **Do:** consume the stream incrementally, count bytes before retaining each
+  chunk, cancel on overflow, and keep the timeout active through body reading.
+- **Caught:** `web_fetch`, `web_search`, and MCP HTTP plain JSON/OAuth responses
+  applied limits only after full buffering, or had no limit at all.
+
+## 81. Delimited protocols need a bound while searching for the delimiter
+
+A line or frame limit enforced only after finding its delimiter cannot stop an
+unterminated input from growing the parser buffer indefinitely.
+
+- **Do:** cap accumulation during reads; after overflow, discard in fixed chunks
+  through the delimiter so later frames remain usable.
+- **Caught:** the Rust runtime used unbounded `read_until('\n')` for JSONL
+  requests, so one oversized line could exhaust the subprocess.
+
+## 82. A transport finish reason is part of payload validity
+
+Text content alone does not prove a model response is complete when the provider
+reports that generation stopped at its output-token limit.
+
+- **Do:** treat a length-limited response as incomplete, request a self-contained
+  replacement, and fail explicitly if no turn remains.
+- **Caught:** the Agent accepted a `finishReason: "length"` response as its final
+  report and silently persisted truncated output.
+
+## 83. Cancellation must cover human-interaction waits
+
+Checking an abort signal before an approval or question is not enough when the
+human-facing promise can remain pending indefinitely.
+
+- **Do:** race every permission and question wait against the run's abort signal
+  and detach the listener when either side settles.
+- **Caught:** cancelling an Agent while it awaited permission or `ask_user` left
+  the run and its workspace lease stuck.
+
+## 84. Absent and explicitly empty security policy are different states
+
+Normalizing an empty allowlist to an absent value can widen access when absence
+means "use the unrestricted default."
+
+- **Do:** preserve an explicit empty collection through parsing, merging, and
+  serialization; default only when the field is truly absent.
+- **Caught:** a subagent `tools: []` whitelist became `undefined`, granting every
+  tool instead of none.
+
+## 85. Closing an iterator is a terminal lifecycle path
+
+An async generator can be closed by its consumer without throwing or reaching
+the producer's normal completion branch.
+
+- **Do:** settle durable status and release owned resources from `finally`, while
+  preserving any status already written by a normal terminal path.
+- **Caught:** closing an Agent event iterator early left the session persisted as
+  `running` after all execution had stopped.
+
+## 86. Redact structured data before serialization
+
+A text redactor may insert newlines or consume JSON quoting syntax when it runs
+over an already serialized record.
+
+- **Do:** recursively redact string leaves first, then serialize the resulting
+  structure exactly once.
+- **Caught:** run-event redaction after `JSON.stringify` corrupted JSONL and
+  failed to remove multiline PEM material reliably.
+
+## 87. Sensitive-path policy must cover every model read ingress
+
+Protecting file tools alone leaves alternate context builders and auto-approved
+search commands able to read the same secret.
+
+- **Do:** apply the shared basename and relative-path policy to file tools,
+  `@path` expansion, workspace-directory expansion, and command auto-approval.
+- **Caught:** `.seekforge/config.json` and `triggers.json` could reach the model
+  through task references or an explicitly targeted `rg` command.
+
+## 88. Credential-name matching needs semantic boundaries
+
+An unbounded substring such as `TOKEN` both misses alternate credential names
+and removes ordinary build settings that merely contain the word.
+
+- **Do:** share credential categories across environment scrubbing and output
+  redaction, matching separator/camel-case boundaries and testing non-secrets.
+- **Caught:** `GITHUB_PAT` leaked while `MAX_TOKENS` and
+  `TOKENIZERS_PARALLELISM` were silently removed.
+
+## 89. Deletion must validate every physical parent
+
+A safe filename does not make `root/subdir/file` safe when `subdir` can be a
+symlink to an external directory.
+
+- **Do:** route deletion through the same physical project-path guard as reads
+  and writes, and reject symlinked parents and leaf nodes.
+- **Caught:** run-ledger compaction could unlink an external `run-*.jsonl`
+  through `.seekforge/run-events`.
+
+## 90. Process-level teardown registration must be disposable
+
+Per-instance signal listeners outlive short-lived clients unless normal
+disposal unregisters them.
+
+- **Do:** return an idempotent disposer from teardown registration and invoke it
+  when the owning client is permanently disposed.
+- **Caught:** each RuntimeClient left four process listeners and retained its
+  closure after shutdown.
+
+## 91. Option parsers must consume each option's complete arity
+
+Skipping a flag without its separate value promotes that value to a subcommand
+and can hide the real operation from policy classification.
+
+- **Do:** encode which global options require a following argument, including
+  both short and long spellings, and keep TS/Rust parity fixtures exhaustive.
+- **Caught:** Rust treated the path after `git --git-dir PATH` as the subcommand,
+  allowing a later destructive Git operation through.
+
+## 92. Atomic replacement still requires complete writes
+
+Atomic rename guarantees which file becomes visible, not that one `write`
+system call consumed the whole buffer.
+
+- **Do:** loop until all bytes are written, advance by the reported byte count,
+  and fail if a writer makes no progress before fsync and rename.
+- **Caught:** `writeFileAtomic` could replace durable state with a truncated temp
+  file after a short write.
+
+## 93. Compound-command flags belong to one invocation
+
+Searching an entire shell line for a dangerous flag can assign an argument from
+one command to a later command and make independent classifiers disagree.
+
+- **Do:** tokenize command boundaries and classify flags only within their
+  owning invocation; pin cross-language behavior with compound fixtures.
+- **Caught:** Rust attributed `--force` from `echo --force && git push` to the
+  Git push while TypeScript did not.
 
 ---
 

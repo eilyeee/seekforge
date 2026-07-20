@@ -108,6 +108,52 @@ describe("createDispatchManager", () => {
     expect(manager.get("ag-1")!.result?.error?.code).toBe("subagent_cancelled");
   });
 
+  it("does not invoke a runner when the parent signal is already aborted", async () => {
+    const parent = new AbortController();
+    parent.abort();
+    const manager = createDispatchManager();
+    let runs = 0;
+    const { promise } = manager.start({
+      agentId: "a",
+      task: "must not start",
+      signal: parent.signal,
+      run: async () => {
+        runs++;
+        return okResult("unexpected");
+      },
+    });
+
+    await expect(promise).resolves.toMatchObject({ ok: false, error: { code: "subagent_cancelled" } });
+    expect(runs).toBe(0);
+    expect(manager.get("ag-1")?.status).toBe("cancelled");
+  });
+
+  it("refuses resume until a cancelled runner has actually settled", async () => {
+    const manager = createDispatchManager();
+    const settled = deferred<void>();
+    const first = manager.start({
+      agentId: "a",
+      task: "first",
+      run: async (signal) => {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        await settled.promise;
+        return okResult("cancelled runner finished");
+      },
+    });
+    await settle();
+    expect(manager.cancel(first.id)).toEqual({ ok: true });
+    expect(() => manager.resume({ id: first.id, task: "too early", run: async () => okResult("new") })).toThrow(
+      /still running/,
+    );
+
+    settled.resolve();
+    await first.promise;
+    await expect(manager.resume({ id: first.id, task: "now safe", run: async () => okResult("new") })).resolves.toEqual(
+      okResult("new"),
+    );
+    expect(manager.get(first.id)?.status).toBe("done");
+  });
+
   it("resume re-runs a completed dispatch and refuses running/unknown ones", async () => {
     const manager = createDispatchManager();
     const gate = deferred<void>();

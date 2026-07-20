@@ -2,10 +2,24 @@ import { createServer, type IncomingHttpHeaders, type Server, type ServerRespons
 import type { Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpClient, McpError } from "../../src/mcp/client.js";
+import { readLimitedResponseText } from "../../src/mcp/http.js";
 
 const SESSION_ID = "sess-42";
 
 type RecordedRequest = { method: string; id?: number; headers: IncomingHttpHeaders; params?: unknown };
+
+describe("bounded MCP HTTP bodies", () => {
+  it("rejects a declared oversized JSON response before reading it", async () => {
+    const response = new Response("small", { headers: { "content-length": "101" } });
+    await expect(readLimitedResponseText(response, 100)).rejects.toMatchObject({ code: "mcp_parse_error" });
+  });
+
+  it("stops an oversized streamed JSON response", async () => {
+    await expect(readLimitedResponseText(new Response("x".repeat(101)), 100)).rejects.toMatchObject({
+      code: "mcp_parse_error",
+    });
+  });
+});
 
 /**
  * Tiny Streamable HTTP MCP server speaking BOTH response styles:

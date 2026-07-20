@@ -15,13 +15,15 @@
  */
 const SECRET_ENV_PATTERNS: RegExp[] = [
   /API[_-]?KEY/i,
-  /SECRET/i,
-  /TOKEN/i,
-  /PASSWORD/i,
-  /PASSWD/i,
-  /CREDENTIALS?/i,
+  /(?:^|[_-])SECRET(?:$|[_-])/i,
+  /(?:^|[_-])TOKEN(?:$|[_-])/i,
+  /(?:^|[_-])PASSWORD(?:$|[_-])/i,
+  /(?:^|[_-])PASSWD(?:$|[_-])/i,
+  /(?:^|[_-])CREDENTIALS?(?:$|[_-])/i,
   /PRIVATE[_-]?KEY/i,
   /SESSION[_-]?KEY/i,
+  /(?:^|[_-])PAT(?:$|[_-])/i,
+  /(?:Secret|Token|Password|Passwd|Credentials?|Pat)$/,
   // Catches AWS_ACCESS_KEY_ID etc.; AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
   // are caught by the SECRET/TOKEN patterns. Deliberately NOT a blanket ^AWS_
   // so non-secret AWS_REGION / AWS_PROFILE a build needs are preserved.

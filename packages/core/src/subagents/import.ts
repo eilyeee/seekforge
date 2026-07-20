@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic } from "../util/fs.js";
+import { resolveInsideWorkspace } from "../tools/sandbox.js";
 import { AGENT_ID_RE, kebabize, parseFrontmatter } from "./frontmatter.js";
 import type { AgentDefinition } from "./types.js";
 
@@ -64,9 +66,10 @@ export function parseExternalAgent(markdown: string): ParsedExternalAgent {
   const executionBlocked = body.includes("executionBlock=true") || body.includes("NOT FOR DIRECT EXECUTION");
   const mode: "ask" | "edit" = governanceType || executionBlocked ? "ask" : "edit";
 
+  const toolsField = fields.get("tools");
   const tools: string[] = [];
   const droppedTools: string[] = [];
-  for (const raw of (fields.get("tools") ?? "").split(",")) {
+  for (const raw of (toolsField ?? "").split(",")) {
     const name = raw.trim();
     if (!name) continue;
     const mapped = TOOL_NAME_MAP[name.toLowerCase()] ?? (KNOWN_TOOLS.has(name) ? name : undefined);
@@ -88,7 +91,9 @@ export function parseExternalAgent(markdown: string): ParsedExternalAgent {
       name: rawName.trim(),
       description: (fields.get("description") ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
       triggers,
-      tools: tools.length > 0 ? tools : undefined,
+      // Preserve an explicit empty whitelist. Treating "all declared tools were
+      // unsupported" as undefined would grant every SeekForge tool instead.
+      tools: toolsField === undefined ? undefined : tools,
       mode,
       own: oneLine(fields.get("own")),
       doNotTouch: oneLine(fields.get("do_not_touch")),
@@ -115,7 +120,7 @@ export function renderAgentMarkdown(def: Omit<AgentDefinition, "scope">): string
   push("name", def.name);
   push("description", def.description);
   push("trigger", def.triggers.join(" | ") || undefined);
-  push("tools", def.tools?.join(", "));
+  if (def.tools !== undefined) lines.push(`tools: ${JSON.stringify(def.tools.join(", "))}`);
   push("mode", def.mode);
   push("own", def.own);
   push("do_not_touch", def.doNotTouch);
@@ -147,11 +152,21 @@ export function importExternalAgent(
 ): { dir: string; agent: Omit<AgentDefinition, "scope">; droppedTools: string[] } {
   const { def, droppedTools } = parseExternalAgent(fs.readFileSync(sourcePath, "utf8"));
 
-  const dir = path.join(opts.targetRoot, def.id);
-  if (fs.existsSync(dir) && !opts.force) {
-    throw new Error(`agent already exists: ${dir} (use --force to replace)`);
+  fs.mkdirSync(opts.targetRoot, { recursive: true });
+  const requestedDir = path.join(opts.targetRoot, def.id);
+  if (fs.existsSync(requestedDir) && fs.lstatSync(requestedDir).isSymbolicLink()) {
+    throw new Error(`refusing symlinked agent directory: ${requestedDir}`);
   }
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "AGENT.md"), renderAgentMarkdown(def));
-  return { dir, agent: def, droppedTools };
+  const resolvedDir = resolveInsideWorkspace(opts.targetRoot, def.id);
+  if (fs.existsSync(resolvedDir) && !opts.force) {
+    throw new Error(`agent already exists: ${requestedDir} (use --force to replace)`);
+  }
+  fs.mkdirSync(resolvedDir, { recursive: true });
+  const requestedFile = path.join(requestedDir, "AGENT.md");
+  if (fs.existsSync(requestedFile) && fs.lstatSync(requestedFile).isSymbolicLink()) {
+    throw new Error(`refusing symlinked agent file: ${requestedFile}`);
+  }
+  const target = resolveInsideWorkspace(opts.targetRoot, path.join(def.id, "AGENT.md"));
+  writeFileAtomic(target, renderAgentMarkdown(def));
+  return { dir: requestedDir, agent: def, droppedTools };
 }

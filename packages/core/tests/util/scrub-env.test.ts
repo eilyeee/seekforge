@@ -11,6 +11,7 @@ describe("scrubSecretEnv", () => {
       DEEPSEEK_API_KEY: "sk-secret",
       ARK_API_KEY: "ark-secret",
       GITHUB_TOKEN: "ghp_x",
+      GITHUB_PAT: "github_pat_x",
       MY_SECRET: "s",
       DB_PASSWORD: "p",
       AWS_ACCESS_KEY_ID: "AKIA",
@@ -22,11 +23,30 @@ describe("scrubSecretEnv", () => {
   });
 
   it("classifies names case-insensitively and across separators", () => {
-    for (const name of ["api_key", "API-KEY", "SomeToken", "x_secret", "AWS_ACCESS_KEY_ID", "private_key"]) {
+    for (const name of [
+      "api_key",
+      "API-KEY",
+      "SomeToken",
+      "x_secret",
+      "AWS_ACCESS_KEY_ID",
+      "private_key",
+      "GITHUB_PAT",
+      "GH-PAT-READONLY",
+    ]) {
       expect(isSecretEnvName(name), name).toBe(true);
     }
     // Non-secret vars a build may need are preserved (incl. AWS_REGION/PROFILE).
-    for (const name of ["PATH", "HOME", "LANG", "AWS_REGION", "AWS_PROFILE", "MONKEY_HOUSE", "KEYBOARD_LAYOUT"]) {
+    for (const name of [
+      "PATH",
+      "HOME",
+      "LANG",
+      "AWS_REGION",
+      "AWS_PROFILE",
+      "MONKEY_HOUSE",
+      "KEYBOARD_LAYOUT",
+      "MAX_TOKENS",
+      "TOKENIZERS_PARALLELISM",
+    ]) {
       expect(isSecretEnvName(name), name).toBe(false);
     }
   });

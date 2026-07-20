@@ -6,7 +6,7 @@ import {
   createDefaultDispatcher,
   disposeBrowser,
 } from "../../src/tools/index.js";
-import { browserTools, checkBrowserUrl } from "../../src/tools/builtins/browser.js";
+import { assertBrowserUrlAllowed, browserTools, checkBrowserUrl } from "../../src/tools/builtins/browser.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 /**
@@ -74,6 +74,23 @@ describe("browser URL policy", () => {
     "still blocks non-loopback private targets: %s",
     (url) => expect(() => checkBrowserUrl(url)).toThrowError(/private|loopback/i),
   );
+
+  it("blocks a public-looking host whose DNS answer is private", async () => {
+    await expect(
+      assertBrowserUrlAllowed("https://public.example/", async () => [{ address: "10.0.0.5", family: 4 }]),
+    ).rejects.toThrow(/resolves to a private/i);
+  });
+
+  it("does not DNS-resolve explicitly allowed loopback development URLs", async () => {
+    let called = false;
+    await expect(
+      assertBrowserUrlAllowed("http://localhost:5173/", async () => {
+        called = true;
+        return [];
+      }),
+    ).resolves.toBeInstanceOf(URL);
+    expect(called).toBe(false);
+  });
 });
 
 describe("browser tools graceful degradation (Playwright absent)", () => {

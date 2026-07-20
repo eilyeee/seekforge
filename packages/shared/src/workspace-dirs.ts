@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isSensitiveBasename } from "./index.js";
+import { isSensitiveBasename, isSensitiveRelPath } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
@@ -79,11 +79,15 @@ export function expandExtraFileRefs(task: string, dirs: readonly string[]): stri
     for (const root of roots) {
       const abs = path.isAbsolute(ref) ? path.resolve(ref) : path.resolve(root.logical, ref);
       if (!isInside(abs, root.logical)) continue;
-      if (isSensitiveBasename(path.basename(abs))) break;
+      if (isSensitiveBasename(path.basename(abs)) || isSensitiveRelPath(path.relative(root.logical, abs))) break;
       try {
         const physical = fs.realpathSync(abs);
         if (!isInside(physical, root.physical)) continue;
-        if (isSensitiveBasename(path.basename(physical)) || !fs.statSync(physical).isFile()) {
+        if (
+          isSensitiveBasename(path.basename(physical)) ||
+          isSensitiveRelPath(path.relative(root.physical, physical)) ||
+          !fs.statSync(physical).isFile()
+        ) {
           continue;
         }
         let content = fs.readFileSync(physical, "utf8");

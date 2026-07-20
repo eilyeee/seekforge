@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeFileAtomic } from "../../src/util/fs.js";
+import { writeAllSync, writeFileAtomic } from "../../src/util/fs.js";
 
 function makeDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-fs-test-"));
@@ -14,6 +14,21 @@ function tempFiles(dir: string): string[] {
 }
 
 describe("writeFileAtomic", () => {
+  it("retries short writes until every byte is consumed", () => {
+    const source = Buffer.from("abcdef");
+    const chunks: Buffer[] = [];
+    writeAllSync(1, source, (_fd, buffer, offset, length) => {
+      const written = Math.min(2, length);
+      chunks.push(Buffer.from(buffer).subarray(offset, offset + written));
+      return written;
+    });
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("abcdef");
+  });
+
+  it("rejects a writer that makes no progress", () => {
+    expect(() => writeAllSync(1, Buffer.from("x"), () => 0)).toThrow(/no progress/);
+  });
+
   it("writes the data to a fresh file", () => {
     const dir = makeDir();
     const target = path.join(dir, "data.txt");

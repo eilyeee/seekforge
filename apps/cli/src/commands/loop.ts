@@ -123,6 +123,12 @@ export function formatSummary(result: LoopResult): string {
   return lines.join("\n");
 }
 
+/** Process exit code for non-success Loop outcomes; passed leaves the current code untouched. */
+export function loopExitCode(status: LoopResult["status"]): 1 | 2 | undefined {
+  if (status === "requirements_pending") return 2;
+  return status === "passed" ? undefined : 1;
+}
+
 export async function loopCommand(task: string, opts: LoopOptions): Promise<void> {
   if (task.trim() === "") {
     fail("Loop task must be non-empty");
@@ -386,8 +392,8 @@ async function runPreparedLoop(
     // Distinct exit code: requirements_pending is a deliberate pause awaiting
     // approval, not a failure — scripts resume with --approve-requirements
     // rather than treating it like an exhausted/failed loop.
-    if (result.status === "requirements_pending") process.exitCode = 2;
-    else if (result.status !== "passed") process.exitCode = 1;
+    const exitCode = loopExitCode(result.status);
+    if (exitCode !== undefined) process.exitCode = exitCode;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;

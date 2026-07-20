@@ -101,6 +101,15 @@ describe("classifyCommand", () => {
       "rg --no-ignore foo",
       "rg -uuu foo .env",
       "rg -u --hidden foo",
+      "rg secret .seekforge/triggers.json",
+      "rg secret ./.seekforge/config.json",
+      "rg secret .git/config",
+      "rg secret /tmp/project/.seekforge/config.json",
+      "rg secret .npmrc",
+      "rg pattern /etc/passwd",
+      "rg pattern ../../outside",
+      "rg pattern ~/.config",
+      "rg pattern $HOME",
     ]) {
       expect(classifyCommand(cmd).allowlisted, cmd).toBe(false);
     }

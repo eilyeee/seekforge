@@ -79,6 +79,7 @@ export function loopStatusTone(status: LoopStatus): LoopTone {
     case "pass":
       return "ok";
     case "cancelled":
+    case "pending":
       return "warn";
     default:
       return "danger";

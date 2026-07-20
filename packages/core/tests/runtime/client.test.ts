@@ -76,6 +76,15 @@ afterAll(() => {
 });
 
 describe("runtime client", () => {
+  it("removes process teardown listeners when disposed", async () => {
+    const events = ["beforeExit", "SIGINT", "SIGTERM", "exit"] as const;
+    const before = Object.fromEntries(events.map((event) => [event, process.listenerCount(event)]));
+    const client = createRuntimeClient({ binPath });
+    await client.ping();
+    client.dispose();
+    for (const event of events) expect(process.listenerCount(event), event).toBe(before[event]);
+  });
+
   it("round-trips a request and correlates by id", async () => {
     const client = createRuntimeClient({ binPath });
     try {

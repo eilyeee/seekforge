@@ -118,10 +118,20 @@ Shell commands are classified deterministically before they can run, in
   `rg` carrying its code-execution (`--pre`, `--search-zip`, `--hostname-bin`) or
   unrestricted-read (`--hidden`, `--no-ignore`, `-u`/`-uu`/`-uuu`) flags is forced
   onto the confirmation path so an auto-run cannot become code execution or a
-  read of protected files (`.env`, keys).
+  read of protected files (`.env`, keys). An explicit sensitive path such as
+  `.seekforge/config.json`, `.seekforge/triggers.json`, or `.git/config` also
+  disables auto-run, as does an absolute, home-relative, environment-derived,
+  or `..` path that cannot be proven workspace-local during classification.
 - **Everything else defaults to `execute`** — confirm and surface the raw
   command (`run-command.ts:310`). Unknown `git`/`gh` subcommands default to the
   safe side, not auto-run.
+
+Agent-spawned commands receive a copy of the parent environment with
+credential-bearing variables removed (`*_API_KEY`, `*_TOKEN`, `*_SECRET`,
+`*_PASSWORD`, `*_PAT`, access/private/session keys). Names are matched at
+separator or camel-case boundaries so ordinary build settings such as
+`MAX_TOKENS` and `TOKENIZERS_PARALLELISM` remain available. Captured output is
+redacted independently before it reaches the model.
 
 ---
 
@@ -135,8 +145,10 @@ symlink escapes, `..`, and absolute paths outside the root are all rejected:
 - `resolveInsideWorkspace` realpaths the workspace and the deepest existing
   ancestor, then asserts containment (`sandbox.ts:42`; throws
   `outside_workspace` `:63`).
-- Reads additionally refuse sensitive files (`.env`, `*.pem`, `*.key`, SSH keys):
-  `resolveForRead` (`sandbox.ts:72`) via `isSensitiveBasename` (`sandbox.ts:29`).
+- Reads additionally refuse sensitive files (`.env`, `*.pem`, `*.key`, SSH keys,
+  package/netrc credential files) and sensitive relative paths
+  (`.seekforge/config.json`, `.seekforge/triggers.json`, `.git/config`). The same
+  policy is applied to `@path` task expansion before content reaches the model.
 - Writes additionally refuse anything under `.git/`: `resolveForWrite`
   (`sandbox.ts:83`).
 
@@ -209,9 +221,11 @@ the raw URL shown — and the network is off by default. On top of that,
 reach the local network:
 
 - Only `http`/`https` schemes are allowed (`web.ts:96`).
-- Private / loopback / link-local targets are blocked: `localhost`, `*.local`,
-  `*.internal`, `0.0.0.0`, `127/8`, `10/8`, `192.168/16`, `172.16–31/12`,
-  `169.254/16`, IPv6 `::1` / `fe80:` / `fc` / `fd` (`web.ts:112`).
+- Private / loopback / link-local and special-use targets are blocked:
+  `localhost`, `*.localhost`, `*.local`, `*.internal`, `0/8`, `127/8`, `10/8`,
+  `100.64/10`, `192.168/16`, `172.16–31/12`, `169.254/16`, `198.18/15`,
+  multicast/reserved IPv4, and IPv6 unspecified / loopback / ULA / link-local /
+  multicast ranges.
 - **IPv4-mapped IPv6** (`::ffff:a.b.c.d`) is decoded so a private IPv4 cannot be
   smuggled through it (`web.ts::mappedIpv4` `:21`).
 - **Numeric-host safety net** — bare integer, octal, and hex hosts
@@ -222,6 +236,17 @@ reach the local network:
   defense-in-depth decoder that fails closed on any numeric-looking but malformed
   or out-of-range host, guarding callers that might feed a host string that never
   went through `new URL` (`web.ts:106`).
+- Hostnames are resolved immediately before fetching and the request is rejected
+  if any DNS answer is non-public. Redirects are followed manually with the full
+  URL and DNS policy reapplied before every hop. `web_fetch` pins each connection
+  to the address that passed this check. Browser navigation applies the same DNS
+  check to every routed request, except for its documented, explicitly confirmed
+  loopback development-server allowance. Chromium performs its own resolution
+  after that check, so Browser retains the narrow TTL-0 rebinding race documented
+  in [Browser tooling](browser.md#security-and-permissions).
 
-Fetch bodies are size-capped and content-type-restricted, and returned text is
-run through `redactSecrets` before it reaches the model.
+Fetch bodies are streamed under the request timeout and rejected as soon as the
+size cap is crossed, rather than being fully buffered first. Content types are
+restricted, and returned text is run through `redactSecrets` before it reaches
+the model. Plain JSON and OAuth responses from MCP HTTP servers are likewise
+streamed with a 1 MiB cap; SSE events have the same bounded-buffer guarantee.

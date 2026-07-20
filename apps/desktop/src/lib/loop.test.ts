@@ -141,6 +141,8 @@ describe("loopStatusTone", () => {
   it("maps statuses to tones", () => {
     expect(loopStatusTone("passed")).toBe("ok");
     expect(loopStatusTone("cancelled")).toBe("warn");
+    // A pause awaiting requirement approval is not a failure — warn, not danger.
+    expect(loopStatusTone("requirements_pending")).toBe("warn");
     expect(loopStatusTone("exhausted")).toBe("danger");
     expect(loopStatusTone("no_progress")).toBe("danger");
     expect(loopStatusTone("budget")).toBe("danger");

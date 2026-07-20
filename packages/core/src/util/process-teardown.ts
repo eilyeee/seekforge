@@ -8,15 +8,26 @@
  *  - `onExit` runs on 'exit', where the event loop is gone: it MUST be
  *    synchronous (kill children, close fds) or the work silently never runs.
  *
- * Each call registers one set of once-listeners; callers keep their own
- * "installed" latch since laziness (install only once a resource exists) is
- * caller-specific.
+ * Each call registers one set of once-listeners and returns an idempotent
+ * disposer. Long-lived factories must call it when their owned resource is
+ * permanently disposed so process-level listeners do not accumulate.
  */
-export function installProcessTeardown(hooks: { onSignal?: () => void; onExit?: () => void }): void {
+export function installProcessTeardown(hooks: { onSignal?: () => void; onExit?: () => void }): () => void {
   if (hooks.onSignal) {
     process.once("beforeExit", hooks.onSignal);
     process.once("SIGINT", hooks.onSignal);
     process.once("SIGTERM", hooks.onSignal);
   }
   if (hooks.onExit) process.once("exit", hooks.onExit);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (hooks.onSignal) {
+      process.removeListener("beforeExit", hooks.onSignal);
+      process.removeListener("SIGINT", hooks.onSignal);
+      process.removeListener("SIGTERM", hooks.onSignal);
+    }
+    if (hooks.onExit) process.removeListener("exit", hooks.onExit);
+  };
 }

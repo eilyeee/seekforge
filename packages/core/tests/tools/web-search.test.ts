@@ -84,15 +84,16 @@ describe("web_search tool (through dispatcher)", () => {
     vi.restoreAllMocks();
   });
 
-  function fetchReturning(body: string, ok = true, status = 200): void {
+  function fetchReturning(body: string, status = 200): void {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok,
-        status,
-        headers: new Headers({ "content-type": "text/html" }),
-        arrayBuffer: async () => new TextEncoder().encode(body).buffer,
-      })) as unknown as typeof fetch,
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status,
+            headers: { "content-type": "text/html" },
+          }),
+      ) as unknown as typeof fetch,
     );
   }
 
@@ -155,7 +156,7 @@ describe("web_search tool (through dispatcher)", () => {
   });
 
   it("maps HTTP errors to a search_failed ToolError", async () => {
-    fetchReturning("", false, 503);
+    fetchReturning("", 503);
     const dispatcher = createDefaultDispatcher();
     const ctx = makeCtx(makeWorkspace(), { confirm: async () => true });
     const res = await dispatcher.execute(call("web_search", { query: "x" }), ctx);

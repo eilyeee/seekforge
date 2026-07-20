@@ -76,6 +76,42 @@ describe("agent loop", () => {
     expect(sessions[0]!.usage?.costUsd).toBeCloseTo(0.001);
   });
 
+  it("continues instead of accepting an output-truncated response as complete", async () => {
+    const provider = fakeProvider([
+      response({ content: "## Summary\npartial", finishReason: "length" }),
+      response({ content: "## Summary\ncomplete" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const completed = events.find((event) => event.type === "session.completed");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]!.messages.at(-1)?.content).toContain("truncated by the output-token limit");
+    expect(provider.requests[1]!.messages.at(-1)?.content).toContain("from the beginning");
+    expect(completed && completed.type === "session.completed" ? completed.report.summary : "").toBe(
+      "## Summary\ncomplete",
+    );
+  });
+
+  it("rejects invalid loop and context limits at construction", () => {
+    const base = {
+      provider: fakeProvider([]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    };
+    expect(() => createAgentCore({ ...base, contextWindowTokens: Number.POSITIVE_INFINITY })).toThrow(
+      /contextWindowTokens/,
+    );
+    expect(() => createAgentCore({ ...base, limits: { maxAgentTurns: 0 } })).toThrow(/maxAgentTurns/);
+    expect(() => createAgentCore({ ...base, limits: { maxToolCalls: Number.NaN } })).toThrow(/maxToolCalls/);
+    expect(() => createAgentCore({ ...base, limits: { contextBudgetRatio: 1.1 } })).toThrow(/contextBudgetRatio/);
+    expect(() => createAgentCore({ ...base, limits: { toolOutputMaxChars: 0 } })).toThrow(/toolOutputMaxChars/);
+  });
+
   it("executes tool calls and feeds results back", async () => {
     const provider = fakeProvider([
       response({
@@ -183,6 +219,98 @@ describe("agent loop", () => {
     const failed = events.find((event) => event.type === "session.failed");
     expect(failed && failed.type === "session.failed" && failed.error.code).toBe("cancelled");
     expect(listSessions(workspace)[0]!.status).toBe("cancelled");
+  });
+
+  it("cancels while waiting for a permission response", async () => {
+    const controller = new AbortController();
+    let permissionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      permissionStarted = resolve;
+    });
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "needs_permission", description: "d", parameters: {} }],
+      execute: async (_call, ctx) => {
+        await ctx.confirm({ toolName: "needs_permission", permission: "write", description: "test" });
+        return { ok: true };
+      },
+    };
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "permission", name: "needs_permission", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => {
+        permissionStarted();
+        return new Promise<boolean>(() => {});
+      },
+    });
+
+    const pending = collect(
+      agent.runTask({ ...baseInput, projectPath: workspace, approvalMode: "confirm", signal: controller.signal }),
+    );
+    await started;
+    controller.abort();
+    const events = await pending;
+    expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+      error: { code: "cancelled" },
+    });
+  });
+
+  it("cancels while waiting for an ask_user response", async () => {
+    const controller = new AbortController();
+    let questionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      questionStarted = resolve;
+    });
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "ask_user", description: "d", parameters: {} }],
+      execute: async (_call, ctx) => {
+        await ctx.askUser?.({ question: "continue?", options: ["yes", "no"] });
+        return { ok: true };
+      },
+    };
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "question", name: "ask_user", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      askUser: async () => {
+        questionStarted();
+        return new Promise<string>(() => {});
+      },
+    });
+
+    const pending = collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
+    await started;
+    controller.abort();
+    const events = await pending;
+    expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+      error: { code: "cancelled" },
+    });
+  });
+
+  it("marks a session cancelled when its event iterator is closed early", async () => {
+    const agent = createAgentCore({
+      provider: fakeProvider([response({ content: "unreached" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const iterator = agent.runTask({ ...baseInput, projectPath: workspace })[Symbol.asyncIterator]();
+    const created = await iterator.next();
+    expect(created.value).toMatchObject({ type: "session.created" });
+    const sessionId = created.value?.type === "session.created" ? created.value.sessionId : "";
+
+    await iterator.return?.();
+    expect(readSessionMeta(workspace, sessionId)?.status).toBe("cancelled");
   });
 
   it("rebuilds the system prompt on resume (plan -> execute mode switch)", async () => {

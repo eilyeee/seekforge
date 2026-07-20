@@ -84,7 +84,8 @@ function readAgentDir(scope: AgentScope, id: string, dir: string): AgentDefiniti
 export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: string): AgentDefinition {
   const { fields, body } = parseFrontmatter(markdown);
 
-  const tools = (fields.get("tools") ?? "")
+  const toolsField = fields.get("tools");
+  const tools = (toolsField ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -116,7 +117,7 @@ export function parseAgentMarkdown(scope: AgentScope, id: string, markdown: stri
     name: fields.get("name")?.trim() || id,
     description: (fields.get("description") ?? "").replace(/\s+/g, " ").trim(),
     triggers,
-    tools: tools.length > 0 ? tools : undefined,
+    tools: toolsField === undefined ? undefined : tools,
     mode: modeRaw ?? "edit",
     own: fields.get("own") || undefined,
     doNotTouch: fields.get("do_not_touch") || undefined,

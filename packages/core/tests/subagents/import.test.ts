@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -75,6 +75,17 @@ describe("parseExternalAgent", () => {
     expect(droppedTools).toEqual([]);
   });
 
+  it("keeps an explicit unsupported tool list as an empty whitelist", () => {
+    const external = EXECUTOR_AGENT.replace("tools: Read, Grep, Bash", "tools: Agent, WebSearch");
+    const { def, droppedTools } = parseExternalAgent(external);
+    expect(def.tools).toEqual([]);
+    expect(droppedTools).toEqual(["Agent", "WebSearch"]);
+
+    const rendered = renderAgentMarkdown(def);
+    expect(rendered).toContain('tools: ""');
+    expect(parseExternalAgent(rendered).def.tools).toEqual([]);
+  });
+
   it("rejects unusable names", () => {
     expect(() => parseExternalAgent("---\nversion: 1\n---\nbody")).toThrow(/name/);
     expect(() => parseExternalAgent("# no frontmatter")).toThrow(/frontmatter/);
@@ -118,12 +129,52 @@ describe("importExternalAgent", () => {
     expect(def.body).toContain("# Meta-Conductor");
   });
 
+  it("round-trips an empty whitelist without granting all tools", () => {
+    const source = join(src, "unsupported.md");
+    writeFileSync(
+      source,
+      EXECUTOR_AGENT.replace("name: bug-fixer", "name: unsupported").replace("tools: Read, Grep, Bash", "tools: Agent"),
+    );
+    const imported = importExternalAgent(source, { targetRoot: target });
+    expect(imported.agent.tools).toEqual([]);
+    expect(loadAgentDefinitionsFromDirs([{ scope: "project", path: target }])[0]?.tools).toEqual([]);
+  });
+
   it("refuses to overwrite without force, replaces with force", () => {
     importExternalAgent(join(src, "meta-conductor.md"), { targetRoot: target });
     expect(() => importExternalAgent(join(src, "meta-conductor.md"), { targetRoot: target })).toThrow(/--force/);
     expect(existsSync(join(target, "meta-conductor", "AGENT.md"))).toBe(true);
     const again = importExternalAgent(join(src, "meta-conductor.md"), { targetRoot: target, force: true });
     expect(again.agent.id).toBe("meta-conductor");
+  });
+
+  it("refuses to follow an existing agent-directory symlink", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sf-agent-outside-"));
+    try {
+      symlinkSync(outside, join(target, "meta-conductor"));
+      expect(() => importExternalAgent(join(src, "meta-conductor.md"), { targetRoot: target, force: true })).toThrow(
+        /symlinked agent directory/,
+      );
+      expect(existsSync(join(outside, "AGENT.md"))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to follow an existing AGENT.md symlink", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sf-agent-outside-"));
+    const outsideFile = join(outside, "protected.md");
+    try {
+      writeFileSync(outsideFile, "keep me");
+      mkdirSync(join(target, "meta-conductor"));
+      symlinkSync(outsideFile, join(target, "meta-conductor", "AGENT.md"));
+      expect(() => importExternalAgent(join(src, "meta-conductor.md"), { targetRoot: target, force: true })).toThrow(
+        /symlinked agent file/,
+      );
+      expect(readFileSync(outsideFile, "utf8")).toBe("keep me");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

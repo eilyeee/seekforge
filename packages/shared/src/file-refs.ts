@@ -12,7 +12,7 @@
 
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
-import { isSensitiveBasename } from "./index.js";
+import { isSensitiveBasename, isSensitiveRelPath } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
@@ -43,11 +43,15 @@ export function expandFileRefs(task: string, workspace: string): string {
   for (const token of tokens) {
     const rel = token.slice(1).replace(/[.,;:]+$/, ""); // strip trailing punctuation
     const abs = resolve(root, rel);
-    if (isSensitiveBasename(basename(abs))) continue;
+    const requestedRel = relative(root, abs);
+    if (isSensitiveBasename(basename(abs)) || isSensitiveRelPath(requestedRel)) continue;
     try {
       const physical = realpathSync(abs);
       if (!isInside(physical, root)) continue;
-      if (isSensitiveBasename(basename(physical)) || !statSync(physical).isFile()) continue;
+      const physicalRel = relative(root, physical);
+      if (isSensitiveBasename(basename(physical)) || isSensitiveRelPath(physicalRel) || !statSync(physical).isFile()) {
+        continue;
+      }
       let content = readFileSync(physical, "utf8");
       if (content.includes("\0")) continue; // binary
       if (content.length > MAX_PER_FILE_CHARS) {

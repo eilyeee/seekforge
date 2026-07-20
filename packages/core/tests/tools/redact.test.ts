@@ -12,6 +12,7 @@ describe("redactSecrets", () => {
       ["ghs_abcdefghijklmnopqrst", "ghs_****"],
       ["ghu_abcdefghijklmnopqrst", "ghu_****"],
       ["ghr_abcdefghijklmnopqrst", "ghr_****"],
+      ["github_pat_11AA22bb33CC44dd55EE", "gith****"],
       ["xoxb-1234-abcdefghijklmnop", "xoxb****"],
       ["xoxp-1234-abcdefghijklmnop", "xoxp****"],
       ["AKIAIOSFODNN7EXAMPLE", "AKIA****"],
@@ -25,10 +26,13 @@ describe("redactSecrets", () => {
   });
 
   it("masks env-style assignments by variable name", () => {
-    const out = redactSecrets("DEEPSEEK_API_KEY=verysecretvalue\nMY_TOKEN: 'anothersecret'");
+    const out = redactSecrets(
+      "DEEPSEEK_API_KEY=verysecretvalue\nMY_TOKEN: 'anothersecret'\nGITHUB_PAT=github_pat_11AA22bb33CC44dd55EE",
+    );
     expect(out).not.toContain("verysecretvalue");
     expect(out).toContain("DEEPSEEK_API_KEY=very****");
     expect(out).not.toContain("anothersecret");
+    expect(out).not.toContain("github_pat_11AA22bb33CC44dd55EE");
   });
 
   it("masks PEM private key blocks", () => {

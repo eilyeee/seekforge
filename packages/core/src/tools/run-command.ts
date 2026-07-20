@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { basename, normalize } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { isSensitiveBasename, isSensitiveRelPath } from "@seekforge/shared";
 import { ToolError } from "./errors.js";
 import { onAbortOnce } from "../util/abort.js";
 import { scrubSecretEnv } from "../util/scrub-env.js";
@@ -68,13 +70,143 @@ export function commandInvokes(ran: string, configured: string): boolean {
   return a === b || a.startsWith(b + " ");
 }
 
-/**
- * A run of git global options that may appear between `git` and its
- * subcommand: `-c key=val` (separate value arg), short flags (`-C`, `-p`),
- * and long `--flag` / `--flag=value`. The `-c\s+\S+` alternative is listed
- * first so it consumes its value argument instead of a bare `-c` swallowing it.
- */
-const GIT_GLOBAL_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--[a-z][\w-]*(?:=\S+|\s+\S+)?|-[A-Za-z]\S*))*`;
+type ShellParseResult = { invocations: string[][]; next: number };
+
+/** Parse shell words without evaluating expansion, retaining nested command
+ * substitutions as independent invocations for security classification. */
+function parseShellSegment(source: string, start = 0, terminator?: ")" | "`"): ShellParseResult {
+  const invocations: string[][] = [];
+  let words: string[] = [];
+  let word = "";
+  let wordStarted = false;
+  let quote: "'" | '"' | undefined;
+
+  const finishWord = () => {
+    if (wordStarted) words.push(word);
+    word = "";
+    wordStarted = false;
+  };
+  const finishInvocation = () => {
+    finishWord();
+    if (words.length > 0) invocations.push(words);
+    words = [];
+  };
+
+  for (let i = start; i < source.length; i++) {
+    const ch = source.charAt(i);
+    const next = source.charAt(i + 1);
+    if (quote === "'") {
+      if (ch === "'") quote = undefined;
+      else word += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      wordStarted = true;
+      if (i + 1 < source.length) word += source.charAt(++i);
+      else word += "\\";
+      continue;
+    }
+    if (quote === '"' && ch === '"') {
+      quote = undefined;
+      continue;
+    }
+    if (ch === "$" && next === "(") {
+      wordStarted = true;
+      const nested = parseShellSegment(source, i + 2, ")");
+      invocations.push(...nested.invocations);
+      i = nested.next;
+      continue;
+    }
+    if (ch === "`") {
+      if (terminator === "`") {
+        finishInvocation();
+        return { invocations, next: i };
+      }
+      wordStarted = true;
+      const nested = parseShellSegment(source, i + 1, "`");
+      invocations.push(...nested.invocations);
+      i = nested.next;
+      continue;
+    }
+    if (quote === '"') {
+      word += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      wordStarted = true;
+      continue;
+    }
+    if (terminator === ")" && ch === ")") {
+      finishInvocation();
+      return { invocations, next: i };
+    }
+    if (ch === "(") {
+      finishInvocation();
+      const nested = parseShellSegment(source, i + 1, ")");
+      invocations.push(...nested.invocations);
+      i = nested.next;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "&" || ch === "\n" || ch === "\r") {
+      finishInvocation();
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      finishWord();
+      continue;
+    }
+    wordStarted = true;
+    word += ch;
+  }
+  finishInvocation();
+  return { invocations, next: source.length };
+}
+
+function gitArgumentRuns(command: string): string[][] {
+  return parseShellSegment(command).invocations.flatMap((invocation) =>
+    invocation.flatMap((word, index) => (word.split(/[\\/]/).at(-1) === "git" ? [invocation.slice(index + 1)] : [])),
+  );
+}
+
+function gitSubcommandIndex(args: readonly string[]): number {
+  const optionsWithValue = new Set([
+    "-c",
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+  ]);
+  let index = 0;
+  while (index < args.length) {
+    const argument = args[index] ?? "";
+    if (optionsWithValue.has(argument)) index = Math.min(index + 2, args.length);
+    else if (argument.startsWith("-")) index++;
+    else break;
+  }
+  return index;
+}
+
+function classifyGitPolicy(command: string): { dangerous?: string; pushes: boolean } {
+  let pushes = false;
+  for (const args of gitArgumentRuns(command)) {
+    const index = gitSubcommandIndex(args);
+    const subcommand = args[index];
+    if (subcommand === "reset" && args.slice(index + 1).includes("--hard")) {
+      return { dangerous: "git reset --hard", pushes };
+    }
+    if (subcommand === "clean") return { dangerous: "git clean", pushes };
+    if (subcommand === "push") {
+      pushes = true;
+      if (args.slice(index + 1).some((argument) => argument === "-f" || argument.startsWith("--force"))) {
+        return { dangerous: "git push --force", pushes };
+      }
+    }
+  }
+  return { pushes };
+}
 
 /**
  * ripgrep flags that turn a search into code execution (`--pre`, `--search-zip`,
@@ -85,6 +217,31 @@ const GIT_GLOBAL_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--[a-z][\w-]*(?:=\S+|\s+
  */
 const RG_UNSAFE_FLAGS =
   /(?:^|\s)(?:--pre(?:=|\b)|--pre-glob\b|--search-zip\b|--hostname-bin\b|--hidden\b|--no-ignore(?:-[a-z]+)?\b|--unrestricted\b|-z\b|-[A-Za-z]*u[A-Za-z]*\b)/;
+
+function referencesSensitivePath(tokens: readonly string[]): boolean {
+  return tokens.some((raw) => {
+    const unquoted = raw.replace(/^['"]|['"]$/g, "");
+    const value = unquoted.includes("=") ? (unquoted.split("=", 2)[1] ?? unquoted) : unquoted;
+    const path = normalize(value).replace(/\\/g, "/");
+    if (isSensitiveBasename(basename(path))) return true;
+    const segments = path.split("/").filter(Boolean);
+    for (let i = 0; i < segments.length; i++) {
+      if (isSensitiveRelPath(segments.slice(i).join("/"))) return true;
+    }
+    return false;
+  });
+}
+
+function referencesUnboundedPath(tokens: readonly string[]): boolean {
+  return tokens.some((raw) => {
+    const value = raw.replace(/^['"]|['"]$/g, "");
+    if (value.startsWith("/") || value.startsWith("~") || value.startsWith("$") || /^[A-Za-z]:[\\/]/.test(value)) {
+      return true;
+    }
+    const path = normalize(value.replace(/\\/g, "/")).replace(/\\/g, "/");
+    return path === ".." || path.startsWith("../");
+  });
+}
 
 /** Destructive / escape-hatch commands. Never run, never prompt. */
 const DENYLIST: Array<{ re: RegExp; reason: string }> = [
@@ -99,17 +256,6 @@ const DENYLIST: Array<{ re: RegExp; reason: string }> = [
   { re: /\bsudo\b/, reason: "sudo" },
   { re: /\bchmod\s+(-[^\s]+\s+)*-R\b/, reason: "chmod -R" },
   { re: /\bchown\b/, reason: "chown" },
-  // Global options (`-c key=val`, `-C <dir>`, `--git-dir=…`) may sit between
-  // `git` and the destructive subcommand — `git -c core.pager=cat push --force`
-  // must not slip past. GIT_GLOBAL_OPTS below consumes any run of them.
-  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+reset\s+--hard\b`), reason: "git reset --hard" },
-  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+clean\b`), reason: "git clean" },
-  // Force-push rewrites remote history — stays absolutely denied. A plain
-  // `git push` is reclassified to env below (always human-confirmed, never auto).
-  {
-    re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+push\b(?=.*(?:--force|\s-f\b))`),
-    reason: "git push --force",
-  },
   {
     re: /\b(curl|wget)\b[^|;&]*\|\s*([^\s|;&]+\s+)*(sh|bash|zsh|dash|ksh|fish|ash)\b/,
     reason: "download piped to shell",
@@ -129,10 +275,6 @@ const ENV_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   { re: /\b(npm|pnpm|yarn)\s+(install|add|i)\b/, reason: "package install" },
   { re: /\bpip3?\s+install\b/, reason: "pip install" },
   { re: /\bcargo\s+add\b/, reason: "cargo add" },
-  // Pushing to a remote is outward-facing: always require explicit human
-  // approval (env never auto-runs, even in "auto" mode, and auto-denies
-  // headless). Force-push is denied outright by the denylist above.
-  { re: new RegExp(String.raw`\bgit${GIT_GLOBAL_OPTS}\s+push\b`), reason: "git push" },
 ];
 
 /** Commands safe to auto-run without confirmation (prefix match, normalized). */
@@ -356,10 +498,28 @@ function classifyGit(tokens: string[]): CommandPermission {
 export function classifyCommand(command: string, extraAllowlist: readonly string[] = []): CommandClassification {
   const normalized = normalizeCommand(command);
 
+  const gitPolicy = classifyGitPolicy(command);
+  if (gitPolicy.dangerous) {
+    return {
+      permission: "dangerous",
+      allowlisted: false,
+      defaultTimeoutMs: 0,
+      reason: gitPolicy.dangerous,
+    };
+  }
+
   for (const { re, reason } of DENYLIST) {
     if (re.test(normalized)) {
       return { permission: "dangerous", allowlisted: false, defaultTimeoutMs: 0, reason };
     }
+  }
+  if (gitPolicy.pushes) {
+    return {
+      permission: "env",
+      allowlisted: false,
+      defaultTimeoutMs: BUILD_COMMAND_TIMEOUT_MS,
+      reason: "git push",
+    };
   }
   for (const { re, reason } of ENV_PATTERNS) {
     if (re.test(normalized)) {
@@ -408,7 +568,11 @@ export function classifyCommand(command: string, extraAllowlist: readonly string
   // `rg` is allowlisted, but its preprocessor / unrestricted-read flags would
   // make an auto-run into code execution or a protected-file read — those forms
   // must confirm instead.
-  const rgUnsafe = tokens[0] === "rg" && RG_UNSAFE_FLAGS.test(normalized);
+  const rgUnsafe =
+    tokens[0] === "rg" &&
+    (RG_UNSAFE_FLAGS.test(normalized) ||
+      referencesSensitivePath(tokens.slice(1)) ||
+      referencesUnboundedPath(tokens.slice(1)));
   const allowlisted =
     !injectsCommands &&
     !rgUnsafe &&

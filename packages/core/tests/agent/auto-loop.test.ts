@@ -173,17 +173,16 @@ describe("runAutoLoop", () => {
     expect(existsSync(join(workspace, ".seekforge", "loops", `${result.loopId}.log`))).toBe(false);
   });
 
-  it("ignores invalid limits: maxIterations<=0 falls back to default, budget<=0 is no cap", async () => {
-    const { deps } = mkDeps();
-    // verify fails (pre-check + iter1), passes iter2. maxIterations:0 and
-    // budget:0 are invalid — they must NOT short-circuit to exhausted/budget.
-    const result = await runAutoLoop(deps, {
-      ...baseOpts(workspace, failNTimes(2)),
-      maxIterations: 0,
-      costBudgetUsd: 0,
-    });
-    expect(result.status).toBe("passed");
-    expect(result.iterations).toBe(2);
+  it.each([
+    { patch: { maxIterations: 0 }, message: /maxIterations/ },
+    { patch: { maxIterations: Number.NaN }, message: /maxIterations/ },
+    { patch: { costBudgetUsd: 0 }, message: /costBudgetUsd/ },
+    { patch: { costBudgetUsd: Number.POSITIVE_INFINITY }, message: /costBudgetUsd/ },
+  ])("rejects invalid loop guardrails before creating state: $patch", async ({ patch, message }) => {
+    await expect(runAutoLoop(mkDeps().deps, { ...baseOpts(workspace, failNTimes(0)), ...patch })).rejects.toThrow(
+      message,
+    );
+    expect(existsSync(join(workspace, ".seekforge"))).toBe(false);
   });
 
   it("reuses ONE session across iterations (resumeSessionId)", async () => {

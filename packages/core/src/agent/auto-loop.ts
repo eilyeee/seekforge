@@ -26,7 +26,7 @@ import {
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
 import { MAX_LOOP_ITERATIONS, MAX_LOOP_WARNING_LENGTH, MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
-import { detectActionCycle } from "./loop-logic.js";
+import { recordProgressFingerprint } from "./loop-logic.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -375,6 +375,19 @@ function liveVerifyOutput(
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
   if (opts.task.trim() === "") throw new Error("Loop task must be non-empty");
   if (opts.verifyCommand.trim() === "") throw new Error("Loop verify command must be non-empty");
+  const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
+  if (
+    configuredIterations !== undefined &&
+    (!Number.isSafeInteger(configuredIterations) || configuredIterations <= 0)
+  ) {
+    throw new RangeError("Loop maxIterations must be a positive safe integer");
+  }
+  const configuredBudget = opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd;
+  if (configuredBudget !== undefined && configuredBudget !== null) {
+    if (!Number.isFinite(configuredBudget) || configuredBudget <= 0) {
+      throw new RangeError("Loop costBudgetUsd must be a finite positive number");
+    }
+  }
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
@@ -409,20 +422,10 @@ async function runAutoLoopWithLease(
   const verify =
     opts.verify ??
     ((workspace, command, signal, onOutput) => defaultVerify(deps, workspace, command, signal, onOutput));
-  // Defensive: ignore non-positive / non-integer / non-finite limits (the WS
-  // entry validates too, but core may be called directly).
-  const requestedIterations =
-    Number.isInteger(opts.maxIterations ?? opts.resumeState?.maxIterations) &&
-    (opts.maxIterations ?? opts.resumeState?.maxIterations ?? 0) > 0
-      ? (opts.maxIterations ?? (opts.resumeState?.maxIterations as number))
-      : 8;
+  const requestedIterations = opts.maxIterations ?? opts.resumeState?.maxIterations ?? 8;
   const maxIterations = Math.min(requestedIterations, MAX_LOOP_ITERATIONS);
-  const costBudgetUsd =
-    typeof (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd) === "number" &&
-    Number.isFinite(opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd) &&
-    (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd ?? 0) > 0
-      ? (opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd ?? undefined)
-      : undefined;
+  const configuredCostBudget = opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd;
+  const costBudgetUsd = configuredCostBudget ?? undefined;
   const approvalMode: ApprovalMode = opts.approvalMode ?? "acceptEdits";
   const requirementMode = opts.resumeState?.requirementMode ?? opts.requirementMode ?? "quick";
   if (!isLoopRequirementMode(requirementMode))
@@ -684,9 +687,13 @@ async function runAutoLoopWithLease(
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousAcceptance = acceptanceFingerprint(acceptanceReview);
   let previousWorkspace = workspaceFingerprint(opts.workspace);
-  const progressFingerprints = [
-    `${previousDiagnostics.fingerprint}:${acceptanceFingerprint(acceptanceReview)}:${previousWorkspace ?? "unknown-workspace"}`,
-  ];
+  const progressFingerprints: string[] = [];
+  recordProgressFingerprint(
+    progressFingerprints,
+    previousWorkspace === null
+      ? null
+      : `${previousDiagnostics.fingerprint}:${acceptanceFingerprint(acceptanceReview)}:${previousWorkspace}`,
+  );
 
   for (let i = iterations + 1; i <= maxIterations; i++) {
     if (opts.signal?.aborted) {
@@ -799,11 +806,12 @@ async function runAutoLoopWithLease(
       diagnostics.fingerprint === previousDiagnostics.fingerprint && currentAcceptance === previousAcceptance;
     const sameWorkspace =
       currentWorkspace !== null && previousWorkspace !== null && currentWorkspace === previousWorkspace;
-    progressFingerprints.push(
-      `${diagnostics.fingerprint}:${acceptanceFingerprint(acceptanceReview)}:${currentWorkspace ?? "unknown-workspace"}`,
+    const cyclePeriod = recordProgressFingerprint(
+      progressFingerprints,
+      currentWorkspace === null
+        ? null
+        : `${diagnostics.fingerprint}:${acceptanceFingerprint(acceptanceReview)}:${currentWorkspace}`,
     );
-    if (progressFingerprints.length > 8) progressFingerprints.shift();
-    const cyclePeriod = detectActionCycle(progressFingerprints);
     if ((sameFailure && sameWorkspace) || cyclePeriod !== null) {
       return finish("no_progress", v);
     }

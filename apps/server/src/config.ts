@@ -204,6 +204,23 @@ export function appendProjectFile(workspace: string, rel: string, content: strin
   }
 }
 
+/** Removes a workspace-owned regular file without following project-local symlinks. */
+export function removeProjectFile(workspace: string, rel: string): boolean {
+  const target = projectPath(workspace, rel, false);
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(target) !== target) {
+    throw new ProjectPathError(`project file is a symlink or not a regular file: ${rel}`);
+  }
+  unlinkSync(target);
+  return true;
+}
+
 /** Atomically replaces a workspace-owned file after revalidating its physical path. */
 export function writeProjectFileAtomic(workspace: string, rel: string, content: string): void {
   const target = projectPath(workspace, rel, true);

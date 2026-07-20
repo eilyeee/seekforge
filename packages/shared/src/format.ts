@@ -27,6 +27,7 @@ export function lastNonEmptyLine(output: string): string {
  * appended to a lone high surrogate (which renders as �).
  */
 export function clipLine(text: string, max: number): string {
+  if (max <= 0) return "";
   if (text.length <= max) return text;
   let cut = max - 1;
   const code = text.charCodeAt(cut - 1);
@@ -36,15 +37,17 @@ export function clipLine(text: string, max: number): string {
 
 /**
  * Semantic outcome of a finished loop: only a clean pass is a success, a user
- * cancel is neutral, and every other terminal status (exhausted / no_progress
- * / budget / verify_error) failed to reach green. Frontends map these three
- * onto their own palettes; the classification itself lives here so it cannot
- * drift between surfaces.
+ * cancel is neutral, requirements_pending is a deliberate pause awaiting
+ * approval (not a failure), and every other terminal status (exhausted /
+ * no_progress / budget / verify_error) failed to reach green. Frontends map
+ * these outcomes onto their own palettes; the classification itself lives here
+ * so it cannot drift between surfaces.
  */
-export type LoopOutcome = "pass" | "cancelled" | "fail";
+export type LoopOutcome = "pass" | "cancelled" | "pending" | "fail";
 
 export function loopOutcome(status: LoopStatus): LoopOutcome {
   if (status === "passed") return "pass";
   if (status === "cancelled") return "cancelled";
+  if (status === "requirements_pending") return "pending";
   return "fail";
 }

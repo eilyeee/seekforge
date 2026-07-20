@@ -1,31 +1,11 @@
-import type { TokenUsage, ToolResult } from "@seekforge/shared";
+import type { ToolResult } from "@seekforge/shared";
 import { commandInvokes } from "../tools/run-command.js";
 import type { FinalizeKind } from "./finalize.js";
 
-export const ZERO_USAGE: TokenUsage = {
-  promptTokens: 0,
-  completionTokens: 0,
-  cacheHitTokens: 0,
-  costUsd: 0,
-};
-
-export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    promptTokens: a.promptTokens + b.promptTokens,
-    completionTokens: a.completionTokens + b.completionTokens,
-    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
-    costUsd: a.costUsd + b.costUsd,
-  };
-}
-
-export function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    promptTokens: a.promptTokens - b.promptTokens,
-    completionTokens: a.completionTokens - b.completionTokens,
-    cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
-    costUsd: a.costUsd - b.costUsd,
-  };
-}
+// TokenUsage arithmetic lives in @seekforge/shared (beside the type) so core and
+// desktop share one implementation. Re-exported here to keep existing
+// `from "./loop-logic.js"` import sites working.
+export { addUsage, subtractUsage, ZERO_USAGE } from "@seekforge/shared";
 
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
@@ -64,6 +44,21 @@ export function detectActionCycle(history: readonly string[], maxPeriod = 4): nu
     if (matches) return period;
   }
   return null;
+}
+
+/** Records a comparable progress fingerprint; unknown workspace state breaks the cycle history. */
+export function recordProgressFingerprint(
+  history: string[],
+  fingerprint: string | null,
+  maxHistory = 8,
+): number | null {
+  if (fingerprint === null) {
+    history.length = 0;
+    return null;
+  }
+  history.push(fingerprint);
+  if (history.length > maxHistory) history.splice(0, history.length - maxHistory);
+  return detectActionCycle(history);
 }
 
 /** Only a successful foreground command can satisfy a verify/lint gate. */

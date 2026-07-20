@@ -63,8 +63,10 @@ Shell 命令在允许执行前会被确定性地分类，逻辑位于 `packages/
 - **拒绝清单（L4 `dangerous`）**——最先匹配；从不执行，从不提示：`rm -rf`（recursive **加** force，不分先后顺序）、`sudo`、`chmod -R`、`chown`、`git reset --hard`、`git clean`、`git push --force`（含 `-f` / `--force-with-lease`）、`curl|wget … | sh`、嵌套 `sh -c`（任意 POSIX / 其他 shell）、`node -e`、`python -c`、`perl`/`ruby -e`、`deno eval`、`bun -e`（`run-command.ts::DENYLIST`）。`git` 与子命令之间的全局选项（`git -c core.pager=cat push --force`、`git -C <dir> …`）无法绕过破坏性 git 匹配模式。
 - **环境类（L3）**——始终需确认，哪怕在 "auto"/"acceptEdits" 下也是如此，无头（headless）运行时自动拒绝：软件包安装 / 依赖变更，以及普通的 `git push`（对外可见 → 强制人工批准，但强制推送在上一条中仍被直接拒绝）（`run-command.ts::ENV_PATTERNS`，`run-command.ts:45`）。
 - **Readonly 快速通道**——只有单条、无管道的 `git`/`gh` 查看类命令会自动执行。命令中只要含有任何可能注入或重定向的 shell 元字符（管道、`&`、`;`、`<`、`>`、换行、反引号或 `$(`）就丧失资格，降级为 `execute`（需确认）。写文件类的 git flag（`git diff --output=<path>` / `-o`）同样丧失资格——一条“只读”查看命令绝不能在无确认下向工作区之外写文件（`classifyGit`、`classifyGh`）。
-- **放行清单（L2 自动执行）**——一小组内置命令（`pwd`、`ls`、`rg`、测试 / 构建运行器）加上用户自行添加的前缀，按 token 边界做前缀匹配。仅当引号感知的 shell 扫描器未发现任何生效的控制运算符或重定向时，这条路径才可用（`run-command.ts::hasShellControlSyntax`）。`rg` 携带其代码执行类（`--pre`、`--search-zip`、`--hostname-bin`）或无限制读取类（`--hidden`、`--no-ignore`、`-u`/`-uu`/`-uuu`）flag 时会被强制走确认流程，以防自动执行变成代码执行或读取受保护文件（`.env`、密钥）。
+- **放行清单（L2 自动执行）**——一小组内置命令（`pwd`、`ls`、`rg`、测试 / 构建运行器）加上用户自行添加的前缀，按 token 边界做前缀匹配。仅当引号感知的 shell 扫描器未发现任何生效的控制运算符或重定向时，这条路径才可用（`run-command.ts::hasShellControlSyntax`）。`rg` 携带其代码执行类（`--pre`、`--search-zip`、`--hostname-bin`）或无限制读取类（`--hidden`、`--no-ignore`、`-u`/`-uu`/`-uuu`）flag 时会被强制走确认流程，以防自动执行变成代码执行或读取受保护文件（`.env`、密钥）。显式指向 `.seekforge/config.json`、`.seekforge/triggers.json` 或 `.git/config` 等敏感路径也会禁用自动放行；绝对路径、home 相对路径、环境变量派生路径以及无法在分类时证明位于工作区内的 `..` 路径同样如此。
 - **其余一切默认归为 `execute`**——需确认，并展示原始命令（`run-command.ts:310`）。未知的 `git`/`gh` 子命令默认落到安全侧，不会自动执行。
+
+Agent 启动的命令会收到一份移除了凭据环境变量的父环境副本（`*_API_KEY`、`*_TOKEN`、`*_SECRET`、`*_PASSWORD`、`*_PAT` 以及 access/private/session key）。名称按分隔符或驼峰边界匹配，因此 `MAX_TOKENS`、`TOKENIZERS_PARALLELISM` 等普通构建设置仍会保留。捕获的输出还会在到达模型前独立脱敏。
 
 ---
 
@@ -75,7 +77,7 @@ Shell 命令在允许执行前会被确定性地分类，逻辑位于 `packages/
 **路径约束**（`packages/core/src/tools/sandbox.ts`）基于 realpath，因此符号链接逃逸、`..` 以及指向根目录之外的绝对路径都会被拒绝：
 
 - `resolveInsideWorkspace` 对工作区和最深的已存在祖先目录取 realpath，再断言包含关系（`sandbox.ts:42`；抛出 `outside_workspace`，`:63`）。
-- 读取额外拒绝敏感文件（`.env`、`*.pem`、`*.key`、SSH 密钥）：`resolveForRead`（`sandbox.ts:72`）经由 `isSensitiveBasename`（`sandbox.ts:29`）。
+- 读取额外拒绝敏感文件（`.env`、`*.pem`、`*.key`、SSH 密钥、包管理器/netrc 凭据文件）以及敏感相对路径（`.seekforge/config.json`、`.seekforge/triggers.json`、`.git/config`）。`@path` 任务展开在内容进入模型前应用同一策略。
 - 写入额外拒绝 `.git/` 下的一切：`resolveForWrite`（`sandbox.ts:83`）。
 
 **操作系统级命令沙箱**（`packages/core/src/tools/os-sandbox.ts`，可选启用）包装 `/bin/sh -c`，使 shell 命令无法写出工作区之外，还可以切断网络：
@@ -113,8 +115,9 @@ Shell 命令在允许执行前会被确定性地分类，逻辑位于 `packages/
 `web_fetch` 和 `web_search` 属于 L3 `env` 工具——始终需人工确认，并展示原始 URL——且网络默认关闭。在此之上，`packages/core/src/tools/builtins/web.ts::checkFetchUrl`（`web.ts:89`）拒绝访问本地网络：
 
 - 只允许 `http`/`https` 协议（`web.ts:96`）。
-- 阻止私有 / 环回 / 链路本地目标：`localhost`、`*.local`、`*.internal`、`0.0.0.0`、`127/8`、`10/8`、`192.168/16`、`172.16–31/12`、`169.254/16`，以及 IPv6 的 `::1` / `fe80:` / `fc` / `fd`（`web.ts:112`）。
+- 阻止私有 / 环回 / 链路本地及特殊用途目标：`localhost`、`*.localhost`、`*.local`、`*.internal`、`0/8`、`127/8`、`10/8`、`100.64/10`、`192.168/16`、`172.16–31/12`、`169.254/16`、`198.18/15`、IPv4 组播/保留范围，以及 IPv6 未指定、环回、ULA、链路本地和组播范围。
 - **IPv4 映射的 IPv6**（`::ffff:a.b.c.d`）会被解码，私有 IPv4 无法借此走私通过（`web.ts::mappedIpv4` `:21`）。
 - **数字主机安全网**——纯整数、八进制和十六进制形式的主机（`http://2130706433/`、`http://0177.0.0.1/`、`http://0x7f.0.0.1/`、`http://0/`）解析后都是私有地址。Node 的 WHATWG `URL` 解析器已会把它们规范化为点分十进制（并拒绝超范围形式），因此现有检查即可捕获；`normalizeNumericIpv4`（`web.ts:62`）是一层纵深防御解码器，对任何看似数字但畸形或超范围的主机名失败即拒绝，保护那些可能传入从未经过 `new URL` 的主机字符串的调用方（`web.ts:106`）。
+- 主机名会在抓取前立即解析；只要任一 DNS 结果不是公网地址，请求就会被拒绝。重定向改为手动跟随，并在每一跳之前重新执行完整 URL 与 DNS 策略；`web_fetch` 会把每次连接固定到通过检查的地址。浏览器导航也会对每个路由请求执行同样的 DNS 检查，但保留文档中明确确认过的环回开发服务器例外。检查后 Chromium 仍会自行解析，因此 Browser 保留了 [Browser 工具](browser.zh-CN.md#安全与权限)中记录的窄 TTL-0 rebinding 竞态。
 
-抓取的响应体有大小上限和 content-type 限制，返回的文本在到达模型之前会先经过 `redactSecrets` 处理。
+抓取响应体会在请求超时仍生效时流式读取，并在刚超过大小上限时立即拒绝，而不是先完整缓冲。content-type 受到限制，返回文本在到达模型前会先经过 `redactSecrets`。MCP HTTP 服务的普通 JSON 与 OAuth 响应同样采用 1 MiB 流式上限；SSE 事件也具有相同的有界缓冲保证。

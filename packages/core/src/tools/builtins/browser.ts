@@ -5,7 +5,7 @@ import { ToolError } from "../errors.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
 import { resolveForWrite } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
-import { checkFetchUrl } from "./web.js";
+import { assertPublicResolvedUrl, checkFetchUrl, type LookupAll } from "./web.js";
 
 /**
  * Browser / visual verification tools, backed by Playwright.
@@ -46,6 +46,15 @@ export function checkBrowserUrl(raw: string): URL {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host === "::1" || /^127\./.test(host)) return url;
   return checkFetchUrl(raw);
+}
+
+/** Apply the DNS-level SSRF check while preserving explicit loopback dev-server access. */
+export async function assertBrowserUrlAllowed(raw: string, resolver?: LookupAll): Promise<URL> {
+  const url = checkBrowserUrl(raw);
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || /^127\./.test(host)) return url;
+  await assertPublicResolvedUrl(url, resolver);
+  return url;
 }
 
 // Minimal structural types for the Playwright surface this file touches. The
@@ -121,10 +130,16 @@ async function getPage(): Promise<PlaywrightPage> {
   if (!context) {
     context = await browser.newContext();
     // Re-check every navigation/subresource so a public URL cannot redirect the
-    // browser into an unapproved private network target.
+    // browser into an unapproved private network target. This validates the
+    // request host with a DNS lookup, but unlike web_fetch it cannot PIN the
+    // socket: Chromium re-resolves the host itself on `continue()`, so a TTL-0
+    // rebinding attacker could still race a private answer into the connect.
+    // Playwright exposes no per-navigation resolver override to close that
+    // window; browser_navigate is an always-confirmed ("env") action, which is
+    // the compensating control for this residual risk.
     await context.route("**/*", async (route) => {
       try {
-        checkBrowserUrl(String(route.request().url()));
+        await assertBrowserUrlAllowed(String(route.request().url()));
         await route.continue();
       } catch {
         await route.abort("blockedbyclient");

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { clipLine } from "@seekforge/shared/format";
 import {
   formatDurationCoarse,
   formatUsage,
@@ -102,6 +103,13 @@ describe("summarizeArgs", () => {
 
   it("passes short args verbatim", () => {
     expect(summarizeArgs({ a: 1 })).toBe('{"a":1}');
+  });
+});
+
+describe("clipLine", () => {
+  it("returns an empty string for a non-positive output budget", () => {
+    expect(clipLine("abc", 0)).toBe("");
+    expect(clipLine("abc", -1)).toBe("");
   });
 });
 

@@ -109,9 +109,10 @@ seekforge loop "<task>" --verify "<command>" \
 The approval flag only approves that already-persisted specification; it never
 silently approves requirements generated in the same invocation.
 
-**Exit code**: 0 only when verify passed and, in analyzed modes, all required
-acceptance criteria are met. Every other terminal
-status is non-zero.
+**Exit code**: `0` only when verify passed and, in analyzed modes, all required
+acceptance criteria are met. `requirements_pending` uses `2` to represent a
+deliberate approval pause; every failed, cancelled, or exhausted terminal status
+uses `1`.
 
 ## 4. Inside one iteration
 

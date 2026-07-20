@@ -16,6 +16,7 @@ import {
   formatLoopEvent,
   formatLoopState,
   formatSummary,
+  loopExitCode,
   outputTail,
   resumeExtensionOptions,
 } from "../commands/loop.js";
@@ -137,6 +138,14 @@ test("formatSummary exposes the persisted loop resume id", () => {
 test("formatSummary includes approval when requirements are pending", () => {
   const s = formatSummary({ ...result, status: "requirements_pending", loopId: "loop-abc" });
   assert.match(s, /seekforge loop-resume loop-abc --approve-requirements/);
+});
+
+test("loop exit codes distinguish success, approval pause, and failure", () => {
+  assert.equal(loopExitCode("passed"), undefined);
+  assert.equal(loopExitCode("requirements_pending"), 2);
+  for (const status of ["exhausted", "no_progress", "budget", "cancelled", "verify_error"] as const) {
+    assert.equal(loopExitCode(status), 1, status);
+  }
 });
 
 test("formatLoopWorktree exposes the retained path and branch", () => {

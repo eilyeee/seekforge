@@ -43,9 +43,26 @@ describe("parseArgs", () => {
   });
 
   it("rejects missing and unsafe repeat counts", () => {
-    for (const value of [undefined, "0", "-1", "1.5", "21", "NaN", "Infinity", "9007199254740992"]) {
+    for (const value of [
+      undefined,
+      "0",
+      "-1",
+      "+1",
+      "1.5",
+      "1e1",
+      "0x10",
+      " 3 ",
+      "21",
+      "NaN",
+      "Infinity",
+      "9007199254740992",
+    ]) {
       const argv = value === undefined ? ["--repeat"] : ["--repeat", value];
       expect(() => parseArgs(argv)).toThrow(/integer from 1 to 20/);
     }
+  });
+
+  it.each(["--suite", "--junit", "--baseline", "--variant"])("rejects an empty value for %s", (flag) => {
+    expect(() => parseArgs([flag, "  "])).toThrow(/requires/);
   });
 });

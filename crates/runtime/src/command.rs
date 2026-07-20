@@ -234,23 +234,212 @@ fn check_interpreter_eval(s: &str) -> Option<&'static str> {
     None
 }
 
-/// Destructive git subcommand match that tolerates global options between
-/// `git` and the subcommand (`git -c core.pager=cat push`, `git -C dir clean`).
-/// Mirrors the TS GIT_GLOBAL_OPTS handling.
-fn git_subcommand_matches(s: &str, subcommand: &[&str]) -> bool {
-    for tokens in token_runs_after(s, "git") {
-        let mut k = 0;
-        while k < tokens.len() {
-            let t = tokens[k];
-            if (t == "-c" || t == "-C") && k + 1 < tokens.len() {
-                k += 2; // option consumes its separate value argument
-            } else if t.starts_with('-') {
-                k += 1;
-            } else {
-                break;
-            }
+/// Return the subcommand index after consuming Git global options. Options that
+/// accept a separate value must consume it before classification; otherwise a
+/// path can be mistaken for the subcommand and hide a later destructive verb.
+fn git_subcommand_index(tokens: &[String]) -> usize {
+    const OPTIONS_WITH_VALUE: &[&str] = &[
+        "-c",
+        "-C",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--config-env",
+    ];
+
+    let mut k = 0;
+    while k < tokens.len() {
+        let token = &tokens[k];
+        if OPTIONS_WITH_VALUE.contains(&token.as_str()) {
+            k = (k + 2).min(tokens.len());
+        } else if token.starts_with('-') {
+            // Attached short values and --long=value each occupy one token, as
+            // do no-value global flags such as --bare and --no-pager.
+            k += 1;
+        } else {
+            break;
         }
-        if tokens[k.min(tokens.len())..].starts_with(subcommand) {
+    }
+    k
+}
+
+fn finish_shell_word(words: &mut Vec<String>, word: &mut String, started: &mut bool) {
+    if *started {
+        words.push(std::mem::take(word));
+    }
+    *started = false;
+}
+
+fn finish_shell_invocation(
+    invocations: &mut Vec<Vec<String>>,
+    words: &mut Vec<String>,
+    word: &mut String,
+    word_started: &mut bool,
+) {
+    finish_shell_word(words, word, word_started);
+    if !words.is_empty() {
+        invocations.push(std::mem::take(words));
+    }
+}
+
+/// Parse shell words without evaluating expansion, retaining nested command
+/// substitutions as independent invocations for security classification.
+fn parse_shell_segment(
+    chars: &[char],
+    start: usize,
+    terminator: Option<char>,
+) -> (Vec<Vec<String>>, usize) {
+    let mut invocations = Vec::new();
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut word_started = false;
+    let mut quote: Option<char> = None;
+    let mut i = start;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if quote == Some('\'') {
+            if ch == '\'' {
+                quote = None;
+            } else {
+                word.push(ch);
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '\\' {
+            word_started = true;
+            if i + 1 < chars.len() {
+                i += 1;
+                word.push(chars[i]);
+            } else {
+                word.push('\\');
+            }
+            i += 1;
+            continue;
+        }
+        if quote == Some('"') && ch == '"' {
+            quote = None;
+            i += 1;
+            continue;
+        }
+        if ch == '$' && chars.get(i + 1) == Some(&'(') {
+            word_started = true;
+            let (nested, next) = parse_shell_segment(chars, i + 2, Some(')'));
+            invocations.extend(nested);
+            i = next.saturating_add(1);
+            continue;
+        }
+        if ch == '`' {
+            if terminator == Some('`') {
+                finish_shell_invocation(&mut invocations, &mut words, &mut word, &mut word_started);
+                return (invocations, i);
+            }
+            word_started = true;
+            let (nested, next) = parse_shell_segment(chars, i + 1, Some('`'));
+            invocations.extend(nested);
+            i = next.saturating_add(1);
+            continue;
+        }
+        if quote == Some('"') {
+            word.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            word_started = true;
+            i += 1;
+            continue;
+        }
+        if terminator == Some(')') && ch == ')' {
+            finish_shell_invocation(&mut invocations, &mut words, &mut word, &mut word_started);
+            return (invocations, i);
+        }
+        if ch == '(' {
+            finish_shell_invocation(&mut invocations, &mut words, &mut word, &mut word_started);
+            let (nested, next) = parse_shell_segment(chars, i + 1, Some(')'));
+            invocations.extend(nested);
+            i = next.saturating_add(1);
+            continue;
+        }
+        if matches!(ch, ';' | '|' | '&' | '\n' | '\r' | ')') {
+            finish_shell_invocation(&mut invocations, &mut words, &mut word, &mut word_started);
+            i += 1;
+            continue;
+        }
+        if ch.is_whitespace() {
+            finish_shell_word(&mut words, &mut word, &mut word_started);
+            i += 1;
+            continue;
+        }
+        word_started = true;
+        word.push(ch);
+        i += 1;
+    }
+    finish_shell_invocation(&mut invocations, &mut words, &mut word, &mut word_started);
+    (invocations, chars.len())
+}
+
+fn shell_invocations(s: &str) -> Vec<Vec<String>> {
+    let chars = s.chars().collect::<Vec<_>>();
+    parse_shell_segment(&chars, 0, None).0
+}
+
+fn git_argument_runs(s: &str) -> Vec<Vec<String>> {
+    shell_invocations(s)
+        .into_iter()
+        .flat_map(|invocation| {
+            invocation
+                .iter()
+                .enumerate()
+                .filter(|(_, word)| word.rsplit('/').next() == Some("git"))
+                .map(|(index, _)| invocation[index + 1..].to_vec())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Destructive git subcommand match that tolerates global options between
+/// `git` and the subcommand (`git -c core.pager=cat push`,
+/// `git --work-tree /repo clean`). Mirrors the TS GIT_GLOBAL_OPTS handling.
+fn git_subcommand_matches(s: &str, subcommand: &[&str]) -> bool {
+    for tokens in git_argument_runs(s) {
+        let k = git_subcommand_index(&tokens);
+        let command = tokens[k..].iter().map(String::as_str).collect::<Vec<_>>();
+        if command.starts_with(subcommand) {
+            return true;
+        }
+    }
+    false
+}
+
+fn git_reset_is_hard(s: &str) -> bool {
+    for tokens in git_argument_runs(s) {
+        let k = git_subcommand_index(&tokens);
+        if tokens.get(k).map(String::as_str) == Some("reset")
+            && tokens[k + 1..].iter().any(|argument| argument == "--hard")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when a force flag belongs to an actual `git push` invocation. Scanning
+/// the normalized command as a whole would incorrectly attach `--force` from a
+/// preceding or following command in the same shell expression.
+fn git_push_has_force_flag(s: &str) -> bool {
+    for tokens in git_argument_runs(s) {
+        let k = git_subcommand_index(&tokens);
+        if tokens.get(k).map(String::as_str) != Some("push") {
+            continue;
+        }
+        if tokens[k + 1..]
+            .iter()
+            .any(|argument| argument.starts_with("--force") || argument == "-f")
+        {
             return true;
         }
     }
@@ -273,17 +462,17 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
     if contains_word(&s, "chown") {
         return Some("chown");
     }
-    if git_subcommand_matches(&s, &["reset", "--hard"]) {
+    if git_reset_is_hard(command) {
         return Some("git reset --hard");
     }
-    if git_subcommand_matches(&s, &["clean"]) {
+    if git_subcommand_matches(command, &["clean"]) {
         return Some("git clean");
     }
     // Only FORCE-push is denied outright (it rewrites remote history). A plain
     // `git push` is not dangerous here — the TS layer classifies it as an
     // env-confirm command (human-approved before it ever reaches the runtime),
     // so hard-denying it here would reject a push the user already confirmed.
-    if git_subcommand_matches(&s, &["push"]) && push_has_force_flag(&s) {
+    if git_push_has_force_flag(command) {
         return Some("git push --force");
     }
     if check_pipe_to_shell(&s) {
@@ -296,12 +485,6 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
         return Some(reason);
     }
     None
-}
-
-/// True when a `git push` carries a force flag (`--force`, `--force-with-lease`,
-/// or a bare `-f` token). Mirrors the TS lookahead `(?:--force|\s-f\b)`.
-fn push_has_force_flag(s: &str) -> bool {
-    s.contains("--force") || s.split_whitespace().any(|t| t == "-f")
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +796,17 @@ mod tests {
             ("git -c core.pager=cat push --force", "git push --force"),
             ("git -c x=y reset --hard HEAD~1", "git reset --hard"),
             ("git -C /repo clean -fd", "git clean"),
+            ("git --git-dir /outside/repo/.git clean -fd", "git clean"),
+            ("git --git-dir '/outside repo/.git' clean -fd", "git clean"),
+            ("git --git-dir '' clean -fd", "git clean"),
+            ("echo \"$(git clean -fd)\"", "git clean"),
+            ("git --work-tree /outside reset --hard", "git reset --hard"),
+            ("git reset HEAD~1 --hard", "git reset --hard"),
+            ("git --namespace ns push --force", "git push --force"),
+            ("git push --force&& echo done", "git push --force"),
+            ("git push 'origin&mirror' --force", "git push --force"),
+            (r"git push origin\&mirror --force", "git push --force"),
+            ("git push '--force' origin main", "git push --force"),
         ];
         for (cmd, reason) in denied {
             assert_eq!(deny_reason(cmd), Some(reason), "expected deny: {cmd}");
@@ -633,6 +827,13 @@ mod tests {
             "git push",
             "git -c core.pager=cat push origin main", // global opts + plain push
             "git --git-dir=/tmp/.git push",
+            "git --git-dir /tmp/.git push origin main",
+            "echo --force && git push origin main",
+            "git push origin main && echo --force",
+            "git push 'origin&mirror' && echo --force",
+            "git push 'origin --force mirror'",
+            "git push origin main && echo --force",
+            "echo 'git clean -fd'",
             "git status",
             "grep -R foo src", // -R is only denied for chmod
             "chmod 644 file",

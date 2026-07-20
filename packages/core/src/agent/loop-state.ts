@@ -8,7 +8,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -18,6 +17,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopEvent, LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
+import { writeFileAtomic } from "../util/fs.js";
 import { isRecord } from "../util/guards.js";
 import {
   isLoopRequirementMode,
@@ -445,15 +445,8 @@ export function saveLoopState(workspace: string, state: LoopState): void {
   const normalized = parseLoopState(state, workspace);
   if (!normalized) throw new Error("Invalid loop state");
   const target = loopFile(workspace, normalized.loopId);
-  const root = dirname(target);
-  mkdirSync(root, { recursive: true });
-  const temp = join(root, `.${normalized.loopId}.${randomUUID()}.tmp`);
-  try {
-    writeFileSync(temp, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    renameSync(temp, target);
-  } finally {
-    rmSync(temp, { force: true });
-  }
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileAtomic(target, `${JSON.stringify(normalized, null, 2)}\n`);
 }
 
 export function loadLoopState(workspace: string, loopId: string): LoopState | null {
@@ -476,7 +469,7 @@ export function listLoopStates(workspace: string): LoopState[] {
     .filter((name) => name.endsWith(".json"))
     .map((name) => loadLoopState(workspace, name.slice(0, -5)))
     .filter((state): state is LoopState => state !== null)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
 export function removeLoopState(workspace: string, loopId: string): boolean {

@@ -56,6 +56,11 @@ describe("parseAgentMarkdown", () => {
     expect(def.own).toBeUndefined();
   });
 
+  it("preserves an explicitly empty tools whitelist", () => {
+    const def = parseAgentMarkdown("project", "isolated", '---\nname: isolated\ntools: ""\n---\nbody');
+    expect(def.tools).toEqual([]);
+  });
+
   it.each([
     ["unknown mode", "mode: execute"],
     ["empty mode", "mode:"],

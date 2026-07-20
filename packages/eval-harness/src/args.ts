@@ -21,7 +21,9 @@ export type CliArgs = {
 export const MAX_REPEAT = 20;
 
 function positiveInteger(raw: string | undefined, flag: string): number {
-  if (raw === undefined) throw new Error(`${flag} requires an integer from 1 to ${MAX_REPEAT}`);
+  if (raw === undefined || !/^[0-9]+$/.test(raw)) {
+    throw new Error(`${flag} requires an integer from 1 to ${MAX_REPEAT}`);
+  }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_REPEAT) {
     throw new Error(`${flag} requires an integer from 1 to ${MAX_REPEAT}`);
@@ -54,7 +56,7 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case "--suite": {
         const val = argv[++i];
-        if (val === undefined || val.length === 0) throw new Error("--suite requires a name");
+        if (val === undefined || val.trim().length === 0) throw new Error("--suite requires a name");
         args.suite = val;
         break;
       }
@@ -63,13 +65,13 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--junit": {
         const val = argv[++i];
-        if (val === undefined || val.length === 0) throw new Error("--junit requires a file path");
+        if (val === undefined || val.trim().length === 0) throw new Error("--junit requires a file path");
         args.junit = val;
         break;
       }
       case "--baseline": {
         const val = argv[++i];
-        if (val === undefined) throw new Error("--baseline requires a file path");
+        if (val === undefined || val.trim().length === 0) throw new Error("--baseline requires a file path");
         args.baseline = val;
         break;
       }
@@ -78,7 +80,7 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--variant": {
         const val = argv[++i];
-        if (val === undefined) throw new Error("--variant requires a name");
+        if (val === undefined || val.trim().length === 0) throw new Error("--variant requires a name");
         args.variants.push(val);
         break;
       }

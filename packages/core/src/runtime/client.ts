@@ -67,6 +67,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let nextId = 1;
   let disposed = false;
   let teardownInstalled = false;
+  let removeTeardown: (() => void) | undefined;
 
   function takePending(id: string): Pending | undefined {
     const request = pending.get(id);
@@ -110,7 +111,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     // spawn, so sessions that never use the runtime add no listeners.
     if (!teardownInstalled) {
       teardownInstalled = true;
-      installProcessTeardown({
+      removeTeardown = installProcessTeardown({
         onSignal: () => dispose(),
         onExit: () => {
           try {
@@ -177,6 +178,9 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
 
   function dispose(): void {
     disposed = true;
+    removeTeardown?.();
+    removeTeardown = undefined;
+    teardownInstalled = false;
     const proc = child;
     if (proc) {
       for (const id of pending.keys()) sendCancellation(proc, id);

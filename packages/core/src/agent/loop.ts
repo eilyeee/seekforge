@@ -83,6 +83,7 @@ import {
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
+import { abortablePromise } from "../util/abort.js";
 
 /**
  * Run-local handoff between providers and agent event streams. One bus is
@@ -379,7 +380,22 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
     }
   }
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...deps.limits };
+  if (!Number.isSafeInteger(limits.maxAgentTurns) || limits.maxAgentTurns <= 0) {
+    throw new RangeError("maxAgentTurns must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(limits.maxToolCalls) || limits.maxToolCalls < 0) {
+    throw new RangeError("maxToolCalls must be a non-negative safe integer");
+  }
+  if (!Number.isFinite(limits.contextBudgetRatio) || limits.contextBudgetRatio <= 0 || limits.contextBudgetRatio > 1) {
+    throw new RangeError("contextBudgetRatio must be a finite number greater than 0 and at most 1");
+  }
+  if (!Number.isSafeInteger(limits.toolOutputMaxChars) || limits.toolOutputMaxChars <= 0) {
+    throw new RangeError("toolOutputMaxChars must be a positive safe integer");
+  }
   const windowTokens = deps.contextWindowTokens ?? 131_072;
+  if (!Number.isSafeInteger(windowTokens) || windowTokens <= 0) {
+    throw new RangeError("contextWindowTokens must be a positive safe integer");
+  }
   // Floor at 1 so a pathologically small contextWindowTokens (where the output
   // reserve exceeds the whole budget) can't yield a zero/negative budget that
   // makes the over-budget comparison meaningless; the shrink-to-fit last resort
@@ -406,6 +422,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       }
       let lspLease: ReturnType<typeof acquireLspServerLease> | undefined;
       let browserLease: ReturnType<typeof acquireBrowserLease> | undefined;
+      const settleRunningSession = (status: "failed" | "cancelled"): void => {
+        try {
+          const current = readSessionMeta(input.projectPath, sessionId);
+          if (current?.status !== "running") return;
+          writeSessionMeta(input.projectPath, {
+            ...current,
+            status,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch {
+          // Cleanup must not mask the original failure or generator return.
+        }
+      };
       try {
         if (depth === 0) {
           lspLease = acquireLspServerLease(input.projectPath);
@@ -638,7 +667,10 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               kind: "permission",
               detail: req,
             });
-            return deps.confirm(req);
+            throwIfCancelled();
+            return abortablePromise(deps.confirm(req), input.signal, () => {
+              return new AgentLimitError("cancelled", "cancelled by user");
+            });
           });
         // Boolean view of confirmWithNotify for the dispatch flow, which only
         // needs allow/deny (allow-for-session has no meaning for a one-off
@@ -652,13 +684,17 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           askUser === undefined
             ? undefined
             : async (q: { question: string; options: string[] }): Promise<string> => {
+                throwIfCancelled();
                 await runHooks("notification", deps.hooks?.notification, {
                   sessionId,
                   workspace: input.projectPath,
                   kind: "question",
                   detail: q,
                 });
-                return askUser(q);
+                throwIfCancelled();
+                return abortablePromise(askUser(q), input.signal, () => {
+                  return new AgentLimitError("cancelled", "cancelled by user");
+                });
               };
 
         // First-write-per-RUN checkpointing: each run snapshots a file's
@@ -947,6 +983,22 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             if (res.content) yield emit({ type: "model.message", content: res.content });
 
             if (res.toolCalls.length === 0) {
+              if (res.finishReason === "length") {
+                if (turnsLeft <= 1) {
+                  throw new AgentLimitError(
+                    "max_output_tokens_exceeded",
+                    "model output was truncated before a complete final answer",
+                  );
+                }
+                if (res.content) messages.push({ role: "assistant", content: res.content });
+                messages.push({
+                  role: "user",
+                  content:
+                    "[harness] Your previous response was truncated by the output-token limit. " +
+                    "Return a complete, concise final answer from the beginning; do not return only the missing suffix.",
+                });
+                continue;
+              }
               // Finalize gate (finalize.ts): before accepting "done", surface the
               // highest-priority unmet check (finish plan → verify → self-review)
               // as a one-time transient nudge and let the model continue. Each
@@ -1021,7 +1073,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 if (
                   nudge.kind === "review" &&
                   dispatchManager !== undefined &&
-                  roster.some((d) => d.id === "reviewer")
+                  roster.some((d) => d.id === "reviewer" && d.mode === "ask" && d.scope === "builtin")
                 ) {
                   yield emit({
                     type: "notice",
@@ -1422,7 +1474,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             });
           }
         }
+      } catch (error) {
+        settleRunningSession(input.signal?.aborted ? "cancelled" : "failed");
+        throw error;
       } finally {
+        // Async-generator consumers may stop iteration without aborting. In that
+        // path no catch block runs, so close the durable lifecycle here.
+        settleRunningSession("cancelled");
         await Promise.all([lspLease?.release().catch(() => {}), browserLease?.release().catch(() => {})]);
         sessionLease.release();
       }

@@ -4,6 +4,7 @@ import { abortablePromise, onAbortOnce } from "../util/abort.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SSE_EVENT_CHARS = 1_048_576;
+const MAX_JSON_RESPONSE_BYTES = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
@@ -27,6 +28,32 @@ function isJsonRpcResponse(value: unknown, id: number): value is JsonRpcResponse
     (value as { id?: unknown }).id === id &&
     ("result" in value || "error" in value)
   );
+}
+
+/** Read a JSON response without buffering an unbounded server-controlled body. */
+export async function readLimitedResponseText(response: Response, maxBytes = MAX_JSON_RESPONSE_BYTES): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new McpError("mcp_parse_error", `HTTP response exceeded ${maxBytes} bytes`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new McpError("mcp_parse_error", `HTTP response exceeded ${maxBytes} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
 }
 
 /**
@@ -198,7 +225,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(await response.text()) as unknown;
+        parsed = JSON.parse(await readLimitedResponseText(response)) as unknown;
       } catch {
         throw new McpError("mcp_auth_error", `MCP OAuth refresh for "${options.name}" returned invalid JSON`);
       }
@@ -289,7 +316,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           if (!res.body) throw new McpError("mcp_parse_error", "empty SSE body");
           return await readSseResponse(res.body, id);
         }
-        const text = await res.text();
+        const text = await readLimitedResponseText(res);
         const parsed = JSON.parse(text) as unknown;
         if (!isJsonRpcResponse(parsed, id)) {
           throw new McpError("mcp_parse_error", `MCP server "${options.name}" sent a mismatched ${method} response`);

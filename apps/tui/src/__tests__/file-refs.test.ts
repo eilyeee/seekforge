@@ -45,4 +45,16 @@ describe("expandFileRefs", () => {
     const task = "leak @linked.ts";
     expect(expandFileRefs(task, workspace)).toBe(task);
   });
+
+  it("does not expand sensitive workspace-relative files", () => {
+    mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+    writeFileSync(join(workspace, ".seekforge", "config.json"), "provider-secret");
+    writeFileSync(join(workspace, ".seekforge", "triggers.json"), "webhook-secret");
+    for (const rel of [".seekforge/config.json", "./.seekforge/triggers.json"]) {
+      const task = `inspect @${rel}`;
+      const out = expandFileRefs(task, workspace);
+      expect(out).toBe(task);
+      expect(out).not.toContain("secret");
+    }
+  });
 });

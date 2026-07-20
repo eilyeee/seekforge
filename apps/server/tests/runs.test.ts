@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
@@ -207,6 +207,33 @@ describe("append-only run ledger", () => {
     expect(() => manager.events(workspace, run.runId, 0)).not.toThrow();
   });
 
+  it("S4: redacts nested multiline PEM values before serializing one valid JSONL record", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "background" });
+    const privateKey = [
+      "-----BEGIN PRIVATE KEY-----",
+      "SUPERSECRETKEYMATERIAL123456",
+      "-----END PRIVATE KEY-----",
+    ].join("\n");
+
+    manager.appendFrame(workspace, run.runId, {
+      type: "tool.result",
+      nested: { values: ["safe", privateKey] },
+    });
+
+    const raw = readFileSync(join(workspace, ".seekforge/run-events", `${run.runId}.jsonl`), "utf8");
+    const lines = raw.split("\n").filter((line) => line !== "");
+    expect(lines).toHaveLength(1);
+    expect(() => JSON.parse(lines[0]!)).not.toThrow();
+    expect(raw).not.toContain("SUPERSECRETKEYMATERIAL123456");
+    expect(raw.match(/BEGIN PRIVATE KEY/g)).toHaveLength(1);
+    expect(raw.match(/END PRIVATE KEY/g)).toHaveLength(1);
+    expect(manager.events(workspace, run.runId)).toMatchObject([
+      { frame: { nested: { values: ["safe", "-----BEGIN PRIVATE KEY-----\n****\n-----END PRIVATE KEY-----"] } } },
+    ]);
+  });
+
   it("D2: deletes the events file of a run evicted by compaction", () => {
     const workspace = makeWorkspace();
     const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
@@ -237,6 +264,36 @@ describe("append-only run ledger", () => {
     manager.create({ workspace, source: "background" }); // trips compaction → evicts run-seed-0
     expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
     expect(existsSync(victimEvents)).toBe(false);
+  });
+
+  it("D2: does not delete outside the workspace through a symlinked run-events directory", () => {
+    const workspace = makeWorkspace();
+    const outside = makeWorkspace();
+    const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
+    const base = Date.parse("2020-01-01T00:00:00.000Z");
+    const seeded = Array.from({ length: RUNS_LEDGER_COMPACTION_THRESHOLD }, (_, i) => {
+      const ts = new Date(base + i * 1000).toISOString();
+      return JSON.stringify({
+        runId: `run-seed-${i}`,
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    });
+    mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+    writeFileSync(ledgerPath, `${seeded.join("\n")}\n`);
+    const outsideVictim = join(outside, "run-seed-0.jsonl");
+    writeFileSync(outsideVictim, "must survive");
+    symlinkSync(outside, join(workspace, ".seekforge/run-events"), "dir");
+
+    const manager = new RunManager();
+    manager.create({ workspace, source: "background" });
+
+    expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
+    expect(readFileSync(outsideVictim, "utf8")).toBe("must survive");
   });
 
   it("REG1: never evicts a non-terminal run, so its later terminal update still lands", () => {

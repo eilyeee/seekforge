@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import { ToolError } from "../../src/tools/errors.js";
-import { checkFetchUrl, extractRelevant, htmlToText, normalizeNumericIpv4 } from "../../src/tools/builtins/web.js";
+import {
+  assertPublicResolvedUrl,
+  checkFetchUrl,
+  extractRelevant,
+  fetchPublicResponse,
+  htmlToText,
+  isPrivateAddress,
+  normalizeNumericIpv4,
+  pinnedTransport,
+  readResponseBody,
+} from "../../src/tools/builtins/web.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("checkFetchUrl", () => {
   it("accepts public http(s) urls", () => {
@@ -14,6 +29,7 @@ describe("checkFetchUrl", () => {
 
   it.each([
     "http://localhost:3000/",
+    "http://api.localhost:3000/",
     "http://127.0.0.1/",
     "http://0.0.0.0/",
     "http://[::1]/",
@@ -22,6 +38,8 @@ describe("checkFetchUrl", () => {
     "http://172.16.0.1/",
     "http://172.31.255.255/",
     "http://169.254.169.254/latest/meta-data/",
+    "http://100.64.0.1/",
+    "http://198.18.0.1/",
     "http://router.local/",
     // IPv4-mapped IPv6 must not smuggle a private IPv4 past the guard.
     "http://[::ffff:127.0.0.1]/",
@@ -106,6 +124,81 @@ describe("normalizeNumericIpv4 (SSRF numeric-host safety net)", () => {
   it("still refuses genuine IPv6 unique-local/link-local literals", () => {
     expect(() => checkFetchUrl("http://[fc00::1]/")).toThrowError(/private|loopback/i);
     expect(() => checkFetchUrl("http://[fe80::1]/")).toThrowError(/private|loopback/i);
+    expect(() => checkFetchUrl("http://[febf::1]/")).toThrowError(/private|loopback/i);
+    expect(() => checkFetchUrl("http://[ff02::1]/")).toThrowError(/private|loopback/i);
+  });
+});
+
+describe("resolved-address and redirect SSRF checks", () => {
+  it.each(["127.0.0.1", "169.254.169.254", "100.64.0.1", "198.19.0.1", "::1", "febf::1", "ff02::1"])(
+    "classifies non-public address %s",
+    (address) => {
+      expect(isPrivateAddress(address)).toBe(true);
+    },
+  );
+
+  it("rejects a public hostname when DNS returns any private address", async () => {
+    const url = checkFetchUrl("https://example.test/docs");
+    await expect(
+      assertPublicResolvedUrl(url, async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ]),
+    ).rejects.toThrow(/resolves to a private/i);
+  });
+
+  it("revalidates redirect targets before following them", async () => {
+    const transport = vi.fn(
+      async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } }),
+    );
+    await expect(
+      fetchPublicResponse(checkFetchUrl("https://8.8.8.8/start"), new AbortController().signal, { transport }),
+    ).rejects.toThrow(/private|loopback/i);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins the socket to the pre-validated address instead of re-resolving (rebinding defense)", async () => {
+    const resolver = async () => [{ address: "93.184.216.34", family: 4 }];
+    let pinnedTo: unknown;
+    const transport = vi.fn(async (_url: URL, addresses: unknown) => {
+      pinnedTo = addresses;
+      return new Response("ok", { status: 200 });
+    });
+    const { response } = await fetchPublicResponse(
+      checkFetchUrl("https://example.test/doc"),
+      new AbortController().signal,
+      { resolver, transport },
+    );
+    expect(response.status).toBe(200);
+    // The transport receives the exact validated addresses to connect to — a
+    // second independent DNS resolution (the rebinding vector) never happens.
+    expect(pinnedTo).toEqual([{ address: "93.184.216.34", family: 4 }]);
+  });
+
+  it("connects to a pinned address while preserving the URL host", async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(req.headers.host);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("test server did not expose a TCP port");
+    try {
+      const url = new URL(`http://example.test:${address.port}/docs`);
+      const response = await pinnedTransport(url, [{ address: "127.0.0.1", family: 4 }], new AbortController().signal);
+      expect(await response.text()).toBe(`example.test:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("enforces the response cap while streaming", async () => {
+    await expect(readResponseBody(new Response("x".repeat(1024)), 100)).rejects.toThrow(/exceeds 100 bytes/i);
   });
 });
 
