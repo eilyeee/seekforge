@@ -181,6 +181,12 @@ describe("parseInput /loop-resume", () => {
     });
   });
 
+  it("reports that --approve-requirements takes no value instead of a misleading error", () => {
+    expect(parseInput("/loop-resume --approve-requirements=true loop-abc")).toMatchObject({
+      command: { name: "loop-resume", error: "--approve-requirements is a boolean flag and takes no value" },
+    });
+  });
+
   it("rejects invalid and duplicate limits", () => {
     expect(parseInput("/loop-resume --add-iterations nope loop-abc")).toMatchObject({
       command: { name: "loop-resume", error: "--add-iterations must be an integer from 1 to 100" },

@@ -77,6 +77,25 @@ test("verify with empty output emits a single line (no trailing newline)", () =>
   const line = formatLoopEvent(e);
   assert.equal(line.includes("\n"), false);
 });
+test("requirements events render localized (non-empty) lines through i18n", () => {
+  const started: LoopEvent = { type: "requirements.started", phase: "analysis" };
+  assert.match(formatLoopEvent(started), /\S/);
+  const review: LoopEvent = { type: "requirements.started", phase: "review" };
+  assert.match(formatLoopEvent(review), /\S/);
+  const completed = {
+    type: "requirements.completed",
+    spec: { requirements: [{}, {}], acceptanceCriteria: [{}] },
+    approvalRequired: true,
+  } as unknown as LoopEvent;
+  const cLine = formatLoopEvent(completed);
+  assert.match(cLine, /2/);
+  assert.match(cLine, /1/);
+  const reviewed = {
+    type: "requirements.reviewed",
+    review: { complete: false, gaps: ["missing test"] },
+  } as unknown as LoopEvent;
+  assert.match(formatLoopEvent(reviewed), /missing test/);
+});
 
 // --- formatSummary / loop.done ----------------------------------------------
 const result: LoopResult = {

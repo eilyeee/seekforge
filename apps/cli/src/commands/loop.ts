@@ -78,13 +78,19 @@ export function formatLoopEvent(event: LoopEvent): string {
       return tail ? `${head}\n${tail}` : head;
     }
     case "requirements.started":
-      return event.phase === "analysis" ? "Analyzing requirements..." : "Reviewing acceptance criteria...";
+      return event.phase === "analysis" ? t("cmd.loop.reqAnalyzing") : t("cmd.loop.reqReviewing");
     case "requirements.completed":
-      return `Requirements analyzed: ${event.spec.requirements.length} requirements, ${event.spec.acceptanceCriteria.length} acceptance criteria${event.approvalRequired ? " (approval required)" : ""}`;
+      return t("cmd.loop.reqCompleted", {
+        reqs: event.spec.requirements.length,
+        criteria: event.spec.acceptanceCriteria.length,
+        approval: event.approvalRequired ? t("cmd.loop.reqApprovalSuffix") : "",
+      });
     case "requirements.reviewed":
       return event.review.complete
-        ? "Acceptance review passed."
-        : `Acceptance review incomplete: ${event.review.gaps.join("; ") || "evidence missing"}`;
+        ? t("cmd.loop.reqReviewPassed")
+        : t("cmd.loop.reqReviewIncomplete", {
+            gaps: event.review.gaps.join("; ") || t("cmd.loop.reqGapsMissing"),
+          });
     case "loop.warning":
       return `Warning: ${event.message}`;
     case "loop.done":
@@ -377,7 +383,11 @@ async function runPreparedLoop(
           ...((opts as LoopOptions).requirements ? { requirementMode: (opts as LoopOptions).requirements } : {}),
           ...common,
         });
-    if (result.status !== "passed") process.exitCode = 1;
+    // Distinct exit code: requirements_pending is a deliberate pause awaiting
+    // approval, not a failure — scripts resume with --approve-requirements
+    // rather than treating it like an exhausted/failed loop.
+    if (result.status === "requirements_pending") process.exitCode = 2;
+    else if (result.status !== "passed") process.exitCode = 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;

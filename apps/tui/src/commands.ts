@@ -265,6 +265,13 @@ function parseLoopFirstLine(
       rest = rest.replace(/^--approve-requirements(?:\s+|$)/, "").trimStart();
       continue;
     }
+    // --approve-requirements is a boolean flag; `=value` is accepted by the
+    // outer option pattern but not the boolean branch above. Report it plainly
+    // instead of falling through to a misleading "--requirements requires a
+    // value" error.
+    if (resume && /^--approve-requirements=/.test(rest)) {
+      return { error: "--approve-requirements is a boolean flag and takes no value" };
+    }
     const match = valuePattern.exec(rest);
     if (!match) {
       const option = rest.startsWith(iterationFlag)
