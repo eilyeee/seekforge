@@ -51,7 +51,41 @@ fn is_word_char(c: char) -> bool {
 }
 
 fn normalize(command: &str) -> String {
-    command.split_whitespace().collect::<Vec<_>>().join(" ")
+    let chars = command.chars().collect::<Vec<_>>();
+    let mut logical = String::with_capacity(command.len());
+    let mut single_quoted = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if single_quoted {
+            logical.push(ch);
+            if ch == '\'' {
+                single_quoted = false;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '\\' {
+            if chars.get(i + 1) == Some(&'\n') {
+                i += 2;
+                continue;
+            }
+            logical.push(ch);
+            if let Some(next) = chars.get(i + 1) {
+                logical.push(*next);
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if ch == '\'' {
+            single_quoted = true;
+        }
+        logical.push(ch);
+        i += 1;
+    }
+    logical.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Byte offsets where `needle` (ASCII) occurs with word boundaries on both sides.
@@ -309,6 +343,10 @@ fn parse_shell_segment(
             continue;
         }
         if ch == '\\' {
+            if chars.get(i + 1) == Some(&'\n') {
+                i += 2;
+                continue;
+            }
             word_started = true;
             if i + 1 < chars.len() {
                 i += 1;

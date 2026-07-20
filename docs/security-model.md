@@ -248,5 +248,8 @@ reach the local network:
 Fetch bodies are streamed under the request timeout and rejected as soon as the
 size cap is crossed, rather than being fully buffered first. Content types are
 restricted, and returned text is run through `redactSecrets` before it reaches
-the model. Plain JSON and OAuth responses from MCP HTTP servers are likewise
+the model. Cancelling an Agent run also aborts pending DNS resolution, web and
+vision requests, response streaming, and active Browser actions instead of
+waiting for each operation's independent timeout. Plain JSON and OAuth responses
+from MCP HTTP servers are likewise
 streamed with a 1 MiB cap; SSE events have the same bounded-buffer guarantee.

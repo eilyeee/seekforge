@@ -531,6 +531,26 @@ describe("runAutoLoop", () => {
     expect(result.iterations).toBe(1);
   });
 
+  it("does not count generated memory files as workspace progress", async () => {
+    const { deps } = mkDeps();
+    let checks = 0;
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, async () => {
+        checks++;
+        if (checks > 1) {
+          const memoryDir = join(workspace, ".seekforge", "memory");
+          mkdirSync(memoryDir, { recursive: true });
+          writeFileSync(join(memoryDir, "candidates.jsonl"), `candidate-${checks}\n`);
+        }
+        return { code: 1, output: "identical output" };
+      }),
+      maxIterations: 3,
+    });
+
+    expect(result.status).toBe("no_progress");
+    expect(result.iterations).toBe(1);
+  });
+
   it("ignores timing noise when comparing structured verification failures", async () => {
     const { deps } = mkDeps();
     let call = 0;

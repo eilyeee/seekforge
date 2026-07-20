@@ -313,6 +313,68 @@ describe("agent loop", () => {
     expect(readSessionMeta(workspace, sessionId)?.status).toBe("cancelled");
   });
 
+  it("aborts and awaits an active tool before iterator.return releases the run", async () => {
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      toolStarted = resolve;
+    });
+    let abortObserved!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      abortObserved = resolve;
+    });
+    let releaseTool!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "read_file", description: "d", parameters: {} }],
+      execute: async (_call, ctx) => {
+        toolStarted();
+        ctx.emitOutput?.("stdout", "tool active\n");
+        await new Promise<void>((resolve) => {
+          const onAbort = () => {
+            abortObserved();
+            void release.then(resolve);
+          };
+          if (ctx.signal?.aborted) onAbort();
+          else ctx.signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        return { ok: false, error: { code: "cancelled", message: "cancelled" } };
+      },
+    };
+    const agent = createAgentCore({
+      provider: fakeProvider([
+        response({
+          toolCalls: [{ id: "r1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+          finishReason: "tool_calls",
+        }),
+      ]),
+      dispatcher,
+      confirm: async () => true,
+    });
+    const iterator = agent.runTask({ ...baseInput, projectPath: workspace })[Symbol.asyncIterator]();
+    let sessionId = "";
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) throw new Error("tool output was not emitted");
+      if (step.value.type === "session.created") sessionId = step.value.sessionId;
+      if (step.value.type === "command.output") break;
+    }
+    await started;
+
+    let returned = false;
+    const closing = iterator.return!().then(() => {
+      returned = true;
+    });
+    await aborted;
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    releaseTool();
+    await closing;
+
+    expect(readSessionMeta(workspace, sessionId)?.status).toBe("cancelled");
+  });
+
   it("rebuilds the system prompt on resume (plan -> execute mode switch)", async () => {
     const planProvider = fakeProvider([response({ content: "## Plan\n1. edit a.ts" })]);
     const first = createAgentCore({
@@ -469,9 +531,10 @@ describe("agent loop", () => {
     expect(second).toEqual({ type: "command.output", stream: "stderr", chunk: "line two\n" });
   });
 
-  it("forwards the run AbortSignal to foreground tools", async () => {
+  it("provides foreground tools with the run-owned AbortSignal", async () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | undefined;
+    let abortedDuringCall = true;
     const provider = fakeProvider([
       response({
         toolCalls: [{ id: "c1", name: "run_command", argumentsJson: '{"command":"pwd"}' }],
@@ -483,6 +546,7 @@ describe("agent loop", () => {
       list: () => [{ name: "run_command", description: "d", parameters: {} }],
       execute: async (_call, ctx) => {
         receivedSignal = ctx.signal;
+        abortedDuringCall = ctx.signal?.aborted ?? true;
         return { ok: true, data: { exitCode: 0 } };
       },
     };
@@ -490,7 +554,10 @@ describe("agent loop", () => {
 
     await collect(agent.runTask({ ...baseInput, projectPath: workspace, signal: controller.signal }));
 
-    expect(receivedSignal).toBe(controller.signal);
+    expect(receivedSignal).toBeDefined();
+    expect(receivedSignal).not.toBe(controller.signal);
+    expect(abortedDuringCall).toBe(false);
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("caps streamed command.output at 200 chunks per tool call", async () => {
@@ -990,6 +1057,42 @@ describe("agent loop: auxiliary usage accounting", () => {
       expect(
         readSessionMeta(workspace, created?.type === "session.created" ? created.sessionId : "")?.usage?.costUsd,
       ).toBe(0.002);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("does not extract memory or complete after cancellation at usage.updated", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-memory-cancel-"));
+    try {
+      const controller = new AbortController();
+      const provider = fakeProvider([
+        response({ content: "done" }),
+        response({ content: '```json\n{"summary":"late","facts":[]}\n```' }),
+      ]);
+      const agent = createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher({ ok: true }),
+        confirm: async () => true,
+        extractMemory: true,
+      });
+      const events: AgentEvent[] = [];
+      for await (const event of agent.runTask({
+        projectPath: workspace,
+        task: "complete the edit",
+        mode: "edit",
+        approvalMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "usage.updated") controller.abort();
+      }
+
+      expect(provider.requests).toHaveLength(1);
+      expect(events.some((event) => event.type === "session.completed")).toBe(false);
+      expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+        error: { code: "cancelled" },
+      });
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

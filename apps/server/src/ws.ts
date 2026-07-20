@@ -24,7 +24,13 @@ import type { ApiErrorCode, ApprovalMode, ConfirmResult, PermissionRequest, Serv
 import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
-import { SERVER_CAPABILITIES, SERVER_PROTOCOL_VERSION, type RunManager, type RunStatus } from "./run-ledger.js";
+import {
+  SERVER_CAPABILITIES,
+  SERVER_PROTOCOL_VERSION,
+  type RunEvent,
+  type RunManager,
+  type RunStatus,
+} from "./run-ledger.js";
 
 export const PERMISSION_TIMEOUT_MS = 120_000;
 
@@ -35,6 +41,7 @@ export const PERMISSION_TIMEOUT_MS = 120_000;
  * fast token stream into ~40 frames/s.
  */
 export const DELTA_FLUSH_MS = 25;
+export const SUBSCRIPTION_POLL_MS = 250;
 
 /** Answer reported to the core when the user never answers an ask_user question. */
 export const DECLINED_ANSWER = "(the user declined to answer)";
@@ -62,6 +69,17 @@ type RunInput = {
   workspace: string;
   /** Per-run model/thinking overrides from the frame (win over config). */
   overrides?: RunOverrides;
+};
+
+type RunSubscription = {
+  workspace: string;
+  runId: string;
+  afterSeq: number;
+  fileIdentity?: string;
+  catchingUp: boolean;
+  pendingLocal: Array<{ event: RunEvent; identity: string }>;
+  unsubscribe?: () => void;
+  timer?: NodeJS.Timeout;
 };
 
 /**
@@ -117,6 +135,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   const pending = new Map<string, (result: ConfirmResult) => void>();
   // question id -> settle(answer); same lifecycle as `pending`.
   const pendingQuestions = new Map<string, (answer: string) => void>();
+  const subscriptions = new Map<string, RunSubscription>();
 
   // Connection-level errors (protocol violations, invalid UTF-8, oversized
   // frames, async send failures) are emitted as an "error" event; without a
@@ -130,13 +149,79 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame), () => {});
   };
   const sendRun = (runId: string, workspace: string, frame: ServerFrame): void => {
-    const stored = deps.runManager.appendFrame(workspace, runId, frame as unknown as Record<string, unknown>);
+    const eventType = frame.type === "event" ? (frame.event as { type?: unknown }).type : undefined;
+    const loopEventType = frame.type === "loop.event" ? (frame.event as { type?: unknown }).type : undefined;
+    const terminal =
+      frame.type === "error" ||
+      eventType === "session.completed" ||
+      eventType === "session.failed" ||
+      loopEventType === "loop.done";
+    const stored = deps.runManager.appendFrame(workspace, runId, frame as unknown as Record<string, unknown>, {
+      cacheSequence: !terminal,
+    });
     send({ ...frame, runId, seq: stored.seq } as unknown as ServerFrame);
   };
   const fail = (code: string, message: string): void => send({ type: "error", code: code as ApiErrorCode, message });
   const launch = (operation: Promise<void>): void => {
     const tracked = deps.trackOperation?.(operation) ?? operation;
     void tracked.catch(() => {});
+  };
+  const terminalFrame = (frame: Record<string, unknown>): boolean => {
+    if (frame["type"] === "error") return true;
+    if (frame["type"] === "event" && typeof frame["event"] === "object" && frame["event"] !== null) {
+      const type = (frame["event"] as { type?: unknown }).type;
+      return type === "session.completed" || type === "session.failed";
+    }
+    return (
+      frame["type"] === "loop.event" &&
+      typeof frame["event"] === "object" &&
+      frame["event"] !== null &&
+      (frame["event"] as { type?: unknown }).type === "loop.done"
+    );
+  };
+  const stopSubscription = (key: string): void => {
+    const subscription = subscriptions.get(key);
+    if (!subscription) return;
+    if (subscription.timer) clearInterval(subscription.timer);
+    subscription.unsubscribe?.();
+    subscriptions.delete(key);
+  };
+  const deliverSubscriptionEvent = (key: string, subscription: RunSubscription, event: RunEvent): void => {
+    if (event.seq <= subscription.afterSeq) return;
+    send({ ...event.frame, runId: subscription.runId, seq: event.seq } as unknown as ServerFrame);
+    subscription.afterSeq = event.seq;
+    if (terminalFrame(event.frame)) stopSubscription(key);
+  };
+  const drainSubscription = (key: string, subscription: RunSubscription): boolean => {
+    const page = deps.runManager.eventPage(subscription.workspace, subscription.runId, subscription.afterSeq);
+    for (const event of page.events) {
+      deliverSubscriptionEvent(key, subscription, event);
+      if (!subscriptions.has(key)) return false;
+    }
+    subscription.catchingUp = page.hasMore;
+    if (!page.hasMore) {
+      const pending = subscription.pendingLocal.splice(0).sort((a, b) => a.event.seq - b.event.seq);
+      for (const { event, identity } of pending) {
+        subscription.fileIdentity = identity;
+        deliverSubscriptionEvent(key, subscription, event);
+        if (!subscriptions.has(key)) return false;
+      }
+    }
+    return page.hasMore;
+  };
+  const pollSubscription = (key: string, subscription: RunSubscription, force = false): void => {
+    try {
+      if (subscriptions.get(key) !== subscription) return;
+      const identity = deps.runManager.eventFileIdentity(subscription.workspace, subscription.runId);
+      if (!force && identity === subscription.fileIdentity) return;
+      subscription.fileIdentity = identity;
+      if (drainSubscription(key, subscription) && subscriptions.has(key)) {
+        setImmediate(() => pollSubscription(key, subscription, true));
+      }
+    } catch {
+      stopSubscription(key);
+      fail("internal_error", "run subscription failed");
+    }
   };
   send({
     type: "hello",
@@ -837,9 +922,33 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         if (!deps.runManager.get(workspace.path, runId)) return fail("unknown_run", `run not found: ${runId}`);
-        for (const event of deps.runManager.events(workspace.path, runId, (afterSeq as number | undefined) ?? 0)) {
-          send({ ...event.frame, runId, seq: event.seq } as unknown as ServerFrame);
-        }
+        const key = `${workspace.path}\0${runId}`;
+        const existing = subscriptions.get(key);
+        if (existing) stopSubscription(key);
+        const subscription: RunSubscription = {
+          workspace: workspace.path,
+          runId,
+          afterSeq: (afterSeq as number | undefined) ?? 0,
+          catchingUp: true,
+          pendingLocal: [],
+        };
+        subscriptions.set(key, subscription);
+        subscription.unsubscribe = deps.runManager.subscribeFrames(workspace.path, runId, (event, identity) => {
+          try {
+            if (subscription.catchingUp) subscription.pendingLocal.push({ event, identity });
+            else {
+              subscription.fileIdentity = identity;
+              deliverSubscriptionEvent(key, subscription, event);
+            }
+          } catch {
+            stopSubscription(key);
+            fail("internal_error", "run subscription failed");
+          }
+        });
+        pollSubscription(key, subscription, true);
+        if (!subscriptions.has(key)) return;
+        subscription.timer = setInterval(() => pollSubscription(key, subscription), SUBSCRIPTION_POLL_MS);
+        subscription.timer.unref();
         return;
       }
 
@@ -855,6 +964,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     clearDeltaTimer();
     pendingDeltaType = undefined;
     pendingDeltaChunk = "";
+    for (const subscription of subscriptions.values()) {
+      if (subscription.timer) clearInterval(subscription.timer);
+      subscription.unsubscribe?.();
+    }
+    subscriptions.clear();
     denyAllPending();
     activeDispatchManager?.disposeAll();
     if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);

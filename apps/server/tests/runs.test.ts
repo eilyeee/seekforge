@@ -1,10 +1,15 @@
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import * as config from "../src/config.js";
 import { RunManager, startServer, type RunningServer } from "../src/index.js";
-import { RUNS_LEDGER_COMPACTION_THRESHOLD, RUNS_LEDGER_MAX_RETAINED } from "../src/run-ledger.js";
+import {
+  RUN_EVENT_REPLAY_LIMIT,
+  RUNS_LEDGER_COMPACTION_THRESHOLD,
+  RUNS_LEDGER_MAX_RETAINED,
+} from "../src/run-ledger.js";
 import { collectFrames, connectWs, emptyReport, fakeAgentFactory, makeWorkspace, waitUntil } from "./helpers.js";
 
 const TOKEN = "run-test-token";
@@ -18,6 +23,62 @@ afterEach(async () => {
 });
 
 describe("append-only run ledger", () => {
+  it("does not lose appends when multiple processes race ledger compaction", async () => {
+    const workspace = makeWorkspace();
+    const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
+    const base = Date.parse("2020-01-01T00:00:00.000Z");
+    const seeded = Array.from({ length: RUNS_LEDGER_COMPACTION_THRESHOLD }, (_, i) => {
+      const ts = new Date(base + i).toISOString();
+      return JSON.stringify({
+        runId: `run-race-seed-${i}`,
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    });
+    mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+    writeFileSync(ledgerPath, `${seeded.join("\n")}\n`);
+
+    const workerPath = join(import.meta.dirname, "fixtures/run-ledger-race-worker.ts");
+    const goPath = join(workspace, "race-go");
+    const workers = Array.from({ length: 4 }, (_, i) => `worker-${i}`);
+    const children = workers.map((worker) => {
+      const readyPath = join(workspace, `race-ready-${worker}`);
+      const child = spawn(process.execPath, ["--import", "tsx", workerPath, workspace, worker, readyPath, goPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return { child, readyPath };
+    });
+    await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)));
+    writeFileSync(goPath, "go");
+    await Promise.all(
+      children.map(
+        ({ child }) =>
+          new Promise<void>((resolve, reject) => {
+            let stderr = "";
+            child.stderr?.on("data", (chunk) => {
+              stderr += String(chunk);
+            });
+            child.once("error", reject);
+            child.once("exit", (code) =>
+              code === 0 ? resolve() : reject(new Error(stderr || `worker exited ${code}`)),
+            );
+          }),
+      ),
+    );
+
+    const labels = new Set(
+      new RunManager()
+        .list(workspace)
+        .map((record) => record.labels?.worker)
+        .filter((worker): worker is string => worker !== undefined),
+    );
+    expect(labels).toEqual(new Set(workers));
+  }, 20_000);
+
   it("persists latest state and strictly increasing replay sequence", () => {
     const workspace = makeWorkspace();
     const manager = new RunManager();
@@ -111,6 +172,7 @@ describe("append-only run ledger", () => {
     const workspace = makeWorkspace();
     const manager = new RunManager();
     const run = manager.create({ workspace, source: "background" });
+    manager.start(run.runId, workspace, new AbortController());
 
     const eventRel = `.seekforge/run-events/${run.runId}.jsonl`;
     const actualReadProjectFile = config.readProjectFile;
@@ -153,6 +215,25 @@ describe("append-only run ledger", () => {
     // just bump the in-memory line count. Keep ledger reads O(1).
     expect(ledgerReads).toBeLessThanOrEqual(3);
     expect(manager.list(workspace).length).toBe(40);
+  });
+
+  it("does not retry a ledger operation that throws ENOENT after acquiring the lease", () => {
+    const workspace = makeWorkspace();
+    const actualAppend = config.appendProjectFile;
+    let attempts = 0;
+    const spy = vi.spyOn(config, "appendProjectFile").mockImplementation((ws, rel, content) => {
+      if (rel === ".seekforge/runs.jsonl") {
+        attempts += 1;
+        throw Object.assign(new Error("operation failed"), { code: "ENOENT" });
+      }
+      return actualAppend(ws, rel, content);
+    });
+    try {
+      expect(() => new RunManager().create({ workspace, source: "background" })).toThrow("operation failed");
+      expect(attempts).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("SCH6: compacts runs.jsonl to the latest record per run once it grows past the threshold", () => {
@@ -343,10 +424,17 @@ describe("append-only run ledger", () => {
     const seqMap = (manager as unknown as { seq: Map<string, number> }).seq;
 
     const run = manager.create({ workspace, source: "background" });
+    manager.start(run.runId, workspace, new AbortController());
     manager.appendFrame(workspace, run.runId, { type: "one" });
     expect(seqMap.has(run.runId)).toBe(true);
 
     manager.update(workspace, run.runId, { status: "succeeded" });
+    manager.appendFrame(
+      workspace,
+      run.runId,
+      { type: "event", event: { type: "session.completed" } },
+      { cacheSequence: false },
+    );
     // Terminal runs must not accumulate forever in the long-lived singleton.
     expect(seqMap.has(run.runId)).toBe(false);
 
@@ -356,6 +444,40 @@ describe("append-only run ledger", () => {
     manager.start(cancelled.runId, workspace, new AbortController());
     manager.cancel(workspace, cancelled.runId);
     expect(seqMap.has(cancelled.runId)).toBe(false);
+  });
+
+  it("streams event replay in bounded pages", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "background" });
+    const eventDir = join(workspace, ".seekforge/run-events");
+    mkdirSync(eventDir, { recursive: true });
+    const ts = new Date().toISOString();
+    const total = RUN_EVENT_REPLAY_LIMIT + 2;
+    writeFileSync(
+      join(eventDir, `${run.runId}.jsonl`),
+      `${Array.from({ length: total }, (_, i) =>
+        JSON.stringify({ runId: run.runId, seq: i + 1, ts, frame: { type: "event", index: i } }),
+      ).join("\n")}\n`,
+    );
+
+    const first = manager.eventPage(workspace, run.runId, 0);
+    expect(first).toMatchObject({ nextAfterSeq: RUN_EVENT_REPLAY_LIMIT, hasMore: true });
+    expect(first.events).toHaveLength(RUN_EVENT_REPLAY_LIMIT);
+    const second = manager.eventPage(workspace, run.runId, first.nextAfterSeq);
+    expect(second).toMatchObject({ nextAfterSeq: total, hasMore: false });
+    expect(second.events.map((event) => event.seq)).toEqual([total - 1, total]);
+  });
+
+  it("does not create missing directories through a project symlink", () => {
+    const workspace = makeWorkspace();
+    const outside = makeWorkspace();
+    symlinkSync(outside, join(workspace, ".seekforge"), "dir");
+
+    expect(() => config.appendProjectFile(workspace, ".seekforge/run-events/run-test.jsonl", "{}\n")).toThrow(
+      /symlink/,
+    );
+    expect(existsSync(join(outside, "run-events"))).toBe(false);
   });
 });
 
@@ -590,6 +712,130 @@ describe("run API and WS replay", () => {
     expect(eventBody.events.some((event) => event.frame.type === "event" && event.seq > 1)).toBe(true);
   });
 
+  it("keeps a subscription live through terminal delivery, then stops polling", async () => {
+    const workspace = makeWorkspace();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const actualIdentity = RunManager.prototype.eventFileIdentity;
+    let polls = 0;
+    const pageSpy = vi.spyOn(RunManager.prototype, "eventFileIdentity").mockImplementation(function (
+      this: RunManager,
+      ...args
+    ) {
+      polls += 1;
+      return actualIdentity.apply(this, args);
+    });
+    try {
+      server = await startServer({
+        workspace,
+        port: 0,
+        token: TOKEN,
+        logger: { log: () => {} },
+        createAgent: fakeAgentFactory(async function* () {
+          yield { type: "session.created", sessionId: "live-subscription" };
+          await gate;
+          yield { type: "session.completed", report: emptyReport("done") };
+        }),
+      });
+      const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+      const started = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "background", mode: "ask", maxCostUsd: 1 }),
+      });
+      const run = (await started.json()) as { runId: string };
+      const subscriber = await connectWs(server.port, TOKEN);
+      sockets.push(subscriber);
+      const replay = collectFrames(subscriber);
+      subscriber.send(JSON.stringify({ type: "subscribe", runId: run.runId, afterSeq: 0 }));
+      await replay.waitFor(
+        (frame) => frame.type === "event" && (frame.event as { type?: string }).type === "session.created",
+      );
+      release();
+      await replay.waitFor(
+        (frame) => frame.type === "event" && (frame.event as { type?: string }).type === "session.completed",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const afterTerminal = polls;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(polls).toBe(afterTerminal);
+    } finally {
+      pageSpy.mockRestore();
+    }
+  });
+
+  it("stops a subscription and reports an internal error when polling throws", async () => {
+    const workspace = makeWorkspace();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const actualEventPage = RunManager.prototype.eventPage;
+    let calls = 0;
+    const pageSpy = vi.spyOn(RunManager.prototype, "eventPage").mockImplementation(function (
+      this: RunManager,
+      ...args
+    ) {
+      calls += 1;
+      if (calls === 2) throw new Error("simulated replay failure");
+      return actualEventPage.apply(this, args);
+    });
+    try {
+      server = await startServer({
+        workspace,
+        port: 0,
+        token: TOKEN,
+        logger: { log: () => {} },
+        createAgent: fakeAgentFactory(async function* () {
+          yield { type: "session.created", sessionId: "poll-failure" };
+          await gate;
+          yield { type: "session.completed", report: emptyReport("done") };
+        }),
+      });
+      const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+      const started = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "background", mode: "ask", maxCostUsd: 1 }),
+      });
+      const run = (await started.json()) as { runId: string };
+      const subscriber = await connectWs(server.port, TOKEN);
+      sockets.push(subscriber);
+      const replay = collectFrames(subscriber);
+      subscriber.send(JSON.stringify({ type: "subscribe", runId: run.runId, afterSeq: 0 }));
+      await replay.waitFor(
+        (frame) => frame.type === "event" && (frame.event as { type?: string }).type === "session.created",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(calls).toBe(1);
+
+      const eventPath = join(workspace, ".seekforge/run-events", `${run.runId}.jsonl`);
+      const persisted = readFileSync(eventPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { seq: number });
+      appendFileSync(
+        eventPath,
+        `${JSON.stringify({
+          runId: run.runId,
+          seq: persisted.at(-1)!.seq + 1,
+          ts: new Date().toISOString(),
+          frame: { type: "event", sessionId: "poll-failure", event: { type: "external.frame" } },
+        })}\n`,
+      );
+      const error = await replay.waitFor((frame) => frame.type === "error" && frame.code === "internal_error");
+      expect(error.message).toBe("run subscription failed");
+      const stoppedAt = calls;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(calls).toBe(stoppedAt);
+    } finally {
+      release();
+      pageSpy.mockRestore();
+    }
+  });
+
   it("starts and cancels a headless background loop", async () => {
     const workspace = makeWorkspace();
     let observedAbort = false;
@@ -611,15 +857,7 @@ describe("run API and WS replay", () => {
           opts.signal?.addEventListener("abort", done, { once: true });
           if (opts.signal?.aborted) done();
         });
-        const result = {
-          status: "cancelled" as const,
-          iterations: 1,
-          costUsd: 0,
-          sessionId: "loop-session",
-          finalVerify: { code: 1, output: "cancelled" },
-        };
-        opts.onEvent?.({ type: "loop.done", result });
-        return result;
+        throw new Error("loop aborted");
       },
     });
     const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
@@ -636,6 +874,9 @@ describe("run API and WS replay", () => {
     });
     expect(await cancelled.json()).toMatchObject({ status: "cancelled" });
     await waitUntil(() => observedAbort);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const snapshot = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}`, { headers });
+    expect(await snapshot.json()).toMatchObject({ status: "cancelled", error: { code: "cancelled" } });
     const events = await fetch(`http://127.0.0.1:${server.port}/api/runs/${run.runId}/events?afterSeq=0`, { headers });
     expect(((await events.json()) as { events: unknown[] }).events.length).toBeGreaterThan(0);
   });

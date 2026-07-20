@@ -111,9 +111,13 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
               ...(classified.command !== undefined ? { command: classified.command } : {}),
               ...(classified.path !== undefined ? { path: classified.path } : {}),
             };
-            const preOutcomes = await runHooks("preToolUse", ctx.hooks?.preToolUse, hookPayload);
+            const preOutcomes = await runHooks("preToolUse", ctx.hooks?.preToolUse, hookPayload, {
+              signal: ctx.signal,
+            });
             const blockedBy = preOutcomes.find((o) => !o.ok);
-            if (blockedBy) {
+            if (ctx.signal?.aborted) {
+              result = fail("cancelled", "Tool call cancelled");
+            } else if (blockedBy) {
               result = fail(
                 "hook_blocked",
                 `Blocked by preToolUse hook${blockedBy.timedOut ? " (timed out)" : ""}: ` +
@@ -155,11 +159,17 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                 // postToolUse is advisory: failures log to stderr, never block.
                 // It sees the args actually run (post-updatedInput); the payload
                 // carries ok/errorCode only, never raw tool output.
-                await runHooks("postToolUse", ctx.hooks?.postToolUse, {
-                  ...hookPayload,
-                  args: runArgs,
-                  result: { ok: result.ok, errorCode: result.error?.code ?? null },
-                });
+                await runHooks(
+                  "postToolUse",
+                  ctx.hooks?.postToolUse,
+                  {
+                    ...hookPayload,
+                    args: runArgs,
+                    result: { ok: result.ok, errorCode: result.error?.code ?? null },
+                  },
+                  { signal: ctx.signal },
+                );
+                if (ctx.signal?.aborted) result = fail("cancelled", "Tool call cancelled");
               }
             }
             // Clear per-hunk selection so it never leaks to the next call.

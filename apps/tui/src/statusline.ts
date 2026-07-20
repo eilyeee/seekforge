@@ -41,6 +41,15 @@ function statusLineEnv(input: StatusLineInput): Record<string, string> {
   return env;
 }
 
+function inheritedStatusLineEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE"]) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 /**
  * Runs `command` via /bin/sh -c (cwd = input.cwd) with the JSON payload on
  * stdin and SEEKFORGE_* env vars set, returning the trimmed first line of
@@ -52,7 +61,7 @@ export function runStatusLine(command: string, input: StatusLineInput, opts?: { 
     const result = spawnSync("/bin/sh", ["-c", command], {
       input: JSON.stringify(input),
       cwd: input.cwd,
-      env: { ...process.env, ...statusLineEnv(input) },
+      env: { ...inheritedStatusLineEnv(), ...statusLineEnv(input) },
       timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       encoding: "utf8",
     });

@@ -1,4 +1,5 @@
 import type { ChatMessage, ProviderToolCall, TokenUsage, ToolDefinitionForModel } from "@seekforge/shared";
+import { abortablePromise } from "../util/abort.js";
 import { loadSessionMessages, rewriteSessionMessages } from "./trace.js";
 import { acquireSessionLease } from "./session-lease.js";
 
@@ -483,13 +484,18 @@ export async function llmCompactMessages(
   let summary: string;
   let usage: TokenUsage | undefined;
   try {
-    const res = await provider.chat({
-      messages: [{ role: "user", content: `${instruction}\n\n${segment}` }],
-      signal: opts?.signal,
-    });
+    const res = await abortablePromise(
+      provider.chat({
+        messages: [{ role: "user", content: `${instruction}\n\n${segment}` }],
+        signal: opts?.signal,
+      }),
+      opts?.signal,
+      () => opts?.signal?.reason ?? new Error("compaction cancelled"),
+    );
     summary = res.content.trim();
     usage = res.usage;
-  } catch {
+  } catch (error) {
+    if (opts?.signal?.aborted) throw opts.signal.reason ?? error;
     return null; // provider error → caller falls back to mechanical compaction
   }
   if (summary === "") return null;

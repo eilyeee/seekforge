@@ -19,8 +19,33 @@ export type CommandClassification = {
   reason: string;
 };
 
+function removeShellLineContinuations(command: string): string {
+  let out = "";
+  let singleQuoted = false;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!;
+    if (singleQuoted) {
+      out += char;
+      if (char === "'") singleQuoted = false;
+      continue;
+    }
+    if (char === "\\") {
+      if (command[i + 1] === "\n") {
+        i++;
+        continue;
+      }
+      out += char;
+      if (i + 1 < command.length) out += command[++i]!;
+      continue;
+    }
+    if (char === "'") singleQuoted = true;
+    out += char;
+  }
+  return out;
+}
+
 export function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, " ");
+  return removeShellLineContinuations(command).trim().replace(/\s+/g, " ");
 }
 
 /**
@@ -101,6 +126,10 @@ function parseShellSegment(source: string, start = 0, terminator?: ")" | "`"): S
       continue;
     }
     if (ch === "\\") {
+      if (next === "\n") {
+        i++;
+        continue;
+      }
       wordStarted = true;
       if (i + 1 < source.length) word += source.charAt(++i);
       else word += "\\";

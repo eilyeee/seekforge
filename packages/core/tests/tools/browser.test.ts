@@ -81,6 +81,16 @@ describe("browser URL policy", () => {
     ).rejects.toThrow(/resolves to a private/i);
   });
 
+  it("stops waiting for DNS when browser navigation is cancelled", async () => {
+    const controller = new AbortController();
+    const resolver = async (): Promise<never> => await new Promise<never>(() => {});
+    const pending = assertBrowserUrlAllowed("https://public.example/", resolver, controller.signal);
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: "fetch_failed" });
+  });
+
   it("does not DNS-resolve explicitly allowed loopback development URLs", async () => {
     let called = false;
     await expect(

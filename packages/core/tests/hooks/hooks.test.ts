@@ -53,6 +53,49 @@ describe("runHooks", () => {
     expect(outcomes[0]!.outputTail).toBe("postToolUse/apply_patch");
   });
 
+  it("scrubs provider secrets while preserving ordinary and hook environment", async () => {
+    const previousSecret = process.env["DEEPSEEK_API_KEY"];
+    const previousOrdinary = process.env["SEEKFORGE_TEST_ORDINARY"];
+    process.env["DEEPSEEK_API_KEY"] = "must-not-leak";
+    process.env["SEEKFORGE_TEST_ORDINARY"] = "kept";
+    try {
+      const outcomes = await runHooks(
+        "postToolUse",
+        [
+          {
+            command:
+              'printf "%s/%s/%s" "$DEEPSEEK_API_KEY" "$SEEKFORGE_TEST_ORDINARY" "$SEEKFORGE_HOOK_STAGE:$SEEKFORGE_TOOL"',
+          },
+        ],
+        payload({ toolName: "read_file" }),
+      );
+      expect(outcomes[0]!.outputTail).toBe("/kept/postToolUse:read_file");
+    } finally {
+      if (previousSecret === undefined) delete process.env["DEEPSEEK_API_KEY"];
+      else process.env["DEEPSEEK_API_KEY"] = previousSecret;
+      if (previousOrdinary === undefined) delete process.env["SEEKFORGE_TEST_ORDINARY"];
+      else process.env["SEEKFORGE_TEST_ORDINARY"] = previousOrdinary;
+    }
+  });
+
+  it("aborts the active hook process group and skips later hooks", async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runHooks(
+      "sessionStart",
+      [{ command: "sleep 30" }, { command: "touch should-not-run-after-abort" }],
+      payload(),
+      { signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 100);
+
+    const outcomes = await pending;
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(existsSync(join(workspace, "should-not-run-after-abort"))).toBe(false);
+  });
+
   it("kills a hook that exceeds the timeout and reports it", async () => {
     const started = Date.now();
     const outcomes = await runHooks("preToolUse", [{ command: "sleep 30" }], payload({ toolName: "run_command" }), {

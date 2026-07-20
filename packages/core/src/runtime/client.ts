@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createInterface } from "node:readline";
 import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
 import { installProcessTeardown } from "../util/process-teardown.js";
@@ -54,6 +53,7 @@ const DISPOSE_GRACE_MS = 5_000;
 const DISPOSE_KILL_GRACE_MS = 2_000;
 /** Bounded tail of the runtime's stderr kept for crash diagnostics. */
 const STDERR_TAIL_MAX = 4_000;
+export const MAX_RUNTIME_RESPONSE_LINE_CHARS = 1_000_000;
 
 /**
  * Line-delimited JSON client for seekforge-runtime (crates/runtime/PROTOCOL.md).
@@ -123,8 +123,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       });
     }
 
-    const rl = createInterface({ input: proc.stdout });
-    rl.on("line", (line) => {
+    const handleResponseLine = (line: string): void => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(line) as unknown;
@@ -148,6 +147,23 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
           ),
         );
       }
+    };
+
+    let stdoutBuffer = "";
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
+      let newline: number;
+      while ((newline = stdoutBuffer.indexOf("\n")) >= 0) {
+        if (newline > MAX_RUNTIME_RESPONSE_LINE_CHARS) {
+          proc.kill("SIGKILL");
+          return;
+        }
+        const line = stdoutBuffer.slice(0, newline);
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+        handleResponseLine(line);
+      }
+      if (stdoutBuffer.length > MAX_RUNTIME_RESPONSE_LINE_CHARS) proc.kill("SIGKILL");
     });
 
     const onGone = (detail: string) => {

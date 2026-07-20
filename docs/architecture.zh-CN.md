@@ -55,7 +55,7 @@ flowchart TD
 
 会话 trace 是只追加（append-only）的 JSONL，始终是智能体运行的事实来源。自动上下文压缩会写出一份带指纹的派生快照；只有当其来源前缀仍然匹配时，恢复才会使用它。上下文准入以完整的 provider 请求为预算单位，包括对外声明的工具 schema。自主 Loop 状态是一个独立的编排检查点，指向某个会话，并拥有冻结需求规格、验收证据与可选批准门禁。需求分析和验收审查使用只读 Agent 阶段，只有编辑迭代会修改工作区；见 [Loop 工程](loop-engineering.zh-CN.md)。
 
-服务器托管的执行有第二个只追加控制平面：`.seekforge/runs.jsonl` 存储运行状态，`.seekforge/run-events/<id>.jsonl` 存储带序号的传输事件。WS 客户端从 `runId + afterSeq` 恢复；headless REST 运行在没有订阅者的情况下继续，而交互式 WS 运行保留明确的「断连即取消」策略。终态转换被集中管理，因此取消不可能被迟到的完成事件覆盖。
+服务器托管的执行有第二个只追加控制平面：`.seekforge/runs.jsonl` 存储运行状态，`.seekforge/run-events/<id>.jsonl` 存储带序号的传输事件。WS 客户端从 `runId + afterSeq` 恢复；headless REST 运行在没有订阅者的情况下继续，而交互式 WS 运行保留明确的「断连即取消」策略。终态转换被集中管理，因此取消不可能被迟到的完成事件覆盖。Ledger 追加与压缩共享跨进程租约；REST 回放采用流式有界分页，每页最多 500 个事件；WS 订阅会从历史回放持续进入实时交付，直到出现终态帧或连接关闭。同一进程内的帧通过 RunManager 直接通知；低频跨进程兜底先比较文件身份，只在事件文件变化后解析回放数据。
 
 安全扫描使用一个独立的只追加事件源，位于 `.seekforge/security/events.jsonl`。`packages/core/src/security` 负责严格的 Agent 输出校验、Finding 与验证生命周期、威胁模型、修复证据，以及 JSON/Markdown/SARIF 渲染。CLI 代码只负责将 Agent 与项目检查的执行接入该领域。扫描器输出在其来源路径、行号范围与精确摘录都能在仓库内解析之前，均视为不可信。
 

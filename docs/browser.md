@@ -86,3 +86,7 @@ never leaked.
 
 Iterate: edit → re-`browser_navigate` (or reload) → `browser_console` until the
 page is clean.
+
+Stopping the Agent run cancels pending browser DNS checks and active navigation,
+screenshot, title, or snapshot operations, closing the shared browser when
+needed to interrupt Playwright.

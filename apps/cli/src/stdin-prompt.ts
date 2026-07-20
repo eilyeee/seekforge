@@ -26,6 +26,8 @@ export function composePrompt(inline: string | undefined, stdin: string | undefi
   return null;
 }
 
+export const MAX_STDIN_PROMPT_BYTES = 16 * 1024 * 1024;
+
 /**
  * Reads all of stdin to a string. Returns "" immediately when stdin is a TTY
  * (interactive, nothing piped) so callers never block waiting for a human.
@@ -33,9 +35,32 @@ export function composePrompt(inline: string | undefined, stdin: string | undefi
 export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Promise<string> {
   if (stream.isTTY) return "";
   const chunks: Buffer[] = [];
-  return new Promise<string>((resolve) => {
-    stream.on("data", (c: Buffer) => chunks.push(c));
-    stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    stream.on("error", () => resolve(Buffer.concat(chunks).toString("utf8")));
+  let total = 0;
+  return new Promise<string>((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.off("data", onData);
+      stream.off("end", onEnd);
+      stream.off("error", onError);
+    };
+    const finish = (): void => {
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    const onEnd = (): void => finish();
+    const onError = (): void => finish();
+    const onData = (chunk: Buffer | string): void => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes.length;
+      if (total > MAX_STDIN_PROMPT_BYTES) {
+        cleanup();
+        stream.pause();
+        reject(new Error(`stdin prompt exceeds ${MAX_STDIN_PROMPT_BYTES} bytes`));
+        return;
+      }
+      chunks.push(bytes);
+    };
+    stream.on("data", onData);
+    stream.once("end", onEnd);
+    stream.once("error", onError);
   });
 }

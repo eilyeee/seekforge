@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChatMessage, FinalReport, TokenUsage } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
+import { abortablePromise } from "../util/abort.js";
 import {
   appendCandidates,
   appendProjectFact,
@@ -36,6 +37,8 @@ export type ExtractMemoryInput = {
    * Undefined = current behavior (every fact queued as pending).
    */
   autoApproveConfidence?: number;
+  /** Cancels the extraction provider request and suppresses all memory writes. */
+  signal?: AbortSignal;
 };
 
 export type ExtractMemoryResult = {
@@ -268,18 +271,26 @@ export async function extractMemoryFromSession(
 ): Promise<ExtractMemoryResult> {
   let parsed: ParsedExtraction | undefined;
   let usage: TokenUsage | undefined;
+  if (input.signal?.aborted) throw input.signal.reason ?? new Error("memory extraction cancelled");
   try {
-    const response = await provider.chat({
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(input) },
-      ],
-      temperature: 0,
-      maxTokens: 1024,
-    });
+    const response = await abortablePromise(
+      provider.chat({
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: buildUserPrompt(input) },
+        ],
+        temperature: 0,
+        maxTokens: 1024,
+        signal: input.signal,
+      }),
+      input.signal,
+      () => input.signal?.reason ?? new Error("memory extraction cancelled"),
+    );
+    if (input.signal?.aborted) throw input.signal.reason ?? new Error("memory extraction cancelled");
     usage = response.usage;
     parsed = parseExtraction(response.content);
-  } catch {
+  } catch (error) {
+    if (input.signal?.aborted) throw input.signal.reason ?? error;
     parsed = undefined;
   }
   if (!parsed) return degrade(input, usage);

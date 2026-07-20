@@ -676,7 +676,11 @@ yields nothing and the TUI falls back to its built-in status line.
 ```
 
 This key is read by the TUI only. Settable via `config set`? **No** — edit the
-file directly.
+global `~/.seekforge/config.json` directly. A project-level `statusLine` is
+ignored because opening a repository must not execute repository-controlled
+shell code. The command receives only a minimal process environment plus the
+documented `SEEKFORGE_*` fields; provider keys and unrelated host variables are
+not inherited.
 
 ### `profiles`
 

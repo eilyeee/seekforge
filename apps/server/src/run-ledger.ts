@@ -1,6 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { redactSecrets } from "@seekforge/core";
-import { appendProjectFile, readProjectFile, removeProjectFile, writeProjectFileAtomic } from "./config.js";
+import { existsSync } from "node:fs";
+import { acquireSessionLease, redactSecrets, SessionBusyError } from "@seekforge/core";
+import {
+  appendProjectFile,
+  projectFileIdentity,
+  readProjectFile,
+  removeProjectFile,
+  visitProjectFileLines,
+  writeProjectFileAtomic,
+} from "./config.js";
 
 export const SERVER_PROTOCOL_VERSION = 1;
 export const SERVER_CAPABILITIES = [
@@ -35,6 +43,12 @@ export type RunEvent = {
   seq: number;
   ts: string;
   frame: Record<string, unknown>;
+};
+
+export type RunEventPage = {
+  events: RunEvent[];
+  nextAfterSeq: number;
+  hasMore: boolean;
 };
 
 type ActiveRun = { workspace: string; controller: AbortController };
@@ -159,18 +173,52 @@ export function readRunLedger(workspace: string): RunRecord[] {
   return [...latest.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-export function readRunEvents(workspace: string, id: string, afterSeq = 0): RunEvent[] {
-  if (!/^run-[A-Za-z0-9-]+$/.test(id) || !Number.isSafeInteger(afterSeq) || afterSeq < 0) return [];
+export const RUN_EVENT_REPLAY_LIMIT = 500;
+export const RUN_EVENT_MAX_LINE_BYTES = 1024 * 1024;
+
+export function readRunEventPage(
+  workspace: string,
+  id: string,
+  afterSeq = 0,
+  limit = RUN_EVENT_REPLAY_LIMIT,
+): RunEventPage {
+  if (
+    !/^run-[A-Za-z0-9-]+$/.test(id) ||
+    !Number.isSafeInteger(afterSeq) ||
+    afterSeq < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit <= 0
+  ) {
+    return { events: [], nextAfterSeq: afterSeq, hasMore: false };
+  }
   const events: RunEvent[] = [];
   let lastSeq = 0;
-  for (const value of readJsonLines(workspace, `.seekforge/run-events/${id}.jsonl`)) {
-    if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) break;
+  let hasMore = false;
+  visitProjectFileLines(workspace, `.seekforge/run-events/${id}.jsonl`, RUN_EVENT_MAX_LINE_BYTES, (line) => {
+    if (line.trim() === "") return true;
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      return false;
+    }
+    if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
     const seq = value["seq"] as number;
-    if (seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) break;
+    if (seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) return false;
     lastSeq = seq;
-    if (seq > afterSeq) events.push(value as RunEvent);
-  }
-  return events;
+    if (seq <= afterSeq) return true;
+    if (events.length === limit) {
+      hasMore = true;
+      return false;
+    }
+    events.push(value as RunEvent);
+    return true;
+  });
+  return { events, nextAfterSeq: events.at(-1)?.seq ?? afterSeq, hasMore };
+}
+
+export function readRunEvents(workspace: string, id: string, afterSeq = 0): RunEvent[] {
+  return readRunEventPage(workspace, id, afterSeq).events;
 }
 
 /**
@@ -183,13 +231,39 @@ export const RUNS_LEDGER_COMPACTION_THRESHOLD = 1000;
 /** After compaction, retain at most this many runs (most-recently-updated). */
 export const RUNS_LEDGER_MAX_RETAINED = 500;
 
-type LedgerState = { lines: number };
+type LedgerState = { lines: number; identity: string | undefined };
+
+const LEDGER_LEASE_ID = "server-run-ledger";
+const LEDGER_LEASE_TIMEOUT_MS = 30_000;
+const ledgerWaitArray = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+function withLedgerLease<T>(workspace: string, operation: () => T): T {
+  const deadline = Date.now() + LEDGER_LEASE_TIMEOUT_MS;
+  let lease: ReturnType<typeof acquireSessionLease>;
+  for (;;) {
+    try {
+      lease = acquireSessionLease(workspace, LEDGER_LEASE_ID);
+      break;
+    } catch (error) {
+      const leaseReleaseRace = (error as NodeJS.ErrnoException).code === "ENOENT" && existsSync(workspace);
+      if (!(error instanceof SessionBusyError) && !leaseReleaseRace) throw error;
+      if (Date.now() >= deadline) throw error;
+      Atomics.wait(ledgerWaitArray, 0, 0, 5);
+    }
+  }
+  try {
+    return operation();
+  } finally {
+    lease.release();
+  }
+}
 
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
   private readonly seq = new Map<string, number>();
-  /** Per-workspace validated line count; absence means "not yet touched this process". */
+  /** Per-workspace line count plus file identity used to detect peer-process writes. */
   private readonly ledger = new Map<string, LedgerState>();
+  private readonly frameListeners = new Map<string, Set<(event: RunEvent, fileIdentity: string) => void>>();
   private started = 0;
   private completed = 0;
   private failed = 0;
@@ -256,7 +330,12 @@ export class RunManager {
     return next;
   }
 
-  appendFrame(workspace: string, id: string, frame: Record<string, unknown>): RunEvent {
+  appendFrame(
+    workspace: string,
+    id: string,
+    frame: Record<string, unknown>,
+    options: { cacheSequence?: boolean } = {},
+  ): RunEvent {
     // Fast path: once we have the run's seq in memory we trust it and only
     // increment — no per-frame full-file reparse (that made an N-event run
     // O(N^2)). The one-time validation below happens on first touch of the run
@@ -279,7 +358,8 @@ export class RunManager {
       });
       nextSeq = this.lastSeq(workspace, id) + 1;
     }
-    this.seq.set(id, nextSeq);
+    if (options.cacheSequence !== false) this.seq.set(id, nextSeq);
+    else this.seq.delete(id);
     const event = { runId: id, seq: nextSeq, ts: new Date().toISOString(), frame };
     // Redact before persisting: frames carry raw model/reasoning deltas and tool
     // results, any of which can contain a secret that would otherwise land on
@@ -287,8 +367,44 @@ export class RunManager {
     // while the frame is still structured so multiline masks are escaped by the
     // final JSON serialization and cannot split the JSONL record.
     const persisted = { ...event, frame: redactStructuredSecrets(frame) };
-    appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${JSON.stringify(persisted)}\n`);
+    const identity = appendProjectFile(
+      workspace,
+      `.seekforge/run-events/${id}.jsonl`,
+      `${JSON.stringify(persisted)}\n`,
+    );
+    const listeners = this.frameListeners.get(`${workspace}\0${id}`);
+    if (listeners) {
+      for (const listener of [...listeners]) {
+        try {
+          listener(persisted as RunEvent, identity);
+        } catch {
+          // Subscribers are observational and must never fail the producer.
+        }
+      }
+    }
     return event;
+  }
+
+  subscribeFrames(
+    workspace: string,
+    id: string,
+    listener: (event: RunEvent, fileIdentity: string) => void,
+  ): () => void {
+    const key = `${workspace}\0${id}`;
+    let listeners = this.frameListeners.get(key);
+    if (!listeners) {
+      listeners = new Set();
+      this.frameListeners.set(key, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) this.frameListeners.delete(key);
+    };
+  }
+
+  eventFileIdentity(workspace: string, id: string): string | undefined {
+    return projectFileIdentity(workspace, `.seekforge/run-events/${id}.jsonl`);
   }
 
   cancel(workspace: string, id: string): RunRecord | undefined {
@@ -296,10 +412,19 @@ export class RunManager {
     if (!record) return undefined;
     this.active.get(id)?.controller.abort();
     if (record.status === "queued" || record.status === "running") {
-      return this.update(workspace, id, {
+      const cancelled = this.update(workspace, id, {
         status: "cancelled",
         error: { code: "cancelled", message: "cancelled by user" },
       });
+      if (cancelled) {
+        this.appendFrame(
+          workspace,
+          id,
+          { type: "error", code: "cancelled", message: "cancelled by user" },
+          { cacheSequence: false },
+        );
+      }
+      return cancelled;
     }
     return record;
   }
@@ -318,6 +443,10 @@ export class RunManager {
 
   events(workspace: string, id: string, afterSeq = 0): RunEvent[] {
     return readRunEvents(workspace, id, afterSeq);
+  }
+
+  eventPage(workspace: string, id: string, afterSeq = 0): RunEventPage {
+    return readRunEventPage(workspace, id, afterSeq);
   }
 
   metrics(): Record<string, number> {
@@ -340,24 +469,29 @@ export class RunManager {
   }
 
   private append(record: RunRecord): void {
-    // Hot path: trust the in-memory validated line count and only append. The
-    // one-time validation happens on this process's FIRST touch of the
-    // workspace ledger (see ensureLedger), which also handles crash recovery —
-    // after a restart the cache is empty, so we repair any torn/forged suffix
-    // before continuing. Re-reading + re-validating the whole file on every
-    // append made an N-record ledger O(N^2).
-    const state = this.ensureLedger(record.workspace);
-    appendProjectFile(record.workspace, ".seekforge/runs.jsonl", `${JSON.stringify(record)}\n`);
-    state.lines += 1;
-    if (state.lines > RUNS_LEDGER_COMPACTION_THRESHOLD) this.compactLedger(record.workspace, state);
+    // Every writer takes the same cross-process lease, so compaction cannot
+    // replace a snapshot while a peer appends. File identity keeps the cached
+    // line count on the O(1) hot path while forcing a recount after any peer
+    // append or atomic replacement.
+    withLedgerLease(record.workspace, () => {
+      const state = this.ensureLedger(record.workspace);
+      appendProjectFile(record.workspace, ".seekforge/runs.jsonl", `${JSON.stringify(record)}\n`);
+      state.lines += 1;
+      state.identity = projectFileIdentity(record.workspace, ".seekforge/runs.jsonl");
+      if (state.lines > RUNS_LEDGER_COMPACTION_THRESHOLD) this.compactLedger(record.workspace, state);
+    });
   }
 
-  /** Validate/repair the append log once per process, caching its line count. */
+  /** Validate/repair after first touch or an append/replacement by another process. */
   private ensureLedger(workspace: string): LedgerState {
     let state = this.ledger.get(workspace);
-    if (state === undefined) {
+    const identity = projectFileIdentity(workspace, ".seekforge/runs.jsonl");
+    if (state === undefined || state.identity !== identity) {
       repairJsonLines(workspace, ".seekforge/runs.jsonl", (value) => parseRecord(value) !== undefined);
-      state = { lines: this.countLedgerLines(workspace) };
+      state = {
+        lines: this.countLedgerLines(workspace),
+        identity: projectFileIdentity(workspace, ".seekforge/runs.jsonl"),
+      };
       this.ledger.set(workspace, state);
     }
     return state;
@@ -394,6 +528,7 @@ export class RunManager {
     const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
     writeProjectFileAtomic(workspace, ".seekforge/runs.jsonl", serialized);
     state.lines = ordered.length;
+    state.identity = projectFileIdentity(workspace, ".seekforge/runs.jsonl");
 
     // Delete the per-run events file of every evicted (terminal, past-retention)
     // run — otherwise run-events/<id>.jsonl accumulates forever, unreferenced by
@@ -414,7 +549,20 @@ export class RunManager {
   }
 
   private lastSeq(workspace: string, id: string): number {
-    const events = readRunEvents(workspace, id);
-    return events.at(-1)?.seq ?? 0;
+    let last = 0;
+    visitProjectFileLines(workspace, `.seekforge/run-events/${id}.jsonl`, RUN_EVENT_MAX_LINE_BYTES, (line) => {
+      if (line.trim() === "") return true;
+      try {
+        const value = JSON.parse(line) as unknown;
+        if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
+        const seq = value["seq"] as number;
+        if (seq <= last || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) return false;
+        last = seq;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    return last;
   }
 }

@@ -46,6 +46,8 @@ export type DispatchRuntime = {
   /** Parent-run cumulative usage; nested usage updates flow through these. */
   getUsage: () => TokenUsage;
   setUsage: (usage: TokenUsage) => void;
+  /** Keeps the parent run alive until a foreground or background dispatch cleans up. */
+  trackOperation: <T>(operation: Promise<T>) => Promise<T>;
   /** loop.ts's createAgentCore, injected to avoid a module cycle. */
   createCore: (deps: AgentCoreDeps) => AgentCore;
 };
@@ -110,7 +112,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
 
   function observeDispatch(dispatchId: string, promise: Promise<ToolResult>): void {
     terminalDispatches.delete(dispatchId);
-    void promise.then((result) => emitDispatchTerminal(dispatchId, result));
+    void rt.trackOperation(promise).then((result) => emitDispatchTerminal(dispatchId, result));
   }
 
   /**
@@ -150,6 +152,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
     let nestedUsage = ZERO_USAGE;
     let report: FinalReport | undefined;
     let failure: { code: string; message: string } | undefined;
+    let cancelled = false;
 
     const events = nested
       .runTask({
@@ -174,11 +177,15 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       for (;;) {
         const step = await Promise.race([events.next(), abortPromise]);
         if (step === ABORTED) {
-          // Abandon the nested run; it received the same signal, so its
-          // own cooperative cancellation will stop it where possible.
-          const ret = events.return?.();
-          if (ret) void ret.then(undefined, () => {});
-          return { ok: false, error: { code: "subagent_cancelled", message: "dispatch aborted" } };
+          cancelled = true;
+          // The nested run owns tools, hooks, and a session lease. Wait for its
+          // generator cleanup before reporting cancellation to the parent.
+          try {
+            await events.return?.();
+          } catch {
+            // Cancellation remains authoritative even if cleanup reports an error.
+          }
+          break;
         }
         if (step.done) break;
         const ev = step.value;
@@ -239,8 +246,12 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
       sessionId: rt.sessionId,
       workspace: input.projectPath,
       agentId: def.id,
-      ok: failure === undefined && report !== undefined,
+      ok: !cancelled && failure === undefined && report !== undefined,
     });
+
+    if (cancelled) {
+      return { ok: false, error: { code: "subagent_cancelled", message: "dispatch aborted" } };
+    }
 
     if (failure || !report) {
       return {
@@ -376,9 +387,17 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         }
       }
       while (!stopped && running.size < validated.plan.maxConcurrency) {
+        const editRunning = [...running.keys()].some((id) => {
+          const runningMember = validated.plan.members.find((candidate) => candidate.id === id)!;
+          return roster.find((candidate) => candidate.id === runningMember.agentId)!.mode === "edit";
+        });
         const member = validated.plan.members.find((candidate) => {
           const outcome = outcomes.get(candidate.id)!;
-          return outcome.status === "pending" && candidate.dependsOn.every((id) => outcomes.get(id)!.status === "done");
+          if (outcome.status !== "pending" || !candidate.dependsOn.every((id) => outcomes.get(id)!.status === "done")) {
+            return false;
+          }
+          const candidateMode = roster.find((definition) => definition.id === candidate.agentId)!.mode;
+          return candidateMode !== "edit" || !editRunning;
         });
         if (!member) break;
 

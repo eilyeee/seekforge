@@ -644,7 +644,10 @@ JSON 格式的状态负载，同时以 `SEEKFORGE_*` 环境变量提供相同字
 { "statusLine": "echo \"$SEEKFORGE_MODEL | $SEEKFORGE_CONTEXT_PERCENT% ctx\"" }
 ```
 
-此键仅由 TUI 读取。可通过 `config set` 设置？**不可以** —— 直接编辑文件。
+此键仅由 TUI 读取。可通过 `config set` 设置？**不可以** —— 直接编辑全局
+`~/.seekforge/config.json`。项目级 `statusLine` 会被忽略，因为打开仓库不应执行由仓库
+控制的 shell 代码。命令只继承最小进程环境和文档列出的 `SEEKFORGE_*` 字段，不会继承
+provider 密钥或其它无关宿主环境变量。
 
 ### `profiles`
 

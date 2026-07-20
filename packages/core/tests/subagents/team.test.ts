@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -252,6 +252,61 @@ describe("validateAgentTeam", () => {
     }
   });
 
+  it("serializes edit members while read-only members keep running concurrently", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-team-edit-serial-"));
+    const releaseFirstEdit = deferred<void>();
+    let parentTurns = 0;
+    let activeEdits = 0;
+    let maxActiveEdits = 0;
+    let readOnlyOverlappedEdit = false;
+    const provider = routedProvider(async (request) => {
+      if (isParentRequest(request)) {
+        parentTurns++;
+        return parentTurns === 1
+          ? toolCallsResponse(
+              toolCall("team-1", "dispatch_team", {
+                members: [
+                  { id: "edit-a", agentId: "fixer", task: "edit first" },
+                  { id: "edit-b", agentId: "fixer", task: "edit second" },
+                  { id: "review", agentId: "reviewer", task: "review concurrently" },
+                ],
+                maxConcurrency: 3,
+              }),
+            )
+          : response({ content: "done" });
+      }
+      const task = request.messages.find((message) => message.role === "user")?.content ?? "";
+      if (task.includes("review concurrently")) {
+        readOnlyOverlappedEdit = activeEdits === 1;
+        releaseFirstEdit.resolve();
+        return response({ content: "reviewed" });
+      }
+      activeEdits++;
+      maxActiveEdits = Math.max(maxActiveEdits, activeEdits);
+      if (task.includes("edit first")) await releaseFirstEdit.promise;
+      activeEdits--;
+      return response({ content: "edited" });
+    });
+
+    try {
+      const events = await collect(
+        createAgentCore({
+          provider,
+          dispatcher: fakeDispatcher(),
+          confirm: async () => true,
+          subagents: [...agents, fixer],
+        }).runTask({ task: "coordinate", mode: "edit", approvalMode: "auto", projectPath: workspace }),
+      );
+
+      expect(readOnlyOverlappedEdit).toBe(true);
+      expect(maxActiveEdits).toBe(1);
+      expect(toolCompleted(events, "dispatch_team")[0]!.result.ok).toBe(true);
+    } finally {
+      releaseFirstEdit.resolve();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("fills a free concurrency slot as soon as a dependency branch becomes ready", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-team-ready-"));
     const slowGate = deferred<void>();
@@ -323,7 +378,18 @@ describe("validateAgentTeam", () => {
             )
           : response({ content: "done" });
       }
-      await nestedGate.promise;
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(request.signal?.reason ?? new Error("cancelled"));
+        if (request.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        request.signal?.addEventListener("abort", onAbort, { once: true });
+        void nestedGate.promise.then(() => {
+          request.signal?.removeEventListener("abort", onAbort);
+          resolve();
+        });
+      });
       return response({ content: "too late" });
     });
 
@@ -335,6 +401,7 @@ describe("validateAgentTeam", () => {
         confirm: async () => true,
         subagents: agents,
         dispatchManager: manager,
+        hooks: { subagentStop: [{ command: "echo called >> stop-count; cat > stop-payload.json" }] },
       }).runTask({ task: "coordinate", mode: "edit", approvalMode: "confirm", projectPath: workspace });
       for await (const event of stream) {
         events.push(event);
@@ -347,6 +414,12 @@ describe("validateAgentTeam", () => {
         data: { status: "cancelled", members: [{ id: "review", status: "cancelled" }] },
       });
       expect(events.some((event) => event.type === "subagent.cancelled")).toBe(true);
+      expect(readFileSync(join(workspace, "stop-count"), "utf8").trim().split("\n")).toEqual(["called"]);
+      expect(JSON.parse(readFileSync(join(workspace, "stop-payload.json"), "utf8"))).toMatchObject({
+        stage: "subagentStop",
+        agentId: "reviewer",
+        ok: false,
+      });
     } finally {
       nestedGate.resolve();
       rmSync(workspace, { recursive: true, force: true });

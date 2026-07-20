@@ -83,7 +83,7 @@ import {
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import { acquireSessionLease, hasActiveSessionRuns, isSessionRunActive } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
-import { abortablePromise } from "../util/abort.js";
+import { abortablePromise, onAbortOnce } from "../util/abort.js";
 
 /**
  * Run-local handoff between providers and agent event streams. One bus is
@@ -420,6 +420,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         }
         throw error;
       }
+      const runController = new AbortController();
+      const detachParentAbort = onAbortOnce(input.signal, () => runController.abort(input.signal?.reason));
+      const runSignal = runController.signal;
+      const throwIfCancelled = () => {
+        if (runSignal.aborted) {
+          throw new AgentLimitError("cancelled", "cancelled by user");
+        }
+      };
+      const activeOperations = new Set<Promise<unknown>>();
+      const trackOperation = <T>(operation: Promise<T>): Promise<T> => {
+        activeOperations.add(operation);
+        void operation.then(
+          () => activeOperations.delete(operation),
+          () => activeOperations.delete(operation),
+        );
+        return operation;
+      };
       let lspLease: ReturnType<typeof acquireLspServerLease> | undefined;
       let browserLease: ReturnType<typeof acquireBrowserLease> | undefined;
       const settleRunningSession = (status: "failed" | "cancelled"): void => {
@@ -539,24 +556,40 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // path (session.failed, meta, sessionEnd hooks) applies.
         let task = input.task;
         let promptBlocked: HookOutcome | undefined;
-        if (depth === 0) {
-          const startOutcomes = await runHooks("sessionStart", deps.hooks?.sessionStart, {
-            sessionId,
-            workspace: input.projectPath,
-            task: input.task,
-            mode: input.mode,
-            resuming,
-          });
-          yield* surfaceHookNotices(startOutcomes);
-          const promptOutcomes = await runHooks("userPromptSubmit", deps.hooks?.userPromptSubmit, {
-            sessionId,
-            workspace: input.projectPath,
-            task: input.task,
-          });
-          promptBlocked = promptOutcomes.find((o) => !o.ok);
-          if (!promptBlocked) {
-            task = input.task + buildHookContext(promptOutcomes);
-            yield* surfaceHookNotices(promptOutcomes);
+        if (depth === 0 && !runSignal.aborted) {
+          const startOutcomes = await runHooks(
+            "sessionStart",
+            deps.hooks?.sessionStart,
+            {
+              sessionId,
+              workspace: input.projectPath,
+              task: input.task,
+              mode: input.mode,
+              resuming,
+            },
+            { signal: runSignal },
+          );
+          if (!runSignal.aborted) {
+            yield* surfaceHookNotices(startOutcomes);
+          }
+          if (!runSignal.aborted) {
+            const promptOutcomes = await runHooks(
+              "userPromptSubmit",
+              deps.hooks?.userPromptSubmit,
+              {
+                sessionId,
+                workspace: input.projectPath,
+                task: input.task,
+              },
+              { signal: runSignal },
+            );
+            if (!runSignal.aborted) {
+              promptBlocked = promptOutcomes.find((o) => !o.ok);
+              if (!promptBlocked) {
+                task = input.task + buildHookContext(promptOutcomes);
+                yield* surfaceHookNotices(promptOutcomes);
+              }
+            }
           }
         }
 
@@ -649,26 +682,25 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           for (const m of messages) trace.message(m);
         }
 
-        const throwIfCancelled = () => {
-          if (input.signal?.aborted) {
-            throw new AgentLimitError("cancelled", "cancelled by user");
-          }
-        };
-
         // notification hooks fire just before the user is interrupted (a
         // permission prompt or an ask_user question), so external notifiers
         // (sound, desktop alert) can ping. Advisory; never affects the answer.
         const confirmWithNotify = (req: PermissionRequest): Promise<ConfirmResult> =>
           confirmQueue.run(async () => {
             throwIfCancelled();
-            await runHooks("notification", deps.hooks?.notification, {
-              sessionId,
-              workspace: input.projectPath,
-              kind: "permission",
-              detail: req,
-            });
+            await runHooks(
+              "notification",
+              deps.hooks?.notification,
+              {
+                sessionId,
+                workspace: input.projectPath,
+                kind: "permission",
+                detail: req,
+              },
+              { signal: runSignal },
+            );
             throwIfCancelled();
-            return abortablePromise(deps.confirm(req), input.signal, () => {
+            return abortablePromise(deps.confirm(req), runSignal, () => {
               return new AgentLimitError("cancelled", "cancelled by user");
             });
           });
@@ -685,14 +717,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ? undefined
             : async (q: { question: string; options: string[] }): Promise<string> => {
                 throwIfCancelled();
-                await runHooks("notification", deps.hooks?.notification, {
-                  sessionId,
-                  workspace: input.projectPath,
-                  kind: "question",
-                  detail: q,
-                });
+                await runHooks(
+                  "notification",
+                  deps.hooks?.notification,
+                  {
+                    sessionId,
+                    workspace: input.projectPath,
+                    kind: "question",
+                    detail: q,
+                  },
+                  { signal: runSignal },
+                );
                 throwIfCancelled();
-                return abortablePromise(askUser(q), input.signal, () => {
+                return abortablePromise(askUser(q), runSignal, () => {
                   return new AgentLimitError("cancelled", "cancelled by user");
                 });
               };
@@ -722,6 +759,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           hooks: deps.hooks,
           sandbox: deps.sandbox,
           background: deps.background ?? createBackgroundTasks(),
+          signal: runSignal,
           checkpoint: (path, before) => {
             if (checkpointed.has(path)) return;
             checkpointed.add(path);
@@ -794,7 +832,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           dispatchManager !== undefined
             ? createDispatchTools({
                 deps,
-                input,
+                input: { ...input, signal: runSignal },
                 roster,
                 depth,
                 confirmQueue,
@@ -809,11 +847,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 setUsage: (next) => {
                   usage = next;
                 },
+                trackOperation,
                 createCore: createAgentCore,
               })
             : undefined;
 
         try {
+          throwIfCancelled();
           // Blocking, mirroring preToolUse: a failing userPromptSubmit hook
           // (run above, before the task message was built) fails the run.
           if (promptBlocked) {
@@ -890,12 +930,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 (deps.compaction === "llm"
                   ? await llmCompactMessages(provider, messages, messageBudgetTokens, {
                       ...(deps.compactFocus !== undefined ? { focus: deps.compactFocus } : {}),
-                      signal: input.signal,
+                      signal: runSignal,
                     })
                   : null) ?? compactMessages(messages, messageBudgetTokens);
               if (compacted?.usage) {
                 usage = addUsage(usage, compacted.usage);
                 yield emit({ type: "usage.updated", usage });
+                throwIfCancelled();
               }
               // Last resort: shrink oversized tool payloads in place so the
               // provider is never handed an over-budget request. This covers
@@ -913,11 +954,16 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               if (compacted) {
                 // Advisory heads-up before compaction mutates the conversation.
                 yield* surfaceHookNotices(
-                  await runHooks("preCompact", deps.hooks?.preCompact, {
-                    sessionId,
-                    workspace: input.projectPath,
-                    reason: "auto",
-                  }),
+                  await runHooks(
+                    "preCompact",
+                    deps.hooks?.preCompact,
+                    {
+                      sessionId,
+                      workspace: input.projectPath,
+                      reason: "auto",
+                    },
+                    { signal: runSignal },
+                  ),
                 );
                 messages = compacted.messages;
                 // Persist a mechanical derivative of the durable trace. This
@@ -961,14 +1007,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             const requestProvider = () =>
               deps.onModelDelta
                 ? provider.chatStream(
-                    { messages, tools: requestTools, signal: input.signal },
+                    { messages, tools: requestTools, signal: runSignal },
                     deps.onModelDelta,
                     deps.onReasoningDelta,
                   )
-                : provider.chat({ messages, tools: requestTools, signal: input.signal });
-            const res = deps.retryBus ? await deps.retryBus.run(routeRetry, requestProvider) : await requestProvider();
+                : provider.chat({ messages, tools: requestTools, signal: runSignal });
+            const providerRequest = deps.retryBus ? deps.retryBus.run(routeRetry, requestProvider) : requestProvider();
+            const res = await abortablePromise(
+              providerRequest,
+              runSignal,
+              () => new AgentLimitError("cancelled", "cancelled by user"),
+            );
             usage = addUsage(usage, res.usage);
             yield emit({ type: "usage.updated", usage });
+            throwIfCancelled();
 
             // Window occupancy after each provider response (cheap estimate).
             // Distinct from usage.updated, which tracks cumulative token cost.
@@ -1048,7 +1100,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     const r = await runShellCommand(autoGate.command, input.projectPath, TEST_COMMAND_TIMEOUT_MS, {
                       sandbox: deps.sandbox,
                       workspace: input.projectPath,
-                      signal: input.signal,
+                      signal: runSignal,
                     });
                     gateResult = classifyAutoGateResult(autoGate, {
                       exitCode: r.exitCode,
@@ -1166,12 +1218,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 continue;
               }
               pendingDispatches++;
-              const run =
+              const run = trackOperation(
                 tc.name === DISPATCH_AGENT_TOOL
                   ? dispatchTools!.runDispatch(args)
                   : tc.name === DISPATCH_TEAM_TOOL
                     ? dispatchTools!.runTeam(args)
-                    : dispatchTools!.runAgentSend(args);
+                    : dispatchTools!.runAgentSend(args),
+              );
               void run
                 .then(
                   (result) => result,
@@ -1205,7 +1258,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 let streamedChunks = 0;
                 const callCtx: ToolContext = {
                   ...ctx,
-                  signal: input.signal,
+                  signal: runSignal,
                   emitOutput: (stream, chunk) => {
                     if (streamedChunks >= MAX_STREAMED_CHUNKS_PER_CALL) return;
                     streamedChunks++;
@@ -1214,12 +1267,12 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 };
                 // preToolUse/postToolUse hooks fire inside the dispatcher
                 // (after permission enforcement, around tool.run).
-                const outcome: Promise<{ ok: true; result: ToolResult } | { ok: false; err: unknown }> = deps.dispatcher
-                  .execute({ id: tc.id, name: tc.name, arguments: args }, callCtx)
-                  .then(
+                const outcome: Promise<{ ok: true; result: ToolResult } | { ok: false; err: unknown }> = trackOperation(
+                  deps.dispatcher.execute({ id: tc.id, name: tc.name, arguments: args }, callCtx).then(
                     (r) => ({ ok: true as const, result: r }),
                     (err: unknown) => ({ ok: false as const, err }),
-                  );
+                  ),
+                );
                 // Yield queued events WHILE the tool runs (live command output,
                 // background dispatch completions) — the same race
                 // executeNestedRun uses against the queue. The final drain after
@@ -1362,6 +1415,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           if (finalContent === undefined) {
             throw new AgentLimitError("max_turns_exceeded", `no final answer within ${limits.maxAgentTurns} turns`);
           }
+          throwIfCancelled();
 
           let report: FinalReport = {
             summary: finalContent,
@@ -1380,6 +1434,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 task: input.task,
                 report,
                 messages,
+                signal: runSignal,
                 ...(deps.memoryAutoApproveConfidence !== undefined
                   ? { autoApproveConfidence: deps.memoryAutoApproveConfidence }
                   : {}),
@@ -1388,12 +1443,15 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 usage = addUsage(usage, extraction.usage);
                 report = { ...report, usage };
                 yield emit({ type: "usage.updated", usage });
+                throwIfCancelled();
               }
               yield emit({ type: "step.completed", title: "extracting memory" });
             } catch {
+              throwIfCancelled();
               // memory extraction must never fail the session
             }
           }
+          throwIfCancelled();
 
           trace.summary(finalContent);
           writeSessionMeta(input.projectPath, {
@@ -1409,18 +1467,23 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           // stop fires after a SUCCESSFUL top-level completion only (never on
           // failure/cancel — sessionEnd covers those). Advisory.
           if (depth === 0) {
-            await runHooks("stop", deps.hooks?.stop, {
-              sessionId,
-              workspace: input.projectPath,
-              summary: finalContent,
-            });
+            await runHooks(
+              "stop",
+              deps.hooks?.stop,
+              {
+                sessionId,
+                workspace: input.projectPath,
+                summary: finalContent,
+              },
+              { signal: runSignal },
+            );
           }
         } catch (err) {
           const e = err as Partial<AgentLimitError> & Error;
           // DOMException.code is numeric (AbortError is commonly 20). The run's
           // signal is authoritative; never persist a caller cancellation as a
           // failed session or leak a non-string value into the event contract.
-          const code = input.signal?.aborted ? "cancelled" : typeof e.code === "string" ? e.code : "agent_error";
+          const code = runSignal.aborted ? "cancelled" : typeof e.code === "string" ? e.code : "agent_error";
           sessionEndStatus = code === "cancelled" ? "cancelled" : "failed";
           writeSessionMeta(input.projectPath, {
             ...meta,
@@ -1447,7 +1510,9 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             },
           });
         } finally {
+          if (sessionEndStatus === undefined) runController.abort();
           dispatchManager?.disposeAll();
+          await Promise.allSettled([...activeOperations]);
           for (const rec of dispatchManager?.list() ?? []) {
             if (rec.status === "cancelled") {
               dispatchTools?.emitDispatchTerminal(
@@ -1475,11 +1540,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           }
         }
       } catch (error) {
-        settleRunningSession(input.signal?.aborted ? "cancelled" : "failed");
+        settleRunningSession(runSignal.aborted ? "cancelled" : "failed");
         throw error;
       } finally {
         // Async-generator consumers may stop iteration without aborting. In that
         // path no catch block runs, so close the durable lifecycle here.
+        runController.abort();
+        await Promise.allSettled([...activeOperations]);
+        detachParentAbort();
         settleRunningSession("cancelled");
         await Promise.all([lspLease?.release().catch(() => {}), browserLease?.release().catch(() => {})]);
         sessionLease.release();

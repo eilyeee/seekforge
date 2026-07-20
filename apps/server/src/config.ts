@@ -15,6 +15,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -136,6 +137,10 @@ export class ConfigValueError extends Error {}
 
 export class ProjectPathError extends ConfigValueError {}
 
+function fileIdentity(stat: ReturnType<typeof fstatSync>): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
 function projectPath(workspace: string, rel: string, createParent: boolean): string {
   const root = realpathSync(resolve(workspace));
   const target = resolve(root, rel);
@@ -144,7 +149,6 @@ function projectPath(workspace: string, rel: string, createParent: boolean): str
     throw new ProjectPathError(`project path escapes the workspace: ${rel}`);
   }
 
-  if (createParent) mkdirSync(dirname(target), { recursive: true });
   const parts = fromRoot.split(sep);
   let current = root;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -154,13 +158,69 @@ function projectPath(workspace: string, rel: string, createParent: boolean): str
       stat = lstatSync(current);
     } catch (err) {
       if (!createParent && (err as NodeJS.ErrnoException).code === "ENOENT") return target;
-      throw new ProjectPathError(`project path is not available: ${rel}`);
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new ProjectPathError(`project path is not available: ${rel}`);
+      }
+      try {
+        mkdirSync(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw new ProjectPathError(`project path is not available: ${rel}`);
+        }
+      }
+      try {
+        stat = lstatSync(current);
+      } catch {
+        throw new ProjectPathError(`project path is not available: ${rel}`);
+      }
     }
     if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync(current) !== current) {
       throw new ProjectPathError(`project path contains a symlink: ${rel}`);
     }
   }
   return target;
+}
+
+/** Visits a workspace-owned file line by line without buffering the whole file. */
+export function visitProjectFileLines(
+  workspace: string,
+  rel: string,
+  maxLineBytes: number,
+  visit: (line: string) => boolean,
+): void {
+  if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0) {
+    throw new RangeError("maxLineBytes must be a positive safe integer");
+  }
+  const target = projectPath(workspace, rel, false);
+  let fd: number | undefined;
+  try {
+    try {
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (!fstatSync(fd).isFile()) throw new ProjectPathError(`project file is not a regular file: ${rel}`);
+
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let pending = Buffer.alloc(0);
+    for (;;) {
+      const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
+      let newline: number;
+      while ((newline = pending.indexOf(0x0a)) !== -1) {
+        if (newline > maxLineBytes) return;
+        const line = pending.subarray(0, newline).toString("utf8");
+        pending = pending.subarray(newline + 1);
+        if (!visit(line)) return;
+      }
+      if (pending.length > maxLineBytes) return;
+    }
+    if (pending.length > 0 && pending.length <= maxLineBytes) visit(pending.toString("utf8"));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /** Reads a workspace-owned file without following project-local symlinks. */
@@ -188,8 +248,27 @@ export function readProjectFile(workspace: string, rel: string): string | undefi
   }
 }
 
+/** Returns an O(1) identity for detecting replacement or external appends. */
+export function projectFileIdentity(workspace: string, rel: string): string | undefined {
+  const target = projectPath(workspace, rel, false);
+  let fd: number | undefined;
+  try {
+    try {
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new ProjectPathError(`project file is not a regular file: ${rel}`);
+    return fileIdentity(stat);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** Appends to a workspace-owned regular file without following symlinks. */
-export function appendProjectFile(workspace: string, rel: string, content: string): void {
+export function appendProjectFile(workspace: string, rel: string, content: string): string {
   const target = projectPath(workspace, rel, true);
   let fd: number | undefined;
   try {
@@ -199,6 +278,7 @@ export function appendProjectFile(workspace: string, rel: string, content: strin
     }
     writeFileSync(fd, content, "utf8");
     fsyncSync(fd);
+    return fileIdentity(fstatSync(fd));
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -207,18 +287,36 @@ export function appendProjectFile(workspace: string, rel: string, content: strin
 /** Removes a workspace-owned regular file without following project-local symlinks. */
 export function removeProjectFile(workspace: string, rel: string): boolean {
   const target = projectPath(workspace, rel, false);
-  let stat: ReturnType<typeof lstatSync>;
+  let fd: number | undefined;
   try {
-    stat = lstatSync(target);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw err;
+    try {
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) throw new ProjectPathError(`project file is not a regular file: ${rel}`);
+
+    // Re-resolve every parent immediately before unlink and require the path to
+    // still name the inode opened above. Node has no portable unlinkat API, so
+    // this narrows the remaining path-name race as far as its fs API permits.
+    projectPath(workspace, rel, false);
+    const current = lstatSync(target);
+    if (
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      realpathSync(target) !== target ||
+      current.dev !== opened.dev ||
+      current.ino !== opened.ino
+    ) {
+      throw new ProjectPathError(`project file changed before deletion: ${rel}`);
+    }
+    unlinkSync(target);
+    return true;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
-  if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(target) !== target) {
-    throw new ProjectPathError(`project file is a symlink or not a regular file: ${rel}`);
-  }
-  unlinkSync(target);
-  return true;
 }
 
 /** Atomically replaces a workspace-owned file after revalidating its physical path. */

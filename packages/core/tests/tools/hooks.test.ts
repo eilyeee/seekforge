@@ -32,6 +32,22 @@ describe("dispatcher hook integration", () => {
     expect(result.error?.message).toContain("secrets policy");
   });
 
+  it("cancels an active preToolUse hook instead of waiting for its timeout", async () => {
+    const controller = new AbortController();
+    const ctx = makeCtx(workspace, {
+      signal: controller.signal,
+      hooks: { preToolUse: [{ match: "read_file", command: "sleep 30" }] },
+    });
+    const started = Date.now();
+    const pending = dispatcher.execute(call("read_file", { path: "a.txt" }), ctx);
+    setTimeout(() => controller.abort(), 100);
+
+    const result = await pending;
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result).toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
   it("a passing preToolUse hook lets the tool run and postToolUse fires after it", async () => {
     const marker = join(workspace, "post.json");
     const ctx = makeCtx(workspace, {

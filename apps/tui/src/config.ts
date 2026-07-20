@@ -177,13 +177,25 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
 ];
 
 /** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
-export function loadConfig(projectPath: string): TuiConfig {
-  const global = readJson(join(homedir(), ".seekforge", "config.json"));
-  const project = readJson(join(projectPath, ".seekforge", "config.json"));
+export function mergeTuiConfig(global: TuiConfig, project: TuiConfig): TuiConfig {
   // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
   // project-over-global; mcpServers merge per server name (project wins);
   // permissionRules concatenate project-then-global (first match wins); hooks
   // concatenate per stage global-then-project (every hook runs); then the
   // provider-aware env API key + SEEKFORGE_RUNTIME_BIN overrides land on top.
-  return mergeConfigLayers<TuiConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
+  const merged = mergeConfigLayers<TuiConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
+  // Unlike ordinary settings, statusLine executes immediately when the TUI
+  // opens. A repository-controlled config must not gain startup code execution.
+  if (project.statusLine !== undefined) {
+    if (global.statusLine === undefined) delete merged.statusLine;
+    else merged.statusLine = global.statusLine;
+  }
+  return merged;
+}
+
+export function loadConfig(projectPath: string): TuiConfig {
+  return mergeTuiConfig(
+    readJson(join(homedir(), ".seekforge", "config.json")),
+    readJson(join(projectPath, ".seekforge", "config.json")),
+  );
 }

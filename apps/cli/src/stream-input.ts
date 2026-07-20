@@ -24,6 +24,8 @@ interface Envelope {
   message?: unknown;
 }
 
+export const MAX_STREAM_JSON_LINE_CHARS = 1_000_000;
+
 /** Build the standard "invalid JSON" error for line `lineNo` (1-based). */
 function invalidJson(lineNo: number, line: string): Error {
   return new Error(`stream-json input: invalid JSON on line ${lineNo}: ${snippet(line)}`);
@@ -32,6 +34,10 @@ function invalidJson(lineNo: number, line: string): Error {
 /** Build the "no extractable text" error for line `lineNo` (1-based). */
 function noText(lineNo: number, line: string): Error {
   return new Error(`stream-json input: no extractable text in user envelope on line ${lineNo}: ${snippet(line)}`);
+}
+
+function lineTooLong(lineNo: number): Error {
+  return new Error(`stream-json input: line ${lineNo} exceeds ${MAX_STREAM_JSON_LINE_CHARS} characters`);
 }
 
 /** A short, single-line snippet of an offending line for error messages. */
@@ -118,12 +124,14 @@ export async function* readStreamJsonInput(stream: NodeJS.ReadableStream): Async
 
     let newlineIdx: number;
     while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+      if (newlineIdx > MAX_STREAM_JSON_LINE_CHARS) throw lineTooLong(lineNo + 1);
       const rawLine = buffer.slice(0, newlineIdx);
       buffer = buffer.slice(newlineIdx + 1);
       lineNo++;
       const text = handleLine(rawLine);
       if (text !== null) yield text;
     }
+    if (buffer.length > MAX_STREAM_JSON_LINE_CHARS) throw lineTooLong(lineNo + 1);
   }
 
   // Flush any trailing line not terminated by a newline.

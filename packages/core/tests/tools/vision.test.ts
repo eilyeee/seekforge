@@ -9,11 +9,7 @@ import { call, makeCtx, makeWorkspace } from "./helpers.js";
 const CONFIG = { model: "test-vision", baseUrl: "https://vision.example/v1", apiKey: "vk" };
 
 function fetchReturningCompletion(content: unknown): ReturnType<typeof vi.fn> {
-  const spy = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ choices: [{ message: { content } }] }),
-  }));
+  const spy = vi.fn(async () => Response.json({ choices: [{ message: { content } }] }));
   vi.stubGlobal("fetch", spy as unknown as typeof fetch);
   return spy;
 }
@@ -153,14 +149,54 @@ describe("image_analyze tool (through dispatcher)", () => {
 
   it("maps HTTP errors and missing content to vision_failed", async () => {
     configureVision(CONFIG);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof fetch,
-    );
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch);
     const ws = makeWorkspace();
     writeImage(ws, "shot.gif");
     const res = await createDefaultDispatcher().execute(call("image_analyze", { path: "shot.gif" }), makeCtx(ws));
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("vision_failed");
+  });
+
+  it("rejects oversized API responses without buffering them completely", async () => {
+    configureVision(CONFIG);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(null, {
+            status: 200,
+            headers: { "content-length": "1000001" },
+          }),
+      ) as unknown as typeof fetch,
+    );
+    const ws = makeWorkspace();
+    writeImage(ws, "shot.png");
+
+    const res = await createDefaultDispatcher().execute(call("image_analyze", { path: "shot.png" }), makeCtx(ws));
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("too_large");
+  });
+
+  it("aborts an in-flight request when the agent run is cancelled", async () => {
+    configureVision(CONFIG);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }) as unknown as typeof fetch,
+    );
+    const ws = makeWorkspace();
+    writeImage(ws, "shot.png");
+    const controller = new AbortController();
+    const ctx = makeCtx(ws, { confirm: async () => true, signal: controller.signal });
+
+    const pending = createDefaultDispatcher().execute(call("image_analyze", { path: "shot.png" }), ctx);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
   });
 });

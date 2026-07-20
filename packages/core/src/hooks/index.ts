@@ -47,6 +47,8 @@
 import { spawn } from "node:child_process";
 import { sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { onAbortOnce } from "../util/abort.js";
+import { scrubSecretEnv } from "../util/scrub-env.js";
 
 export type HookStage =
   | "preToolUse"
@@ -163,6 +165,8 @@ export type RunHooksOptions = {
   timeoutMs?: number;
   /** Sink for non-blocking hook failures (default: console.error). */
   onError?: (message: string) => void;
+  /** Cancels the active hook process group and skips remaining hooks. */
+  signal?: AbortSignal;
 };
 
 export const HOOK_TIMEOUT_MS = 10_000;
@@ -226,6 +230,7 @@ function runOneHook(
   toolName: string | undefined,
   cwd: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<HookOutcome> {
   return new Promise<HookOutcome>((resolve) => {
     let output = "";
@@ -233,6 +238,7 @@ function runOneHook(
     let timedOut = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let offAbort: () => void = () => {};
 
     // Decode each stream through its own StringDecoder so a multi-byte UTF-8
     // sequence split across two `data` chunks isn't mangled into U+FFFD (a hook
@@ -254,6 +260,7 @@ function runOneHook(
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      offAbort();
       // Flush bytes the decoders held back (incomplete trailing sequences).
       const outTail = outDecoder.end();
       if (outTail) {
@@ -282,7 +289,7 @@ function runOneHook(
         detached: true, // own process group -> tree kill on timeout
         stdio: ["pipe", "pipe", "pipe"],
         env: {
-          ...process.env,
+          ...scrubSecretEnv(),
           SEEKFORGE_HOOK_STAGE: stage,
           SEEKFORGE_TOOL: toolName ?? "",
         },
@@ -293,8 +300,7 @@ function runOneHook(
       return;
     }
 
-    timer = setTimeout(() => {
-      timedOut = true;
+    const killProcessGroup = (): void => {
       if (child.pid !== undefined) {
         try {
           process.kill(-child.pid, "SIGKILL");
@@ -302,6 +308,17 @@ function runOneHook(
           child.kill("SIGKILL");
         }
       }
+    };
+
+    offAbort = onAbortOnce(signal, () => {
+      killProcessGroup();
+      finish(null);
+    });
+    if (settled) return;
+
+    timer = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup();
       // Resolve now rather than waiting for `close`: if the kill didn't land
       // (pid already undefined, or a stuck child), the close event may never
       // fire and the awaited hook Promise would hang the whole run. finish() is
@@ -476,8 +493,13 @@ export async function runHooks(
   const onError = opts.onError ?? ((msg: string) => console.error(msg));
 
   for (const entry of hooks) {
+    if (opts.signal?.aborted) break;
     if (!hookApplies(entry, payload)) continue;
-    const ran = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs);
+    const ran = await runOneHook(entry, stage, stdinJson, payload.toolName, payload.workspace, timeoutMs, opts.signal);
+    if (opts.signal?.aborted) {
+      outcomes.push(ran);
+      break;
+    }
 
     // Extra JSON fields (continue / systemMessage / updatedInput) ride along on
     // every outcome from a clean exit, regardless of stage; consumers pick what

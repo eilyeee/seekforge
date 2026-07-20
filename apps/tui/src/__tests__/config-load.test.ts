@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { mergeConfigLayers } from "@seekforge/shared/config-layers";
-import { configParseErrors, loadConfig } from "../config.js";
+import { configParseErrors, loadConfig, mergeTuiConfig } from "../config.js";
 
 const roots: string[] = [];
 
@@ -46,5 +46,12 @@ describe("loadConfig", () => {
     expect(merged.permissionRules).toEqual([{ action: "deny", tool: "run_command" }]);
     expect(merged.mcpServers).toEqual({ local: { command: "node" } });
     expect(merged.hooks).toEqual({ preToolUse: [{ command: "check" }] });
+  });
+
+  it("never executes a repository-provided statusLine at TUI startup", () => {
+    expect(mergeTuiConfig({}, { statusLine: "touch /tmp/untrusted" }).statusLine).toBeUndefined();
+    expect(mergeTuiConfig({ statusLine: "trusted-global" }, { statusLine: "untrusted-project" }).statusLine).toBe(
+      "trusted-global",
+    );
   });
 });

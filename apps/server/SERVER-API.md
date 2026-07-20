@@ -92,7 +92,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/metrics | Prometheus text metrics for HTTP and run lifecycle counters (global) |
 | GET /api/runs | latest snapshot of every append-only run in the selected workspace |
 | GET /api/runs/:id | one run snapshot (`runId/source/status/attempt/sessionId/costUsd/error`) |
-| GET /api/runs/:id/events?afterSeq=N | persisted WS events with `seq > N` |
+| GET /api/runs/:id/events?afterSeq=N | at most 500 persisted WS events with `seq > N`, returned as `{events,nextAfterSeq,hasMore}`; continue with `nextAfterSeq` while `hasMore` |
 | POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged. Returns 409 when the run is owned by another server process, because this process cannot signal its `AbortController` |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
 | POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
@@ -186,7 +186,9 @@ The server first sends `{"type":"hello","protocolVersion":1,"capabilities":[...]
 Every accepted run receives a stable `runId`; persisted run frames carry a
 strictly increasing `seq`. A reconnecting client sends
 `{"type":"subscribe","runId":"...","afterSeq":42,"ws":"..."?}` to replay
-only missing frames. Disconnect remains fail-closed: it immediately cancels an
+missing frames and then continuously follow newly persisted frames. A
+subscription ends after it observes a terminal Agent/Loop/error frame or the
+connection closes. Disconnect remains fail-closed: it immediately cancels an
 active run, denies pending prompts, and retains emitted frames for replay.
 This cancel-on-disconnect rule applies only to runs started by that WS. Runs
 started through `POST /api/runs` are headless, deny interactive approvals, and
@@ -252,8 +254,12 @@ return `bad_frame`.
 ```
 
 Run snapshots are append-only JSONL at `.seekforge/runs.jsonl`; replay frames
-are stored under `.seekforge/run-events/<runId>.jsonl`. Terminal history remains
-queryable after restart. Nested frame strings are redacted before JSON
+are stored under `.seekforge/run-events/<runId>.jsonl`. Ledger appends and
+compaction share a cross-process lease. `GET /api/runs/:id/events` streams the
+event log and returns at most 500 events per page as
+`{events,nextAfterSeq,hasMore}`; while `hasMore` is true, pass `nextAfterSeq`
+back as `afterSeq`. Terminal history remains queryable after restart. Nested
+frame strings are redacted before JSON
 serialization, and ledger writes and compaction cleanup reject symlinked project
 path components. `seq` is scoped to one run. Snapshot status is one of
 `queued`, `running`, `waiting`, `succeeded`, `failed`, or `cancelled`;

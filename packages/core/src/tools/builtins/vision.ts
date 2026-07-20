@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
+import { onAbortOnce } from "../../util/abort.js";
+import { readResponseBody } from "../../util/response-body.js";
 import { ToolError } from "../errors.js";
 import { resolveForRead } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
@@ -123,10 +125,11 @@ const imageAnalyze = defineTool({
     };
 
     const controller = new AbortController();
+    const offAbort = onAbortOnce(ctx.signal, () => controller.abort());
     const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
-    let res: Response;
+    let description: string;
     try {
-      res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -135,24 +138,31 @@ const imageAnalyze = defineTool({
         },
         body: JSON.stringify(body),
       });
+      if (!res.ok) {
+        throw new ToolError("vision_failed", `Vision API returned HTTP ${res.status}`);
+      }
+      const responseBytes = await readResponseBody(res);
+      let json: { choices?: { message?: { content?: unknown } }[] } | undefined;
+      try {
+        json = JSON.parse(responseBytes.toString("utf8")) as typeof json;
+      } catch {
+        json = undefined;
+      }
+      const content = json?.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || content.length === 0) {
+        throw new ToolError("vision_failed", "Vision API response had no message content");
+      }
+      description = content;
     } catch (err) {
+      if (ctx.signal?.aborted) throw new ToolError("cancelled", "Vision request cancelled");
+      if (err instanceof ToolError) throw err;
       throw new ToolError(
         "vision_failed",
         `Vision request failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
+      offAbort();
       clearTimeout(timer);
-    }
-
-    if (!res.ok) {
-      throw new ToolError("vision_failed", `Vision API returned HTTP ${res.status}`);
-    }
-    const json = (await res.json().catch(() => undefined)) as
-      | { choices?: { message?: { content?: unknown } }[] }
-      | undefined;
-    const description = json?.choices?.[0]?.message?.content;
-    if (typeof description !== "string" || description.length === 0) {
-      throw new ToolError("vision_failed", "Vision API response had no message content");
     }
 
     return { data: { description } };

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
+import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { ToolError } from "../errors.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
 import { resolveForWrite } from "../sandbox.js";
@@ -49,11 +50,11 @@ export function checkBrowserUrl(raw: string): URL {
 }
 
 /** Apply the DNS-level SSRF check while preserving explicit loopback dev-server access. */
-export async function assertBrowserUrlAllowed(raw: string, resolver?: LookupAll): Promise<URL> {
+export async function assertBrowserUrlAllowed(raw: string, resolver?: LookupAll, signal?: AbortSignal): Promise<URL> {
   const url = checkBrowserUrl(raw);
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host === "::1" || /^127\./.test(host)) return url;
-  await assertPublicResolvedUrl(url, resolver);
+  await assertPublicResolvedUrl(url, resolver, signal);
   return url;
 }
 
@@ -98,6 +99,7 @@ type FailedRequest = { url: string; failure: string };
 let browser: PlaywrightBrowser | null = null;
 let context: PlaywrightContext | null = null;
 let page: PlaywrightPage | null = null;
+let activeBrowserSignal: AbortSignal | undefined;
 const browserLeases = new Set<symbol>();
 
 // Capture buffers, reset on every navigate so `browser_console` reports only
@@ -139,7 +141,7 @@ async function getPage(): Promise<PlaywrightPage> {
     // the compensating control for this residual risk.
     await context.route("**/*", async (route) => {
       try {
-        await assertBrowserUrlAllowed(String(route.request().url()));
+        await assertBrowserUrlAllowed(String(route.request().url()), undefined, activeBrowserSignal);
         await route.continue();
       } catch {
         await route.abort("blockedbyclient");
@@ -200,6 +202,21 @@ async function closeBrowser(): Promise<void> {
     } catch {
       // Best-effort teardown — a failed close must not surface as an error.
     }
+  }
+}
+
+async function runBrowserOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  label: string,
+): Promise<T> {
+  activeBrowserSignal = signal;
+  const offAbort = onAbortOnce(signal, () => void closeBrowser());
+  try {
+    return await abortablePromise(operation, signal, () => new ToolError("cancelled", `${label} cancelled`));
+  } finally {
+    offAbort();
+    if (activeBrowserSignal === signal) activeBrowserSignal = undefined;
   }
 }
 
@@ -266,8 +283,9 @@ const browserNavigate = defineTool({
     description: `Open in browser: ${args.url}`,
     command: `GET ${args.url}`,
   }),
-  async run(args) {
+  async run(args, ctx) {
     const url = checkBrowserUrl(args.url);
+    if (ctx.signal?.aborted) throw new ToolError("cancelled", "Browser navigation cancelled");
     const p = await getPage();
     // Reset capture so browser_console reflects only the new page.
     consoleMessages = [];
@@ -275,14 +293,22 @@ const browserNavigate = defineTool({
     failedRequests = [];
     let resp: PlaywrightResponse | null;
     try {
-      resp = await p.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+      resp = await runBrowserOperation(
+        p.goto(url.toString(), { waitUntil: "load", timeout: NAV_TIMEOUT_MS }),
+        ctx.signal,
+        "Browser navigation",
+      );
     } catch (err) {
+      if (err instanceof ToolError && err.code === "cancelled") throw err;
       throw new ToolError(
         "navigation_failed",
         `Navigation failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const title = await p.title().catch(() => "");
+    const title = await runBrowserOperation(p.title(), ctx.signal, "Browser title read").catch((err: unknown) => {
+      if (err instanceof ToolError && err.code === "cancelled") throw err;
+      return "";
+    });
     return {
       data: {
         url: p.url(),
@@ -320,8 +346,13 @@ const browserScreenshot = defineTool({
     const resolved = resolveForWrite(ctx.workspace, rel);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     try {
-      await p.screenshot({ path: resolved, fullPage: true, timeout: ACTION_TIMEOUT_MS });
+      await runBrowserOperation(
+        p.screenshot({ path: resolved, fullPage: true, timeout: ACTION_TIMEOUT_MS }),
+        ctx.signal,
+        "Browser screenshot",
+      );
     } catch (err) {
+      if (err instanceof ToolError && err.code === "cancelled") throw err;
       throw new ToolError(
         "screenshot_failed",
         `Screenshot failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -339,34 +370,38 @@ const browserSnapshot = defineTool({
   schema: z.object({}),
   // Pure read of the already-loaded page.
   classify: () => ({ permission: "readonly", description: "Snapshot the current browser page" }),
-  async run() {
+  async run(_args, ctx) {
     await loadPlaywright();
     const p = requirePage();
     // Extract a compact accessibility-ish summary in the page context. DOM
     // globals are reached through globalThis so this typechecks without the
     // "dom" lib (the body runs in the browser, not in Node).
-    const snap = (await p.evaluate((max: number) => {
-      const g = globalThis as any;
-      const doc = g.document;
-      const textOf = (el: any): string => (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      const take = (arr: any[]): any[] => arr.slice(0, max);
-      const headings = take(Array.from(doc.querySelectorAll("h1,h2,h3")))
-        .map((el) => `${el.tagName.toLowerCase()}: ${textOf(el)}`)
-        .filter((s) => s.length > 4);
-      const links = take(Array.from(doc.querySelectorAll("a[href]")))
-        .map((el) => textOf(el))
-        .filter(Boolean);
-      const buttons = take(
-        Array.from(doc.querySelectorAll("button, [role=button], input[type=submit], input[type=button]")),
-      )
-        .map((el) => textOf(el) || el.value || "")
-        .filter(Boolean);
-      const inputs = take(Array.from(doc.querySelectorAll("input, textarea, select"))).map((el) =>
-        [el.getAttribute("name"), el.getAttribute("type"), el.getAttribute("placeholder")].filter(Boolean).join(" "),
-      );
-      const text = (doc.body?.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
-      return { title: doc.title, url: g.location.href, headings, links, buttons, inputs, text };
-    }, MAX_ELEMENTS)) as {
+    const snap = (await runBrowserOperation(
+      p.evaluate((max: number) => {
+        const g = globalThis as any;
+        const doc = g.document;
+        const textOf = (el: any): string => (el.textContent ?? "").replace(/\s+/g, " ").trim();
+        const take = (arr: any[]): any[] => arr.slice(0, max);
+        const headings = take(Array.from(doc.querySelectorAll("h1,h2,h3")))
+          .map((el) => `${el.tagName.toLowerCase()}: ${textOf(el)}`)
+          .filter((s) => s.length > 4);
+        const links = take(Array.from(doc.querySelectorAll("a[href]")))
+          .map((el) => textOf(el))
+          .filter(Boolean);
+        const buttons = take(
+          Array.from(doc.querySelectorAll("button, [role=button], input[type=submit], input[type=button]")),
+        )
+          .map((el) => textOf(el) || el.value || "")
+          .filter(Boolean);
+        const inputs = take(Array.from(doc.querySelectorAll("input, textarea, select"))).map((el) =>
+          [el.getAttribute("name"), el.getAttribute("type"), el.getAttribute("placeholder")].filter(Boolean).join(" "),
+        );
+        const text = (doc.body?.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
+        return { title: doc.title, url: g.location.href, headings, links, buttons, inputs, text };
+      }, MAX_ELEMENTS),
+      ctx.signal,
+      "Browser snapshot",
+    )) as {
       title: string;
       url: string;
       headings: string[];

@@ -1276,6 +1276,149 @@ one command to a later command and make independent classifiers disagree.
 - **Caught:** Rust attributed `--force` from `echo --force && git push` to the
   Git push while TypeScript did not.
 
+## 94. Policy normalization must match shell line continuation
+
+A backslash-newline outside single quotes is removed before shell tokenization,
+so treating it as whitespace can hide a dangerous command across two lines.
+
+- **Do:** remove shell line continuations before policy matching and word
+  parsing, preserve them inside single quotes, and pin cross-runtime parity.
+- **Caught:** `r\\<newline>m -rf` and `git pu\\<newline>sh --force` executed as
+  denied commands but evaded both TypeScript and Rust classifiers.
+
+## 95. Parent cancellation must cover every network phase
+
+An operation-local timeout does not make a tool responsive to cancellation of
+the Agent run that owns it, especially while DNS is still unresolved.
+
+- **Do:** connect the parent signal to the request controller and race DNS,
+  request, and body consumption; detach listeners when the operation settles.
+- **Caught:** cancelled `web_fetch`, `web_search`, `image_analyze`, and Browser
+  actions continued until their independent timeout; Vision also cleared its
+  timeout after headers, leaving response-body parsing unbounded.
+
+## 96. Repository configuration must not trigger startup execution
+
+Configuration precedence does not imply that every layer has equal trust; a
+checked-out repository is untrusted before the user has approved any action.
+
+- **Do:** source startup shell commands only from user-owned configuration and
+  launch them with a minimal allowlisted environment.
+- **Caught:** a project `.seekforge/config.json` could run `statusLine` as soon
+  as the TUI opened and inherit provider API keys from `process.env`.
+
+## 97. Delimited streams need a pre-delimiter frame limit
+
+A parser that checks size only after finding a newline can buffer an unbounded
+unterminated record even when every parsed record is later validated.
+
+- **Do:** cap the pending buffer before waiting for the delimiter, also reject
+  oversized terminated frames, and fail or terminate the producer promptly.
+- **Caught:** CLI stream-json input and Runtime stdout JSONL could each consume
+  unbounded host memory with one line that never ended; ordinary piped CLI text
+  accumulated every chunk without a total-size limit.
+
+## 98. Async UI results must remain bound to their request identity
+
+Changing props does not cancel promises started by an earlier render; a late
+result can otherwise overwrite state that now belongs to another resource.
+
+- **Do:** capture a generation or resource identity, invalidate it in effect
+  cleanup, and guard success, error, and finalization callbacks. Within one
+  resource, capture an edit revision so a save response cannot hide newer input.
+- **Caught:** a late file read could place file A's content in file B's editor,
+  and a subsequent save wrote that content to B; file-index loads had the same
+  workspace-switch race. A save completion could also close the editor after
+  the user had typed a newer, unsaved revision.
+
+## 99. Apply response-size limits before generic JSON parsing
+
+`Response.json()` buffers the complete body and cannot enforce an
+application-level cap while bytes arrive.
+
+- **Do:** read untrusted API responses incrementally through the shared bounded
+  body reader, then parse the bounded buffer.
+- **Caught:** Vision API responses bypassed the web response cap and could
+  consume unbounded memory before JSON parsing completed.
+
+## 100. Snapshot replacement and append must share one cross-process lease
+
+Atomic rename prevents torn files, but it does not stop a compactor from
+replacing a snapshot after another process appended to the old file. A cached
+line count also becomes stale when a peer appends or replaces the file.
+
+- **Do:** put every append and compaction under the same cross-process lease;
+  compare a cheap file identity under that lease and recount after peer writes.
+- **Caught:** concurrent Server run-ledger compaction could permanently discard
+  another process's run record.
+
+## 101. Background polling must own failure and terminal cleanup
+
+Exceptions thrown by timer callbacks escape the request promise, and polling
+that never unregisters retains connection state after the resource is done.
+
+- **Do:** catch every polling iteration, unregister on failure, socket close,
+  and observed terminal frames, and expose only a generic transport error.
+- **Caught:** WS run subscriptions could crash on a replay read error or poll
+  forever after delivering the terminal event.
+
+## 102. A polling cursor must make idle and incremental work cheap
+
+Polling a growing append log from byte zero on every timer tick is O(N) while
+idle and O(N^2) over a long run, even if the response page is bounded.
+
+- **Do:** deliver process-local appends through direct notifications; use a
+  low-frequency cross-process fallback that checks O(1) file identity first and
+  reads bounded pages only after a change.
+- **Caught:** live WS subscriptions reparsed the complete run-event JSONL every
+  25 ms, including periods with no new event.
+
+## 102. Cancellation owns every descendant operation until cleanup completes
+
+An abort check at the start of a turn does not cover hooks, post-response work,
+or a tool that remains active after an async iterator is closed.
+
+- **Do:** bridge caller cancellation into a run-owned signal, pass it to every
+  descendant operation, re-check after externally observed usage events, race
+  provider promises that may ignore signals, and await active tool/subagent
+  cleanup before releasing the session lease. Even an already-aborted race must
+  observe the producer promise so a synchronous rejection cannot escape.
+- **Caught:** budget cancellation could still run memory extraction and complete
+  a session, while `iterator.return()` released the lease before its tool exited;
+  tool-level pre/post hooks also ignored the run signal, and background dispatch
+  launch promises were tracked instead of the underlying child runs.
+
+## 103. Generated agent state is not workspace progress
+
+Progress fingerprints that include an agent's own logs, memory candidates, or
+session state change even when no product source or verifier result changed.
+
+- **Do:** exclude all generated state roots from both Git-backed and fallback
+  workspace fingerprint paths.
+- **Caught:** memory extraction changed `.seekforge/memory/candidates.jsonl` on
+  every Loop iteration and prevented the `no_progress` guard from firing.
+
+## 104. Concurrent writers need workspace isolation or serialization
+
+Two agents can both successfully write from the same stale snapshot while the
+later write silently replaces the earlier result.
+
+- **Do:** use isolated worktrees or content-version CAS; when neither is already
+  available, conservatively serialize edit-mode agents sharing one workspace
+  while retaining concurrency for read-only agents.
+- **Caught:** independent `dispatch_team` edit members could overwrite each
+  other's changes and both report success.
+
+## 105. Configured child processes receive a least-privilege environment
+
+A command being user-configured does not make every provider token and host
+credential in the parent process relevant to that command.
+
+- **Do:** construct child environments through the shared secret scrubber, then
+  add only the explicit metadata variables required by the child protocol.
+- **Caught:** hooks inherited the complete `process.env`, exposing provider API
+  keys before any tool permission boundary.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

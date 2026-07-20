@@ -353,10 +353,18 @@ function FileFinder({
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
+    let active = true;
     api
       .files("", workspaceId)
-      .then((r) => setFiles(r.files))
-      .catch(() => setFiles([]));
+      .then((r) => {
+        if (active) setFiles(r.files);
+      })
+      .catch(() => {
+        if (active) setFiles([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [workspaceId]);
 
   const term = q.trim();
@@ -571,6 +579,8 @@ function FilePane({
   const [viewSource, setViewSource] = useState(() => localStorage.getItem("sf.files.viewSource") === "1");
   const [wrap, setWrap] = useState(() => localStorage.getItem("sf.files.wrap") === "1");
   const editorRef = useRef<CodeEditorHandle>(null);
+  const fileGeneration = useRef(0);
+  const draftRevision = useRef(0);
 
   useEffect(() => localStorage.setItem("sf.files.wrap", wrap ? "1" : "0"), [wrap]);
   // Persist the *preference* only on an explicit user toggle (below), not when a
@@ -590,40 +600,62 @@ function FilePane({
   }, [reveal?.nonce]);
 
   useEffect(() => {
+    const generation = ++fileGeneration.current;
     setFile(null);
     setError(null);
     setEditing(false);
     setSaveError(null);
     setSaved(false);
+    setSaving(false);
     api
       .readFile(path, workspaceId)
       .then((f) => {
+        if (fileGeneration.current !== generation) return;
         setFile(f);
         setDraft(f.content);
+        draftRevision.current = 0;
       })
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => {
+        if (fileGeneration.current === generation) setError(String(e));
+      });
+    return () => {
+      if (fileGeneration.current === generation) fileGeneration.current++;
+    };
   }, [path, workspaceId]);
 
   const startEdit = () => {
     if (!file) return;
     setDraft(file.content);
+    draftRevision.current = 0;
     setSaveError(null);
     setSaved(false);
     setEditing(true);
   };
 
   const save = () => {
+    const generation = fileGeneration.current;
+    const savedDraft = draft;
+    const savedRevision = draftRevision.current;
     setSaving(true);
     setSaveError(null);
     api
-      .writeFile(path, draft, workspaceId)
+      .writeFile(path, savedDraft, workspaceId)
       .then(() => {
-        setFile((f) => (f ? { ...f, content: draft } : f));
-        setEditing(false);
-        setSaved(true);
+        if (fileGeneration.current !== generation) return;
+        setFile((f) => (f ? { ...f, content: savedDraft } : f));
+        if (draftRevision.current === savedRevision) {
+          setEditing(false);
+          setSaved(true);
+        } else {
+          setSaved(false);
+        }
       })
-      .catch((e: unknown) => setSaveError(String(e)))
-      .finally(() => setSaving(false));
+      .catch((e: unknown) => {
+        if (fileGeneration.current === generation) setSaveError(String(e));
+      })
+      .finally(() => {
+        if (fileGeneration.current === generation) setSaving(false);
+      });
   };
 
   const isMarkdown = MARKDOWN_RE.test(path);
@@ -735,7 +767,16 @@ function FilePane({
           <p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>
         ) : editing ? (
           <Suspense fallback={<p className="px-4 py-4 text-xs text-tertiary">{t("files.loading")}</p>}>
-            <CodeEditor ref={editorRef} path={path} value={draft} onChange={setDraft} wrap={wrap} />
+            <CodeEditor
+              ref={editorRef}
+              path={path}
+              value={draft}
+              onChange={(value) => {
+                draftRevision.current++;
+                setDraft(value);
+              }}
+              wrap={wrap}
+            />
           </Suspense>
         ) : showRenderedMarkdown ? (
           <div className="px-4 py-3 text-sm leading-relaxed text-secondary">

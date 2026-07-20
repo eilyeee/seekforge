@@ -54,6 +54,17 @@ describe("runStatusLine", () => {
     expect(runStatusLine('printf "%s" "$SEEKFORGE_CONTEXT_PERCENT"', full)).toBe("42");
   });
 
+  it("does not expose provider credentials or unrelated host environment", () => {
+    const previous = process.env["DEEPSEEK_API_KEY"];
+    process.env["DEEPSEEK_API_KEY"] = "must-not-leak";
+    try {
+      expect(runStatusLine('printf "%s" "$DEEPSEEK_API_KEY"', input)).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env["DEEPSEEK_API_KEY"];
+      else process.env["DEEPSEEK_API_KEY"] = previous;
+    }
+  });
+
   it("runs with the workspace as cwd", () => {
     // /tmp is symlinked to /private/tmp on macOS, so resolve via the shell's pwd -P.
     expect(runStatusLine("pwd", { model: "m", cwd: process.cwd(), costUsd: 0 })).toBe(process.cwd());

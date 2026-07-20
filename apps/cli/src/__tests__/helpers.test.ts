@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
@@ -25,7 +26,7 @@ import {
   outcomeFromErrorCode,
   resolveOutputFormat,
 } from "../output-format.js";
-import { composePrompt } from "../stdin-prompt.js";
+import { MAX_STDIN_PROMPT_BYTES, composePrompt, readStdin } from "../stdin-prompt.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { isCacheFresh } from "../version-check.js";
@@ -34,6 +35,14 @@ import { parseIndexList, parseNumberedChoice } from "../input-selection.js";
 // Matches a raw ANSI escape introducer (ESC + "["). Detecting these is the
 // whole point of the color-gating tests, so the control char is intentional.
 const ANSI = /\x1b\[/;
+
+test("readStdin rejects oversized piped prompts", async () => {
+  const stream = Readable.from([Buffer.alloc(MAX_STDIN_PROMPT_BYTES + 1)]) as NodeJS.ReadStream;
+  await assert.rejects(readStdin(stream), /stdin prompt exceeds/);
+  assert.equal(stream.listenerCount("data"), 0);
+  assert.equal(stream.listenerCount("end"), 0);
+  assert.equal(stream.listenerCount("error"), 0);
+});
 
 test("version cache rejects non-finite timestamps and intervals", () => {
   const entry = { checkedAt: 100, latest: "1.2.3" };

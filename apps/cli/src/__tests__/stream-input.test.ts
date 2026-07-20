@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { test } from "vitest";
-import { readStreamJsonInput } from "../stream-input.js";
+import { MAX_STREAM_JSON_LINE_CHARS, readStreamJsonInput } from "../stream-input.js";
 
 /** Turn explicit chunks into a readable stream (preserves chunk boundaries). */
 function streamOf(chunks: string[]): NodeJS.ReadableStream {
@@ -161,4 +161,16 @@ test("an EXPLICIT empty-text simple form is still an error", async () => {
     assert.match(err.message, /no extractable text/);
     return true;
   });
+});
+
+test("rejects an oversized line before waiting for a newline", async () => {
+  await assert.rejects(collect(["x".repeat(MAX_STREAM_JSON_LINE_CHARS + 1)]), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /line 1 exceeds/);
+    return true;
+  });
+});
+
+test("rejects an oversized newline-terminated line", async () => {
+  await assert.rejects(collect([`${"x".repeat(MAX_STREAM_JSON_LINE_CHARS + 1)}\n`]), /line 1 exceeds/);
 });

@@ -72,6 +72,10 @@ In addition to the common flags above:
 | `--input-format <fmt>` | `text` (default) or `stream-json` (line-delimited user turns on stdin) |
 | `--mcp-config <file>` | See run-specific |
 | `--replay-user-messages` | With `-p` + `--input-format stream-json`: echo each user turn back as a stream-json event |
+
+Piped text input is capped at 16 MiB. For `stream-json`, each JSONL record is
+capped at 1,000,000 characters, including an unterminated record still waiting
+for its newline; oversized input fails before it can grow memory without bound.
 | `--strict-mcp-config` | See run-specific |
 | `--verbose` | See run-specific |
 

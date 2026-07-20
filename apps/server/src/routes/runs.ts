@@ -147,9 +147,13 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               : {}),
           });
         } catch (err) {
+          const cancelled = controller.signal.aborted;
           rest.runManager.update(workspace, ledgerRun.runId, {
-            status: controller.signal.aborted ? "cancelled" : "failed",
-            error: { code: "loop_error", message: err instanceof Error ? err.message : String(err) },
+            status: cancelled ? "cancelled" : "failed",
+            error: {
+              code: cancelled ? "cancelled" : "loop_error",
+              message: err instanceof Error ? err.message : String(err),
+            },
           });
         }
       };
@@ -183,7 +187,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", "afterSeq must be a non-negative safe integer");
       return true;
     }
-    sendJson(res, 200, { events: rest.runManager.events(workspace, id, Number(raw)) });
+    sendJson(res, 200, rest.runManager.eventPage(workspace, id, Number(raw)));
     return true;
   }
 

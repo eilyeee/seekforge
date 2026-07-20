@@ -57,3 +57,6 @@ Playwright 通过**工具内部的动态 import** 加载，绝不在顶层加载
    `image_analyze` 做视觉检查（「布局是不是坏了？」）。
 
 如此迭代：编辑 → 重新 `browser_navigate`（或刷新）→ `browser_console`，直到页面干净为止。
+
+停止 Agent 运行会取消等待中的浏览器 DNS 检查，以及正在执行的导航、截图、标题读取或
+页面快照操作；需要中断 Playwright 时会关闭共享浏览器。

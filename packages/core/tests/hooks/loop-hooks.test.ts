@@ -134,6 +134,33 @@ describe("agent loop: hooks + context visibility", () => {
     expect(prompt).toMatchObject({ stage: "userPromptSubmit", task: "do it", workspace });
   });
 
+  it("does not start session hooks after cancellation at session.created", async () => {
+    const controller = new AbortController();
+    const agent = createAgentCore({
+      provider: fakeProvider([response({ content: "never" })]),
+      dispatcher: spyDispatcher({ ok: true }),
+      confirm: async () => true,
+      hooks: { sessionStart: [{ command: "touch should-not-start" }] },
+    });
+    const iterator = agent
+      .runTask({ ...baseInput, projectPath: workspace, signal: controller.signal })
+      [Symbol.asyncIterator]();
+    const created = await iterator.next();
+    expect(created.value).toMatchObject({ type: "session.created" });
+    controller.abort();
+
+    const events: AgentEvent[] = [];
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) break;
+      events.push(step.value);
+    }
+    expect(existsSync(join(workspace, "should-not-start"))).toBe(false);
+    expect(events.find((event) => event.type === "session.failed")).toMatchObject({
+      error: { code: "cancelled" },
+    });
+  });
+
   it("appends userPromptSubmit hook stdout to the task as <hook-context> blocks", async () => {
     const requests: ChatRequest[] = [];
     const recording: ChatProvider = {

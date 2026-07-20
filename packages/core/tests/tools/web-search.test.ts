@@ -164,6 +164,26 @@ describe("web_search tool (through dispatcher)", () => {
     expect(res.error?.code).toBe("search_failed");
   });
 
+  it("aborts an in-flight search when the agent run is cancelled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }) as unknown as typeof fetch,
+    );
+    const controller = new AbortController();
+    const dispatcher = createDefaultDispatcher();
+    const ctx = makeCtx(makeWorkspace(), { confirm: async () => true, signal: controller.signal });
+
+    const pending = dispatcher.execute(call("web_search", { query: "x" }), ctx);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
   it("caps count at 10", async () => {
     const res = await createDefaultDispatcher().execute(
       call("web_search", { query: "x", count: 99 }),

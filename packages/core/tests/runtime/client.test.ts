@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRuntimeClient, RuntimeError } from "../../src/runtime/client.js";
+import { createRuntimeClient, MAX_RUNTIME_RESPONSE_LINE_CHARS, RuntimeError } from "../../src/runtime/client.js";
 
 /**
  * Stub runtime: a node script speaking the stdio protocol.
@@ -42,6 +42,10 @@ rl.on("line", (line) => {
       marker: req.params.marker,
       timer: setTimeout(() => active.delete(req.id), 10000),
     });
+    return;
+  }
+  if (req.method === "oversized") {
+    process.stdout.write("x".repeat(${1_000_001}));
     return;
   }
   if (req.method === "cancellation_count") {
@@ -143,6 +147,19 @@ describe("runtime client", () => {
       // next call must transparently respawn the child
       const again = await client.call<{ got: unknown }>("echo", { workspace: "/w", n: 3 });
       expect(again.got).toMatchObject({ n: 3 });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("kills a runtime that emits an oversized unterminated response and then respawns", async () => {
+    expect(MAX_RUNTIME_RESPONSE_LINE_CHARS).toBe(1_000_000);
+    const client = createRuntimeClient({ binPath });
+    try {
+      await expect(client.call("oversized", { workspace: "/w" })).rejects.toMatchObject({ code: "runtime_crashed" });
+      await expect(client.call<{ got: unknown }>("echo", { workspace: "/w", recovered: true })).resolves.toMatchObject({
+        got: { recovered: true },
+      });
     } finally {
       client.dispose();
     }

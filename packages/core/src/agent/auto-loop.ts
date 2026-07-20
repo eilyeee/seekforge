@@ -221,6 +221,7 @@ function workspaceFingerprint(workspace: string): string | null {
             (path) =>
               Boolean(path) &&
               !path.startsWith(".seekforge/loops/") &&
+              !path.startsWith(".seekforge/memory/") &&
               !path.startsWith(".seekforge/sessions/") &&
               !path.startsWith(".seekforge/uploads/"),
           ),
@@ -231,6 +232,7 @@ function workspaceFingerprint(workspace: string): string | null {
       .filter(
         (record) =>
           !record.includes(" .seekforge/loops/") &&
+          !record.includes(" .seekforge/memory/") &&
           !record.includes(" .seekforge/sessions/") &&
           !record.includes(" .seekforge/uploads/"),
       )
@@ -256,6 +258,7 @@ function workspaceFingerprint(workspace: string): string | null {
             path === ".git" ||
             path.startsWith(".git/") ||
             path.startsWith(".seekforge/loops/") ||
+            path.startsWith(".seekforge/memory/") ||
             path.startsWith(".seekforge/sessions/") ||
             path.startsWith(".seekforge/uploads/")
           )

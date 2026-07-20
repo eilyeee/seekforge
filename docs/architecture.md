@@ -75,7 +75,12 @@ Server-managed execution has a second append-only control plane:
 stores sequenced transport events. WS clients resume from `runId + afterSeq`;
 headless REST runs continue without a subscriber, while interactive WS runs
 retain an explicit disconnect-cancels policy. Terminal state transitions are
-centralized so cancellation cannot be overwritten by a late completion.
+centralized so cancellation cannot be overwritten by a late completion. Ledger
+append and compaction share a cross-process lease, REST replay streams bounded
+pages of at most 500 events, and WS subscriptions continue from replay into
+live delivery until a terminal frame or connection close. Process-local frames
+use direct RunManager notifications; a low-frequency cross-process fallback
+checks file identity and parses replay data only after the event file changes.
 
 Security scans use a separate append-only event source at
 `.seekforge/security/events.jsonl`. `packages/core/src/security` owns strict

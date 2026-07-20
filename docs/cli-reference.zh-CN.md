@@ -72,6 +72,9 @@
 | `--input-format <fmt>` | `text`（默认）或 `stream-json`（stdin 上按行分隔的用户轮次） |
 | `--mcp-config <file>` | 见 run 专属 |
 | `--replay-user-messages` | 与 `-p` + `--input-format stream-json` 搭配：把每个用户轮次作为 stream-json 事件回显 |
+
+管道文本输入上限为 16 MiB。使用 `stream-json` 时，每条 JSONL 记录上限为
+1,000,000 个字符；仍在等待换行的未终止记录也受此限制，超限输入会在无界占用内存前失败。
 | `--strict-mcp-config` | 见 run 专属 |
 | `--verbose` | 见 run 专属 |
 

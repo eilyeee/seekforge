@@ -20,6 +20,7 @@ describe("commandInvokes (verify/lint gate matcher)", () => {
     expect(commandInvokes("pnpm test", "pnpm test")).toBe(true);
     expect(commandInvokes("pnpm test --watch", "pnpm test")).toBe(true);
     expect(commandInvokes("pnpm  test", "pnpm test")).toBe(true); // whitespace-normalized
+    expect(commandInvokes("pnpm \\\ntest", "pnpm test")).toBe(true); // shell line continuation
   });
   it("does NOT match a different command that merely contains the string", () => {
     expect(commandInvokes("pnpm test:watch", "pnpm test")).toBe(false);

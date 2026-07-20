@@ -44,7 +44,16 @@ export function abortablePromise<T>(
   makeReason: () => unknown,
 ): Promise<T> {
   if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(makeReason());
+  if (signal.aborted) {
+    // The producer may have synchronously aborted the signal immediately
+    // before returning a rejected promise. Observe that promise even though
+    // cancellation wins, otherwise its rejection becomes process-global.
+    void promise.then(
+      () => {},
+      () => {},
+    );
+    return Promise.reject(makeReason());
+  }
   return new Promise<T>((resolve, reject) => {
     const off = onAbortOnce(signal, () => reject(makeReason()));
     promise.then(

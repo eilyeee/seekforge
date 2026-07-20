@@ -147,6 +147,16 @@ describe("resolved-address and redirect SSRF checks", () => {
     ).rejects.toThrow(/resolves to a private/i);
   });
 
+  it("stops waiting for DNS when the request is cancelled", async () => {
+    const controller = new AbortController();
+    const resolver = vi.fn(() => new Promise<never>(() => {}));
+    const pending = assertPublicResolvedUrl(checkFetchUrl("https://example.test/docs"), resolver, controller.signal);
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: "fetch_failed" });
+  });
+
   it("revalidates redirect targets before following them", async () => {
     const transport = vi.fn(
       async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } }),

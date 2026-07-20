@@ -5,13 +5,14 @@ import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { DEFAULT_LIMITS } from "@seekforge/shared";
+import { abortablePromise, onAbortOnce } from "../../util/abort.js";
+import { readResponseBody } from "../../util/response-body.js";
 import { ToolError } from "../errors.js";
 import { redactSecrets } from "../redact.js";
 import { truncateHeadTail } from "../text.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
-const MAX_BODY_BYTES = 1_000_000;
 const MAX_REDIRECTS = 5;
 
 type ResolvedAddress = { address: string; family: number };
@@ -90,6 +91,7 @@ export function isPrivateAddress(address: string): boolean {
 export async function assertPublicResolvedUrl(
   url: URL,
   resolver: LookupAll = lookupAll,
+  signal?: AbortSignal,
 ): Promise<readonly ResolvedAddress[] | null> {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (isIP(host) !== 0) {
@@ -101,8 +103,13 @@ export async function assertPublicResolvedUrl(
 
   let addresses: readonly ResolvedAddress[];
   try {
-    addresses = await resolver(host);
+    addresses = await abortablePromise(
+      resolver(host),
+      signal,
+      () => new ToolError("fetch_failed", `DNS lookup cancelled for ${host}`),
+    );
   } catch (err) {
+    if (err instanceof ToolError) throw err;
     throw new ToolError(
       "fetch_failed",
       `DNS lookup failed for ${host}: ${err instanceof Error ? err.message : String(err)}`,
@@ -282,7 +289,7 @@ export async function fetchPublicResponse(
   const transport = deps.transport ?? pinnedTransport;
   let current = initialUrl;
   for (let redirects = 0; ; redirects++) {
-    const addresses = await assertPublicResolvedUrl(current, deps.resolver);
+    const addresses = await assertPublicResolvedUrl(current, deps.resolver, signal);
     const response = await transport(current, addresses, signal);
     const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
     if (location === null) return { response, finalUrl: current };
@@ -300,29 +307,7 @@ export async function fetchPublicResponse(
   }
 }
 
-/** Read a response incrementally so the size cap applies before buffering it all. */
-export async function readResponseBody(response: Response, maxBytes = MAX_BODY_BYTES): Promise<Buffer> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new ToolError("too_large", `Response body exceeds ${maxBytes} bytes`);
-  }
-  if (response.body === null) return Buffer.alloc(0);
-
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new ToolError("too_large", `Response body exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, total);
-}
+export { readResponseBody } from "../../util/response-body.js";
 
 /** Crude readable-text extraction for HTML pages (no DOM dependency). */
 export function htmlToText(html: string): string {
@@ -428,15 +413,17 @@ const webFetch = defineTool({
     description: `Fetch URL: ${args.url}`,
     command: `GET ${args.url}`,
   }),
-  async run(args, _ctx) {
+  async run(args, ctx) {
     const url = checkFetchUrl(args.url);
 
     const controller = new AbortController();
+    const offAbort = onAbortOnce(ctx.signal, () => controller.abort());
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const { response: res, finalUrl } = await fetchPublicResponse(url, controller.signal);
       const contentType = res.headers.get("content-type") ?? "";
       if (!/text\/|json|xml|javascript/i.test(contentType)) {
+        await res.body?.cancel().catch(() => undefined);
         throw new ToolError("unsupported_content", `Unsupported content-type: ${contentType || "unknown"}`);
       }
 
@@ -461,9 +448,11 @@ const webFetch = defineTool({
         meta: { truncated },
       };
     } catch (err) {
+      if (ctx.signal?.aborted) throw new ToolError("cancelled", "Web fetch cancelled");
       if (err instanceof ToolError) throw err;
       throw new ToolError("fetch_failed", `Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      offAbort();
       clearTimeout(timer);
     }
   },
@@ -577,12 +566,13 @@ const webSearch = defineTool({
     description: `Web search: ${args.query}`,
     command: `SEARCH ${args.query}`,
   }),
-  async run(args, _ctx) {
+  async run(args, ctx) {
     const count = Math.min(args.count ?? SEARCH_DEFAULT_COUNT, SEARCH_MAX_COUNT);
     const url = new URL(DDG_HTML_ENDPOINT);
     url.searchParams.set("q", args.query);
 
     const controller = new AbortController();
+    const offAbort = onAbortOnce(ctx.signal, () => controller.abort());
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let res: Response;
     let buf: Buffer;
@@ -598,9 +588,11 @@ const webSearch = defineTool({
       }
       buf = await readResponseBody(res);
     } catch (err) {
+      if (ctx.signal?.aborted) throw new ToolError("cancelled", "Web search cancelled");
       if (err instanceof ToolError && err.code === "search_failed") throw err;
       throw new ToolError("search_failed", `Search failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      offAbort();
       clearTimeout(timer);
     }
 
