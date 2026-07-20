@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
+import { installProcessTeardown } from "../util/process-teardown.js";
 
 /** Error thrown for runtime-reported failures; code mirrors PROTOCOL.md. */
 export class RuntimeError extends Error {
@@ -41,6 +42,10 @@ type Pending = {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const DISPOSE_GRACE_MS = 5_000;
+/** After SIGTERM at dispose, wait this long before escalating to SIGKILL. */
+const DISPOSE_KILL_GRACE_MS = 2_000;
+/** Bounded tail of the runtime's stderr kept for crash diagnostics. */
+const STDERR_TAIL_MAX = 4_000;
 
 /**
  * Line-delimited JSON client for seekforge-runtime (crates/runtime/PROTOCOL.md).
@@ -53,6 +58,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let pending = new Map<string, Pending>();
   let nextId = 1;
   let disposed = false;
+  let teardownInstalled = false;
 
   function takePending(id: string): Pending | undefined {
     const request = pending.get(id);
@@ -74,6 +80,35 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
 
     const proc = spawn(options.binPath, [], { stdio: ["pipe", "pipe", "pipe"] });
     child = proc;
+
+    // Drain stderr unconditionally: nothing else reads fd 2, so a runtime that
+    // writes a stack trace / panic / verbose log (~64KB) would otherwise fill
+    // the pipe buffer and block forever on its own stderr write, hanging every
+    // subsequent call() to its timeout. Keep a bounded tail for diagnostics.
+    let stderrTail = "";
+    proc.stderr.setEncoding("utf8");
+    proc.stderr.on("data", (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_MAX);
+    });
+    proc.stderr.on("error", () => {});
+
+    // Force-kill the child if the host process dies without calling dispose()
+    // (a bare SIGTERM/hard exit would otherwise orphan the runtime), matching
+    // the LSP client and browser tool. Installed once, lazily after the first
+    // spawn, so sessions that never use the runtime add no listeners.
+    if (!teardownInstalled) {
+      teardownInstalled = true;
+      installProcessTeardown({
+        onSignal: () => dispose(),
+        onExit: () => {
+          try {
+            child?.kill("SIGKILL");
+          } catch {
+            // best-effort: the child may already be gone
+          }
+        },
+      });
+    }
 
     const rl = createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
@@ -107,16 +142,59 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       child = undefined;
       const stale = pending;
       pending = new Map();
+      const tail = stderrTail.trim();
+      const suffix = tail ? `${detail}; stderr: ${tail}` : detail;
       for (const p of stale.values()) {
         clearTimeout(p.timer);
         p.offAbort?.();
-        p.reject(new RuntimeError("runtime_crashed", `seekforge-runtime exited unexpectedly (${detail})`));
+        p.reject(new RuntimeError("runtime_crashed", `seekforge-runtime exited unexpectedly (${suffix})`));
       }
     };
     proc.on("exit", (code, signal) => onGone(`code=${code} signal=${signal}`));
     proc.on("error", (err) => onGone(err.message));
 
     return proc;
+  }
+
+  function dispose(): void {
+    disposed = true;
+    const proc = child;
+    if (proc) {
+      for (const id of pending.keys()) sendCancellation(proc, id);
+    }
+    for (const id of [...pending.keys()]) {
+      takePending(id)?.reject(new RuntimeError("disposed", "runtime client disposed"));
+    }
+    if (proc) {
+      child = undefined;
+      proc.stdin.end();
+      // Give a freshly spawned runtime enough time to consume the queued
+      // request and cancellation before forcing it down under heavy load, then
+      // escalate SIGTERM → SIGKILL so a runtime that ignores stdin-EOF and
+      // SIGTERM is still reaped instead of lingering.
+      let killed = false;
+      proc.once("exit", () => {
+        killed = true;
+      });
+      const sigterm = setTimeout(() => {
+        if (killed) return;
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          // best-effort
+        }
+        const sigkill = setTimeout(() => {
+          if (killed) return;
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // best-effort
+          }
+        }, DISPOSE_KILL_GRACE_MS);
+        sigkill.unref();
+      }, DISPOSE_GRACE_MS);
+      sigterm.unref();
+    }
   }
 
   return {
@@ -163,24 +241,6 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       return this.call<{ version: string }>("ping", {});
     },
 
-    dispose() {
-      disposed = true;
-      const proc = child;
-      if (proc) {
-        for (const id of pending.keys()) sendCancellation(proc, id);
-      }
-      for (const id of [...pending.keys()]) {
-        takePending(id)?.reject(new RuntimeError("disposed", "runtime client disposed"));
-      }
-      if (proc) {
-        child = undefined;
-        proc.stdin.end();
-        // Give a freshly spawned runtime enough time to consume the queued
-        // request and cancellation before forcing it down under heavy load.
-        const forceKill = setTimeout(() => proc.kill(), DISPOSE_GRACE_MS);
-        forceKill.unref();
-        proc.once("exit", () => clearTimeout(forceKill));
-      }
-    },
+    dispose,
   };
 }

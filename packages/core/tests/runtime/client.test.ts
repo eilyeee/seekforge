@@ -29,6 +29,14 @@ rl.on("line", (line) => {
     return;
   }
   if (req.method === "die") process.exit(7);
+  if (req.method === "flood_stderr") {
+    // Write far more than a pipe buffer (~64KB) to stderr, THEN answer. If the
+    // client does not drain stderr, this write blocks and the answer never
+    // comes — the call() below would hang to its timeout.
+    process.stderr.write("E".repeat(512 * 1024));
+    process.stdout.write(JSON.stringify({ id: req.id, ok: true, data: { got: req.params } }) + "\\n");
+    return;
+  }
   if (req.method === "slow") {
     active.set(req.id, {
       marker: req.params.marker,
@@ -89,6 +97,19 @@ describe("runtime client", () => {
         name: "RuntimeError",
         code: "sensitive_path",
       });
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it("drains stderr so a chatty runtime cannot deadlock on a full pipe", async () => {
+    const client = createRuntimeClient({ binPath });
+    try {
+      // Without stderr draining this half-MB stderr write blocks the runtime
+      // before it answers, and the call hangs to its timeout. A short timeout
+      // makes the regression fail fast instead of stalling the suite.
+      const result = await client.call<{ got: unknown }>("flood_stderr", { workspace: "/w" }, { timeoutMs: 4000 });
+      expect(result.got).toMatchObject({ workspace: "/w" });
     } finally {
       client.dispose();
     }
