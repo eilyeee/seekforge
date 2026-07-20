@@ -349,13 +349,24 @@ export class RunManager {
   }
 
   /**
-   * Collapse the append log to one record per run (its latest state), keeping
-   * only the most-recently-updated {@link RUNS_LEDGER_MAX_RETAINED} runs, then
+   * Collapse the append log to one record per run (its latest state), then
    * rewrite it chronologically. Crash-recovery semantics are preserved: the
    * rewritten file is exactly the latest valid state readRunLedger would report.
+   *
+   * Retention: keep EVERY non-terminal run (queued/running) unconditionally,
+   * plus the most-recently-updated {@link RUNS_LEDGER_MAX_RETAINED} terminal
+   * runs. A non-terminal run must never be evicted: its later terminal
+   * `update()` reads the current record back from this file, so dropping it
+   * would make that update a silent no-op — the terminal state never appended,
+   * the active/seq maps leaked, and the completed/failed metrics never bumped.
    */
   private compactLedger(workspace: string, state: LedgerState): void {
-    const retained = readRunLedger(workspace).slice(0, RUNS_LEDGER_MAX_RETAINED);
+    const isTerminal = (status: RunStatus): boolean =>
+      status === "waiting" || status === "succeeded" || status === "failed" || status === "cancelled";
+    const all = readRunLedger(workspace); // most-recently-updated first
+    const nonTerminal = all.filter((record) => !isTerminal(record.status));
+    const terminal = all.filter((record) => isTerminal(record.status)).slice(0, RUNS_LEDGER_MAX_RETAINED);
+    const retained = [...nonTerminal, ...terminal];
     const ordered = [...retained].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
     writeProjectFileAtomic(workspace, ".seekforge/runs.jsonl", serialized);

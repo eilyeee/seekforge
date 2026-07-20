@@ -183,15 +183,57 @@ describe("append-only run ledger", () => {
     const lines = readFileSync(ledgerPath, "utf8")
       .split("\n")
       .filter((l) => l.trim() !== "").length;
-    // Compaction bounds the log at the retention cap, well below what was written.
-    expect(lines).toBe(RUNS_LEDGER_MAX_RETAINED);
+    // Compaction bounds the terminal runs at the retention cap, plus the one
+    // still-queued run (non-terminal runs are always retained — see REG1 below).
+    expect(lines).toBe(RUNS_LEDGER_MAX_RETAINED + 1);
     expect(lines).toBeLessThan(RUNS_LEDGER_COMPACTION_THRESHOLD);
     // The newest run (highest updatedAt) is retained and queryable...
     expect(manager.get(workspace, created.runId)).toMatchObject({ runId: created.runId, status: "queued" });
-    // ...while the oldest seed was evicted as least-recently-updated.
+    // ...while the oldest terminal seed was evicted as least-recently-updated.
     expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
     // Every retained line still parses as a valid ledger record.
     expect(manager.list(workspace).length).toBe(lines);
+  });
+
+  it("REG1: never evicts a non-terminal run, so its later terminal update still lands", () => {
+    const workspace = makeWorkspace();
+    const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
+    const base = Date.parse("2020-01-01T00:00:00.000Z");
+    // The victim: a queued run with the OLDEST updatedAt — a recency-only cap
+    // would evict it first. It must survive because it is non-terminal.
+    const victim = JSON.stringify({
+      runId: "run-victim",
+      source: "background",
+      status: "queued",
+      attempt: 1,
+      workspace,
+      createdAt: new Date(base).toISOString(),
+      updatedAt: new Date(base).toISOString(),
+    });
+    // Fill the rest of the threshold with newer terminal runs.
+    const seeded = Array.from({ length: RUNS_LEDGER_COMPACTION_THRESHOLD - 1 }, (_, i) => {
+      const ts = new Date(base + (i + 1) * 1000).toISOString();
+      return JSON.stringify({
+        runId: `run-seed-${i}`,
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    });
+    mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+    writeFileSync(ledgerPath, `${[victim, ...seeded].join("\n")}\n`);
+
+    const manager = new RunManager();
+    manager.create({ workspace, source: "background" }); // trips compaction
+
+    // The oldest run survived compaction because it is still queued...
+    expect(manager.get(workspace, "run-victim")).toMatchObject({ runId: "run-victim", status: "queued" });
+    // ...so its terminal update is not silently dropped (get() found the record).
+    const updated = manager.update(workspace, "run-victim", { status: "succeeded", costUsd: 0.1 });
+    expect(updated).toMatchObject({ runId: "run-victim", status: "succeeded" });
   });
 
   it("drops the in-memory seq entry once a run reaches a terminal state", () => {
