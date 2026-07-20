@@ -433,6 +433,13 @@ export type ShellResult = {
 
 /** Cap raw capture so a chatty process cannot exhaust memory; tools re-truncate for output. */
 const MAX_CAPTURE_CHARS = 2_000_000;
+/**
+ * After the shell process exits, wait this long for its stdout/stderr pipes to
+ * reach EOF (the "close" event). If a detached descendant inherited the pipes
+ * and holds them open past this grace, reap the process group and report the
+ * real exit code instead of stalling to the command timeout.
+ */
+const EXIT_DRAIN_GRACE_MS = 100;
 
 export type RunShellOptions = {
   /** OS-level sandbox; "off"/absent = plain /bin/sh (current behavior). */
@@ -552,14 +559,17 @@ export function runShellCommand(
     };
     let timer: ReturnType<typeof setTimeout>;
     let offAbort: () => void = () => {};
+    let exitGrace: ReturnType<typeof setTimeout> | undefined;
 
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (exitGrace) clearTimeout(exitGrace);
       offAbort();
       child.removeAllListeners("error");
       child.removeAllListeners("close");
+      child.removeAllListeners("exit");
       child.stdout.removeAllListeners("data");
       child.stderr.removeAllListeners("data");
       fn();
@@ -591,8 +601,7 @@ export function runShellCommand(
       settleTerminalError("cancelled");
     });
 
-    child.on("error", (err) => settle(() => reject(new ToolError("spawn_failed", err.message))));
-    child.on("close", (code) => {
+    const finishNormally = (code: number | null): void =>
       settle(() => {
         // Flush any bytes the decoders buffered mid-sequence at stream end.
         const outTail = outDecoder.end();
@@ -602,6 +611,23 @@ export function runShellCommand(
         const durationMs = Date.now() - started;
         resolve({ exitCode: code ?? -1, stdout, stderr, durationMs });
       });
+
+    child.on("error", (err) => settle(() => reject(new ToolError("spawn_failed", err.message))));
+    // Fast path: the pipes reach EOF (no lingering holders) and we settle with
+    // the full output.
+    child.on("close", (code) => finishNormally(code));
+    // The shell process itself exited. "close" normally follows immediately,
+    // but a detached descendant that inherited the stdout/stderr pipe keeps it
+    // open, so "close" never fires. Wait a short grace for a clean drain, then
+    // reap the process group and settle with the real exit code — otherwise the
+    // run stalls to `timeoutMs` and is mislabeled a timeout.
+    child.on("exit", (code) => {
+      if (settled || exitGrace) return;
+      exitGrace = setTimeout(() => {
+        killTree();
+        finishNormally(code);
+      }, EXIT_DRAIN_GRACE_MS);
+      exitGrace.unref();
     });
   });
 }

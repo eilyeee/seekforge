@@ -536,6 +536,19 @@ describe("runShellCommand onOutput", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("still-works");
   });
+
+  it("settles on shell exit even when a detached descendant holds the pipes open", async () => {
+    const ws = makeWorkspace();
+    const started = Date.now();
+    // The shell exits ~immediately, but `sleep 30 &` inherits stdout/stderr and
+    // outlives it. Before the exit-settle fix this hung to the 30s timeout and
+    // reported "timeout"; now it settles quickly with the real exit code.
+    const res = await runShellCommand("sleep 30 & echo done", ws, 30_000);
+    const elapsed = Date.now() - started;
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("done");
+    expect(elapsed).toBeLessThan(5_000);
+  });
 });
 
 describe("looksLikeSandboxDenial", () => {
