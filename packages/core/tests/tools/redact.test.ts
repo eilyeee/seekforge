@@ -5,9 +5,15 @@ describe("redactSecrets", () => {
   it("masks well-known token prefixes, keeping the first 4 chars", () => {
     const cases: Array<[string, string]> = [
       ["sk-abcdefghijklmnop1234", "sk-a****"],
+      ["pk-abcdefghijklmnop1234", "pk-a****"],
+      ["rk-abcdefghijklmnop1234", "rk-a****"],
       ["ghp_abcdefghijklmnopqrst", "ghp_****"],
       ["gho_abcdefghijklmnopqrst", "gho_****"],
+      ["ghs_abcdefghijklmnopqrst", "ghs_****"],
+      ["ghu_abcdefghijklmnopqrst", "ghu_****"],
+      ["ghr_abcdefghijklmnopqrst", "ghr_****"],
       ["xoxb-1234-abcdefghijklmnop", "xoxb****"],
+      ["xoxp-1234-abcdefghijklmnop", "xoxp****"],
       ["AKIAIOSFODNN7EXAMPLE", "AKIA****"],
       ["AIzaSyD-abcdefghijklmnop", "AIza****"],
     ];

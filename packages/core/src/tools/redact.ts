@@ -9,7 +9,7 @@ const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9
 
 /** Well-known token prefixes. */
 const TOKEN_PREFIXES =
-  /\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|gho_[A-Za-z0-9]{8,}|xoxb-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{8,}|AIza[A-Za-z0-9_-]{8,})/g;
+  /\b((?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9]{8,}|xox[bpasr]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{8,}|AIza[A-Za-z0-9_-]{8,})/g;
 
 /** Env-style assignments: FOO_API_KEY=..., MY_SECRET_X: "...", BAR_TOKEN='...'. */
 const ENV_ASSIGNMENT = /\b([A-Z0-9_]*(?:API_KEY|SECRET|TOKEN)[A-Z0-9_]*)(\s*[=:]\s*)("([^"\n]+)"|'([^'\n]+)'|(\S+))/g;
