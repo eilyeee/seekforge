@@ -1,21 +1,38 @@
 //! apply_patch: search/replace edits, all-or-nothing.
 
+use std::io::{Read, Seek, SeekFrom, Write};
+
 use serde_json::{json, Value};
 
 use crate::protocol::{codes, EditSpec, RtError, RtResult};
-use crate::sandbox::{resolve_for_read, resolve_for_write};
+use crate::sandbox::SecureWritePath;
 
 pub fn apply_patch(workspace: &str, path: &str, edits: &[EditSpec]) -> RtResult<Value> {
-    let resolved = resolve_for_write(workspace, path)?;
-    // Editing reads current content back into error hints: read rules apply too.
-    resolve_for_read(workspace, path)?;
-    let meta = std::fs::metadata(&resolved)
+    apply_patch_with_hook(workspace, path, edits, || {})
+}
+
+fn apply_patch_with_hook<F>(
+    workspace: &str,
+    path: &str,
+    edits: &[EditSpec],
+    after_validation: F,
+) -> RtResult<Value>
+where
+    F: FnOnce(),
+{
+    // Editing reads current content back into error hints, so read rules apply too.
+    let target = SecureWritePath::prepare(workspace, path, true)?;
+    after_validation();
+    let mut file = target.open_for_update()?;
+    let meta = file
+        .metadata()
         .map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
     if !meta.is_file() {
         return Err(RtError::io(format!("not a regular file: {path}")));
     }
-    let bytes =
-        std::fs::read(&resolved).map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
     let content = String::from_utf8(bytes).map_err(|_| {
         RtError::new(
             codes::BINARY_FILE,
@@ -25,8 +42,12 @@ pub fn apply_patch(workspace: &str, path: &str, edits: &[EditSpec]) -> RtResult<
 
     // All edits are applied in memory; any failure means nothing is written.
     let next = apply_edits(&content, edits)?;
-    std::fs::write(&resolved, next)
+    file.seek(SeekFrom::Start(0))
         .map_err(|e| RtError::io(format!("cannot write {path}: {e}")))?;
+    file.write_all(next.as_bytes())
+        .map_err(|e| RtError::io(format!("cannot write {path}: {e}")))?;
+    file.set_len(next.len() as u64)
+        .map_err(|e| RtError::io(format!("cannot truncate {path}: {e}")))?;
     Ok(json!({ "path": path, "editsApplied": edits.len() }))
 }
 
@@ -187,5 +208,54 @@ mod tests {
         assert_eq!(data["editsApplied"], 2);
         assert_eq!(std::fs::read_to_string(ws.join("f.txt")).unwrap(), "A\nB\n");
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn patch_rejects_parent_symlink_swap_after_validation() {
+        let ws = tmpdir("patch-parent-swap");
+        let outside = tmpdir("patch-parent-outside");
+        std::fs::create_dir_all(ws.join("dir")).unwrap();
+        std::fs::write(ws.join("dir/file.txt"), "inside").unwrap();
+        std::fs::write(outside.join("file.txt"), "outside").unwrap();
+        let err = apply_patch_with_hook(
+            ws.to_str().unwrap(),
+            "dir/file.txt",
+            &[edit("inside", "changed")],
+            || {
+                std::fs::rename(ws.join("dir"), ws.join("dir-old")).unwrap();
+                std::os::unix::fs::symlink(&outside, ws.join("dir")).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("file.txt")).unwrap(),
+            "outside"
+        );
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn patch_rejects_leaf_symlink_swap_after_validation() {
+        let ws = tmpdir("patch-leaf-swap");
+        let outside = tmpdir("patch-leaf-outside");
+        let outside_file = outside.join("outside.txt");
+        std::fs::write(ws.join("target.txt"), "inside").unwrap();
+        std::fs::write(&outside_file, "outside").unwrap();
+        let err = apply_patch_with_hook(
+            ws.to_str().unwrap(),
+            "target.txt",
+            &[edit("inside", "changed")],
+            || {
+                std::fs::remove_file(ws.join("target.txt")).unwrap();
+                std::os::unix::fs::symlink(&outside_file, ws.join("target.txt")).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "outside");
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 }

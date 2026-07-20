@@ -1,13 +1,12 @@
 //! File methods: read_file, list_files, write_file.
 
+use std::io::Write;
 use std::path::Path;
 
 use serde_json::{json, Value};
 
 use crate::protocol::{codes, RtError, RtResult};
-use crate::sandbox::{
-    is_ignored_dir, resolve_for_read, resolve_for_write, resolve_inside_workspace,
-};
+use crate::sandbox::{is_ignored_dir, resolve_for_read, resolve_inside_workspace, SecureWritePath};
 
 /// PROTOCOL.md: files over 5 MB are rejected with `too_large`.
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
@@ -112,18 +111,23 @@ fn walk(
 }
 
 pub fn write_file(workspace: &str, path: &str, content: &str, overwrite: bool) -> RtResult<Value> {
-    let resolved = resolve_for_write(workspace, path)?;
-    if resolved.exists() && !overwrite {
-        return Err(RtError::new(
-            codes::EXISTS,
-            format!("file already exists: {path} (pass overwrite:true to replace)"),
-        ));
-    }
-    if let Some(parent) = resolved.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| RtError::io(format!("cannot create directories for {path}: {e}")))?;
-    }
-    std::fs::write(&resolved, content)
+    write_file_with_hook(workspace, path, content, overwrite, || {})
+}
+
+fn write_file_with_hook<F>(
+    workspace: &str,
+    path: &str,
+    content: &str,
+    overwrite: bool,
+    after_validation: F,
+) -> RtResult<Value>
+where
+    F: FnOnce(),
+{
+    let target = SecureWritePath::prepare(workspace, path, false)?;
+    after_validation();
+    let mut file = target.open_for_write(overwrite)?;
+    file.write_all(content.as_bytes())
         .map_err(|e| RtError::io(format!("cannot write {path}: {e}")))?;
     Ok(json!({ "path": path }))
 }
@@ -178,6 +182,47 @@ mod tests {
         write_file(ws_s, "a/b/c.txt", "two", true).unwrap();
         assert_eq!(read_file(ws_s, "a/b/c.txt").unwrap()["content"], "two");
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn write_rejects_parent_symlink_swap_after_validation() {
+        let ws = tmpdir("write-parent-swap");
+        let outside = tmpdir("write-parent-outside");
+        std::fs::create_dir_all(ws.join("dir")).unwrap();
+        let err =
+            write_file_with_hook(ws.to_str().unwrap(), "dir/new.txt", "secret", false, || {
+                std::fs::rename(ws.join("dir"), ws.join("dir-old")).unwrap();
+                std::os::unix::fs::symlink(&outside, ws.join("dir")).unwrap();
+            })
+            .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        assert!(!outside.join("new.txt").exists());
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn write_rejects_leaf_symlink_swap_after_validation() {
+        let ws = tmpdir("write-leaf-swap");
+        let outside = tmpdir("write-leaf-outside");
+        let outside_file = outside.join("outside.txt");
+        std::fs::write(ws.join("target.txt"), "inside").unwrap();
+        std::fs::write(&outside_file, "outside").unwrap();
+        let err = write_file_with_hook(
+            ws.to_str().unwrap(),
+            "target.txt",
+            "replacement",
+            true,
+            || {
+                std::fs::remove_file(ws.join("target.txt")).unwrap();
+                std::os::unix::fs::symlink(&outside_file, ws.join("target.txt")).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "outside");
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

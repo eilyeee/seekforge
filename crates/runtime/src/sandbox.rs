@@ -5,8 +5,11 @@
 //! the missing tail re-appended. This mirrors the TypeScript sandbox
 //! (packages/core/src/tools/sandbox.ts) as a second line of defense.
 
-use std::ffi::OsString;
-use std::fs;
+use std::ffi::{CString, OsStr, OsString};
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use crate::protocol::{codes, RtError, RtResult};
@@ -132,6 +135,11 @@ pub fn resolve_inside_workspace(workspace: &str, rel: &str) -> RtResult<PathBuf>
 pub fn resolve_for_read(workspace: &str, rel: &str) -> RtResult<PathBuf> {
     let ws = canonical_workspace(workspace)?;
     let resolved = resolve_inside_workspace(workspace, rel)?;
+    ensure_read_allowed(&ws, &resolved, rel)?;
+    Ok(resolved)
+}
+
+fn ensure_read_allowed(ws: &Path, resolved: &Path, rel: &str) -> RtResult<()> {
     let basename = resolved
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -139,7 +147,7 @@ pub fn resolve_for_read(workspace: &str, rel: &str) -> RtResult<PathBuf> {
     // Secret files with a generic basename (config.json / triggers.json /
     // .git/config) are blocked by workspace-relative path.
     let rel_from_ws = resolved
-        .strip_prefix(&ws)
+        .strip_prefix(ws)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default();
     if is_sensitive_basename(&basename) || is_sensitive_rel_path(&rel_from_ws) {
@@ -148,7 +156,7 @@ pub fn resolve_for_read(workspace: &str, rel: &str) -> RtResult<PathBuf> {
             format!("reading {rel} is not allowed (sensitive file)"),
         ));
     }
-    Ok(resolved)
+    Ok(())
 }
 
 /// Containment + .git/ protection for write access.
@@ -164,6 +172,184 @@ pub fn resolve_for_write(workspace: &str, rel: &str) -> RtResult<PathBuf> {
         }
     }
     Ok(resolved)
+}
+
+/// A validated write target anchored to an open workspace descriptor.
+///
+/// All later traversal is descriptor-relative and rejects symlinks. This keeps
+/// validation and mutation bound to the same directory hierarchy even when an
+/// untrusted process swaps path components concurrently.
+pub(crate) struct SecureWritePath {
+    root: File,
+    parents: Vec<OsString>,
+    leaf: OsString,
+    display: String,
+}
+
+impl SecureWritePath {
+    pub(crate) fn prepare(workspace: &str, rel: &str, needs_read: bool) -> RtResult<Self> {
+        let ws = canonical_workspace(workspace)?;
+        let root = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&ws)
+            .map_err(|e| secure_path_error(rel, "open workspace", e))?;
+        let resolved = resolve_for_write(workspace, rel)?;
+        if needs_read {
+            ensure_read_allowed(&ws, &resolved, rel)?;
+        }
+        let inner = resolved.strip_prefix(&ws).map_err(|_| {
+            RtError::new(
+                codes::OUTSIDE_WORKSPACE,
+                format!("path escapes the workspace: {rel}"),
+            )
+        })?;
+        let mut components = Vec::new();
+        for component in inner.components() {
+            match component {
+                Component::Normal(name) => components.push(name.to_os_string()),
+                _ => {
+                    return Err(RtError::new(
+                        codes::OUTSIDE_WORKSPACE,
+                        format!("invalid workspace-relative path: {rel}"),
+                    ));
+                }
+            }
+        }
+        let leaf = components.pop().ok_or_else(|| {
+            RtError::io(format!("path must name a file inside the workspace: {rel}"))
+        })?;
+        Ok(Self {
+            root,
+            parents: components,
+            leaf,
+            display: rel.to_string(),
+        })
+    }
+
+    pub(crate) fn open_for_write(&self, overwrite: bool) -> RtResult<File> {
+        let parent = self.open_parent(true)?;
+        let mut flags = libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        if overwrite {
+            flags |= libc::O_TRUNC;
+        } else {
+            flags |= libc::O_EXCL;
+        }
+        match openat_file(&parent, &self.leaf, flags, 0o666) {
+            Ok(file) => Ok(file),
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) && !overwrite => {
+                Err(RtError::new(
+                    codes::EXISTS,
+                    format!(
+                        "file already exists: {} (pass overwrite:true to replace)",
+                        self.display
+                    ),
+                ))
+            }
+            Err(error) => Err(secure_path_error(
+                &self.display,
+                "open file for writing",
+                error,
+            )),
+        }
+    }
+
+    pub(crate) fn open_for_update(&self) -> RtResult<File> {
+        let parent = self.open_parent(false)?;
+        openat_file(
+            &parent,
+            &self.leaf,
+            libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+        .map_err(|error| secure_path_error(&self.display, "open file for editing", error))
+    }
+
+    fn open_parent(&self, create: bool) -> RtResult<File> {
+        let mut current = self
+            .root
+            .try_clone()
+            .map_err(|e| secure_path_error(&self.display, "clone workspace handle", e))?;
+        for component in &self.parents {
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            match openat_file(&current, component, flags, 0) {
+                Ok(next) => current = next,
+                Err(error) if create && error.raw_os_error() == Some(libc::ENOENT) => {
+                    match mkdirat(&current, component) {
+                        Ok(()) => {}
+                        Err(mkdir_error) if mkdir_error.raw_os_error() == Some(libc::EEXIST) => {}
+                        Err(mkdir_error) => {
+                            return Err(secure_path_error(
+                                &self.display,
+                                "create parent directory",
+                                mkdir_error,
+                            ));
+                        }
+                    }
+                    // Open the winner of a concurrent create with NOFOLLOW.
+                    current = openat_file(&current, component, flags, 0).map_err(|error| {
+                        secure_path_error(&self.display, "open parent directory", error)
+                    })?;
+                }
+                Err(error) => {
+                    return Err(secure_path_error(
+                        &self.display,
+                        "open parent directory",
+                        error,
+                    ));
+                }
+            }
+        }
+        Ok(current)
+    }
+}
+
+fn c_name(name: &OsStr) -> std::io::Result<CString> {
+    CString::new(name.as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path component contains a NUL byte",
+        )
+    })
+}
+
+fn openat_file(
+    parent: &File,
+    name: &OsStr,
+    flags: i32,
+    mode: libc::c_uint,
+) -> std::io::Result<File> {
+    let name = c_name(name)?;
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, mode) };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+}
+
+fn mkdirat(parent: &File, name: &OsStr) -> std::io::Result<()> {
+    let name = c_name(name)?;
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) };
+    if result < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn secure_path_error(path: &str, operation: &str, error: std::io::Error) -> RtError {
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::ELOOP) | Some(libc::ENOTDIR)
+    ) {
+        RtError::new(
+            codes::OUTSIDE_WORKSPACE,
+            format!("unsafe symlink or non-directory component in {path}: {error}"),
+        )
+    } else {
+        RtError::io(format!("cannot {operation} for {path}: {error}"))
+    }
 }
 
 #[cfg(test)]
