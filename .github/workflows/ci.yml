@@ -118,6 +118,12 @@ jobs:
       - name: WS protocol coverage
         run: pnpm test:coverage:ws
 
+      # Run-ledger (JSONL torn-write repair, compaction retention, seq recovery)
+      # and triggers (HMAC/constant-time auth, injection sanitization) are
+      # enforcement surfaces too — gate them so gutting their tests fails CI.
+      - name: Server enforcement coverage
+        run: pnpm test:coverage:server
+
       - name: Upload CLI build
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
