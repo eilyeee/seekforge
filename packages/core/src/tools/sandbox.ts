@@ -46,9 +46,25 @@ export function resolveInsideWorkspace(workspace: string, relPath: string): stri
   }
   let resolved: string;
   try {
-    resolved = path.join(fs.realpathSync(probe), ...tail);
+    resolved = fs.realpathSync(probe);
   } catch {
-    resolved = path.join(probe, ...tail);
+    resolved = probe;
+  }
+  // Re-append the missing tail one component at a time, rejecting any symlink
+  // among them. The existence probe above uses `existsSync`, which FOLLOWS
+  // symlinks, so a DANGLING symlink (its target does not exist) is skipped as a
+  // plain missing name — its literal path then passes the containment check
+  // below, after which a following write/mkdir would follow the link and escape
+  // the workspace. lstat (no-follow) closes that hole.
+  for (const name of tail) {
+    resolved = path.join(resolved, name);
+    const st = fs.lstatSync(resolved, { throwIfNoEntry: false });
+    if (st?.isSymbolicLink()) {
+      throw new ToolError("outside_workspace", `Path escapes the workspace (symlink): ${relPath}`, {
+        path: relPath,
+        resolved,
+      });
+    }
   }
 
   if (resolved !== wsReal && !resolved.startsWith(wsReal + path.sep)) {

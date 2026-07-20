@@ -43,6 +43,17 @@ describe("resolveInsideWorkspace", () => {
     expect(codeOf(() => resolveInsideWorkspace(ws, "file-link"))).toBe("outside_workspace");
   });
 
+  it("rejects a DANGLING symlink whose target does not exist (existsSync would follow it)", () => {
+    const ws = makeWorkspace();
+    const outside = makeWorkspace();
+    // A symlink to a NON-existent target: existsSync(link) follows it and
+    // returns false, so the containment probe used to treat `link` as a plain
+    // new name and let a write through it escape. Must be rejected.
+    fs.symlinkSync(path.join(outside, "does-not-exist.txt"), path.join(ws, "dangling"));
+    expect(codeOf(() => resolveInsideWorkspace(ws, "dangling"))).toBe("outside_workspace");
+    expect(codeOf(() => resolveInsideWorkspace(ws, "dangling/AGENT.md"))).toBe("outside_workspace");
+  });
+
   it("resolves not-yet-existing paths via the deepest existing ancestor", () => {
     const ws = makeWorkspace();
     const outside = makeWorkspace();
