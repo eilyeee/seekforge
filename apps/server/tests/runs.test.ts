@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
@@ -193,6 +193,50 @@ describe("append-only run ledger", () => {
     expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
     // Every retained line still parses as a valid ledger record.
     expect(manager.list(workspace).length).toBe(lines);
+  });
+
+  it("S4: redacts secrets in persisted event frames", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "background" });
+    manager.appendFrame(workspace, run.runId, { type: "model.delta", text: "the key is sk-ABCDEFGH12345678 ok" });
+    const raw = readFileSync(join(workspace, ".seekforge/run-events", `${run.runId}.jsonl`), "utf8");
+    expect(raw).not.toContain("sk-ABCDEFGH12345678");
+    expect(raw).toContain("sk-A****");
+    // Redaction keeps the line valid JSON, so replay still works.
+    expect(() => manager.events(workspace, run.runId, 0)).not.toThrow();
+  });
+
+  it("D2: deletes the events file of a run evicted by compaction", () => {
+    const workspace = makeWorkspace();
+    const ledgerPath = join(workspace, ".seekforge/runs.jsonl");
+    const base = Date.parse("2020-01-01T00:00:00.000Z");
+    const seeded = Array.from({ length: RUNS_LEDGER_COMPACTION_THRESHOLD }, (_, i) => {
+      const ts = new Date(base + i * 1000).toISOString();
+      return JSON.stringify({
+        runId: `run-seed-${i}`,
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+    });
+    mkdirSync(join(workspace, ".seekforge/run-events"), { recursive: true });
+    writeFileSync(ledgerPath, `${seeded.join("\n")}\n`);
+    // An events file for the oldest seed (evicted first by compaction).
+    const victimEvents = join(workspace, ".seekforge/run-events/run-seed-0.jsonl");
+    writeFileSync(
+      victimEvents,
+      `${JSON.stringify({ runId: "run-seed-0", seq: 1, ts: new Date(base).toISOString(), frame: { type: "x" } })}\n`,
+    );
+    expect(existsSync(victimEvents)).toBe(true);
+
+    const manager = new RunManager();
+    manager.create({ workspace, source: "background" }); // trips compaction → evicts run-seed-0
+    expect(manager.get(workspace, "run-seed-0")).toBeUndefined();
+    expect(existsSync(victimEvents)).toBe(false);
   });
 
   it("REG1: never evicts a non-terminal run, so its later terminal update still lands", () => {

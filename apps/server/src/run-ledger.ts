@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { redactSecrets } from "@seekforge/core";
 import { appendProjectFile, readProjectFile, writeProjectFileAtomic } from "./config.js";
 
 export const SERVER_PROTOCOL_VERSION = 1;
@@ -264,7 +267,11 @@ export class RunManager {
     }
     this.seq.set(id, nextSeq);
     const event = { runId: id, seq: nextSeq, ts: new Date().toISOString(), frame };
-    appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${JSON.stringify(event)}\n`);
+    // Redact before persisting: frames carry raw model/reasoning deltas and tool
+    // results, any of which can contain a secret that would otherwise land on
+    // disk in cleartext (and be readable via read_file). The mask is JSON-safe,
+    // so the persisted line still parses. runId/seq/ts are not secret-shaped.
+    appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${redactSecrets(JSON.stringify(event))}\n`);
     return event;
   }
 
@@ -371,6 +378,23 @@ export class RunManager {
     const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
     writeProjectFileAtomic(workspace, ".seekforge/runs.jsonl", serialized);
     state.lines = ordered.length;
+
+    // Delete the per-run events file of every evicted (terminal, past-retention)
+    // run — otherwise run-events/<id>.jsonl accumulates forever, unreferenced by
+    // any ledger record. Also drop the evicted run's in-memory seq entry.
+    const retainedIds = new Set(retained.map((record) => record.runId));
+    for (const record of all) {
+      if (retainedIds.has(record.runId)) continue;
+      this.seq.delete(record.runId);
+      // Path-safety: ids are internally generated, but never derive a filesystem
+      // path from one containing a separator or traversal.
+      if (/[/\\]|\.\./.test(record.runId)) continue;
+      try {
+        rmSync(join(workspace, ".seekforge", "run-events", `${record.runId}.jsonl`), { force: true });
+      } catch {
+        // best-effort: an events file that can't be removed is harmless garbage
+      }
+    }
   }
 
   private lastSeq(workspace: string, id: string): number {
