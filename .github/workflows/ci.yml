@@ -78,6 +78,17 @@ jobs:
           sudo apt-get install -y -qq bubblewrap
           sudo sysctl -q kernel.apparmor_restrict_unprivileged_userns=0
 
+      # Build the runtime so the TS<->Rust integration test (backend-integration
+      # .test.ts) actually runs instead of skipping. Linux only to keep the
+      # macOS matrix lean; the sentinel below makes a missing binary fail there.
+      - name: Setup Rust toolchain (runtime integration test)
+        if: runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build seekforge-runtime (TS<->Rust integration test)
+        if: runner.os == 'Linux'
+        run: cargo build --release -p seekforge-runtime
+
       - name: Typecheck
         run: pnpm -r typecheck
 
@@ -90,6 +101,9 @@ jobs:
           # Fail loudly if the sandbox mechanism is missing instead of letting
           # the enforcement tests skip silently (os-sandbox.test.ts sentinel).
           SEEKFORGE_REQUIRE_SANDBOX_TESTS: "1"
+          # On Linux the runtime was built above, so the TS<->Rust integration
+          # test must run (not skip). macOS has no binary and leaves it empty.
+          SEEKFORGE_REQUIRE_RUNTIME_TESTS: ${{ runner.os == 'Linux' && '1' || '' }}
 
       - name: Critical boundary coverage
         run: pnpm test:coverage:critical

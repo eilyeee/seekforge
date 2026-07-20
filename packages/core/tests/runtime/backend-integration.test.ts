@@ -15,6 +15,20 @@ const BIN = process.env["SEEKFORGE_RUNTIME_BIN"] ?? resolve(__dirname, "../../..
 
 const hasBinary = existsSync(BIN);
 
+// CI sets SEEKFORGE_REQUIRE_RUNTIME_TESTS=1 after building the runtime, so a
+// missing binary becomes a hard failure instead of a silent skip (the same
+// sentinel pattern os-sandbox.test.ts uses). Without it, local runs still skip.
+if (process.env["SEEKFORGE_REQUIRE_RUNTIME_TESTS"] === "1" && !hasBinary) {
+  describe("rust runtime backend (integration)", () => {
+    it("requires the seekforge-runtime binary to be built", () => {
+      throw new Error(
+        `seekforge-runtime not found at ${BIN}. Build it with \`cargo build --release -p seekforge-runtime\` ` +
+          "or unset SEEKFORGE_REQUIRE_RUNTIME_TESTS.",
+      );
+    });
+  });
+}
+
 describe.skipIf(!hasBinary)("rust runtime backend (integration)", () => {
   let workspace: string;
   let runtime: RuntimeClient;
