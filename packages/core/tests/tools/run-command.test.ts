@@ -537,6 +537,20 @@ describe("runShellCommand onOutput", () => {
     expect(res.stdout).toContain("still-works");
   });
 
+  it("does not leak a secret env var (e.g. the provider API key) to the command", async () => {
+    const ws = makeWorkspace();
+    const prev = process.env.DEEPSEEK_API_KEY;
+    process.env.DEEPSEEK_API_KEY = "sk-should-not-leak";
+    try {
+      const res = await runShellCommand('printf "key=[%s]" "$DEEPSEEK_API_KEY"', ws, 10_000);
+      expect(res.stdout).toContain("key=[]"); // scrubbed → empty
+      expect(res.stdout).not.toContain("sk-should-not-leak");
+    } finally {
+      if (prev === undefined) delete process.env.DEEPSEEK_API_KEY;
+      else process.env.DEEPSEEK_API_KEY = prev;
+    }
+  });
+
   it("settles on shell exit even when a detached descendant holds the pipes open", async () => {
     const ws = makeWorkspace();
     const started = Date.now();

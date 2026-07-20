@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
 import { onAbortOnce } from "../util/abort.js";
+import { scrubSecretEnv } from "../util/scrub-env.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
 export type CommandPermission = "readonly" | "execute" | "env" | "dangerous";
@@ -505,6 +506,7 @@ export function runShellCommand(
       cwd,
       detached: true, // own process group -> tree kill on timeout
       stdio: ["ignore", "pipe", "pipe"],
+      env: scrubSecretEnv(), // don't leak the provider API key / tokens to commands
     });
 
     let stdout = "";

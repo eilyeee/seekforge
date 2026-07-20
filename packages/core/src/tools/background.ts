@@ -3,6 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import { ToolError } from "./errors.js";
 import { randomBytes } from "node:crypto";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel, type SandboxProfile } from "./os-sandbox.js";
+import { scrubSecretEnv } from "../util/scrub-env.js";
 
 /** Per-stream ring buffer: keep only the LAST N chars of stdout/stderr. */
 const RING_BUFFER_CHARS = 100_000;
@@ -152,6 +153,7 @@ export function createBackgroundTasks(
         cwd,
         detached: true, // own process group -> tree kill
         stdio: ["ignore", "pipe", "pipe"],
+        env: scrubSecretEnv(), // don't leak the provider API key / tokens to commands
       });
       const task: TaskRecord = {
         id,

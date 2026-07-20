@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { onAbortOnce } from "../util/abort.js";
 import { isRecord } from "../util/guards.js";
 import { installProcessTeardown } from "../util/process-teardown.js";
+import { scrubSecretEnv } from "../util/scrub-env.js";
 
 /** Error thrown for runtime-reported failures; code mirrors PROTOCOL.md. */
 export class RuntimeError extends Error {
@@ -78,7 +79,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     if (child) return child;
     if (disposed) throw new RuntimeError("disposed", "runtime client is disposed");
 
-    const proc = spawn(options.binPath, [], { stdio: ["pipe", "pipe", "pipe"] });
+    // Scrub secrets from the runtime child's env: it never calls the provider
+    // API, but it spawns /bin/sh for run_command, which would otherwise inherit
+    // (and could exfiltrate) the API key / tokens. Scrubbing here covers the
+    // runtime's shells transitively.
+    const proc = spawn(options.binPath, [], { stdio: ["pipe", "pipe", "pipe"], env: scrubSecretEnv() });
     child = proc;
 
     // Drain stderr unconditionally: nothing else reads fd 2, so a runtime that
