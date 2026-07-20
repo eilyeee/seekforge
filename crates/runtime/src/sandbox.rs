@@ -258,6 +258,25 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_basename_parity_fixture() {
+        // Shared TS<->Rust fixture: the sensitive/not-sensitive decision here
+        // must match the TypeScript isSensitiveBasename (asserted by a sibling
+        // Vitest). Adding a pattern to one backend without the other breaks
+        // this test. Source: test-fixtures/sensitive-basename.json.
+        let raw = include_str!("../../../test-fixtures/sensitive-basename.json");
+        let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        for case in parsed["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let expected = case["sensitive"].as_bool().unwrap();
+            assert_eq!(
+                is_sensitive_basename(name),
+                expected,
+                "parity mismatch for: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn read_denied_for_sensitive_file() {
         let ws = tmpdir("sens");
         fs::write(ws.join(".env"), "SECRET=1").unwrap();

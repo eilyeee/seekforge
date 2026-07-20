@@ -1,0 +1,21 @@
+{
+  "description": "Shared TS<->Rust parity fixture for the sensitive-file basename check. The TypeScript isSensitiveBasename (packages/shared/src/index.ts) and the Rust is_sensitive_basename (crates/runtime/src/sandbox.rs) each hand-maintain the same pattern list; a file whose basename is `sensitive: true` must never be read/exposed. Both backends assert this fixture, so adding a pattern to one without the other breaks the build. Note the checks are case-SENSITIVE by design (matched against real on-disk basenames).",
+  "cases": [
+    { "name": ".env", "sensitive": true },
+    { "name": ".env.local", "sensitive": true },
+    { "name": ".env.production", "sensitive": true },
+    { "name": ".environment", "sensitive": false },
+    { "name": ".envrc", "sensitive": false },
+    { "name": "envelope.txt", "sensitive": false },
+    { "name": "server.pem", "sensitive": true },
+    { "name": "cert.PEM", "sensitive": false },
+    { "name": "private.key", "sensitive": true },
+    { "name": "keys/id_rsa", "sensitive": false },
+    { "name": "id_rsa", "sensitive": true },
+    { "name": "id_rsa.pub", "sensitive": true },
+    { "name": "id_ed25519", "sensitive": true },
+    { "name": "id_ed25519.pub", "sensitive": true },
+    { "name": "id_ecdsa", "sensitive": false },
+    { "name": "notes.txt", "sensitive": false }
+  ]
+}
