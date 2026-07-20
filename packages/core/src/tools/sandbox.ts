@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isSensitiveBasename } from "@seekforge/shared";
+import { isSensitiveBasename, isSensitiveRelPath } from "@seekforge/shared";
 import { ToolError } from "./errors.js";
 
 // Re-exported so `import { isSensitiveBasename } from "@seekforge/core"` keeps
 // working — the implementation moved to @seekforge/shared (browser-safe, pure)
 // so shared's file-refs/workspace-dirs helpers can use it without a cycle.
-export { isSensitiveBasename };
+export { isSensitiveBasename, isSensitiveRelPath };
 
 /** Directories skipped by listing/search tools. */
 export const DEFAULT_IGNORE_DIRS: ReadonlySet<string> = new Set([
@@ -80,6 +80,15 @@ export function resolveInsideWorkspace(workspace: string, relPath: string): stri
 export function resolveForRead(workspace: string, relPath: string): string {
   const resolved = resolveInsideWorkspace(workspace, relPath);
   if (isSensitiveBasename(path.basename(resolved))) {
+    throw new ToolError("sensitive_path", `Reading ${relPath} is not allowed (sensitive file)`, {
+      path: relPath,
+    });
+  }
+  // Secret files with a generic basename (SeekForge's own config.json /
+  // triggers.json, .git/config) — blocked by workspace-relative path so the
+  // model can't read the provider apiKey / webhook secrets back.
+  const wsReal = fs.realpathSync(workspace);
+  if (isSensitiveRelPath(path.relative(wsReal, resolved))) {
     throw new ToolError("sensitive_path", `Reading ${relPath} is not allowed (sensitive file)`, {
       path: relPath,
     });

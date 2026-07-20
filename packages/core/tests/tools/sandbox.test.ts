@@ -82,6 +82,19 @@ describe("sensitive paths", () => {
     expect(() => resolveForRead(ws, "envelope.txt")).not.toThrow();
   });
 
+  it("denies reading SeekForge's own secret files even though the basename is generic", () => {
+    const ws = makeWorkspace();
+    for (const p of [".seekforge/config.json", ".seekforge/triggers.json", ".git/config", ".npmrc", ".netrc"]) {
+      expect(
+        codeOf(() => resolveForRead(ws, p)),
+        p,
+      ).toBe("sensitive_path");
+    }
+    // A project-level config.json (not under .seekforge/) stays readable.
+    expect(() => resolveForRead(ws, "config.json")).not.toThrow();
+    expect(() => resolveForRead(ws, "src/config.json")).not.toThrow();
+  });
+
   it("denies writes under .git/", () => {
     const ws = makeWorkspace();
     expect(codeOf(() => resolveForWrite(ws, ".git/config"))).toBe("sensitive_path");

@@ -7,6 +7,7 @@ import { applyEdits } from "../edits.js";
 import {
   DEFAULT_IGNORE_DIRS,
   isSensitiveBasename,
+  isSensitiveRelPath,
   resolveForRead,
   resolveForWrite,
   resolveInsideWorkspace,
@@ -500,7 +501,7 @@ const searchText = defineTool({
         return;
       }
       if (!stat.isFile() || stat.size > MAX_SEARCHABLE_FILE_BYTES) return;
-      if (isSensitiveBasename(path.basename(filePath))) return;
+      if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(rel)) return;
       const buf = fs.readFileSync(filePath);
       if (buf.subarray(0, 8192).includes(0)) return; // binary sniff: NUL byte
       const content = buf.toString("utf8");

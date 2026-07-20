@@ -16,6 +16,20 @@
     { "name": "id_ed25519", "sensitive": true },
     { "name": "id_ed25519.pub", "sensitive": true },
     { "name": "id_ecdsa", "sensitive": false },
-    { "name": "notes.txt", "sensitive": false }
+    { "name": "notes.txt", "sensitive": false },
+    { "name": ".npmrc", "sensitive": true },
+    { "name": ".netrc", "sensitive": true },
+    { "name": ".pgpass", "sensitive": true },
+    { "name": ".git-credentials", "sensitive": true },
+    { "name": "npmrc", "sensitive": false },
+    { "name": ".gitconfig", "sensitive": false }
+  ],
+  "relPathCases": [
+    { "path": ".seekforge/config.json", "sensitive": true },
+    { "path": ".seekforge/triggers.json", "sensitive": true },
+    { "path": ".git/config", "sensitive": true },
+    { "path": "config.json", "sensitive": false },
+    { "path": "src/config.json", "sensitive": false },
+    { "path": ".seekforge/loops/x.log", "sensitive": false }
   ]
 }

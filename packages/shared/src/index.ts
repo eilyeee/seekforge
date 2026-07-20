@@ -132,10 +132,40 @@ export type PermissionPolicy = {
  * re-exports it, so `import { isSensitiveBasename } from "@seekforge/core"`
  * keeps working.
  */
-const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [/^\.env$/, /^\.env\..+$/, /\.pem$/, /\.key$/, /^id_rsa/, /^id_ed25519/];
+const SENSITIVE_BASENAME_PATTERNS: RegExp[] = [
+  /^\.env$/,
+  /^\.env\..+$/,
+  /\.pem$/,
+  /\.key$/,
+  /^id_rsa/,
+  /^id_ed25519/,
+  // Unambiguous credential files (always secrets, so basename-matching is safe).
+  /^\.npmrc$/,
+  /^\.netrc$/,
+  /^\.pgpass$/,
+  /^\.git-credentials$/,
+];
 
 export function isSensitiveBasename(basename: string): boolean {
   return SENSITIVE_BASENAME_PATTERNS.some((re) => re.test(basename));
+}
+
+/**
+ * Workspace-relative paths whose contents are secrets even though their
+ * basename is generic (so basename-matching can't catch them). SeekForge's own
+ * config.json (holds the provider apiKey) and triggers.json (holds webhook
+ * secrets) live inside the workspace under .seekforge/, and .git/config can
+ * carry credential-bearing remote URLs — none must be read back to the model.
+ * `rel` is workspace-relative; separators are normalized to "/".
+ */
+const SENSITIVE_REL_PATHS: ReadonlySet<string> = new Set([
+  ".seekforge/config.json",
+  ".seekforge/triggers.json",
+  ".git/config",
+]);
+
+export function isSensitiveRelPath(rel: string): boolean {
+  return SENSITIVE_REL_PATHS.has(rel.replace(/\\/g, "/"));
 }
 
 // ---------------------------------------------------------------------------

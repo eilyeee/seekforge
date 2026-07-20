@@ -37,6 +37,21 @@ pub fn is_sensitive_basename(name: &str) -> bool {
         || name.ends_with(".key")
         || name.starts_with("id_rsa")
         || name.starts_with("id_ed25519")
+        // Unambiguous credential files (always secrets).
+        || name == ".npmrc"
+        || name == ".netrc"
+        || name == ".pgpass"
+        || name == ".git-credentials"
+}
+
+/// Workspace-relative paths whose contents are secrets despite a generic
+/// basename (SeekForge's own config.json / triggers.json, and .git/config).
+/// Mirrors the TS isSensitiveRelPath. `rel` uses "/" separators.
+pub fn is_sensitive_rel_path(rel: &str) -> bool {
+    matches!(
+        rel,
+        ".seekforge/config.json" | ".seekforge/triggers.json" | ".git/config"
+    )
 }
 
 /// Canonicalize the workspace root itself (must exist).
@@ -113,14 +128,21 @@ pub fn resolve_inside_workspace(workspace: &str, rel: &str) -> RtResult<PathBuf>
     Ok(resolved)
 }
 
-/// Containment + sensitive-basename check for read access.
+/// Containment + sensitive-basename/path check for read access.
 pub fn resolve_for_read(workspace: &str, rel: &str) -> RtResult<PathBuf> {
+    let ws = canonical_workspace(workspace)?;
     let resolved = resolve_inside_workspace(workspace, rel)?;
     let basename = resolved
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if is_sensitive_basename(&basename) {
+    // Secret files with a generic basename (config.json / triggers.json /
+    // .git/config) are blocked by workspace-relative path.
+    let rel_from_ws = resolved
+        .strip_prefix(&ws)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    if is_sensitive_basename(&basename) || is_sensitive_rel_path(&rel_from_ws) {
         return Err(RtError::new(
             codes::SENSITIVE_PATH,
             format!("reading {rel} is not allowed (sensitive file)"),
@@ -272,6 +294,15 @@ mod tests {
                 is_sensitive_basename(name),
                 expected,
                 "parity mismatch for: {name}"
+            );
+        }
+        for case in parsed["relPathCases"].as_array().unwrap() {
+            let path = case["path"].as_str().unwrap();
+            let expected = case["sensitive"].as_bool().unwrap();
+            assert_eq!(
+                is_sensitive_rel_path(path),
+                expected,
+                "rel-path parity mismatch for: {path}"
             );
         }
     }

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isSensitiveBasename } from "../src/index.js";
+import { isSensitiveBasename, isSensitiveRelPath } from "../src/index.js";
 
 // packages/shared had no tests at all, yet it hosts isSensitiveBasename — the
 // list that decides which file contents are withheld from the model and that
@@ -11,6 +11,7 @@ import { isSensitiveBasename } from "../src/index.js";
 const fixtureUrl = new URL("../../../test-fixtures/sensitive-basename.json", import.meta.url);
 const fixture = JSON.parse(readFileSync(fileURLToPath(fixtureUrl), "utf8")) as {
   cases: Array<{ name: string; sensitive: boolean }>;
+  relPathCases: Array<{ path: string; sensitive: boolean }>;
 };
 
 describe("isSensitiveBasename", () => {
@@ -18,6 +19,14 @@ describe("isSensitiveBasename", () => {
     for (const { name, sensitive } of fixture.cases) {
       expect(isSensitiveBasename(name), name).toBe(sensitive);
     }
+  });
+
+  it("blocks secret files by workspace-relative path (matches the fixture and Rust)", () => {
+    for (const { path, sensitive } of fixture.relPathCases) {
+      expect(isSensitiveRelPath(path), path).toBe(sensitive);
+    }
+    // Separator normalization (Windows-style path still matches).
+    expect(isSensitiveRelPath(".seekforge\\config.json")).toBe(true);
   });
 
   it("is case-sensitive and anchored (no substring false positives)", () => {
