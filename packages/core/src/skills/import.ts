@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { AGENT_ID_RE, kebabize, parseFrontmatter } from "../subagents/frontmatter.js";
 import type { Skill } from "./types.js";
 
 /**
@@ -21,57 +22,24 @@ export type ParsedExternalSkill = {
   body: string;
 };
 
-const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
-
-function kebabize(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/[_\s]+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 /**
- * Minimal YAML-frontmatter reader for the subset external skills use:
- * `key: value`, quoted values, and `key: |` block scalars. Lists and
- * nested maps are ignored (we only need name/description/trigger/tags).
+ * Parses an external SKILL.md and maps its frontmatter to a skill record. The
+ * generic YAML-frontmatter reading (incl. `|-`/`>+` chomping indicators and
+ * JSON-escaped quoted values) is shared with the subagent importer via
+ * parseFrontmatter — this only adds the skill-specific field mapping.
  */
 export function parseFrontmatterSkill(markdown: string): ParsedExternalSkill {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(markdown);
-  if (!m) {
+  let fields: Map<string, string>;
+  let body: string;
+  try {
+    ({ fields, body } = parseFrontmatter(markdown));
+  } catch {
     throw new Error("not an importable skill: missing YAML frontmatter (--- ... ---)");
-  }
-  const [, fm, body] = m as unknown as [string, string, string];
-
-  const fields = new Map<string, string>();
-  const lines = fm.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] as string;
-    const kv = /^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    const key = (kv[1] as string).toLowerCase();
-    let value = (kv[2] as string).trim();
-    if (value === "|" || value === ">") {
-      // Block scalar: consume the indented lines that follow.
-      const block: string[] = [];
-      while (
-        i + 1 < lines.length &&
-        (/^\s+\S/.test(lines[i + 1] as string) || (lines[i + 1] as string).trim() === "")
-      ) {
-        i++;
-        block.push((lines[i] as string).trim());
-      }
-      value = block.join(" ").trim();
-    }
-    value = value.replace(/^["']|["']$/g, "");
-    fields.set(key, value);
   }
 
   const rawName = fields.get("name") ?? "";
   const id = kebabize(rawName);
-  if (!ID_RE.test(id)) {
+  if (!AGENT_ID_RE.test(id)) {
     throw new Error(`not an importable skill: frontmatter "name" is missing or invalid (${rawName || "empty"})`);
   }
 

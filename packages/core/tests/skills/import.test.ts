@@ -45,6 +45,15 @@ describe("parseFrontmatterSkill", () => {
     expect(() => parseFrontmatterSkill("---\nversion: 1\n---\nbody")).toThrow(/name/);
     expect(() => parseFrontmatterSkill("# no frontmatter at all")).toThrow(/frontmatter/);
   });
+
+  it("handles block-scalar chomping indicators (shared parser, previously unsupported)", () => {
+    // `description: |-` was NOT recognized by the old skill-only parser (it only
+    // matched bare `|`/`>`), so the block body leaked as an empty description.
+    const md = "---\nname: Chomp Skill\ndescription: |-\n  first line\n  second line\n---\nbody";
+    const s = parseFrontmatterSkill(md);
+    expect(s.id).toBe("chomp-skill");
+    expect(s.description).toBe("first line second line");
+  });
 });
 
 describe("importExternalSkill", () => {
