@@ -1,18 +1,11 @@
+import { ZERO_USAGE, addUsage, type TokenUsage } from "@seekforge/shared";
 import { formatCostUsd } from "@seekforge/shared/format";
-import type { TokenUsage } from "@seekforge/shared";
+
+// addUsage lives in @seekforge/shared (single implementation, shared with core).
+export { addUsage };
 
 export function emptyUsage(): TokenUsage {
-  return { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
-}
-
-/** Accumulate TokenUsage reports (footer total across session.completed events). */
-export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    promptTokens: a.promptTokens + b.promptTokens,
-    completionTokens: a.completionTokens + b.completionTokens,
-    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
-    costUsd: a.costUsd + b.costUsd,
-  };
+  return { ...ZERO_USAGE };
 }
 
 export const formatUsd = formatCostUsd;

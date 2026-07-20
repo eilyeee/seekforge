@@ -206,6 +206,34 @@ export type TokenUsage = {
   costUsd: number;
 };
 
+/** All-zero usage. Treat as immutable; use addUsage/subtractUsage to combine. */
+export const ZERO_USAGE: TokenUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  cacheHitTokens: 0,
+  costUsd: 0,
+};
+
+/** Field-wise sum of two usage records (returns a new object). */
+export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
+    costUsd: a.costUsd + b.costUsd,
+  };
+}
+
+/** Field-wise difference a - b (returns a new object). */
+export function subtractUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    promptTokens: a.promptTokens - b.promptTokens,
+    completionTokens: a.completionTokens - b.completionTokens,
+    cacheHitTokens: a.cacheHitTokens - b.cacheHitTokens,
+    costUsd: a.costUsd - b.costUsd,
+  };
+}
+
 export type ChatFinishReason = "stop" | "tool_calls" | "length" | "other";
 
 export type ChatResponse = {
