@@ -11,7 +11,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import type { AgentEvent, ChatMessage, SessionStatus, TokenUsage } from "@seekforge/shared";
 import { compactMessages, estimateMessagesTokens } from "./context.js";
@@ -655,6 +655,11 @@ export function sessionTitle(workspace: string, sessionId: string): string {
 
 export function newSessionId(now = new Date()): string {
   const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
-  const rand = Math.random().toString(36).slice(2, 8);
+  // Crypto-strong suffix (48 bits) instead of Math.random's 6 base-36 chars:
+  // burst-dispatched subagents create sessions in the same second, and a
+  // suffix collision would make two sessions share a directory and interleave
+  // their messages.jsonl (breaking the longest-valid-prefix replay). Loops
+  // already use randomUUID for the same reason.
+  const rand = randomBytes(6).toString("hex");
   return `${stamp}-${rand}`;
 }

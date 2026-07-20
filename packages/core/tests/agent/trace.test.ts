@@ -16,11 +16,21 @@ import {
   deleteSession,
   listSessions,
   loadSessionMessages,
+  newSessionId,
   pruneSessions,
   rewriteSessionMessages,
   writeSessionMeta,
   type SessionMeta,
 } from "../../src/agent/trace.js";
+
+describe("newSessionId", () => {
+  it("gives a unique crypto suffix even at the same timestamp (no burst collision)", () => {
+    const now = new Date("2020-01-01T00:00:00.000Z");
+    const ids = new Set(Array.from({ length: 500 }, () => newSessionId(now)));
+    expect(ids.size).toBe(500); // Math.random's 6 base-36 chars would collide
+    for (const id of ids) expect(id).toMatch(/^20200101T000000-[0-9a-f]{12}$/);
+  });
+});
 
 function meta(id: string, daysAgo: number, extra: Partial<SessionMeta> = {}): SessionMeta {
   const ts = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
