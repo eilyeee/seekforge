@@ -24,6 +24,14 @@ import type { RunManager, RunStatus } from "./run-ledger.js";
 /** Answer given for a headless ask_user (no interactive user to answer). */
 export const HEADLESS_DECLINE = "(no interactive user: this is a headless triggered run)";
 
+/**
+ * Default hard token ceiling for a headless triggered run. The cost cap is the
+ * primary control, but it is a no-op on providers with no price table (costUsd
+ * never grows), so this bounds a run by tokens regardless of pricing. Generous
+ * enough not to cut off a legitimately long run; low enough to stop a runaway.
+ */
+export const DEFAULT_MAX_TRIGGER_TOTAL_TOKENS = 8_000_000;
+
 export type StartTriggerRunInput = {
   createAgent: CreateAgentFn;
   workspace: string;
@@ -31,6 +39,12 @@ export type StartTriggerRunInput = {
   mode: TriggerMode;
   /** Hard cap on cumulative spend (USD); the run aborts on reaching it. */
   maxCostUsd: number;
+  /**
+   * Hard cap on cumulative tokens (prompt + completion). Independent of cost so
+   * a provider with no price table (costUsd stays 0) is still bounded. Defaults
+   * to DEFAULT_MAX_TRIGGER_TOTAL_TOKENS.
+   */
+  maxTotalTokens?: number;
   runManager?: RunManager;
   runId?: string;
   /** Optional workspace mutation scheduler shared with other server surfaces. */
@@ -50,6 +64,7 @@ export type TriggerRunHandle = {
  */
 export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunHandle {
   const controller = new AbortController();
+  const maxTotalTokens = input.maxTotalTokens ?? DEFAULT_MAX_TRIGGER_TOTAL_TOKENS;
   if (input.runManager && input.runId) input.runManager.start(input.runId, input.workspace, controller);
   let resolveStarted!: (value: { sessionId: string }) => void;
   let rejectStarted!: (error: Error) => void;
@@ -98,11 +113,12 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           }
         } else if (event.type === "usage.updated") {
           input.runManager?.update(input.workspace, input.runId ?? "", { costUsd: event.usage.costUsd });
-          // Cumulative spend guard — a SOFT, reactive cap: we abort on the
-          // first usage event at/over budget, so the in-flight model turn that
-          // crossed it can overshoot by one call. Bound turns/tokens too if a
-          // hard ceiling is ever required.
-          if (event.usage.costUsd >= input.maxCostUsd) controller.abort();
+          // Cumulative guards — SOFT, reactive caps: we abort on the first usage
+          // event at/over a ceiling, so the in-flight model turn that crossed it
+          // can overshoot by one call. The token ceiling is independent of cost
+          // so a provider with no price table (costUsd stays 0) is still bounded.
+          const totalTokens = event.usage.promptTokens + event.usage.completionTokens;
+          if (event.usage.costUsd >= input.maxCostUsd || totalTokens >= maxTotalTokens) controller.abort();
         } else if (event.type === "session.completed") {
           terminalStatus = "succeeded";
           input.runManager?.update(input.workspace, input.runId ?? "", {

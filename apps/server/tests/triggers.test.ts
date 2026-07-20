@@ -16,7 +16,7 @@ import {
   validateTrigger,
   type Trigger,
 } from "../src/triggers.js";
-import { fakeAgentFactory, makeWorkspace, waitUntil, writeFileIn } from "./helpers.js";
+import { emptyReport, fakeAgentFactory, makeWorkspace, waitUntil, writeFileIn } from "./helpers.js";
 
 // --- Pure module: validation ------------------------------------------------
 
@@ -102,6 +102,36 @@ describe("checkTriggerSecret", () => {
 
   it("rejects a secret that is a prefix of the real one (hashed compare)", () => {
     expect(checkTriggerSecret("correct-horse", "correct")).toBe(false);
+  });
+});
+
+describe("headless run ceilings", () => {
+  it("aborts a run that blows the token ceiling even when cost stays zero", async () => {
+    let reachedPastCeiling = false;
+    // No price table → costUsd is always 0, so the cost cap never trips; only
+    // the token ceiling can stop a runaway headless run.
+    const createAgent = fakeAgentFactory(async function* (_opts, input) {
+      yield { type: "session.created", sessionId: "s-runaway" };
+      yield {
+        type: "usage.updated",
+        usage: { promptTokens: 5_000_000, completionTokens: 4_000_000, cacheHitTokens: 0, costUsd: 0 },
+      };
+      if (input.signal?.aborted) return; // ceiling fired → stop
+      reachedPastCeiling = true;
+      yield { type: "session.completed", report: emptyReport() };
+    });
+
+    const handle = startManagedTriggerRun({
+      createAgent,
+      workspace: makeWorkspace(),
+      task: "spin forever",
+      mode: "ask",
+      maxCostUsd: 999, // cost cap can never trip without pricing
+      maxTotalTokens: 8_000_000,
+    });
+    await handle.started;
+    await handle.completion;
+    expect(reachedPastCeiling).toBe(false);
   });
 });
 
