@@ -1,15 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchWithRetry } from "../../src/provider/http.js";
+import { fetchWithRetry, parseRetryAfter } from "../../src/provider/http.js";
 import type { RetryInfo } from "../../src/provider/index.js";
 
 /** Builds a minimal Response-like stub for the retry loop. */
-function res(status: number, body = ""): Response {
+function res(status: number, body = "", headers?: Record<string, string>): Response {
+  const lower = new Map(Object.entries(headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   return {
     ok: status >= 200 && status < 300,
     status,
     text: async () => body,
+    headers: { get: (name: string) => lower.get(name.toLowerCase()) ?? null },
   } as unknown as Response;
 }
+
+describe("parseRetryAfter", () => {
+  it("parses delta-seconds", () => {
+    expect(parseRetryAfter("5")).toBe(5000);
+    expect(parseRetryAfter("0")).toBe(0);
+  });
+  it("parses an HTTP-date relative to now", () => {
+    const now = 1_000_000;
+    expect(parseRetryAfter(new Date(now + 8000).toUTCString(), now)).toBe(8000);
+  });
+  it("caps an excessive wait", () => {
+    expect(parseRetryAfter("99999")).toBe(30_000);
+  });
+  it("returns undefined for missing/malformed/elapsed values", () => {
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter("")).toBeUndefined();
+    expect(parseRetryAfter("soon")).toBeUndefined();
+    const now = 1_000_000;
+    expect(parseRetryAfter(new Date(now - 5000).toUTCString(), now)).toBeUndefined();
+  });
+});
 
 describe("fetchWithRetry onRetry", () => {
   const realFetch = globalThis.fetch;
@@ -50,6 +73,23 @@ describe("fetchWithRetry onRetry", () => {
     expect(retries).toHaveLength(1);
     expect(retries[0]).toMatchObject({ attempt: 1, maxAttempts: 3, reason: "rate limited" });
     expect(retries[0]!.delayMs).toBeGreaterThan(0);
+  });
+
+  it("honors a Retry-After header instead of the exponential backoff", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(res(429, "slow down", { "retry-after": "5" }))
+      .mockResolvedValueOnce(res(200, "ok"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const retries: RetryInfo[] = [];
+    const out = await runWithTimers(
+      fetchWithRetry("https://x/y", { method: "POST" }, { onRetry: (i) => retries.push(i) }),
+    );
+
+    expect(out.status).toBe(200);
+    // The server asked for 5s; the retry must wait exactly that, not ~500ms.
+    expect(retries[0]!.delayMs).toBe(5000);
   });
 
   it("reports the matching reason for a 5xx then a network error", async () => {

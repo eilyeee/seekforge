@@ -103,6 +103,28 @@ function backoffMs(attempt: number): number {
   return BASE_DELAY_MS * 2 ** (attempt - 1) + Math.random() * 250;
 }
 
+/** Cap on an honored Retry-After so a hostile/huge header can't stall a run. */
+const MAX_RETRY_AFTER_MS = 30_000;
+
+/**
+ * Parse an HTTP `Retry-After` header (delta-seconds or an HTTP-date) into a
+ * delay in ms, bounded by MAX_RETRY_AFTER_MS. Returns undefined for a missing,
+ * malformed, or already-elapsed value so the caller falls back to exponential
+ * backoff.
+ */
+export function parseRetryAfter(value: string | null, nowMs: number = Date.now()): number | undefined {
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (/^\d+$/.test(trimmed)) {
+    return Math.min(Number(trimmed) * 1000, MAX_RETRY_AFTER_MS);
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return undefined;
+  const delta = at - nowMs;
+  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
+}
+
 export function fetchWithRetry(url: string, init: RequestInit, options?: FetchWithRetryOptions): Promise<Response>;
 export function fetchWithRetry<T>(
   url: string,
@@ -120,11 +142,14 @@ export async function fetchWithRetry<T>(
   // Cause of the failure that scheduled the upcoming retry (status undefined =
   // network error). Carried across iterations so onRetry reports it precisely.
   let pendingStatus: number | undefined;
+  // A Retry-After the server asked us to wait (ms), honored in place of the
+  // exponential backoff for the next attempt. Undefined = use backoff.
+  let pendingRetryAfterMs: number | undefined;
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
-      const delayMs = backoffMs(attempt);
+      const delayMs = pendingRetryAfterMs ?? backoffMs(attempt);
       try {
         options.onRetry?.({
           attempt,
@@ -169,6 +194,7 @@ export async function fetchWithRetry<T>(
           : `network error calling DeepSeek API: ${err instanceof Error ? err.message : String(err)}`,
       );
       pendingStatus = undefined;
+      pendingRetryAfterMs = undefined;
       continue;
     }
     if (res.ok) {
@@ -192,6 +218,7 @@ export async function fetchWithRetry<T>(
               : `network error reading DeepSeek API response: ${err instanceof Error ? err.message : String(err)}`,
           );
           pendingStatus = undefined;
+          pendingRetryAfterMs = undefined;
           continue;
         }
       }
@@ -202,6 +229,7 @@ export async function fetchWithRetry<T>(
     // Error response: keep the timer armed while reading the (bounded) error
     // body. clearing it first would leave the read with no abort path, so a
     // server that sends error headers but stalls the body would hang forever.
+    const retryAfter = parseRetryAfter(res.headers?.get("retry-after") ?? null);
     const snippet = (await res.text().catch(() => "")).slice(0, BODY_SNIPPET_CHARS);
     clearAttemptTimeout();
     if (init.signal?.aborted) throw init.signal.reason;
@@ -210,6 +238,9 @@ export async function fetchWithRetry<T>(
     if (!retryable) throw new DeepSeekApiError(message, res.status);
     lastError = new DeepSeekApiError(message, res.status);
     pendingStatus = res.status;
+    // Honor the server's stated wait for the next attempt (e.g. a 429 asking us
+    // to back off 30s) instead of the fixed exponential schedule.
+    pendingRetryAfterMs = retryAfter;
   }
   throw lastError;
 }
