@@ -8,7 +8,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import {
+  readWorkspaceStateFile,
+  WorkspaceStateTooLargeError,
+  writeWorkspaceStateFileAtomic,
+} from "../util/workspace-state.js";
 import { withMemoryTransaction } from "./lease.js";
 
 export { withMemoryTransaction } from "./lease.js";
@@ -80,6 +84,32 @@ const MAX_CANDIDATE_CONTENT_CHARS = 16 * 1024;
 const MAX_SOURCE_SESSION_ID_CHARS = 256;
 const MAX_TIMESTAMP_CHARS = 64;
 const MAX_FACT_META_KEY_CHARS = MAX_CANDIDATE_CONTENT_CHARS + 64;
+export const MAX_MEMORY_DOCUMENT_BYTES = 4 * 1024 * 1024;
+export const MAX_MEMORY_CANDIDATES_BYTES = 16 * 1024 * 1024;
+export const MAX_MEMORY_META_BYTES = 16 * 1024 * 1024;
+
+export class MemoryStateCorruptError extends Error {
+  readonly code = "EBADMSG";
+
+  constructor(
+    readonly relPath: string,
+    detail: string,
+  ) {
+    super(`memory state is corrupt (${relPath}): ${detail}`);
+    this.name = "MemoryStateCorruptError";
+  }
+}
+
+function readMemoryStateFile(workspace: string, relPath: string, maxBytes: number): string | undefined {
+  return readWorkspaceStateFile(workspace, relPath, maxBytes);
+}
+
+function writeMemoryStateFile(workspace: string, relPath: string, data: string, maxBytes: number): void {
+  if (Buffer.byteLength(data, "utf8") > maxBytes) {
+    throw new WorkspaceStateTooLargeError(relPath, maxBytes);
+  }
+  writeWorkspaceStateFileAtomic(workspace, relPath, data);
+}
 
 function isBoundedText(value: unknown, maxChars: number, allowFormatting = false): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > maxChars || value.trim() !== value)
@@ -127,29 +157,54 @@ function memoryRelPath(name: string): string {
   return path.join(".seekforge", "memory", name);
 }
 
-/** Metadata keyed by bullet body ("[type] content" — matches brief bullets). */
-export function readFactMeta(workspace: string): Record<string, FactMeta> {
-  const raw = readWorkspaceStateFile(workspace, memoryRelPath("fact-meta.json"));
-  if (!raw) return {};
+function parseFactMeta(raw: string, strict: boolean): Record<string, FactMeta> {
+  const relPath = memoryRelPath("fact-meta.json");
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    const valid: Record<string, FactMeta> = Object.create(null) as Record<string, FactMeta>;
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!isBoundedText(key, MAX_FACT_META_KEY_CHARS) || !isFactMeta(value)) continue;
-      valid[key] = value;
-    }
-    return valid;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
+    if (strict) throw new MemoryStateCorruptError(relPath, "invalid JSON");
     return {};
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (strict) throw new MemoryStateCorruptError(relPath, "top-level value must be an object");
+    return {};
+  }
+  const valid: Record<string, FactMeta> = Object.create(null) as Record<string, FactMeta>;
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!isBoundedText(key, MAX_FACT_META_KEY_CHARS) || !isFactMeta(value)) {
+      if (strict) throw new MemoryStateCorruptError(relPath, `invalid entry: ${JSON.stringify(key)}`);
+      continue;
+    }
+    valid[key] = value;
+  }
+  return valid;
+}
+
+/** Metadata keyed by bullet body ("[type] content" — matches brief bullets). */
+export function readFactMeta(workspace: string): Record<string, FactMeta> {
+  const raw = readMemoryStateFile(workspace, memoryRelPath("fact-meta.json"), MAX_MEMORY_META_BYTES);
+  if (!raw) return {};
+  return parseFactMeta(raw, false);
+}
+
+export function readFactMetaForMutation(workspace: string): Record<string, FactMeta> {
+  const raw = readMemoryStateFile(workspace, memoryRelPath("fact-meta.json"), MAX_MEMORY_META_BYTES);
+  if (!raw) return {};
+  return parseFactMeta(raw, true);
 }
 
 function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void {
   // Best-effort: never break a run on a metadata write failure.
   try {
-    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("fact-meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
-  } catch {
+    writeMemoryStateFile(
+      workspace,
+      memoryRelPath("fact-meta.json"),
+      `${JSON.stringify(meta, null, 2)}\n`,
+      MAX_MEMORY_META_BYTES,
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError || error instanceof MemoryStateCorruptError) throw error;
     /* ignore */
   }
 }
@@ -158,7 +213,7 @@ function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void 
 export function recordFactAdded(workspace: string, bullet: string): void {
   withMemoryTransaction(workspace, () => {
     const key = bullet.replace(/^-\s*/, "").trim();
-    const meta = readFactMeta(workspace);
+    const meta = readFactMetaForMutation(workspace);
     if (!meta[key]) {
       meta[key] = { addedAt: new Date().toISOString(), uses: 0 };
       writeFactMeta(workspace, meta);
@@ -174,7 +229,7 @@ export function recordFactAdded(workspace: string, bullet: string): void {
 export function reconcileFactMeta(workspace: string, finalContent: string): void {
   try {
     withMemoryTransaction(workspace, () => {
-      const meta = readFactMeta(workspace);
+      const meta = readFactMetaForMutation(workspace);
       const keys = Object.keys(meta);
       if (keys.length === 0) return;
       const live = new Set<string>();
@@ -192,7 +247,8 @@ export function reconcileFactMeta(workspace: string, finalContent: string): void
       }
       if (changed) writeFactMeta(workspace, meta);
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError || error instanceof MemoryStateCorruptError) throw error;
     /* best-effort: never break compaction on a metadata reconcile failure */
   }
 }
@@ -202,7 +258,7 @@ type FactActivity = "exposure" | "use" | "retrieval";
 function recordFactActivity(workspace: string, briefText: string, activity: FactActivity): void {
   withMemoryTransaction(workspace, () => {
     const now = new Date().toISOString();
-    const meta = readFactMeta(workspace);
+    const meta = readFactMetaForMutation(workspace);
     let changed = false;
     for (const line of briefText.split("\n")) {
       const m = /^-\s*(\[[a-z_]+\].+)$/.exec(line.trim());
@@ -265,8 +321,9 @@ const IMPORT_LINE = /^\s*@(\S+)\s*$/;
  */
 function expandImports(
   text: string,
-  dir: string,
-  rootReal: string,
+  workspaceRoot: string,
+  currentFileRel: string,
+  importRootRel: string,
   depth: number,
   visited: Set<string>,
   budget: { remaining: number },
@@ -282,23 +339,22 @@ function expandImports(
     // Refuse absolute paths and traversal that escapes the base directory.
     const spec = m[1];
     if (path.isAbsolute(spec)) continue;
-    const resolved = path.resolve(dir, spec);
-    const rel = path.relative(dir, resolved);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    const resolvedRel = path.normalize(path.join(path.dirname(currentFileRel), spec));
+    const rel = path.relative(importRootRel, resolvedRel);
+    if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
     if (depth >= MAX_IMPORT_DEPTH) continue;
-    let physical: string;
+    if (visited.has(resolvedRel)) continue; // cycle guard
+    let included: string | undefined;
     try {
-      physical = fs.realpathSync(resolved);
-    } catch {
+      included = readMemoryStateFile(workspaceRoot, resolvedRel, MAX_MEMORY_DOCUMENT_BYTES);
+    } catch (error) {
+      if (error instanceof WorkspaceStateTooLargeError) throw error;
       continue;
     }
-    if (physical !== rootReal && !physical.startsWith(`${rootReal}${path.sep}`)) continue;
-    if (visited.has(physical)) continue; // cycle guard
-    const included = readWorkspaceStateFile(rootReal, path.relative(rootReal, physical));
     if (included === undefined) continue; // missing → skip silently
     if (budget.remaining <= 0) continue; // size cap reached
-    visited.add(physical);
-    const expanded = expandImports(included, path.dirname(physical), rootReal, depth + 1, visited, budget);
+    visited.add(resolvedRel);
+    const expanded = expandImports(included, workspaceRoot, resolvedRel, importRootRel, depth + 1, visited, budget);
     out.push(expanded);
   }
   return out.join("\n");
@@ -307,19 +363,21 @@ function expandImports(
 /** Reads a memory file (if present) and expands any `@import` lines in it. */
 function readMemoryFileExpanded(filePath: string, allowedRoot: string): string | undefined {
   try {
-    const allowedReal = fs.realpathSync(allowedRoot);
-    const memoryRoot = fs.realpathSync(path.dirname(filePath));
-    const physicalFile = fs.realpathSync(filePath);
-    const inside = (root: string, target: string): boolean =>
-      target === root || target.startsWith(`${root}${path.sep}`);
-    if (!inside(allowedReal, memoryRoot) || !inside(memoryRoot, physicalFile)) return undefined;
-    const raw = readWorkspaceStateFile(allowedReal, path.relative(allowedReal, physicalFile));
+    const allowedLogical = path.resolve(allowedRoot);
+    const allowedReal = fs.realpathSync(allowedLogical);
+    const logicalFile = path.resolve(filePath);
+    const fileRel = path.relative(allowedLogical, logicalFile);
+    if (fileRel === "" || fileRel === ".." || fileRel.startsWith(`..${path.sep}`) || path.isAbsolute(fileRel)) {
+      return undefined;
+    }
+    const raw = readMemoryStateFile(allowedReal, fileRel, MAX_MEMORY_DOCUMENT_BYTES);
     if (raw === undefined) return undefined;
-    const visited = new Set<string>([physicalFile]);
-    return expandImports(raw, path.dirname(physicalFile), memoryRoot, 0, visited, {
+    const visited = new Set<string>([fileRel]);
+    return expandImports(raw, allowedReal, fileRel, path.dirname(fileRel), 0, visited, {
       remaining: MAX_IMPORT_SIZE,
     }).slice(0, MAX_IMPORT_SIZE);
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError) throw error;
     return undefined;
   }
 }
@@ -335,7 +393,7 @@ export function readProjectMemory(workspace: string): string | undefined {
  * directives and duplicate the imported content into the root file.
  */
 export function readRawProjectMemory(workspace: string): string | undefined {
-  return readWorkspaceStateFile(workspace, memoryRelPath("project.md"));
+  return readMemoryStateFile(workspace, memoryRelPath("project.md"), MAX_MEMORY_DOCUMENT_BYTES);
 }
 
 // --- Subdirectory memory cascade (monorepo per-package facts) ----------------
@@ -391,7 +449,7 @@ export function readSubdirMemories(workspace: string): SubdirMemory[] {
       }
       // Collect this package's own memory file, if present.
       const memFile = projectMemoryPath(childDir);
-      const content = readMemoryFileExpanded(memFile, childDir);
+      const content = readMemoryFileExpanded(memFile, workspace);
       if (content !== undefined && content.trim().length > 0) {
         results.push({ relDir: path.relative(workspace, childDir), content });
         if (results.length >= SUBDIR_SCAN_MAX_FILES) return;
@@ -401,7 +459,8 @@ export function readSubdirMemories(workspace: string): SubdirMemory[] {
   };
   try {
     walk(workspace, 1);
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError) throw error;
     // Best-effort: memory is non-essential; never throw out of discovery.
   }
   return results;
@@ -436,22 +495,41 @@ function assertCandidateRecord(value: unknown): asserts value is MemoryCandidate
   if (!isCandidateRecord(value)) throw new Error("invalid memory candidate");
 }
 
-/** Candidates in file (append) order; corrupt lines are skipped. */
-export function readCandidates(workspace: string): MemoryCandidate[] {
-  const raw = readWorkspaceStateFile(workspace, memoryRelPath("candidates.jsonl"));
-  if (!raw) return [];
+function parseCandidates(raw: string, strict: boolean): MemoryCandidate[] {
+  const relPath = memoryRelPath("candidates.jsonl");
   const candidates: MemoryCandidate[] = [];
+  let lineNumber = 0;
   for (const line of raw.split("\n")) {
+    lineNumber++;
     const trimmed = line.trim();
     if (!trimmed) continue;
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (isCandidateRecord(parsed)) candidates.push(parsed);
+      parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      // Corrupt line: tolerate and skip.
+      if (strict) throw new MemoryStateCorruptError(relPath, `invalid JSON on line ${lineNumber}`);
+      continue;
     }
+    if (!isCandidateRecord(parsed)) {
+      if (strict) throw new MemoryStateCorruptError(relPath, `invalid candidate on line ${lineNumber}`);
+      continue;
+    }
+    candidates.push(parsed);
   }
   return candidates;
+}
+
+/** Candidates in file (append) order; corrupt lines are skipped. */
+export function readCandidates(workspace: string): MemoryCandidate[] {
+  const raw = readMemoryStateFile(workspace, memoryRelPath("candidates.jsonl"), MAX_MEMORY_CANDIDATES_BYTES);
+  if (!raw) return [];
+  return parseCandidates(raw, false);
+}
+
+export function readCandidatesForMutation(workspace: string): MemoryCandidate[] {
+  const raw = readMemoryStateFile(workspace, memoryRelPath("candidates.jsonl"), MAX_MEMORY_CANDIDATES_BYTES);
+  if (!raw) return [];
+  return parseCandidates(raw, true);
 }
 
 export function listMemoryCandidates(workspace: string): MemoryCandidate[] {
@@ -464,8 +542,14 @@ export function appendCandidates(workspace: string, candidates: MemoryCandidate[
   withMemoryTransaction(workspace, () => {
     for (const candidate of candidates) assertCandidateRecord(candidate);
     const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-    const existing = readWorkspaceStateFile(workspace, memoryRelPath("candidates.jsonl")) ?? "";
-    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("candidates.jsonl"), `${existing}${lines}`);
+    const existing =
+      readMemoryStateFile(workspace, memoryRelPath("candidates.jsonl"), MAX_MEMORY_CANDIDATES_BYTES) ?? "";
+    writeMemoryStateFile(
+      workspace,
+      memoryRelPath("candidates.jsonl"),
+      `${existing}${lines}`,
+      MAX_MEMORY_CANDIDATES_BYTES,
+    );
   });
 }
 
@@ -474,7 +558,7 @@ export function writeCandidates(workspace: string, candidates: MemoryCandidate[]
   withMemoryTransaction(workspace, () => {
     for (const candidate of candidates) assertCandidateRecord(candidate);
     const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("candidates.jsonl"), lines);
+    writeMemoryStateFile(workspace, memoryRelPath("candidates.jsonl"), lines, MAX_MEMORY_CANDIDATES_BYTES);
   });
 }
 
@@ -492,23 +576,33 @@ export function appendProjectFact(workspace: string, candidate: MemoryCandidate)
   withMemoryTransaction(workspace, () => {
     assertCandidateRecord(candidate);
     const bullet = formatFactBullet(candidate);
-    const existing = readWorkspaceStateFile(workspace, memoryRelPath("project.md"));
+    const existing = readMemoryStateFile(workspace, memoryRelPath("project.md"), MAX_MEMORY_DOCUMENT_BYTES);
     if (existing === undefined) {
-      writeWorkspaceStateFileAtomic(workspace, memoryRelPath("project.md"), `# Project Memory\n${bullet}\n`);
+      writeMemoryStateFile(
+        workspace,
+        memoryRelPath("project.md"),
+        `# Project Memory\n${bullet}\n`,
+        MAX_MEMORY_DOCUMENT_BYTES,
+      );
       recordFactAdded(workspace, bullet);
       return;
     }
     // Dedupe: skip when an identical content line already exists.
     if (existing.split("\n").some((line) => line.trim() === bullet)) return;
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-    writeWorkspaceStateFileAtomic(workspace, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`);
+    writeMemoryStateFile(
+      workspace,
+      memoryRelPath("project.md"),
+      `${existing}${sep}${bullet}\n`,
+      MAX_MEMORY_DOCUMENT_BYTES,
+    );
     recordFactAdded(workspace, bullet);
   });
 }
 
 function setCandidateStatus(workspace: string, id: string, status: MemoryCandidate["status"]): MemoryCandidate {
   return withMemoryTransaction(workspace, () => {
-    const candidates = readCandidates(workspace);
+    const candidates = readCandidatesForMutation(workspace);
     const target = candidates.find((c) => c.id === id);
     if (!target) {
       throw new Error(`candidate not found: ${id}`);
@@ -530,14 +624,19 @@ export function appendGlobalFact(candidate: MemoryCandidate): void {
   withMemoryTransaction(home, () => {
     assertCandidateRecord(candidate);
     const bullet = formatFactBullet(candidate);
-    const existing = readWorkspaceStateFile(home, memoryRelPath("project.md"));
+    const existing = readMemoryStateFile(home, memoryRelPath("project.md"), MAX_MEMORY_DOCUMENT_BYTES);
     if (existing === undefined) {
-      writeWorkspaceStateFileAtomic(home, memoryRelPath("project.md"), `# Global Memory\n${bullet}\n`);
+      writeMemoryStateFile(
+        home,
+        memoryRelPath("project.md"),
+        `# Global Memory\n${bullet}\n`,
+        MAX_MEMORY_DOCUMENT_BYTES,
+      );
       return;
     }
     if (existing.split("\n").some((line) => line.trim() === bullet)) return;
     const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-    writeWorkspaceStateFileAtomic(home, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`);
+    writeMemoryStateFile(home, memoryRelPath("project.md"), `${existing}${sep}${bullet}\n`, MAX_MEMORY_DOCUMENT_BYTES);
   });
 }
 
@@ -553,10 +652,15 @@ export function approveMemoryCandidate(
   scope: "project" | "user" = "project",
 ): MemoryCandidate {
   return withMemoryTransaction(workspace, () => {
-    const candidate = setCandidateStatus(workspace, id, "approved");
-    if (scope === "user") appendGlobalFact(candidate);
-    else appendProjectFact(workspace, candidate);
-    return candidate;
+    const candidates = readCandidatesForMutation(workspace);
+    const target = candidates.find((candidate) => candidate.id === id);
+    if (!target) throw new Error(`candidate not found: ${id}`);
+    const approved = { ...target, status: "approved" as const };
+    if (scope === "user") appendGlobalFact(approved);
+    else appendProjectFact(workspace, approved);
+    target.status = "approved";
+    writeCandidates(workspace, candidates);
+    return approved;
   });
 }
 

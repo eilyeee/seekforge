@@ -699,6 +699,30 @@ describe("run_command sandbox escalation", () => {
     expect(res.meta?.sandboxEscalated).toBeUndefined();
   });
 
+  it("does not treat a structured denial as approval for an unsandboxed retry", async () => {
+    const ws = makeWorkspace();
+    const calls = stubShell([denial]);
+    const ctx = makeCtx(ws, {
+      sandbox: "workspace-write",
+      policy: { commandAllowlist: ["mkdir"] },
+      confirm: async () => ({ allow: false }),
+    });
+
+    const res = await dispatcher.execute(call("run_command", { command: "mkdir /etc/x" }), ctx);
+
+    expect(calls).toHaveLength(1);
+    expect((res.data as { exitCode: number }).exitCode).toBe(1);
+    expect(res.meta?.sandboxEscalated).toBeUndefined();
+  });
+
+  it("rejects non-positive and fractional command timeouts", async () => {
+    const ws = makeWorkspace();
+    for (const timeoutMs of [-1, 0, 1.5]) {
+      const res = await dispatcher.execute(call("run_command", { command: "pwd", timeoutMs }), makeCtx(ws));
+      expect(res, String(timeoutMs)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
+  });
+
   it("does not prompt for ordinary failures or when no sandbox is active", async () => {
     const ws = makeWorkspace();
     let confirms = 0;

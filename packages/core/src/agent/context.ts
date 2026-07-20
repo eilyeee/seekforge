@@ -207,9 +207,7 @@ function describeArgValue(value: unknown): string | undefined {
  * note when there is no linkage or no usable arg. Stays well under
  * CLEAR_MIN_CHARS so re-running the clear never re-clears (idempotency).
  */
-function clearedNoteFor(toolCallId: string | undefined, callsById: Map<string, ProviderToolCall>): string {
-  if (toolCallId === undefined) return CLEARED_TOOL_CONTENT;
-  const call = callsById.get(toolCallId);
+function clearedNoteFor(call: ProviderToolCall | undefined): string {
   if (!call) return CLEARED_TOOL_CONTENT;
 
   let arg: string | undefined;
@@ -263,19 +261,33 @@ export function clearOldToolResults(
   }
   if (boundary < 0) return { messages, cleared: 0 };
 
-  // Map every tool call id to its originating assistant call, so a cleared
-  // tool result can name the tool + key arg it answered (re-fetch hint).
-  const callsById = new Map<string, ProviderToolCall>();
-  for (const m of messages) {
-    if (m.role !== "assistant" || !m.toolCalls) continue;
-    for (const tc of m.toolCalls) callsById.set(tc.id, tc);
+  // Tool-call ids are scoped to one assistant turn and providers may reuse
+  // them later. Pair each result only against the active assistant turn.
+  const callsByResultIndex = new Map<number, ProviderToolCall>();
+  let activeCalls = new Map<string, ProviderToolCall[]>();
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (message.role === "assistant") {
+      activeCalls = new Map();
+      for (const call of message.toolCalls ?? []) {
+        const calls = activeCalls.get(call.id) ?? [];
+        calls.push(call);
+        activeCalls.set(call.id, calls);
+      }
+    } else if (message.role === "tool") {
+      const calls = message.toolCallId === undefined ? undefined : activeCalls.get(message.toolCallId);
+      const call = calls?.shift();
+      if (call) callsByResultIndex.set(i, call);
+    } else {
+      activeCalls.clear();
+    }
   }
 
   let cleared = 0;
   const out = messages.map((m, i) => {
     if (i >= boundary || m.role !== "tool" || m.content.length <= CLEAR_MIN_CHARS) return m;
     cleared++;
-    return { ...m, content: clearedNoteFor(m.toolCallId, callsById) };
+    return { ...m, content: clearedNoteFor(callsByResultIndex.get(i)) };
   });
   return cleared > 0 ? { messages: out, cleared } : { messages, cleared: 0 };
 }

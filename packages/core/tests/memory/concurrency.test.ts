@@ -11,6 +11,7 @@ import {
   readFactMeta,
   recordFactRetrieval,
 } from "../../src/memory/index.js";
+import { withMemoryTransaction } from "../../src/memory/store.js";
 import { makeCandidate, makeWorkspace, writeCandidatesRaw } from "./helpers.js";
 
 const children = new Set<ChildProcess>();
@@ -21,6 +22,17 @@ afterEach(() => {
 });
 
 describe("memory transaction lease", () => {
+  it("releases the lease when a transaction throws", () => {
+    const workspace = makeWorkspace();
+    expect(() =>
+      withMemoryTransaction(workspace, () => {
+        throw new Error("failed transaction");
+      }),
+    ).toThrow("failed transaction");
+
+    expect(withMemoryTransaction(workspace, () => "reacquired")).toBe("reacquired");
+  });
+
   it("serializes append, approval, and usage updates across processes", async () => {
     const workspace = makeWorkspace();
     const first = makeCandidate({ id: "mc-first", content: "shared fact", type: "tech" });

@@ -67,7 +67,14 @@ import { stashList, stashPop, stashPush } from "./stash.js";
 import { THEME_PRESETS, loadTheme, themePickerLines } from "./theme.js";
 import { buildHandoff, handoffPath, latestHandoff, listHandoffs } from "./handoff.js";
 import { formatUsageDetail, kfmt } from "./format.js";
-import { COMMANDS, commandRequiresIdle, parseInput, type CommandSpec, type SlashCommand } from "./commands.js";
+import {
+  COMMANDS,
+  commandRequiresIdle,
+  parseInput,
+  parsePositiveIndex,
+  type CommandSpec,
+  type SlashCommand,
+} from "./commands.js";
 import { argCandidates, type ArgContext } from "./arg-values.js";
 import { parseWorktreeCommand, pickFreeSlug, resolveWorktreeTarget, seekforgeWorktrees } from "./worktree-cmd.js";
 import { bumpUsage, didYouMean, rankCommands, type CommandUsage } from "./command-rank.js";
@@ -178,6 +185,7 @@ import { ContextInspector } from "./components/ContextInspector.js";
 import { ListOverlay } from "./components/ListOverlay.js";
 import { QuestionPanel } from "./components/QuestionPanel.js";
 import { useStatusLine } from "./use-statusline.js";
+import { runShellCommand } from "./shell-command.js";
 import { useTerminalLifecycle } from "./use-terminal-lifecycle.js";
 
 export type AppProps = {
@@ -1151,7 +1159,7 @@ export function App({
           break;
         }
         case "memory": {
-          if (command.arg?.startsWith("candidates")) {
+          if (command.arg === "candidates") {
             // "/memory candidates" — review pending memory candidates in an
             // interactive overlay (a approve · r reject · s scope). Core owns
             // the candidate store; this only lists the pending ones.
@@ -1166,7 +1174,7 @@ export function App({
             });
             break;
           }
-          if (command.arg?.startsWith("edit")) {
+          if (command.arg === "edit" || command.arg?.startsWith("edit ")) {
             // "/memory edit [file]" — files restricted to .seekforge/memory/.
             const fileArg = command.arg.slice(4).trim();
             const memoryDir = dirname(projectMemoryPath(projectPath));
@@ -1256,11 +1264,13 @@ export function App({
             } else if (verb === "add" && restWords.length > 0) {
               const t = addTodo(projectPath, restWords.join(" "));
               notice(`added todo ${t.index}: ${t.text}`);
-            } else if (verb === "done" && restWords[0]) {
-              const t = toggleTodo(projectPath, Number(restWords[0]));
+            } else if (verb === "done" && restWords.length === 1 && /^[1-9][0-9]*$/.test(restWords[0]!)) {
+              const index = parsePositiveIndex(restWords[0]);
+              const t = index === null ? null : toggleTodo(projectPath, index);
               notice(t ? `${t.done ? "done" : "reopened"}: ${t.text}` : "no such todo", t ? "dim" : "error");
-            } else if (verb === "rm" && restWords[0]) {
-              const t = removeTodo(projectPath, Number(restWords[0]));
+            } else if (verb === "rm" && restWords.length === 1 && /^[1-9][0-9]*$/.test(restWords[0]!)) {
+              const index = parsePositiveIndex(restWords[0]);
+              const t = index === null ? null : removeTodo(projectPath, index);
               notice(t ? `removed: ${t.text}` : "no such todo", t ? "dim" : "error");
             } else {
               notice("usage: /todo [add <text> | done <n> | rm <n>]", "error");
@@ -1911,16 +1921,9 @@ export function App({
 
   /** "!cmd" passthrough: the user's own shell command, run locally, blocking. */
   const runBash = useCallback(
-    (command: string) => {
-      const r = spawnSync("/bin/sh", ["-c", command], {
-        cwd: projectPath,
-        encoding: "utf8",
-        timeout: 60_000,
-        maxBuffer: 4_000_000,
-      });
-      const output =
-        `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd() || (r.error ? String(r.error.message) : "(no output)");
-      dispatch({ type: "shell", command, output, exitCode: r.status ?? 1 });
+    async (command: string, tabId: number) => {
+      const result = await runShellCommand(command, projectPath);
+      tabsDispatch({ type: "chat", tabId, action: { type: "shell", command, ...result } });
     },
     [projectPath],
   );
@@ -1938,7 +1941,7 @@ export function App({
       return;
     }
     if (parsed.kind === "bash") {
-      runBash(parsed.command);
+      void runBash(parsed.command, activeIdRef.current);
       return;
     }
     // Steering: typing during a run queues the message; it is sent (in

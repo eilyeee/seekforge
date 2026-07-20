@@ -37,6 +37,13 @@ export type PrintCliOptions = {
   includePartialMessages?: boolean;
 };
 
+export function parseMaxTurns(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/.test(value)) return Number.NaN;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : Number.NaN;
+}
+
 export async function printCommand(inlinePrompt: string | undefined, opts: PrintCliOptions): Promise<void> {
   let format: OutputFormat;
   try {
@@ -69,7 +76,7 @@ export async function printCommand(inlinePrompt: string | undefined, opts: Print
     }
   }
 
-  const maxTurns = opts.maxTurns !== undefined ? Number.parseInt(opts.maxTurns, 10) : undefined;
+  const maxTurns = parseMaxTurns(opts.maxTurns);
   if (maxTurns !== undefined && (Number.isNaN(maxTurns) || maxTurns <= 0)) {
     fail(t("err.maxTurnsPositive"));
     return;

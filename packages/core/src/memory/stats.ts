@@ -15,7 +15,8 @@
  */
 
 import { listProjectFacts } from "./direct.js";
-import { readCandidates, readFactMeta } from "./store.js";
+import { MemoryStateCorruptError, readCandidates, readFactMeta } from "./store.js";
+import { WorkspaceStateTooLargeError } from "../util/workspace-state.js";
 
 /**
  * sourceSessionId used by the direct channel (direct.ts addMemoryFact default).
@@ -165,7 +166,8 @@ export function memoryStats(workspace: string): MemoryStats {
       approved,
       rejected,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError || error instanceof MemoryStateCorruptError) throw error;
     return { ...EMPTY };
   }
 }

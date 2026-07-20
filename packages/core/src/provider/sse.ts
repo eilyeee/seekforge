@@ -60,6 +60,11 @@ export type SseAccumulator = {
 };
 
 export function createSseAccumulator(limits: Partial<SseLimits> = {}): SseAccumulator {
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || (value as number) < 0) {
+      throw new RangeError(`SSE ${name} limit must be a non-negative safe integer`);
+    }
+  }
   return {
     buffer: "",
     content: "",
@@ -117,6 +122,7 @@ function processLine(
   onDelta?: (delta: string) => void,
   onReasoningDelta?: (delta: string) => void,
 ): void {
+  if (acc.done) return;
   const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
   if (!line.startsWith("data:")) return; // blank lines, comments, other fields
   const payload = line.slice("data:".length).trim();

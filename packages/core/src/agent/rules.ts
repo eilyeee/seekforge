@@ -13,10 +13,11 @@
  * project → local behavior is unchanged.
  */
 
-import { type Dirent, readFileSync, readdirSync } from "node:fs";
+import { type Dirent, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { taskPathTokens } from "../memory/index.js";
+import { readWorkspaceStateFile } from "../util/workspace-state.js";
 
 export type RuleFile = {
   /** Display origin used in the section header (e.g. "~/.seekforge/AGENTS.md"). */
@@ -24,9 +25,14 @@ export type RuleFile = {
   content: string;
 };
 
-function readIfPresent(path: string): string | undefined {
+/** Oversized rule files are skipped rather than partially injecting instructions. */
+export const MAX_RULE_FILE_BYTES = 256 * 1024;
+/** Includes origin headers and separators across global/project/local/subdir rules. */
+export const MAX_RULES_TOTAL_BYTES = 384 * 1024;
+
+function readIfPresent(root: string, relPath: string): string | undefined {
   try {
-    return readFileSync(path, "utf8");
+    return readWorkspaceStateFile(root, relPath, MAX_RULE_FILE_BYTES);
   } catch {
     return undefined;
   }
@@ -74,9 +80,10 @@ function scanSubdirRules(workspace: string): SubdirRule[] {
       if (!entry.isDirectory()) continue;
       if (SUBDIR_SCAN_EXCLUDE.has(entry.name)) continue;
       const childDir = join(dir, entry.name);
-      const content = readIfPresent(join(childDir, "AGENTS.md"));
+      const relDir = relative(workspace, childDir);
+      const content = readIfPresent(workspace, join(relDir, "AGENTS.md"));
       if (content !== undefined && content.trim().length > 0) {
-        results.push({ relDir: relative(workspace, childDir), content });
+        results.push({ relDir, content });
         if (results.length >= SUBDIR_SCAN_MAX_FILES) return;
       }
       walk(childDir, depth + 1);
@@ -105,16 +112,22 @@ function taskReferencesSubdir(relDir: string, pathTokens: string[]): boolean {
 /** Loads each rules layer that exists and is non-empty, in precedence order. */
 export function collectRuleFiles(workspace: string, homeOverride?: string): RuleFile[] {
   const home = homeOverride ?? homedir();
-  const layers: Array<{ origin: string; path: string }> = [
-    { origin: "~/.seekforge/AGENTS.md", path: join(home, ".seekforge", "AGENTS.md") },
-    { origin: "AGENTS.md", path: join(workspace, "AGENTS.md") },
-    { origin: "AGENTS.local.md", path: join(workspace, "AGENTS.local.md") },
+  const layers: Array<{ origin: string; root: string; relPath: string }> = [
+    { origin: "~/.seekforge/AGENTS.md", root: home, relPath: join(".seekforge", "AGENTS.md") },
+    { origin: "AGENTS.md", root: workspace, relPath: "AGENTS.md" },
+    { origin: "AGENTS.local.md", root: workspace, relPath: "AGENTS.local.md" },
   ];
   const out: RuleFile[] = [];
+  let totalBytes = 0;
   for (const layer of layers) {
-    const content = readIfPresent(layer.path);
+    const content = readIfPresent(layer.root, layer.relPath);
     if (content !== undefined && content.trim().length > 0) {
+      const separatorBytes = out.length > 0 ? 2 : 0;
+      const contribution =
+        Buffer.byteLength(`<!-- from: ${layer.origin} -->\n${content.trim()}`, "utf8") + separatorBytes;
+      if (totalBytes + contribution > MAX_RULES_TOTAL_BYTES) continue;
       out.push({ origin: layer.origin, content });
+      totalBytes += contribution;
     }
   }
   return out;
@@ -133,6 +146,7 @@ export function collectProjectRules(workspace: string, homeOverride?: string, ta
   const blocks = collectRuleFiles(workspace, homeOverride).map(
     (f) => `<!-- from: ${f.origin} -->\n${f.content.trim()}`,
   );
+  let totalBytes = Buffer.byteLength(blocks.join("\n\n"), "utf8");
 
   if (task && task.trim().length > 0) {
     let pathTokens: string[] = [];
@@ -145,7 +159,11 @@ export function collectProjectRules(workspace: string, homeOverride?: string, ta
       for (const sub of scanSubdirRules(workspace)) {
         if (taskReferencesSubdir(sub.relDir, pathTokens)) {
           const rel = sub.relDir.split(sep).join("/");
-          blocks.push(`<!-- from: ${rel}/AGENTS.md -->\n${sub.content.trim()}`);
+          const block = `<!-- from: ${rel}/AGENTS.md -->\n${sub.content.trim()}`;
+          const contribution = Buffer.byteLength(block, "utf8") + (blocks.length > 0 ? 2 : 0);
+          if (totalBytes + contribution > MAX_RULES_TOTAL_BYTES) continue;
+          blocks.push(block);
+          totalBytes += contribution;
         }
       }
     }

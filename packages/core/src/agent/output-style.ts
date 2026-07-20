@@ -8,7 +8,7 @@
 // .seekforge/output-styles/<name>.md (project, then the user home); its body
 // (frontmatter stripped) is the addendum verbatim.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
 
@@ -75,9 +75,42 @@ function stripFrontmatter(md: string): string {
   return (m ? (m[1] as string) : md).trim();
 }
 
-/** The two directories custom output styles are read from (project wins). */
-function outputStyleDirs(projectPath: string): string[] {
-  return [join(projectPath, ".seekforge", "output-styles"), join(seekforgeHome(), ".seekforge", "output-styles")];
+/** Resolve a config directory without following symlinks below its trusted base. */
+function outputStyleDir(base: string): string | undefined {
+  try {
+    let dir = realpathSync(base);
+    for (const segment of [".seekforge", "output-styles"]) {
+      dir = join(dir, segment);
+      const stat = lstatSync(dir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return undefined;
+    }
+    return dir;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The two base directories custom output styles are read from (project wins). */
+function outputStyleBases(projectPath: string): string[] {
+  return [projectPath, seekforgeHome()];
+}
+
+function isCustomOutputStyleName(name: string): boolean {
+  return name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\");
+}
+
+function readStyleFile(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    const stat = lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    return readFileSync(fd, "utf8");
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /**
@@ -86,13 +119,14 @@ function outputStyleDirs(projectPath: string): string[] {
  * addendum. Returns undefined when no such file exists in any layer.
  */
 export function loadCustomOutputStyle(name: string, projectPath: string): string | undefined {
-  for (const dir of outputStyleDirs(projectPath)) {
-    try {
-      const body = stripFrontmatter(readFileSync(join(dir, `${name}.md`), "utf8"));
-      if (body) return body;
-    } catch {
-      // not present in this layer — try the next
-    }
+  if (!isCustomOutputStyleName(name)) return undefined;
+  for (const base of outputStyleBases(projectPath)) {
+    const dir = outputStyleDir(base);
+    if (!dir) continue;
+    const raw = readStyleFile(join(dir, `${name}.md`));
+    if (raw === undefined) continue;
+    const body = stripFrontmatter(raw);
+    if (body) return body;
   }
   return undefined;
 }
@@ -122,7 +156,9 @@ export type OutputStyleInfo = { name: string; kind: "builtin" | "custom" };
 export function listOutputStyles(projectPath: string): OutputStyleInfo[] {
   const out: OutputStyleInfo[] = OUTPUT_STYLES.map((name) => ({ name, kind: "builtin" as const }));
   const seen = new Set<string>(OUTPUT_STYLES);
-  for (const dir of outputStyleDirs(projectPath)) {
+  for (const base of outputStyleBases(projectPath)) {
+    const dir = outputStyleDir(base);
+    if (!dir) continue;
     let entries: import("node:fs").Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });

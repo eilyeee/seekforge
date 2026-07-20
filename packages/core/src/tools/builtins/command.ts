@@ -34,8 +34,11 @@ const runCommandSchema = z.object({
     ),
   timeoutMs: z
     .number()
+    .int()
+    .min(1)
+    .max(30 * 60 * 1000)
     .optional()
-    .describe("Timeout in milliseconds (defaults: 30s, 120s for tests, 180s for builds)."),
+    .describe("Timeout in milliseconds (1-1800000; defaults: 30s, 120s for tests, 180s for builds)."),
   background: z
     .boolean()
     .optional()
@@ -180,7 +183,7 @@ const runCommand = defineTool({
         description: "Command failed inside the sandbox — retry WITHOUT sandbox?",
         command: args.command,
       });
-      if (approved) {
+      if (typeof approved === "boolean" ? approved : approved.allow) {
         return finish(await execute("off"), true);
       }
     }
@@ -193,7 +196,13 @@ const DEFAULT_TASK_OUTPUT_TAIL_CHARS = 2_000;
 
 const taskOutputSchema = z.object({
   taskId: z.string().describe("Background task id returned by run_command with background:true."),
-  tail: z.number().optional().describe("Return only the last N chars of each stream (default 2000)."),
+  tail: z
+    .number()
+    .int()
+    .min(0)
+    .max(DEFAULT_LIMITS.toolOutputMaxChars)
+    .optional()
+    .describe("Return only the last N chars of each stream (default 2000)."),
 });
 
 const taskOutput = defineTool({

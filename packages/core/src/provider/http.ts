@@ -10,6 +10,7 @@ import { onAbortOnce } from "../util/abort.js";
 import { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
 
 const MAX_RETRIES = 3;
+const MAX_CONFIGURED_RETRIES = 10;
 const BASE_DELAY_MS = 500;
 const BODY_SNIPPET_CHARS = 500;
 /**
@@ -84,6 +85,9 @@ export async function readJsonResponseBounded(
   response: Response,
   limit = MAX_PROVIDER_RESPONSE_BYTES,
 ): Promise<unknown> {
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new RangeError(`provider response byte limit must be a non-negative safe integer: ${limit}`);
+  }
   if (!response.body) return await response.json();
   const declared = Number(response.headers?.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) {
@@ -218,7 +222,13 @@ export async function fetchWithRetry<T>(
   // exponential backoff for the next attempt. Undefined = use backoff.
   let pendingRetryAfterMs: number | undefined;
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  if (!Number.isSafeInteger(maxRetries) || maxRetries < 0 || maxRetries > MAX_CONFIGURED_RETRIES) {
+    throw new RangeError(`provider maxRetries must be an integer between 0 and ${MAX_CONFIGURED_RETRIES}`);
+  }
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new RangeError("provider timeoutMs must be finite and between 1 and 2147483647");
+  }
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const delayMs = pendingRetryAfterMs ?? backoffMs(attempt);

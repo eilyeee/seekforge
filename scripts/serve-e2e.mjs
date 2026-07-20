@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 // Resolve ws from apps/server (it is not a root dependency).
 const require = createRequire(new URL("../apps/server/package.json", import.meta.url));
@@ -21,7 +22,7 @@ if (!workspace) {
   process.exit(1);
 }
 
-const repo = new URL("..", import.meta.url).pathname;
+const repo = fileURLToPath(new URL("..", import.meta.url));
 const child = spawn(`${repo}/node_modules/.bin/tsx`, [`${repo}/apps/cli/src/index.ts`, "serve", "--port", "0"], {
   cwd: workspace,
   stdio: ["ignore", "pipe", "pipe"],

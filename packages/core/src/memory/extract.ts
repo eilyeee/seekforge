@@ -9,12 +9,14 @@
 import type { ChatMessage, FinalReport, TokenUsage } from "@seekforge/shared";
 import type { ChatProvider } from "../provider/index.js";
 import { abortablePromise } from "../util/abort.js";
-import { writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import { WorkspaceStateTooLargeError, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import {
   appendCandidates,
   appendProjectFact,
+  MAX_MEMORY_DOCUMENT_BYTES,
+  MemoryStateCorruptError,
   MEMORY_CANDIDATE_TYPES,
-  readCandidates,
+  readCandidatesForMutation,
   readProjectMemory,
   withMemoryTransaction,
   type MemoryCandidate,
@@ -208,6 +210,9 @@ function buildMinimalSummary(input: ExtractMemoryInput): string {
 }
 
 function writeSummary(input: ExtractMemoryInput, markdown: string): void {
+  if (Buffer.byteLength(markdown, "utf8") > MAX_MEMORY_DOCUMENT_BYTES) {
+    throw new Error(`memory summary exceeds ${MAX_MEMORY_DOCUMENT_BYTES} bytes`);
+  }
   writeWorkspaceStateFileAtomic(input.workspace, `.seekforge/sessions/${input.sessionId}/summary.md`, markdown);
 }
 
@@ -256,7 +261,8 @@ function degrade(input: ExtractMemoryInput, usage?: TokenUsage): ExtractMemoryRe
   const summaryMarkdown = buildMinimalSummary(input);
   try {
     writeSummary(input, summaryMarkdown);
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError) throw error;
     // Even fs failures must not propagate.
   }
   return { summaryMarkdown, candidates: [], ...(usage ? { usage } : {}) };
@@ -291,10 +297,16 @@ export async function extractMemoryFromSession(
     parsed = undefined;
   }
   if (!parsed) return degrade(input, usage);
+  if (Buffer.byteLength(parsed.summary, "utf8") > MAX_MEMORY_DOCUMENT_BYTES) {
+    throw new WorkspaceStateTooLargeError(
+      `.seekforge/sessions/${input.sessionId}/summary.md`,
+      MAX_MEMORY_DOCUMENT_BYTES,
+    );
+  }
 
   try {
     return withMemoryTransaction(input.workspace, () => {
-      const existing = readCandidates(input.workspace);
+      const existing = readCandidatesForMutation(input.workspace);
       const knownContents = new Set(existing.map((c) => c.content));
       const projectMemory = readProjectMemory(input.workspace) ?? "";
       const sessionOffset = existing.filter((c) => c.sourceSessionId === input.sessionId).length;
@@ -332,7 +344,8 @@ export async function extractMemoryFromSession(
       writeSummary(input, parsed.summary);
       return { summaryMarkdown: parsed.summary, candidates, ...(usage ? { usage } : {}) };
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceStateTooLargeError || error instanceof MemoryStateCorruptError) throw error;
     return degrade(input, usage);
   }
 }

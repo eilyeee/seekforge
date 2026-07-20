@@ -4,8 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const repo = resolve(new URL("..", import.meta.url).pathname);
+const repo = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const cliDir = join(repo, "apps", "cli");
 const temp = mkdtempSync(join(tmpdir(), "seekforge-pack-smoke-"));
 const prefix = join(temp, "install");

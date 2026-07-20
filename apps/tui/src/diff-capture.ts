@@ -26,21 +26,49 @@ type Pending = { relPath: string; absPath: string; before: string | null } | nul
 export function createDiffCapture(workspace: string): {
   onEvent(e: AgentEvent): CapturedDiff | null;
 } {
-  const root = path.resolve(workspace);
+  const root = fs.realpathSync(path.resolve(workspace));
   const stacks = new Map<string, Pending[]>();
 
   const resolveInside = (rel: unknown): { relPath: string; absPath: string } | null => {
     if (typeof rel !== "string" || rel === "") return null;
     const abs = path.resolve(root, rel);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
-    return { relPath: rel, absPath: abs };
+
+    const missingTail: string[] = [];
+    let ancestor = abs;
+    for (;;) {
+      try {
+        const lexicalStat = fs.lstatSync(ancestor);
+        if (missingTail.length === 0 && (lexicalStat.isSymbolicLink() || !lexicalStat.isFile())) return null;
+        if (missingTail.length > 0 && !fs.statSync(ancestor).isDirectory()) return null;
+        const physical = fs.realpathSync(ancestor);
+        if (physical !== root && !physical.startsWith(root + path.sep)) return null;
+        return {
+          relPath: rel,
+          absPath: missingTail.length === 0 ? physical : path.join(physical, ...missingTail),
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return null;
+        missingTail.unshift(path.basename(ancestor));
+        ancestor = parent;
+      }
+    }
   };
 
   const readOrNull = (abs: string): string | null => {
+    let fd: number | undefined;
     try {
-      return fs.readFileSync(abs, "utf8");
+      const physical = fs.realpathSync(abs);
+      if (physical !== root && !physical.startsWith(root + path.sep)) return null;
+      fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      if (!fs.fstatSync(fd).isFile()) return null;
+      return fs.readFileSync(fd, "utf8");
     } catch {
       return null;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
   };
 

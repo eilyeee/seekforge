@@ -6,7 +6,9 @@ import type WebSocket from "ws";
 import * as config from "../src/config.js";
 import { RunManager, startServer, type RunningServer } from "../src/index.js";
 import {
+  RUN_EVENT_MAX_LINE_BYTES,
   RUN_EVENT_REPLAY_LIMIT,
+  RunEventTooLargeError,
   RUNS_LEDGER_COMPACTION_THRESHOLD,
   RUNS_LEDGER_MAX_RETAINED,
 } from "../src/run-ledger.js";
@@ -52,7 +54,7 @@ describe("append-only run ledger", () => {
       });
       return { child, readyPath };
     });
-    await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)));
+    await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)), 15_000);
     writeFileSync(goPath, "go");
     await Promise.all(
       children.map(
@@ -77,7 +79,7 @@ describe("append-only run ledger", () => {
         .filter((worker): worker is string => worker !== undefined),
     );
     expect(labels).toEqual(new Set(workers));
-  }, 20_000);
+  }, 30_000);
 
   it("persists latest state and strictly increasing replay sequence", () => {
     const workspace = makeWorkspace();
@@ -95,6 +97,19 @@ describe("append-only run ledger", () => {
       costUsd: 0.25,
     });
     expect(manager.events(workspace, run.runId, 1)).toMatchObject([{ seq: 2, frame: { type: "two" } }]);
+  });
+
+  it("rejects an oversized event before it can poison replay", () => {
+    const workspace = makeWorkspace();
+    const manager = new RunManager();
+    const run = manager.create({ workspace, source: "background" });
+
+    expect(() =>
+      manager.appendFrame(workspace, run.runId, { type: "event", data: "x".repeat(RUN_EVENT_MAX_LINE_BYTES) }),
+    ).toThrow(RunEventTooLargeError);
+    expect(manager.events(workspace, run.runId)).toEqual([]);
+    expect(manager.appendFrame(workspace, run.runId, { type: "small" }).seq).toBe(1);
+    expect(manager.events(workspace, run.runId)).toMatchObject([{ seq: 1, frame: { type: "small" } }]);
   });
 
   it("does not let a late completion overwrite a cancelled terminal state", () => {

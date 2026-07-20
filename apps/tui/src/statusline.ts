@@ -53,7 +53,8 @@ function inheritedStatusLineEnv(): NodeJS.ProcessEnv {
 }
 
 function processGroupAlive(child: ChildProcess): boolean {
-  if (child.pid === undefined || process.platform === "win32") return child.pid !== undefined;
+  if (child.pid === undefined) return false;
+  if (process.platform === "win32") return child.exitCode === null && child.signalCode === null;
   try {
     process.kill(-child.pid, 0);
     return true;
@@ -99,8 +100,10 @@ export function runStatusLine(
     const killGroup = (signal: NodeJS.Signals): void => {
       if (child.pid === undefined) return;
       try {
-        if (process.platform === "win32") child.kill(signal);
-        else process.kill(-child.pid, signal);
+        if (process.platform === "win32") {
+          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+          killer.on("error", () => {});
+        } else process.kill(-child.pid, signal);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
@@ -133,7 +136,23 @@ export function runStatusLine(
     });
     child.once("error", () => finish(null));
     child.once("close", (code) => {
-      if (forceKillTimer !== undefined && !processGroupAlive(child)) clearTimeout(forceKillTimer);
+      const groupAlive = processGroupAlive(child);
+      if (forceKillTimer !== undefined && !groupAlive) clearTimeout(forceKillTimer);
+      if (forceKillTimer === undefined && groupAlive) {
+        try {
+          killGroup("SIGTERM");
+        } catch {
+          // Preserve the status-line result while cleaning up descendants.
+        }
+        forceKillTimer = setTimeout(() => {
+          try {
+            killGroup("SIGKILL");
+          } catch {
+            // Best-effort cleanup after the shell has closed.
+          }
+        }, FORCE_KILL_DELAY_MS);
+        forceKillTimer.unref();
+      }
       if (settled || code !== 0) return finish(null);
       const first = output.toString("utf8").split("\n")[0]?.trim() ?? "";
       if (first === "") return finish(null);

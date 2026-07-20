@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
+import { isRecord } from "../../util/guards.js";
+import { readWorkspaceStateFile } from "../../util/workspace-state.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 
 type PackageJson = {
@@ -12,10 +14,22 @@ type PackageJson = {
 };
 
 function readPackageJson(workspace: string): PackageJson | undefined {
-  const p = path.join(workspace, "package.json");
-  if (!fs.existsSync(p)) return undefined;
   try {
-    return JSON.parse(fs.readFileSync(p, "utf8")) as PackageJson;
+    const source = readWorkspaceStateFile(workspace, "package.json", 1024 * 1024);
+    if (source === undefined) return undefined;
+    const parsed = JSON.parse(source) as unknown;
+    if (!isRecord(parsed)) return undefined;
+    const stringMap = (value: unknown): Record<string, string> | undefined =>
+      isRecord(value) && Object.values(value).every((entry) => typeof entry === "string")
+        ? (value as Record<string, string>)
+        : undefined;
+    return {
+      ...(typeof parsed["name"] === "string" ? { name: parsed["name"] } : {}),
+      ...(typeof parsed["packageManager"] === "string" ? { packageManager: parsed["packageManager"] } : {}),
+      ...(stringMap(parsed["scripts"]) ? { scripts: stringMap(parsed["scripts"]) } : {}),
+      ...(stringMap(parsed["dependencies"]) ? { dependencies: stringMap(parsed["dependencies"]) } : {}),
+      ...(stringMap(parsed["devDependencies"]) ? { devDependencies: stringMap(parsed["devDependencies"]) } : {}),
+    };
   } catch {
     return undefined;
   }

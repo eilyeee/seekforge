@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchBalance } from "../../src/provider/balance.js";
+import { MAX_PROVIDER_RESPONSE_BYTES } from "../../src/provider/protocol-limits.js";
 
 function fetchReturning(json: unknown, ok = true, status = 200): ReturnType<typeof vi.fn> {
   const spy = vi.fn(async () => ({ ok, status, json: async () => json }));
@@ -57,5 +58,26 @@ describe("fetchBalance", () => {
       }) as unknown as typeof fetch,
     );
     expect(await fetchBalance("sk-test")).toBeNull();
+  });
+
+  it("rejects a declared oversized body and cancels it without buffering", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(body, {
+            headers: { "content-length": String(MAX_PROVIDER_RESPONSE_BYTES + 1) },
+          }),
+      ) as unknown as typeof fetch,
+    );
+
+    expect(await fetchBalance("sk-test")).toBeNull();
+    expect(cancelled).toBe(true);
   });
 });

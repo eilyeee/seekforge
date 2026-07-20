@@ -99,10 +99,12 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
           if (!outcome.allowed) {
             result = fail(outcome.errorCode, outcome.errorMessage);
           } else {
-            // Thread per-hunk selection from the permission outcome onto the
-            // tool context so apply_patch.run can filter edits. Cleared by
-            // the caller after each execute (not persisted across calls).
-            ctx.selectedHunks = outcome.selectedHunks;
+            // selectedHunks is call-local. A dispatcher can be used concurrently
+            // by SDK consumers, so mutating the shared context lets one approval
+            // alter another in-flight apply_patch call.
+            const runCtx: ToolContext = { ...ctx };
+            delete runCtx.selectedHunks;
+            if (outcome.selectedHunks !== undefined) runCtx.selectedHunks = [...outcome.selectedHunks];
             // Hooks fire only for calls that passed permission enforcement.
             // Model-controlled content goes into the payload (stdin), never
             // into the hook command line.
@@ -154,14 +156,17 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                   permission = reClassified.permission;
                   decision = reCheck.decision;
                   if (!reCheck.allowed) updatedDenied = fail(reCheck.errorCode, reCheck.errorMessage);
-                  else ctx.selectedHunks = reCheck.selectedHunks;
+                  else {
+                    delete runCtx.selectedHunks;
+                    if (reCheck.selectedHunks !== undefined) runCtx.selectedHunks = [...reCheck.selectedHunks];
+                  }
                 }
               }
               if (updatedDenied) {
                 result = updatedDenied;
               } else {
                 try {
-                  const out = await tool.run(runArgs as never, ctx);
+                  const out = await tool.run(runArgs as never, runCtx);
                   result = { ok: true, data: out.data, ...(out.meta ? { meta: out.meta } : {}) };
                 } catch (err) {
                   if (err instanceof ToolError) {
@@ -190,8 +195,6 @@ export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
                 if (ctx.signal?.aborted) result = fail("cancelled", "Tool call cancelled");
               }
             }
-            // Clear per-hunk selection so it never leaks to the next call.
-            delete ctx.selectedHunks;
           }
         }
       }

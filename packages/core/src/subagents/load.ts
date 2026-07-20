@@ -1,12 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { seekforgeHome } from "../memory/store.js";
+import { readWorkspaceStateFile } from "../util/workspace-state.js";
 import { BUILTIN_AGENTS } from "./builtins.js";
 import { AGENT_ID_RE, parseFrontmatter } from "./frontmatter.js";
 import type { AgentDefinition, AgentScope } from "./types.js";
 
 /** An agents root directory plus the scope its agents get. */
 export type AgentsDir = { scope: AgentScope; path: string };
+
+/** Oversized definitions are skipped; partial frontmatter must never be parsed. */
+export const MAX_AGENT_DEFINITION_BYTES = 256 * 1024;
 
 /**
  * Loads agent definitions from each root (`<root>/<id>/AGENT.md`), in order:
@@ -46,25 +50,48 @@ export function loadAgentDefinitions(workspace: string): AgentDefinition[] {
 
 function readAgentsRoot({ scope, path: root }: AgentsDir): AgentDefinition[] {
   let entries: fs.Dirent[];
+  let physicalRoot: string;
+  let rootIdentity: fs.Stats;
   try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
+    const lexicalRoot = path.resolve(root);
+    const stat = fs.lstatSync(lexicalRoot);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
+    const parentStat = fs.lstatSync(path.dirname(lexicalRoot));
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return [];
+    physicalRoot = fs.realpathSync(lexicalRoot);
+    rootIdentity = fs.statSync(physicalRoot);
+    entries = fs.readdirSync(physicalRoot, { withFileTypes: true });
+    const currentRoot = fs.statSync(physicalRoot);
+    if (!sameIdentity(rootIdentity, currentRoot) || fs.realpathSync(physicalRoot) !== physicalRoot) return [];
   } catch {
     return [];
   }
   const defs: AgentDefinition[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const def = readAgentDir(scope, entry.name, path.join(root, entry.name));
+    const def = readAgentDir(scope, entry.name, physicalRoot, rootIdentity);
     if (def) defs.push(def);
   }
   return defs;
 }
 
-function readAgentDir(scope: AgentScope, id: string, dir: string): AgentDefinition | undefined {
+function sameIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function readAgentDir(
+  scope: AgentScope,
+  id: string,
+  root: string,
+  rootIdentity: fs.Stats,
+): AgentDefinition | undefined {
   if (!AGENT_ID_RE.test(id)) return undefined;
   let markdown: string;
   try {
-    markdown = fs.readFileSync(path.join(dir, "AGENT.md"), "utf8");
+    if (!sameIdentity(rootIdentity, fs.statSync(root))) return undefined;
+    const source = readWorkspaceStateFile(root, path.join(id, "AGENT.md"), MAX_AGENT_DEFINITION_BYTES);
+    if (source === undefined || !sameIdentity(rootIdentity, fs.statSync(root))) return undefined;
+    markdown = source;
   } catch {
     return undefined;
   }

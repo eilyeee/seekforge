@@ -6,7 +6,16 @@ import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 const sent: ClientFrame[] = [];
 let lastHandlers: (WsClientHandlers & { getToken: () => string }) | undefined;
 let acceptSend = true;
+type WorkspaceListResponse = {
+  workspaces: { id: string; name: string; path: string }[];
+  recents: { path: string; name: string }[];
+};
 const openWorkspaceMock = vi.hoisted(() => vi.fn());
+const workspacesMock = vi.hoisted(() =>
+  vi.fn<() => Promise<WorkspaceListResponse>>(() => Promise.resolve({ workspaces: [], recents: [] })),
+);
+const configMock = vi.hoisted(() => vi.fn(() => Promise.resolve({})));
+const worktreesMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 
 vi.mock("./lib/ws", () => ({
   encodeClientFrame: (frame: ClientFrame): string | null => {
@@ -39,9 +48,10 @@ class MockApiError extends Error {
 }
 vi.mock("./lib/api", () => ({
   api: {
-    workspaces: () => Promise.resolve({ workspaces: [], recents: [] }),
-    config: () => Promise.resolve({}),
+    workspaces: workspacesMock,
+    config: configMock,
     openWorkspace: openWorkspaceMock,
+    worktrees: worktreesMock,
   },
   ApiError: MockApiError,
   setTokenProvider: () => {},
@@ -55,6 +65,9 @@ function resetStore(): void {
   sent.length = 0;
   acceptSend = true;
   openWorkspaceMock.mockReset();
+  workspacesMock.mockReset().mockResolvedValue({ workspaces: [], recents: [] });
+  configMock.mockReset().mockResolvedValue({});
+  worktreesMock.mockReset().mockResolvedValue([]);
   // Fresh single-tab state for each test.
   useStore.setState((s) => ({
     tabs: {
@@ -145,6 +158,47 @@ describe("store: workspace selection", () => {
     expect(useStore.getState().activeWorkspaceId).toBe("workspace-second");
     expect(useStore.getState().workspaces.map((workspace) => workspace.id)).toEqual(["workspace-second"]);
     expect(useStore.getState().tabs.tabs[0]!.ws).toBe("workspace-second");
+  });
+
+  it("does not let an older workspace-list response replace a newer open", async () => {
+    const oldList = deferred<{
+      workspaces: { id: string; name: string; path: string }[];
+      recents: [];
+    }>();
+    workspacesMock.mockReturnValueOnce(oldList.promise);
+    const opened = {
+      workspace: { id: "workspace-b", name: "B", path: "/b" },
+      workspaces: [{ id: "workspace-b", name: "B", path: "/b" }],
+      recents: [] as [],
+    };
+    openWorkspaceMock.mockResolvedValue(opened);
+
+    useStore.getState().loadWorkspaces();
+    await useStore.getState().openWorkspace("/b");
+    oldList.resolve({ workspaces: [{ id: "workspace-a", name: "A", path: "/a" }], recents: [] });
+    await oldList.promise;
+    await Promise.resolve();
+
+    expect(useStore.getState().activeWorkspaceId).toBe("workspace-b");
+    expect(useStore.getState().workspaces).toEqual(opened.workspaces);
+  });
+});
+
+describe("store: boot request identity", () => {
+  beforeEach(resetStore);
+
+  it("keeps completed onboarding after an older config request resolves", async () => {
+    const oldConfig = deferred<Record<string, unknown>>();
+    configMock.mockReturnValueOnce(oldConfig.promise);
+    useStore.setState({ onboarding: "unknown" });
+
+    useStore.getState().checkOnboarding();
+    useStore.getState().finishOnboarding();
+    oldConfig.resolve({ apiKey: "" });
+    await oldConfig.promise;
+    await Promise.resolve();
+
+    expect(useStore.getState().onboarding).toBe("done");
   });
 });
 

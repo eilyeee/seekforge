@@ -413,6 +413,29 @@ describe("clearOldToolResults", () => {
     );
   });
 
+  it("pairs reused tool-call ids within their assistant turn", () => {
+    const messages: ChatMessage[] = [
+      msg("system", "system prompt"),
+      msg("user", "turn 0"),
+      msg("assistant", "", {
+        toolCalls: [{ id: "same", name: "read_file", argumentsJson: '{"path":"old.ts"}' }],
+      }),
+      msg("tool", "x".repeat(1000), { toolCallId: "same" }),
+      msg("user", "turn 1"),
+      msg("assistant", "", {
+        toolCalls: [{ id: "same", name: "run_command", argumentsJson: '{"command":"pnpm test"}' }],
+      }),
+      msg("tool", "y".repeat(1000), { toolCallId: "same" }),
+      msg("user", "turn 2"),
+      msg("user", "turn 3"),
+    ];
+
+    const out = clearOldToolResults(messages).messages;
+
+    expect(out[3]!.content).toContain("old read_file output for old.ts");
+    expect(out[3]!.content).not.toContain("pnpm test");
+  });
+
   it("uses the generic note when the tool message has no linkage", () => {
     const messages: ChatMessage[] = [
       msg("system", "system prompt"),

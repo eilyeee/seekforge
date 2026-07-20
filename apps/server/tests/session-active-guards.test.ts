@@ -201,4 +201,32 @@ describe("active-session REST guards", () => {
 
     expect(readdirSync(sessionsDir).sort()).toEqual(before);
   });
+
+  it("rejects project settings mutations while another session owns the workspace", async () => {
+    const lease = acquireSessionLease(workspace, "settings-active");
+    try {
+      await expectSessionBusy(
+        authed("/api/hooks", {
+          method: "PUT",
+          body: JSON.stringify({ hooks: { preToolUse: [{ command: "echo blocked" }] } }),
+        }),
+      );
+      await expectSessionBusy(
+        authed("/api/config", {
+          method: "PUT",
+          body: JSON.stringify({ key: "sandbox", value: "off" }),
+        }),
+      );
+      await expectSessionBusy(
+        authed("/api/mcp", {
+          method: "POST",
+          body: JSON.stringify({ name: "blocked", command: "node" }),
+        }),
+      );
+    } finally {
+      lease.release();
+    }
+
+    expect(existsSync(join(workspace, ".seekforge/config.json"))).toBe(false);
+  });
 });

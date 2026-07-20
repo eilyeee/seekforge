@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import { fail, formatError, green, makeColorizer, useColor } from "../colors.js";
@@ -28,6 +29,7 @@ import {
 } from "../output-format.js";
 import { MAX_STDIN_PROMPT_BYTES, composePrompt, readStdin } from "../stdin-prompt.js";
 import { MAX_SHELL_CAPTURE_BYTES, runShellCapture } from "../shell-capture.js";
+import { parseMaxTurns } from "../commands/print.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { isCacheFresh } from "../version-check.js";
@@ -55,6 +57,29 @@ test("readStdin rejects an I/O error instead of executing partial input", async 
   await assert.rejects(readStdin(stream), /simulated EIO/);
 });
 
+test("readStdin settles when called after the stream already ended", async () => {
+  const stream = new Readable({ read() {} }) as NodeJS.ReadStream;
+  stream.push(null);
+  stream.resume();
+  await once(stream, "end");
+  await assert.doesNotReject(async () => assert.equal(await readStdin(stream), ""));
+});
+
+test("readStdin rejects a close without end and removes every listener", async () => {
+  const stream = new Readable({ read() {} }) as NodeJS.ReadStream;
+  const reading = readStdin(stream);
+  stream.destroy();
+  await assert.rejects(reading, /closed before end/);
+  for (const event of ["data", "end", "error", "close"]) assert.equal(stream.listenerCount(event), 0);
+});
+
+test("print max-turns parser consumes the complete safe integer", () => {
+  assert.equal(parseMaxTurns("12"), 12);
+  for (const value of ["12turns", "1e2", "0", "9007199254740992"]) {
+    assert.equal(Number.isNaN(parseMaxTurns(value)), true);
+  }
+});
+
 test("custom-command shell capture bounds output", async () => {
   const command = `${JSON.stringify(process.execPath)} -e 'process.stdout.write("x".repeat(${MAX_SHELL_CAPTURE_BYTES + 1}))'`;
   assert.match(await runShellCapture(command, process.cwd()), /output exceeded/);
@@ -68,6 +93,36 @@ test("custom-command shell capture settles on timeout even when a descendant own
   const started = Date.now();
   assert.match(await runShellCapture("sleep 10 &", process.cwd(), 50), /timed out/);
   assert.ok(Date.now() - started < 2_000);
+});
+
+test("custom-command shell capture cleans descendants after a successful shell exit", async () => {
+  if (process.platform === "win32") return;
+  const dir = mkdtempSync(join(tmpdir(), "seekforge-shell-descendant-"));
+  const pidFile = join(dir, "pid");
+  let pid = 0;
+  try {
+    const command = `sleep 10 </dev/null >/dev/null 2>&1 & printf %s $! > ${JSON.stringify(pidFile)}`;
+    assert.equal(await runShellCapture(command, dir), "");
+    pid = Number(readFileSync(pidFile, "utf8"));
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    for (let i = 0; i < 100; i++) {
+      try {
+        process.kill(pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw error;
+      }
+    }
+    assert.fail(`descendant ${pid} remained alive`);
+  } finally {
+    if (pid > 0) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("version cache rejects non-finite timestamps and intervals", () => {

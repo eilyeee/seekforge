@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { acquireSessionLease, redactSecrets, SessionBusyError } from "@seekforge/core";
+import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   appendProjectFile,
   projectFileIdentity,
@@ -174,7 +175,14 @@ export function readRunLedger(workspace: string): RunRecord[] {
 }
 
 export const RUN_EVENT_REPLAY_LIMIT = 500;
-export const RUN_EVENT_MAX_LINE_BYTES = 1024 * 1024;
+export const RUN_EVENT_MAX_LINE_BYTES = MAX_WS_PAYLOAD_BYTES;
+
+export class RunEventTooLargeError extends Error {
+  constructor() {
+    super(`run event exceeds ${RUN_EVENT_MAX_LINE_BYTES} bytes`);
+    this.name = "RunEventTooLargeError";
+  }
+}
 
 export function readRunEventPage(
   workspace: string,
@@ -358,8 +366,6 @@ export class RunManager {
       });
       nextSeq = this.lastSeq(workspace, id) + 1;
     }
-    if (options.cacheSequence !== false) this.seq.set(id, nextSeq);
-    else this.seq.delete(id);
     const event = { runId: id, seq: nextSeq, ts: new Date().toISOString(), frame };
     // Redact before persisting: frames carry raw model/reasoning deltas and tool
     // results, any of which can contain a secret that would otherwise land on
@@ -367,11 +373,13 @@ export class RunManager {
     // while the frame is still structured so multiline masks are escaped by the
     // final JSON serialization and cannot split the JSONL record.
     const persisted = { ...event, frame: redactStructuredSecrets(frame) };
-    const identity = appendProjectFile(
-      workspace,
-      `.seekforge/run-events/${id}.jsonl`,
-      `${JSON.stringify(persisted)}\n`,
-    );
+    const serialized = JSON.stringify(persisted);
+    if (Buffer.byteLength(serialized, "utf8") > RUN_EVENT_MAX_LINE_BYTES) {
+      throw new RunEventTooLargeError();
+    }
+    const identity = appendProjectFile(workspace, `.seekforge/run-events/${id}.jsonl`, `${serialized}\n`);
+    if (options.cacheSequence !== false) this.seq.set(id, nextSeq);
+    else this.seq.delete(id);
     const listeners = this.frameListeners.get(`${workspace}\0${id}`);
     if (listeners) {
       for (const listener of [...listeners]) {

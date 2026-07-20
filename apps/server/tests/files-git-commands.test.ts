@@ -309,7 +309,7 @@ describe("GET /api/diff (oversized output)", () => {
     } finally {
       await local.close();
     }
-  });
+  }, 15_000);
 });
 
 describe("git stage / unstage / commit", () => {

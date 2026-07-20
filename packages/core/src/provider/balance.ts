@@ -1,4 +1,5 @@
 import { DEFAULT_BASE_URL } from "./constants.js";
+import { readJsonResponseBounded } from "./http.js";
 
 const BALANCE_TIMEOUT_MS = 10_000;
 
@@ -30,7 +31,7 @@ export async function fetchBalance(apiKey: string, baseUrl?: string): Promise<Ac
       headers: { authorization: `Bearer ${apiKey}` },
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as {
+    const json = (await readJsonResponseBounded(res)) as {
       balance_infos?: { currency?: unknown; total_balance?: unknown }[];
     };
     const info = json?.balance_infos?.[0];

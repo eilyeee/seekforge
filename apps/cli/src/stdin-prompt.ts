@@ -34,6 +34,11 @@ export const MAX_STDIN_PROMPT_BYTES = 16 * 1024 * 1024;
  */
 export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Promise<string> {
   if (stream.isTTY) return "";
+  if (stream.readableEnded) return "";
+  if (stream.destroyed) {
+    const error = (stream as NodeJS.ReadStream & { errored?: Error | null }).errored;
+    throw error ?? new Error("stdin closed before it could be read");
+  }
   const chunks: Buffer[] = [];
   let total = 0;
   return new Promise<string>((resolve, reject) => {
@@ -41,6 +46,7 @@ export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Prom
       stream.off("data", onData);
       stream.off("end", onEnd);
       stream.off("error", onError);
+      stream.off("close", onClose);
     };
     const finish = (): void => {
       cleanup();
@@ -50,6 +56,10 @@ export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Prom
     const onError = (error: Error): void => {
       cleanup();
       reject(error);
+    };
+    const onClose = (): void => {
+      cleanup();
+      reject(new Error("stdin closed before end"));
     };
     const onData = (chunk: Buffer | string): void => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -65,5 +75,6 @@ export async function readStdin(stream: NodeJS.ReadStream = process.stdin): Prom
     stream.on("data", onData);
     stream.once("end", onEnd);
     stream.once("error", onError);
+    stream.once("close", onClose);
   });
 }

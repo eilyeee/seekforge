@@ -77,7 +77,6 @@ type RunSubscription = {
   afterSeq: number;
   fileIdentity?: string;
   catchingUp: boolean;
-  pendingLocal: Array<{ event: RunEvent; identity: string }>;
   unsubscribe?: () => void;
   timer?: NodeJS.Timeout;
 };
@@ -199,14 +198,6 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       if (!subscriptions.has(key)) return false;
     }
     subscription.catchingUp = page.hasMore;
-    if (!page.hasMore) {
-      const pending = subscription.pendingLocal.splice(0).sort((a, b) => a.event.seq - b.event.seq);
-      for (const { event, identity } of pending) {
-        subscription.fileIdentity = identity;
-        deliverSubscriptionEvent(key, subscription, event);
-        if (!subscriptions.has(key)) return false;
-      }
-    }
     return page.hasMore;
   };
   const pollSubscription = (key: string, subscription: RunSubscription, force = false): void => {
@@ -603,7 +594,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     }
   };
 
-  ws.on("message", (data: RawData) => {
+  ws.on("message", (data: RawData, isBinary: boolean) => {
+    if (isBinary) {
+      fail("bad_frame", "frames must be UTF-8 JSON text, not binary data");
+      return;
+    }
     let frame: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(String(data));
@@ -930,14 +925,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           runId,
           afterSeq: (afterSeq as number | undefined) ?? 0,
           catchingUp: true,
-          pendingLocal: [],
         };
         subscriptions.set(key, subscription);
         subscription.unsubscribe = deps.runManager.subscribeFrames(workspace.path, runId, (event, identity) => {
           try {
-            if (subscription.catchingUp) subscription.pendingLocal.push({ event, identity });
-            else {
-              subscription.fileIdentity = identity;
+            subscription.fileIdentity = identity;
+            if (!subscription.catchingUp) {
               deliverSubscriptionEvent(key, subscription, event);
             }
           } catch {

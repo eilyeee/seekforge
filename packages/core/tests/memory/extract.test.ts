@@ -2,8 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@seekforge/shared";
-import { extractMemoryFromSession, listMemoryCandidates } from "../../src/memory/index.js";
+import { candidatesPath, extractMemoryFromSession, listMemoryCandidates } from "../../src/memory/index.js";
 import { INJECTION_PATTERN, MAX_FACTS_PER_SESSION } from "../../src/memory/extract.js";
+import { MAX_MEMORY_CANDIDATES_BYTES } from "../../src/memory/store.js";
+import { WorkspaceStateTooLargeError } from "../../src/util/workspace-state.js";
 import {
   makeCandidate,
   makeFakeProvider,
@@ -307,5 +309,31 @@ describe("extractMemoryFromSession (degraded path)", () => {
   it("degrades when summary is missing from the JSON", async () => {
     const ws = makeWorkspace();
     await expectDegraded(ws, makeFakeProvider(['```json\n{"facts": []}\n```']));
+  });
+
+  it("fails closed without replacing an oversized candidate store", async () => {
+    const ws = makeWorkspace();
+    const file = candidatesPath(ws);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "sentinel");
+    fs.truncateSync(file, MAX_MEMORY_CANDIDATES_BYTES + 1);
+    const before = fs.statSync(file);
+    const provider = makeFakeProvider([
+      fencedResponse([{ content: "must not be persisted", type: "tech", confidence: 0.9 }]),
+    ]);
+
+    await expect(extractMemoryFromSession(provider, makeInput(ws))).rejects.toBeInstanceOf(WorkspaceStateTooLargeError);
+
+    const after = fs.statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    const fd = fs.openSync(file, "r");
+    try {
+      const prefix = Buffer.alloc(8);
+      expect(fs.readSync(fd, prefix, 0, prefix.length, 0)).toBe(8);
+      expect(prefix.toString()).toBe("sentinel");
+    } finally {
+      fs.closeSync(fd);
+    }
+    expect(fs.existsSync(path.join(ws, ".seekforge", "sessions", "sess1", "summary.md"))).toBe(false);
   });
 });

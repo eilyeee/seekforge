@@ -4,6 +4,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use serde_json::{json, Value};
 
+use crate::fs::MAX_FILE_BYTES;
 use crate::protocol::{codes, EditSpec, RtError, RtResult};
 use crate::sandbox::SecureWritePath;
 
@@ -30,9 +31,26 @@ where
     if !meta.is_file() {
         return Err(RtError::io(format!("not a regular file: {path}")));
     }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(RtError::new(
+            codes::TOO_LARGE,
+            format!(
+                "file {path} is {} bytes (limit {MAX_FILE_BYTES})",
+                meta.len()
+            ),
+        ));
+    }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    (&mut file)
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(RtError::new(
+            codes::TOO_LARGE,
+            format!("file {path} grew beyond the {MAX_FILE_BYTES} byte limit while being read"),
+        ));
+    }
     let content = String::from_utf8(bytes).map_err(|_| {
         RtError::new(
             codes::BINARY_FILE,
@@ -207,6 +225,17 @@ mod tests {
         let data = apply_patch(ws_s, "f.txt", &[edit("alpha", "A"), edit("beta", "B")]).unwrap();
         assert_eq!(data["editsApplied"], 2);
         assert_eq!(std::fs::read_to_string(ws.join("f.txt")).unwrap(), "A\nB\n");
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn patch_rejects_files_over_the_read_limit() {
+        let ws = tmpdir("large");
+        let file = ws.join("large.txt");
+        std::fs::write(&file, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
+        let err = apply_patch(ws.to_str().unwrap(), "large.txt", &[edit("x", "y")]).unwrap_err();
+        assert_eq!(err.code, codes::TOO_LARGE);
+        assert_eq!(std::fs::metadata(file).unwrap().len(), MAX_FILE_BYTES + 1);
         std::fs::remove_dir_all(&ws).ok();
     }
 

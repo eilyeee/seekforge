@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { Command, InvalidArgumentError } from "commander";
 import { fail, setColorEnabled, useColor } from "./colors.js";
@@ -46,6 +45,7 @@ import { serveCommand } from "./commands/serve.js";
 import { updateCommand } from "./commands/update.js";
 import { modelsCommand } from "./commands/models.js";
 import { sessionsCommand, sessionsPruneCommand, statusCommand } from "./commands/sessions.js";
+import { runInheritedCommand } from "./inherited-command.js";
 
 const program = new Command();
 
@@ -657,8 +657,9 @@ program
 program
   .command("diff")
   .description("show current git diff")
-  .action(() => {
-    spawn("git", ["diff"], { stdio: "inherit" });
+  .action(async () => {
+    const code = await runInheritedCommand("git", ["diff"]);
+    if (code !== 0) process.exitCode = code;
   });
 
 program

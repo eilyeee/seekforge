@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -35,6 +35,25 @@ describe("rules-file hierarchy", () => {
     writeFileSync(join(workspace, "AGENTS.md"), "# Project rules\nuse pnpm");
     const merged = collectProjectRules(workspace, home);
     expect(merged).toBe("<!-- from: AGENTS.md -->\n# Project rules\nuse pnpm");
+  });
+
+  it("does not load a project AGENTS.md symlink outside the workspace", () => {
+    const outside = join(home, "outside-rules.md");
+    writeFileSync(outside, "outside instructions");
+    symlinkSync(outside, join(workspace, "AGENTS.md"));
+
+    expect(collectRuleFiles(workspace, home)).toEqual([]);
+    expect(collectProjectRules(workspace, home)).toBeUndefined();
+  });
+
+  it("does not follow a symlinked global rules parent directory", () => {
+    const outside = join(workspace, "outside-config");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "AGENTS.md"), "outside instructions");
+    symlinkSync(outside, join(home, ".seekforge"), "dir");
+
+    expect(collectRuleFiles(workspace, home)).toEqual([]);
+    expect(collectProjectRules(workspace, home)).toBeUndefined();
   });
 
   it("loads only the global AGENTS.md when present alone", () => {
@@ -79,6 +98,21 @@ describe("rules-file hierarchy", () => {
     // a single non-empty layer among empty ones still loads
     writeFileSync(join(workspace, "AGENTS.local.md"), "only me");
     expect(collectProjectRules(workspace, home)).toBe("<!-- from: AGENTS.local.md -->\nonly me");
+  });
+
+  it("skips an AGENTS.md that exceeds the per-file byte limit", () => {
+    writeFileSync(join(workspace, "AGENTS.md"), "x".repeat(256 * 1024 + 1));
+
+    expect(collectRuleFiles(workspace, home)).toEqual([]);
+    expect(collectProjectRules(workspace, home)).toBeUndefined();
+  });
+
+  it("stops adding rule files when their combined content exceeds the total limit", () => {
+    writeGlobal(`GLOBAL:${"g".repeat(199 * 1024)}`);
+    writeFileSync(join(workspace, "AGENTS.md"), `PROJECT:${"p".repeat(199 * 1024)}`);
+
+    const files = collectRuleFiles(workspace, home);
+    expect(files.map((file) => file.origin)).toEqual(["~/.seekforge/AGENTS.md"]);
   });
 
   it("defaults to os.homedir() when no override is given", () => {

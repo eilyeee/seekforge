@@ -1,23 +1,36 @@
 //! File methods: read_file, list_files, write_file.
 
-use std::io::Write;
-use std::path::Path;
+use std::ffi::{CStr, OsString};
+use std::io::{Read, Write};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::unix::ffi::OsStringExt;
 
 use serde_json::{json, Value};
 
 use crate::protocol::{codes, RtError, RtResult};
-use crate::sandbox::{is_ignored_dir, resolve_for_read, resolve_inside_workspace, SecureWritePath};
+use crate::sandbox::{is_ignored_dir, openat_file, SecureDirPath, SecureReadPath, SecureWritePath};
 
 /// PROTOCOL.md: files over 5 MB are rejected with `too_large`.
-const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 /// PROTOCOL.md: list_files caps at 500 entries.
 const MAX_LIST_ENTRIES: usize = 500;
 /// Binary sniff window: a NUL byte in the first 8 KB means binary.
 const BINARY_SNIFF_BYTES: usize = 8192;
 
 pub fn read_file(workspace: &str, path: &str) -> RtResult<Value> {
-    let resolved = resolve_for_read(workspace, path)?;
-    let meta = std::fs::metadata(&resolved)
+    read_file_with_hook(workspace, path, || {})
+}
+
+fn read_file_with_hook<F>(workspace: &str, path: &str, after_validation: F) -> RtResult<Value>
+where
+    F: FnOnce(),
+{
+    let target = SecureReadPath::prepare(workspace, path)?;
+    after_validation();
+    let mut file = target.open()?;
+    let meta = file
+        .metadata()
         .map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
     if !meta.is_file() {
         return Err(RtError::io(format!("not a regular file: {path}")));
@@ -31,8 +44,17 @@ pub fn read_file(workspace: &str, path: &str) -> RtResult<Value> {
             ),
         ));
     }
-    let bytes =
-        std::fs::read(&resolved).map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
+    let mut bytes = Vec::with_capacity(meta.len().min(MAX_FILE_BYTES) as usize);
+    (&mut file)
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| RtError::io(format!("cannot read {path}: {e}")))?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(RtError::new(
+            codes::TOO_LARGE,
+            format!("file {path} grew beyond the {MAX_FILE_BYTES} byte limit while being read"),
+        ));
+    }
     if bytes.iter().take(BINARY_SNIFF_BYTES).any(|b| *b == 0) {
         return Err(RtError::new(
             codes::BINARY_FILE,
@@ -49,18 +71,85 @@ pub fn read_file(workspace: &str, path: &str) -> RtResult<Value> {
 }
 
 pub fn list_files(workspace: &str, path: &str, max_depth: u32) -> RtResult<Value> {
-    let root = resolve_inside_workspace(workspace, path)?;
-    if !root.is_dir() {
-        return Err(RtError::io(format!("not a directory: {path}")));
-    }
+    list_files_with_hook(workspace, path, max_depth, || {})
+}
+
+fn list_files_with_hook<F>(
+    workspace: &str,
+    path: &str,
+    max_depth: u32,
+    after_validation: F,
+) -> RtResult<Value>
+where
+    F: FnOnce(),
+{
+    let target = SecureDirPath::prepare(workspace, path)?;
+    after_validation();
+    let root = target.open()?;
     let mut entries: Vec<String> = Vec::new();
     let mut truncated = false;
-    walk(&root, "", 1, max_depth, &mut entries, &mut truncated);
+    walk(root, "", 1, max_depth, &mut entries, &mut truncated);
     Ok(json!({ "entries": entries, "truncated": truncated }))
 }
 
+struct DirStream(*mut libc::DIR);
+
+impl Drop for DirStream {
+    fn drop(&mut self) {
+        unsafe {
+            libc::closedir(self.0);
+        }
+    }
+}
+
+fn open_dir_stream(dir: std::fs::File) -> std::io::Result<DirStream> {
+    let fd = dir.into_raw_fd();
+    let stream = unsafe { libc::fdopendir(fd) };
+    if stream.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(fd);
+        }
+        Err(error)
+    } else {
+        Ok(DirStream(stream))
+    }
+}
+
+fn is_directory(parent: &std::fs::File, name: &CStr) -> bool {
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    result == 0 && (unsafe { stat.assume_init() }.st_mode & libc::S_IFMT) == libc::S_IFDIR
+}
+
+fn directory_entries(dir: &std::fs::File) -> std::io::Result<(DirStream, Vec<(OsString, bool)>)> {
+    let stream = open_dir_stream(dir.try_clone()?)?;
+    let mut entries = Vec::new();
+    loop {
+        let entry = unsafe { libc::readdir(stream.0) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let bytes = name.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        entries.push((OsString::from_vec(bytes.to_vec()), is_directory(dir, name)));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((stream, entries))
+}
+
 fn walk(
-    dir: &Path,
+    dir: std::fs::File,
     rel: &str,
     depth: u32,
     max_depth: u32,
@@ -70,18 +159,16 @@ fn walk(
     if *truncated || depth > max_depth {
         return;
     }
-    let mut dirents: Vec<std::fs::DirEntry> = match std::fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+    let (_stream, dirents) = match directory_entries(&dir) {
+        Ok(entries) => entries,
         Err(_) => return,
     };
-    dirents.sort_by_key(|e| e.file_name());
-    for d in dirents {
+    for (raw_name, is_dir) in dirents {
         if *truncated {
             return;
         }
-        let name = d.file_name().to_string_lossy().into_owned();
+        let name = raw_name.to_string_lossy().into_owned();
         // Symlinks are listed as plain entries and never followed.
-        let is_dir = d.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir && is_ignored_dir(&name) {
             continue;
         }
@@ -96,14 +183,10 @@ fn walk(
         }
         if is_dir {
             entries.push(format!("{child_rel}/"));
-            walk(
-                &d.path(),
-                &child_rel,
-                depth + 1,
-                max_depth,
-                entries,
-                truncated,
-            );
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            if let Ok(child) = openat_file(&dir, &raw_name, flags, 0) {
+                walk(child, &child_rel, depth + 1, max_depth, entries, truncated);
+            }
         } else {
             entries.push(child_rel);
         }
@@ -164,7 +247,50 @@ mod tests {
         std::fs::write(ws.join("ok.txt"), "hello").unwrap();
         let data = read_file(ws_s, "ok.txt").unwrap();
         assert_eq!(data["content"], "hello");
+        std::fs::write(
+            ws.join("large.txt"),
+            vec![b'x'; MAX_FILE_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert_eq!(
+            read_file(ws_s, "large.txt").unwrap_err().code,
+            codes::TOO_LARGE
+        );
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn read_rejects_parent_symlink_swap_after_validation() {
+        let ws = tmpdir("read-parent-swap");
+        let outside = tmpdir("read-parent-outside");
+        std::fs::create_dir_all(ws.join("dir")).unwrap();
+        std::fs::write(ws.join("dir/file.txt"), "inside").unwrap();
+        std::fs::write(outside.join("file.txt"), "outside").unwrap();
+        let err = read_file_with_hook(ws.to_str().unwrap(), "dir/file.txt", || {
+            std::fs::rename(ws.join("dir"), ws.join("dir-old")).unwrap();
+            std::os::unix::fs::symlink(&outside, ws.join("dir")).unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn read_rejects_leaf_symlink_swap_after_validation() {
+        let ws = tmpdir("read-leaf-swap");
+        let outside = tmpdir("read-leaf-outside");
+        let outside_file = outside.join("outside.txt");
+        std::fs::write(ws.join("target.txt"), "inside").unwrap();
+        std::fs::write(&outside_file, "outside").unwrap();
+        let err = read_file_with_hook(ws.to_str().unwrap(), "target.txt", || {
+            std::fs::remove_file(ws.join("target.txt")).unwrap();
+            std::os::unix::fs::symlink(&outside_file, ws.join("target.txt")).unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]
@@ -243,6 +369,41 @@ mod tests {
         assert_eq!(entries, vec!["root.txt", "src/", "src/a.txt"]);
         assert_eq!(data["truncated"], false);
         std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn list_rejects_parent_symlink_swap_after_validation() {
+        let ws = tmpdir("list-parent-swap");
+        let outside = tmpdir("list-parent-outside");
+        std::fs::create_dir_all(ws.join("dir")).unwrap();
+        std::fs::write(ws.join("dir/inside.txt"), "inside").unwrap();
+        std::fs::write(outside.join("secret.txt"), "outside").unwrap();
+        let err = list_files_with_hook(ws.to_str().unwrap(), "dir", 2, || {
+            std::fs::rename(ws.join("dir"), ws.join("dir-old")).unwrap();
+            std::os::unix::fs::symlink(&outside, ws.join("dir")).unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(err.code, codes::OUTSIDE_WORKSPACE);
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn list_does_not_follow_recursive_symlink_swap() {
+        let ws = tmpdir("list-recursive-swap");
+        let outside = tmpdir("list-recursive-outside");
+        std::fs::create_dir_all(ws.join("dir/sub")).unwrap();
+        std::fs::write(ws.join("dir/sub/inside.txt"), "inside").unwrap();
+        std::fs::write(outside.join("secret.txt"), "outside").unwrap();
+        std::fs::remove_dir_all(ws.join("dir/sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("dir/sub")).unwrap();
+        let data = list_files(ws.to_str().unwrap(), "dir", 3).unwrap();
+        let entries = data["entries"].as_array().unwrap();
+        assert!(entries
+            .iter()
+            .all(|entry| entry.as_str() != Some("sub/secret.txt")));
+        std::fs::remove_dir_all(&ws).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

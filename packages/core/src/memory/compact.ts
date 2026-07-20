@@ -4,8 +4,18 @@
  * longer survivor. No model call — auditable and reproducible (docs/09).
  */
 
-import { readFactMeta, readRawProjectMemory, reconcileFactMeta, withMemoryTransaction } from "./store.js";
-import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import {
+  MAX_MEMORY_DOCUMENT_BYTES,
+  readFactMetaForMutation,
+  readRawProjectMemory,
+  reconcileFactMeta,
+  withMemoryTransaction,
+} from "./store.js";
+import {
+  readWorkspaceStateFile,
+  WorkspaceStateTooLargeError,
+  writeWorkspaceStateFileAtomic,
+} from "../util/workspace-state.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
 const NEAR_DUP_JACCARD = 0.8;
@@ -194,7 +204,7 @@ function compactProjectMemoryUnlocked(workspace: string, opts: CompactOptions): 
 
   let finalContent = content;
   if (opts.pruneUnusedDays !== undefined && opts.pruneUnusedDays >= 0) {
-    const pruned = pruneUnused(content, readFactMeta(workspace), opts.pruneUnusedDays);
+    const pruned = pruneUnused(content, readFactMetaForMutation(workspace), opts.pruneUnusedDays);
     finalContent = pruned.content;
     result.archived = pruned.archived;
     result.after -= pruned.archived.length;
@@ -204,9 +214,14 @@ function compactProjectMemoryUnlocked(workspace: string, opts: CompactOptions): 
     const block = `${result.archived.join("\n")}\n`;
     try {
       const archiveRel = ".seekforge/memory/project-archive.md";
-      const existingArchive = readWorkspaceStateFile(workspace, archiveRel) ?? "";
-      writeWorkspaceStateFileAtomic(workspace, archiveRel, `${existingArchive}${block}`);
-    } catch {
+      const existingArchive = readWorkspaceStateFile(workspace, archiveRel, MAX_MEMORY_DOCUMENT_BYTES) ?? "";
+      const archive = `${existingArchive}${block}`;
+      if (Buffer.byteLength(archive, "utf8") > MAX_MEMORY_DOCUMENT_BYTES) {
+        throw new WorkspaceStateTooLargeError(archiveRel, MAX_MEMORY_DOCUMENT_BYTES);
+      }
+      writeWorkspaceStateFileAtomic(workspace, archiveRel, archive);
+    } catch (error) {
+      if (error instanceof WorkspaceStateTooLargeError) throw error;
       // Preserve facts in project.md unless their archive write succeeded.
       finalContent = content;
       result.after += result.archived.length;

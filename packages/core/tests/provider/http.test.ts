@@ -64,6 +64,10 @@ describe("bounded response bodies", () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])("rejects an invalid byte limit: %s", async (limit) => {
+    await expect(readJsonResponseBounded(new Response("{}"), limit)).rejects.toBeInstanceOf(RangeError);
+  });
 });
 
 describe("fetchWithRetry onRetry", () => {
@@ -258,5 +262,17 @@ describe("fetchWithRetry timeout", () => {
     const body = response.json();
     controller.abort(reason);
     await expect(body).rejects.toBe(reason);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, 11])("rejects an invalid retry budget: %s", async (value) => {
+    await expect(fetchWithRetry("https://x/y", { method: "POST" }, { maxRetries: value })).rejects.toBeInstanceOf(
+      RangeError,
+    );
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1])("rejects an invalid request timeout: %s", async (value) => {
+    await expect(fetchWithRetry("https://x/y", { method: "POST" }, { timeoutMs: value })).rejects.toBeInstanceOf(
+      RangeError,
+    );
   });
 });

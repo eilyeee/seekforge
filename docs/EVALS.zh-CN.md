@@ -200,7 +200,7 @@ harness，让它走与原生任务**相同**的确定性门禁。基准测试的
 
 ```json
 {
-  "id": "string id, must match the filename and be registered (see below)",
+  "id": "portable id, must match the filename and be registered (see below)",
   "title": "human-readable one-liner",
   "fixture": "name of a dir under evals/fixtures/",
   "mode": "edit",
@@ -209,13 +209,19 @@ harness，让它走与原生任务**相同**的确定性门禁。基准测试的
 }
 ```
 
+`id` 长度为 1-128 个字符，首字符必须是 ASCII 字母或数字，后续只能包含
+ASCII 字母、数字、`.`、`_` 和 `-`。这样临时工作区名称、报告行和样本匹配
+在各平台上都保持明确且可移植。
+
 fixture 是位于 `evals/fixtures/<name>/` 的一个**自包含项目**。它必须是
 封闭自洽（hermetic）的：只用 Node 内置模块，其 `package.json` 中没有
 `dependencies`/`devDependencies`（数据集门禁会强制检查）。harness 会把它
 复制到一个临时目录，执行 `git init`，然后在那里运行 agent。
 
 检查项（见 `packages/eval-harness/src/task-runner.ts`）是确定性的 ——
-没有 LLM 评判：
+没有 LLM 评判。文件检查拒绝符号链接和超过 5 MiB 的文件；命令的 `cwd`
+必须解析为临时工作区内的物理目录。检查命令拥有独立进程组、限制捕获输出，
+并在超时时终止整个进程组，避免一个任务向后续样本泄漏进程：
 
 - `file_contains` —— `{ type, path, pattern }`：正则必须匹配该文件。
 - `file_not_contains` —— 结构相同：正则必须**不**匹配（用于钉死 agent

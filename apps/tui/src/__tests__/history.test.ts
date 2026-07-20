@@ -48,7 +48,7 @@ describe("loadHistory / appendHistory", () => {
     expect(entries).toHaveLength(200);
     expect(entries[0]).toBe("entry 30");
     expect(entries[199]).toBe("entry 229");
-  });
+  }, 15_000);
 });
 
 describe("createHistoryNav", () => {

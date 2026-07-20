@@ -5,8 +5,7 @@
  * including saving the in-progress draft on the first ↑.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { readStateFile, writeStateFile } from "./state-file.js";
 
 const MAX_ENTRIES = 200;
 
@@ -14,7 +13,7 @@ const MAX_ENTRIES = 200;
 export function loadHistory(file: string): string[] {
   let raw: string;
   try {
-    raw = fs.readFileSync(file, "utf8");
+    raw = readStateFile(file);
   } catch {
     return [];
   }
@@ -37,8 +36,7 @@ export function appendHistory(file: string, entry: string): void {
   if (entries[entries.length - 1] === entry) return;
   entries.push(entry);
   const kept = entries.slice(-MAX_ENTRIES);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+  writeStateFile(file, kept.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
 export type HistoryNav = {

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -112,6 +112,19 @@ describe("buildRepoMap", () => {
     expect(buildRepoMap(root, { path: "src/api" })).toContain("src/api/user.js");
   });
 
+  it("does not scan a subtree symlink that resolves outside the workspace", () => {
+    const outside = mkdtempSync(join(tmpdir(), "repomap-outside-"));
+    try {
+      writeFileSync(join(outside, "leak.ts"), "export function leakedSymbol() {}\n");
+      symlinkSync(outside, join(root, "escape"), "dir");
+
+      expect(buildRepoMap(root, { path: "escape" })).toContain("outside the workspace");
+      expect(findDefinitions(root, "leakedSymbol", { path: "escape" })).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("findDefinitions locates a declaration and ignores non-identifiers", () => {
     const defs = findDefinitions(root, "login");
     expect(defs).toHaveLength(1);
@@ -119,6 +132,28 @@ describe("buildRepoMap", () => {
     expect(defs[0]!.line).toBe(1);
     expect(findDefinitions(root, "a.*b")).toEqual([]); // regex metachars rejected
     expect(findDefinitions(root, "nonexistentThing")).toEqual([]);
+  });
+
+  it("does not read a file that grows past the byte limit after scanning", () => {
+    const scan = scanRepo(root);
+    const target = join(root, "src/api/user.js");
+    writeFileSync(target, `export const huge = 1;\n${"x".repeat(512 * 1024)}`);
+    let observedBytes = 0;
+    const observer: SymbolBackend = {
+      name: "read-size-observer",
+      outline: (rel, content) => {
+        if (rel === "src/api/user.js") observedBytes = content.length;
+        return "exports: huge";
+      },
+      definitions: () => undefined,
+    };
+    symbolBackends.unshift(observer);
+    try {
+      buildFileGraph(root, scan.files);
+      expect(observedBytes).toBe(0);
+    } finally {
+      symbolBackends.shift();
+    }
   });
 });
 

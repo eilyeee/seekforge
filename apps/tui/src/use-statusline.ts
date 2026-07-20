@@ -39,8 +39,10 @@ export function useStatusLine(command: string | undefined, projectPath: string, 
         try {
           if (cancelled) return;
           const result = await tick(schedulerRef.current, command, statusLineInput(stateRef.current, projectPath));
-          schedulerRef.current = result.state;
-          if (!cancelled && result.recomputed) setText(result.state.lastOutput);
+          if (!cancelled) {
+            schedulerRef.current = result.state;
+            if (result.recomputed) setText(result.state.lastOutput);
+          }
         } finally {
           busyRef.current = false;
         }

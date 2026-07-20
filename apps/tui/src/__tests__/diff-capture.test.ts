@@ -42,6 +42,21 @@ describe("createDiffCapture", () => {
     });
   });
 
+  it("captures a write_file creation below newly created nested directories", () => {
+    const capture = createDiffCapture(dir);
+    expect(capture.onEvent(started("write_file", { path: "new/deep/file.txt", content: "hello\n" }))).toBeNull();
+    fs.mkdirSync(path.join(dir, "new", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "new", "deep", "file.txt"), "hello\n");
+
+    expect(capture.onEvent(completed("write_file", true))).toEqual({
+      path: "new/deep/file.txt",
+      lines: [
+        { kind: "hunk", text: "@@ -0,0 +1,1 @@" },
+        { kind: "add", text: "+hello" },
+      ],
+    });
+  });
+
   it("captures an apply_patch modification", () => {
     fs.writeFileSync(path.join(dir, "mod.txt"), "a\nb\nc\n");
     const capture = createDiffCapture(dir);
@@ -81,6 +96,20 @@ describe("createDiffCapture", () => {
     capture.onEvent(started("write_file", { path: `../${path.basename(outside)}` }));
     fs.writeFileSync(outside, "evil\n");
     try {
+      expect(capture.onEvent(completed("write_file", true))).toBeNull();
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  it("refuses a symlinked file that resolves outside the workspace", () => {
+    const outside = path.join(dir, "..", `outside-${path.basename(dir)}.txt`);
+    fs.writeFileSync(outside, "secret\n");
+    fs.symlinkSync(outside, path.join(dir, "linked.txt"));
+    try {
+      const capture = createDiffCapture(dir);
+      capture.onEvent(started("write_file", { path: "linked.txt" }));
+      fs.writeFileSync(outside, "changed\n");
       expect(capture.onEvent(completed("write_file", true))).toBeNull();
     } finally {
       fs.rmSync(outside, { force: true });

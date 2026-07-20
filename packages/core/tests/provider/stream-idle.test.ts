@@ -55,6 +55,43 @@ describe("chatStream mid-stream idle timeout", () => {
     expect(out.content).toBe("hello");
   });
 
+  it("returns and cancels the transport immediately after [DONE]", async () => {
+    const enc = new TextEncoder();
+    let reads = 0;
+    let cancelled = false;
+    let released = false;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: () => {
+            reads++;
+            if (reads === 1) {
+              return Promise.resolve({
+                done: false,
+                value: enc.encode('data: {"choices":[{"delta":{"content":"done"}}]}\n\ndata: [DONE]\n\n'),
+              });
+            }
+            return new Promise<never>(() => {});
+          },
+          cancel: async () => {
+            cancelled = true;
+          },
+          releaseLock: () => {
+            released = true;
+          },
+        }),
+      },
+    })) as unknown as typeof fetch;
+
+    const provider = createDeepSeekProvider({ apiKey: "k", streamIdleTimeoutMs: 30 });
+    await expect(provider.chatStream(req, () => {})).resolves.toMatchObject({ content: "done" });
+    expect(reads).toBe(1);
+    expect(cancelled).toBe(true);
+    expect(released).toBe(true);
+  });
+
   it("rejects EOF before the protocol terminator", async () => {
     const enc = new TextEncoder();
     let sent = false;

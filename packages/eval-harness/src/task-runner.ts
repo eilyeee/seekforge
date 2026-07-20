@@ -3,10 +3,11 @@
  * mode, then evaluates deterministic checks (no LLM judges).
  */
 
-import { execFile } from "node:child_process";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { constants } from "node:fs";
+import { cp, mkdtemp, open, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import {
   addMemoryFact,
@@ -29,6 +30,9 @@ import type { Check, ExpectedSessionStatus, SessionScenarioStep, TaskDef, TaskRu
 
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 120_000;
+const COMMAND_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+const FORCE_KILL_DELAY_MS = 250;
+const CHECK_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 const ZERO_USAGE: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
 
 export type CreatedAgent = {
@@ -178,9 +182,199 @@ async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
 }
 
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+function processGroupAlive(child: ChildProcess): boolean {
+  if (child.pid === undefined || process.platform === "win32") return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+type CheckCommandError = Error & { code?: number | string; stdout?: string; stderr?: string };
+
+/** Runs one deterministic check with bounded output and ownership of its process tree. */
+export function runCheckCommand(
+  command: string,
+  cwd: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/sh", ["-c", command], {
+      cwd,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    const output = (): { stdout: string; stderr: string } => ({
+      stdout: Buffer.concat(stdout).toString("utf8"),
+      stderr: Buffer.concat(stderr).toString("utf8"),
+    });
+    const finish = (error?: CheckCommandError): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      const captured = output();
+      if (error) {
+        error.stdout = captured.stdout;
+        error.stderr = captured.stderr;
+        reject(error);
+      } else {
+        resolve(captured);
+      }
+    };
+    const terminate = (error: CheckCommandError): void => {
+      try {
+        killProcessGroup(child, "SIGTERM");
+      } catch {
+        // Preserve the check failure that initiated teardown.
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      forceKillTimer = setTimeout(() => {
+        try {
+          killProcessGroup(child, "SIGKILL");
+        } catch {
+          // Best-effort escalation after the check has already settled.
+        }
+      }, FORCE_KILL_DELAY_MS);
+      forceKillTimer.unref();
+      finish(error);
+    };
+    const collect = (chunks: Buffer[], chunk: Buffer): void => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (outputBytes > COMMAND_OUTPUT_LIMIT_BYTES) {
+        terminate(new Error(`command output exceeded ${COMMAND_OUTPUT_LIMIT_BYTES} bytes`));
+        return;
+      }
+      chunks.push(chunk);
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.once("error", (error) => finish(error));
+    child.once("close", (code, signal) => {
+      const groupAlive = processGroupAlive(child);
+      if (forceKillTimer !== undefined && !groupAlive) clearTimeout(forceKillTimer);
+      if (settled) return;
+      if (groupAlive) {
+        try {
+          killProcessGroup(child, "SIGTERM");
+        } catch {
+          // The command result remains authoritative; cleanup is best effort.
+        }
+        forceKillTimer = setTimeout(() => {
+          try {
+            killProcessGroup(child, "SIGKILL");
+          } catch {
+            // Best-effort cleanup for descendants that outlived the shell.
+          }
+        }, FORCE_KILL_DELAY_MS);
+        forceKillTimer.unref();
+      }
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const error = new Error(
+        `command failed (${signal ? `signal ${signal}` : `exit ${String(code)}`})`,
+      ) as CheckCommandError;
+      error.code = code ?? signal ?? "error";
+      finish(error);
+    });
+    const timeoutTimer = setTimeout(() => {
+      terminate(new Error(`command timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+}
+
 function tail(text: string, maxChars = 400): string {
   const trimmed = text.trim();
   return trimmed.length > maxChars ? `...${trimmed.slice(-maxChars)}` : trimmed;
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function sameIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function resolvePhysicalCheckPath(root: string, relPath: string): Promise<{ root: string; path: string }> {
+  const physicalRoot = await realpath(root);
+  const requested = resolve(physicalRoot, relPath);
+  if (!isInside(requested, physicalRoot)) throw new Error(`path escapes eval workspace: ${relPath}`);
+  const physical = await realpath(requested);
+  if (physical !== requested || !isInside(physical, physicalRoot)) {
+    throw new Error(`path uses a symlink or escapes eval workspace: ${relPath}`);
+  }
+  return { root: physicalRoot, path: requested };
+}
+
+async function readCheckFile(root: string, relPath: string): Promise<string> {
+  const resolved = await resolvePhysicalCheckPath(root, relPath);
+  const parent = dirname(resolved.path);
+  const parentBefore = await stat(parent);
+  const handle = await open(resolved.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await handle.stat();
+    const [parentAfter, current, physicalAfter] = await Promise.all([
+      stat(parent),
+      stat(resolved.path),
+      realpath(resolved.path),
+    ]);
+    if (
+      !opened.isFile() ||
+      physicalAfter !== resolved.path ||
+      !sameIdentity(parentBefore, parentAfter) ||
+      !sameIdentity(opened, current)
+    ) {
+      throw new Error(`file changed while opening: ${relPath}`);
+    }
+    if (opened.size > CHECK_FILE_LIMIT_BYTES) {
+      throw new Error(`file exceeds ${CHECK_FILE_LIMIT_BYTES} bytes: ${relPath}`);
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, CHECK_FILE_LIMIT_BYTES - total + 1));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > CHECK_FILE_LIMIT_BYTES) {
+        throw new Error(`file grew beyond ${CHECK_FILE_LIMIT_BYTES} bytes: ${relPath}`);
+      }
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function resolveCheckCwd(root: string, relPath: string | undefined): Promise<string> {
+  const resolved = await resolvePhysicalCheckPath(root, relPath ?? ".");
+  if (!(await stat(resolved.path)).isDirectory()) throw new Error(`check cwd is not a directory: ${relPath ?? "."}`);
+  return resolved.path;
 }
 
 /** Evaluates a single check against the workspace copy / final answer. */
@@ -190,9 +384,14 @@ export async function evaluateCheck(check: Check, ctx: { dir: string; answer: st
     case "file_not_contains": {
       let content: string;
       try {
-        content = await readFile(join(ctx.dir, check.path), "utf8");
-      } catch {
-        return { check, passed: false, detail: `file not found: ${check.path}` };
+        content = await readCheckFile(ctx.dir, check.path);
+      } catch (error) {
+        const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+        return {
+          check,
+          passed: false,
+          detail: `${missing ? "file not found" : "file unavailable or unsafe"}: ${check.path}`,
+        };
       }
       const matched = new RegExp(check.pattern).test(content);
       if (check.type === "file_contains") {
@@ -205,9 +404,9 @@ export async function evaluateCheck(check: Check, ctx: { dir: string; answer: st
         : { check, passed: true };
     }
     case "command_succeeds": {
-      const cwd = check.cwd ? join(ctx.dir, check.cwd) : ctx.dir;
       try {
-        await execFileAsync("/bin/sh", ["-c", check.command], { cwd, timeout: COMMAND_TIMEOUT_MS });
+        const cwd = await resolveCheckCwd(ctx.dir, check.cwd);
+        await runCheckCommand(check.command, cwd);
         return { check, passed: true };
       } catch (err) {
         const e = err as { code?: number | string; stderr?: string; stdout?: string };
@@ -576,7 +775,11 @@ export async function runTask(task: TaskDef, opts: RunTaskOptions): Promise<Task
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     } finally {
-      created?.dispose?.();
+      try {
+        created?.dispose?.();
+      } catch (caught) {
+        error ??= `agent cleanup failed: ${caught instanceof Error ? caught.message : String(caught)}`;
+      }
     }
 
     const traceMetrics = enrichMetricsFromTrace(dir, execution.sessionIds, metrics);

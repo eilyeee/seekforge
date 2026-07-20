@@ -56,6 +56,35 @@ describe("frecency", () => {
     expect(loadFrecency(root)).toEqual({});
   });
 
+  it("drops non-finite, negative, and unsafe persisted ranking values", () => {
+    fs.mkdirSync(path.join(root, ".seekforge"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".seekforge", "tui-frecency.json"),
+      '{"valid":{"count":2,"last":3},"infinite":{"count":1e999,"last":4},"negative":{"count":-1,"last":4},"unsafe":{"count":9007199254740992,"last":4}}',
+    );
+    expect(loadFrecency(root)).toEqual({ valid: { count: 2, last: 3 } });
+  });
+
+  it("refuses to replace a symlinked frecency file", () => {
+    const stateDir = path.join(root, ".seekforge");
+    const outside = path.join(root, "outside.json");
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(outside, "outside");
+    fs.symlinkSync(outside, path.join(stateDir, "tui-frecency.json"));
+
+    expect(() => bumpFrecency(root, "a.ts")).toThrow(/regular file|symlink|state path/);
+    expect(fs.readFileSync(outside, "utf8")).toBe("outside");
+  });
+
+  it("refuses a symlinked state directory", () => {
+    const outside = path.join(root, "outside-state");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(root, ".seekforge"));
+
+    expect(() => bumpFrecency(root, "a.ts")).toThrow(/state directory/);
+    expect(fs.existsSync(path.join(outside, "tui-frecency.json"))).toBe(false);
+  });
+
   it("bump round-trips count and last", () => {
     bumpFrecency(root, "a.ts");
     bumpFrecency(root, "a.ts");

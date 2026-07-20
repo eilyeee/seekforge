@@ -6,6 +6,35 @@ export type McpServeOptions = {
   allowWrite?: boolean;
 };
 
+export function waitForStdinEnd(stream: NodeJS.ReadStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.removeListener("end", done);
+      stream.removeListener("close", done);
+      stream.removeListener("error", failed);
+    };
+    const done = (): void => {
+      cleanup();
+      resolve();
+    };
+    const failed = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    if (stream.readableEnded) {
+      done();
+      return;
+    }
+    if (stream.destroyed) {
+      failed((stream as NodeJS.ReadStream & { errored?: Error | null }).errored ?? new Error("stdin closed"));
+      return;
+    }
+    stream.once("end", done);
+    stream.once("close", done);
+    stream.once("error", failed);
+  });
+}
+
 /**
  * `seekforge mcp-serve` — run SeekForge AS an MCP server on stdio so another
  * agent can use this workspace's tools. Read-only by default; --allow-write
@@ -25,19 +54,7 @@ export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
   const server = serveMcp({ workspace, readOnly, input: process.stdin, output: process.stdout });
 
   try {
-    await new Promise<void>((resolve) => {
-      const done = (): void => {
-        process.stdin.removeListener("end", done);
-        process.stdin.removeListener("close", done);
-        resolve();
-      };
-      if (process.stdin.readableEnded || process.stdin.destroyed) {
-        done();
-        return;
-      }
-      process.stdin.on("end", done);
-      process.stdin.on("close", done);
-    });
+    await waitForStdinEnd(process.stdin);
   } finally {
     server.close();
   }

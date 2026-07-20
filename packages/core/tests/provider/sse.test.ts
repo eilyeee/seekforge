@@ -126,6 +126,24 @@ describe("SSE accumulation", () => {
     expect(finalizeSse(acc).content).toBe("tail");
   });
 
+  it("treats [DONE] as final and ignores trailing provider data", () => {
+    const acc = createSseAccumulator();
+    const deltas: string[] = [];
+    feedSseChunk(
+      acc,
+      [
+        'data: {"choices":[{"delta":{"content":"accepted"}}]}',
+        "data: [DONE]",
+        'data: {"choices":[{"delta":{"content":" rejected"}}]}',
+        "",
+      ].join("\n"),
+      (delta) => deltas.push(delta),
+    );
+
+    expect(finalizeSse(acc).content).toBe("accepted");
+    expect(deltas).toEqual(["accepted"]);
+  });
+
   it("rejects a newline-free line before the carry-over buffer can grow unbounded", () => {
     const acc = createSseAccumulator();
     feedSseChunk(acc, "x".repeat(MAX_SSE_LINE_CHARS));
@@ -209,6 +227,10 @@ describe("SSE accumulation", () => {
       /SSE tool call count exceeds 1/,
     );
     expect(acc.toolCallsByIndex.size).toBe(1);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])("rejects an invalid custom limit: %s", (limit) => {
+    expect(() => createSseAccumulator({ decodedChars: limit })).toThrow(RangeError);
   });
 });
 

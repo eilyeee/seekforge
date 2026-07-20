@@ -174,30 +174,85 @@ pub fn resolve_for_write(workspace: &str, rel: &str) -> RtResult<PathBuf> {
     Ok(resolved)
 }
 
-/// A validated write target anchored to an open workspace descriptor.
-///
-/// All later traversal is descriptor-relative and rejects symlinks. This keeps
-/// validation and mutation bound to the same directory hierarchy even when an
-/// untrusted process swaps path components concurrently.
-pub(crate) struct SecureWritePath {
+fn open_workspace_root(ws: &Path, rel: &str) -> RtResult<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(ws)
+        .map_err(|e| secure_path_error(rel, "open workspace", e))
+}
+
+fn split_secure_path(ws: &Path, resolved: &Path, rel: &str) -> RtResult<(Vec<OsString>, OsString)> {
+    let inner = resolved.strip_prefix(ws).map_err(|_| {
+        RtError::new(
+            codes::OUTSIDE_WORKSPACE,
+            format!("path escapes the workspace: {rel}"),
+        )
+    })?;
+    let mut components = Vec::new();
+    for component in inner.components() {
+        match component {
+            Component::Normal(name) => components.push(name.to_os_string()),
+            _ => {
+                return Err(RtError::new(
+                    codes::OUTSIDE_WORKSPACE,
+                    format!("invalid workspace-relative path: {rel}"),
+                ));
+            }
+        }
+    }
+    let leaf = components
+        .pop()
+        .ok_or_else(|| RtError::io(format!("path must name a file inside the workspace: {rel}")))?;
+    Ok((components, leaf))
+}
+
+/// A validated read target anchored to an open workspace descriptor.
+pub(crate) struct SecureReadPath {
     root: File,
     parents: Vec<OsString>,
     leaf: OsString,
     display: String,
 }
 
-impl SecureWritePath {
-    pub(crate) fn prepare(workspace: &str, rel: &str, needs_read: bool) -> RtResult<Self> {
+impl SecureReadPath {
+    pub(crate) fn prepare(workspace: &str, rel: &str) -> RtResult<Self> {
         let ws = canonical_workspace(workspace)?;
-        let root = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&ws)
-            .map_err(|e| secure_path_error(rel, "open workspace", e))?;
-        let resolved = resolve_for_write(workspace, rel)?;
-        if needs_read {
-            ensure_read_allowed(&ws, &resolved, rel)?;
-        }
+        let root = open_workspace_root(&ws, rel)?;
+        let resolved = resolve_for_read(workspace, rel)?;
+        let (parents, leaf) = split_secure_path(&ws, &resolved, rel)?;
+        Ok(Self {
+            root,
+            parents,
+            leaf,
+            display: rel.to_string(),
+        })
+    }
+
+    pub(crate) fn open(&self) -> RtResult<File> {
+        let parent = open_parent_chain(&self.root, &self.parents, false, &self.display)?;
+        openat_file(
+            &parent,
+            &self.leaf,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+        .map_err(|error| secure_path_error(&self.display, "open file for reading", error))
+    }
+}
+
+/// A validated directory target anchored to an open workspace descriptor.
+pub(crate) struct SecureDirPath {
+    root: File,
+    components: Vec<OsString>,
+    display: String,
+}
+
+impl SecureDirPath {
+    pub(crate) fn prepare(workspace: &str, rel: &str) -> RtResult<Self> {
+        let ws = canonical_workspace(workspace)?;
+        let root = open_workspace_root(&ws, rel)?;
+        let resolved = resolve_inside_workspace(workspace, rel)?;
         let inner = resolved.strip_prefix(&ws).map_err(|_| {
             RtError::new(
                 codes::OUTSIDE_WORKSPACE,
@@ -216,9 +271,39 @@ impl SecureWritePath {
                 }
             }
         }
-        let leaf = components.pop().ok_or_else(|| {
-            RtError::io(format!("path must name a file inside the workspace: {rel}"))
-        })?;
+        Ok(Self {
+            root,
+            components,
+            display: rel.to_string(),
+        })
+    }
+
+    pub(crate) fn open(&self) -> RtResult<File> {
+        open_parent_chain(&self.root, &self.components, false, &self.display)
+    }
+}
+
+/// A validated write target anchored to an open workspace descriptor.
+///
+/// All later traversal is descriptor-relative and rejects symlinks. This keeps
+/// validation and mutation bound to the same directory hierarchy even when an
+/// untrusted process swaps path components concurrently.
+pub(crate) struct SecureWritePath {
+    root: File,
+    parents: Vec<OsString>,
+    leaf: OsString,
+    display: String,
+}
+
+impl SecureWritePath {
+    pub(crate) fn prepare(workspace: &str, rel: &str, needs_read: bool) -> RtResult<Self> {
+        let ws = canonical_workspace(workspace)?;
+        let root = open_workspace_root(&ws, rel)?;
+        let resolved = resolve_for_write(workspace, rel)?;
+        if needs_read {
+            ensure_read_allowed(&ws, &resolved, rel)?;
+        }
+        let (components, leaf) = split_secure_path(&ws, &resolved, rel)?;
         Ok(Self {
             root,
             parents: components,
@@ -266,42 +351,44 @@ impl SecureWritePath {
     }
 
     fn open_parent(&self, create: bool) -> RtResult<File> {
-        let mut current = self
-            .root
-            .try_clone()
-            .map_err(|e| secure_path_error(&self.display, "clone workspace handle", e))?;
-        for component in &self.parents {
-            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-            match openat_file(&current, component, flags, 0) {
-                Ok(next) => current = next,
-                Err(error) if create && error.raw_os_error() == Some(libc::ENOENT) => {
-                    match mkdirat(&current, component) {
-                        Ok(()) => {}
-                        Err(mkdir_error) if mkdir_error.raw_os_error() == Some(libc::EEXIST) => {}
-                        Err(mkdir_error) => {
-                            return Err(secure_path_error(
-                                &self.display,
-                                "create parent directory",
-                                mkdir_error,
-                            ));
-                        }
+        open_parent_chain(&self.root, &self.parents, create, &self.display)
+    }
+}
+
+fn open_parent_chain(
+    root: &File,
+    parents: &[OsString],
+    create: bool,
+    display: &str,
+) -> RtResult<File> {
+    let mut current = root
+        .try_clone()
+        .map_err(|e| secure_path_error(display, "clone workspace handle", e))?;
+    for component in parents {
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        match openat_file(&current, component, flags, 0) {
+            Ok(next) => current = next,
+            Err(error) if create && error.raw_os_error() == Some(libc::ENOENT) => {
+                match mkdirat(&current, component) {
+                    Ok(()) => {}
+                    Err(mkdir_error) if mkdir_error.raw_os_error() == Some(libc::EEXIST) => {}
+                    Err(mkdir_error) => {
+                        return Err(secure_path_error(
+                            display,
+                            "create parent directory",
+                            mkdir_error,
+                        ));
                     }
-                    // Open the winner of a concurrent create with NOFOLLOW.
-                    current = openat_file(&current, component, flags, 0).map_err(|error| {
-                        secure_path_error(&self.display, "open parent directory", error)
-                    })?;
                 }
-                Err(error) => {
-                    return Err(secure_path_error(
-                        &self.display,
-                        "open parent directory",
-                        error,
-                    ));
-                }
+                current = openat_file(&current, component, flags, 0)
+                    .map_err(|error| secure_path_error(display, "open parent directory", error))?;
+            }
+            Err(error) => {
+                return Err(secure_path_error(display, "open parent directory", error));
             }
         }
-        Ok(current)
     }
+    Ok(current)
 }
 
 fn c_name(name: &OsStr) -> std::io::Result<CString> {
@@ -313,7 +400,7 @@ fn c_name(name: &OsStr) -> std::io::Result<CString> {
     })
 }
 
-fn openat_file(
+pub(crate) fn openat_file(
     parent: &File,
     name: &OsStr,
     flags: i32,

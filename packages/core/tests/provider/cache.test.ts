@@ -1,10 +1,20 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatResponse } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import { wrapProviderWithCache } from "../../src/provider/cache.js";
+import { MAX_PROVIDER_RESPONSE_BYTES } from "../../src/provider/protocol-limits.js";
 
 const USAGE = { promptTokens: 100, completionTokens: 50, cacheHitTokens: 10, costUsd: 0.02 };
 const ZERO = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
@@ -118,10 +128,14 @@ describe("wrapProviderWithCache", () => {
     await cached.chat(req("hello"));
     const file = join(dir, readdirSync(dir)[0]!);
     writeFileSync(file, "{not json!");
+    const before = statSync(file);
 
     const res = await cached.chat(req("hello"));
     expect(res.content).toBe("reply-2");
     expect(inner.chats).toBe(2);
+    const after = statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    expect(readFileSync(file, "utf8")).toBe("{not json!");
   });
 
   it("cache entries with non-finite timestamps are ignored", async () => {
@@ -134,6 +148,63 @@ describe("wrapProviderWithCache", () => {
     const res = await cached.chat(req("hello"));
     expect(res.content).toBe("reply-2");
     expect(inner.chats).toBe(2);
+  });
+
+  it("treats an invalid TTL as the default instead of making stale entries immortal", async () => {
+    const inner = countingProvider();
+    await wrapProviderWithCache(inner, dir).chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    const entry = JSON.parse(readFileSync(file, "utf8")) as { ts: number; response: ChatResponse };
+    entry.ts = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    writeFileSync(file, JSON.stringify(entry));
+
+    const result = await wrapProviderWithCache(inner, dir, { ttlMs: Number.NaN }).chat(req("hello"));
+    expect(result.content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+  });
+
+  it("ignores cache entries dated implausibly far in the future", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    await cached.chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    const entry = JSON.parse(readFileSync(file, "utf8")) as { ts: number; response: ChatResponse };
+    entry.ts = Date.now() + 60 * 60 * 1000;
+    writeFileSync(file, JSON.stringify(entry));
+
+    expect((await cached.chat(req("hello"))).content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+  });
+
+  it("does not buffer an oversized cache file", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    await cached.chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    truncateSync(file, MAX_PROVIDER_RESPONSE_BYTES + 1);
+    const before = statSync(file);
+
+    expect((await cached.chat(req("hello"))).content).toBe("reply-2");
+    expect(inner.chats).toBe(2);
+    const after = statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+  });
+
+  it("does not read through or overwrite a symlinked cache entry", async () => {
+    const inner = countingProvider();
+    const cached = wrapProviderWithCache(inner, dir);
+    await cached.chat(req("hello"));
+    const file = join(dir, readdirSync(dir)[0]!);
+    const outside = join(dir, "..", "outside-cache.json");
+    writeFileSync(outside, "outside");
+    rmSync(file);
+    symlinkSync(outside, file);
+    try {
+      expect((await cached.chat(req("hello"))).content).toBe("reply-2");
+      expect(readFileSync(outside, "utf8")).toBe("outside");
+    } finally {
+      rmSync(outside, { force: true });
+    }
   });
 
   it.each([
@@ -189,6 +260,21 @@ describe("wrapProviderWithCache", () => {
     await expect(cached.chatStream(cancelled, () => {})).rejects.toBe(reason);
     expect(inner.chats).toBe(0);
     expect(inner.streams).toBe(0);
+  });
+
+  it("does not cache a late response after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled after provider completion");
+    const inner = countingProvider();
+    inner.chat = async () => {
+      inner.chats++;
+      controller.abort(reason);
+      return response("late");
+    };
+    const cached = wrapProviderWithCache(inner, dir);
+
+    await expect(cached.chat({ ...req("hello"), signal: controller.signal })).rejects.toBe(reason);
+    expect(() => readdirSync(dir)).toThrow();
   });
 
   it("keeps the wrapped provider's model id", () => {

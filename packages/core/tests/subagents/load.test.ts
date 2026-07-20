@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -88,6 +88,33 @@ describe("loadAgentDefinitionsFromDirs", () => {
     rmSync(projectRoot, { recursive: true, force: true });
   });
 
+  it("does not follow an agents root symlink outside its configured directory", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sf-agents-outside-"));
+    try {
+      writeAgent(outside, "injected", CANONICAL);
+      const linkedRoot = join(projectRoot, "linked");
+      symlinkSync(outside, linkedRoot, "dir");
+
+      expect(loadAgentDefinitionsFromDirs([{ scope: "project", path: linkedRoot }])).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a symlink in an agents root parent path", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sf-agents-parent-outside-"));
+    try {
+      const agents = join(outside, "agents");
+      writeAgent(agents, "injected", CANONICAL);
+      const linkedParent = join(projectRoot, "linked-parent");
+      symlinkSync(outside, linkedParent, "dir");
+
+      expect(loadAgentDefinitionsFromDirs([{ scope: "project", path: join(linkedParent, "agents") }])).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("loads agents and lets project override global by id", () => {
     writeAgent(globalRoot, "code-reviewer", CANONICAL);
     writeAgent(globalRoot, "doc-writer", "---\nname: doc-writer\ndescription: global docs\n---\n");
@@ -119,5 +146,21 @@ describe("loadAgentDefinitionsFromDirs", () => {
 
   it("returns [] for missing roots", () => {
     expect(loadAgentDefinitionsFromDirs([{ scope: "global", path: join(globalRoot, "nope") }])).toEqual([]);
+  });
+
+  it("does not load an AGENT.md symlink that escapes its configured root", () => {
+    const outside = join(projectRoot, "outside.md");
+    writeFileSync(outside, "---\nname: escaped\nmode: edit\n---\noutside instructions\n");
+    const dir = join(globalRoot, "escaped");
+    mkdirSync(dir);
+    symlinkSync(outside, join(dir, "AGENT.md"));
+
+    expect(loadAgentDefinitionsFromDirs([{ scope: "project", path: globalRoot }])).toEqual([]);
+  });
+
+  it("skips an AGENT.md that exceeds the definition byte limit", () => {
+    writeAgent(globalRoot, "oversized", `---\nname: oversized\n---\n${"x".repeat(256 * 1024)}`);
+
+    expect(loadAgentDefinitionsFromDirs([{ scope: "project", path: globalRoot }])).toEqual([]);
   });
 });

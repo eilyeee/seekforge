@@ -1,11 +1,25 @@
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { mkdirSync } from "node:fs";
 import type { ChatResponse } from "@seekforge/shared";
 import type { ChatProvider, ChatRequest } from "./types.js";
 import { isRecord } from "../util/guards.js";
+import {
+  readWorkspaceStateFile,
+  WorkspaceStateTooLargeError,
+  writeWorkspaceStateFileAtomic,
+} from "../util/workspace-state.js";
+import { MAX_PROVIDER_USAGE_TOKENS } from "./mapping.js";
+import {
+  MAX_PROVIDER_RESPONSE_BYTES,
+  MAX_SSE_CONTENT_CHARS,
+  MAX_SSE_REASONING_CHARS,
+  MAX_SSE_TOOL_ARGUMENT_CHARS,
+  MAX_SSE_TOOL_CALLS,
+  MAX_SSE_TOTAL_TOOL_ARGUMENT_CHARS,
+} from "./protocol-limits.js";
 
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export type ProviderCacheOptions = {
   /** Entry freshness window in milliseconds (default 24h). */
@@ -20,15 +34,18 @@ type CacheEntry = {
 
 const FINISH_REASONS = new Set(["stop", "tool_calls", "length", "other"]);
 const isTokenCount = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_PROVIDER_USAGE_TOKENS;
 const isFiniteNonnegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 function parseChatResponse(value: unknown): ChatResponse | null {
-  if (!isRecord(value) || typeof value["content"] !== "string") return null;
+  if (!isRecord(value) || typeof value["content"] !== "string" || value["content"].length > MAX_SSE_CONTENT_CHARS)
+    return null;
   const toolCalls = value["toolCalls"];
+  let totalArgumentChars = 0;
   if (
     !Array.isArray(toolCalls) ||
+    toolCalls.length > MAX_SSE_TOOL_CALLS ||
     !toolCalls.every(
       (call) =>
         isRecord(call) &&
@@ -36,7 +53,9 @@ function parseChatResponse(value: unknown): ChatResponse | null {
         call["id"].length > 0 &&
         typeof call["name"] === "string" &&
         call["name"].length > 0 &&
-        typeof call["argumentsJson"] === "string",
+        typeof call["argumentsJson"] === "string" &&
+        call["argumentsJson"].length <= MAX_SSE_TOOL_ARGUMENT_CHARS &&
+        (totalArgumentChars += call["argumentsJson"].length) <= MAX_SSE_TOTAL_TOOL_ARGUMENT_CHARS,
     )
   ) {
     return null;
@@ -53,7 +72,8 @@ function parseChatResponse(value: unknown): ChatResponse | null {
   if (
     typeof value["finishReason"] !== "string" ||
     !FINISH_REASONS.has(value["finishReason"]) ||
-    (value["reasoningContent"] !== undefined && typeof value["reasoningContent"] !== "string")
+    (value["reasoningContent"] !== undefined &&
+      (typeof value["reasoningContent"] !== "string" || value["reasoningContent"].length > MAX_SSE_REASONING_CHARS))
   ) {
     return null;
   }
@@ -88,6 +108,11 @@ function zeroedUsage(res: ChatResponse): ChatResponse {
   };
 }
 
+type CacheReadResult =
+  | { kind: "hit"; response: ChatResponse }
+  | { kind: "missing" | "stale" }
+  | { kind: "corrupt" | "too_large" | "unsafe" };
+
 /**
  * Wraps a ChatProvider with a file-based response cache under `dir`.
  *
@@ -104,25 +129,46 @@ function zeroedUsage(res: ChatResponse): ChatResponse {
  * (interactive TUI sessions) intentionally bypass the cache.
  */
 export function wrapProviderWithCache(provider: ChatProvider, dir: string, opts?: ProviderCacheOptions): ChatProvider {
-  const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
+  const configuredTtl = opts?.ttlMs;
+  const ttlMs =
+    typeof configuredTtl === "number" && Number.isFinite(configuredTtl) && configuredTtl >= 0
+      ? Math.min(Math.floor(configuredTtl), Number.MAX_SAFE_INTEGER)
+      : DEFAULT_TTL_MS;
 
-  function read(key: string): ChatResponse | null {
+  function read(key: string): CacheReadResult {
     try {
-      const raw = fs.readFileSync(path.join(dir, `${key}.json`), "utf8");
-      const entry = JSON.parse(raw) as unknown;
-      if (!isRecord(entry) || typeof entry["ts"] !== "number" || !Number.isFinite(entry["ts"])) return null;
-      if (Date.now() - entry["ts"] > ttlMs) return null;
-      return parseChatResponse(entry["response"]);
-    } catch {
-      return null; // missing or corrupt entry = miss
+      const raw = readWorkspaceStateFile(dir, `${key}.json`, MAX_PROVIDER_RESPONSE_BYTES);
+      if (raw === undefined) return { kind: "missing" };
+      let entry: unknown;
+      try {
+        entry = JSON.parse(raw) as unknown;
+      } catch {
+        return { kind: "corrupt" };
+      }
+      if (!isRecord(entry)) return { kind: "corrupt" };
+      const timestamp = entry["ts"];
+      if (!Number.isSafeInteger(timestamp) || (timestamp as number) < 0) {
+        return { kind: "corrupt" };
+      }
+      const age = Date.now() - (timestamp as number);
+      if (age < -MAX_FUTURE_CLOCK_SKEW_MS) return { kind: "corrupt" };
+      if (age > ttlMs) return { kind: "stale" };
+      const response = parseChatResponse(entry["response"]);
+      return response ? { kind: "hit", response } : { kind: "corrupt" };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      if (error instanceof WorkspaceStateTooLargeError) return { kind: "too_large" };
+      return { kind: "unsafe" };
     }
   }
 
   function write(key: string, response: ChatResponse): void {
     try {
-      fs.mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
       const entry: CacheEntry = { ts: Date.now(), response };
-      fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify(entry));
+      const serialized = JSON.stringify(entry);
+      if (Buffer.byteLength(serialized, "utf8") > MAX_PROVIDER_RESPONSE_BYTES) return;
+      writeWorkspaceStateFileAtomic(dir, `${key}.json`, serialized);
     } catch {
       // best-effort: a read-only or full disk must not fail the chat call
     }
@@ -135,9 +181,10 @@ export function wrapProviderWithCache(provider: ChatProvider, dir: string, opts?
       if (req.signal?.aborted) throw req.signal.reason;
       const key = cacheKey(provider.cacheIdentity ?? provider.model, provider.model, req);
       const cached = read(key);
-      if (cached) return zeroedUsage(cached);
+      if (cached.kind === "hit") return zeroedUsage(cached.response);
       const res = await provider.chat(req);
-      write(key, res);
+      if (req.signal?.aborted) throw req.signal.reason;
+      if (cached.kind === "missing" || cached.kind === "stale") write(key, res);
       return res;
     },
     chatStream(req, onDelta, onReasoningDelta) {

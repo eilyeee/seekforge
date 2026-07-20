@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +23,8 @@ beforeEach(() => {
 afterEach(() => {
   if (savedHome === undefined) delete process.env.SEEKFORGE_HOME;
   else process.env.SEEKFORGE_HOME = savedHome;
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 describe("listOutputStyles", () => {
@@ -53,5 +55,34 @@ describe("resolveOutputStyle", () => {
     writeStyle(workspace, "pirate", "---\ndescription: x\n---\nSpeak like a pirate.");
     expect(resolveOutputStyle("pirate", workspace)).toBe("Speak like a pirate.");
     expect(() => resolveOutputStyle("nope", workspace)).toThrow();
+  });
+
+  it("does not resolve a traversal name outside the output-styles directory", () => {
+    writeFileSync(join(workspace, "outside.md"), "outside instructions");
+    expect(() => resolveOutputStyle("../../outside", workspace)).toThrow(/Unknown output style/);
+  });
+
+  it("does not follow a project output-styles directory symlink", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sf-style-outside-"));
+    try {
+      writeFileSync(join(outside, "injected.md"), "outside instructions");
+      mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+      symlinkSync(outside, join(workspace, ".seekforge", "output-styles"), "dir");
+
+      expect(listOutputStyles(workspace).some((style) => style.name === "injected")).toBe(false);
+      expect(() => resolveOutputStyle("injected", workspace)).toThrow(/Unknown output style/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a custom output-style file symlink", () => {
+    const outside = join(workspace, "outside-style.md");
+    writeFileSync(outside, "outside instructions");
+    const styles = join(workspace, ".seekforge", "output-styles");
+    mkdirSync(styles, { recursive: true });
+    symlinkSync(outside, join(styles, "injected.md"));
+
+    expect(() => resolveOutputStyle("injected", workspace)).toThrow(/Unknown output style/);
   });
 });

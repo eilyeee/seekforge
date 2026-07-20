@@ -19,6 +19,7 @@ import {
   type ResumeLoopFn,
   type RunLoopFn,
 } from "./agent.js";
+import { discardRequestBody } from "./http.js";
 import { handleApi, sendApiError } from "./rest.js";
 import { resolveStaticRoot, serveStatic } from "./static.js";
 import { createWorkspaceRegistry } from "./workspaces.js";
@@ -136,20 +137,28 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
         runManager,
         logger,
         requestId,
-      }).catch((e: unknown) => {
-        // Defense-in-depth: handleApi answers its own errors, but never leave a
-        // request hanging on an unexpected rejection.
-        if (!res.headersSent) {
-          sendApiError(res, 500, "internal_error", e instanceof Error ? e.message : String(e));
-        }
-      });
+      })
+        .catch((e: unknown) => {
+          // Defense-in-depth: handleApi answers its own errors, but never leave a
+          // request hanging on an unexpected rejection.
+          if (!res.headersSent) {
+            sendApiError(res, 500, "internal_error", e instanceof Error ? e.message : String(e));
+          }
+        })
+        .finally(() => discardRequestBody(req));
       void coordinator.track(operation);
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       return sendApiError(res, 405, "method_not_allowed", `${req.method} not allowed for ${url.pathname}`);
     }
-    serveStatic(res, { root: staticRoot, pathname: url.pathname, port, workspace: registry.default.path });
+    serveStatic(res, {
+      root: staticRoot,
+      pathname: url.pathname,
+      port,
+      workspace: registry.default.path,
+      head: req.method === "HEAD",
+    });
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD_BYTES });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandRequiresIdle, parseInput } from "../commands.js";
+import { commandRequiresIdle, parseInput, parsePositiveIndex } from "../commands.js";
 
 describe("parseInput", () => {
   it("treats blank lines as empty", () => {
@@ -249,5 +249,14 @@ describe("commandRequiresIdle", () => {
     expect(commandRequiresIdle({ name: "rewind" })).toBe(true);
     expect(commandRequiresIdle({ name: "rewind", arg: "yes" })).toBe(true);
     expect(commandRequiresIdle({ name: "help" })).toBe(false);
+  });
+});
+
+describe("parsePositiveIndex", () => {
+  it("accepts only complete safe decimal indexes", () => {
+    expect(parsePositiveIndex("12")).toBe(12);
+    for (const value of [undefined, "", "0", "01", "1e2", "0x10", "12x", "9007199254740992"]) {
+      expect(parsePositiveIndex(value)).toBeNull();
+    }
   });
 });

@@ -77,11 +77,18 @@ jobs:
 
       - name: Resolve tag
         id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
+            TAG="$DISPATCH_TAG"
           else
             TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag '$TAG'. Expected vMAJOR.MINOR.PATCH with optional prerelease/build suffixes."
+            exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           # Strip leading "v" for the bare semver.
@@ -89,13 +96,17 @@ jobs:
           echo "Resolved tag: ${TAG}"
 
       - name: Verify tag matches apps/cli/package.json version
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
+          set -euo pipefail
           PKG_VER="$(node -p "require('./apps/cli/package.json').version")"
-          TAG_VER="${{ steps.tag.outputs.version }}"
+          TAG_VER="$RELEASE_VERSION"
           echo "package.json version: ${PKG_VER}"
           echo "tag version:          ${TAG_VER}"
-          if [ "v${PKG_VER}" != "${{ steps.tag.outputs.tag }}" ]; then
-            echo "::error::Tag '${{ steps.tag.outputs.tag }}' does not match apps/cli/package.json version 'v${PKG_VER}'. Refusing to publish."
+          if [ "v${PKG_VER}" != "$RELEASE_TAG" ]; then
+            echo "::error::Tag '${RELEASE_TAG}' does not match apps/cli/package.json version 'v${PKG_VER}'. Refusing to publish."
             exit 1
           fi
 
@@ -107,8 +118,11 @@ jobs:
 
       - name: Guard against republishing an existing version
         id: guard
+        env:
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          VER="${{ steps.tag.outputs.version }}"
+          set -euo pipefail
+          VER="$RELEASE_VERSION"
           # `npm view` exits non-zero if the version doesn't exist yet; that is
           # the happy path. If it prints the version, it's already published.
           PUBLISHED="$(npm view "seekforge@${VER}" version --registry=https://registry.npmjs.org/ 2>/dev/null || true)"
@@ -128,9 +142,12 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          VER="${{ steps.tag.outputs.version }}"
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          VER="$RELEASE_VERSION"
           NOTES_FILE="$(mktemp)"
 
           # Prefer a matching CHANGELOG section if one exists and is easily

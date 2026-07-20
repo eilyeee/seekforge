@@ -263,7 +263,9 @@ function bindBlankInitialTab(tabs: TabsState, workspaceId: string): TabsState {
 }
 
 export const useStore = create<AppStore>()((set, get) => {
-  let openWorkspaceGeneration = 0;
+  let workspaceListGeneration = 0;
+  let onboardingGeneration = 0;
+  const worktreeRefreshGeneration = new Map<string, number>();
 
   const handleFrame = (tabId: string, frame: ServerFrame): void => {
     // Title is read before routing; it does not change mid-run.
@@ -315,9 +317,11 @@ export const useStore = create<AppStore>()((set, get) => {
     activeWorkspaceId: "",
 
     loadWorkspaces: () => {
+      const generation = ++workspaceListGeneration;
       api
         .workspaces()
         .then(({ workspaces, recents }) => {
+          if (generation !== workspaceListGeneration) return;
           const storedPath = readStoredActivePath();
           const restored = storedPath ? workspaces.find((w) => w.path === storedPath) : undefined;
           // Whether the user already picked a workspace this session (a reload
@@ -346,6 +350,7 @@ export const useStore = create<AppStore>()((set, get) => {
           }
         })
         .catch((e: unknown) => {
+          if (generation !== workspaceListGeneration) return;
           // Single-workspace / old server without /api/workspaces: stay on the
           // default workspace (empty id -> server's first). A real connection
           // failure (server down) instead surfaces the global recovery banner.
@@ -354,16 +359,16 @@ export const useStore = create<AppStore>()((set, get) => {
     },
 
     setActiveWorkspace: (id) => {
-      openWorkspaceGeneration += 1;
+      workspaceListGeneration += 1;
       const ws = get().workspaces.find((w) => w.id === id);
       if (ws) storeActivePath(ws.path);
       set({ activeWorkspaceId: id });
     },
 
     openWorkspace: async (path) => {
-      const generation = ++openWorkspaceGeneration;
+      const generation = ++workspaceListGeneration;
       const { workspace, workspaces, recents } = await api.openWorkspace(path);
-      if (generation !== openWorkspaceGeneration) return;
+      if (generation !== workspaceListGeneration) return;
       storeActivePath(workspace.path);
       set((s) => ({
         workspaces,
@@ -399,10 +404,14 @@ export const useStore = create<AppStore>()((set, get) => {
 
     onboarding: "unknown",
     checkOnboarding: () => {
+      const generation = ++onboardingGeneration;
       api
         .config()
-        .then((config) => set({ onboarding: needsOnboarding(config) ? "needed" : "done" }))
+        .then((config) => {
+          if (generation === onboardingGeneration) set({ onboarding: needsOnboarding(config) ? "needed" : "done" });
+        })
         .catch((e: unknown) => {
+          if (generation !== onboardingGeneration) return;
           // Can't reach config (offline/old server) — don't block the app. A
           // real connection failure (server down) surfaces the recovery banner
           // so the user knows actions will fail and can retry.
@@ -410,7 +419,10 @@ export const useStore = create<AppStore>()((set, get) => {
           if (isUnreachable(e)) set({ bootError: String(e instanceof Error ? e.message : e) });
         });
     },
-    finishOnboarding: () => set({ onboarding: "done" }),
+    finishOnboarding: () => {
+      onboardingGeneration += 1;
+      set({ onboarding: "done" });
+    },
 
     bootError: null,
     retryBoot: () => {
@@ -465,9 +477,12 @@ export const useStore = create<AppStore>()((set, get) => {
     refreshWorktrees: () => {
       const worktreeTabs = get().tabs.tabs.filter((t) => t.worktree);
       for (const base of new Set(worktreeTabs.map((t) => t.worktree!.base))) {
+        const generation = (worktreeRefreshGeneration.get(base) ?? 0) + 1;
+        worktreeRefreshGeneration.set(base, generation);
         api
           .worktrees(base)
           .then((list) => {
+            if (worktreeRefreshGeneration.get(base) !== generation) return;
             set((s) => {
               let tabs = s.tabs;
               for (const t of s.tabs.tabs) {

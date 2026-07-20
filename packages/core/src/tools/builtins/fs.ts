@@ -183,7 +183,13 @@ function buildPreview(
 
 const listFilesSchema = z.object({
   path: z.string().optional().describe("Directory to list, relative to the workspace root (default '.')."),
-  maxDepth: z.number().optional().describe("Maximum recursion depth (default 10); lower it for a quick overview."),
+  maxDepth: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe("Maximum recursion depth (0-100, default 10); lower it for a quick overview."),
 });
 
 function walkEntries(root: string, maxDepth: number): { entries: string[]; truncated: boolean } {
@@ -265,9 +271,11 @@ const readFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
   offset: z
     .number()
+    .int()
+    .min(1)
     .optional()
     .describe("1-based line number to start reading from (combine with limit for large files)."),
-  limit: z.number().optional().describe("Maximum number of lines to return."),
+  limit: z.number().int().min(1).optional().describe("Maximum number of lines to return."),
 });
 
 const readFile = defineTool({
@@ -347,6 +355,9 @@ const searchTextSchema = z.object({
     .describe('Only search files whose path matches this glob, e.g. "*.ts" or "src/**/*.tsx".'),
   contextLines: z
     .number()
+    .int()
+    .min(0)
+    .max(MAX_CONTEXT_LINES)
     .optional()
     .describe("Include up to N lines of context before and after each match (like grep -C, max 10)."),
   filesWithMatches: z
@@ -357,7 +368,13 @@ const searchTextSchema = z.object({
     .boolean()
     .optional()
     .describe("Treat each file as one string so the pattern can span newlines (regex 's' flag)."),
-  maxMatches: z.number().optional().describe("Cap on the number of results (default 1000, max 5000)."),
+  maxMatches: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_SEARCH_MATCHES)
+    .optional()
+    .describe("Cap on the number of results (default 1000, max 5000)."),
 });
 
 function escapeRegExp(s: string): string {

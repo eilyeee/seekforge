@@ -1,5 +1,15 @@
+import { closeSync, mkdirSync, openSync, readSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { approveMemoryCandidate, listMemoryCandidates, rejectMemoryCandidate } from "../../src/memory/index.js";
+import {
+  addMemoryFact,
+  approveMemoryCandidate,
+  candidatesPath,
+  listMemoryCandidates,
+  rejectMemoryCandidate,
+} from "../../src/memory/index.js";
+import { MAX_MEMORY_CANDIDATES_BYTES, MemoryStateCorruptError } from "../../src/memory/store.js";
+import { WorkspaceStateTooLargeError } from "../../src/util/workspace-state.js";
 import {
   makeCandidate,
   makeWorkspace,
@@ -37,6 +47,20 @@ describe("listMemoryCandidates", () => {
     expect(list.map((c) => c.id)).toEqual(["mc-s1-2", "mc-s1-1"]);
   });
 
+  it("preserves corrupt candidate bytes when a mutation is attempted", () => {
+    const ws = makeWorkspace();
+    seed(ws, [makeCandidate({ id: "mc-s1-1" }), "{truncated"]);
+    const file = candidatesPath(ws);
+    const raw = readCandidatesRaw(ws);
+    const before = statSync(file);
+
+    expect(() => rejectMemoryCandidate(ws, "mc-s1-1")).toThrow(MemoryStateCorruptError);
+
+    const after = statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    expect(readCandidatesRaw(ws)).toBe(raw);
+  });
+
   it("skips records with invalid numeric, timestamp, or bounded string fields", () => {
     const ws = makeWorkspace();
     const valid = makeCandidate({ id: "valid" });
@@ -56,6 +80,30 @@ describe("listMemoryCandidates", () => {
     seed(ws, [valid, ...invalid, JSON.stringify(valid).replace('"confidence":0.9', '"confidence":1e999')]);
 
     expect(listMemoryCandidates(ws)).toEqual([valid]);
+  });
+
+  it("fails closed without replacing an oversized candidate store", () => {
+    const ws = makeWorkspace();
+    const file = candidatesPath(ws);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "sentinel");
+    truncateSync(file, MAX_MEMORY_CANDIDATES_BYTES + 1);
+    const before = statSync(file);
+
+    expect(() => addMemoryFact(ws, { content: "replacement fact", approve: false })).toThrow(
+      WorkspaceStateTooLargeError,
+    );
+
+    const after = statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    const fd = openSync(file, "r");
+    try {
+      const prefix = Buffer.alloc(8);
+      expect(readSync(fd, prefix, 0, prefix.length, 0)).toBe(8);
+      expect(prefix.toString()).toBe("sentinel");
+    } finally {
+      closeSync(fd);
+    }
   });
 });
 
@@ -96,6 +144,16 @@ describe("approveMemoryCandidate", () => {
     const ws = makeWorkspace();
     seed(ws, [makeCandidate({ id: "mc-s1-1" })]);
     expect(() => approveMemoryCandidate(ws, "nope")).toThrowError("candidate not found: nope");
+  });
+
+  it("does not persist approved status when the fact write fails", () => {
+    const ws = makeWorkspace();
+    seed(ws, [makeCandidate({ id: "mc-s1-1", content: "must remain pending" })]);
+    const project = join(ws, ".seekforge", "memory", "project.md");
+    mkdirSync(project);
+
+    expect(() => approveMemoryCandidate(ws, "mc-s1-1")).toThrow();
+    expect(listMemoryCandidates(ws)[0]?.status).toBe("pending");
   });
 });
 

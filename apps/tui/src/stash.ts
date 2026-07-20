@@ -6,8 +6,8 @@
  * 20 entries (oldest pruned at push time); corrupt files read as empty.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
+import { readStateFile, writeStateFile } from "./state-file.js";
 
 const MAX_STASH_ENTRIES = 20;
 
@@ -19,7 +19,7 @@ function stashFile(workspace: string): string {
 export function stashList(workspace: string): string[] {
   let raw: string;
   try {
-    raw = fs.readFileSync(stashFile(workspace), "utf8");
+    raw = readStateFile(stashFile(workspace));
   } catch {
     return [];
   }
@@ -34,8 +34,7 @@ export function stashList(workspace: string): string[] {
 
 function writeStash(workspace: string, entries: readonly string[]): void {
   const file = stashFile(workspace);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(entries, null, 1), "utf8");
+  writeStateFile(file, JSON.stringify(entries, null, 1));
 }
 
 /**

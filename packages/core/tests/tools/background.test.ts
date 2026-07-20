@@ -213,6 +213,16 @@ describe("task_output / task_kill via dispatcher", () => {
     expect(res.error?.code).toBe("unknown_task");
   });
 
+  it("rejects negative and fractional output tail lengths", async () => {
+    const ws = makeWorkspace();
+    const bg = createBackgroundTasks();
+    const ctx = makeCtx(ws, { background: bg });
+    for (const tail of [-1, 1.5]) {
+      const res = await dispatcher.execute(call("task_output", { taskId: "bg-1", tail }), ctx);
+      expect(res, String(tail)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
+  });
+
   it("task_kill terminates the task and reports the original command", async () => {
     const ws = makeWorkspace();
     const bg = createBackgroundTasks();

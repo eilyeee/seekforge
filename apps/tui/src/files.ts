@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_IGNORE_DIRS } from "@seekforge/core";
 import { fuzzyScore } from "./fuzzy.js";
+import { readStateFile, writeStateFile } from "./state-file.js";
 
 const DEFAULT_SCAN_LIMIT = 5000;
 const MAX_FRECENCY_ENTRIES = 500;
@@ -57,12 +58,19 @@ function frecencyFile(root: string): string {
 /** Loads <root>/.seekforge/tui-frecency.json; {} when missing or corrupt. */
 export function loadFrecency(root: string): Frecency {
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(frecencyFile(root), "utf8"));
+    const parsed: unknown = JSON.parse(readStateFile(frecencyFile(root)));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
     const out: Frecency = {};
     for (const [key, value] of Object.entries(parsed)) {
       const v = value as { count?: unknown; last?: unknown };
-      if (typeof v?.count === "number" && typeof v?.last === "number") {
+      if (
+        typeof v?.count === "number" &&
+        Number.isSafeInteger(v.count) &&
+        v.count >= 0 &&
+        typeof v?.last === "number" &&
+        Number.isFinite(v.last) &&
+        v.last >= 0
+      ) {
         out[key] = { count: v.count, last: v.last };
       }
     }
@@ -76,15 +84,14 @@ export function loadFrecency(root: string): Frecency {
 export function bumpFrecency(root: string, filePath: string): void {
   const frecency = loadFrecency(root);
   const prev = frecency[filePath];
-  frecency[filePath] = { count: (prev?.count ?? 0) + 1, last: Date.now() };
+  frecency[filePath] = { count: Math.min(Number.MAX_SAFE_INTEGER, (prev?.count ?? 0) + 1), last: Date.now() };
   let entries = Object.entries(frecency);
   if (entries.length > MAX_FRECENCY_ENTRIES) {
     entries.sort((a, b) => b[1].last - a[1].last); // most recent first
     entries = entries.slice(0, MAX_FRECENCY_ENTRIES);
   }
   const file = frecencyFile(root);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(Object.fromEntries(entries)), "utf8");
+  writeStateFile(file, JSON.stringify(Object.fromEntries(entries)));
 }
 
 /**

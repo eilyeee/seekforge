@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
+  acquireSessionLease,
   acquireWorkspaceSessionGuard,
   createMcpClient,
   expandShellInjections,
@@ -51,6 +52,9 @@ type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: un
 type McpScope = "global" | "project";
 
 const MASKED_SECRET = "********";
+const GLOBAL_CONFIG_LOCK_ID = "coord-server-global-config";
+
+class ConfigMutationError extends Error {}
 
 function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,17 +71,48 @@ function parseConfigDoc(raw: string): ConfigDoc {
  * `mutate` to the current servers object and writes the file back (mode 0o600).
  * Other top-level keys are preserved; an empty mcpServers map is dropped.
  */
-function mutateMcpServers(
+function mutateMcpServers<T>(
   workspace: string,
   scope: McpScope,
-  mutate: (servers: Record<string, McpServerConfig>) => void,
-): void {
+  mutate: (servers: Record<string, McpServerConfig>) => T,
+): T {
   const doc = readConfigDoc(workspace, scope);
   const servers = { ...(doc.mcpServers ?? {}) };
-  mutate(servers);
+  const result = mutate(servers);
   if (Object.keys(servers).length === 0) delete doc.mcpServers;
   else doc.mcpServers = servers;
   writeConfigDoc(workspace, scope, doc);
+  return result;
+}
+
+async function withSettingsMutation<T>(
+  rest: RouteCtx["rest"],
+  workspace: string,
+  scope: McpScope,
+  operation: () => T,
+): Promise<T> {
+  if (scope === "global") {
+    const lease = acquireSessionLease(homedir(), GLOBAL_CONFIG_LOCK_ID);
+    try {
+      return operation();
+    } finally {
+      lease.release();
+    }
+  }
+  return rest.coordinator.withRepository(workspace, async () => {
+    const guard = acquireWorkspaceSessionGuard(workspace);
+    try {
+      return operation();
+    } finally {
+      guard.release();
+    }
+  });
+}
+
+function settingsBusy(res: RouteCtx["res"], error: unknown): boolean {
+  if (!(error instanceof SessionBusyError)) return false;
+  sendApiError(res, 409, "session_busy", "cannot mutate settings while the selected scope is active");
+  return true;
 }
 
 /** Reads one config layer (raw); returns {} on missing/invalid. */
@@ -367,6 +402,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const config = (loadConfig(workspace).mcpServers ?? {})[serverName];
     if (!isMcpServerConfig(config))
       return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
+    if (config.trusted !== true) {
+      return sendApiError(res, 403, "forbidden", `MCP server is not trusted: ${serverName}`);
+    }
     const body = await readJsonBody(req, res);
     if (body === undefined) return;
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -514,47 +552,56 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         return sendApiError(res, 400, "bad_request", "url must be an absolute http or https URL");
       }
     }
-    const previous = mcpServersAt(workspace, scope)[normalizedName];
-    const nextEnv = preserveMaskedValues(env as Record<string, string> | undefined, previous?.env);
-    const nextHeaders = preserveMaskedValues(headers as Record<string, string> | undefined, previous?.headers);
-    let nextOauth: McpServerConfig["oauth"] | undefined;
-    if (oauth !== undefined) {
-      const incoming = oauth as NonNullable<McpServerConfig["oauth"]>;
-      if (incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken === undefined) {
-        return sendApiError(res, 400, "bad_request", "oauth refreshToken must be provided for a new server");
-      }
-      if (incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret === undefined) {
-        return sendApiError(res, 400, "bad_request", "oauth clientSecret placeholder has no existing value");
-      }
-      const refreshToken =
-        incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken !== undefined
-          ? previous.oauth.refreshToken
-          : incoming.refreshToken;
-      const clientSecret =
-        incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret !== undefined
-          ? previous.oauth.clientSecret
-          : incoming.clientSecret;
-      nextOauth = {
-        tokenEndpoint: incoming.tokenEndpoint.trim(),
-        clientId: incoming.clientId.trim(),
-        refreshToken,
-        ...(clientSecret !== undefined && clientSecret !== "" ? { clientSecret } : {}),
-        ...(incoming.scope !== undefined && incoming.scope.trim() !== "" ? { scope: incoming.scope.trim() } : {}),
-      };
+    try {
+      const result = await withSettingsMutation(rest, workspace, scope, () =>
+        mutateMcpServers(workspace, scope, (servers) => {
+          const previous = servers[normalizedName];
+          const nextEnv = preserveMaskedValues(env as Record<string, string> | undefined, previous?.env);
+          const nextHeaders = preserveMaskedValues(headers as Record<string, string> | undefined, previous?.headers);
+          let nextOauth: McpServerConfig["oauth"] | undefined;
+          if (oauth !== undefined) {
+            const incoming = oauth as NonNullable<McpServerConfig["oauth"]>;
+            if (incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken === undefined) {
+              throw new ConfigMutationError("oauth refreshToken must be provided for a new server");
+            }
+            if (incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret === undefined) {
+              throw new ConfigMutationError("oauth clientSecret placeholder has no existing value");
+            }
+            const refreshToken =
+              incoming.refreshToken === MASKED_SECRET && previous?.oauth?.refreshToken !== undefined
+                ? previous.oauth.refreshToken
+                : incoming.refreshToken;
+            const clientSecret =
+              incoming.clientSecret === MASKED_SECRET && previous?.oauth?.clientSecret !== undefined
+                ? previous.oauth.clientSecret
+                : incoming.clientSecret;
+            nextOauth = {
+              tokenEndpoint: incoming.tokenEndpoint.trim(),
+              clientId: incoming.clientId.trim(),
+              refreshToken,
+              ...(clientSecret !== undefined && clientSecret !== "" ? { clientSecret } : {}),
+              ...(incoming.scope !== undefined && incoming.scope.trim() !== "" ? { scope: incoming.scope.trim() } : {}),
+            };
+          }
+          const entry: McpServerConfig = {
+            ...(hasCommand ? { command: command.trim() } : {}),
+            ...(Array.isArray(args) && args.length > 0 ? { args: args as string[] } : {}),
+            ...(nextEnv !== undefined && Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
+            ...(hasUrl ? { url: serverUrl.trim() } : {}),
+            ...(nextHeaders !== undefined && Object.keys(nextHeaders).length > 0 ? { headers: nextHeaders } : {}),
+            ...(nextOauth ? { oauth: nextOauth } : {}),
+            ...(trusted !== undefined ? { trusted } : {}),
+          };
+          servers[normalizedName] = entry;
+          return entry;
+        }),
+      );
+      return sendJson(res, 200, { ok: true, server: sanitizedMcpServer(normalizedName, result, scope) });
+    } catch (error) {
+      if (settingsBusy(res, error)) return;
+      if (error instanceof ConfigMutationError) return sendApiError(res, 400, "bad_request", error.message);
+      throw error;
     }
-    const entry: McpServerConfig = {
-      ...(hasCommand ? { command: command.trim() } : {}),
-      ...(Array.isArray(args) && args.length > 0 ? { args: args as string[] } : {}),
-      ...(nextEnv !== undefined && Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
-      ...(hasUrl ? { url: serverUrl.trim() } : {}),
-      ...(nextHeaders !== undefined && Object.keys(nextHeaders).length > 0 ? { headers: nextHeaders } : {}),
-      ...(nextOauth ? { oauth: nextOauth } : {}),
-      ...(trusted !== undefined ? { trusted } : {}),
-    };
-    mutateMcpServers(workspace, scope, (servers) => {
-      servers[normalizedName] = entry;
-    });
-    return sendJson(res, 200, { ok: true, server: sanitizedMcpServer(normalizedName, entry, scope) });
   }
 
   // Remove an MCP server from the workspace config.json.
@@ -565,13 +612,20 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", 'scope must be "global" or "project"');
     }
     const scope: McpScope = rawScope === "global" ? "global" : "project";
-    const config = mcpServersAt(workspace, scope);
-    if (!config[name])
-      return sendApiError(res, 404, "not_found", `MCP server not configured in ${scope} scope: ${name}`);
-    mutateMcpServers(workspace, scope, (servers) => {
-      delete servers[name];
-    });
-    return sendJson(res, 200, { ok: true, scope });
+    try {
+      const removed = await withSettingsMutation(rest, workspace, scope, () =>
+        mutateMcpServers(workspace, scope, (servers) => {
+          if (!servers[name]) return false;
+          delete servers[name];
+          return true;
+        }),
+      );
+      if (!removed) return sendApiError(res, 404, "not_found", `MCP server not configured in ${scope} scope: ${name}`);
+      return sendJson(res, 200, { ok: true, scope });
+    } catch (error) {
+      if (settingsBusy(res, error)) return;
+      throw error;
+    }
   }
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "test") {
@@ -650,8 +704,13 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if ("error" in result) {
       return sendApiError(res, 400, "bad_request", result.error);
     }
-    writeHooks(workspace, result.hooks);
-    return sendJson(res, 200, { hooks: result.hooks });
+    try {
+      await withSettingsMutation(rest, workspace, "project", () => writeHooks(workspace, result.hooks));
+      return sendJson(res, 200, { hooks: result.hooks });
+    } catch (error) {
+      if (settingsBusy(res, error)) return;
+      throw error;
+    }
   }
 
   if (method === "PUT" && path === "/api/config") {
@@ -661,9 +720,16 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (typeof key !== "string") {
       return sendApiError(res, 400, "bad_request", "body must be {key, value, global?}");
     }
-    // ConfigValueError (unknown key / bad value) maps to 400 in the
-    // trailing catch.
-    setConfigValue(workspace, key, value, global === true);
-    return sendJson(res, 200, maskedConfig(workspace));
+    try {
+      // ConfigValueError (unknown key / bad value) maps to 400 in the
+      // trailing catch.
+      await withSettingsMutation(rest, workspace, global === true ? "global" : "project", () =>
+        setConfigValue(workspace, key, value, global === true),
+      );
+      return sendJson(res, 200, maskedConfig(workspace));
+    } catch (error) {
+      if (settingsBusy(res, error)) return;
+      throw error;
+    }
   }
 }

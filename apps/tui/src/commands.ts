@@ -227,6 +227,12 @@ export type ParsedInput =
   | { kind: "bash"; command: string }
   | { kind: "task"; text: string };
 
+export function parsePositiveIndex(value: string | undefined): number | null {
+  if (value === undefined || !/^[1-9][0-9]*$/.test(value)) return null;
+  const index = Number(value);
+  return Number.isSafeInteger(index) ? index : null;
+}
+
 export function commandRequiresIdle(command: SlashCommand): boolean {
   return command.name === "rewind";
 }

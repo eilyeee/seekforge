@@ -55,6 +55,16 @@ describe("WS auth", () => {
     ws.send(Buffer.alloc(MAX_WS_PAYLOAD_BYTES + 1));
     await expect(closed).resolves.toBe(1009);
   });
+
+  it("rejects binary payloads even when they contain valid JSON bytes", async () => {
+    const { server } = await boot(fakeAgentFactory(async function* () {}));
+    const { ws, rx } = await open(server.port);
+
+    ws.send(Buffer.from(JSON.stringify({ type: "cancel" })));
+
+    const error = await rx.waitFor((frame) => frame.type === "error");
+    expect(error).toMatchObject({ code: "bad_frame", message: expect.stringContaining("not binary") });
+  });
 });
 
 describe("start -> events -> idle", () => {

@@ -67,14 +67,15 @@ function uploadName(file: File): string | null {
   return ext ? `pasted.${ext}` : null;
 }
 
-function fileToBase64(file: File): Promise<string> {
+export function fileToBase64(file: File): Promise<string> {
   const sizeError = imageUploadSizeError(file.size);
   if (sizeError) return Promise.reject(new Error(sizeError));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     // readAsDataURL yields "data:<mime>;base64,<data>" — strip the prefix.
     reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(reader.error ?? new Error("failed to read image"));
+    reader.onabort = () => reject(new Error("image read aborted"));
     reader.readAsDataURL(file);
   });
 }
@@ -169,6 +170,8 @@ export function Composer({
   // Latest value for async insertions (uploads resolve after re-renders).
   const valueRef = useRef(value);
   valueRef.current = value;
+  const workspaceRef = useRef(workspaceId);
+  workspaceRef.current = workspaceId;
   // Caret to restore after a programmatic text change.
   const pendingCaret = useRef<number | null>(null);
   useEffect(() => {
@@ -282,6 +285,7 @@ export function Composer({
   };
 
   const uploadImages = async (files: Iterable<File>) => {
+    const uploadWorkspace = workspaceId;
     setUploadError(null);
     for (const file of files) {
       const name = uploadName(file);
@@ -289,14 +293,18 @@ export function Composer({
       setUploading((n) => n + 1);
       try {
         const dataBase64 = await fileToBase64(file);
-        const { path } = await api.upload(name, dataBase64, workspaceId);
+        if (workspaceRef.current !== uploadWorkspace) return;
+        const { path } = await api.upload(name, dataBase64, uploadWorkspace);
+        if (workspaceRef.current !== uploadWorkspace) return;
         const el = textareaRef.current;
         const pos = el ? el.selectionStart : valueRef.current.length;
         const end = el ? el.selectionEnd : pos;
         const out = insertImageMarker(valueRef.current, pos, end, path);
         applyChange(out.text, out.caret);
       } catch (err) {
-        setUploadError(err instanceof Error ? err.message : String(err));
+        if (workspaceRef.current === uploadWorkspace) {
+          setUploadError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
         setUploading((n) => n - 1);
       }

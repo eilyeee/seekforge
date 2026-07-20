@@ -1066,6 +1066,8 @@ A later permission prompt around a tool call does not authorize that startup.
   management probes separate and user initiated.
 - **Caught:** untrusted MCP stdio servers started while assembling an Agent,
   before any tool-level confirmation was possible.
+- **Also caught:** Server prompt resolution started a configured MCP server
+  without requiring the trust flag used by prompt/resource discovery.
 
 ## 73. One terminal cause must map to one protocol status
 
@@ -1451,7 +1453,8 @@ an error event is not successful EOF.
   delayed force-kill timer only after confirming the complete group is gone.
 - **Caught:** REPL shell expansion and TUI status-line commands could hang on
   descendant pipes or consume unbounded output; stdin errors returned partial
-  prompts and status-line execution blocked rendering.
+  prompts and status-line execution blocked rendering; successful CLI/TUI shell
+  parents could also leave detached-output descendants running.
 
 ## 109. Enforce wire limits before destructive client state changes
 
@@ -1511,7 +1514,8 @@ logical path check does not survive concurrent writers or symlink rebinding.
   read-modify-write transactions across processes, read through verified
   no-follow descriptors, and atomically replace through a revalidated parent.
 - **Caught:** memory metadata accepted non-finite values, concurrent updates were
-  lost, and memory/candidate/archive/summary writes retained symlink TOCTOU gaps.
+  lost, and memory/candidate/archive/summary writes retained symlink TOCTOU gaps;
+  treating oversized or corrupt durable state as missing could overwrite it.
 
 ## 115. Streaming protocols need cumulative and temporal budgets
 
@@ -1524,6 +1528,126 @@ still carry unsafe integers or non-finite arithmetic.
 - **Caught:** provider SSE could grow indefinitely across valid lines or run
   forever while progressing; non-streaming/error bodies buffered without a
   byte cap, and malformed token usage produced unsafe costs.
+
+## 116. A canonical path must stay bound to the opened file
+
+Resolving a path physically and then calling `stat`/`readFile` by pathname leaves
+a swap window; truncating after `readFile` also is not a memory limit.
+
+- **Do:** open the canonical parent and leaf with no-follow flags, compare path
+  and descriptor identities, and read only a bounded byte prefix from the fd.
+- **Caught:** shared workspace and extra-directory `@path` expansion could follow
+  a file swapped after validation and buffered the complete file before its 30k
+  cap; Rust runtime reads/listing reopened validated paths and `apply_patch`
+  buffered an unbounded target.
+
+## 117. Rejected request bodies still own a drain lifecycle
+
+Rejecting a body promise does not stop the socket from emitting data or errors.
+Removing every error listener before the discarded body closes can crash on a
+late transport error; leaving normal listeners attached leaks them per request.
+
+- **Do:** single-settle the body reader, detach normal listeners on every terminal
+  path, keep a drain-only error sink through `close`, and preflight Content-Length.
+- **Caught:** Server REST body reads could hang on an aborted request and retained
+  listeners after settlement; early route rejections left bodies unread, and the
+  first oversize fix left a late-error window.
+
+## 118. Persisted protocol limits belong on the writer
+
+A replay reader's line cap cannot repair an oversized record already appended;
+the first unreadable line hides every later valid event.
+
+- **Do:** serialize and byte-count the exact persisted envelope before append,
+  advance sequence state only after success, and avoid duplicate catch-up queues.
+- **Caught:** Server run events could poison durable replay, while WS catch-up
+  retained an unbounded second copy of locally appended events.
+
+## 119. Settings are security-sensitive mutation surfaces
+
+Hooks, sandbox policy, and MCP startup configuration affect later execution even
+though they are not product source files. Independent read/merge/write routes can
+lose updates or change policy while an Agent owns the workspace.
+
+- **Do:** hold the repository/workspace guard across the complete project-layer
+  transaction and a shared cross-process lease across global-layer transactions.
+- **Caught:** Server hooks, config, and MCP writes bypassed session coordination;
+  masked-secret preservation also read the old MCP entry before acquiring a lock.
+
+## 120. Transport type and method semantics are protocol data
+
+Bytes containing JSON are not necessarily a WebSocket text frame, and accepting
+`HEAD` does not permit sending a GET response body.
+
+- **Do:** reject binary frames explicitly; for HEAD, send GET-equivalent headers
+  including Content-Length and suppress the body on success and error paths.
+- **Caught:** Server WS accepted binary JSON and static HEAD handling emitted the
+  same body path as GET without a stable length.
+
+## 121. Prompt-bearing configuration needs physical and byte boundaries
+
+Files that become system prompts or tool metadata are untrusted input. A lexical
+join, a pre-read `stat`, or later prompt truncation does not bound what is read.
+
+- **Do:** validate names, reject linked config roots/leaves, bind reads to
+  verified no-follow descriptors, enforce per-file and cumulative byte limits,
+  and skip oversized structured files instead of parsing partial content.
+- **Caught:** output-style traversal; linked command/rules/subagent roots;
+  unbounded AGENTS/AGENT files; and package/repo-map reads that could outgrow a
+  stale size check before entering prompt construction.
+
+## 122. Authorization results and execution context are operation-local
+
+Structured denial objects are truthy, and mutable fields on a shared tool
+context can be overwritten by another concurrent execution.
+
+- **Do:** normalize every permission result through its explicit `allow` field
+  and copy approval-derived state into a fresh per-call context.
+- **Caught:** sandbox fallback could run unsandboxed after `{allow:false}`, and
+  concurrent edit approvals could exchange `selectedHunks` selections.
+
+## 123. Schema and correlation boundaries must encode exact domains
+
+Numeric coercion and globally keyed correlation silently accept values or pair
+records outside the domain their consumer assumes.
+
+- **Do:** require integer minima/maxima in schemas, preserve those constraints
+  in the JSON Schema advertised to the model, validate deserialized field
+  shapes, and scope tool-call/result correlation to one assistant turn.
+- **Caught:** negative/fractional timeouts, tails, depths, ranges and limits;
+  a schema converter dropping numeric and collection bounds; malformed package
+  metadata; and reused tool-call ids clearing the wrong turn.
+
+## 124. An evaluation workspace is adversarial input
+
+An Agent can shape the files and processes that its own checks inspect. A
+lexically safe check path or direct shell timeout does not make the score sound.
+
+- **Do:** reject linked assertion files and command directories, bind file reads
+  to verified descriptors, cap assertion bytes/output, own the complete check
+  process group, and fail the sample when cleanup fails.
+- **Caught:** Eval `file_not_contains` could pass through a symlink, command `cwd`
+  could escape the fixture, timed-out checks leaked descendants, and disposer
+  errors rejected the harness instead of producing a failed result.
+
+## 125. CI values are data, never shell source
+
+Manual workflow inputs and action outputs can contain shell metacharacters even
+when the operator intends them to be a tag or version.
+
+- **Do:** pass expressions through environment variables, validate the complete
+  domain before producing outputs, and quote variables at every use.
+- **Caught:** the npm release workflow interpolated a dispatch tag into shell
+  source, allowing workspace modification before a later credentialed publish.
+
+## 126. A `file:` URL pathname is not a filesystem path
+
+URL pathnames retain percent encoding and have platform-specific leading/path
+rules, so they fail for spaces, Unicode, and Windows paths.
+
+- **Do:** convert file URLs with `fileURLToPath`; only then call path utilities.
+- **Caught:** package-smoke and live server E2E scripts derived the repository
+  path from `import.meta.url.pathname`.
 
 ---
 

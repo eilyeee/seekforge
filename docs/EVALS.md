@@ -214,7 +214,7 @@ A task is a JSON file at `evals/tasks/<id>.json`:
 
 ```json
 {
-  "id": "string id, must match the filename and be registered (see below)",
+  "id": "portable id, must match the filename and be registered (see below)",
   "title": "human-readable one-liner",
   "fixture": "name of a dir under evals/fixtures/",
   "mode": "edit",
@@ -223,13 +223,20 @@ A task is a JSON file at `evals/tasks/<id>.json`:
 }
 ```
 
+`id` is 1-128 characters, starts with an ASCII letter or digit, and may then
+contain only ASCII letters, digits, `.`, `_`, and `-`. This keeps temporary
+workspace names, report rows, and sample matching portable and unambiguous.
+
 A fixture is a **self-contained project** at `evals/fixtures/<name>/`. It must
 be hermetic: only Node built-ins, no `dependencies`/`devDependencies` in its
 `package.json` (the dataset gate enforces this). The harness copies it to a
 throwaway dir, `git init`s it, then runs the agent there.
 
 Checks (see `packages/eval-harness/src/task-runner.ts`) are deterministic — no
-LLM judges:
+LLM judges. File checks reject symlinks and files over 5 MiB; command `cwd`
+values must resolve to physical directories inside the throwaway workspace.
+Check commands own their process group, cap captured output, and terminate the
+group on timeout so one task cannot leak processes into later samples:
 
 - `file_contains` — `{ type, path, pattern }`: regex must match the file.
 - `file_not_contains` — same shape: regex must **not** match (pins what the

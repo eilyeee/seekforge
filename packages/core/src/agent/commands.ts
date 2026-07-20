@@ -12,7 +12,7 @@
  * (project wins). Never throws — unreadable dirs/files are skipped.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
 import { parseFrontmatter } from "../subagents/frontmatter.js";
@@ -99,8 +99,24 @@ function parseCommandFile(name: string, scope: "project" | "user", raw: string):
  * whose name is its path under `root` with separators turned into ":"
  * (`frontend/build.md` → `frontend:build`). Unreadable dirs/files are skipped.
  */
-function loadCommandsDir(root: string, scope: "project" | "user"): UserCommand[] {
+function resolveCommandsDir(base: string): string | undefined {
+  try {
+    let dir = realpathSync(base);
+    for (const segment of [".seekforge", "commands"]) {
+      dir = join(dir, segment);
+      const stat = lstatSync(dir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return undefined;
+    }
+    return dir;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadCommandsDir(base: string, scope: "project" | "user"): UserCommand[] {
   const out: UserCommand[] = [];
+  const root = resolveCommandsDir(base);
+  if (!root) return out;
   const walk = (dir: string, prefix: string): void => {
     let entries: import("node:fs").Dirent[];
     try {
@@ -118,10 +134,17 @@ function loadCommandsDir(root: string, scope: "project" | "user"): UserCommand[]
       const name = `${prefix}${entry.name.slice(0, -3)}`;
       if (name === "" || name.endsWith(":")) continue;
       let raw: string;
+      let fd: number | undefined;
       try {
-        raw = readFileSync(join(dir, entry.name), "utf8");
+        const file = join(dir, entry.name);
+        const stat = lstatSync(file);
+        if (stat.isSymbolicLink() || !stat.isFile()) continue;
+        fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+        raw = readFileSync(fd, "utf8");
       } catch {
         continue;
+      } finally {
+        if (fd !== undefined) closeSync(fd);
       }
       out.push(parseCommandFile(name, scope, raw));
     }
@@ -136,8 +159,8 @@ function loadCommandsDir(root: string, scope: "project" | "user"): UserCommand[]
  * wins). Returns project commands first, then the user-only commands.
  */
 export function loadUserCommands(workspace: string): UserCommand[] {
-  const project = loadCommandsDir(join(workspace, ".seekforge", "commands"), "project");
-  const user = loadCommandsDir(join(seekforgeHome(), ".seekforge", "commands"), "user");
+  const project = loadCommandsDir(workspace, "project");
+  const user = loadCommandsDir(seekforgeHome(), "user");
   const seen = new Set(project.map((c) => c.name));
   const out = [...project];
   for (const cmd of user) {

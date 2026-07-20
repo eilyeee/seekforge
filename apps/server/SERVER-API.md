@@ -19,7 +19,8 @@ basename. The **first** workspace is the default.
   omitted = first workspace. The session runs in that workspace's path. One
   connection still drives at most one running session, but different
   connections/tabs may target different workspaces.
-- WebSocket frames are capped at 1,000,000 serialized bytes. The desktop checks
+- WebSocket frames are UTF-8 JSON **text** frames capped at 1,000,000 serialized bytes;
+  binary frames are rejected even when their bytes contain valid JSON. The desktop checks
   the same shared limit before sending and preserves the draft when a task or
   loop request is too large.
 
@@ -122,7 +123,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/balance | `{balance: {currency, totalBalance} \| null}` — DeepSeek account balance fetched with the server's key. Null-safe: missing key or any fetch failure returns `{balance: null}`, never an error |
 | GET /api/mcp/resources | `{resources: [{server, uri, name?}]}` — resources/list of every explicitly trusted MCP server (spawned on demand with the workspace advertised as a filesystem root, then disposed). An untrusted, failed, or unsupported server contributes zero entries |
 | GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every explicitly trusted MCP server (spawned on demand, then disposed). An untrusted, failed, or unsupported server contributes zero entries. Mirrors GET /api/mcp/resources |
-| POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one MCP prompt in the selected workspace; 404 unconfigured server, 502 MCP failure |
+| POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |
@@ -131,15 +132,15 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
 | POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the project hooks block from `.seekforge/config.json` (`{}` when none) |
-| PUT /api/hooks | body `{hooks}` — replaces the project `.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped from the file), returns `{hooks}`. Validated against the 9 stages (`preToolUse`, `postToolUse`, `sessionStart`, `userPromptSubmit`, `preCompact`, `stop`, `subagentStop`, `notification`, `sessionEnd`); each entry needs a non-empty `command` plus optional string `match`/`pattern`. 400 on an unknown stage or malformed shape |
+| PUT /api/hooks | body `{hooks}` — replaces the project `.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped from the file), returns `{hooks}`. Validated against the 9 stages (`preToolUse`, `postToolUse`, `sessionStart`, `userPromptSubmit`, `preCompact`, `stop`, `subagentStop`, `notification`, `sessionEnd`); each entry needs a non-empty `command` plus optional string `match`/`pattern`. 400 on an unknown stage or malformed shape; 409 `session_busy` while a workspace session owns the project settings layer |
 | GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` (always present, with effective defaults `"off"` / `"mechanical"` / `false` / `null`); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
 | POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
 | GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; project entries shadow same-name global entries |
-| POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, and optional refresh-token `oauth`; masked sentinels preserve existing secrets |
-| DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer |
+| POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, and optional refresh-token `oauth`; masked sentinels preserve existing secrets. The complete read/merge/write is serialized per selected layer; 409 `session_busy` when that layer is owned |
+| DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer; 409 `session_busy` when that layer is owned |
 | POST /api/mcp/:name/test | connect, list tools, dispose, and return `{ok, latencyMs, toolCount}` |
 | POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |
 | GET /api/security | current repository evidence package (Findings, scans, fixes, threat models, events) |
@@ -149,7 +150,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/security/findings/:id/fix | body `{maxCostUsd, verifyCommand, lintCommand?}`; runs a cost-bounded edit Agent, exact sandboxed checks, and a fresh scan |
 | GET /api/security/export?format=json\|markdown\|sarif | rendered compliance evidence package and filename |
 | POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
-| PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key |
+| PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown key. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
 | DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |
@@ -182,8 +183,9 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
 ## WebSocket (path /ws?token=...)
 
 One WS connection drives at most one *running* session at a time.
-All frames are JSON objects with a `type` field and are capped at 1 MB before
-JSON parsing. A larger frame closes the connection with WebSocket code 1009.
+All frames are UTF-8 JSON text objects with a `type` field and are capped at 1 MB
+before JSON parsing. A larger frame closes the connection with WebSocket code
+1009; a binary frame receives `bad_frame`.
 
 The server first sends `{"type":"hello","protocolVersion":1,"capabilities":[...],"disconnectPolicy":"cancel","backgroundDisconnectPolicy":"continue"}`.
 Every accepted run receives a stable `runId`; persisted run frames carry a
@@ -264,7 +266,9 @@ event log and returns at most 500 events per page as
 back as `afterSeq`. Terminal history remains queryable after restart. Nested
 frame strings are redacted before JSON
 serialization, and ledger writes and compaction cleanup reject symlinked project
-path components. `seq` is scoped to one run. Snapshot status is one of
+path components. A frame that would exceed the replay JSONL line limit is
+rejected before append, so one oversized event cannot hide all later replay
+history. `seq` is scoped to one run. Snapshot status is one of
 `queued`, `running`, `waiting`, `succeeded`, `failed`, or `cancelled`;
 `waiting` is a non-failure terminal snapshot used when a confirm-mode Loop has
 persisted requirements and awaits an explicit resume approval.

@@ -6,15 +6,18 @@ const FORCE_KILL_DELAY_MS = 250;
 function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
   try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
+    if (process.platform === "win32") {
+      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      killer.on("error", () => {});
+    } else process.kill(-child.pid, signal);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
 }
 
 function processGroupAlive(child: ChildProcess): boolean {
-  if (child.pid === undefined || process.platform === "win32") return child.pid !== undefined;
+  if (child.pid === undefined) return false;
+  if (process.platform === "win32") return child.exitCode === null && child.signalCode === null;
   try {
     process.kill(-child.pid, 0);
     return true;
@@ -80,7 +83,23 @@ export function runShellCapture(command: string, cwd: string, timeoutMs = 10_000
     child.stderr?.on("data", collect);
     child.once("error", (error) => finish(`[command failed: ${error.message}]`));
     child.once("close", (code, signal) => {
-      if (forceKillTimer !== undefined && !processGroupAlive(child)) clearTimeout(forceKillTimer);
+      const groupAlive = processGroupAlive(child);
+      if (forceKillTimer !== undefined && !groupAlive) clearTimeout(forceKillTimer);
+      if (forceKillTimer === undefined && groupAlive) {
+        try {
+          killProcessGroup(child, "SIGTERM");
+        } catch {
+          // The command result remains valid; cleanup is best-effort.
+        }
+        forceKillTimer = setTimeout(() => {
+          try {
+            killProcessGroup(child, "SIGKILL");
+          } catch {
+            // Best-effort cleanup of descendants after the shell exited.
+          }
+        }, FORCE_KILL_DELAY_MS);
+        forceKillTimer.unref();
+      }
       const output = Buffer.concat(chunks).toString("utf8");
       if (code === 0) finish(output);
       else

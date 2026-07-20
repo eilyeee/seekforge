@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,6 +34,8 @@ beforeEach(() => {
 afterEach(() => {
   if (savedHome === undefined) delete process.env.SEEKFORGE_HOME;
   else process.env.SEEKFORGE_HOME = savedHome;
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 describe("loadUserCommands", () => {
@@ -137,6 +139,19 @@ describe("loadUserCommands", () => {
       .map((c) => c.name)
       .sort();
     expect(names).toEqual(["frontend:build", "top"]);
+  });
+
+  it("does not follow a project commands directory symlink", () => {
+    const outside = mkdtempSync(join(tmpdir(), "seekforge-cmd-outside-"));
+    try {
+      writeFileSync(join(outside, "injected.md"), "outside instructions");
+      mkdirSync(join(workspace, ".seekforge"), { recursive: true });
+      symlinkSync(outside, join(workspace, ".seekforge", "commands"), "dir");
+
+      expect(loadUserCommands(workspace)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

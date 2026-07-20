@@ -52,21 +52,28 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
   function connect() {
     if (closed) return;
     setState("connecting");
-    sock = new WebSocket(wsUrl());
-    sock.onopen = () => {
+    const connection = new WebSocket(wsUrl());
+    sock = connection;
+    connection.onopen = () => {
+      if (closed || sock !== connection) {
+        connection.close();
+        return;
+      }
       initialConnection = false;
       attempts = 0;
       setState("connected");
       flush();
     };
-    sock.onmessage = (e) => {
+    connection.onmessage = (e) => {
+      if (closed || sock !== connection) return;
       try {
         handlers.onFrame(JSON.parse(String(e.data)));
       } catch {
         // ignore malformed frames
       }
     };
-    sock.onclose = () => {
+    connection.onclose = () => {
+      if (sock !== connection) return;
       sock = null;
       initialConnection = false;
       if (closed) return;
@@ -76,8 +83,8 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
       setState("disconnected");
       scheduleReconnect();
     };
-    sock.onerror = () => {
-      sock?.close();
+    connection.onerror = () => {
+      connection.close();
     };
   }
 

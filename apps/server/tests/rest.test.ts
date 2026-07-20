@@ -841,6 +841,10 @@ describe("static serving", () => {
       const asset = await fetch(`${uiBase}/assets/app.js?token=${TOKEN}`);
       expect(asset.status).toBe(200);
       expect(asset.headers.get("content-type")).toContain("javascript");
+      const assetHead = await fetch(`${uiBase}/assets/app.js?token=${TOKEN}`, { method: "HEAD" });
+      expect(assetHead.status).toBe(200);
+      expect(assetHead.headers.get("content-length")).toBe(String(Buffer.byteLength("console.log('app')")));
+      expect(await assetHead.text()).toBe("");
 
       // SPA fallback for extension-less client routes.
       const route = await fetch(`${uiBase}/sessions/s1?token=${TOKEN}`);

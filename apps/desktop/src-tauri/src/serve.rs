@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 /// How long we wait for the server to print its URL line.
 pub const URL_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_STARTUP_LINE_BYTES: usize = 64 * 1024;
+const MAX_STARTUP_CAPTURE_BYTES: usize = 1024 * 1024;
+const STARTUP_LINE_CHANNEL_CAPACITY: usize = 16;
 
 // ---------------------------------------------------------------------------
 // URL-line parsing
@@ -404,35 +407,58 @@ impl ServeChild {
                 let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
             });
         }
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::sync_channel::<String>(STARTUP_LINE_CHANNEL_CAPACITY);
         std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(l) => {
-                        if tx.send(l).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
+            drain_startup_lines(BufReader::new(stdout), tx);
         });
         wait_for_url_from_lines(&rx, timeout)
     }
 
     /// Kills the child's whole process group (SIGKILL) and reaps it.
     pub fn kill(&mut self) {
-        #[cfg(unix)]
-        {
-            let pid = self.child.id() as libc::pid_t;
-            // setsid in pre_exec makes pid the process-group id.
-            unsafe {
-                libc::killpg(pid, libc::SIGKILL);
-            }
-        }
+        kill_process_tree(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn drain_startup_lines<R: BufRead>(mut reader: R, tx: mpsc::SyncSender<String>) {
+    let mut line = Vec::new();
+    let mut truncated = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        if available.is_empty() {
+            if !line.is_empty() || truncated {
+                let _ = tx.send(String::from_utf8_lossy(&line).into_owned());
+            }
+            return;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        let content_len = newline.unwrap_or(available.len());
+        let remaining = MAX_STARTUP_LINE_BYTES.saturating_sub(line.len());
+        line.extend_from_slice(&available[..content_len.min(remaining)]);
+        if content_len > remaining {
+            truncated = true;
+        }
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            if tx
+                .send(String::from_utf8_lossy(&line).into_owned())
+                .is_err()
+            {
+                // The URL was already found. Keep draining for the lifetime of
+                // the server so a full stdout pipe cannot stall the child.
+                let _ = std::io::copy(&mut reader, &mut std::io::sink());
+                return;
+            }
+            line.clear();
+            truncated = false;
+        }
     }
 }
 
@@ -468,8 +494,13 @@ pub fn wait_for_url_from_lines(
                 if let Some(url) = parse_url_line(&line) {
                     return Ok(url);
                 }
-                captured.push_str(&line);
-                captured.push('\n');
+                if captured.len() < MAX_STARTUP_CAPTURE_BYTES {
+                    let remaining = MAX_STARTUP_CAPTURE_BYTES - captured.len();
+                    captured.push_str(&line[..line.floor_char_boundary(remaining.min(line.len()))]);
+                    if captured.len() < MAX_STARTUP_CAPTURE_BYTES {
+                        captured.push('\n');
+                    }
+                }
             }
             Err(_) => return Err(captured),
         }
@@ -484,6 +515,25 @@ pub fn wait_for_url_from_lines(
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{Cursor, Read};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct EofTrackingReader {
+        inner: Cursor<Vec<u8>>,
+        reached_eof: Arc<AtomicBool>,
+    }
+
+    impl Read for EofTrackingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let limit = buffer.len().min(1);
+            let read = self.inner.read(&mut buffer[..limit])?;
+            if read == 0 {
+                self.reached_eof.store(true, Ordering::SeqCst);
+            }
+            Ok(read)
+        }
+    }
 
     // --- parse_url_line ---
 
@@ -786,5 +836,77 @@ mod tests {
         drop(tx); // channel closes -> error path with captured output
         let err = wait_for_url_from_lines(&rx, Duration::from_millis(50)).unwrap_err();
         assert!(err.contains("some noise"));
+    }
+
+    #[test]
+    fn startup_output_is_bounded_but_later_url_is_still_seen() {
+        let mut input = vec![b'x'; MAX_STARTUP_LINE_BYTES * 2];
+        input.extend_from_slice(b"\nhttp://127.0.0.1:1234/?token=bounded\n");
+        let (tx, rx) = mpsc::sync_channel(STARTUP_LINE_CHANNEL_CAPACITY);
+        drain_startup_lines(BufReader::new(input.as_slice()), tx);
+
+        let first = rx.recv().unwrap();
+        assert_eq!(first.len(), MAX_STARTUP_LINE_BYTES);
+        assert_eq!(
+            wait_for_url_from_lines(&rx, Duration::from_secs(1)).unwrap(),
+            "http://127.0.0.1:1234/?token=bounded"
+        );
+    }
+
+    #[test]
+    fn startup_diagnostics_capture_has_a_total_limit() {
+        let (tx, rx) = mpsc::sync_channel(STARTUP_LINE_CHANNEL_CAPACITY);
+        let producer = std::thread::spawn(move || {
+            for _ in 0..32 {
+                tx.send("x".repeat(MAX_STARTUP_LINE_BYTES)).unwrap();
+            }
+        });
+        let captured = wait_for_url_from_lines(&rx, Duration::from_secs(1)).unwrap_err();
+        producer.join().unwrap();
+        assert!(captured.len() <= MAX_STARTUP_CAPTURE_BYTES);
+    }
+
+    #[test]
+    fn bounded_startup_queue_still_reaches_a_later_url() {
+        let mut input = String::new();
+        for index in 0..(STARTUP_LINE_CHANNEL_CAPACITY * 4) {
+            input.push_str(&format!("noise {index}\n"));
+        }
+        input.push_str("http://127.0.0.1:1234/?token=later\n");
+
+        let (tx, rx) = mpsc::sync_channel(STARTUP_LINE_CHANNEL_CAPACITY);
+        let producer = std::thread::spawn(move || {
+            drain_startup_lines(BufReader::new(input.as_bytes()), tx);
+        });
+
+        assert_eq!(
+            wait_for_url_from_lines(&rx, Duration::from_secs(1)).unwrap(),
+            "http://127.0.0.1:1234/?token=later"
+        );
+        drop(rx);
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn dropping_url_receiver_still_drains_stdout_to_eof() {
+        let mut input = b"http://127.0.0.1:1234/?token=ready\n".to_vec();
+        input.extend(std::iter::repeat_n(b'x', 128 * 1024));
+        let reached_eof = Arc::new(AtomicBool::new(false));
+        let reader = EofTrackingReader {
+            inner: Cursor::new(input),
+            reached_eof: Arc::clone(&reached_eof),
+        };
+        let (tx, rx) = mpsc::sync_channel(1);
+        let producer = std::thread::spawn(move || {
+            drain_startup_lines(BufReader::new(reader), tx);
+        });
+
+        assert_eq!(
+            wait_for_url_from_lines(&rx, Duration::from_secs(1)).unwrap(),
+            "http://127.0.0.1:1234/?token=ready"
+        );
+        drop(rx);
+        producer.join().unwrap();
+        assert!(reached_eof.load(Ordering::SeqCst));
     }
 }

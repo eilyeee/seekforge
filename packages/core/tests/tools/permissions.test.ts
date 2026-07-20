@@ -647,6 +647,6 @@ describe("dispatcher basics", () => {
     });
     const props = (readFileDef.parameters as { properties: Record<string, unknown> }).properties;
     expect(props.path).toMatchObject({ type: "string" });
-    expect(props.offset).toMatchObject({ type: "number" });
+    expect(props.offset).toMatchObject({ type: "integer", minimum: 1 });
   });
 });

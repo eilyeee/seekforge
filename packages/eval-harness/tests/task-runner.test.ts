@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentEvent } from "@seekforge/shared";
 import type { AgentCoreDeps } from "@seekforge/core";
-import { evaluateCheck, runTask } from "../src/task-runner.js";
+import { evaluateCheck, runCheckCommand, runTask } from "../src/task-runner.js";
 import { FAKE_USAGE, completedEvents, fakeAgent, makeTask, makeTempFixture, type TempFixture } from "./helpers.js";
 
 let fixtures: TempFixture[] = [];
@@ -47,6 +47,18 @@ describe("evaluateCheck", () => {
     expect(missing.passed).toBe(false);
   });
 
+  it("rejects symlink-backed file assertions instead of allowing false passes", async () => {
+    if (process.platform === "win32") return;
+    const fx = fileChecks();
+    symlinkSync("/dev/null", join(fx.dir, "empty-link"));
+    const result = await evaluateCheck(
+      { type: "file_not_contains", path: "empty-link", pattern: "must-not-exist" },
+      { dir: fx.dir, answer: "" },
+    );
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain("unsafe");
+  });
+
   it("command_succeeds reflects the exit code and honors cwd", async () => {
     const fx = fileChecks();
     const ctx = { dir: fx.dir, answer: "" };
@@ -57,6 +69,25 @@ describe("evaluateCheck", () => {
     expect(fail.detail).toContain("exit 3");
     const inSub = await evaluateCheck({ type: "command_succeeds", command: "test -f marker", cwd: "sub" }, ctx);
     expect(inSub.passed).toBe(true);
+  });
+
+  it("owns and times out the complete check-command process group", async () => {
+    if (process.platform === "win32") return;
+    const fx = fileChecks();
+    const startedAt = Date.now();
+    await expect(runCheckCommand("sleep 5 & wait", fx.dir, 25)).rejects.toThrow(/timed out/);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("rejects a symlink-backed command cwd", async () => {
+    if (process.platform === "win32") return;
+    const fx = fileChecks();
+    symlinkSync("/tmp", join(fx.dir, "outside"));
+    const result = await evaluateCheck(
+      { type: "command_succeeds", command: "true", cwd: "outside" },
+      { dir: fx.dir, answer: "" },
+    );
+    expect(result.passed).toBe(false);
   });
 
   it("answer_matches tests the final answer against the regex", async () => {
@@ -188,6 +219,22 @@ describe("runTask", () => {
     });
     expect(thrown.success).toBe(false);
     expect(thrown.error).toBe("transport closed");
+  });
+
+  it("records cleanup failures instead of rejecting the whole eval run", async () => {
+    const fx = fixture({ "file.txt": "ok" });
+    const createBaseAgent = fakeAgent(() => completedEvents());
+    const result = await runTask(makeTask(), {
+      fixturesDir: fx.fixturesDir,
+      createAgent: async () => ({
+        ...(await createBaseAgent()),
+        dispose: () => {
+          throw new Error("runtime dispose failed");
+        },
+      }),
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("agent cleanup failed: runtime dispose failed");
   });
 
   it("records missing terminal events as session errors", async () => {

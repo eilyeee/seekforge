@@ -121,6 +121,7 @@ beforeAll(async () => {
       reasoningEffort: "max",
       mcpServers: {
         fake: { command: process.execPath, args: [mcpFixture.serverPath], trusted: true },
+        untrusted: { command: process.execPath, args: [mcpFixture.serverPath], trusted: false },
         broken: { command: "/definitely/not/a/real/binary", trusted: true },
       },
     }),
@@ -394,6 +395,12 @@ describe("GET /api/mcp/prompts", () => {
     const res = await post("/api/mcp/prompts/fake/greet", { arguments: { who: "Ada" } });
     expect(res.status).toBe(200);
     expect(await jsonOf(res)).toEqual({ text: "user: Hello Ada" });
+  });
+
+  it("does not start an untrusted MCP server for prompt resolution", async () => {
+    const res = await post("/api/mcp/prompts/untrusted/greet", { arguments: { who: "Ada" } });
+    expect(res.status).toBe(403);
+    expect((await jsonOf(res)).error.code).toBe("forbidden");
   });
 
   it.each([42, [], { arguments: [] }, { arguments: { who: 42 } }])(

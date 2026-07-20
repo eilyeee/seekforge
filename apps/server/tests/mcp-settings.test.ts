@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acquireSessionLease } from "@seekforge/core";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
 
@@ -43,6 +44,24 @@ afterAll(async () => {
 });
 
 describe("MCP settings scopes and secret preservation", () => {
+  it("returns 409 while the global settings lease is owned elsewhere", async () => {
+    const lease = acquireSessionLease(home, "coord-server-global-config");
+    try {
+      const mcp = await save({ name: "blocked-global", scope: "global", command: "node" });
+      expect(mcp.status).toBe(409);
+      expect(((await mcp.json()) as { error: { code: string } }).error.code).toBe("session_busy");
+
+      const config = await request("/api/config", {
+        method: "PUT",
+        body: JSON.stringify({ key: "sandbox", value: "off", global: true }),
+      });
+      expect(config.status).toBe(409);
+      expect(((await config.json()) as { error: { code: string } }).error.code).toBe("session_busy");
+    } finally {
+      lease.release();
+    }
+  });
+
   it("reads, writes, shadows, and deletes the requested config layer", async () => {
     const global = await save({
       name: "shared",

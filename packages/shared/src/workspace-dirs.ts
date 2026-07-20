@@ -14,10 +14,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readVerifiedFileBounded } from "./bounded-file-read.js";
 import { isSensitiveBasename, isSensitiveRelPath } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
+const MAX_PER_FILE_BYTES = MAX_PER_FILE_CHARS * 4;
 
 /** True when `child` is `parent` or nested anywhere below it. */
 function isInside(child: string, parent: string): boolean {
@@ -87,14 +89,15 @@ export function expandExtraFileRefs(task: string, dirs: readonly string[]): stri
         if (!isInside(physical, root.physical)) continue;
         if (
           isSensitiveBasename(path.basename(physical)) ||
-          isSensitiveRelPath(path.relative(root.physical, physical)) ||
-          !fs.statSync(physical).isFile()
+          isSensitiveRelPath(path.relative(root.physical, physical))
         ) {
           continue;
         }
-        let content = fs.readFileSync(physical, "utf8");
-        if (content.includes("\0")) break; // binary
-        if (content.length > MAX_PER_FILE_CHARS) {
+        const data = readVerifiedFileBounded(root.physical, physical, MAX_PER_FILE_BYTES);
+        if (data.includes(0)) break; // binary
+        let content = data.toString("utf8");
+        const truncated = content.length > MAX_PER_FILE_CHARS || data.length === MAX_PER_FILE_BYTES;
+        if (truncated) {
           content = `${content.slice(0, MAX_PER_FILE_CHARS)}\n…[truncated]`;
         }
         if (total + content.length > MAX_TOTAL_CHARS) return appendSections(task, sections);

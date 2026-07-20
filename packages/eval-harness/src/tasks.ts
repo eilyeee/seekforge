@@ -125,6 +125,14 @@ function requireString(obj: Record<string, unknown>, key: string, where: string)
   return value;
 }
 
+function requireTaskId(obj: Record<string, unknown>, where: string): string {
+  const id = requireString(obj, "id", where);
+  if (id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
+    throw new Error(`${where}: "id" must be 1-128 portable identifier characters (letters, digits, ., _, -)`);
+  }
+  return id;
+}
+
 function requireRelativePath(obj: Record<string, unknown>, key: string, where: string): string {
   const value = requireString(obj, key, where);
   // Task data is portable: reject Windows and POSIX escape forms regardless of
@@ -366,7 +374,7 @@ export function validateTask(value: unknown, where: string): TaskDef {
     throw new Error(`${where}: "runner" must be agent, loop, or session_scenario`);
   }
   const task: TaskDef = {
-    id: requireString(value, "id", where),
+    id: requireTaskId(value, where),
     title: requireString(value, "title", where),
     fixture: requireRelativePath(value, "fixture", where),
     mode,

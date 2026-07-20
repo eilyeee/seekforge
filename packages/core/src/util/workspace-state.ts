@@ -8,6 +8,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -18,6 +19,32 @@ import { writeAllSync } from "./fs.js";
 
 function sameIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+export class WorkspaceStateTooLargeError extends Error {
+  readonly code = "EFBIG";
+
+  constructor(
+    readonly relPath: string,
+    readonly limit: number,
+  ) {
+    super(`workspace state file exceeds ${limit} bytes: ${relPath}`);
+    this.name = "WorkspaceStateTooLargeError";
+  }
+}
+
+function readUtf8Bounded(fd: number, relPath: string, limit: number): string {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, limit - total + 1));
+    const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+    if (total > limit) throw new WorkspaceStateTooLargeError(relPath, limit);
+    chunks.push(chunk.subarray(0, bytesRead));
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 function stateTarget(workspace: string, relPath: string, createParents: boolean): string {
@@ -58,7 +85,10 @@ function stateTarget(workspace: string, relPath: string, createParents: boolean)
 }
 
 /** Reads a workspace-owned state file without following a leaf or parent symlink. */
-export function readWorkspaceStateFile(workspace: string, relPath: string): string | undefined {
+export function readWorkspaceStateFile(workspace: string, relPath: string, maxBytes?: number): string | undefined {
+  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) {
+    throw new RangeError(`workspace state byte limit must be a non-negative safe integer: ${maxBytes}`);
+  }
   let fd: number | undefined;
   try {
     const target = stateTarget(workspace, relPath, false);
@@ -66,6 +96,9 @@ export function readWorkspaceStateFile(workspace: string, relPath: string): stri
     const parentBefore = statSync(parent);
     fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
     const opened = fstatSync(fd);
+    if (maxBytes !== undefined && opened.size > maxBytes) {
+      throw new WorkspaceStateTooLargeError(relPath, maxBytes);
+    }
     const currentTarget = stateTarget(workspace, relPath, false);
     const parentAfter = statSync(parent);
     const current = statSync(currentTarget);
@@ -77,7 +110,7 @@ export function readWorkspaceStateFile(workspace: string, relPath: string): stri
     ) {
       throw new Error(`workspace state file changed during read: ${relPath}`);
     }
-    return readFileSync(fd, "utf8");
+    return maxBytes === undefined ? readFileSync(fd, "utf8") : readUtf8Bounded(fd, relPath, maxBytes);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

@@ -115,12 +115,14 @@ export type ServeStaticOptions = {
   pathname: string;
   port: number;
   workspace: string;
+  head?: boolean;
 };
 
 export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void {
   const notFound = () => {
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { code: "not_found", message: `not found: ${opts.pathname}` } }));
+    const data = Buffer.from(JSON.stringify({ error: { code: "not_found", message: `not found: ${opts.pathname}` } }));
+    res.writeHead(404, { "content-type": "application/json", "content-length": String(data.length) });
+    res.end(opts.head ? undefined : data);
   };
 
   if (!opts.root) {
@@ -130,8 +132,7 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
     }
     // Static pages are served without auth, so this page must NOT include
     // the token — `seekforge serve` prints the full token URL to the terminal.
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(
+    const data = Buffer.from(
       `<!doctype html><html><head><meta charset="utf-8"><title>SeekForge server</title></head><body>` +
         `<h1>SeekForge server</h1>` +
         `<p>Workspace: <code>${escapeHtml(opts.workspace)}</code></p>` +
@@ -140,6 +141,8 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
         `<p>Open the token URL printed by <code>seekforge serve</code> (port ${opts.port}).</p>` +
         `</body></html>`,
     );
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": String(data.length) });
+    res.end(opts.head ? undefined : data);
     return;
   }
 
@@ -166,6 +169,6 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
   }
 
   const type = CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
-  res.writeHead(200, { "content-type": type });
-  res.end(data);
+  res.writeHead(200, { "content-type": type, "content-length": String(data.length) });
+  res.end(opts.head ? undefined : data);
 }

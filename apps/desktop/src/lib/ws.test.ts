@@ -59,6 +59,34 @@ describe("createWsClient reconnect queue", () => {
     client.close();
   });
 
+  it("ignores late events from a replaced connection", () => {
+    const frames: unknown[] = [];
+    const states: string[] = [];
+    const client = createWsClient({
+      getToken: () => "",
+      onState: (state) => states.push(state),
+      onFrame: (frame) => frames.push(frame),
+    });
+    const original = FakeWebSocket.instances[0]!;
+    original.onclose?.();
+    vi.advanceTimersByTime(500);
+
+    const replacement = FakeWebSocket.instances[1]!;
+    replacement.readyState = FakeWebSocket.OPEN;
+    replacement.onopen?.();
+    const statesAfterReconnect = [...states];
+
+    original.onmessage?.({ data: JSON.stringify({ type: "idle" }) });
+    original.onerror?.();
+    original.onclose?.();
+
+    expect(frames).toEqual([]);
+    expect(states).toEqual(statesAfterReconnect);
+    expect(client.send({ type: "cancel" })).toBe(true);
+    expect(replacement.sent).toEqual([JSON.stringify({ type: "cancel" })]);
+    client.close();
+  });
+
   it("rejects frames above the server payload limit before sending", () => {
     const client = createWsClient({ getToken: () => "", onState: vi.fn(), onFrame: vi.fn() });
     const socket = FakeWebSocket.instances[0]!;

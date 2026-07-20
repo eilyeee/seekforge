@@ -144,6 +144,9 @@ describe("task validation", () => {
 
   it("rejects bad shapes", () => {
     expect(() => validateTask({ ...valid, id: "" }, "t")).toThrow(/"id"/);
+    for (const id of ["../escape", "bad/id", "bad\\id", "bad|id", `a${"x".repeat(128)}`]) {
+      expect(() => validateTask({ ...valid, id }, "t"), id).toThrow(/portable identifier/);
+    }
     expect(() => validateTask({ ...valid, mode: "chat" }, "t")).toThrow(/"mode"/);
     expect(() => validateTask({ ...valid, checks: [] }, "t")).toThrow(/"checks"/);
     expect(() => validateCheck({ type: "llm_judge", pattern: "x" }, "c")).toThrow(/unknown check type/);

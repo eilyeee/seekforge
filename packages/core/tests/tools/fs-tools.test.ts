@@ -165,6 +165,19 @@ describe("search_text (grep parity)", () => {
     expect(data.matches).toHaveLength(3);
     expect(data.truncated).toBe(true);
   });
+
+  it("rejects invalid context and result-count bounds", async () => {
+    const ws = setup();
+    for (const args of [
+      { pattern: "needle", contextLines: -1 },
+      { pattern: "needle", contextLines: 1.5 },
+      { pattern: "needle", maxMatches: 0 },
+      { pattern: "needle", maxMatches: 1.5 },
+    ]) {
+      const res = await dispatcher.execute(call("search_text", args), makeCtx(ws));
+      expect(res, JSON.stringify(args)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
+  });
 });
 
 describe("list_files", () => {
@@ -180,6 +193,14 @@ describe("list_files", () => {
     const data = res.data as { entries: string[] };
     expect(data.entries).toEqual(["README.md", "src/", "src/a.ts", "src/b.ts"]);
   });
+
+  it("rejects negative and fractional recursion depths", async () => {
+    const ws = makeWorkspace();
+    for (const maxDepth of [-1, 1.5]) {
+      const res = await dispatcher.execute(call("list_files", { maxDepth }), makeCtx(ws));
+      expect(res, String(maxDepth)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
+  });
 });
 
 describe("read_file", () => {
@@ -189,6 +210,28 @@ describe("read_file", () => {
     const res = await dispatcher.execute(call("read_file", { path: "f.txt", offset: 2, limit: 2 }), makeCtx(ws));
     expect(res.ok).toBe(true);
     expect((res.data as { content: string }).content).toBe("l2\nl3");
+  });
+
+  it("rejects invalid line-range indices", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "f.txt"), "l1\nl2\n");
+    for (const args of [
+      { path: "f.txt", offset: 0 },
+      { path: "f.txt", offset: 1.5 },
+      { path: "f.txt", limit: -1 },
+      { path: "f.txt", limit: 1.5 },
+    ]) {
+      const res = await dispatcher.execute(call("read_file", args), makeCtx(ws));
+      expect(res, JSON.stringify(args)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
+  });
+
+  it("rejects invalid repo-map sizing arguments before scanning", async () => {
+    const ws = makeWorkspace();
+    for (const args of [{ maxDepth: -1 }, { maxDepth: 1.5 }, { maxFiles: -1 }, { maxFiles: 1.5 }]) {
+      const res = await dispatcher.execute(call("repo_map", args), makeCtx(ws));
+      expect(res, JSON.stringify(args)).toMatchObject({ ok: false, error: { code: "invalid_args" } });
+    }
   });
 
   it("denies sensitive files", async () => {

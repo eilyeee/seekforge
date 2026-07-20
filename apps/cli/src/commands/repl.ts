@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline/promises";
 import {
   addMemoryFact,
@@ -24,6 +23,7 @@ import { statusCommand } from "./sessions.js";
 import { createRenderer, formatContextSuffix, formatUsage } from "../render.js";
 import { parseNumberedChoice } from "../input-selection.js";
 import { runShellCapture } from "../shell-capture.js";
+import { runInheritedCommand } from "../inherited-command.js";
 
 const HELP = t("repl.help");
 
@@ -226,7 +226,7 @@ export async function replCommand(opts: {
             console.log(`SeekForge — ${dim(t("repl.screenCleared"))}`);
             break;
           case "/diff":
-            spawn("git", ["diff"], { stdio: "inherit" });
+            await runInheritedCommand("git", ["diff"], projectPath);
             break;
           case "/status":
             statusCommand();

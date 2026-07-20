@@ -10,12 +10,14 @@
  * stay browser-safe for the desktop bundle).
  */
 
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { readVerifiedFileBounded } from "./bounded-file-read.js";
 import { isSensitiveBasename, isSensitiveRelPath } from "./index.js";
 
 const MAX_PER_FILE_CHARS = 30_000;
 const MAX_TOTAL_CHARS = 60_000;
+const MAX_PER_FILE_BYTES = MAX_PER_FILE_CHARS * 4;
 
 function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
@@ -49,12 +51,14 @@ export function expandFileRefs(task: string, workspace: string): string {
       const physical = realpathSync(abs);
       if (!isInside(physical, root)) continue;
       const physicalRel = relative(root, physical);
-      if (isSensitiveBasename(basename(physical)) || isSensitiveRelPath(physicalRel) || !statSync(physical).isFile()) {
+      if (isSensitiveBasename(basename(physical)) || isSensitiveRelPath(physicalRel)) {
         continue;
       }
-      let content = readFileSync(physical, "utf8");
-      if (content.includes("\0")) continue; // binary
-      if (content.length > MAX_PER_FILE_CHARS) {
+      const data = readVerifiedFileBounded(root, physical, MAX_PER_FILE_BYTES);
+      if (data.includes(0)) continue; // binary
+      let content = data.toString("utf8");
+      const truncated = content.length > MAX_PER_FILE_CHARS || data.length === MAX_PER_FILE_BYTES;
+      if (truncated) {
         content = `${content.slice(0, MAX_PER_FILE_CHARS)}\n…[truncated]`;
       }
       if (total + content.length > MAX_TOTAL_CHARS) break;

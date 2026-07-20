@@ -10,8 +10,20 @@ const repoMapSchema = z.object({
     .string()
     .optional()
     .describe("Subtree to map, relative to the workspace root (default '.'). Narrow it on huge repos."),
-  maxDepth: z.number().optional().describe("Directory-tree depth in the Structure section (default 3)."),
-  maxFiles: z.number().optional().describe("Max files given a symbol outline in the Files section (default 60)."),
+  maxDepth: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe("Directory-tree depth in the Structure section (0-100, default 3)."),
+  maxFiles: z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe("Max files given a symbol outline in the Files section (1-1000, default 60)."),
 });
 
 const repoMap = defineTool({

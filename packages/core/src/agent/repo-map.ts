@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { taskKeywords, taskPathTokens } from "../memory/brief.js";
 import { DEFAULT_IGNORE_DIRS } from "../tools/sandbox.js";
+import { readWorkspaceStateFile } from "../util/workspace-state.js";
 
 /**
  * Repo map: a compact, token-budgeted structural overview of a (possibly large)
@@ -62,11 +63,26 @@ function isCode(name: string): boolean {
   return dot >= 0 && CODE_EXTS.has(name.slice(dot + 1).toLowerCase());
 }
 
-/** Resolve a subtree path under root; null if it escapes the root (no traversal). */
-function resolveSubtree(root: string, sub: string): string | null {
-  const base = path.resolve(root);
-  const start = path.resolve(base, sub);
-  return start === base || start.startsWith(base + path.sep) ? start : null;
+type ResolvedSubtree = { root: string; start: string };
+
+/** Resolve a subtree path under root; null if its lexical or physical path escapes. */
+function resolveSubtree(root: string, sub: string): ResolvedSubtree | null {
+  let base: string;
+  try {
+    base = fs.realpathSync(root);
+  } catch {
+    return null;
+  }
+  const candidate = path.resolve(base, sub);
+  if (candidate !== base && !candidate.startsWith(base + path.sep)) return null;
+  try {
+    const start = fs.realpathSync(candidate);
+    if (start !== base && !start.startsWith(base + path.sep)) return null;
+    return { root: base, start };
+  } catch {
+    // Missing and unreadable subtrees preserve the previous empty-map behavior.
+    return { root: base, start: candidate };
+  }
 }
 
 /** Walk a directory collecting code files (rel to root) and per-dir counts. */
@@ -238,18 +254,22 @@ export function extractSymbols(rel: string, content: string): string {
   return resolveOutline(rel, content);
 }
 
-function outlineFor(abs: string, rel: string, size: number, cached?: FileGraphFileInfo): string {
+function readCodeFile(root: string, rel: string): string | undefined {
+  try {
+    return readWorkspaceStateFile(root, rel, MAX_READ_BYTES);
+  } catch {
+    return undefined;
+  }
+}
+
+function outlineFor(root: string, rel: string, size: number, cached?: FileGraphFileInfo): string {
   if (size > MAX_READ_BYTES) return `(${Math.round(size / 1024)}KB)`;
   // Reuse the outline + line count captured during a graph build (same
   // content, same backends) instead of re-reading the file. Only files the
   // graph actually read are cached; everything else falls through to a read.
   if (cached) return `${cached.outline}${cached.outline ? "  " : ""}(${cached.lines} ln)`.trim();
-  let content: string;
-  try {
-    content = fs.readFileSync(abs, "utf8");
-  } catch {
-    return "";
-  }
+  const content = readCodeFile(root, rel);
+  if (content === undefined) return "";
   const lines = content.split("\n").length;
   const sym = extractSymbols(rel, content);
   return `${sym}${sym ? "  " : ""}(${lines} ln)`.trim();
@@ -343,12 +363,8 @@ export function buildFileGraph(root: string, files: CodeFile[]): FileGraph {
   for (const f of capped) {
     nodes.push(f.rel);
     if (f.size > MAX_READ_BYTES) continue;
-    let content: string;
-    try {
-      content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
-    } catch {
-      continue;
-    }
+    const content = readCodeFile(root, f.rel);
+    if (content === undefined) continue;
     // The outline is computed here anyway (for definitions); capture it plus
     // the line count so buildRepoOverview/buildRelevantFiles don't re-read.
     const outline = extractSymbols(f.rel, content);
@@ -458,10 +474,10 @@ export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxDepth = opts.maxDepth ?? 3;
   const maxFiles = opts.maxFiles ?? 60;
-  const start = resolveSubtree(root, sub);
-  if (start === null) return `Repo map: "${sub}" is outside the workspace.`;
-  const { files, dirCounts } = walk(root, start);
-  return formatRepoMap(root, sub, files, dirCounts, maxDepth, maxFiles);
+  const resolved = resolveSubtree(root, sub);
+  if (resolved === null) return `Repo map: "${sub}" is outside the workspace.`;
+  const { files, dirCounts } = walk(resolved.root, resolved.start);
+  return formatRepoMap(resolved.root, sub, files, dirCounts, maxDepth, maxFiles);
 }
 
 /** A single tree scan, shareable across the prompt-injection builders below. */
@@ -604,7 +620,8 @@ export function buildRelevantFiles(
         outline = cached.outline;
       } else {
         try {
-          const content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
+          const content = readCodeFile(root, f.rel);
+          if (content === undefined) throw new Error("unreadable code file");
           outline = extractSymbols(f.rel, content);
         } catch {
           // Unreadable -> keep the path-only score (outline stays "").
@@ -667,7 +684,7 @@ function formatRepoMap(
       )
     : [...files].sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel));
   for (const f of sorted.slice(0, maxFiles)) {
-    const outline = outlineFor(path.resolve(root, f.rel), f.rel, f.size, info?.get(f.rel));
+    const outline = outlineFor(root, f.rel, f.size, info?.get(f.rel));
     out.push(`${f.rel}${outline ? `  ${outline}` : ""}`);
   }
   if (sorted.length > maxFiles) {
@@ -693,19 +710,15 @@ export function findDefinitions(
   if (!/^[\p{L}\p{N}_$]+$/u.test(symbol)) return [];
   const sub = opts.path && opts.path !== "." ? opts.path : ".";
   const maxResults = opts.maxResults ?? 50;
-  const start = resolveSubtree(root, sub);
-  if (start === null) return [];
-  const { files } = walk(root, start);
+  const resolved = resolveSubtree(root, sub);
+  if (resolved === null) return [];
+  const { files } = walk(resolved.root, resolved.start);
   const results: Definition[] = [];
   for (const f of files) {
     if (results.length >= maxResults) break;
     if (f.size > MAX_READ_BYTES) continue;
-    let content: string;
-    try {
-      content = fs.readFileSync(path.resolve(root, f.rel), "utf8");
-    } catch {
-      continue;
-    }
+    const content = readCodeFile(resolved.root, f.rel);
+    if (content === undefined) continue;
     for (const d of resolveDefinitions(f.rel, content, symbol)) {
       if (results.length >= maxResults) break;
       results.push({ file: f.rel, line: d.line, text: d.text });

@@ -239,14 +239,21 @@ export function createDeepSeekProvider(config: ProviderConfig): ChatProvider {
         }
         streamBytes += value.byteLength;
         feedSseChunk(acc, decoder.decode(value, { stream: true }), onDelta, onReasoningDelta);
+        if (acc.done) {
+          // [DONE] is the protocol terminator. Do not wait for a peer that keeps
+          // the transport open, and do not accept trailing bytes as deltas.
+          await reader.cancel().catch(() => {});
+          break;
+        }
       }
       feedSseChunk(acc, decoder.decode(), onDelta, onReasoningDelta);
-      reader.releaseLock();
     } catch (err) {
       // A stall (or any read error) leaves a pending read — cancel to settle it
       // and tear down the connection, then propagate.
       await reader.cancel().catch(() => {});
       throw err;
+    } finally {
+      reader.releaseLock();
     }
     const result = finalizeSse(acc);
     if (!acc.done) {

@@ -9,8 +9,11 @@ import {
   readFactMeta,
   readProjectMemory,
   recordFactUse,
+  projectMemoryPath,
   type MemoryCandidate,
 } from "../../src/memory/index.js";
+import { MAX_MEMORY_DOCUMENT_BYTES, MemoryStateCorruptError } from "../../src/memory/store.js";
+import { WorkspaceStateTooLargeError } from "../../src/util/workspace-state.js";
 import { makeWorkspace, writeProjectMemory } from "./helpers.js";
 
 const fact = (content: string, type: MemoryCandidate["type"] = "convention"): MemoryCandidate => ({
@@ -50,6 +53,29 @@ describe("memory fact lifecycle (P2)", () => {
     }
   });
 
+  it("fails closed without replacing an oversized project memory file", () => {
+    const ws = makeWorkspace();
+    const file = projectMemoryPath(ws);
+    fs.mkdirSync(join(ws, ".seekforge", "memory"), { recursive: true });
+    fs.writeFileSync(file, "sentinel");
+    fs.truncateSync(file, MAX_MEMORY_DOCUMENT_BYTES + 1);
+    const before = fs.statSync(file);
+
+    expect(() => appendProjectFact(ws, fact("bounded replacement"))).toThrow(WorkspaceStateTooLargeError);
+    expect(() => compactProjectMemory(ws)).toThrow(WorkspaceStateTooLargeError);
+
+    const after = fs.statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    const fd = fs.openSync(file, "r");
+    try {
+      const prefix = Buffer.alloc(8);
+      expect(fs.readSync(fd, prefix, 0, prefix.length, 0)).toBe(8);
+      expect(prefix.toString()).toBe("sentinel");
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+
   it("recordFactUse bumps uses + lastUsedAt for every fact in an injected brief", () => {
     const ws = makeWorkspace();
     appendProjectFact(ws, fact("login validation lives in src/auth.ts"));
@@ -86,6 +112,20 @@ describe("memory fact lifecycle (P2)", () => {
     expect(readFactMeta(ws)).toEqual({
       valid: { addedAt: timestamp, uses: 1, exposures: 2, retrievals: 3, lastUsedAt: timestamp },
     });
+  });
+
+  it("preserves corrupt fact metadata when a counter mutation is attempted", () => {
+    const ws = makeWorkspace();
+    const file = factMetaPath(ws);
+    fs.mkdirSync(join(ws, ".seekforge", "memory"), { recursive: true });
+    fs.writeFileSync(file, '{"truncated":');
+    const before = fs.statSync(file);
+
+    expect(() => recordFactUse(ws, "- [tech] must not overwrite metadata")).toThrow(MemoryStateCorruptError);
+
+    const after = fs.statSync(file);
+    expect({ ino: after.ino, size: after.size }).toEqual({ ino: before.ino, size: before.size });
+    expect(fs.readFileSync(file, "utf8")).toBe('{"truncated":');
   });
 
   it("keeps fact counters within the non-negative safe-integer range", () => {

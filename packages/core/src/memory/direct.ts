@@ -13,7 +13,7 @@ import {
   appendCandidates,
   appendGlobalFact,
   appendProjectFact,
-  readCandidates,
+  readCandidatesForMutation,
   readRawProjectMemory,
   reconcileFactMeta,
   withMemoryTransaction,
@@ -150,7 +150,7 @@ export function removeProjectFact(workspace: string, selector: ProjectFactSelect
  */
 export function removeCandidate(workspace: string, id: string): MemoryCandidate {
   return withMemoryTransaction(workspace, () => {
-    const candidates = readCandidates(workspace);
+    const candidates = readCandidatesForMutation(workspace);
     const target = candidates.find((c) => c.id === id);
     if (!target) throw new Error(`candidate not found: ${id}`);
     writeCandidates(
