@@ -367,11 +367,15 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
 
   const path = join(global ? homedir() : workspace, ".seekforge", "config.json");
   let current: Record<string, unknown> = {};
+  // A malformed existing config must NOT be silently overwritten from empty —
+  // that would discard every other key the user had (and a non-atomic partial
+  // write could itself produce the malformed state, compounding the loss).
+  // Refuse and let the user fix or remove the file.
   if (global && existsSync(path)) {
     try {
       current = parseConfigDoc(readFileSync(path, "utf8"));
     } catch {
-      // invalid JSON: rewrite from scratch (same behaviour as the CLI)
+      throw new ConfigValueError(`refusing to overwrite malformed ${path} — fix or delete it first`);
     }
   } else if (!global) {
     try {
@@ -379,16 +383,41 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
       if (raw !== undefined) current = parseConfigDoc(raw);
     } catch (err) {
       if (err instanceof ProjectPathError) throw err;
-      // invalid JSON: rewrite from scratch (same behaviour as the CLI)
+      throw new ConfigValueError("refusing to overwrite malformed .seekforge/config.json — fix or delete it first");
     }
   }
   if (stored === undefined) delete current[key];
   else current[key] = stored;
   const serialized = `${JSON.stringify(current, null, 2)}\n`;
   if (global) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, serialized, { mode: 0o600 });
+    writeGlobalConfigAtomic(path, serialized);
   } else {
     writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
+  }
+}
+
+/** Atomic + fsync write for the global (~/.seekforge) config, with symlink guard. */
+function writeGlobalConfigAtomic(path: string, serialized: string): void {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw new ConfigValueError("global config must not be a symbolic link");
+  }
+  const temp = join(dir, `.config.${randomBytes(12).toString("hex")}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temp, "wx", 0o600);
+    writeFileSync(fd, serialized, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temp, path);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(temp);
+    } catch {
+      // rename consumed the temp file, or creation failed
+    }
   }
 }
