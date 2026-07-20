@@ -93,13 +93,22 @@ export function estimateToolDefinitionsTokens(tools: ToolDefinitionForModel[] | 
   return total;
 }
 
+// Tool definitions are immutable for the whole run, yet their token cost is
+// re-estimated several times per turn (budget selection, request estimation,
+// again after selection). JSON.stringify-ing every tool's schema each time is
+// pure waste with large MCP catalogs — cache per tool object, same as messages.
+const toolTokensCache = new WeakMap<ToolDefinitionForModel, number>();
+
 function estimateToolDefinitionTokens(tool: ToolDefinitionForModel): number {
-  return (
+  const cached = toolTokensCache.get(tool);
+  if (cached !== undefined) return cached;
+  const total =
     PER_MESSAGE_OVERHEAD +
     estimateTokens(tool.name) +
     estimateTokens(tool.description) +
-    estimateTokens(JSON.stringify(tool.parameters))
-  );
+    estimateTokens(JSON.stringify(tool.parameters));
+  toolTokensCache.set(tool, total);
+  return total;
 }
 
 const ESSENTIAL_TOOL_NAMES = new Set([
