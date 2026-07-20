@@ -351,7 +351,12 @@ impl BoundedOutput {
             self.tail.drain(..drop);
         }
         let mut out = String::from_utf8_lossy(&self.head).into_owned();
-        out.push_str("\n…[output truncated]…\n");
+        // Same ASCII marker family as truncate_head_tail / TS text.ts (which use
+        // "\n... [truncated N chars] ...\n"); streaming can't cheaply produce the
+        // exact omitted count, so this variant omits it — but the marker style no
+        // longer diverges (it used a unicode-ellipsis form a consumer parsing the
+        // ASCII marker would miss).
+        out.push_str("\n... [output truncated] ...\n");
         out.push_str(&String::from_utf8_lossy(&self.tail));
         out
     }
