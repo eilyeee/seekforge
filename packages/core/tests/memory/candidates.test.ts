@@ -36,6 +36,27 @@ describe("listMemoryCandidates", () => {
     const list = listMemoryCandidates(ws);
     expect(list.map((c) => c.id)).toEqual(["mc-s1-2", "mc-s1-1"]);
   });
+
+  it("skips records with invalid numeric, timestamp, or bounded string fields", () => {
+    const ws = makeWorkspace();
+    const valid = makeCandidate({ id: "valid" });
+    const invalid = [
+      makeCandidate({ id: "" }),
+      makeCandidate({ id: "x".repeat(257) }),
+      makeCandidate({ id: "line\nbreak" }),
+      makeCandidate({ id: "empty-content", content: "" }),
+      makeCandidate({ id: "oversized-content", content: "x".repeat(16 * 1024 + 1) }),
+      makeCandidate({ id: "negative-confidence", confidence: -0.1 }),
+      makeCandidate({ id: "high-confidence", confidence: 1.1 }),
+      makeCandidate({ id: "empty-source", sourceSessionId: "" }),
+      makeCandidate({ id: "control-source", sourceSessionId: "bad\0source" }),
+      makeCandidate({ id: "bad-date", createdAt: "not-a-date" }),
+      makeCandidate({ id: "noncanonical-date", createdAt: "2026-06-10T08:00:00+08:00" }),
+    ];
+    seed(ws, [valid, ...invalid, JSON.stringify(valid).replace('"confidence":0.9', '"confidence":1e999')]);
+
+    expect(listMemoryCandidates(ws)).toEqual([valid]);
+  });
 });
 
 describe("approveMemoryCandidate", () => {

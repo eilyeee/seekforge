@@ -18,6 +18,7 @@ import {
   readCandidates,
   readProjectMemory,
   sessionSummaryPath,
+  withMemoryTransaction,
   type MemoryCandidate,
   type MemoryCandidateType,
 } from "./store.js";
@@ -296,43 +297,45 @@ export async function extractMemoryFromSession(
   if (!parsed) return degrade(input, usage);
 
   try {
-    const existing = readCandidates(input.workspace);
-    const knownContents = new Set(existing.map((c) => c.content));
-    const projectMemory = readProjectMemory(input.workspace) ?? "";
-    const sessionOffset = existing.filter((c) => c.sourceSessionId === input.sessionId).length;
+    return withMemoryTransaction(input.workspace, () => {
+      const existing = readCandidates(input.workspace);
+      const knownContents = new Set(existing.map((c) => c.content));
+      const projectMemory = readProjectMemory(input.workspace) ?? "";
+      const sessionOffset = existing.filter((c) => c.sourceSessionId === input.sessionId).length;
 
-    const createdAt = new Date().toISOString();
-    // Opt-in auto-approval (default off): a finite, in-range threshold enables it.
-    const threshold = input.autoApproveConfidence;
-    const autoApproveEnabled =
-      typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
+      const createdAt = new Date().toISOString();
+      // Opt-in auto-approval (default off): a finite, in-range threshold enables it.
+      const threshold = input.autoApproveConfidence;
+      const autoApproveEnabled =
+        typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
 
-    const candidates: MemoryCandidate[] = [];
-    for (const fact of parsed.facts) {
-      if (INJECTION_PATTERN.test(fact.content)) continue;
-      if (knownContents.has(fact.content)) continue;
-      if (projectMemory.includes(fact.content)) continue;
-      if (candidates.some((c) => c.content === fact.content)) continue;
-      const autoApprove = autoApproveEnabled && fact.confidence >= (threshold as number);
-      const candidate: MemoryCandidate = {
-        id: `mc-${input.sessionId}-${sessionOffset + candidates.length + 1}`,
-        content: fact.content,
-        type: fact.type,
-        confidence: fact.confidence,
-        sourceSessionId: input.sessionId,
-        createdAt,
-        status: autoApprove ? "approved" : "pending",
-      };
-      // High-confidence facts go straight to project.md (records fact-meta);
-      // low-confidence ones stay pending for review. Both are audited in
-      // candidates.jsonl with their resolved status.
-      if (autoApprove) appendProjectFact(input.workspace, candidate);
-      candidates.push(candidate);
-    }
+      const candidates: MemoryCandidate[] = [];
+      for (const fact of parsed.facts) {
+        if (INJECTION_PATTERN.test(fact.content)) continue;
+        if (knownContents.has(fact.content)) continue;
+        if (projectMemory.includes(fact.content)) continue;
+        if (candidates.some((c) => c.content === fact.content)) continue;
+        const autoApprove = autoApproveEnabled && fact.confidence >= (threshold as number);
+        const candidate: MemoryCandidate = {
+          id: `mc-${input.sessionId}-${sessionOffset + candidates.length + 1}`,
+          content: fact.content,
+          type: fact.type,
+          confidence: fact.confidence,
+          sourceSessionId: input.sessionId,
+          createdAt,
+          status: autoApprove ? "approved" : "pending",
+        };
+        // High-confidence facts go straight to project.md (records fact-meta);
+        // low-confidence ones stay pending for review. Both are audited in
+        // candidates.jsonl with their resolved status.
+        if (autoApprove) appendProjectFact(input.workspace, candidate);
+        candidates.push(candidate);
+      }
 
-    appendCandidates(input.workspace, candidates);
-    writeSummary(input, parsed.summary);
-    return { summaryMarkdown: parsed.summary, candidates, ...(usage ? { usage } : {}) };
+      appendCandidates(input.workspace, candidates);
+      writeSummary(input, parsed.summary);
+      return { summaryMarkdown: parsed.summary, candidates, ...(usage ? { usage } : {}) };
+    });
   } catch {
     return degrade(input, usage);
   }

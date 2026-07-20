@@ -17,6 +17,7 @@ import {
   readCandidates,
   readRawProjectMemory,
   reconcileFactMeta,
+  withMemoryTransaction,
   writeCandidates,
   type MemoryCandidate,
   type MemoryCandidateType,
@@ -47,7 +48,7 @@ export type ProjectFact = {
 
 export type ProjectFactSelector = { index: number } | { match: string };
 
-function nextUserFactId(_existing: MemoryCandidate[]): string {
+function nextUserFactId(): string {
   return `mc-user-${randomUUID()}`;
 }
 
@@ -68,7 +69,7 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
   // not tracked in the per-project candidate queue.
   const approve = scope === "user" ? true : (options.approve ?? true);
   const candidate: MemoryCandidate = {
-    id: nextUserFactId(readCandidates(workspace)),
+    id: nextUserFactId(),
     content,
     type: options.type ?? "convention",
     confidence: 1, // User-stated, not model-assessed.
@@ -80,11 +81,13 @@ export function addMemoryFact(workspace: string, options: AddMemoryFactOptions):
     appendGlobalFact(candidate); // Dedupes identical lines.
     return candidate;
   }
-  if (approve)
-    appendProjectFact(workspace, candidate); // Dedupes identical lines.
-  else candidate.status = "pending";
-  appendCandidates(workspace, [candidate]);
-  return candidate;
+  return withMemoryTransaction(workspace, () => {
+    if (approve)
+      appendProjectFact(workspace, candidate); // Dedupes identical lines.
+    else candidate.status = "pending";
+    appendCandidates(workspace, [candidate]);
+    return candidate;
+  });
 }
 
 type ParsedFact = ProjectFact & { lineNo: number };
@@ -115,29 +118,31 @@ export function listProjectFacts(workspace: string): ProjectFact[] {
  * lines, other bullets) is preserved. Returns the removed line.
  */
 export function removeProjectFact(workspace: string, selector: ProjectFactSelector): string {
-  const { raw, facts } = parseProjectFacts(workspace);
-  let target: ParsedFact;
-  if ("index" in selector) {
-    const found = facts.find((f) => f.index === selector.index);
-    if (!found) throw new Error(`no fact at index ${selector.index} (have ${facts.length})`);
-    target = found;
-  } else {
-    const matches = facts.filter((f) => f.line.includes(selector.match));
-    if (matches.length === 0) throw new Error(`no fact matches: ${selector.match}`);
-    if (matches.length > 1) {
-      const indexes = matches.map((f) => f.index).join(", ");
-      throw new Error(`multiple facts match "${selector.match}" (indexes ${indexes}); remove by index`);
+  return withMemoryTransaction(workspace, () => {
+    const { raw, facts } = parseProjectFacts(workspace);
+    let target: ParsedFact;
+    if ("index" in selector) {
+      const found = facts.find((f) => f.index === selector.index);
+      if (!found) throw new Error(`no fact at index ${selector.index} (have ${facts.length})`);
+      target = found;
+    } else {
+      const matches = facts.filter((f) => f.line.includes(selector.match));
+      if (matches.length === 0) throw new Error(`no fact matches: ${selector.match}`);
+      if (matches.length > 1) {
+        const indexes = matches.map((f) => f.index).join(", ");
+        throw new Error(`multiple facts match "${selector.match}" (indexes ${indexes}); remove by index`);
+      }
+      target = matches[0] as ParsedFact;
     }
-    target = matches[0] as ParsedFact;
-  }
-  const lines = raw.split("\n");
-  lines.splice(target.lineNo, 1);
-  const content = lines.join("\n");
-  writeFileAtomic(projectMemoryPath(workspace), content);
-  // Drop the removed fact's sidecar meta so a later re-add starts fresh instead
-  // of resurrecting stale addedAt/uses (which pruneUnused could then misjudge).
-  reconcileFactMeta(workspace, content);
-  return target.line;
+    const lines = raw.split("\n");
+    lines.splice(target.lineNo, 1);
+    const content = lines.join("\n");
+    writeFileAtomic(projectMemoryPath(workspace), content);
+    // Drop the removed fact's sidecar meta so a later re-add starts fresh instead
+    // of resurrecting stale addedAt/uses (which pruneUnused could then misjudge).
+    reconcileFactMeta(workspace, content);
+    return target.line;
+  });
 }
 
 /**
@@ -145,12 +150,14 @@ export function removeProjectFact(workspace: string, selector: ProjectFactSelect
  * with status "rejected"). Unknown id throws. Returns the removed candidate.
  */
 export function removeCandidate(workspace: string, id: string): MemoryCandidate {
-  const candidates = readCandidates(workspace);
-  const target = candidates.find((c) => c.id === id);
-  if (!target) throw new Error(`candidate not found: ${id}`);
-  writeCandidates(
-    workspace,
-    candidates.filter((c) => c.id !== id),
-  );
-  return target;
+  return withMemoryTransaction(workspace, () => {
+    const candidates = readCandidates(workspace);
+    const target = candidates.find((c) => c.id === id);
+    if (!target) throw new Error(`candidate not found: ${id}`);
+    writeCandidates(
+      workspace,
+      candidates.filter((c) => c.id !== id),
+    );
+    return target;
+  });
 }

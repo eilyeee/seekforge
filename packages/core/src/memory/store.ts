@@ -10,6 +10,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { readFileIfExists, writeFileAtomic } from "../util/fs.js";
 import { resolveForWrite } from "../tools/sandbox.js";
+import { withMemoryTransaction } from "./lease.js";
+
+export { withMemoryTransaction } from "./lease.js";
 
 export type MemoryCandidateType = "command" | "path" | "convention" | "tech" | "task_pattern";
 
@@ -73,6 +76,50 @@ export type FactMeta = {
   lastUsedAt?: string;
 };
 
+const MAX_CANDIDATE_ID_CHARS = 256;
+const MAX_CANDIDATE_CONTENT_CHARS = 16 * 1024;
+const MAX_SOURCE_SESSION_ID_CHARS = 256;
+const MAX_TIMESTAMP_CHARS = 64;
+const MAX_FACT_META_KEY_CHARS = MAX_CANDIDATE_CONTENT_CHARS + 64;
+
+function isBoundedText(value: unknown, maxChars: number, allowFormatting = false): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxChars || value.trim() !== value)
+    return false;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code === 127 || (code <= 31 && !(allowFormatting && (code === 9 || code === 10 || code === 13)))) return false;
+  }
+  return true;
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_TIMESTAMP_CHARS) return false;
+  const epoch = Date.parse(value);
+  if (!Number.isFinite(epoch)) return false;
+  try {
+    return new Date(epoch).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isFactMeta(value: unknown): value is FactMeta {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const meta = value as Record<string, unknown>;
+  return (
+    isIsoTimestamp(meta.addedAt) &&
+    isNonNegativeSafeInteger(meta.uses) &&
+    (meta.exposures === undefined || isNonNegativeSafeInteger(meta.exposures)) &&
+    (meta.retrievals === undefined || isNonNegativeSafeInteger(meta.retrievals)) &&
+    (meta.lastExposedAt === undefined || isIsoTimestamp(meta.lastExposedAt)) &&
+    (meta.lastUsedAt === undefined || isIsoTimestamp(meta.lastUsedAt))
+  );
+}
+
 export function factMetaPath(workspace: string): string {
   return path.join(workspace, ".seekforge", "memory", "fact-meta.json");
 }
@@ -87,7 +134,13 @@ export function readFactMeta(workspace: string): Record<string, FactMeta> {
   if (!raw) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, FactMeta>) : {};
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const valid: Record<string, FactMeta> = Object.create(null) as Record<string, FactMeta>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!isBoundedText(key, MAX_FACT_META_KEY_CHARS) || !isFactMeta(value)) continue;
+      valid[key] = value;
+    }
+    return valid;
   } catch {
     return {};
   }
@@ -106,12 +159,14 @@ function writeFactMeta(workspace: string, meta: Record<string, FactMeta>): void 
 
 /** First-seen time for a freshly approved/added fact (no-op if already known). */
 export function recordFactAdded(workspace: string, bullet: string): void {
-  const key = bullet.replace(/^-\s*/, "").trim();
-  const meta = readFactMeta(workspace);
-  if (!meta[key]) {
-    meta[key] = { addedAt: new Date().toISOString(), uses: 0 };
-    writeFactMeta(workspace, meta);
-  }
+  withMemoryTransaction(workspace, () => {
+    const key = bullet.replace(/^-\s*/, "").trim();
+    const meta = readFactMeta(workspace);
+    if (!meta[key]) {
+      meta[key] = { addedAt: new Date().toISOString(), uses: 0 };
+      writeFactMeta(workspace, meta);
+    }
+  });
 }
 
 /**
@@ -121,23 +176,25 @@ export function recordFactAdded(workspace: string, bullet: string): void {
  */
 export function reconcileFactMeta(workspace: string, finalContent: string): void {
   try {
-    const meta = readFactMeta(workspace);
-    const keys = Object.keys(meta);
-    if (keys.length === 0) return;
-    const live = new Set<string>();
-    for (const line of finalContent.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("- ")) continue;
-      live.add(trimmed.replace(/^-\s*/, ""));
-    }
-    let changed = false;
-    for (const key of keys) {
-      if (!live.has(key)) {
-        delete meta[key];
-        changed = true;
+    withMemoryTransaction(workspace, () => {
+      const meta = readFactMeta(workspace);
+      const keys = Object.keys(meta);
+      if (keys.length === 0) return;
+      const live = new Set<string>();
+      for (const line of finalContent.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("- ")) continue;
+        live.add(trimmed.replace(/^-\s*/, ""));
       }
-    }
-    if (changed) writeFactMeta(workspace, meta);
+      let changed = false;
+      for (const key of keys) {
+        if (!live.has(key)) {
+          delete meta[key];
+          changed = true;
+        }
+      }
+      if (changed) writeFactMeta(workspace, meta);
+    });
   } catch {
     /* best-effort: never break compaction on a metadata reconcile failure */
   }
@@ -146,34 +203,30 @@ export function reconcileFactMeta(workspace: string, finalContent: string): void
 type FactActivity = "exposure" | "use" | "retrieval";
 
 function recordFactActivity(workspace: string, briefText: string, activity: FactActivity): void {
-  const now = new Date().toISOString();
-  const meta = readFactMeta(workspace);
-  let changed = false;
-  for (const line of briefText.split("\n")) {
-    const m = /^-\s*(\[[a-z_]+\].+)$/.exec(line.trim());
-    if (!m || m[1] === undefined) continue;
-    const key = m[1].trim();
-    // A hand-edited/corrupt fact-meta.json may hold a non-object (or a missing
-    // numeric `uses`) at this key; coerce rather than throw mid-run.
-    const prev = meta[key];
-    const entry: FactMeta = prev !== null && typeof prev === "object" ? prev : { addedAt: now, uses: 0 };
-    entry.uses = typeof entry.uses === "number" && Number.isFinite(entry.uses) ? entry.uses : 0;
-    if (activity === "exposure") {
-      entry.exposures =
-        (typeof entry.exposures === "number" && Number.isFinite(entry.exposures) ? entry.exposures : 0) + 1;
-      entry.lastExposedAt = now;
-    } else {
-      entry.uses += 1;
-      entry.lastUsedAt = now;
-      if (activity === "retrieval") {
-        entry.retrievals =
-          (typeof entry.retrievals === "number" && Number.isFinite(entry.retrievals) ? entry.retrievals : 0) + 1;
+  withMemoryTransaction(workspace, () => {
+    const now = new Date().toISOString();
+    const meta = readFactMeta(workspace);
+    let changed = false;
+    for (const line of briefText.split("\n")) {
+      const m = /^-\s*(\[[a-z_]+\].+)$/.exec(line.trim());
+      if (!m || m[1] === undefined) continue;
+      const key = m[1].trim();
+      const entry = meta[key] ?? { addedAt: now, uses: 0 };
+      if (activity === "exposure") {
+        entry.exposures = Math.min(Number.MAX_SAFE_INTEGER, (entry.exposures ?? 0) + 1);
+        entry.lastExposedAt = now;
+      } else {
+        entry.uses = Math.min(Number.MAX_SAFE_INTEGER, entry.uses + 1);
+        entry.lastUsedAt = now;
+        if (activity === "retrieval") {
+          entry.retrievals = Math.min(Number.MAX_SAFE_INTEGER, (entry.retrievals ?? 0) + 1);
+        }
       }
+      meta[key] = entry;
+      changed = true;
     }
-    meta[key] = entry;
-    changed = true;
-  }
-  if (changed) writeFactMeta(workspace, meta);
+    if (changed) writeFactMeta(workspace, meta);
+  });
 }
 
 /** Records passive prompt exposure without claiming the fact affected output. */
@@ -366,17 +419,24 @@ export function readGlobalMemory(): string | undefined {
 }
 
 function isCandidateRecord(value: unknown): value is MemoryCandidate {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const c = value as Record<string, unknown>;
   return (
-    typeof c.id === "string" &&
-    typeof c.content === "string" &&
+    isBoundedText(c.id, MAX_CANDIDATE_ID_CHARS) &&
+    isBoundedText(c.content, MAX_CANDIDATE_CONTENT_CHARS, true) &&
     MEMORY_CANDIDATE_TYPES.includes(c.type as MemoryCandidateType) &&
     typeof c.confidence === "number" &&
-    typeof c.sourceSessionId === "string" &&
-    typeof c.createdAt === "string" &&
+    Number.isFinite(c.confidence) &&
+    c.confidence >= 0 &&
+    c.confidence <= 1 &&
+    isBoundedText(c.sourceSessionId, MAX_SOURCE_SESSION_ID_CHARS) &&
+    isIsoTimestamp(c.createdAt) &&
     (c.status === "pending" || c.status === "approved" || c.status === "rejected")
   );
+}
+
+function assertCandidateRecord(value: unknown): asserts value is MemoryCandidate {
+  if (!isCandidateRecord(value)) throw new Error("invalid memory candidate");
 }
 
 /** Candidates in file (append) order; corrupt lines are skipped. */
@@ -404,18 +464,24 @@ export function listMemoryCandidates(workspace: string): MemoryCandidate[] {
 
 export function appendCandidates(workspace: string, candidates: MemoryCandidate[]): void {
   if (candidates.length === 0) return;
-  const file = memoryFileForWrite(workspace, "candidates.jsonl");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-  fs.appendFileSync(file, lines, "utf8");
+  withMemoryTransaction(workspace, () => {
+    for (const candidate of candidates) assertCandidateRecord(candidate);
+    const file = memoryFileForWrite(workspace, "candidates.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
+    fs.appendFileSync(file, lines, "utf8");
+  });
 }
 
 /** Module-internal (used by direct.ts); not part of the public barrel. */
 export function writeCandidates(workspace: string, candidates: MemoryCandidate[]): void {
-  const file = memoryFileForWrite(workspace, "candidates.jsonl");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
-  writeFileAtomic(file, lines);
+  withMemoryTransaction(workspace, () => {
+    for (const candidate of candidates) assertCandidateRecord(candidate);
+    const file = memoryFileForWrite(workspace, "candidates.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const lines = candidates.map((c) => `${JSON.stringify(c)}\n`).join("");
+    writeFileAtomic(file, lines);
+  });
 }
 
 export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "content">): string {
@@ -429,31 +495,36 @@ export function formatFactBullet(candidate: Pick<MemoryCandidate, "type" | "cont
 
 /** Appends a fact bullet to project.md, creating it with a header if needed. */
 export function appendProjectFact(workspace: string, candidate: MemoryCandidate): void {
-  const file = memoryFileForWrite(workspace, "project.md");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const bullet = formatFactBullet(candidate);
-  const existing = readFileIfExists(file);
-  if (existing === undefined) {
-    fs.writeFileSync(file, `# Project Memory\n${bullet}\n`, "utf8");
+  withMemoryTransaction(workspace, () => {
+    assertCandidateRecord(candidate);
+    const file = memoryFileForWrite(workspace, "project.md");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bullet = formatFactBullet(candidate);
+    const existing = readFileIfExists(file);
+    if (existing === undefined) {
+      fs.writeFileSync(file, `# Project Memory\n${bullet}\n`, "utf8");
+      recordFactAdded(workspace, bullet);
+      return;
+    }
+    // Dedupe: skip when an identical content line already exists.
+    if (existing.split("\n").some((line) => line.trim() === bullet)) return;
+    const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+    fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
     recordFactAdded(workspace, bullet);
-    return;
-  }
-  // Dedupe: skip when an identical content line already exists.
-  if (existing.split("\n").some((line) => line.trim() === bullet)) return;
-  const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-  fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
-  recordFactAdded(workspace, bullet);
+  });
 }
 
 function setCandidateStatus(workspace: string, id: string, status: MemoryCandidate["status"]): MemoryCandidate {
-  const candidates = readCandidates(workspace);
-  const target = candidates.find((c) => c.id === id);
-  if (!target) {
-    throw new Error(`candidate not found: ${id}`);
-  }
-  target.status = status;
-  writeCandidates(workspace, candidates);
-  return target;
+  return withMemoryTransaction(workspace, () => {
+    const candidates = readCandidates(workspace);
+    const target = candidates.find((c) => c.id === id);
+    if (!target) {
+      throw new Error(`candidate not found: ${id}`);
+    }
+    target.status = status;
+    writeCandidates(workspace, candidates);
+    return target;
+  });
 }
 
 /** Appends the fact to project.md and marks the candidate approved. */
@@ -463,17 +534,21 @@ function setCandidateStatus(workspace: string, id: string, status: MemoryCandida
  * fact-meta tracking (that sidecar is project-scoped).
  */
 export function appendGlobalFact(candidate: MemoryCandidate): void {
-  const file = resolveForWrite(seekforgeHome(), path.join(".seekforge", "memory", "project.md"));
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const bullet = formatFactBullet(candidate);
-  const existing = readFileIfExists(file);
-  if (existing === undefined) {
-    fs.writeFileSync(file, `# Global Memory\n${bullet}\n`, "utf8");
-    return;
-  }
-  if (existing.split("\n").some((line) => line.trim() === bullet)) return;
-  const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-  fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
+  const home = seekforgeHome();
+  withMemoryTransaction(home, () => {
+    assertCandidateRecord(candidate);
+    const file = resolveForWrite(home, path.join(".seekforge", "memory", "project.md"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bullet = formatFactBullet(candidate);
+    const existing = readFileIfExists(file);
+    if (existing === undefined) {
+      fs.writeFileSync(file, `# Global Memory\n${bullet}\n`, "utf8");
+      return;
+    }
+    if (existing.split("\n").some((line) => line.trim() === bullet)) return;
+    const sep = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+    fs.appendFileSync(file, `${sep}${bullet}\n`, "utf8");
+  });
 }
 
 /**
@@ -487,12 +562,14 @@ export function approveMemoryCandidate(
   id: string,
   scope: "project" | "user" = "project",
 ): MemoryCandidate {
-  const candidate = setCandidateStatus(workspace, id, "approved");
-  if (scope === "user") appendGlobalFact(candidate);
-  else appendProjectFact(workspace, candidate);
-  return candidate;
+  return withMemoryTransaction(workspace, () => {
+    const candidate = setCandidateStatus(workspace, id, "approved");
+    if (scope === "user") appendGlobalFact(candidate);
+    else appendProjectFact(workspace, candidate);
+    return candidate;
+  });
 }
 
 export function rejectMemoryCandidate(workspace: string, id: string): MemoryCandidate {
-  return setCandidateStatus(workspace, id, "rejected");
+  return withMemoryTransaction(workspace, () => setCandidateStatus(workspace, id, "rejected"));
 }

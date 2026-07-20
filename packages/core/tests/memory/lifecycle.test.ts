@@ -62,6 +62,54 @@ describe("memory fact lifecycle (P2)", () => {
     expect(meta.lastUsedAt).toBeDefined();
   });
 
+  it("filters malformed fact metadata instead of exposing poisoned counters", () => {
+    const ws = makeWorkspace();
+    const timestamp = "2026-06-10T00:00:00.000Z";
+    fs.mkdirSync(join(ws, ".seekforge", "memory"), { recursive: true });
+    fs.writeFileSync(
+      factMetaPath(ws),
+      JSON.stringify({
+        valid: { addedAt: timestamp, uses: 1, exposures: 2, retrievals: 3, lastUsedAt: timestamp },
+        negative: { addedAt: timestamp, uses: -1 },
+        fractional: { addedAt: timestamp, uses: 0.5 },
+        unsafe: { addedAt: timestamp, uses: Number.MAX_SAFE_INTEGER + 1 },
+        infinite: { addedAt: timestamp, uses: 42 },
+        badDate: { addedAt: "not-a-date", uses: 0 },
+        noncanonicalDate: { addedAt: "2026-06-10T08:00:00+08:00", uses: 0 },
+        badOptionalCounter: { addedAt: timestamp, uses: 0, retrievals: -1 },
+        badOptionalDate: { addedAt: timestamp, uses: 0, lastExposedAt: "yesterday" },
+        ["x".repeat(16 * 1024 + 65)]: { addedAt: timestamp, uses: 0 },
+      }).replace('"uses":42', '"uses":1e999'),
+      "utf8",
+    );
+
+    expect(readFactMeta(ws)).toEqual({
+      valid: { addedAt: timestamp, uses: 1, exposures: 2, retrievals: 3, lastUsedAt: timestamp },
+    });
+  });
+
+  it("keeps fact counters within the non-negative safe-integer range", () => {
+    const ws = makeWorkspace();
+    const key = "[tech] bounded counter";
+    fs.mkdirSync(join(ws, ".seekforge", "memory"), { recursive: true });
+    fs.writeFileSync(
+      factMetaPath(ws),
+      JSON.stringify({
+        [key]: {
+          addedAt: "2026-06-10T00:00:00.000Z",
+          uses: Number.MAX_SAFE_INTEGER,
+          retrievals: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+      "utf8",
+    );
+
+    recordFactUse(ws, `- ${key}`);
+    const meta = readFactMeta(ws)[key]!;
+    expect(meta.uses).toBe(Number.MAX_SAFE_INTEGER);
+    expect(meta.retrievals).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it("compact pruneUnusedDays archives old, never-used facts; keeps recent/used ones", () => {
     const ws = makeWorkspace();
     writeProjectMemory(

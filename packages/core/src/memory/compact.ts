@@ -6,7 +6,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { projectMemoryPath, readFactMeta, readRawProjectMemory, reconcileFactMeta } from "./store.js";
+import {
+  projectMemoryPath,
+  readFactMeta,
+  readRawProjectMemory,
+  reconcileFactMeta,
+  withMemoryTransaction,
+} from "./store.js";
 import { writeFileAtomic } from "../util/fs.js";
 
 /** Jaccard threshold above which two same-type bullets are "near duplicates". */
@@ -185,7 +191,7 @@ function pruneUnused(
  * `pruneUnusedDays`, also archives stale, never-used facts. When dryRun, reports
  * the plan without writing. Header / non-bullet lines are preserved verbatim.
  */
-export function compactProjectMemory(workspace: string, opts: CompactOptions = {}): CompactResult {
+function compactProjectMemoryUnlocked(workspace: string, opts: CompactOptions): CompactResult {
   // Raw (unexpanded): compaction rewrites project.md, so it must operate on and
   // preserve the literal file — never the @import-inlined form.
   const raw = readRawProjectMemory(workspace);
@@ -221,4 +227,8 @@ export function compactProjectMemory(workspace: string, opts: CompactOptions = {
     reconcileFactMeta(workspace, finalContent);
   }
   return result;
+}
+
+export function compactProjectMemory(workspace: string, opts: CompactOptions = {}): CompactResult {
+  return withMemoryTransaction(workspace, () => compactProjectMemoryUnlocked(workspace, opts));
 }
