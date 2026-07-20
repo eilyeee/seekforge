@@ -139,6 +139,18 @@ describe("runtime client", () => {
     }
   });
 
+  it("reports an unexpected exit via onExit (even so a caller can log/count restarts)", async () => {
+    const exits: Array<{ detail: string; stderr: string }> = [];
+    const client = createRuntimeClient({ binPath, onExit: (info) => exits.push(info) });
+    try {
+      await expect(client.call("die", { workspace: "/w" })).rejects.toMatchObject({ code: "runtime_crashed" });
+      expect(exits).toHaveLength(1);
+      expect(exits[0]!.detail).toMatch(/code=|signal=/);
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("times out unanswered requests", async () => {
     const client = createRuntimeClient({ binPath, requestTimeoutMs: 200 });
     try {

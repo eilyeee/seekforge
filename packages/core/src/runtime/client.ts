@@ -21,6 +21,13 @@ export type RuntimeClientOptions = {
   binPath: string;
   /** Default per-request timeout. Individual calls may override. */
   requestTimeoutMs?: number;
+  /**
+   * Called when the runtime child exits UNEXPECTEDLY (crash/panic), including
+   * when it dies with no in-flight requests. Lets a caller with a structured
+   * logger/metrics record the restart; `stderr` is a bounded tail of the
+   * child's stderr (its panic/stack trace), empty if it wrote none.
+   */
+  onExit?: (info: { detail: string; stderr: string }) => void;
 };
 
 export type RuntimeClient = {
@@ -143,12 +150,19 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     });
 
     const onGone = (detail: string) => {
-      if (child !== proc) return;
+      if (child !== proc) return; // an expected dispose already cleared `child`
       child = undefined;
       const stale = pending;
       pending = new Map();
       const tail = stderrTail.trim();
       const suffix = tail ? `${detail}; stderr: ${tail}` : detail;
+      // Always leave a trail. onGone only fires on an UNEXPECTED exit (dispose
+      // clears `child` first, so this returns early there). If the runtime
+      // panics between calls, `pending` is empty and the loop below surfaces
+      // nothing — the stderr tail, the only diagnostic of why it died, would
+      // vanish. Emit one line so a recurring crash is visible.
+      process.stderr.write(`seekforge-runtime exited unexpectedly (${suffix})\n`);
+      options.onExit?.({ detail, stderr: tail });
       for (const p of stale.values()) {
         clearTimeout(p.timer);
         p.offAbort?.();
