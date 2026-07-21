@@ -103,4 +103,17 @@ describe("createWsClient reconnect queue", () => {
     expect(socket.sent).toEqual([]);
     client.close();
   });
+
+  it("bounds the aggregate queue while the initial connection is pending", () => {
+    const client = createWsClient({ getToken: () => "", onState: vi.fn(), onFrame: vi.fn() });
+    const large = {
+      type: "start",
+      task: "x".repeat(Math.floor(MAX_WS_PAYLOAD_BYTES * 0.6)),
+      mode: "edit",
+      approvalMode: "confirm",
+    } as const;
+    expect(client.send(large)).toBe(true);
+    expect(client.send(large)).toBe(false);
+    client.close();
+  });
 });

@@ -5,7 +5,6 @@ import {
   mkdirSync,
   lstatSync,
   openSync,
-  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -15,12 +14,15 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { FileTooLargeError, readUtf8FileBoundedSync } from "../util/fs.js";
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 // Outside the persisted session-id grammar, so a real session can never
 // collide with the workspace-wide maintenance guard.
 const WORKSPACE_GUARD_ID = "@workspace-operation";
 const MALFORMED_LEASE_GRACE_MS = 30_000;
+const MAX_LEASE_OWNER_BYTES = 16 * 1024;
+const MAX_PROC_STAT_BYTES = 64 * 1024;
 const localLeases = new Map<string, string>();
 
 export class SessionBusyError extends Error {
@@ -113,7 +115,7 @@ function recoveryDir(workspace: string, sessionId: string): string {
 function processIdentity(pid: number): string | undefined {
   try {
     if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const stat = readUtf8FileBoundedSync(`/proc/${pid}/stat`, MAX_PROC_STAT_BYTES);
       const closeParen = stat.lastIndexOf(")");
       const fields = stat.slice(closeParen + 2).split(" ");
       return fields[19] ? `linux:${fields[19]}` : undefined;
@@ -155,11 +157,18 @@ function snapshot(dir: string): LeaseSnapshot {
   validatePrivateDirectory(dir);
   let content: string;
   try {
-    content = readFileSync(join(dir, "owner.json"), "utf8");
+    content = readUtf8FileBoundedSync(join(dir, "owner.json"), MAX_LEASE_OWNER_BYTES);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       const mtime = statSync(dir).mtimeMs;
       return { signature: `malformed:${mtime}`, alive: Date.now() - mtime < MALFORMED_LEASE_GRACE_MS };
+    }
+    if (error instanceof FileTooLargeError) {
+      const stat = statSync(join(dir, "owner.json"));
+      return {
+        signature: `oversized:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
+        alive: Date.now() - stat.mtimeMs < MALFORMED_LEASE_GRACE_MS,
+      };
     }
     throw error;
   }
@@ -235,7 +244,9 @@ function removeStaleLease(workspace: string, sessionId: string, expected: LeaseS
     return true;
   } finally {
     try {
-      const owner = JSON.parse(readFileSync(join(recovery, "owner.json"), "utf8")) as { token?: unknown };
+      const owner = JSON.parse(readUtf8FileBoundedSync(join(recovery, "owner.json"), MAX_LEASE_OWNER_BYTES)) as {
+        token?: unknown;
+      };
       if (owner.token === recoveryToken) rmSync(recovery, { recursive: true, force: true });
     } catch {
       // A missing or replaced recovery marker is no longer ours.
@@ -275,7 +286,9 @@ function acquireLease(workspace: string, sessionId: string): SessionLease {
           if (released) return;
           try {
             validatePrivateDirectory(target);
-            const owner = JSON.parse(readFileSync(join(target, "owner.json"), "utf8")) as { token?: unknown };
+            const owner = JSON.parse(readUtf8FileBoundedSync(join(target, "owner.json"), MAX_LEASE_OWNER_BYTES)) as {
+              token?: unknown;
+            };
             if (owner.token !== token) {
               released = true;
               if (localLeases.get(key) === token) localLeases.delete(key);

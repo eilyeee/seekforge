@@ -212,6 +212,15 @@ describe("read_file", () => {
     expect((res.data as { content: string }).content).toBe("l2\nl3");
   });
 
+  it("rejects oversized files before buffering them", async () => {
+    const ws = makeWorkspace();
+    const file = path.join(ws, "huge.txt");
+    fs.writeFileSync(file, "x");
+    fs.truncateSync(file, 5 * 1024 * 1024 + 1);
+    const res = await dispatcher.execute(call("read_file", { path: "huge.txt" }), makeCtx(ws));
+    expect(res).toMatchObject({ ok: false, error: { code: "too_large" } });
+  });
+
   it("rejects invalid line-range indices", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "f.txt"), "l1\nl2\n");

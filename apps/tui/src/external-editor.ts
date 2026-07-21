@@ -4,9 +4,20 @@
  * responsible for raw-mode juggling around the call.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_EDITOR_FILE_BYTES, readTextFdBounded } from "./bounded-file.js";
 
 export type EditorResult = { ok: true; text: string } | { ok: false; error: string };
 export type EditorLaunchResult = { ok: true } | { ok: false; error: string };
@@ -72,23 +83,37 @@ export function openFileInExternalEditor(file: string): EditorLaunchResult {
 }
 
 /** Open `text` in the user's editor and return the edited content. */
-export function openInExternalEditor(text: string): EditorResult {
-  const file = join(
-    tmpdir(),
-    `seekforge-edit-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`,
-  );
+export function openInExternalEditor(text: string, tempRoot = tmpdir()): EditorResult {
+  let dir: string | undefined;
   try {
-    writeFileSync(file, text, "utf8");
+    dir = realpathSync(mkdtempSync(join(tempRoot, "seekforge-edit-")));
+    const file = join(dir, "draft.md");
+    const fd = openSync(
+      file,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      writeFileSync(fd, text, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     const launched = openFileInExternalEditor(file);
     if (!launched.ok) return launched;
-    return { ok: true, text: readFileSync(file, "utf8") };
+    const stat = lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(file) !== file) {
+      return { ok: false, error: "editor result is not a private regular file" };
+    }
+    const readFd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      return { ok: true, text: readTextFdBounded(readFd, file, MAX_EDITOR_FILE_BYTES) };
+    } finally {
+      closeSync(readFd);
+    }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
-    try {
-      unlinkSync(file);
-    } catch {
-      // tmp file may never have been written; nothing to clean up
-    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }
 }

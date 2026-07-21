@@ -6,16 +6,7 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -40,6 +31,8 @@ import {
   type McpServerConfig,
 } from "@seekforge/core";
 import { loadConfig, maskedConfig, readProjectFile, setConfigValue, writeProjectFileAtomic } from "../config.js";
+import { readFileBounded } from "@seekforge/shared/bounded-file-read";
+import { MAX_CONFIG_FILE_BYTES } from "@seekforge/shared/config-layers";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
@@ -62,8 +55,7 @@ function isMcpServerConfig(value: unknown): value is McpServerConfig {
 
 function parseConfigDoc(raw: string): ConfigDoc {
   const parsed = JSON.parse(raw) as unknown;
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-  return parsed as ConfigDoc;
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as ConfigDoc) : {};
 }
 
 /**
@@ -76,7 +68,7 @@ function mutateMcpServers<T>(
   scope: McpScope,
   mutate: (servers: Record<string, McpServerConfig>) => T,
 ): T {
-  const doc = readConfigDoc(workspace, scope);
+  const doc = readConfigDoc(workspace, scope, true);
   const servers = { ...(doc.mcpServers ?? {}) };
   const result = mutate(servers);
   if (Object.keys(servers).length === 0) delete doc.mcpServers;
@@ -116,20 +108,24 @@ function settingsBusy(res: RouteCtx["res"], error: unknown): boolean {
 }
 
 /** Reads one config layer (raw); returns {} on missing/invalid. */
-function readConfigDoc(workspace: string, scope: McpScope = "project"): ConfigDoc {
+function readConfigDoc(workspace: string, scope: McpScope = "project", strict = false): ConfigDoc {
   try {
     const raw =
       scope === "project"
-        ? readProjectFile(workspace, ".seekforge/config.json")
-        : readFileSync(join(homedir(), ".seekforge", "config.json"), "utf8");
+        ? readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES)
+        : readFileBounded(join(homedir(), ".seekforge", "config.json"), MAX_CONFIG_FILE_BYTES).toString("utf8");
     return raw === undefined ? {} : parseConfigDoc(raw);
-  } catch {
+  } catch (error) {
+    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return {};
   }
 }
 
 function writeConfigDoc(workspace: string, scope: McpScope, doc: ConfigDoc): void {
   const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_CONFIG_FILE_BYTES) {
+    throw new ConfigMutationError(`config exceeds ${MAX_CONFIG_FILE_BYTES} bytes`);
+  }
   if (scope === "project") {
     writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
     return;
@@ -250,7 +246,7 @@ function validateHooks(input: unknown): { hooks: HookConfig } | { error: string 
 
 /** Writes the hooks block into the project config.json, preserving other keys. */
 function writeHooks(workspace: string, hooks: HookConfig): void {
-  const doc = readConfigDoc(workspace);
+  const doc = readConfigDoc(workspace, "project", true);
   if (Object.keys(hooks).length === 0) delete doc.hooks;
   else doc.hooks = hooks;
   writeProjectFileAtomic(workspace, ".seekforge/config.json", `${JSON.stringify(doc, null, 2)}\n`);

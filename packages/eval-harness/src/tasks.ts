@@ -5,7 +5,7 @@
  * never LLM judges. Legacy tasks without `runner` remain single agent runs.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, opendirSync } from "node:fs";
 import { join, posix } from "node:path";
 import {
   MAX_LOOP_ITERATIONS,
@@ -14,6 +14,8 @@ import {
   type MemoryCandidateType,
   type MemoryStats,
 } from "@seekforge/core";
+import { readTextFileBounded } from "./file-io.js";
+import { MAX_TASK_FILE_BYTES, MAX_TASK_FILES } from "./limits.js";
 
 export const TASK_RUNNERS = ["agent", "loop", "session_scenario"] as const;
 export type TaskRunner = (typeof TASK_RUNNERS)[number];
@@ -409,10 +411,23 @@ export function validateTask(value: unknown, where: string): TaskDef {
 /** Loads and validates all tasks in a directory, sorted by id. */
 export function loadTasks(dir: string): TaskDef[] {
   const tasks: TaskDef[] = [];
-  for (const entry of readdirSync(dir).sort()) {
+  const entries: string[] = [];
+  const handle = opendirSync(dir);
+  try {
+    for (;;) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      entries.push(entry.name);
+      if (entries.length > MAX_TASK_FILES) throw new Error(`task directory exceeds ${MAX_TASK_FILES} JSON files`);
+    }
+  } finally {
+    handle.closeSync();
+  }
+  for (const entry of entries.sort()) {
     if (!entry.endsWith(".json")) continue;
     const file = join(dir, entry);
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(readTextFileBounded(file, MAX_TASK_FILE_BYTES));
     tasks.push(validateTask(parsed, entry));
   }
   const seen = new Set<string>();

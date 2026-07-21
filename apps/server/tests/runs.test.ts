@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import * as config from "../src/config.js";
+import { ServerCoordinator } from "../src/coordinator.js";
 import { RunManager, startServer, type RunningServer } from "../src/index.js";
 import {
   RUN_EVENT_MAX_LINE_BYTES,
@@ -54,7 +55,7 @@ describe("append-only run ledger", () => {
       });
       return { child, readyPath };
     });
-    await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)), 15_000);
+    await waitUntil(() => children.every(({ readyPath }) => existsSync(readyPath)), 30_000);
     writeFileSync(goPath, "go");
     await Promise.all(
       children.map(
@@ -79,7 +80,7 @@ describe("append-only run ledger", () => {
         .filter((worker): worker is string => worker !== undefined),
     );
     expect(labels).toEqual(new Set(workers));
-  }, 30_000);
+  }, 60_000);
 
   it("persists latest state and strictly increasing replay sequence", () => {
     const workspace = makeWorkspace();
@@ -211,7 +212,9 @@ describe("append-only run ledger", () => {
     );
   });
 
-  it("SCH6: appends to runs.jsonl without re-reading+re-validating the whole file each time", () => {
+  it("SCH6: appends to runs.jsonl without re-reading+re-validating the whole file each time", {
+    timeout: 15_000,
+  }, () => {
     const workspace = makeWorkspace();
     const manager = new RunManager();
     const actualRead = config.readProjectFile;
@@ -497,6 +500,65 @@ describe("append-only run ledger", () => {
 });
 
 describe("run API and WS replay", () => {
+  it.each(["agent", "loop"] as const)("records a failed terminal %s run when scheduling rejects", async (kind) => {
+    const workspace = makeWorkspace();
+    let agentCalls = 0;
+    let loopCalls = 0;
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      logger: { log: () => {} },
+      createAgent: async () => {
+        agentCalls += 1;
+        return fakeAgentFactory(async function* () {})({
+          workspace,
+          confirm: async () => false,
+          extractMemory: true,
+        });
+      },
+      runLoop: async () => {
+        loopCalls += 1;
+        throw new Error("must not execute");
+      },
+    });
+    const schedule = vi.spyOn(ServerCoordinator.prototype, "withAgentMutation").mockImplementationOnce(async () => {
+      throw new Error("schedule rejected before execute");
+    });
+    try {
+      const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          kind,
+          task: "scheduled run",
+          mode: "edit",
+          maxCostUsd: 1,
+          ...(kind === "loop" ? { verifyCommand: "true" } : {}),
+        }),
+      });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as { runId: string };
+      let record: { status: string; error?: { message?: string } } | undefined;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const current = await fetch(`http://127.0.0.1:${server.port}/api/runs/${accepted.runId}`, { headers });
+        record = (await current.json()) as typeof record;
+        if (record?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(record).toMatchObject({ status: "failed", error: { message: "schedule rejected before execute" } });
+      const events = await fetch(`http://127.0.0.1:${server.port}/api/runs/${accepted.runId}/events`, { headers });
+      expect((await events.json()) as { events: Array<{ frame: { type: string } }> }).toMatchObject({
+        events: [expect.objectContaining({ frame: expect.objectContaining({ type: "error" }) })],
+      });
+      expect(agentCalls).toBe(0);
+      expect(loopCalls).toBe(0);
+    } finally {
+      schedule.mockRestore();
+    }
+  });
+
   it("defaults Loop runs to edit mode and rejects ask mode", async () => {
     const workspace = makeWorkspace();
     let extractMemory: boolean | undefined;

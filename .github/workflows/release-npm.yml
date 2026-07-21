@@ -40,6 +40,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-npm-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read # checkout
   id-token: write # npm provenance (OIDC)
@@ -54,28 +58,11 @@ jobs:
       id-token: write
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.16.1
-
-      - name: Setup Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          # registry-url wires npm to the official registry so NODE_AUTH_TOKEN
-          # is injected into ~/.npmrc for the publish step.
-          registry-url: "https://registry.npmjs.org"
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Resolve tag
+      - name: Resolve and checkout release tag
         id: tag
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
@@ -90,10 +77,31 @@ jobs:
             echo "::error::Invalid release tag '$TAG'. Expected vMAJOR.MINOR.PATCH with optional prerelease/build suffixes."
             exit 1
           fi
+          TAG_COMMIT="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")" || {
+            echo "::error::Release tag '$TAG' does not exist."
+            exit 1
+          }
+          git checkout --detach "$TAG_COMMIT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          # Strip leading "v" for the bare semver.
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "Resolved tag: ${TAG}"
+          echo "Resolved tag: ${TAG} (${TAG_COMMIT})"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0609f0983b7a228f052f81ef4c3d6510cae254ad # v4
+        with:
+          version: 10.16.1
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          # registry-url wires npm to the official registry so NODE_AUTH_TOKEN
+          # is injected into ~/.npmrc for the publish step.
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Verify tag matches apps/cli/package.json version
         env:

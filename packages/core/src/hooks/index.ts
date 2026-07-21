@@ -48,6 +48,7 @@ import { spawn } from "node:child_process";
 import { sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { onAbortOnce } from "../util/abort.js";
+import { killProcessTree } from "../util/process-tree.js";
 import { scrubSecretEnv } from "../util/scrub-env.js";
 
 export type HookStage =
@@ -239,6 +240,11 @@ function runOneHook(
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let offAbort: () => void = () => {};
+    let child: ReturnType<typeof spawn> | undefined;
+
+    const killOwnedTree = (): void => {
+      if (child) killProcessTree(child);
+    };
 
     // Decode each stream through its own StringDecoder so a multi-byte UTF-8
     // sequence split across two `data` chunks isn't mangled into U+FFFD (a hook
@@ -261,6 +267,9 @@ function runOneHook(
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       offAbort();
+      // The shell can exit while a detached, stdio-closed descendant remains.
+      // Reap the owned tree on every terminal path, not only timeout/abort.
+      killOwnedTree();
       // Flush bytes the decoders held back (incomplete trailing sequences).
       const outTail = outDecoder.end();
       if (outTail) {
@@ -282,9 +291,10 @@ function runOneHook(
       });
     };
 
-    let child: ReturnType<typeof spawn>;
     try {
-      child = spawn("/bin/sh", ["-c", entry.command], {
+      const shell = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+      const shellArgs = process.platform === "win32" ? ["/d", "/s", "/c", entry.command] : ["-c", entry.command];
+      child = spawn(shell, shellArgs, {
         cwd,
         detached: true, // own process group -> tree kill on timeout
         stdio: ["pipe", "pipe", "pipe"],
@@ -301,13 +311,7 @@ function runOneHook(
     }
 
     const killProcessGroup = (): void => {
-      if (child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          child.kill("SIGKILL");
-        }
-      }
+      killOwnedTree();
     };
 
     offAbort = onAbortOnce(signal, () => {

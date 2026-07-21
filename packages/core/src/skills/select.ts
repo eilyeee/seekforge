@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_LIMITS } from "@seekforge/shared";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 import type { Skill, SkillSelection } from "./types.js";
 
 export type SelectSkillsOptions = {
@@ -19,7 +20,8 @@ const KNOWN_FRAMEWORKS = ["vue", "react", "next", "nuxt", "vite", "express"];
 /** Frameworks present as dependencies in <workspace>/package.json. */
 function detectFrameworks(workspace: string): string[] {
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(workspace, "package.json"), "utf8")) as {
+    const packageFile = fs.realpathSync(path.join(workspace, "package.json"));
+    const raw = JSON.parse(readUtf8FileBoundedSync(packageFile, 1024 * 1024)) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };

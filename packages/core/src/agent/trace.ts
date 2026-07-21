@@ -6,7 +6,6 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
   realpathSync,
   rmSync,
   writeSync,
@@ -22,7 +21,7 @@ import {
   SessionBusyError,
   type SessionLease,
 } from "./session-lease.js";
-import { writeFileAtomic } from "../util/fs.js";
+import { readUtf8FileBoundedSync, writeFileAtomic } from "../util/fs.js";
 import { isRecord } from "../util/guards.js";
 import { installProcessTeardown } from "../util/process-teardown.js";
 
@@ -57,6 +56,7 @@ export type SessionTrace = {
  * process exit. O_APPEND makes concurrent writers to the same file safe.
  */
 const APPEND_FD_MAX = 32;
+const MAX_SESSION_TEXT_BYTES = 64 * 1024 * 1024;
 const appendFds = new Map<string, number>();
 let appendFdsExitHookInstalled = false;
 
@@ -221,12 +221,7 @@ export function sessionFile(workspace: string, sessionId: string, name: string, 
 
 export function readSessionText(workspace: string, sessionId: string, name: string): string {
   const file = sessionFile(workspace, sessionId, name);
-  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    return readFileSync(fd, "utf8");
-  } finally {
-    closeSync(fd);
-  }
+  return readUtf8FileBoundedSync(file, MAX_SESSION_TEXT_BYTES);
 }
 
 export function writeSessionText(workspace: string, sessionId: string, name: string, content: string): void {

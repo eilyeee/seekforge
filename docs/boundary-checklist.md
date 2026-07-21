@@ -1454,7 +1454,9 @@ an error event is not successful EOF.
 - **Caught:** REPL shell expansion and TUI status-line commands could hang on
   descendant pipes or consume unbounded output; stdin errors returned partial
   prompts and status-line execution blocked rendering; successful CLI/TUI shell
-  parents could also leave detached-output descendants running.
+  parents could also leave detached-output descendants running. Hook shells and
+  Server command expansion had the same leak after both successful and failed
+  exits, and Windows teardown only targeted the direct child instead of the tree.
 
 ## 109. Enforce wire limits before destructive client state changes
 
@@ -1539,7 +1541,9 @@ a swap window; truncating after `readFile` also is not a memory limit.
 - **Caught:** shared workspace and extra-directory `@path` expansion could follow
   a file swapped after validation and buffered the complete file before its 30k
   cap; Rust runtime reads/listing reopened validated paths and `apply_patch`
-  buffered an unbounded target.
+  buffered an unbounded target. Skill/agent imports, security evidence, Loop and
+  session leases, tool checkpoints/searches, and vision input repeated the same
+  preflight-stat or post-read-limit pattern.
 
 ## 117. Rejected request bodies still own a drain lifecycle
 
@@ -1648,6 +1652,53 @@ rules, so they fail for spaces, Unicode, and Windows paths.
 - **Do:** convert file URLs with `fileURLToPath`; only then call path utilities.
 - **Caught:** package-smoke and live server E2E scripts derived the repository
   path from `import.meta.url.pathname`.
+
+## 127. Line framing limits must run before line buffering
+
+Checking a line's length in a `readline` callback is too late: a peer can send an
+unbounded stream without a newline, and the framing layer has already retained it.
+
+- **Do:** count raw bytes while consuming chunks, enter a discard state as soon
+  as a frame crosses the limit, discard through its newline, then resume with the
+  next frame. A client that cannot correlate the rejected frame must fail its
+  pending requests and restart the transport deterministically.
+- **Caught:** MCP stdio server input and client stdout/stderr used unbounded
+  `readline` framing; a malicious peer could grow memory without completing a
+  JSON-RPC message.
+
+## 128. A file limit must cover growth and preserve oversized durable state
+
+A pre-read size check followed by a whole-file read is still vulnerable to file
+growth, while treating oversized state as missing can destroy it on the next write.
+
+- **Do:** read descriptors incrementally with overflow detection, stream responses
+  over a fixed verified range, fail closed before mutating oversized state, and
+  publish reports by atomic replacement.
+- **Caught:** Server static assets/settings/recents, shared config/todos, and Eval
+  suite/task/baseline/trend/metadata files had unbounded reads; state mutations
+  could overwrite oversized files and report readers could observe partial output.
+
+## 129. A run reservation owns terminal state before scheduled execution begins
+
+Persisting `running` before entering a scheduler leaves a gap: cancellation or a
+coordinator failure can reject before the operation's own `try/finally` runs.
+
+- **Do:** attach terminal ledger, event, and connection cleanup to the scheduled
+  promise itself; every pre-execution rejection must become failed or cancelled.
+- **Caught:** REST background Loop and WebSocket Agent/Loop runs could remain
+  permanently `running` when repository coordination rejected before execution.
+
+## 130. Validate special files without blocking on open
+
+A size check or post-open regular-file check cannot protect a reader if opening
+a FIFO waits indefinitely for a writer first.
+
+- **Do:** open untrusted read paths with `O_NONBLOCK` and `O_NOFOLLOW`, then
+  validate the descriptor is a regular file before reading. Mutations must treat
+  every read failure except `ENOENT` as state that must not be replaced.
+- **Caught:** bounded config, state, trace, static-asset, dataset, and todo reads
+  could block on a FIFO; todo mutations could also treat non-missing read errors
+  as an empty list before attempting replacement.
 
 ---
 

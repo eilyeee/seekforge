@@ -148,6 +148,8 @@ fn nearest_line_hint(content: &str, old_string: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -236,6 +238,19 @@ mod tests {
         let err = apply_patch(ws.to_str().unwrap(), "large.txt", &[edit("x", "y")]).unwrap_err();
         assert_eq!(err.code, codes::TOO_LARGE);
         assert_eq!(std::fs::metadata(file).unwrap().len(), MAX_FILE_BYTES + 1);
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn patch_rejects_fifo_without_blocking() {
+        let ws = tmpdir("fifo");
+        let fifo = ws.join("pipe");
+        let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        let error = apply_patch(ws.to_str().unwrap(), "pipe", &[edit("x", "y")]).unwrap_err();
+        assert_eq!(error.code, codes::IO_ERROR);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         std::fs::remove_dir_all(&ws).ok();
     }
 

@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MAX_COMMAND_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 const DESCRIPTION_CAP = 60;
 const ARGUMENTS_PLACEHOLDER = "$ARGUMENTS";
@@ -71,7 +72,7 @@ function loadDir(dir: string, scope: "project" | "global"): CustomCommand[] {
     if (name === "") continue;
     let raw: string;
     try {
-      raw = fs.readFileSync(path.join(dir, entry.name), "utf8");
+      raw = readTextFileBounded(path.join(dir, entry.name), MAX_COMMAND_FILE_BYTES);
     } catch {
       continue;
     }

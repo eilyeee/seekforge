@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AGENT_ID_RE, kebabize, parseFrontmatter } from "../subagents/frontmatter.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
+import { MAX_SKILL_DEFINITION_BYTES } from "./load.js";
 import type { Skill } from "./types.js";
 
 /**
@@ -81,7 +83,13 @@ export function importExternalSkill(
   if (stat.isDirectory()) {
     file = path.join(file, "SKILL.md");
   }
-  const parsed = parseFrontmatterSkill(fs.readFileSync(file, "utf8"));
+  let physical: string;
+  try {
+    physical = fs.realpathSync(file);
+  } catch {
+    throw new Error(`skill source not found: ${file}`);
+  }
+  const parsed = parseFrontmatterSkill(readUtf8FileBoundedSync(physical, MAX_SKILL_DEFINITION_BYTES));
 
   const dir = path.join(opts.targetRoot, parsed.id);
   if (fs.existsSync(dir) && !opts.force) {

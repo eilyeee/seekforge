@@ -7,7 +7,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -32,6 +31,8 @@ export class WorkspaceStateTooLargeError extends Error {
     this.name = "WorkspaceStateTooLargeError";
   }
 }
+
+const DEFAULT_WORKSPACE_STATE_BYTES = 64 * 1024 * 1024;
 
 function readUtf8Bounded(fd: number, relPath: string, limit: number): string {
   const chunks: Buffer[] = [];
@@ -85,8 +86,12 @@ function stateTarget(workspace: string, relPath: string, createParents: boolean)
 }
 
 /** Reads a workspace-owned state file without following a leaf or parent symlink. */
-export function readWorkspaceStateFile(workspace: string, relPath: string, maxBytes?: number): string | undefined {
-  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) {
+export function readWorkspaceStateFile(
+  workspace: string,
+  relPath: string,
+  maxBytes = DEFAULT_WORKSPACE_STATE_BYTES,
+): string | undefined {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new RangeError(`workspace state byte limit must be a non-negative safe integer: ${maxBytes}`);
   }
   let fd: number | undefined;
@@ -94,9 +99,9 @@ export function readWorkspaceStateFile(workspace: string, relPath: string, maxBy
     const target = stateTarget(workspace, relPath, false);
     const parent = dirname(target);
     const parentBefore = statSync(parent);
-    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     const opened = fstatSync(fd);
-    if (maxBytes !== undefined && opened.size > maxBytes) {
+    if (opened.size > maxBytes) {
       throw new WorkspaceStateTooLargeError(relPath, maxBytes);
     }
     const currentTarget = stateTarget(workspace, relPath, false);
@@ -110,7 +115,7 @@ export function readWorkspaceStateFile(workspace: string, relPath: string, maxBy
     ) {
       throw new Error(`workspace state file changed during read: ${relPath}`);
     }
-    return maxBytes === undefined ? readFileSync(fd, "utf8") : readUtf8Bounded(fd, relPath, maxBytes);
+    return readUtf8Bounded(fd, relPath, maxBytes);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

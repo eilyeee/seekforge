@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { useT } from "../lib/i18n";
 import type { Todo } from "../types";
 import { Badge, Button, Input, IconSparkle, IconArrowRight, IconCornerDownRight } from "./ui";
+import { useWorkspaceAsyncCoordinator } from "../views/use-workspace-async";
 
 /**
  * Right-side drawer over the cross-session todo list (.seekforge/todos.md,
@@ -17,9 +18,10 @@ export function TodosPanel() {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
 
   useEffect(() => {
-    let active = true;
+    const operation = requests.beginLatest(ws);
     setTodos(null);
     setError(null);
     setDraft("");
@@ -27,31 +29,30 @@ export function TodosPanel() {
     api
       .todos(ws)
       .then((list) => {
-        if (active) setTodos(list);
+        if (operation && requests.isCurrent(operation)) setTodos(list);
       })
       .catch((e: unknown) => {
-        if (active) setError(String(e));
+        if (operation && requests.isCurrent(operation)) setError(String(e));
       });
-    return () => {
-      active = false;
-    };
-  }, [ws]);
+  }, [requests, ws]);
 
   const run = (op: Parameters<typeof api.todosOp>[0]) => {
     const workspaceId = ws;
+    const operation = requests.beginLatest(workspaceId);
+    if (!operation) return;
     setBusy(true);
     api
       .todosOp(op, workspaceId)
       .then((list) => {
-        if (useStore.getState().activeWorkspaceId !== workspaceId) return;
+        if (!requests.isCurrent(operation)) return;
         setTodos(list);
         setError(null);
       })
       .catch((e: unknown) => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setError(String(e));
+        if (requests.isCurrent(operation)) setError(String(e));
       })
       .finally(() => {
-        if (useStore.getState().activeWorkspaceId === workspaceId) setBusy(false);
+        if (requests.isCurrent(operation)) setBusy(false);
       });
   };
 

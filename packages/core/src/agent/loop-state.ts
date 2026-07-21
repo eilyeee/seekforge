@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -17,7 +16,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopEvent, LoopStatus } from "./auto-loop.js";
 import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
-import { writeFileAtomic } from "../util/fs.js";
+import { FileTooLargeError, readUtf8FileBoundedSync } from "../util/fs.js";
+import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { isRecord } from "../util/guards.js";
 import {
   isLoopRequirementMode,
@@ -126,11 +126,14 @@ function leaseFile(workspace: string, loopId: string): string {
 
 type LockSnapshot = { content: string; alive: boolean };
 const MALFORMED_LOCK_GRACE_MS = 30_000;
+const MAX_LOOP_LOCK_BYTES = 16 * 1024;
+const MAX_LOOP_STATE_BYTES = 1024 * 1024;
+const MAX_PROC_STAT_BYTES = 64 * 1024;
 
 function processIdentity(pid: number): string | undefined {
   try {
     if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const stat = readUtf8FileBoundedSync(`/proc/${pid}/stat`, MAX_PROC_STAT_BYTES);
       const closeParen = stat.lastIndexOf(")");
       const fields = stat.slice(closeParen + 2).split(" ");
       return fields[19] ? `linux:${fields[19]}` : undefined;
@@ -149,7 +152,17 @@ function processIdentity(pid: number): string | undefined {
 const selfProcessIdentity = processIdentity(process.pid);
 
 function readLockSnapshot(target: string): LockSnapshot {
-  const content = readFileSync(target, "utf8");
+  let content: string;
+  try {
+    content = readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES);
+  } catch (error) {
+    if (!(error instanceof FileTooLargeError)) throw error;
+    const stat = statSync(target);
+    return {
+      content: `oversized:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
+      alive: Date.now() - stat.mtimeMs < MALFORMED_LOCK_GRACE_MS,
+    };
+  }
   let owner: Record<string, unknown>;
   try {
     const parsed = JSON.parse(content) as unknown;
@@ -183,7 +196,7 @@ function readLockSnapshot(target: string): LockSnapshot {
 
 function removeStaleLock(target: string, expectedContent: string): boolean {
   try {
-    if (readFileSync(target, "utf8") !== expectedContent) return false;
+    if (readLockSnapshot(target).content !== expectedContent) return false;
     rmSync(target);
     return true;
   } catch (error) {
@@ -275,7 +288,7 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
         closeSync(fd);
         if (existsSync(recoveryTarget)) {
           try {
-            const owner = JSON.parse(readFileSync(target, "utf8")) as { token?: unknown };
+            const owner = JSON.parse(readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES)) as { token?: unknown };
             if (owner.token === token) rmSync(target);
           } catch {
             /* A recovery contender replaced or removed this candidate. */
@@ -286,7 +299,7 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
           release: () => {
             activeLeases.delete(key);
             try {
-              const owner = JSON.parse(readFileSync(target, "utf8")) as { token?: unknown };
+              const owner = JSON.parse(readUtf8FileBoundedSync(target, MAX_LOOP_LOCK_BYTES)) as { token?: unknown };
               if (owner.token === token) rmSync(target);
             } catch {
               /* A missing/replaced lock no longer belongs to this lease. */
@@ -316,7 +329,9 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
           if ((recoveryError as NodeJS.ErrnoException).code !== "ENOENT") throw recoveryError;
         } finally {
           try {
-            const owner = JSON.parse(readFileSync(recoveryTarget, "utf8")) as { token?: unknown };
+            const owner = JSON.parse(readUtf8FileBoundedSync(recoveryTarget, MAX_LOOP_LOCK_BYTES)) as {
+              token?: unknown;
+            };
             if (owner.token === token) rmSync(recoveryTarget);
           } catch {
             /* A missing/replaced recovery marker no longer belongs to this process. */
@@ -444,15 +459,22 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
 export function saveLoopState(workspace: string, state: LoopState): void {
   const normalized = parseLoopState(state, workspace);
   if (!normalized) throw new Error("Invalid loop state");
-  const target = loopFile(workspace, normalized.loopId);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileAtomic(target, `${JSON.stringify(normalized, null, 2)}\n`);
+  writeWorkspaceStateFileAtomic(
+    requireWorkspace(workspace),
+    join(".seekforge", "loops", `${normalized.loopId}.json`),
+    `${JSON.stringify(normalized, null, 2)}\n`,
+  );
 }
 
 export function loadLoopState(workspace: string, loopId: string): LoopState | null {
-  const file = loopFile(workspace, loopId);
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
   try {
-    return parseLoopState(JSON.parse(readFileSync(file, "utf8")) as unknown, workspace);
+    const raw = readWorkspaceStateFile(
+      requireWorkspace(workspace),
+      join(".seekforge", "loops", `${loopId}.json`),
+      MAX_LOOP_STATE_BYTES,
+    );
+    return raw === undefined ? null : parseLoopState(JSON.parse(raw) as unknown, workspace);
   } catch {
     return null;
   }

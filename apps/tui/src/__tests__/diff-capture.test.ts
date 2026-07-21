@@ -123,6 +123,15 @@ describe("createDiffCapture", () => {
     expect(capture.onEvent(completed("apply_patch", true))).toBeNull();
   });
 
+  it("does not load an oversized file into the TUI diff", () => {
+    const file = path.join(dir, "large.txt");
+    fs.writeFileSync(file, "before\n");
+    const capture = createDiffCapture(dir);
+    capture.onEvent(started("write_file", { path: "large.txt" }));
+    fs.truncateSync(file, 4 * 1024 * 1024 + 1);
+    expect(capture.onEvent(completed("write_file", true))).toBeNull();
+  });
+
   it("ignores non-write tools and bad args without throwing", () => {
     const capture = createDiffCapture(dir);
     expect(capture.onEvent(started("run_command", { command: "ls" }))).toBeNull();

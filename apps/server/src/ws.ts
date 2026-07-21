@@ -322,6 +322,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     workspace: string,
     operation: (runController: AbortController) => Promise<void>,
     serialize: boolean,
+    failureCode: "agent_error" | "loop_error",
   ): void => {
     running = true;
     const runController = new AbortController();
@@ -330,12 +331,38 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     activeWorkspace = workspace;
     deps.runManager.start(runId, workspace, runController);
     const execute = () => operation(runController);
-    launch(
+    const scheduled =
       serialize && deps.withAgentMutation
         ? deps.withAgentMutation(workspace, runController.signal, execute)
         : serialize && deps.withRepository
           ? deps.withRepository(workspace, execute)
-          : execute(),
+          : execute();
+    launch(
+      scheduled.catch((error: unknown) => {
+        // A scheduler can reject before operation() enters its own try/finally.
+        // Close that gap so connection state and the durable ledger both reach
+        // a terminal state.
+        const cancelled = runController.signal.aborted;
+        const message = error instanceof Error ? error.message : String(error);
+        deps.runManager.update(workspace, runId, {
+          status: cancelled ? "cancelled" : "failed",
+          error: { code: cancelled ? "cancelled" : failureCode, message },
+        });
+        try {
+          sendRun(runId, workspace, {
+            type: "error",
+            code: cancelled ? "cancelled" : failureCode,
+            message,
+          });
+        } finally {
+          running = false;
+          if (controller === runController) controller = undefined;
+          activeRunId = undefined;
+          activeWorkspace = undefined;
+          denyAllPending();
+          if (!closed) send({ type: "idle" });
+        }
+      }),
     );
   };
 
@@ -648,6 +675,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               runController,
             ),
           mode === "edit",
+          "agent_error",
         );
         return;
       }
@@ -706,6 +734,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               runController,
             ),
           (mode ?? meta.mode) === "edit",
+          "agent_error",
         );
         return;
       }
@@ -766,6 +795,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               runController,
             ),
           true,
+          "loop_error",
         );
         return;
       }
@@ -820,6 +850,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
               runController,
             ),
           true,
+          "loop_error",
         );
         return;
       }

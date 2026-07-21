@@ -10,6 +10,7 @@ import * as path from "node:path";
 import type { AgentEvent } from "@seekforge/shared";
 import type { DiffLine } from "./model.js";
 import { computeDiffLines } from "./diff.js";
+import { MAX_STATE_FILE_BYTES, readTextFdBounded } from "./bounded-file.js";
 
 const WRITE_TOOLS = new Set(["apply_patch", "write_file"]);
 
@@ -62,9 +63,9 @@ export function createDiffCapture(workspace: string): {
     try {
       const physical = fs.realpathSync(abs);
       if (physical !== root && !physical.startsWith(root + path.sep)) return null;
-      fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
       if (!fs.fstatSync(fd).isFile()) return null;
-      return fs.readFileSync(fd, "utf8");
+      return readTextFdBounded(fd, abs, MAX_STATE_FILE_BYTES);
     } catch {
       return null;
     } finally {
@@ -86,6 +87,7 @@ export function createDiffCapture(workspace: string): {
           const pending = stacks.get(e.toolName)?.pop();
           if (!pending || !e.result.ok) return null;
           const after = readOrNull(pending.absPath);
+          if (after === null) return null;
           const lines = computeDiffLines(pending.before, after);
           if (lines.length === 0) return null;
           return { path: pending.relPath, lines };

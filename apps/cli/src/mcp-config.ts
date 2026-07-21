@@ -2,10 +2,10 @@
 // .seekforge/config.json document without losing other keys. Kept separate
 // from disk I/O so the mutation logic is unit-testable.
 
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { McpServerConfig } from "@seekforge/core";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 import { writeStatePath } from "./project-state.js";
 
 type ConfigDoc = { mcpServers?: Record<string, McpServerConfig>; [k: string]: unknown };
@@ -69,7 +69,7 @@ export class ConfigParseError extends Error {
 export function readConfigDoc(path: string): ConfigDoc {
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readTextFileBounded(path, MAX_CONFIG_FILE_BYTES);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
     // Exists but unreadable (EACCES, EISDIR, …): don't risk overwriting it.

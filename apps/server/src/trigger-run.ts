@@ -141,6 +141,14 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
         status: terminalStatus,
         error: { code: terminalStatus === "cancelled" ? "cancelled" : "trigger_error", message },
       });
+      if (input.runManager && input.runId) {
+        input.runManager.appendFrame(
+          input.workspace,
+          input.runId,
+          { type: "error", code: terminalStatus === "cancelled" ? "cancelled" : "agent_error", message },
+          { cacheSequence: false },
+        );
+      }
       // A failure after we've already resolved (i.e. mid-background-run) is
       // recorded in the session trace as session.failed; swallow it here so
       // it doesn't surface as an unhandled rejection.
@@ -172,13 +180,22 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
   );
   const completion = scheduled.catch((error: unknown) => {
     const cancelled = controller.signal.aborted;
+    const message = error instanceof Error ? error.message : String(error);
     input.runManager?.update(input.workspace, input.runId ?? "", {
       status: cancelled ? "cancelled" : "failed",
       error: {
         code: cancelled ? "cancelled" : "trigger_schedule_error",
-        message: error instanceof Error ? error.message : String(error),
+        message,
       },
     });
+    if (input.runManager && input.runId) {
+      input.runManager.appendFrame(
+        input.workspace,
+        input.runId,
+        { type: "error", code: cancelled ? "cancelled" : "agent_error", message },
+        { cacheSequence: false },
+      );
+    }
     if (!settled) {
       settled = true;
       rejectStarted(error instanceof Error ? error : new Error(String(error)));

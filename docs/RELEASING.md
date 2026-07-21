@@ -58,6 +58,10 @@ pre-release check and is **not** yet wired into CI.
 
 ## Automated quality gates
 
+- Release workflows require an existing `v<semver>` tag, resolve it before
+  dependency installation, and check out that exact commit. Third-party
+  actions and the Bun toolchain are pinned to immutable versions; update those
+  pins deliberately when upgrading the release toolchain.
 - `.github/workflows/ci.yml` runs full typecheck/build/test on Node 22, enforces
   scoped coverage floors for the highest-risk URL/browser/command/cache
   boundaries, then installs and exercises the packed CLI on the supported floor,

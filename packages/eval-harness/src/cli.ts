@@ -23,7 +23,7 @@
  * --require-api-key is set; exits 1 when any task failed.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "./args.js";
 import { aggregateResults } from "./aggregate.js";
@@ -41,6 +41,8 @@ import { runTask, type TaskResult } from "./task-runner.js";
 import { writeTrendReport } from "./trends.js";
 import { loadSuiteConfig, selectSuite, type SuiteConfig } from "./suite-config.js";
 import { getVariant, listVariants, type AgentBuildOptions } from "./variants.js";
+import { readTextFileBounded, writeFileAtomic } from "./file-io.js";
+import { MAX_BASELINE_BYTES } from "./limits.js";
 
 type VariantExecutor = {
   name: string;
@@ -138,8 +140,8 @@ function writeAbReport(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const jsonPath = join(reportsDir, `ab-${stamp}.json`);
   const markdownPath = join(reportsDir, `ab-${stamp}.md`);
-  writeFileSync(jsonPath, toAbJson(runs, summary));
-  writeFileSync(markdownPath, `# SeekForge paired A/B report\n\n${toAbMarkdown(summary)}\n`);
+  writeFileAtomic(jsonPath, toAbJson(runs, summary));
+  writeFileAtomic(markdownPath, `# SeekForge paired A/B report\n\n${toAbMarkdown(summary)}\n`);
   return { jsonPath, markdownPath };
 }
 
@@ -220,7 +222,7 @@ async function main(): Promise<void> {
   let regressed: string[] = [];
   let baselineJson: string | undefined;
   if (args.baseline !== undefined) {
-    baselineJson = readFileSync(args.baseline, "utf8");
+    baselineJson = readTextFileBounded(args.baseline, MAX_BASELINE_BYTES);
     console.log(`\nComparison vs baseline:\n${compare(results, baselineJson)}`);
     regressed = regressions(results, baselineJson);
   }

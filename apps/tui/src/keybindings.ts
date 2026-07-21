@@ -10,10 +10,10 @@
  * for the same scope+action). keymap.ts itself stays untouched.
  */
 
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ActionId, Binding, KeyStroke, Scope } from "./keymap.js";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /** A single user override: bind `key` to `action` within `scope`. */
 export type KeyOverride = { scope: Scope; action: ActionId; key: KeyStroke };
@@ -113,7 +113,7 @@ const ACTIONS: ReadonlySet<string> = new Set([
 function readOverrides(path: string): KeyOverride[] {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    raw = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
   } catch {
     return [];
   }

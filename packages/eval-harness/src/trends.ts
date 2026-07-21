@@ -1,9 +1,11 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, opendirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { aggregateResults } from "./aggregate.js";
 import { parseBaseline } from "./baseline.js";
 import { costDistribution, proportionCi95, type ConfidenceInterval, type CostDistribution } from "./statistics.js";
 import type { TaskResult } from "./task-runner.js";
+import { readTextFileBounded, writeFileAtomic } from "./file-io.js";
+import { MAX_TREND_FILES, MAX_TREND_REPORT_BYTES } from "./limits.js";
 
 export type TrendEntry = {
   generatedAt: string;
@@ -115,7 +117,7 @@ function parseResults(value: unknown): TaskResult[] | undefined {
 function entriesFromFile(path: string): TrendEntry[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(readTextFileBounded(path, MAX_TREND_REPORT_BYTES));
   } catch {
     return [];
   }
@@ -141,13 +143,30 @@ function entriesFromFile(path: string): TrendEntry[] {
 }
 
 export function collectTrends(dir: string): TrendEntry[] {
-  let files: string[];
+  const files: string[] = [];
+  let handle: ReturnType<typeof opendirSync>;
   try {
-    files = readdirSync(dir)
-      .filter((file) => file.endsWith(".json") && file !== "trends.json" && file !== "junit.json")
-      .map((file) => join(dir, file));
+    handle = opendirSync(dir);
   } catch {
     return [];
+  }
+  try {
+    for (;;) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      if (
+        !entry.isFile() ||
+        !entry.name.endsWith(".json") ||
+        entry.name === "trends.json" ||
+        entry.name === "junit.json"
+      ) {
+        continue;
+      }
+      files.push(join(dir, entry.name));
+      if (files.length > MAX_TREND_FILES) throw new Error(`report directory exceeds ${MAX_TREND_FILES} JSON files`);
+    }
+  } finally {
+    handle.closeSync();
   }
   const unique = new Map<string, TrendEntry>();
   for (const item of files.flatMap(entriesFromFile)) {
@@ -188,7 +207,7 @@ export function writeTrendReport(dir: string): WrittenTrendReport {
   const report: TrendReport = { generatedAt: new Date().toISOString(), entries: collectTrends(dir) };
   const jsonPath = join(dir, "trends.json");
   const markdownPath = join(dir, "trends.md");
-  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  writeFileSync(markdownPath, `${toTrendMarkdown(report.entries)}\n`);
+  writeFileAtomic(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  writeFileAtomic(markdownPath, `${toTrendMarkdown(report.entries)}\n`);
   return { markdownPath, jsonPath, report };
 }

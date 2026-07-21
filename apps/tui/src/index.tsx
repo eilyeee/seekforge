@@ -15,13 +15,18 @@ import { checkForUpdate, formatUpdateNotice } from "../../cli/src/version-check.
 
 /** First-run wizard: collect the API key, save it globally, return it. */
 async function runOnboarding(): Promise<string | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const instance = render(
       <Onboarding
         onDone={(apiKey) => {
-          saveGlobalApiKey(apiKey);
-          instance.unmount();
-          resolve(apiKey);
+          try {
+            saveGlobalApiKey(apiKey);
+            instance.unmount();
+            resolve(apiKey);
+          } catch (error) {
+            instance.unmount();
+            reject(error);
+          }
         }}
         onSkip={() => {
           instance.unmount();

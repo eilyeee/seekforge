@@ -1313,7 +1313,8 @@ verifier 结果完全没变，指纹也会变化。
   整个进程组，并且只在确认整个进程组都已退出后取消延迟强杀定时器。
 - **发现位置：** REPL shell 展开和 TUI 状态栏会因后代管道挂起或无界收集输出；stdin
   错误会返回部分 prompt，状态栏命令还会阻塞渲染；CLI/TUI shell 父进程成功退出后，
-  关闭了输出的后代也可能继续运行。
+  关闭了输出的后代也可能继续运行。Hook shell 和 Server 命令展开在成功或失败退出后同样
+  会泄漏后台后代；Windows 清理还只会终止直接子进程，而不是整棵进程树。
 
 ## 109. 在破坏客户端状态前执行传输上限
 
@@ -1385,7 +1386,8 @@ JSON 能解析不代表值有限且有界；逻辑路径检查也无法抵抗并
   只从 fd 读取有界字节前缀。
 - **发现位置：** workspace 和额外目录的共享 `@path` 展开可能跟随校验后被替换的文件，
   还会在 30k 上限生效前缓冲完整文件；Rust runtime 读取/列表会重新打开已校验路径，
-  `apply_patch` 也会无界缓冲目标文件。
+  `apply_patch` 也会无界缓冲目标文件。Skill/agent 导入、security evidence、Loop 与 session
+  lease、工具 checkpoint/search 和 vision 输入也重复了读取前 `stat` 或读取后才限长的模式。
 
 ## 117. 被拒绝的请求 body 仍然拥有 drain 生命周期
 
@@ -1481,6 +1483,47 @@ URL pathname 会保留百分号编码，并带有平台相关的前导符/路径
 - **正确做法：** 使用 `fileURLToPath` 转换 file URL，再调用路径工具。
 - **发现位置：** package smoke 和实时 server E2E 脚本从 `import.meta.url.pathname`
   推导仓库路径。
+
+## 127. 行 framing 上限必须早于行缓冲
+
+在 `readline` 回调中检查行长度已经太迟：peer 可以持续发送不带换行的数据，此时 framing
+层早已把它们全部保存在内存中。
+
+- **正确做法：** 消费 chunk 时按原始字节计数；frame 一旦越界就进入丢弃状态，持续丢弃
+  到该 frame 的换行符，然后恢复处理下一帧。客户端无法关联被拒绝 frame 时，必须确定性地
+  失败所有 pending request 并重启 transport。
+- **发现位置：** MCP stdio server 输入以及 client stdout/stderr 使用无界 `readline`
+  framing；恶意 peer 无需完成 JSON-RPC 消息就能持续增加内存占用。
+
+## 128. 文件上限必须覆盖读取期间增长，并保护超限持久状态
+
+先检查尺寸再整文件读取，仍会受到文件继续增长的影响；把超限状态当成“缺失”，还可能在
+下一次写入时销毁原文件。
+
+- **正确做法：** 通过描述符增量读取并检测越界；响应只在已验证的固定区间内流式发送；
+修改超限状态前失败关闭；报告通过原子替换发布。
+- **发现位置：** Server 静态资源/settings/recents、shared config/todos，以及 Eval 的
+suite/task/baseline/trend/metadata 存在无界读取；状态修改可能覆盖超限文件，报告读取方也
+可能看到部分输出。
+
+## 129. run 一旦预留，必须在调度执行前就拥有终态责任
+
+在进入调度器前先持久化 `running` 会留下空窗：取消或协调器失败可能在操作自身的
+`try/finally` 运行前就拒绝 Promise。
+
+- **正确做法：** 在调度 Promise 本身挂接 ledger 终态、事件和连接清理；任何执行前拒绝
+都必须表现为 failed 或 cancelled。
+- **发现位置：** REST 后台 Loop 和 WebSocket Agent/Loop 在仓库协调执行前拒绝时，可能
+永久停留在 `running`。
+
+## 130. 校验特殊文件时，不能先阻塞在 open
+
+如果打开 FIFO 会先无限等待 writer，那么尺寸检查或打开后的普通文件校验都无法保护读取方。
+
+- **正确做法：** 对不可信读取路径同时使用 `O_NONBLOCK` 和 `O_NOFOLLOW`，随后在读取前
+  校验描述符确实指向普通文件。状态修改必须把 `ENOENT` 之外的所有读取失败视为不可覆盖状态。
+- **发现位置：** config、state、trace、静态资源、dataset 和 todo 的有界读取都可能阻塞在
+  FIFO；todo 修改还可能把非“文件不存在”的读取错误当成空列表后尝试替换。
 
 ---
 

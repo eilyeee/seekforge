@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -224,6 +225,26 @@ describe("loop state persistence", () => {
       writeFileSync(file, content);
       expect(loadLoopState(workspace, "bad")).toBeNull();
     }
+  });
+
+  it("returns null for an oversized state file without buffering it", () => {
+    createLoopState({ loopId: "oversized", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const file = join(workspace, ".seekforge", "loops", "oversized.json");
+    truncateSync(file, 1024 * 1024 + 1);
+    expect(loadLoopState(workspace, "oversized")).toBeNull();
+  });
+
+  it("recovers an old oversized lock without reading it into memory", () => {
+    const root = join(workspace, ".seekforge", "loops");
+    mkdirSync(root, { recursive: true });
+    const lock = join(root, ".oversized-lock.lock");
+    writeFileSync(lock, "x");
+    truncateSync(lock, 16 * 1024 + 1);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(isLoopLeaseActive(workspace, "oversized-lock")).toBe(false);
+    const lease = acquireLoopLease(workspace, "oversized-lock", true);
+    lease.release();
   });
 
   it("rejects non-finite and inconsistent numbers", () => {

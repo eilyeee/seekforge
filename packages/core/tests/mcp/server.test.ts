@@ -76,7 +76,7 @@ function connect(workspace: string, readOnly?: boolean) {
     if (method === "notifications/initialized") initialized = true;
     input.write(`${JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}) })}\n`);
   };
-  return { server, request, notify, unsolicited };
+  return { server, request, notify, unsolicited, input };
 }
 
 describe("mcp server", () => {
@@ -113,6 +113,17 @@ describe("mcp server", () => {
     const ping = await c.request("ping");
     expect(ping.result).toEqual({});
     expect(c.unsolicited).toEqual([]);
+  });
+
+  it("rejects an oversized frame without poisoning the next request", async () => {
+    const c = client();
+    c.input.write("x".repeat(1024 * 1024 + 1));
+    c.input.write("\n");
+    const initialized = await c.request("initialize", { protocolVersion: "2025-06-18" });
+    expect(initialized.result).toBeDefined();
+    expect(c.unsolicited).toContainEqual(
+      expect.objectContaining({ id: null, error: expect.objectContaining({ code: -32700 }) }),
+    );
   });
 
   it("tools/list in read-only mode advertises exactly the read-only subset", async () => {

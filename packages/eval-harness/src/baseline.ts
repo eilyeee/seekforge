@@ -1,5 +1,6 @@
 import type { TaskResult } from "./task-runner.js";
 import { TASK_RUNNERS, validateCheck } from "./tasks.js";
+import { MAX_BASELINE_BYTES, MAX_BASELINE_RESULTS } from "./limits.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -120,6 +121,9 @@ function validateResult(value: unknown, where: string): TaskResult {
 }
 
 export function parseBaseline(baselineJson: string): TaskResult[] {
+  if (Buffer.byteLength(baselineJson, "utf8") > MAX_BASELINE_BYTES) {
+    throw new Error(`baseline exceeds ${MAX_BASELINE_BYTES} bytes`);
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(baselineJson);
@@ -133,5 +137,8 @@ export function parseBaseline(baselineJson: string): TaskResult[] {
     throw new Error("baseline JSON must be a report file ({results: [...]}) or an array of task results");
   }
   if (rawResults.length === 0) throw new Error("baseline results must not be empty");
+  if (rawResults.length > MAX_BASELINE_RESULTS) {
+    throw new Error(`baseline results exceed ${MAX_BASELINE_RESULTS} entries`);
+  }
   return rawResults.map((result, index) => validateResult(result, `baseline.results[${index}]`));
 }

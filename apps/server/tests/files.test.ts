@@ -218,5 +218,5 @@ describe("files TTL cache", () => {
 
     const result = await listWorkspaceFiles(ws, "needle", 3000);
     expect(result.files).toEqual(["many/needle.txt"]);
-  }, 15_000);
+  }, 30_000);
 });

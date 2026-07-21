@@ -212,11 +212,13 @@ describe("suite config and JUnit", () => {
           },
         ],
       }),
-      result({ taskId: "error", success: false, error: "API & timeout" }),
+      result({ taskId: "error", success: false, error: "API & timeout\u0000" }),
     ]);
     expect(xml).toContain('tests="3" failures="1" errors="1"');
     expect(xml).toContain("a&lt;&amp; sample 1");
     expect(xml).toContain("bad &lt; output");
     expect(xml).toContain("API &amp; timeout");
+    expect(xml).not.toContain("\u0000");
+    expect(xml).toContain("\uFFFD");
   });
 });

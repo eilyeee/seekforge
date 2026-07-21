@@ -3,7 +3,7 @@
  * regression tracking, and timestamped report files.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { reportsDir as defaultReportsDir } from "./paths.js";
 import { aggregateResults, type RunAggregate } from "./aggregate.js";
@@ -11,6 +11,7 @@ import { parseBaseline } from "./baseline.js";
 import type { GateResult } from "./gates.js";
 import type { RunMetadata } from "./run-metadata.js";
 import type { TaskResult } from "./task-runner.js";
+import { writeFileAtomic } from "./file-io.js";
 
 const PASS = "✓";
 const FAIL = "✗";
@@ -171,7 +172,7 @@ export function writeReport(
   const gates = options.gates
     ? `\n\n## Gates\n\n${options.gates.checks.map((gate) => `- ${gate.passed ? "PASS" : "FAIL"}: ${gate.message}`).join("\n")}`
     : "";
-  writeFileSync(markdownPath, `# SeekForge eval report\n\n${toMarkdown(results)}${metadata}${gates}\n`);
-  writeFileSync(jsonPath, toJson(results, options));
+  writeFileAtomic(markdownPath, `# SeekForge eval report\n\n${toMarkdown(results)}${metadata}${gates}\n`);
+  writeFileAtomic(jsonPath, toJson(results, options));
   return { markdownPath, jsonPath };
 }

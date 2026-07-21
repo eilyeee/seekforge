@@ -23,6 +23,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
   let initialConnection = true;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const queue: string[] = [];
+  let queuedBytes = 0;
 
   const wsUrl = () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -35,7 +36,16 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
 
   function flush() {
     while (queue.length > 0 && sock && sock.readyState === WebSocket.OPEN) {
-      sock.send(queue.shift() as string);
+      const payload = queue.shift() as string;
+      queuedBytes -= new TextEncoder().encode(payload).byteLength;
+      try {
+        sock.send(payload);
+      } catch {
+        queue.length = 0;
+        queuedBytes = 0;
+        sock.close();
+        return;
+      }
     }
   }
 
@@ -52,7 +62,16 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
   function connect() {
     if (closed) return;
     setState("connecting");
-    const connection = new WebSocket(wsUrl());
+    let connection: WebSocket;
+    try {
+      connection = new WebSocket(wsUrl());
+    } catch {
+      sock = null;
+      initialConnection = false;
+      setState("disconnected");
+      scheduleReconnect();
+      return;
+    }
     sock = connection;
     connection.onopen = () => {
       if (closed || sock !== connection) {
@@ -80,6 +99,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
       // Requests queued for this failed connection were marked interrupted by
       // the store. Never replay them silently on a later connection.
       queue.length = 0;
+      queuedBytes = 0;
       setState("disconnected");
       scheduleReconnect();
     };
@@ -95,11 +115,19 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
       const payload = encodeClientFrame(frame);
       if (payload === null) return false;
       if (sock && sock.readyState === WebSocket.OPEN) {
-        sock.send(payload);
-        return true;
+        try {
+          sock.send(payload);
+          return true;
+        } catch {
+          sock.close();
+          return false;
+        }
       }
       if (initialConnection && sock) {
+        const bytes = new TextEncoder().encode(payload).byteLength;
+        if (queuedBytes + bytes > MAX_WS_PAYLOAD_BYTES) return false;
         queue.push(payload);
+        queuedBytes += bytes;
         return true;
       }
       return false;
@@ -107,6 +135,7 @@ export function createWsClient(handlers: WsClientHandlers & { getToken: () => st
     close() {
       closed = true;
       queue.length = 0;
+      queuedBytes = 0;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       sock?.close();
       setState("disconnected");

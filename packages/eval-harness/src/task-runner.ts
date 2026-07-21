@@ -5,7 +5,7 @@
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
-import { cp, mkdtemp, open, readFile, realpath, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, open, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,8 @@ import {
 import type { TokenUsage } from "@seekforge/shared";
 import { fixturesDir as defaultFixturesDir } from "./paths.js";
 import type { Check, ExpectedSessionStatus, SessionScenarioStep, TaskDef, TaskRunner } from "./tasks.js";
+import { readTextFileBounded } from "./file-io.js";
+import { MAX_SKILL_USAGE_BYTES } from "./limits.js";
 
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -153,7 +155,7 @@ function taskText(text: string, suffix: string | undefined): string {
 async function readSkillUsage(dir: string): Promise<SkillUsage[]> {
   let raw: string;
   try {
-    raw = await readFile(join(dir, ".seekforge", "skills-usage.jsonl"), "utf8");
+    raw = readTextFileBounded(join(dir, ".seekforge", "skills-usage.jsonl"), MAX_SKILL_USAGE_BYTES);
   } catch {
     return [];
   }

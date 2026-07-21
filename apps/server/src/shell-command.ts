@@ -64,6 +64,23 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 10_000
       finish(error);
     };
 
+    const terminateRemainingGroup = (): void => {
+      if (!processGroupAlive(child)) return;
+      try {
+        killProcessGroup(child, "SIGTERM");
+      } catch {
+        // The command result remains authoritative; cleanup is best-effort.
+      }
+      forceKillTimer = setTimeout(() => {
+        try {
+          killProcessGroup(child, "SIGKILL");
+        } catch {
+          // Best-effort escalation after the direct shell has already exited.
+        }
+      }, FORCE_KILL_DELAY_MS);
+      forceKillTimer.unref();
+    };
+
     const collect = (chunks: Buffer[], chunk: Buffer): void => {
       if (settled) return;
       outputBytes += chunk.length;
@@ -80,6 +97,7 @@ export function runShellCommand(command: string, cwd: string, timeoutMs = 10_000
     child.once("close", (code, signal) => {
       if (forceKillTimer !== undefined && !processGroupAlive(child)) clearTimeout(forceKillTimer);
       if (settled) return;
+      terminateRemainingGroup();
       if (code === 0) {
         finish();
         return;

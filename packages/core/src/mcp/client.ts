@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { createInterface } from "node:readline";
 import { McpError } from "./errors.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import { createMcpHttpTransport } from "./http.js";
+import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
 import type { McpPrompt, McpResource, McpServerConfig, McpTool } from "./types.js";
 
 export { McpError };
@@ -201,54 +201,79 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
     });
     child = proc;
 
-    const rl = createInterface({ input: proc.stdout });
-    rl.on("line", (line) => {
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        return; // not protocol output; tolerate
-      }
-      if (msg === null || typeof msg !== "object") return;
-      const id = msg["id"];
-      if (("result" in msg || "error" in msg) && typeof id === "number") {
-        const p = pending.get(id);
-        if (!p) return;
-        pending.delete(id);
-        clearTimeout(p.timer);
-        p.cleanup();
-        const error = msg["error"] as { code?: number; message?: string } | undefined;
-        if (error) {
-          p.reject(new McpError("mcp_error", error.message ?? `MCP error ${error.code ?? ""}`.trim()));
-        } else {
-          p.resolve(msg["result"]);
-        }
-        return;
-      }
-      // Server-initiated requests: answer roots/list with the workspace roots.
-      // Any other server request gets a JSON-RPC "method not found"; bare
-      // notifications (no id) are tolerated silently.
-      if (typeof msg["method"] === "string") {
-        const method = msg["method"];
-        if (id === undefined || id === null) return; // notification — nothing to answer
-        if (method === "roots/list") {
-          proc.stdin.write(
-            `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,
-            () => {},
+    const stdoutReader = createBoundedLineReader(proc.stdout, {
+      maxBytes: MAX_MCP_MESSAGE_BYTES,
+      onOversize: () => {
+        if (child !== proc) return;
+        child = undefined;
+        handshake = undefined;
+        const stale = pending;
+        pending = new Map();
+        for (const p of stale.values()) {
+          clearTimeout(p.timer);
+          p.cleanup();
+          p.reject(
+            new McpError(
+              "mcp_protocol_limit",
+              `MCP server "${options.name}" sent a message larger than ${MAX_MCP_MESSAGE_BYTES} bytes`,
+            ),
           );
+        }
+        proc.kill("SIGKILL");
+      },
+      onLine: (line) => {
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return; // not protocol output; tolerate
+        }
+        if (msg === null || typeof msg !== "object") return;
+        const id = msg["id"];
+        if (("result" in msg || "error" in msg) && typeof id === "number") {
+          const p = pending.get(id);
+          if (!p) return;
+          pending.delete(id);
+          clearTimeout(p.timer);
+          p.cleanup();
+          const error = msg["error"] as { code?: number; message?: string } | undefined;
+          if (error) {
+            p.reject(new McpError("mcp_error", error.message ?? `MCP error ${error.code ?? ""}`.trim()));
+          } else {
+            p.resolve(msg["result"]);
+          }
           return;
         }
-        proc.stdin.write(
-          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } })}\n`,
-          () => {},
-        );
-      }
+        // Server-initiated requests: answer roots/list with the workspace roots.
+        // Any other server request gets a JSON-RPC "method not found"; bare
+        // notifications (no id) are tolerated silently.
+        if (typeof msg["method"] === "string") {
+          const method = msg["method"];
+          if (id === undefined || id === null) return; // notification — nothing to answer
+          if (method === "roots/list") {
+            proc.stdin.write(
+              `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,
+              () => {},
+            );
+            return;
+          }
+          proc.stdin.write(
+            `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } })}\n`,
+            () => {},
+          );
+        }
+      },
     });
 
-    const errRl = createInterface({ input: proc.stderr });
-    errRl.on("line", (line) => process.stderr.write(`[mcp:${options.name}] ${line}\n`));
+    const stderrReader = createBoundedLineReader(proc.stderr, {
+      maxBytes: 64 * 1024,
+      onLine: (line) => process.stderr.write(`[mcp:${options.name}] ${line}\n`),
+      onOversize: () => process.stderr.write(`[mcp:${options.name}] stderr line exceeded 65536 bytes; discarded\n`),
+    });
 
     const onGone = (detail: string): void => {
+      stdoutReader.close();
+      stderrReader.close();
       if (child !== proc) return;
       child = undefined;
       handshake = undefined;

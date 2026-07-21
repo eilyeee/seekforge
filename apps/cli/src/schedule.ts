@@ -15,7 +15,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   projectStateDirectory,
@@ -23,6 +23,9 @@ import {
   readProjectStateFile,
   writeProjectStateFile,
 } from "./project-state.js";
+import { readTextFileBounded } from "./bounded-file.js";
+
+const MAX_LEASE_OWNER_BYTES = 64 * 1024;
 
 /** ask = read-only Q&A; edit = may modify files (edits auto-approved headless). */
 export type ScheduleMode = "ask" | "edit";
@@ -66,7 +69,7 @@ const portableSelfStart = `portable:${Math.floor((Date.now() - process.uptime() 
 function processIdentity(pid: number): string | undefined {
   try {
     if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const stat = readTextFileBounded(`/proc/${pid}/stat`, MAX_LEASE_OWNER_BYTES);
       const closeParen = stat.lastIndexOf(")");
       const fields = stat.slice(closeParen + 2).split(" ");
       return fields[19] ? `linux:${fields[19]}` : undefined;
@@ -85,7 +88,7 @@ const selfProcessIdentity = processIdentity(process.pid);
 
 function readLeaseOwner(leasePath: string): LeaseOwner | null {
   try {
-    const parsed = JSON.parse(readFileSync(join(leasePath, "owner.json"), "utf8")) as unknown;
+    const parsed = JSON.parse(readTextFileBounded(join(leasePath, "owner.json"), MAX_LEASE_OWNER_BYTES)) as unknown;
     if (typeof parsed !== "object" || parsed === null) return null;
     const owner = parsed as Record<string, unknown>;
     if (!Number.isSafeInteger(owner["pid"]) || (owner["pid"] as number) <= 0) return null;

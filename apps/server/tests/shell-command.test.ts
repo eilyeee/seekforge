@@ -14,6 +14,22 @@ function isProcessAlive(pid: number): boolean {
 }
 
 describe("runShellCommand", () => {
+  it.each([
+    ["successful", "exit 0"],
+    ["failed", "exit 7"],
+  ])("terminates background descendants after a %s direct-shell exit", async (_label, exit) => {
+    if (process.platform === "win32") return;
+    const workspace = makeWorkspace();
+    const pidFile = join(workspace, "child.pid");
+    const command = `(trap '' TERM; sleep 30) </dev/null >/dev/null 2>&1 & echo $! > child.pid; ${exit}`;
+
+    if (exit === "exit 0") await expect(runShellCommand(command, workspace)).resolves.toBe("");
+    else await expect(runShellCommand(command, workspace)).rejects.toThrow(/exit 7/);
+    await waitUntil(() => existsSync(pidFile));
+    const childPid = Number(readFileSync(pidFile, "utf8").trim());
+    await waitUntil(() => !isProcessAlive(childPid));
+  });
+
   it("rejects timeout output and terminates the entire process group", async () => {
     const workspace = makeWorkspace();
     const pidFile = join(workspace, "child.pid");

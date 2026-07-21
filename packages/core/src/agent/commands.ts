@@ -12,9 +12,10 @@
  * (project wins). Never throws — unreadable dirs/files are skipped.
  */
 
-import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { parseFrontmatter } from "../subagents/frontmatter.js";
 
 export type UserCommand = {
@@ -37,6 +38,8 @@ export type UserCommand = {
    */
   disableModelInvocation?: boolean;
 };
+
+const MAX_COMMAND_FILE_BYTES = 256 * 1024;
 
 /**
  * Parses one command file. An optional YAML frontmatter block contributes
@@ -134,17 +137,13 @@ function loadCommandsDir(base: string, scope: "project" | "user"): UserCommand[]
       const name = `${prefix}${entry.name.slice(0, -3)}`;
       if (name === "" || name.endsWith(":")) continue;
       let raw: string;
-      let fd: number | undefined;
       try {
         const file = join(dir, entry.name);
         const stat = lstatSync(file);
         if (stat.isSymbolicLink() || !stat.isFile()) continue;
-        fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-        raw = readFileSync(fd, "utf8");
+        raw = readUtf8FileBoundedSync(file, MAX_COMMAND_FILE_BYTES);
       } catch {
         continue;
-      } finally {
-        if (fd !== undefined) closeSync(fd);
       }
       out.push(parseCommandFile(name, scope, raw));
     }

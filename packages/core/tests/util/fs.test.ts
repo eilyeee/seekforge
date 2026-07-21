@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeAllSync, writeFileAtomic } from "../../src/util/fs.js";
+import { FileTooLargeError, readFileBoundedSync, writeAllSync, writeFileAtomic } from "../../src/util/fs.js";
 
 function makeDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "seekforge-fs-test-"));
@@ -85,5 +86,46 @@ describe("writeFileAtomic", () => {
     }
     expect(fs.readFileSync(target, "utf8")).toBe("good\n");
     expect(tempFiles(dir)).toEqual([]);
+  });
+});
+
+describe("readFileBoundedSync", () => {
+  it("reads a file at the exact byte limit", () => {
+    const dir = makeDir();
+    const target = path.join(dir, "data.txt");
+    fs.writeFileSync(target, "abcdef");
+    expect(readFileBoundedSync(target, 6).toString("utf8")).toBe("abcdef");
+  });
+
+  it("rejects an oversized sparse file before buffering it", () => {
+    const dir = makeDir();
+    const target = path.join(dir, "large.bin");
+    fs.writeFileSync(target, "x");
+    fs.truncateSync(target, 1025);
+    expect(() => readFileBoundedSync(target, 1024)).toThrow(FileTooLargeError);
+  });
+
+  it("does not follow a symlink leaf", () => {
+    const dir = makeDir();
+    const target = path.join(dir, "target.txt");
+    const link = path.join(dir, "link.txt");
+    fs.writeFileSync(target, "secret");
+    fs.symlinkSync(target, link);
+    expect(() => readFileBoundedSync(link, 1024)).toThrow();
+  });
+
+  it("rejects a FIFO without waiting for a writer", () => {
+    if (process.platform === "win32") return;
+    const dir = makeDir();
+    const target = path.join(dir, "data.pipe");
+    expect(spawnSync("mkfifo", [target]).status).toBe(0);
+    const delayedWriter = spawn("sh", ["-c", 'sleep 2; printf x > "$1"', "sh", target], { stdio: "ignore" });
+    const started = Date.now();
+    try {
+      expect(() => readFileBoundedSync(target, 1024)).toThrow(/regular file/);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    } finally {
+      delayedWriter.kill("SIGKILL");
+    }
   });
 });

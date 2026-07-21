@@ -2,15 +2,17 @@
 // package. Fire-and-forget: NEVER throws, NEVER blocks startup. Hits the npm
 // registry at most once per 24h; otherwise serves a cached result.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { dim, useColor } from "./colors.js";
+import { readTextFileBounded } from "./bounded-file.js";
 
 const REGISTRY_URL = "https://registry.npmjs.org/seekforge/latest";
 const PACKAGE_NAME = "seekforge";
 const FETCH_TIMEOUT_MS = 2000;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+const MAX_UPDATE_CACHE_BYTES = 64 * 1024;
 
 /** Path to the update-check cache (~/.seekforge/update-check.json). */
 function cachePath(): string {
@@ -70,7 +72,7 @@ export function isCacheFresh(entry: CacheEntry | null, now: number, intervalMs =
 
 function readCache(): CacheEntry | null {
   try {
-    const raw = JSON.parse(readFileSync(cachePath(), "utf8")) as Partial<CacheEntry>;
+    const raw = JSON.parse(readTextFileBounded(cachePath(), MAX_UPDATE_CACHE_BYTES)) as Partial<CacheEntry>;
     if (typeof raw.checkedAt === "number" && Number.isFinite(raw.checkedAt) && typeof raw.latest === "string") {
       return { checkedAt: raw.checkedAt, latest: raw.latest };
     }

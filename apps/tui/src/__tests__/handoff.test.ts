@@ -120,4 +120,12 @@ describe("listHandoffs / latestHandoff", () => {
     expect(preview).toContain("line 10");
     expect(preview).not.toContain("line 11");
   });
+
+  it("does not read an oversized handoff preview", () => {
+    const dir = join(workspace, ".seekforge", "handoffs");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "handoff-20260721T120000.md");
+    writeFileSync(file, "x".repeat(64 * 1024 + 1));
+    expect(latestHandoff(workspace)).toBeNull();
+  });
 });

@@ -52,6 +52,9 @@ GUI 端到端在这里无法用 CI 自动化；请在一台 PATH 中**没有** `
 
 ## 自动化质量门禁
 
+- 发布 workflow 要求已有的 `v<semver>` tag，在安装依赖前解析该 tag，
+  并检出它对应的精确 commit。第三方 action 与 Bun 工具链都固定到不可变版本；
+  升级发布工具链时应显式更新这些固定值。
 - `.github/workflows/ci.yml` 在 Node 22 上运行完整的 typecheck/构建/测试，
   对风险最高的 URL/浏览器/命令/缓存边界强制执行分域覆盖率下限，
   然后在受支持的最低版本 Node 20 上安装并运行打包后的 CLI。

@@ -1,4 +1,4 @@
-import { closeSync, chmodSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, chmodSync, constants, fstatSync, fsyncSync, mkdirSync, openSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -14,6 +14,9 @@ import {
   type VerificationStatus,
 } from "./types.js";
 import { sanitizeSecurityText } from "./redact.js";
+import { FileTooLargeError, readUtf8FileBoundedSync, writeAllSync } from "../util/fs.js";
+
+export const MAX_SECURITY_EVENT_LOG_BYTES = 64 * 1024 * 1024;
 
 const eventBaseSchema = z.object({
   version: z.literal(1),
@@ -186,10 +189,32 @@ export function appendSecurityEvent(workspace: string, event: SecurityEvent): vo
   const target = securityEventsPath(workspace);
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   chmodSync(dirname(target), 0o700);
-  const fd = openSync(target, "a", 0o600);
+  const parent = dirname(target);
+  const parentBefore = statSync(parent);
+  const fd = openSync(
+    target,
+    constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0),
+    0o600,
+  );
   try {
+    const opened = fstatSync(fd);
+    const current = statSync(target);
+    const parentAfter = statSync(parent);
+    if (
+      !opened.isFile() ||
+      opened.dev !== current.dev ||
+      opened.ino !== current.ino ||
+      parentBefore.dev !== parentAfter.dev ||
+      parentBefore.ino !== parentAfter.ino
+    ) {
+      throw new Error("security event log changed during append");
+    }
+    const line = Buffer.from(`${JSON.stringify(event)}\n`, "utf8");
+    if (opened.size + line.length > MAX_SECURITY_EVENT_LOG_BYTES) {
+      throw new FileTooLargeError(target, MAX_SECURITY_EVENT_LOG_BYTES);
+    }
     chmodSync(target, 0o600);
-    writeSync(fd, `${JSON.stringify(event)}\n`, undefined, "utf8");
+    writeAllSync(fd, line);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -200,7 +225,7 @@ export function readSecurityEvents(workspace: string): SecurityEvent[] {
   const target = securityEventsPath(workspace);
   let raw: string;
   try {
-    raw = readFileSync(target, "utf8");
+    raw = readUtf8FileBoundedSync(target, MAX_SECURITY_EVENT_LOG_BYTES);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;

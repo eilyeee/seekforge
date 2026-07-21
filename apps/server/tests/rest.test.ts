@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
+import { MAX_STATIC_FILE_BYTES } from "../src/static.js";
 
 const TOKEN = "test-token-rest";
 
@@ -881,6 +882,27 @@ describe("static serving", () => {
         expect(res.status).toBe(404);
         expect(await res.text()).not.toContain("outside secret");
       }
+    } finally {
+      await ui.close();
+    }
+  });
+
+  it("rejects oversized public static assets without buffering them", async () => {
+    const distParent = makeWorkspace();
+    writeFileIn(distParent, "dist/index.html", "<html>ui-home</html>");
+    const large = join(distParent, "dist/assets/large.js");
+    writeFileIn(distParent, "dist/assets/large.js", "");
+    truncateSync(large, MAX_STATIC_FILE_BYTES + 1);
+    const ui = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      staticDir: join(distParent, "dist"),
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${ui.port}/assets/large.js`);
+      expect(response.status).toBe(404);
     } finally {
       await ui.close();
     }

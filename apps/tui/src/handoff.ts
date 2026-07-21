@@ -8,12 +8,20 @@
  * instead of re-importing the context that forced the handoff.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ChatItem } from "./model.js";
+import { readTextFileBounded } from "./bounded-file.js";
+
+const MAX_HANDOFF_PREVIEW_BYTES = 64 * 1024;
 
 /** Per-section entry caps; oldest entries beyond the cap are summarized away. */
 export const HANDOFF_CAPS = { tasks: 10, files: 30, commands: 15 } as const;
+const HANDOFF_ENTRY_CHARS = 8_000;
+
+function clipEntry(value: string): string {
+  return value.length <= HANDOFF_ENTRY_CHARS ? value : `${value.slice(0, HANDOFF_ENTRY_CHARS)}…[truncated]`;
+}
 
 export type BuildHandoffInput = {
   items: readonly ChatItem[];
@@ -27,13 +35,13 @@ export function buildHandoff(input: BuildHandoffInput): string {
 
   const tasks = items
     .filter((i) => i.kind === "user")
-    .map((i) => i.text.trim())
+    .map((i) => clipEntry(i.text.trim()))
     .filter(Boolean);
 
   // Files touched: file + diff items, deduped in first-seen order.
   const files: string[] = [];
   for (const i of items) {
-    if ((i.kind === "file" || i.kind === "diff") && !files.includes(i.path)) files.push(i.path);
+    if ((i.kind === "file" || i.kind === "diff") && !files.includes(i.path)) files.push(clipEntry(i.path));
   }
 
   // Commands run: run_command tool items, deduped in first-seen order.
@@ -41,7 +49,7 @@ export function buildHandoff(input: BuildHandoffInput): string {
   for (const i of items) {
     if (i.kind !== "tool" || i.toolName !== "run_command") continue;
     const cmd = (i.args as { command?: unknown } | null)?.command;
-    if (typeof cmd === "string" && cmd.trim() !== "" && !commands.includes(cmd)) commands.push(cmd);
+    if (typeof cmd === "string" && cmd.trim() !== "" && !commands.includes(cmd)) commands.push(clipEntry(cmd));
   }
 
   const out: string[] = ["# Session handoff", ""];
@@ -70,7 +78,7 @@ export function buildHandoff(input: BuildHandoffInput): string {
 
   out.push("## Open questions", "");
   const open = trailingBullets(lastAssistantText(items));
-  if (open.length > 0) for (const q of open) out.push(`- ${q}`);
+  if (open.length > 0) for (const q of open.slice(-HANDOFF_CAPS.tasks)) out.push(`- ${clipEntry(q)}`);
   else out.push("- (none — review the last assistant message for context)");
 
   return `${out.join("\n").trimEnd()}\n`;
@@ -136,7 +144,7 @@ export function latestHandoff(workspace: string): string | null {
   const newest = listHandoffs(workspace)[0];
   if (!newest) return null;
   try {
-    return readFileSync(newest, "utf8").split("\n").slice(0, 10).join("\n");
+    return readTextFileBounded(newest, MAX_HANDOFF_PREVIEW_BYTES).split("\n").slice(0, 10).join("\n");
   } catch {
     return null;
   }

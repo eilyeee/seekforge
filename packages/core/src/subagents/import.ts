@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { writeFileAtomic } from "../util/fs.js";
+import { readUtf8FileBoundedSync, writeFileAtomic } from "../util/fs.js";
 import { resolveInsideWorkspace } from "../tools/sandbox.js";
+import { MAX_AGENT_DEFINITION_BYTES } from "./load.js";
 import { AGENT_ID_RE, kebabize, parseFrontmatter } from "./frontmatter.js";
 import type { AgentDefinition } from "./types.js";
 
@@ -150,7 +151,8 @@ export function importExternalAgent(
   sourcePath: string,
   opts: ImportAgentOptions,
 ): { dir: string; agent: Omit<AgentDefinition, "scope">; droppedTools: string[] } {
-  const { def, droppedTools } = parseExternalAgent(fs.readFileSync(sourcePath, "utf8"));
+  const source = fs.realpathSync(sourcePath);
+  const { def, droppedTools } = parseExternalAgent(readUtf8FileBoundedSync(source, MAX_AGENT_DEFINITION_BYTES));
 
   fs.mkdirSync(opts.targetRoot, { recursive: true });
   const requestedDir = path.join(opts.targetRoot, def.id);

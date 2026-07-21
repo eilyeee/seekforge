@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HookEntry } from "@seekforge/core";
 import { formatDurationCoarse, kfmt } from "./format.js";
 import type { TuiConfig } from "./config.js";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
  * Pure formatters for the batch-D slash commands
@@ -318,7 +319,7 @@ export function findChangelogSection(startDirs: readonly string[]): ChangelogSec
       const candidate = join(dir, "CHANGELOG.md");
       if (existsSync(candidate)) {
         try {
-          const section = parseFirstSection(readFileSync(candidate, "utf8"));
+          const section = parseFirstSection(readTextFileBounded(candidate, MAX_CONFIG_FILE_BYTES));
           if (section) return section;
         } catch {
           // unreadable file — keep walking

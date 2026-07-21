@@ -356,4 +356,22 @@ describe("mcp client", () => {
       old.cleanup();
     }
   });
+
+  it("rejects an oversized stdio frame and reconnects cleanly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "seekforge-mcp-oversize-"));
+    const script = join(dir, "server.cjs");
+    const marker = join(dir, "oversized-once");
+    writeFileSync(
+      script,
+      `const fs=require("node:fs");const rl=require("node:readline").createInterface({input:process.stdin});const send=o=>process.stdout.write(JSON.stringify(o)+"\\n");let ready=false;rl.on("line",line=>{const m=JSON.parse(line);if(m.method==="initialize"){if(!fs.existsSync(${JSON.stringify(marker)})){fs.writeFileSync(${JSON.stringify(marker)},"1");process.stdout.write("x".repeat(1048577)+"\\n");return;}send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:"2025-06-18",capabilities:{},serverInfo:{name:"bounded",version:"1"}}});return;}if(m.method==="notifications/initialized"){ready=true;return;}if(ready&&m.method==="tools/list")send({jsonrpc:"2.0",id:m.id,result:{tools:[]}});});`,
+    );
+    const client = createMcpClient({ name: "oversized", config: { command: process.execPath, args: [script] } });
+    try {
+      await expect(client.listTools()).rejects.toMatchObject({ code: "mcp_protocol_limit" });
+      await expect(client.listTools()).resolves.toEqual([]);
+    } finally {
+      client.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

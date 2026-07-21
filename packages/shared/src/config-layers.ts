@@ -30,8 +30,10 @@
  * (the package root must stay browser-safe for the desktop bundle).
  */
 
-import { readFileSync } from "node:fs";
+import { readFileBounded } from "./bounded-file-read.js";
 import { HOOK_STAGES, type HookEntry, type HookStage, type PermissionRule } from "./index.js";
+
+export const MAX_CONFIG_FILE_BYTES = 1_000_000;
 
 /**
  * The keys mergeConfigLayers treats specially. App config types satisfy this
@@ -203,7 +205,7 @@ export function mergeConfigLayers<T extends BaseConfigShape>(
  */
 export function readJsonConfigLayer<T extends object>(path: string, opts: { requireObject?: boolean } = {}): T {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    const parsed = JSON.parse(readFileBounded(path, MAX_CONFIG_FILE_BYTES).toString("utf8")) as unknown;
     if (opts.requireObject && !(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))) {
       return {} as T;
     }

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { seekforgeHome } from "../memory/store.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 import type { Skill, SkillScope } from "./types.js";
 
@@ -22,6 +23,9 @@ const skillJsonSchema = z.object({
   enabled: z.boolean().optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
 });
+
+export const MAX_SKILL_DEFINITION_BYTES = 256 * 1024;
+const MAX_SKILL_METADATA_BYTES = 64 * 1024;
 
 /** A skills root directory plus the scope its skills get. */
 export type SkillsDir = { scope: SkillScope; path: string };
@@ -67,7 +71,9 @@ const disableMarkerSchema = z.object({ id: z.string().min(1), enabled: z.literal
 function readSkillDir(scope: SkillScope, dir: string, allowedRootReal: string): Skill | undefined {
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(path.join(dir, "skill.json"), "utf8"));
+    const metadata = fs.realpathSync(path.join(dir, "skill.json"));
+    if (metadata !== allowedRootReal && !metadata.startsWith(`${allowedRootReal}${path.sep}`)) return undefined;
+    raw = JSON.parse(readUtf8FileBoundedSync(metadata, MAX_SKILL_METADATA_BYTES));
   } catch {
     return undefined;
   }
@@ -100,7 +106,7 @@ function readSkillDir(scope: SkillScope, dir: string, allowedRootReal: string): 
     const physical = fs.realpathSync(skillFile);
     const inside = physical === allowedRootReal || physical.startsWith(`${allowedRootReal}${path.sep}`);
     if (!inside) return undefined;
-    content = fs.readFileSync(physical, "utf8");
+    content = readUtf8FileBoundedSync(physical, MAX_SKILL_DEFINITION_BYTES);
   } catch {
     // Broken links and unreadable files are malformed skills, not disable markers.
     return undefined;

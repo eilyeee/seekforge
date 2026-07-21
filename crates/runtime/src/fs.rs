@@ -218,6 +218,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -256,6 +258,28 @@ mod tests {
             read_file(ws_s, "large.txt").unwrap_err().code,
             codes::TOO_LARGE
         );
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn file_methods_reject_fifo_without_blocking() {
+        let ws = tmpdir("fifo");
+        let fifo = ws.join("pipe");
+        let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+
+        assert_eq!(
+            read_file(ws.to_str().unwrap(), "pipe").unwrap_err().code,
+            codes::IO_ERROR
+        );
+        assert_eq!(
+            write_file(ws.to_str().unwrap(), "pipe", "x", true)
+                .unwrap_err()
+                .code,
+            codes::IO_ERROR
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         std::fs::remove_dir_all(&ws).ok();
     }
 

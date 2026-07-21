@@ -25,6 +25,21 @@ describe("runHooks", () => {
     ...overrides,
   });
 
+  const isAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const waitForDead = async (pid: number): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (isAlive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(isAlive(pid)).toBe(false);
+  };
+
   it("delivers the JSON payload on stdin (stage + fields) with cwd = workspace", async () => {
     const outcomes = await runHooks(
       "preToolUse",
@@ -105,6 +120,29 @@ describe("runHooks", () => {
     expect(outcomes[0]!.ok).toBe(false);
     expect(outcomes[0]!.timedOut).toBe(true);
     expect(outcomes[0]!.outputTail).toContain("timed out");
+  });
+
+  it.skipIf(process.platform === "win32")("reaps stdio-closed descendants after a successful hook", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > descendant.pid" }],
+      payload({ toolName: "read_file" }),
+    );
+    expect(outcomes[0]?.ok).toBe(true);
+    const pid = Number(readFileSync(join(workspace, "descendant.pid"), "utf8"));
+    await waitForDead(pid);
+  });
+
+  it.skipIf(process.platform === "win32")("reaps stdio-closed descendants after a failed hook", async () => {
+    const outcomes = await runHooks(
+      "postToolUse",
+      [{ command: "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > failed-descendant.pid; exit 7" }],
+      payload({ toolName: "read_file" }),
+      { onError: () => {} },
+    );
+    expect(outcomes[0]?.exitCode).toBe(7);
+    const pid = Number(readFileSync(join(workspace, "failed-descendant.pid"), "utf8"));
+    await waitForDead(pid);
   });
 
   it("a non-zero preToolUse hook fails with its output tail and stops later hooks", async () => {

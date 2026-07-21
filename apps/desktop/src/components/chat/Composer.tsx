@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
+import { WorkspaceAsyncCoordinator } from "../../views/async-coordination";
 import { api } from "../../lib/api";
 import { IconSparkle } from "../ui/icons";
 import {
@@ -172,6 +173,15 @@ export function Composer({
   valueRef.current = value;
   const workspaceRef = useRef(workspaceId);
   workspaceRef.current = workspaceId;
+  const uploadCoordinator = useMemo(
+    () => new WorkspaceAsyncCoordinator(workspaceId, () => workspaceRef.current),
+    [workspaceId],
+  );
+  useEffect(() => {
+    setUploading(0);
+    setUploadError(null);
+    return () => uploadCoordinator.invalidate();
+  }, [uploadCoordinator]);
   // Caret to restore after a programmatic text change.
   const pendingCaret = useRef<number | null>(null);
   useEffect(() => {
@@ -286,6 +296,8 @@ export function Composer({
 
   const uploadImages = async (files: Iterable<File>) => {
     const uploadWorkspace = workspaceId;
+    const operation = uploadCoordinator.capture(uploadWorkspace);
+    if (!operation) return;
     setUploadError(null);
     for (const file of files) {
       const name = uploadName(file);
@@ -293,20 +305,20 @@ export function Composer({
       setUploading((n) => n + 1);
       try {
         const dataBase64 = await fileToBase64(file);
-        if (workspaceRef.current !== uploadWorkspace) return;
+        if (!uploadCoordinator.isCurrent(operation)) return;
         const { path } = await api.upload(name, dataBase64, uploadWorkspace);
-        if (workspaceRef.current !== uploadWorkspace) return;
+        if (!uploadCoordinator.isCurrent(operation)) return;
         const el = textareaRef.current;
         const pos = el ? el.selectionStart : valueRef.current.length;
         const end = el ? el.selectionEnd : pos;
         const out = insertImageMarker(valueRef.current, pos, end, path);
         applyChange(out.text, out.caret);
       } catch (err) {
-        if (workspaceRef.current === uploadWorkspace) {
+        if (uploadCoordinator.isCurrent(operation)) {
           setUploadError(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        setUploading((n) => n - 1);
+        if (uploadCoordinator.isCurrent(operation)) setUploading((n) => Math.max(0, n - 1));
       }
     }
   };

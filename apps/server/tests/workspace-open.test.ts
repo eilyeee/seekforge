@@ -1,10 +1,17 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { acquireSessionLease } from "@seekforge/core";
-import { forgetRecent, loadRecents, rememberRecent, isWorkspaceDir, recentsFilePath } from "../src/recents.js";
+import {
+  forgetRecent,
+  loadRecents,
+  rememberRecent,
+  isWorkspaceDir,
+  MAX_RECENTS_FILE_BYTES,
+  recentsFilePath,
+} from "../src/recents.js";
 import { makeWorkspace, unusedAgentFactory } from "./helpers.js";
 
 const TOKEN = "test-token-ws-open";
@@ -69,6 +76,15 @@ describe("recents store", () => {
     writeFileSync(recentsFilePath(), '{"recents":[{"path":"/tmp/poisoned","lastOpened":1e999}]}');
     expect(loadRecents()).toEqual([{ path: "/tmp/poisoned", name: "poisoned", lastOpened: 0 }]);
   });
+
+  it("does not overwrite an oversized recents file during mutation", () => {
+    const file = recentsFilePath();
+    writeFileSync(file, Buffer.alloc(MAX_RECENTS_FILE_BYTES + 1, 0x20));
+    expect(loadRecents()).toEqual([]);
+    expect(() => rememberRecent("/tmp/must-not-replace")).toThrow(/exceeds/);
+    expect(readFileSync(file).length).toBe(MAX_RECENTS_FILE_BYTES + 1);
+    writeFileSync(file, '{"recents":[]}');
+  });
 });
 
 describe("workspace open/remove endpoints", () => {
@@ -86,7 +102,7 @@ describe("workspace open/remove endpoints", () => {
     expect(body.workspace!.path).toBe(other);
     expect(body.workspaces.some((w) => w.path === other)).toBe(true);
     // Persisted to the recents file under the isolated home.
-    expect(recentsFilePath().startsWith(home)).toBe(true);
+    expect(recentsFilePath().startsWith(realpathSync(home))).toBe(true);
     expect(JSON.parse(readFileSync(recentsFilePath(), "utf8")).recents[0].path).toBe(other);
   });
 

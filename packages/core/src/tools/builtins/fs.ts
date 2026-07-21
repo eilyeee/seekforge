@@ -19,11 +19,13 @@ import { callRuntime } from "../runtime-backend.js";
 import { compileGlob } from "./glob.js";
 import { defineTool, type ToolSpec } from "../registry.js";
 import type { ToolContext } from "../index.js";
+import { FileTooLargeError, readFileBoundedSync, readUtf8FileBoundedSync } from "../../util/fs.js";
 
 const MAX_LIST_ENTRIES = 500;
 const DEFAULT_SEARCH_MATCHES = 1000;
 const MAX_SEARCH_MATCHES = 5000;
 const MAX_SEARCHABLE_FILE_BYTES = 1_000_000;
+const MAX_TOOL_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CONTEXT_LINES = 10;
 
 // Edit-review preview: cap the rendered diff so a huge rewrite cannot bloat the
@@ -154,8 +156,7 @@ function readCurrentForPreview(ctx: ToolContext, relPath: string): string | null
   try {
     if (ctx.runtime) return null;
     const resolved = resolveForRead(ctx.workspace, relPath);
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return null;
-    return fs.readFileSync(resolved, "utf8");
+    return readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
   } catch {
     return null;
   }
@@ -303,7 +304,14 @@ const readFile = defineTool({
       if (!fs.statSync(resolved).isFile()) {
         throw new ToolError("not_a_file", `Not a regular file: ${args.path}`);
       }
-      content = fs.readFileSync(resolved, "utf8");
+      try {
+        content = readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
+      } catch (error) {
+        if (error instanceof FileTooLargeError) {
+          throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
+        }
+        throw error;
+      }
     }
     const fullContent = content; // whole file, before offset/limit slicing
     const totalLines = content.split("\n").length;
@@ -519,7 +527,12 @@ const searchText = defineTool({
       }
       if (!stat.isFile() || stat.size > MAX_SEARCHABLE_FILE_BYTES) return;
       if (isSensitiveBasename(path.basename(filePath)) || isSensitiveRelPath(rel)) return;
-      const buf = fs.readFileSync(filePath);
+      let buf: Buffer;
+      try {
+        buf = readFileBoundedSync(filePath, MAX_SEARCHABLE_FILE_BYTES);
+      } catch {
+        return;
+      }
       if (buf.subarray(0, 8192).includes(0)) return; // binary sniff: NUL byte
       const content = buf.toString("utf8");
 
@@ -746,7 +759,16 @@ const writeFile = defineTool({
       throw new ToolError("exists", `File already exists: ${args.path} (pass overwrite:true to replace)`);
     }
     const expected = exists ? fs.statSync(resolved) : undefined;
-    ctx.checkpoint?.(args.path, exists ? fs.readFileSync(resolved, "utf8") : null);
+    if (ctx.checkpoint) {
+      try {
+        ctx.checkpoint(args.path, exists ? readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES) : null);
+      } catch (error) {
+        if (error instanceof FileTooLargeError) {
+          throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
+        }
+        throw error;
+      }
+    }
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     const fd = openVerifiedWrite(ctx.workspace, args.path, resolved, {
       create: true,
@@ -837,7 +859,15 @@ const applyPatch = defineTool({
       throw new ToolError("not_found", `File not found: ${args.path}`);
     }
     const expected = fs.statSync(resolved);
-    const content = fs.readFileSync(resolved, "utf8");
+    let content: string;
+    try {
+      content = readUtf8FileBoundedSync(resolved, MAX_TOOL_FILE_BYTES);
+    } catch (error) {
+      if (error instanceof FileTooLargeError) {
+        throw new ToolError("too_large", `File exceeds ${MAX_TOOL_FILE_BYTES} bytes: ${args.path}`);
+      }
+      throw error;
+    }
     // applyEdits throws on no_match/ambiguous before anything is written.
     const next = applyEdits(content, args.edits);
     ctx.checkpoint?.(args.path, content);

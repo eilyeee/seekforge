@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { isSensitiveBasename, isSensitiveRelPath } from "@seekforge/shared";
 import { ToolError } from "./errors.js";
 import { onAbortOnce } from "../util/abort.js";
+import { killProcessTree } from "../util/process-tree.js";
 import { scrubSecretEnv } from "../util/scrub-env.js";
 import { buildSandboxSpec, sandboxedShell, type SandboxLevel } from "./os-sandbox.js";
 
@@ -744,13 +745,7 @@ export function runShellCommand(
     child.stderr.on("error", () => {});
 
     const killTree = (): void => {
-      if (child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          child.kill("SIGKILL");
-        }
-      }
+      killProcessTree(child);
     };
     let timer: ReturnType<typeof setTimeout>;
     let offAbort: () => void = () => {};

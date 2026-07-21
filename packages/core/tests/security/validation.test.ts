@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { redactSecurityText } from "../../src/security/redact.js";
-import { validateAgentFindings } from "../../src/security/validation.js";
+import { MAX_EVIDENCE_FILE_BYTES, validateAgentFindings } from "../../src/security/validation.js";
 
 describe("security Agent output validation", () => {
   let workspace: string;
@@ -38,6 +38,18 @@ describe("security Agent output validation", () => {
     const [finding] = validateAgentFindings(workspace, envelope());
     expect(finding).toMatchObject({ severity: "high", ruleId: "command-injection" });
     expect(finding!.evidence[0]).toEqual({ path: "app.ts", lineStart: 2, lineEnd: 2, excerpt: "run(userInput);" });
+  });
+
+  it("rejects oversized evidence files before parsing lines", () => {
+    const target = join(workspace, "huge.ts");
+    writeFileSync(target, "x");
+    truncateSync(target, MAX_EVIDENCE_FILE_BYTES + 1);
+    expect(() =>
+      validateAgentFindings(
+        workspace,
+        envelope({ evidence: [{ path: "huge.ts", lineStart: 1, lineEnd: 1, excerpt: "x" }] }),
+      ),
+    ).toThrow(/exceeds/);
   });
 
   it("rejects markdown, unknown fields, missing files, traversal, and forged excerpts", () => {

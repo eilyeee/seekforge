@@ -1,12 +1,14 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 import { z } from "zod";
 import { resolveForRead } from "../tools/sandbox.js";
 import { FINDING_SEVERITIES, type FindingEvidence, type FindingSeverity } from "./types.js";
 import { sanitizeSecurityText } from "./redact.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 
 const MAX_FINDINGS = 100;
 const MAX_EVIDENCE = 5;
+export const MAX_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
 
 const evidenceSchema = z
   .object({
@@ -79,7 +81,7 @@ function validateRelativeEvidencePath(workspace: string, rawPath: string): strin
 export function validateEvidence(workspace: string, raw: z.infer<typeof evidenceSchema>): FindingEvidence {
   const path = validateRelativeEvidencePath(workspace, raw.path);
   const resolved = resolveForRead(workspace, path);
-  const content = readFileSync(resolved, "utf8").replace(/\r\n/g, "\n");
+  const content = readUtf8FileBoundedSync(resolved, MAX_EVIDENCE_FILE_BYTES).replace(/\r\n/g, "\n");
   const lines = content.split("\n");
   if (raw.lineEnd < raw.lineStart || raw.lineEnd > lines.length) {
     throw new Error(`invalid evidence line range for ${path}: ${raw.lineStart}-${raw.lineEnd}`);
@@ -123,7 +125,9 @@ export function validateEvidenceLocation(
   evidence: { path: string; lineStart: number; lineEnd: number },
 ): { path: string; lineStart: number; lineEnd: number } {
   const path = validateRelativeEvidencePath(workspace, evidence.path);
-  const lineCount = readFileSync(resolveForRead(workspace, path), "utf8").replace(/\r\n/g, "\n").split("\n").length;
+  const lineCount = readUtf8FileBoundedSync(resolveForRead(workspace, path), MAX_EVIDENCE_FILE_BYTES)
+    .replace(/\r\n/g, "\n")
+    .split("\n").length;
   if (
     !Number.isSafeInteger(evidence.lineStart) ||
     !Number.isSafeInteger(evidence.lineEnd) ||

@@ -8,10 +8,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { seekforgeHome } from "../memory/store.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 
 export type ManageSkillOptions = { global?: boolean };
 const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+const MAX_SKILL_METADATA_BYTES = 64 * 1024;
 
 function requireSkillId(id: string): void {
   if (!SKILL_ID_RE.test(id)) {
@@ -87,7 +89,7 @@ export function setSkillEnabled(
     // Flip enabled in place, preserving the rest of skill.json.
     let parsed: Record<string, unknown>;
     try {
-      const value = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as unknown;
+      const value = JSON.parse(readUtf8FileBoundedSync(fs.realpathSync(jsonPath), MAX_SKILL_METADATA_BYTES)) as unknown;
       parsed =
         typeof value === "object" && value !== null && !Array.isArray(value)
           ? (value as Record<string, unknown>)

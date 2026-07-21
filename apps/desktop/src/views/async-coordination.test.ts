@@ -73,6 +73,20 @@ describe("WorkspaceAsyncCoordinator", () => {
     expect(coordinator.capture()).not.toBeNull();
   });
 
+  it("does not revive an old operation after switching A to B to A", () => {
+    let activeWorkspace = "workspace-a";
+    const coordinator = new WorkspaceAsyncCoordinator("workspace-a", () => activeWorkspace);
+    const oldA = coordinator.capture()!;
+
+    activeWorkspace = "workspace-b";
+    coordinator.setWorkspace("workspace-b");
+    activeWorkspace = "workspace-a";
+    coordinator.setWorkspace("workspace-a");
+
+    expect(coordinator.isCurrent(oldA)).toBe(false);
+    expect(coordinator.capture()).not.toBeNull();
+  });
+
   it("keeps mutations current across newer requests in the same workspace", () => {
     const coordinator = new WorkspaceAsyncCoordinator("workspace-a", () => "workspace-a");
     const mutation = coordinator.capture();

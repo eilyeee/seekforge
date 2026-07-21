@@ -6,13 +6,13 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { MAX_STATE_FILE_BYTES, readTextFdBounded } from "./bounded-file.js";
 
 function isMissing(err: unknown): boolean {
   return (err as NodeJS.ErrnoException).code === "ENOENT";
@@ -48,12 +48,12 @@ export function projectStateFilePath(projectPath: string, name: string): string 
   return join(projectStateDirectory(projectPath), name);
 }
 
-export function readProjectStateFile(projectPath: string, name: string): string {
+export function readProjectStateFile(projectPath: string, name: string, maxBytes = MAX_STATE_FILE_BYTES): string {
   const path = projectStateFilePath(projectPath, name);
   const noFollow = constants.O_NOFOLLOW ?? 0;
-  const fd = openSync(path, constants.O_RDONLY | noFollow);
+  const fd = openSync(path, constants.O_RDONLY | noFollow | (constants.O_NONBLOCK ?? 0));
   try {
-    return readFileSync(fd, "utf8");
+    return readTextFdBounded(fd, path, maxBytes);
   } finally {
     closeSync(fd);
   }

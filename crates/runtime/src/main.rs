@@ -27,6 +27,20 @@ const MIN_WORKERS: usize = 2;
 const MAX_WORKERS: usize = 8;
 const QUEUED_REQUESTS_PER_WORKER: usize = 2;
 const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_LIST_DEPTH: u64 = 100;
+
+fn bounded_integer(value: Option<f64>, default: u64, max: u64, name: &str) -> RtResult<u64> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > max as f64 {
+        return Err(RtError::new(
+            codes::BAD_REQUEST,
+            format!("{name} must be an integer between 0 and {max}"),
+        ));
+    }
+    Ok(value as u64)
+}
 
 #[derive(Debug, Eq, PartialEq)]
 enum BoundedLine {
@@ -95,9 +109,7 @@ fn dispatch(method: &str, params: Value, cancelled: &AtomicBool) -> RtResult<Val
         }
         "list_files" => {
             let p: protocol::ListFilesParams = parse_params(params)?;
-            let max_depth = p
-                .max_depth
-                .map_or(10, |d| if d < 0.0 { 0 } else { d as u32 });
+            let max_depth = bounded_integer(p.max_depth, 10, MAX_LIST_DEPTH, "maxDepth")? as u32;
             fs::list_files(&p.workspace, p.path.as_deref().unwrap_or("."), max_depth)
         }
         "write_file" => {
@@ -110,13 +122,12 @@ fn dispatch(method: &str, params: Value, cancelled: &AtomicBool) -> RtResult<Val
         }
         "run_command" => {
             let p: protocol::RunCommandParams = parse_params(params)?;
-            let timeout_ms = p.timeout_ms.map_or(command::DEFAULT_TIMEOUT_MS, |t| {
-                if t < 0.0 {
-                    0
-                } else {
-                    t as u64
-                }
-            });
+            let timeout_ms = bounded_integer(
+                p.timeout_ms,
+                command::DEFAULT_TIMEOUT_MS,
+                command::MAX_TIMEOUT_MS,
+                "timeoutMs",
+            )?;
             command::run_command_cancellable(
                 &p.workspace,
                 &p.command,
@@ -369,7 +380,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_bounded_line, BoundedLine};
+    use super::{bounded_integer, read_bounded_line, BoundedLine};
     use std::io::Cursor;
 
     #[test]
@@ -401,5 +412,19 @@ mod tests {
             BoundedLine::Line
         );
         assert_eq!(output, b"final");
+    }
+
+    #[test]
+    fn bounded_integer_rejects_non_finite_fractional_and_oversized_values() {
+        assert_eq!(bounded_integer(None, 10, 100, "value").unwrap(), 10);
+        assert_eq!(bounded_integer(Some(0.0), 10, 100, "value").unwrap(), 0);
+        for invalid in [f64::NAN, f64::INFINITY, -1.0, 1.5, 101.0] {
+            assert_eq!(
+                bounded_integer(Some(invalid), 10, 100, "value")
+                    .unwrap_err()
+                    .code,
+                super::codes::BAD_REQUEST
+            );
+        }
     }
 }

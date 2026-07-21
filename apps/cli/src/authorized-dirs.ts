@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { writeFileAtomic } from "@seekforge/core";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
  * Real, case-canonical absolute path. Canonicalizing BOTH the stored dirs and
@@ -30,11 +31,16 @@ export function authorizedStorePath(): string {
   return join(homedir(), ".seekforge", "authorized.json");
 }
 
-function readDirs(storePath: string): string[] {
+function readDirs(storePath: string, strict = false): string[] {
   try {
-    const data = JSON.parse(readFileSync(storePath, "utf8")) as { dirs?: unknown };
-    return Array.isArray(data.dirs) ? data.dirs.filter((d): d is string => typeof d === "string") : [];
-  } catch {
+    const data = JSON.parse(readTextFileBounded(storePath, MAX_CONFIG_FILE_BYTES)) as unknown;
+    if (typeof data !== "object" || data === null || Array.isArray(data))
+      throw new Error("invalid authorization store");
+    const dirs = (data as { dirs?: unknown }).dirs;
+    if (dirs !== undefined && !Array.isArray(dirs)) throw new Error("invalid authorization directories");
+    return Array.isArray(dirs) ? dirs.filter((d): d is string => typeof d === "string") : [];
+  } catch (error) {
+    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return [];
   }
 }
@@ -55,7 +61,7 @@ export function isAuthorizedDir(dir: string, storePath: string = authorizedStore
 /** Record `dir` as authorized for future runs (idempotent). */
 export function authorizeDir(dir: string, storePath: string = authorizedStorePath()): void {
   const target = canonical(dir);
-  const dirs = readDirs(storePath);
+  const dirs = readDirs(storePath, true);
   // Skip when already covered by an exact match OR an authorized ANCESTOR — the
   // same containment rule isAuthorizedDir uses — so a redundant subdir entry is
   // never appended (which would bloat the store).

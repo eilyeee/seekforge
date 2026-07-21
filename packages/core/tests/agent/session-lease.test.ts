@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -89,6 +89,20 @@ describe("session leases", () => {
     expect(isSessionRunActive(workspace, "malformed")).toBe(false);
 
     const lease = acquireSessionLease(workspace, "malformed");
+    lease.release();
+  });
+
+  it("recovers an old oversized owner file without buffering it", () => {
+    const workspace = makeWorkspace();
+    const lock = join(initializeLeaseRoot(workspace), "oversized.lock");
+    mkdirSync(lock, { mode: 0o700 });
+    const owner = join(lock, "owner.json");
+    writeFileSync(owner, "x");
+    truncateSync(owner, 16 * 1024 + 1);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(owner, old, old);
+    expect(isSessionRunActive(workspace, "oversized")).toBe(false);
+    const lease = acquireSessionLease(workspace, "oversized");
     lease.release();
   });
 

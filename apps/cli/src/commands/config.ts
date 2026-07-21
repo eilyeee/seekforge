@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { availableProfiles, loadConfig } from "../config.js";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { t } from "../i18n.js";
 import { writeStatePath } from "../project-state.js";
 
@@ -57,7 +58,7 @@ export function configSetCommand(key: string, value: string, opts: { global?: bo
   let current: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
-      const parsed = parseConfigDoc(readFileSync(path, "utf8"));
+      const parsed = parseConfigDoc(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
       if (!parsed) throw new Error("config root must be an object");
       current = parsed;
     } catch {

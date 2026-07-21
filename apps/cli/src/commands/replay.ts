@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { listSessions, loadSessionMessages, readSessionMeta, sessionTitle } from "@seekforge/core";
 import type { AgentEvent, ChatMessage } from "@seekforge/shared";
 import { dim, fail } from "../colors.js";
 import { t } from "../i18n.js";
 import { createRenderer } from "../render.js";
+import { MAX_REPLAY_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 
 export type ReplayOptions = {
   /** Print full tool args and tool result data (mirrors run's --verbose). */
@@ -25,7 +26,7 @@ function eventsFile(workspace: string, sessionId: string): string {
 export function loadSessionEvents(workspace: string, sessionId: string): AgentEvent[] {
   const file = eventsFile(workspace, sessionId);
   const events: AgentEvent[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of readTextFileBounded(file, MAX_REPLAY_FILE_BYTES).split("\n")) {
     if (!line.trim()) continue;
     try {
       const { ts: _ts, ...event } = JSON.parse(line) as AgentEvent & { ts?: string };

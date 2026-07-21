@@ -8,9 +8,10 @@
 // .seekforge/output-styles/<name>.md (project, then the user home); its body
 // (frontmatter stripped) is the addendum verbatim.
 
-import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { seekforgeHome } from "../memory/store.js";
+import { readUtf8FileBoundedSync } from "../util/fs.js";
 
 /** The set of built-in output styles. */
 export type OutputStyle = "default" | "concise" | "explanatory" | "learning";
@@ -100,16 +101,12 @@ function isCustomOutputStyleName(name: string): boolean {
 }
 
 function readStyleFile(file: string): string | undefined {
-  let fd: number | undefined;
   try {
     const stat = lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-    return readFileSync(fd, "utf8");
+    return readUtf8FileBoundedSync(file, 256 * 1024);
   } catch {
     return undefined;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
   }
 }
 

@@ -15,8 +15,9 @@ try {
   const result = spawnSync(
     "pnpm",
     ["dlx", "playwright@1.55.0", "screenshot", "--browser", "chromium", pathToFileURL(page).href, screenshot],
-    { stdio: "inherit" },
+    { stdio: "inherit", timeout: 2 * 60 * 1000 },
   );
+  if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`Playwright smoke exited with ${result.status ?? "no status"}`);
   }

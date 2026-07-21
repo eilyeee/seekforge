@@ -2,6 +2,7 @@ import { symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_SKILLS, loadSkillsFromDirs } from "../../src/skills/index.js";
+import { MAX_SKILL_DEFINITION_BYTES } from "../../src/skills/load.js";
 import { makeTempDir, skillJson, writeSkillDir } from "./helpers.js";
 
 const MD = "# Skill\n\n## Procedure\n\n1. do it\n";
@@ -39,6 +40,13 @@ describe("loadSkillsFromDirs", () => {
     const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);
     const minimal = skills.find((s) => s.id === "minimal");
     expect(minimal).toMatchObject({ priority: 50, enabled: true, risk: "medium", content: MD });
+  });
+
+  it("skips oversized definitions instead of buffering them", () => {
+    const project = makeTempDir();
+    writeSkillDir(project, "oversized", skillJson("oversized"), "x".repeat(MAX_SKILL_DEFINITION_BYTES + 1));
+    const skills = loadSkillsFromDirs([{ scope: "project", path: project }]);
+    expect(skills.find((skill) => skill.id === "oversized")).toBeUndefined();
   });
 
   it("a project override with enabled:false disables a builtin of the same id", () => {

@@ -24,7 +24,31 @@ const TARGETS = [
   { path: "apps/desktop/src-tauri/Cargo.toml", kind: "cargo" },
 ];
 
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
+
+export function isValidSemver(version) {
+  const match = SEMVER_RE.exec(version);
+  if (!match) return false;
+  const prerelease = match[4];
+  if (!prerelease) return true;
+  return prerelease
+    .split(".")
+    .every((part) => part.length > 0 && (!/^\d+$/.test(part) || part === "0" || !part.startsWith("0")));
+}
+
+export function replaceJsonVersion(text, version) {
+  const document = JSON.parse(text);
+  if (document === null || Array.isArray(document) || typeof document !== "object") {
+    throw new Error("version file must contain a JSON object");
+  }
+  if (typeof document.version !== "string") {
+    throw new Error('version file must contain a string "version" field');
+  }
+  document.version = version;
+  const indent = text.match(/\n([ \t]+)"/)?.[1] ?? "  ";
+  const newline = text.endsWith("\n") ? "\n" : "";
+  return `${JSON.stringify(document, null, indent)}${newline}`;
+}
 
 function fail(msg) {
   process.stderr.write(`release: ${msg}\n`);
@@ -71,12 +95,12 @@ function writeVersion(target, version) {
   const file = abs(target.path);
   const text = readFileSync(file, "utf8");
   if (target.kind === "json") {
-    // Minimal-diff rewrite: replace only the top-level "version" string.
-    // Guard on the pattern MATCHING, not on the text changing — a file
-    // already at the target version is a valid no-op, not a missing field.
-    const re = /("version"\s*:\s*)"[^"]*"/;
-    if (!re.test(text)) fail(`could not find a "version" field in ${target.path}`);
-    const replaced = text.replace(re, `$1"${version}"`);
+    let replaced;
+    try {
+      replaced = replaceJsonVersion(text, version);
+    } catch (error) {
+      fail(`cannot update ${target.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (replaced !== text) writeFileSync(file, replaced);
     return;
   }
@@ -157,7 +181,7 @@ function runCheck() {
 }
 
 function runBump(version, { commit }) {
-  if (!SEMVER_RE.test(version)) fail(`"${version}" is not a valid semver (e.g. 0.8.0)`);
+  if (!isValidSemver(version)) fail(`"${version}" is not a valid semver (e.g. 0.8.0)`);
   assertCleanTree();
 
   for (const target of TARGETS) {
@@ -188,13 +212,15 @@ function runBump(version, { commit }) {
 
   const tag = `v${version}`;
   if (commit) {
-    git(["commit", "-am", `release: ${tag}`]);
+    git(["commit", "-am", `chore(release): ${tag}`]);
     git(["tag", tag]);
     process.stdout.write(`\nCommitted and tagged ${tag} (not pushed). Review, then:\n`);
     process.stdout.write(`  git push && git push --tags\n`);
   } else {
     process.stdout.write(`\nNext steps (review, then run):\n`);
-    process.stdout.write(`  git commit -am "release: ${tag}" && git tag ${tag} && git push && git push --tags\n`);
+    process.stdout.write(
+      `  git commit -am "chore(release): ${tag}" && git tag ${tag} && git push && git push --tags\n`,
+    );
   }
 }
 
@@ -216,4 +242,6 @@ function main() {
   runBump(version, { commit });
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

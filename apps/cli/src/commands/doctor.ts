@@ -8,7 +8,7 @@
 // probe bag, the unrecognized-provider warning and the desktop/GUI checks.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_BASE_URL, resolveProviderPreset } from "@seekforge/core";
 import {
@@ -33,6 +33,7 @@ import {
 import { dim, green, red, yellow } from "../colors.js";
 import { t } from "../i18n.js";
 import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 
 export type { DoctorCheck };
 export { configParseCheck };
@@ -93,7 +94,7 @@ export function createDefaultProbes(): DoctorProbes {
     },
     readText: (path) => {
       try {
-        return readFileSync(path, "utf8");
+        return readTextFileBounded(path, MAX_CONFIG_FILE_BYTES);
       } catch {
         return null;
       }

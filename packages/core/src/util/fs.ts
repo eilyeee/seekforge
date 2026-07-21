@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 type SyncWriter = (fd: number, buffer: Uint8Array, offset: number, length: number) => number;
@@ -15,12 +27,73 @@ export function writeAllSync(fd: number, data: Uint8Array, writer: SyncWriter = 
 }
 
 /** Read a UTF-8 file, or undefined when it is missing/unreadable. */
-export function readFileIfExists(filePath: string): string | undefined {
+const DEFAULT_BOUNDED_FILE_BYTES = 16 * 1024 * 1024;
+
+export function readFileIfExists(filePath: string, maxBytes = DEFAULT_BOUNDED_FILE_BYTES): string | undefined {
   try {
-    return readFileSync(filePath, "utf8");
+    return readUtf8FileBoundedSync(filePath, maxBytes);
   } catch {
     return undefined;
   }
+}
+
+export class FileTooLargeError extends Error {
+  readonly code = "EFBIG";
+
+  constructor(
+    readonly filePath: string,
+    readonly limit: number,
+  ) {
+    super(`file exceeds ${limit} bytes: ${filePath}`);
+    this.name = "FileTooLargeError";
+  }
+}
+
+function sameIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/**
+ * Reads at most `maxBytes` from one physical regular file. The descriptor and
+ * pathname are identity-checked so a validation/read swap cannot redirect the
+ * operation, and the streaming limit still holds when the file grows mid-read.
+ */
+export function readFileBoundedSync(filePath: string, maxBytes: number): Buffer {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new RangeError(`file byte limit must be a non-negative safe integer: ${maxBytes}`);
+  }
+  const parent = dirname(filePath);
+  const parentBefore = statSync(parent);
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) throw new Error(`not a regular file: ${filePath}`);
+    if (opened.size > maxBytes) throw new FileTooLargeError(filePath, maxBytes);
+    const current = statSync(filePath);
+    const parentAfter = statSync(parent);
+    if (!sameIdentity(parentBefore, parentAfter) || !sameIdentity(opened, current)) {
+      throw new Error(`file changed during validation: ${filePath}`);
+    }
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total + 1));
+      const count = readSync(fd, chunk, 0, chunk.length, null);
+      if (count === 0) break;
+      total += count;
+      if (total > maxBytes) throw new FileTooLargeError(filePath, maxBytes);
+      chunks.push(chunk.subarray(0, count));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function readUtf8FileBoundedSync(filePath: string, maxBytes: number): string {
+  return readFileBoundedSync(filePath, maxBytes).toString("utf8");
 }
 
 /**

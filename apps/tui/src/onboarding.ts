@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
+import { writeStateFile } from "./state-file.js";
 
 /**
  * First-run onboarding logic: decide when to show the API-key wizard,
@@ -36,17 +37,19 @@ export function validateApiKeyFormat(key: string): string | null {
 export function saveGlobalApiKey(key: string, homeDir: string = homedir()): { path: string } {
   const dir = join(homeDir, ".seekforge");
   const path = join(dir, "config.json");
-  mkdirSync(dir, { recursive: true });
   let existing: Record<string, unknown> = {};
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      existing = parsed as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`existing config is not a JSON object: ${path}`);
     }
-  } catch {
-    // missing or corrupt file: start fresh
+    existing = parsed as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`refusing to replace unreadable or invalid config: ${path}`, { cause: error });
+    }
   }
   const merged = { ...existing, apiKey: key.trim() };
-  writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
+  writeStateFile(path, `${JSON.stringify(merged, null, 2)}\n`);
   return { path };
 }

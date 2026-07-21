@@ -6,10 +6,11 @@
  * ARK_API_KEY for another tool never gets the Ark key sent to DeepSeek.
  */
 
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ModelPricing } from "@seekforge/core";
+import { readTextFileBounded } from "./file-io.js";
+import { MAX_EVAL_CONFIG_BYTES } from "./limits.js";
 
 export type EvalConfig = {
   apiKey?: string;
@@ -58,7 +59,7 @@ function readModelPricing(value: unknown): Record<string, ModelPricing> | undefi
 
 function readJson(path: string): EvalConfig {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(readTextFileBounded(path, MAX_EVAL_CONFIG_BYTES));
     if (!isRecord(parsed)) return {};
     const result: EvalConfig = {};
     for (const key of ["apiKey", "model", "baseUrl", "provider"] as const) {

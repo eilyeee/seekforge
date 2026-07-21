@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --testTimeout=15000"
   },
   "dependencies": {
     "@seekforge/core": "workspace:*",

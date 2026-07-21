@@ -27,17 +27,18 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { FileTooLargeError, readFileDescriptorBounded } from "./bounded-file-read.js";
 
 export type Todo = { index: number; text: string; done: boolean };
 
 const CHECKLIST_RE = /^- \[( |x|X)\] (.*)$/;
+export const MAX_TODO_FILE_BYTES = 1_000_000;
 
 function todosFile(workspace: string, createParent = false): string {
   const root = realpathSync(resolve(workspace));
@@ -60,17 +61,21 @@ function todosFile(workspace: string, createParent = false): string {
   return join(stateDir, "todos.md");
 }
 
-function readLines(workspace: string): string[] {
+function readLines(workspace: string, preserveOnError = false): string[] {
   let fd: number | undefined;
   try {
-    fd = openSync(todosFile(workspace), constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(todosFile(workspace), constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     if (!fstatSync(fd).isFile()) return [];
-    const lines = readFileSync(fd, "utf8").split("\n");
+    const lines = readFileDescriptorBounded(fd, MAX_TODO_FILE_BYTES).toString("utf8").split("\n");
     // A trailing newline yields one empty last element; drop it so writes
     // (which re-append "\n") do not accumulate blank lines.
     if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
     return lines;
-  } catch {
+  } catch (error) {
+    if (preserveOnError && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (error instanceof FileTooLargeError) throw error;
+      throw new Error("todo state file must be a workspace-owned regular file", { cause: error });
+    }
     return [];
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -95,6 +100,7 @@ function writeLines(workspace: string, lines: readonly string[]): void {
   try {
     fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     const data = Buffer.from(lines.length > 0 ? `${lines.join("\n")}\n` : "", "utf8");
+    if (data.length > MAX_TODO_FILE_BYTES) throw new FileTooLargeError(MAX_TODO_FILE_BYTES);
     let offset = 0;
     while (offset < data.length) {
       const written = writeSync(fd, data, offset, data.length - offset);
@@ -160,7 +166,7 @@ export function collapseTodoText(text: string): string {
 /** Appends a new unchecked todo (creating .seekforge/ if needed) and returns it. */
 export function addTodo(workspace: string, text: string): Todo {
   const single = collapseTodoText(text);
-  const lines = readLines(workspace);
+  const lines = readLines(workspace, true);
   lines.push(`- [ ] ${single}`);
   writeLines(workspace, lines);
   const index = lines.filter((l) => CHECKLIST_RE.test(l)).length;
@@ -181,7 +187,7 @@ function lineIndexOf(lines: readonly string[], index: number): number {
 
 /** Flips the [ ]/[x] state of the todo at `index`; null when out of range. */
 export function toggleTodo(workspace: string, index: number): Todo | null {
-  const lines = readLines(workspace);
+  const lines = readLines(workspace, true);
   const at = lineIndexOf(lines, index);
   if (at === -1) return null;
   const todo = parseTodo(lines[at] as string, index) as Todo;
@@ -193,7 +199,7 @@ export function toggleTodo(workspace: string, index: number): Todo | null {
 
 /** Removes the todo at `index` (its line only); null when out of range. */
 export function removeTodo(workspace: string, index: number): Todo | null {
-  const lines = readLines(workspace);
+  const lines = readLines(workspace, true);
   const at = lineIndexOf(lines, index);
   if (at === -1) return null;
   const todo = parseTodo(lines[at] as string, index) as Todo;

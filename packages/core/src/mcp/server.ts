@@ -19,9 +19,9 @@
  *   human. Only wire full mode to callers you would trust with a shell.
  */
 
-import { createInterface, type Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { createDefaultDispatcher, type ToolContext } from "../tools/index.js";
+import { createBoundedLineReader, MAX_MCP_MESSAGE_BYTES } from "./framing.js";
 
 /** Must match what our own client sends (client.ts PROTOCOL_VERSION). */
 const PROTOCOL_VERSION = "2025-06-18";
@@ -319,22 +319,31 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
     }
   }
 
-  const rl: Interface = createInterface({ input });
-  rl.on("line", (line) => {
-    const trimmed = line.trim();
-    if (trimmed === "") return;
-    let msg: JsonRpcMessage;
-    try {
-      msg = JSON.parse(trimmed) as JsonRpcMessage;
-    } catch {
-      return; // not protocol traffic; tolerate (mirrors the client)
-    }
-    if (msg === null || typeof msg !== "object") return;
-    // JSON-RPC request ids make out-of-order responses unambiguous. Dispatch
-    // independently so a long tool call cannot block ping/tools/list/cancel.
-    void handle(msg).catch(() => {
-      // Request handlers report their own errors when an id is present.
-    });
+  const reader = createBoundedLineReader(input, {
+    maxBytes: MAX_MCP_MESSAGE_BYTES,
+    onOversize: () => {
+      write({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: `JSON-RPC message exceeds ${MAX_MCP_MESSAGE_BYTES} bytes` },
+      });
+    },
+    onLine: (line) => {
+      const trimmed = line.trim();
+      if (trimmed === "") return;
+      let msg: JsonRpcMessage;
+      try {
+        msg = JSON.parse(trimmed) as JsonRpcMessage;
+      } catch {
+        return; // not protocol traffic; tolerate (mirrors the client)
+      }
+      if (msg === null || typeof msg !== "object") return;
+      // JSON-RPC request ids make out-of-order responses unambiguous. Dispatch
+      // independently so a long tool call cannot block ping/tools/list/cancel.
+      void handle(msg).catch(() => {
+        // Request handlers report their own errors when an id is present.
+      });
+    },
   });
 
   return {
@@ -342,7 +351,7 @@ export function serveMcp(opts: ServeMcpOptions): McpServerHandle {
       closed = true;
       for (const controller of inflight.values()) controller.abort();
       inflight.clear();
-      rl.close();
+      reader.close();
     },
   };
 }

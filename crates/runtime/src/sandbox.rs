@@ -234,7 +234,7 @@ impl SecureReadPath {
         openat_file(
             &parent,
             &self.leaf,
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0,
         )
         .map_err(|error| secure_path_error(&self.display, "open file for reading", error))
@@ -314,14 +314,26 @@ impl SecureWritePath {
 
     pub(crate) fn open_for_write(&self, overwrite: bool) -> RtResult<File> {
         let parent = self.open_parent(true)?;
-        let mut flags = libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        if overwrite {
-            flags |= libc::O_TRUNC;
-        } else {
+        let mut flags =
+            libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        if !overwrite {
             flags |= libc::O_EXCL;
         }
         match openat_file(&parent, &self.leaf, flags, 0o666) {
-            Ok(file) => Ok(file),
+            Ok(file) => {
+                let metadata = file.metadata().map_err(|error| {
+                    secure_path_error(&self.display, "inspect file for writing", error)
+                })?;
+                if !metadata.is_file() {
+                    return Err(RtError::io(format!("not a regular file: {}", self.display)));
+                }
+                if overwrite {
+                    file.set_len(0).map_err(|error| {
+                        secure_path_error(&self.display, "truncate file for writing", error)
+                    })?;
+                }
+                Ok(file)
+            }
             Err(error) if error.raw_os_error() == Some(libc::EEXIST) && !overwrite => {
                 Err(RtError::new(
                     codes::EXISTS,
@@ -344,7 +356,7 @@ impl SecureWritePath {
         openat_file(
             &parent,
             &self.leaf,
-            libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDWR | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0,
         )
         .map_err(|error| secure_path_error(&self.display, "open file for editing", error))

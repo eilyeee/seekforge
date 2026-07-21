@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
+import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
  * Local copy of the CLI's config type/loader. Apps must not depend on apps,
@@ -77,7 +77,12 @@ export type TuiConfig = {
 };
 
 function readJson(path: string): TuiConfig {
-  return readJsonConfigLayer<TuiConfig>(path, { requireObject: true });
+  try {
+    const parsed: unknown = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
+    return isPlainObject(parsed) ? (parsed as TuiConfig) : {};
+  } catch {
+    return {};
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -146,9 +151,11 @@ export function configParseErrors(projectPath: string): string[] {
   for (const path of [join(homedir(), ".seekforge", "config.json"), join(projectPath, ".seekforge", "config.json")]) {
     let raw: string;
     try {
-      raw = readFileSync(path, "utf8");
-    } catch {
-      continue; // absent/unreadable — not a parse error
+      raw = readTextFileBounded(path, MAX_CONFIG_FILE_BYTES);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      broken.push(path);
+      continue;
     }
     try {
       if (!isPlainObject(JSON.parse(raw))) broken.push(path);

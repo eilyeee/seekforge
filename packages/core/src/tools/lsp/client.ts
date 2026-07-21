@@ -22,6 +22,9 @@ import { ToolError } from "../errors.js";
 import { abortablePromise, onAbortOnce } from "../../util/abort.js";
 import { installProcessTeardown } from "../../util/process-teardown.js";
 import { isRecord } from "../../util/guards.js";
+import { readUtf8FileBoundedSync } from "../../util/fs.js";
+
+const MAX_LSP_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Pure JSON-RPC framing (Content-Length header + JSON body). No IO here.
@@ -439,7 +442,7 @@ class LspSession {
   /** Keep the server's document snapshot aligned with the file on disk. */
   private syncDocument(absPath: string, forceChange = false): { uri: string; version: number } {
     const uri = pathToFileURL(absPath).toString();
-    const text = fs.readFileSync(absPath, "utf8");
+    const text = readUtf8FileBoundedSync(absPath, MAX_LSP_DOCUMENT_BYTES);
     const current = this.opened.get(uri);
     if (!current) {
       this.opened.set(uri, { version: 1, text });

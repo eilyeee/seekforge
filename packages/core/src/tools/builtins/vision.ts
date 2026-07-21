@@ -1,8 +1,8 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { onAbortOnce } from "../../util/abort.js";
 import { readResponseBody } from "../../util/response-body.js";
+import { FileTooLargeError, readFileBoundedSync } from "../../util/fs.js";
 import { ToolError } from "../errors.js";
 import { resolveForRead } from "../sandbox.js";
 import { defineTool, type ToolSpec } from "../registry.js";
@@ -97,17 +97,16 @@ const imageAnalyze = defineTool({
     const resolved = resolveForRead(ctx.workspace, args.path);
     let bytes: Buffer;
     try {
-      bytes = fs.readFileSync(resolved);
+      bytes = readFileBoundedSync(resolved, MAX_IMAGE_BYTES);
     } catch (err) {
+      if (err instanceof FileTooLargeError) {
+        throw new ToolError("too_large", `Image exceeds ${MAX_IMAGE_BYTES} bytes (4MB): ${args.path}`);
+      }
       throw new ToolError(
         "read_failed",
         `Cannot read image ${args.path}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (bytes.length > MAX_IMAGE_BYTES) {
-      throw new ToolError("too_large", `Image is ${bytes.length} bytes; max is ${MAX_IMAGE_BYTES} (4MB)`);
-    }
-
     const question = args.question ?? DEFAULT_QUESTION;
     const dataUrl = `data:${mime};base64,${bytes.toString("base64")}`;
     const body = {

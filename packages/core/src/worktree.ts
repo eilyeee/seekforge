@@ -11,12 +11,14 @@
  */
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { readUtf8FileBoundedSync } from "./util/fs.js";
 
 const execFileAsync = promisify(execFile);
 const WORKTREE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const MAX_GIT_EXCLUDE_BYTES = 1024 * 1024;
 
 /** Structured git failure; `code` is stable, the caller maps it (e.g. to HTTP status). */
 export class WorktreeGitError extends Error {
@@ -83,7 +85,7 @@ async function ensureExcluded(basePath: string): Promise<void> {
   const infoDir = join(gitDir, "info");
   const excludeFile = join(infoDir, "exclude");
   const line = ".seekforge/worktrees/";
-  const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
+  const current = existsSync(excludeFile) ? readUtf8FileBoundedSync(excludeFile, MAX_GIT_EXCLUDE_BYTES) : "";
   if (current.split("\n").some((l) => l.trim() === line)) return;
   mkdirSync(infoDir, { recursive: true });
   appendFileSync(excludeFile, `${current.endsWith("\n") || current === "" ? "" : "\n"}${line}\n`);

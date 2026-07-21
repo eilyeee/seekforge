@@ -2,21 +2,24 @@
 //! group, timeout via SIGKILL on the group, capped output.
 
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
-use std::thread;
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 use crate::protocol::{codes, RtError, RtResult};
-use crate::sandbox::resolve_inside_workspace;
+use crate::sandbox::SecureDirPath;
 
 /// PROTOCOL.md: stdout/stderr capped at 20000 chars (head+tail).
 pub const MAX_OUTPUT_CHARS: usize = 20_000;
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
 
 // ---------------------------------------------------------------------------
 // Output truncation
@@ -531,6 +534,8 @@ pub fn deny_reason(command: &str) -> Option<&'static str> {
 
 const OUTPUT_BYTE_CAP: usize = MAX_OUTPUT_CHARS * 4;
 pub(crate) const OUTPUT_CHANNEL_DEPTH: usize = 8;
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
+const OUTPUT_POLL_MS: i32 = 25;
 
 #[derive(Default)]
 pub(crate) struct BoundedOutput {
@@ -583,17 +588,64 @@ impl BoundedOutput {
     }
 }
 
-pub(crate) fn read_chunks(mut r: impl Read, tx: SyncSender<Vec<u8>>) {
-    let mut chunk = [0u8; 16_384];
-    loop {
-        let n = match r.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        if tx.send(chunk[..n].to_vec()).is_err() {
-            break;
+pub(crate) fn spawn_output_reader<R>(
+    mut reader: R,
+    tx: SyncSender<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()>
+where
+    R: Read + AsRawFd + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut chunk = [0u8; 16_384];
+        loop {
+            let mut pollfd = libc::pollfd {
+                fd: reader.as_raw_fd(),
+                events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut pollfd, 1, OUTPUT_POLL_MS) };
+            if ready < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            if ready == 0 {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                continue;
+            }
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut data = chunk[..n].to_vec();
+                    loop {
+                        match tx.try_send(data) {
+                            Ok(()) => break,
+                            Err(mpsc::TrySendError::Full(returned)) => {
+                                if stop.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                data = returned;
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => return,
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
         }
+    })
+}
+
+pub(crate) fn stop_output_readers(stop: &AtomicBool, readers: Vec<JoinHandle<()>>) {
+    stop.store(true, Ordering::Release);
+    for reader in readers {
+        let _ = reader.join();
     }
 }
 
@@ -620,6 +672,20 @@ pub fn run_command_cancellable(
     timeout_ms: u64,
     cancelled: &AtomicBool,
 ) -> RtResult<Value> {
+    run_command_with_hook(workspace, command, cwd, timeout_ms, cancelled, || {})
+}
+
+fn run_command_with_hook<F>(
+    workspace: &str,
+    command: &str,
+    cwd: &str,
+    timeout_ms: u64,
+    cancelled: &AtomicBool,
+    after_cwd_open: F,
+) -> RtResult<Value>
+where
+    F: FnOnce(),
+{
     // Denylist first: a denied command must never reach the shell, regardless
     // of cwd validity.
     if let Some(reason) = deny_reason(command) {
@@ -629,10 +695,8 @@ pub fn run_command_cancellable(
         ));
     }
 
-    let dir = resolve_inside_workspace(workspace, cwd)?;
-    if !dir.is_dir() {
-        return Err(RtError::io(format!("cwd is not a directory: {cwd}")));
-    }
+    let dir = SecureDirPath::prepare(workspace, cwd)?.open()?;
+    after_cwd_open();
     if cancelled.load(Ordering::Acquire) {
         return Err(RtError::new(codes::CANCELLED, "command cancelled"));
     }
@@ -641,14 +705,20 @@ pub fn run_command_cancellable(
     let mut cmd = Command::new("/bin/sh");
     cmd.arg("-c")
         .arg(command)
-        .current_dir(&dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Own process group so a timeout can kill the whole tree.
+    let dir_fd = dir.as_raw_fd();
+    // Bind execution to the validated directory descriptor and own a process
+    // group so timeout/cancellation can terminate the complete command tree.
     unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
+        cmd.pre_exec(move || {
+            if libc::fchdir(dir_fd) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
@@ -665,16 +735,14 @@ pub fn run_command_cancellable(
     // deliberately escapes the process group and retains a pipe forever.
     let (out_tx, out_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
     let (err_tx, err_rx) = mpsc::sync_channel(OUTPUT_CHANNEL_DEPTH);
-    thread::spawn(move || {
-        if let Some(pipe) = stdout_pipe {
-            read_chunks(pipe, out_tx);
-        }
-    });
-    thread::spawn(move || {
-        if let Some(pipe) = stderr_pipe {
-            read_chunks(pipe, err_tx);
-        }
-    });
+    let output_stop = Arc::new(AtomicBool::new(false));
+    let mut output_readers = Vec::with_capacity(2);
+    if let Some(pipe) = stdout_pipe {
+        output_readers.push(spawn_output_reader(pipe, out_tx, Arc::clone(&output_stop)));
+    }
+    if let Some(pipe) = stderr_pipe {
+        output_readers.push(spawn_output_reader(pipe, err_tx, Arc::clone(&output_stop)));
+    }
     let mut stdout_capture = BoundedOutput::default();
     let mut stderr_capture = BoundedOutput::default();
 
@@ -694,6 +762,7 @@ pub fn run_command_cancellable(
                 libc::killpg(pid, libc::SIGKILL);
             }
             let _ = child.wait();
+            stop_output_readers(&output_stop, output_readers);
             return Err(RtError::new(codes::CANCELLED, "command cancelled"));
         }
         match child.try_wait() {
@@ -731,10 +800,12 @@ pub fn run_command_cancellable(
 
     // Normal descendants die with the process group and close both pipes. An
     // escaped descendant must not make output drainage bypass the deadline.
+    let drain_deadline = deadline.min(Instant::now() + OUTPUT_DRAIN_GRACE);
     let mut stdout_done = false;
     let mut stderr_done = false;
     while !(stdout_done && stderr_done) {
         if cancelled.load(Ordering::Acquire) {
+            stop_output_readers(&output_stop, output_readers);
             return Err(RtError::new(codes::CANCELLED, "command cancelled"));
         }
         stdout_done |= drain_output(&out_rx, &mut stdout_capture);
@@ -742,17 +813,21 @@ pub fn run_command_cancellable(
         // Cancellation wins over the command deadline if both become visible
         // while an escaped descendant is still holding an output pipe open.
         if cancelled.load(Ordering::Acquire) {
+            stop_output_readers(&output_stop, output_readers);
             return Err(RtError::new(codes::CANCELLED, "command cancelled"));
         }
         if stdout_done && stderr_done {
             break;
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= drain_deadline {
             timed_out = true;
             break;
         }
         thread::sleep(Duration::from_millis(2));
     }
+    stop_output_readers(&output_stop, output_readers);
+    drain_output(&out_rx, &mut stdout_capture);
+    drain_output(&err_rx, &mut stderr_capture);
     let stdout = stdout_capture.finish();
     let stderr = stderr_capture.finish();
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -959,5 +1034,39 @@ mod tests {
 
         assert_eq!(result["timedOut"], true);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn command_cwd_stays_bound_to_open_directory_after_workspace_swap() {
+        let base =
+            std::env::temp_dir().join(format!("seekforge-runtime-cwd-swap-{}", std::process::id()));
+        let workspace = base.join("workspace");
+        let moved = base.join("workspace-moved");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let cancelled = AtomicBool::new(false);
+
+        let result = run_command_with_hook(
+            workspace.to_str().unwrap(),
+            "printf inside > marker.txt",
+            ".",
+            1_000,
+            &cancelled,
+            || {
+                std::fs::rename(&workspace, &moved).unwrap();
+                std::os::unix::fs::symlink(&outside, &workspace).unwrap();
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result["exitCode"], 0);
+        assert_eq!(
+            std::fs::read_to_string(moved.join("marker.txt")).unwrap(),
+            "inside"
+        );
+        assert!(!outside.join("marker.txt").exists());
+        std::fs::remove_file(&workspace).unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -4,7 +4,16 @@
  * All resolved paths are confined to the static root (no path traversal).
  */
 
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, type Stats } from "node:fs";
+import {
+  closeSync,
+  constants,
+  createReadStream,
+  fstatSync,
+  openSync,
+  realpathSync,
+  statSync,
+  type Stats,
+} from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +37,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+/** Static UI assets are public and must not become an unbounded memory/disk-read surface. */
+export const MAX_STATIC_FILE_BYTES = 25 * 1024 * 1024;
+
+type OpenedStaticFile = { fd: number; size: number };
+
 /**
  * Returns the directory to serve at /, or undefined when there is no built UI.
  * Default: apps/desktop/dist resolved relative to this package — the same
@@ -47,8 +61,12 @@ export function resolveStaticRoot(override?: string): string | undefined {
   for (const root of candidates) {
     try {
       const canonicalRoot = realpathSync(resolve(root));
-      if (statSync(canonicalRoot).isDirectory() && openStaticFile(canonicalRoot, join(canonicalRoot, "index.html"))) {
-        return canonicalRoot;
+      if (statSync(canonicalRoot).isDirectory()) {
+        const index = openStaticFile(canonicalRoot, join(canonicalRoot, "index.html"));
+        if (index) {
+          closeSync(index.fd);
+          return canonicalRoot;
+        }
       }
     } catch {
       // Missing or unsafe candidates are treated as an unbuilt UI.
@@ -77,7 +95,7 @@ function sameFile(a: Stats, b: Stats): boolean {
 }
 
 /** Opens and reads a regular file without following static-root-local symlinks. */
-function openStaticFile(root: string, path: string): Buffer | undefined {
+function openStaticFile(root: string, path: string): OpenedStaticFile | undefined {
   const rel = relative(root, path);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
 
@@ -86,7 +104,7 @@ function openStaticFile(root: string, path: string): Buffer | undefined {
   try {
     const parent = dirname(path);
     parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    fileFd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fileFd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
 
     // Canonical equality rejects symlinks in every path component. Descriptor
     // identity checks ensure neither path was swapped between resolution/open.
@@ -94,10 +112,19 @@ function openStaticFile(root: string, path: string): Buffer | undefined {
     const parentPathStat = statSync(parent);
     const filePathStat = statSync(path);
     const fileStat = fstatSync(fileFd);
-    if (!sameFile(fstatSync(parentFd), parentPathStat) || !sameFile(fileStat, filePathStat) || !fileStat.isFile()) {
+    if (
+      !sameFile(fstatSync(parentFd), parentPathStat) ||
+      !sameFile(fileStat, filePathStat) ||
+      !fileStat.isFile() ||
+      !Number.isSafeInteger(fileStat.size) ||
+      fileStat.size < 0 ||
+      fileStat.size > MAX_STATIC_FILE_BYTES
+    ) {
       return undefined;
     }
-    return readFileSync(fileFd);
+    const opened = { fd: fileFd, size: fileStat.size };
+    fileFd = undefined;
+    return opened;
   } catch {
     return undefined;
   } finally {
@@ -153,22 +180,33 @@ export function serveStatic(res: ServerResponse, opts: ServeStaticOptions): void
   }
 
   let file = target;
-  let data = openStaticFile(opts.root, file);
-  if (!data) {
+  let opened = openStaticFile(opts.root, file);
+  if (!opened) {
     // SPA fallback: extension-less client-side routes get index.html.
     if (extname(file) !== "") {
       notFound();
       return;
     }
     file = join(opts.root, "index.html");
-    data = openStaticFile(opts.root, file);
-    if (!data) {
+    opened = openStaticFile(opts.root, file);
+    if (!opened) {
       notFound();
       return;
     }
   }
 
   const type = CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
-  res.writeHead(200, { "content-type": type, "content-length": String(data.length) });
-  res.end(opts.head ? undefined : data);
+  res.writeHead(200, { "content-type": type, "content-length": String(opened.size) });
+  if (opts.head || opened.size === 0) {
+    closeSync(opened.fd);
+    res.end();
+    return;
+  }
+
+  // Read at most the descriptor size verified above. Concurrent appends cannot
+  // extend the response, and streaming avoids one full-file allocation/request.
+  const stream = createReadStream(file, { fd: opened.fd, autoClose: true, start: 0, end: opened.size - 1 });
+  stream.once("error", () => res.destroy());
+  res.once("close", () => stream.destroy());
+  stream.pipe(res);
 }

@@ -1,9 +1,9 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import type { TaskResult } from "./task-runner.js";
+import { writeFileAtomic } from "./file-io.js";
 
 function xml(value: string): string {
   return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "\uFFFD")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -41,6 +41,5 @@ export function toJunit(results: TaskResult[], name = "SeekForge Agent Eval"): s
 }
 
 export function writeJunit(results: TaskResult[], path: string, name?: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, toJunit(results, name));
+  writeFileAtomic(path, toJunit(results, name));
 }

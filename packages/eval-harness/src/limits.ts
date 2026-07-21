@@ -1,0 +1,12 @@
+export const MAX_EVAL_CONFIG_BYTES = 1_000_000;
+export const MAX_SUITE_CONFIG_BYTES = 1_000_000;
+export const MAX_TASK_FILE_BYTES = 1_000_000;
+export const MAX_TASK_FILES = 1000;
+export const MAX_BASELINE_BYTES = 64 * 1024 * 1024;
+export const MAX_BASELINE_RESULTS = 20_000;
+export const MAX_TREND_REPORT_BYTES = 64 * 1024 * 1024;
+export const MAX_TREND_FILES = 1000;
+export const MAX_SKILL_USAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_DATASET_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_DATASET_TOTAL_BYTES = 100 * 1024 * 1024;
+export const MAX_DATASET_FILES = 10_000;

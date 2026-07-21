@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
+import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 export type CliConfig = {
   apiKey?: string;
@@ -137,9 +137,12 @@ function isPlainObject(v: unknown): boolean {
 }
 
 function readJson(path: string): CliConfig {
-  // requireObject: JSON.parse succeeds for null/true/42/"x"; spreading those
-  // downstream throws.
-  return readJsonConfigLayer<CliConfig>(path, { requireObject: true });
+  try {
+    const parsed: unknown = JSON.parse(readTextFileBounded(path, MAX_CONFIG_FILE_BYTES));
+    return isPlainObject(parsed) ? (parsed as CliConfig) : {};
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -156,9 +159,11 @@ export function configParseErrors(projectPath: string): string[] {
   ]) {
     let raw: string;
     try {
-      raw = readFileSync(path, "utf8");
-    } catch {
-      continue; // absent/unreadable — not a parse error
+      raw = readTextFileBounded(path, MAX_CONFIG_FILE_BYTES);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      broken.push(path);
+      continue;
     }
     try {
       if (!isPlainObject(JSON.parse(raw))) broken.push(path);
@@ -253,8 +258,13 @@ function readSettingsFile(settingsPath: string): CliConfig {
   const absPath = resolve(settingsPath);
   let raw: string;
   try {
-    raw = readFileSync(absPath, "utf8");
-  } catch {
+    raw = readTextFileBounded(absPath, MAX_CONFIG_FILE_BYTES);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      throw Object.assign(new Error(`settings file exceeds ${MAX_CONFIG_FILE_BYTES} bytes: ${absPath}`), {
+        hint: "reduce the settings file size and try again",
+      });
+    }
     throw Object.assign(new Error(`settings file not found: ${absPath}`), {
       hint: "check the path and try again",
     });

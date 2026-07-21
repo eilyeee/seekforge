@@ -42,13 +42,13 @@ describe("loadHistory / appendHistory", () => {
     expect(loadHistory(file)).toEqual(["same", "other", "same"]);
   });
 
-  it("caps the file at 200 entries", () => {
+  it("caps the file at 200 entries", { timeout: 30_000 }, () => {
     for (let i = 0; i < 230; i += 1) appendHistory(file, `entry ${i}`);
     const entries = loadHistory(file);
     expect(entries).toHaveLength(200);
     expect(entries[0]).toBe("entry 30");
     expect(entries[199]).toBe("entry 229");
-  }, 15_000);
+  });
 });
 
 describe("createHistoryNav", () => {

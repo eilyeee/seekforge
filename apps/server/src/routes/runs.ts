@@ -148,16 +148,38 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
           });
         } catch (err) {
           const cancelled = controller.signal.aborted;
+          const message = err instanceof Error ? err.message : String(err);
           rest.runManager.update(workspace, ledgerRun.runId, {
             status: cancelled ? "cancelled" : "failed",
             error: {
               code: cancelled ? "cancelled" : "loop_error",
-              message: err instanceof Error ? err.message : String(err),
+              message,
             },
           });
+          rest.runManager.appendFrame(
+            workspace,
+            ledgerRun.runId,
+            { type: "error", code: cancelled ? "cancelled" : "loop_error", message },
+            { cacheSequence: false },
+          );
         }
       };
-      const completion = rest.coordinator.withAgentMutation(workspace, controller.signal, execute);
+      const completion = rest.coordinator.withAgentMutation(workspace, controller.signal, execute).catch((err) => {
+        // The coordinator may reject before execute starts (for example when an
+        // already-aborted run is still waiting for a cross-process lease).
+        const cancelled = controller.signal.aborted;
+        const message = err instanceof Error ? err.message : String(err);
+        rest.runManager.update(workspace, ledgerRun.runId, {
+          status: cancelled ? "cancelled" : "failed",
+          error: { code: cancelled ? "cancelled" : "loop_schedule_error", message },
+        });
+        rest.runManager.appendFrame(
+          workspace,
+          ledgerRun.runId,
+          { type: "error", code: cancelled ? "cancelled" : "loop_error", message },
+          { cacheSequence: false },
+        );
+      });
       trackRun(rest, {
         started: completion.then(() => ({ sessionId: finalSessionId })),
         completion,

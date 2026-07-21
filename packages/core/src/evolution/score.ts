@@ -5,10 +5,9 @@
  * Reads .seekforge/sessions/<id>/{session.json,messages.jsonl,tool-calls.jsonl}.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { SessionStatus } from "@seekforge/shared";
 import { readSessionMeta } from "../agent/index.js";
+import { readSessionText } from "../agent/trace.js";
 
 export type SessionScoreMetrics = {
   /** Assistant turns (model responses) in the transcript. */
@@ -48,11 +47,12 @@ type ToolCallEntry = {
   args?: Record<string, unknown>;
 };
 
-function readJsonlObjects(file: string): Record<string, unknown>[] {
+function readJsonlObjects(workspace: string, sessionId: string, name: string): Record<string, unknown>[] {
   let raw: string;
   try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
+    raw = readSessionText(workspace, sessionId, name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return [];
   }
   const objects: Record<string, unknown>[] = [];
@@ -72,8 +72,7 @@ function readJsonlObjects(file: string): Record<string, unknown>[] {
 }
 
 export function readToolCallLog(workspace: string, sessionId: string): ToolCallEntry[] {
-  const file = path.join(workspace, ".seekforge", "sessions", sessionId, "tool-calls.jsonl");
-  return readJsonlObjects(file) as ToolCallEntry[];
+  return readJsonlObjects(workspace, sessionId, "tool-calls.jsonl") as ToolCallEntry[];
 }
 
 function commandOf(entry: ToolCallEntry): string | undefined {
@@ -88,8 +87,7 @@ export function scoreSession(workspace: string, sessionId: string): SessionScore
     throw new Error(`session not found: ${sessionId}`);
   }
 
-  const sessionDir = path.join(workspace, ".seekforge", "sessions", sessionId);
-  const messages = readJsonlObjects(path.join(sessionDir, "messages.jsonl"));
+  const messages = readJsonlObjects(workspace, sessionId, "messages.jsonl");
   const toolCalls = readToolCallLog(workspace, sessionId);
 
   const turns = messages.filter((m) => m.role === "assistant").length;

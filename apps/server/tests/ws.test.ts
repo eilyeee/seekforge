@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import type { RunAgentTaskInput } from "@seekforge/core";
 import type { ConfirmResult } from "@seekforge/shared";
 import { MAX_WS_PAYLOAD_BYTES, startServer, type CreateAgentFn, type RunningServer } from "../src/index.js";
+import { ServerCoordinator } from "../src/coordinator.js";
 import {
   collectFrames,
   connectWs,
@@ -690,6 +691,39 @@ describe("override + output-style contract (frame -> agent)", () => {
     sendFrame(ws, { type: "start", task: "x", mode: "edit", approvalMode: "auto", model: "" });
     const err = await rx.waitFor((f) => f.type === "error");
     expect(err.code).toBe("bad_frame");
+  });
+});
+
+describe("scheduler rejection", () => {
+  it("fails the ledger and releases connection state when edit scheduling rejects before execution", async () => {
+    let agentExecuted = false;
+    const { server, workspace } = await boot(
+      fakeAgentFactory(async function* () {
+        agentExecuted = true;
+        yield { type: "session.created", sessionId: "unexpected" };
+      }),
+    );
+    const schedule = vi.spyOn(ServerCoordinator.prototype, "withAgentMutation").mockImplementationOnce(async () => {
+      throw new Error("scheduler unavailable");
+    });
+    try {
+      const { ws, rx } = await open(server.port);
+      sendFrame(ws, { type: "start", task: "edit", mode: "edit", approvalMode: "acceptEdits" });
+      const accepted = await rx.waitFor((frame) => frame.type === "run.accepted");
+      expect(await rx.waitFor((frame) => frame.type === "error" && frame.code === "agent_error")).toMatchObject({
+        message: "scheduler unavailable",
+      });
+      await rx.waitFor((frame) => frame.type === "idle");
+
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/runs/${String(accepted.runId)}`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(await response.json()).toMatchObject({ status: "failed", error: { message: "scheduler unavailable" } });
+      expect(agentExecuted).toBe(false);
+      expect(workspace).toBeTruthy();
+    } finally {
+      schedule.mockRestore();
+    }
   });
 });
 

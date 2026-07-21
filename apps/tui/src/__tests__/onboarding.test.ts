@@ -90,12 +90,12 @@ describe("saveGlobalApiKey", () => {
     expect(mode).toBe(0o600);
   });
 
-  it("recovers from a corrupt existing config.json", () => {
+  it("refuses to overwrite a corrupt existing config.json", () => {
     const dir = join(home, ".seekforge");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "config.json"), "{ not json");
-    const { path } = saveGlobalApiKey("sk-abcdefghijklmnopqrstuvwx", home);
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    expect(parsed).toEqual({ apiKey: "sk-abcdefghijklmnopqrstuvwx" });
+    const path = join(dir, "config.json");
+    expect(() => saveGlobalApiKey("sk-abcdefghijklmnopqrstuvwx", home)).toThrow(/refusing to replace/);
+    expect(readFileSync(path, "utf8")).toBe("{ not json");
   });
 });

@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MAX_REPEAT } from "./args.js";
+import { readTextFileBounded } from "./file-io.js";
+import { MAX_SUITE_CONFIG_BYTES } from "./limits.js";
 import { evalsDir } from "./paths.js";
 
 export type GateConfig = {
@@ -102,7 +103,7 @@ export function parseSuiteConfig(value: unknown): EvalSuiteConfig {
 export function loadSuiteConfig(path: string = join(evalsDir, "config.json")): EvalSuiteConfig {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(readTextFileBounded(path, MAX_SUITE_CONFIG_BYTES));
   } catch (error) {
     throw new Error(`cannot load eval suite config ${path}: ${(error as Error).message}`);
   }

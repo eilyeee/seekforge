@@ -51,10 +51,10 @@ Unparseable request lines get a response with `"id": null`, code
 | --- | --- | --- |
 | ping | – | `{version}` |
 | read_file | path | `{content}` (UTF-8; >5 MB → error `too_large`; binary → error `binary_file`) |
-| list_files | path?, maxDepth? | `{entries: string[], truncated: bool}` (sorted, ignore-list applied, cap 500) |
+| list_files | path?, maxDepth? | `{entries: string[], truncated: bool}` (sorted, ignore-list applied, cap 500; depth integer 0..100) |
 | write_file | path, content, overwrite? | `{path}` (exists && !overwrite → error `exists`) |
 | apply_patch | path, edits: [{oldString,newString}] | `{path, editsApplied}` (atomic; target >5 MB → `too_large`; 0 matches → `no_match` with nearest-line hint in message; >1 → `ambiguous` with count) |
-| run_command | command, cwd?, timeoutMs? | `{exitCode, stdout, stderr, durationMs, timedOut}` (denylist re-check → `denied_dangerous`; stdout/stderr capped 20000 chars head+tail) |
+| run_command | command, cwd?, timeoutMs? | `{exitCode, stdout, stderr, durationMs, timedOut}` (timeout integer 0..86400000 ms; denylist re-check → `denied_dangerous`; stdout/stderr capped 20000 chars head+tail) |
 | git_status | – | `{output}` (cancellable; 30-second internal deadline; output capped at 20000 chars head+tail) |
 | git_diff | staged? | `{output}` (cancellable; 30-second internal deadline; output capped at 20000 chars head+tail) |
 
@@ -68,6 +68,9 @@ Unparseable request lines get a response with `"id": null`, code
   `.seekforge/config.json`, `.seekforge/triggers.json`, and `.git/config` are
   denied as well.
 - Write denial under `.git/`.
+- File reads and edits accept regular files only. FIFOs, devices, sockets, and
+  symlink leaves are rejected without blocking. Command and Git working
+  directories stay bound to their verified directory descriptors through exec.
 - Ignore list for list_files: `.git node_modules dist build .next .nuxt
   .cache coverage target vendor`.
 - run_command denylist (error `denied_dangerous`, never execute):

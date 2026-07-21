@@ -14,6 +14,24 @@ export const FILE_LIST_LIMIT = 2000;
 export type FileList = { files: string[]; truncated: boolean };
 
 const LIST_YIELD_EVERY = 50;
+const FILE_READ_CHUNK_BYTES = 64 * 1024;
+
+async function readOpenedFileBounded(
+  fileHandle: Awaited<ReturnType<typeof openVerifiedFileAsync>>["fileHandle"],
+  maxBytes: number,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const chunk = Buffer.allocUnsafe(Math.min(FILE_READ_CHUNK_BYTES, maxBytes - total + 1));
+    const { bytesRead } = await fileHandle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    total += bytesRead;
+    if (total > maxBytes) throw new Error(`file grew beyond ${maxBytes} bytes while reading`);
+    chunks.push(chunk.subarray(0, bytesRead));
+  }
+  return Buffer.concat(chunks, total);
+}
 
 async function walkWorkspaceFiles(root: string, limit: number): Promise<FileList> {
   const files: string[] = [];
@@ -188,9 +206,9 @@ export async function searchWorkspaceContent(root: string, q: string, opts: Sear
     let opened: Awaited<ReturnType<typeof openVerifiedFileAsync>> | undefined;
     try {
       const resolved = resolveWorkspacePath(root, rel, true);
-      opened = await openVerifiedFileAsync(resolved.path, constants.O_RDONLY);
+      opened = await openVerifiedFileAsync(resolved.path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
       if (!opened.stat.isFile() || opened.stat.size > SEARCH_MAX_FILE_BYTES) continue;
-      const buf = await opened.fileHandle.readFile();
+      const buf = await readOpenedFileBounded(opened.fileHandle, SEARCH_MAX_FILE_BYTES);
       if (looksBinary(buf)) continue;
       const lines = buf.toString("utf8").split("\n");
       for (let i = 0; i < lines.length; i++) {

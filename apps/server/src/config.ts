@@ -16,7 +16,6 @@ import {
   mkdirSync,
   openSync,
   readSync,
-  readFileSync,
   realpathSync,
   renameSync,
   unlinkSync,
@@ -32,7 +31,10 @@ import {
   type ModelPricing,
 } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
+import { readFileBounded, readFileDescriptorBounded } from "@seekforge/shared/bounded-file-read";
+import { MAX_CONFIG_FILE_BYTES, mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
+
+export const MAX_PROJECT_STATE_FILE_BYTES = 8_000_000;
 
 /** Default selectable model list (core's non-deprecated ids) when none configured. */
 const DEFAULT_MODEL_LIST = Object.keys(MODEL_PRICING).filter(
@@ -195,7 +197,7 @@ export function visitProjectFileLines(
   let fd: number | undefined;
   try {
     try {
-      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
@@ -224,7 +226,11 @@ export function visitProjectFileLines(
 }
 
 /** Reads a workspace-owned file without following project-local symlinks. */
-export function readProjectFile(workspace: string, rel: string): string | undefined {
+export function readProjectFile(
+  workspace: string,
+  rel: string,
+  maxBytes = MAX_PROJECT_STATE_FILE_BYTES,
+): string | undefined {
   const target = projectPath(workspace, rel, false);
   let stat: ReturnType<typeof lstatSync>;
   try {
@@ -238,11 +244,11 @@ export function readProjectFile(workspace: string, rel: string): string | undefi
   }
   let fd: number | undefined;
   try {
-    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     if (!fstatSync(fd).isFile()) {
       throw new ProjectPathError(`project file is not a regular file: ${rel}`);
     }
-    return readFileSync(fd, "utf8");
+    return readFileDescriptorBounded(fd, maxBytes).toString("utf8");
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -254,7 +260,7 @@ export function projectFileIdentity(workspace: string, rel: string): string | un
   let fd: number | undefined;
   try {
     try {
-      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
@@ -290,7 +296,7 @@ export function removeProjectFile(workspace: string, rel: string): boolean {
   let fd: number | undefined;
   try {
     try {
-      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
@@ -394,7 +400,7 @@ export function loadConfig(workspace: string): ServerConfig {
   const global = readJson(join(homedir(), ".seekforge", "config.json"));
   let project: ServerConfig = {};
   try {
-    const raw = readProjectFile(workspace, ".seekforge/config.json");
+    const raw = readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES);
     if (raw !== undefined) project = parseConfigDoc(raw) as ServerConfig;
   } catch {
     // A missing, malformed, or physically unsafe project layer is ignored.
@@ -488,13 +494,13 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
   // Refuse and let the user fix or remove the file.
   if (global && existsSync(path)) {
     try {
-      current = parseConfigDoc(readFileSync(path, "utf8"));
+      current = parseConfigDoc(readFileBounded(path, MAX_CONFIG_FILE_BYTES).toString("utf8"));
     } catch {
       throw new ConfigValueError(`refusing to overwrite malformed ${path} — fix or delete it first`);
     }
   } else if (!global) {
     try {
-      const raw = readProjectFile(workspace, ".seekforge/config.json");
+      const raw = readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES);
       if (raw !== undefined) current = parseConfigDoc(raw);
     } catch (err) {
       if (err instanceof ProjectPathError) throw err;
@@ -504,6 +510,9 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
   if (stored === undefined) delete current[key];
   else current[key] = stored;
   const serialized = `${JSON.stringify(current, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_CONFIG_FILE_BYTES) {
+    throw new ConfigValueError(`config exceeds ${MAX_CONFIG_FILE_BYTES} bytes`);
+  }
   if (global) {
     writeGlobalConfigAtomic(path, serialized);
   } else {
