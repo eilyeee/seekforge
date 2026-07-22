@@ -51,10 +51,11 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
 
         <p className="mb-5 text-sm leading-relaxed text-secondary">{t("onboarding.description")}</p>
 
-        <label className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">
+        <label htmlFor="onboarding-api-key" className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">
           {t("onboarding.apiKeyLabel")}
         </label>
         <Input
+          id="onboarding-api-key"
           type="password"
           value={apiKey}
           onChange={(e) => {

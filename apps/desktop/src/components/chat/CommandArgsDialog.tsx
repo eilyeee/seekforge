@@ -70,9 +70,10 @@ export function CommandArgsDialog({
           )}
           {command.description && <span className="text-xs text-tertiary">{command.description}</span>}
         </div>
-        <label className="block">
+        <label htmlFor="command-arguments" className="block">
           <span className="mb-1 block text-2xs uppercase tracking-wider text-tertiary">{t("chat.cmdArgs.label")}</span>
           <TextArea
+            id="command-arguments"
             ref={argsRef}
             value={args}
             onChange={(e) => setArgs(e.target.value)}

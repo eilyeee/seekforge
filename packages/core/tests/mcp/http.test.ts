@@ -1,7 +1,7 @@
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createMcpClient, McpError } from "../../src/mcp/client.js";
+import { createMcpClient } from "../../src/mcp/client.js";
 import { readLimitedResponseText } from "../../src/mcp/http.js";
 
 const SESSION_ID = "sess-42";

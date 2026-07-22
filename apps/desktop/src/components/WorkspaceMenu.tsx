@@ -77,9 +77,9 @@ export function WorkspaceMenu({ compact = false }: { compact?: boolean } = {}) {
   }, [doOpen]);
 
   return (
-    <div className={compact ? "relative" : "relative px-3 pb-3"} onMouseDown={(e) => e.stopPropagation()}>
+    <div className={compact ? "relative" : "relative px-3 pb-3"}>
       {!compact && (
-        <label className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">{t("nav.workspace")}</label>
+        <div className="mb-1 block px-1 text-2xs uppercase tracking-wider text-tertiary">{t("nav.workspace")}</div>
       )}
       <button
         type="button"

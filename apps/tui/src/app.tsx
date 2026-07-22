@@ -49,23 +49,16 @@ import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
 import { clipLine } from "@seekforge/shared/format";
 import type { TuiConfig } from "./config.js";
 import { configParseErrors, unknownConfigKeys } from "./config.js";
-import {
-  approvalModeFor,
-  nextApproval,
-  permissionResultForKey,
-  type ChatAction,
-  type ChatState,
-  type Overlay,
-} from "./model.js";
+import { approvalModeFor, nextApproval, permissionResultForKey, type ChatAction, type ChatState } from "./model.js";
 import { activeChat, activeTabId, initialTabs, tabLabels, tabsReducer } from "./tabs.js";
 import { buildTree, moveCursor, toggleDir, visibleNodes, type TreeState } from "./file-tree.js";
 import { Sidebar } from "./components/Sidebar.js";
-import { pagerLines, pagerWindow } from "./pager-source.js";
+import { pagerLines } from "./pager-source.js";
 import { Pager } from "./components/Pager.js";
 import { ghostSuggestion } from "./suggestion.js";
 import { stashList, stashPop, stashPush } from "./stash.js";
 import { THEME_PRESETS, loadTheme, themePickerLines } from "./theme.js";
-import { buildHandoff, handoffPath, latestHandoff, listHandoffs } from "./handoff.js";
+import { buildHandoff, handoffPath, listHandoffs } from "./handoff.js";
 import { formatUsageDetail, kfmt } from "./format.js";
 import {
   COMMANDS,
@@ -411,12 +404,7 @@ export function App({
   }, [exit]);
 
   // Mouse capture is opt-in so native selection remains available by default.
-  const { mouseOn, setMouseOn, suspend } = useTerminalLifecycle(
-    config.mouse === true,
-    projectPath,
-    state.running,
-    setRawMode,
-  );
+  const { setMouseOn, suspend } = useTerminalLifecycle(config.mouse === true, projectPath, state.running, setRawMode);
   const statusLineText = useStatusLine(config.statusLine, projectPath, state);
 
   const notice = useCallback((text: string, tone?: "dim" | "error") => {
@@ -599,7 +587,6 @@ export function App({
       const dispatchTab = (action: ChatAction): void => tabsDispatch({ type: "chat", tabId: runTabId, action });
       const tabChat = (): ChatState =>
         tabsStateRef.current.tabs.find((t) => t.id === runTabId)?.chat ?? stateRef.current;
-      const label = clipLine(task.replace(/\s+/g, " "), 48);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       // Detached runs stay silent except for their final outcome.
       const dispatchRun = (a: ChatAction): void => {
@@ -1628,7 +1615,7 @@ export function App({
         }
         case "copy": {
           const lastAssistant = [...stateRef.current.items].reverse().find((i) => i.kind === "assistant");
-          if (!lastAssistant || lastAssistant.kind !== "assistant") {
+          if (lastAssistant?.kind !== "assistant") {
             notice("nothing to copy yet");
           } else if (copyToClipboard(lastAssistant.text)) {
             notice(`copied last reply (${kfmt(lastAssistant.text.length)} chars)`);

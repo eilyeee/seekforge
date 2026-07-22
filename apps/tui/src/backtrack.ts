@@ -29,7 +29,7 @@ export function backtrackTargets(items: readonly ChatItem[]): BacktrackTarget[] 
   let turn = -1;
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i];
-    if (!item || item.kind !== "user") continue;
+    if (item?.kind !== "user") continue;
     turn += 1;
     if (turn === 0) continue; // the original task is never removable
     targets.push({ turn, text: item.text, itemIndex: i });

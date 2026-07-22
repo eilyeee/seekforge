@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from "@seekforge/shared";
-import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
+import type { ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore, type AgentCoreDeps } from "../../src/agent/loop.js";
 import { loadSessionMessages } from "../../src/agent/trace.js";

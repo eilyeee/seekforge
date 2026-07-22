@@ -16,7 +16,7 @@ function makeDir(prefix: string): string {
 }
 
 function writeCmd(dir: string, rel: string, content: string): void {
-  const path = join(dir, rel);
+  const _path = join(dir, rel);
   mkdirSync(join(dir, ".seekforge", "commands"), { recursive: true });
   writeFileSync(join(dir, ".seekforge", "commands", rel), content);
 }

@@ -343,9 +343,10 @@ export function TeamPlanDialog({
     >
       <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 text-xs">
         <div className="grid grid-cols-2 gap-2">
-          <label>
+          <label htmlFor="team-max-concurrency">
             <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamConcurrency")}</span>
             <Input
+              id="team-max-concurrency"
               type="number"
               min={1}
               max={6}
@@ -354,9 +355,10 @@ export function TeamPlanDialog({
               className="mt-1 font-mono"
             />
           </label>
-          <label>
+          <div>
             <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamFailurePolicy")}</span>
             <Select
+              ariaLabel={t("agents.teamFailurePolicy")}
               value={failurePolicy}
               onChange={(value) => setFailurePolicy(value as "stop" | "continue")}
               className="mt-1 w-full"
@@ -365,41 +367,45 @@ export function TeamPlanDialog({
                 { value: "continue", label: t("agents.teamContinue") },
               ]}
             />
-          </label>
+          </div>
         </div>
         {members.map((member, index) => (
           <div key={index} className="space-y-2 rounded-md border border-subtle bg-surface-raised p-3">
             <div className="grid grid-cols-2 gap-2">
-              <label>
+              <label htmlFor={`team-member-${index}-id`}>
                 <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamMemberId")}</span>
                 <Input
+                  id={`team-member-${index}-id`}
                   value={member.id}
                   onChange={(event) => update(index, { id: event.target.value })}
                   className="mt-1 font-mono"
                 />
               </label>
-              <label>
+              <div>
                 <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamAgent")}</span>
                 <Select
+                  ariaLabel={t("agents.teamAgent")}
                   value={member.agentId}
                   onChange={(value) => update(index, { agentId: value })}
                   className="mt-1 w-full"
                   options={agents.map((agent) => ({ value: agent.id, label: `${agent.name} (${agent.id})` }))}
                 />
-              </label>
+              </div>
             </div>
-            <label className="block">
+            <label htmlFor={`team-member-${index}-task`} className="block">
               <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamTask")}</span>
               <TextArea
+                id={`team-member-${index}-task`}
                 value={member.task}
                 onChange={(event) => update(index, { task: event.target.value })}
                 rows={3}
                 className="mt-1"
               />
             </label>
-            <label className="block">
+            <label htmlFor={`team-member-${index}-depends`} className="block">
               <span className="text-2xs uppercase tracking-wider text-tertiary">{t("agents.teamDepends")}</span>
               <Input
+                id={`team-member-${index}-depends`}
                 value={member.dependsOn.join(", ")}
                 onChange={(event) =>
                   update(index, {

@@ -378,10 +378,21 @@ const browserSnapshot = defineTool({
     // "dom" lib (the body runs in the browser, not in Node).
     const snap = (await runBrowserOperation(
       p.evaluate((max: number) => {
-        const g = globalThis as any;
+        type ElementLike = {
+          textContent?: string | null;
+          tagName: string;
+          value?: string;
+          getAttribute(name: string): string | null;
+        };
+        type DocumentLike = {
+          title: string;
+          body?: { innerText?: string };
+          querySelectorAll(selector: string): ArrayLike<ElementLike>;
+        };
+        const g = globalThis as unknown as { document: DocumentLike; location: { href: string } };
         const doc = g.document;
-        const textOf = (el: any): string => (el.textContent ?? "").replace(/\s+/g, " ").trim();
-        const take = (arr: any[]): any[] => arr.slice(0, max);
+        const textOf = (el: ElementLike): string => (el.textContent ?? "").replace(/\s+/g, " ").trim();
+        const take = <T>(arr: T[]): T[] => arr.slice(0, max);
         const headings = take(Array.from(doc.querySelectorAll("h1,h2,h3")))
           .map((el) => `${el.tagName.toLowerCase()}: ${textOf(el)}`)
           .filter((s) => s.length > 4);

@@ -479,9 +479,10 @@ export function McpEditorDialog({
       onCancel={onClose}
     >
       <div className="space-y-3 text-xs">
-        <label className="block">
+        <label htmlFor="mcp-server-name" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddName")}</span>
           <Input
+            id="mcp-server-name"
             value={name}
             autoFocus
             onChange={(e) => setName(e.target.value)}
@@ -490,9 +491,10 @@ export function McpEditorDialog({
             disabled={busy || initial !== undefined}
           />
         </label>
-        <label className="block">
+        <div className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpScope")}</span>
           <Select
+            ariaLabel={t("settings.mcpScope")}
             value={scope}
             onChange={(value) => setScope(value as "global" | "project")}
             disabled={busy || initial !== undefined}
@@ -502,10 +504,11 @@ export function McpEditorDialog({
               { value: "global", label: t("settings.mcpScopeGlobal") },
             ]}
           />
-        </label>
-        <label className="block">
+        </div>
+        <div className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddTransport")}</span>
           <Select
+            ariaLabel={t("settings.mcpAddTransport")}
             value={transport}
             onChange={(v) => setTransport(v as "stdio" | "http")}
             disabled={busy}
@@ -515,12 +518,13 @@ export function McpEditorDialog({
               { value: "http", label: t("settings.mcpAddHttp") },
             ]}
           />
-        </label>
+        </div>
         {transport === "stdio" ? (
           <>
-            <label className="block">
+            <label htmlFor="mcp-command" className="block">
               <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddCommand")}</span>
               <Input
+                id="mcp-command"
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
                 placeholder={t("settings.mcpAddCommandPlaceholder")}
@@ -564,9 +568,10 @@ export function McpEditorDialog({
             <KeyValueEditor label={t("settings.mcpEnvVars")} rows={env} onChange={setEnv} disabled={busy} />
           </>
         ) : (
-          <label className="block">
+          <label htmlFor="mcp-url" className="block">
             <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpAddUrl")}</span>
             <Input
+              id="mcp-url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder={t("settings.mcpAddUrlPlaceholder")}
@@ -592,42 +597,46 @@ export function McpEditorDialog({
             </label>
             {oauthEnabled && (
               <div className="grid gap-2 sm:grid-cols-2">
-                <label className="sm:col-span-2">
+                <label htmlFor="mcp-oauth-token-endpoint" className="sm:col-span-2">
                   <span className="text-2xs uppercase tracking-wider text-tertiary">
                     {t("settings.mcpOauthTokenEndpoint")}
                   </span>
                   <Input
+                    id="mcp-oauth-token-endpoint"
                     value={tokenEndpoint}
                     onChange={(event) => setTokenEndpoint(event.target.value)}
                     className="mt-1 font-mono"
                     disabled={busy}
                   />
                 </label>
-                <label>
+                <label htmlFor="mcp-oauth-client-id">
                   <span className="text-2xs uppercase tracking-wider text-tertiary">
                     {t("settings.mcpOauthClientId")}
                   </span>
                   <Input
+                    id="mcp-oauth-client-id"
                     value={clientId}
                     onChange={(event) => setClientId(event.target.value)}
                     className="mt-1 font-mono"
                     disabled={busy}
                   />
                 </label>
-                <label>
+                <label htmlFor="mcp-oauth-scope">
                   <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpOauthScope")}</span>
                   <Input
+                    id="mcp-oauth-scope"
                     value={oauthScope}
                     onChange={(event) => setOauthScope(event.target.value)}
                     className="mt-1 font-mono"
                     disabled={busy}
                   />
                 </label>
-                <label>
+                <label htmlFor="mcp-oauth-client-secret">
                   <span className="text-2xs uppercase tracking-wider text-tertiary">
                     {t("settings.mcpOauthClientSecret")}
                   </span>
                   <Input
+                    id="mcp-oauth-client-secret"
                     type="password"
                     value={clientSecret}
                     onChange={(event) => setClientSecret(event.target.value)}
@@ -635,11 +644,12 @@ export function McpEditorDialog({
                     disabled={busy}
                   />
                 </label>
-                <label>
+                <label htmlFor="mcp-oauth-refresh-token">
                   <span className="text-2xs uppercase tracking-wider text-tertiary">
                     {t("settings.mcpOauthRefreshToken")}
                   </span>
                   <Input
+                    id="mcp-oauth-refresh-token"
                     type="password"
                     value={refreshToken}
                     onChange={(event) => setRefreshToken(event.target.value)}
@@ -919,12 +929,17 @@ function McpPromptsSection({ ws }: { ws: string }) {
           <div className="space-y-3">
             {selected.description && <p className="text-xs text-secondary">{selected.description}</p>}
             {(selected.arguments ?? []).map((arg) => (
-              <label key={arg.name} className="block text-xs text-secondary">
+              <label
+                htmlFor={`mcp-prompt-${encodeURIComponent(arg.name)}`}
+                key={arg.name}
+                className="block text-xs text-secondary"
+              >
                 <span>
                   {arg.name}
                   {arg.required ? " *" : ""}
                 </span>
                 <Input
+                  id={`mcp-prompt-${encodeURIComponent(arg.name)}`}
                   disabled={running}
                   value={args[arg.name] ?? ""}
                   onChange={(e) => setArgs((current) => ({ ...current, [arg.name]: e.target.value }))}

@@ -522,10 +522,11 @@ function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApp
       </div>
       <Card className="p-4">
         <p className="text-xs leading-relaxed text-tertiary">{t("memory.compact.description")}</p>
-        <label className="mt-3 block text-2xs uppercase tracking-wider text-tertiary">
+        <label htmlFor="memory-prune-days" className="mt-3 block text-2xs uppercase tracking-wider text-tertiary">
           {t("memory.compact.pruneLabel")}
         </label>
         <Input
+          id="memory-prune-days"
           value={pruneDays}
           onChange={(e) => setPruneDays(e.target.value.replace(/[^0-9]/g, ""))}
           inputMode="numeric"

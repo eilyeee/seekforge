@@ -123,15 +123,17 @@ export function CommandPalette() {
   let lastSection: PaletteItem["section"] | null = null;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 p-4 pt-[12vh] backdrop-blur-[2px]"
-      onClick={close}
-    >
+    <div className="fixed inset-0 z-[60] flex items-start justify-center p-4 pt-[12vh]">
+      <button
+        type="button"
+        aria-label={t("palette.close")}
+        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        onClick={close}
+      />
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-lg overflow-hidden rounded-xl border border-subtle bg-surface-raised shadow-2xl shadow-black/50"
-        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-lg overflow-hidden rounded-xl border border-subtle bg-surface-raised shadow-2xl shadow-black/50"
       >
         <div className="flex items-center gap-2 border-b border-subtle px-3 py-2.5">
           <IconSearch size={15} className="shrink-0 text-tertiary" />

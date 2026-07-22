@@ -27,7 +27,7 @@ export function detectLocale(env: Record<string, string | undefined> = process.e
   const explicit = env.SEEKFORGE_LANG;
   if (explicit) return explicit.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
   for (const value of [env.LC_ALL, env.LANG]) {
-    if (value && value.toLowerCase().startsWith("zh")) return "zh-CN";
+    if (value?.toLowerCase().startsWith("zh")) return "zh-CN";
   }
   return "en";
 }

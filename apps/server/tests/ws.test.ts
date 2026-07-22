@@ -841,7 +841,7 @@ describe("permission bridge", () => {
   });
 
   it("permission.request forwards hunks when present", async () => {
-    let seenRequest: import("@seekforge/shared").PermissionRequest | undefined;
+    let _seenRequest: import("@seekforge/shared").PermissionRequest | undefined;
     const { server } = await boot(
       fakeAgentFactory(async function* (opts) {
         yield { type: "session.created", sessionId: "perm-hunks" };

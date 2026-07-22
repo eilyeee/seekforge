@@ -1,4 +1,3 @@
-import React from "react";
 import { describe, expect, it } from "vitest";
 import type { PermissionRequest } from "@seekforge/shared";
 import { PermissionPanel } from "../components/PermissionPanel.js";

@@ -99,9 +99,10 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
           <p className="mb-3 text-xs text-secondary">{t("chat.loop.explain")}</p>
 
           <div className="flex flex-col gap-2">
-            <label className="flex flex-col gap-1">
+            <label htmlFor="loop-task" className="flex flex-col gap-1">
               <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">{t("chat.loop.task")}</span>
               <TextArea
+                id="loop-task"
                 rows={2}
                 value={task}
                 onChange={(e) => setTask(e.target.value)}
@@ -111,7 +112,7 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
             </label>
 
             <div className="flex flex-wrap items-end gap-2">
-              <label className="flex w-40 flex-col gap-1">
+              <div className="flex w-40 flex-col gap-1">
                 <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
                   {t("chat.loop.requirements")}
                 </span>
@@ -126,12 +127,13 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                     { value: "confirm", label: t("chat.loop.requirements.confirm") },
                   ]}
                 />
-              </label>
-              <label className="flex min-w-48 flex-1 flex-col gap-1">
+              </div>
+              <label htmlFor="loop-verify" className="flex min-w-48 flex-1 flex-col gap-1">
                 <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
                   {t("chat.loop.verify")}
                 </span>
                 <Input
+                  id="loop-verify"
                   value={verify}
                   onChange={(e) => setVerify(e.target.value)}
                   placeholder={t("chat.loop.verifyPlaceholder")}
@@ -140,11 +142,12 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                 />
               </label>
 
-              <label className="flex w-28 flex-col gap-1">
+              <label htmlFor="loop-max-iterations" className="flex w-28 flex-col gap-1">
                 <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
                   {t("chat.loop.maxIterations")}
                 </span>
                 <Input
+                  id="loop-max-iterations"
                   type="number"
                   min={1}
                   max={MAX_LOOP_ITERATIONS}
@@ -157,11 +160,12 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                 {max.error && <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>}
               </label>
 
-              <label className="flex w-28 flex-col gap-1">
+              <label htmlFor="loop-budget" className="flex w-28 flex-col gap-1">
                 <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
                   {t("chat.loop.budget")}
                 </span>
                 <Input
+                  id="loop-budget"
                   type="number"
                   min={0}
                   step="0.01"
@@ -252,9 +256,10 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                   {result.loopId && <span className="ml-2 font-mono text-2xs text-tertiary">{result.loopId}</span>}
                   {result.loopId && !running && (
                     <div className="mt-3 flex flex-wrap items-end gap-2 text-primary">
-                      <label className="flex w-32 flex-col gap-1">
+                      <label htmlFor="loop-added-iterations" className="flex w-32 flex-col gap-1">
                         <span className="text-2xs text-tertiary">{t("chat.loop.addedIterations")}</span>
                         <Input
+                          id="loop-added-iterations"
                           value={addedIterations}
                           onChange={(e) => setAddedIterations(e.target.value)}
                           type="number"
@@ -268,9 +273,10 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                           <span className="text-2xs text-danger">{t("chat.loop.invalidIterations")}</span>
                         )}
                       </label>
-                      <label className="flex w-32 flex-col gap-1">
+                      <label htmlFor="loop-added-budget" className="flex w-32 flex-col gap-1">
                         <span className="text-2xs text-tertiary">{t("chat.loop.addedBudget")}</span>
                         <Input
+                          id="loop-added-budget"
                           value={addedBudget}
                           onChange={(e) => setAddedBudget(e.target.value)}
                           type="number"

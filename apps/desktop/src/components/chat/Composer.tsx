@@ -410,7 +410,7 @@ export function Composer({
     void uploadImages(images);
   };
 
-  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDrop = (e: React.DragEvent<HTMLFieldSetElement>) => {
     e.preventDefault();
     setDragOver(false);
     if (disabled) return;
@@ -418,8 +418,9 @@ export function Composer({
   };
 
   return (
-    <div
-      className="relative border-t border-subtle p-3"
+    <fieldset
+      aria-label={t("chat.composer.inputLabel")}
+      className="relative min-w-0 border-x-0 border-b-0 border-t border-subtle p-3"
       onDragOver={(e) => {
         e.preventDefault();
         if (!disabled) setDragOver(true);
@@ -568,6 +569,7 @@ export function Composer({
               strokeLinecap="round"
               strokeLinejoin="round"
             >
+              <title>{t("chat.composer.attach")}</title>
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
           </button>
@@ -589,6 +591,7 @@ export function Composer({
               strokeLinecap="round"
               strokeLinejoin="round"
             >
+              <title>{t("chat.composer.send")}</title>
               <path d="M12 19V5M5 12l7-7 7 7" />
             </svg>
           </button>
@@ -606,6 +609,6 @@ export function Composer({
           e.target.value = "";
         }}
       />
-    </div>
+    </fieldset>
   );
 }

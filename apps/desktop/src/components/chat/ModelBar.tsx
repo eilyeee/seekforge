@@ -68,9 +68,14 @@ export function ModelBar({
         up
         value={thinkValue}
         options={thinkOptions}
-        onChange={(v) =>
-          v === "off" ? onSetThinking(false) : (onSetThinking(true), onSetReasoningEffort(v as "high" | "max"))
-        }
+        onChange={(v) => {
+          if (v === "off") {
+            onSetThinking(false);
+            return;
+          }
+          onSetThinking(true);
+          onSetReasoningEffort(v as "high" | "max");
+        }}
         size="sm"
         disabled={running}
         leading={<IconThinking size={14} />}

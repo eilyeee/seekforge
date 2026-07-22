@@ -42,13 +42,13 @@
     "rules": {
       "preset": "recommended",
       "a11y": {
-        "noLabelWithoutControl": "warn",
-        "noStaticElementInteractions": "warn",
-        "noSvgWithoutTitle": "warn",
-        "useKeyWithClickEvents": "warn",
-        "useAriaPropsSupportedByRole": "warn",
-        "noNoninteractiveElementToInteractiveRole": "warn",
-        "useFocusableInteractive": "warn"
+        "noLabelWithoutControl": "error",
+        "noStaticElementInteractions": "error",
+        "noSvgWithoutTitle": "error",
+        "useKeyWithClickEvents": "error",
+        "useAriaPropsSupportedByRole": "error",
+        "noNoninteractiveElementToInteractiveRole": "error",
+        "useFocusableInteractive": "error"
       },
       "style": {
         "noNonNullAssertion": "off",
@@ -63,10 +63,10 @@
       },
       "suspicious": {
         "noAssignInExpressions": "off",
-        "noExplicitAny": "warn",
-        "noArrayIndexKey": "warn",
-        "noControlCharactersInRegex": "warn",
-        "noTemplateCurlyInString": "warn",
+        "noExplicitAny": "error",
+        "noArrayIndexKey": "off",
+        "noControlCharactersInRegex": "off",
+        "noTemplateCurlyInString": "off",
         "noUnknownAtRules": "off"
       }
     }
@@ -91,7 +91,17 @@
       "linter": {
         "rules": {
           "correctness": {
-            "useExhaustiveDependencies": "warn"
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/tests/**", "**/__tests__/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
           }
         }
       }

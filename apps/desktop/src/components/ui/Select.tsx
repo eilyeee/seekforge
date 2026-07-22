@@ -85,7 +85,8 @@ export function Select({
         disabled={disabled}
         title={title}
         aria-label={ariaLabel ?? title}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
+        aria-controls={open ? listId : undefined}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={`focus-ring inline-flex w-full items-center justify-between rounded-lg border border-strong bg-surface font-medium text-primary transition-colors hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-50 ${TRIGGER_SIZE[size]}`}
@@ -101,9 +102,9 @@ export function Select({
       </button>
 
       {open && (
-        <ul
+        <div
           id={listId}
-          role="listbox"
+          role="menu"
           className={`absolute left-0 z-50 max-h-72 min-w-full overflow-auto rounded-lg border border-strong bg-surface-raised p-1 shadow-lg ${
             up ? "bottom-full mb-1" : "top-full mt-1"
           }`}
@@ -111,9 +112,11 @@ export function Select({
           {options.map((o) => {
             const active = o.value === value;
             return (
-              <li key={o.value} role="option" aria-selected={active}>
+              <div key={o.value}>
                 <button
                   type="button"
+                  role="menuitemradio"
+                  aria-checked={active}
                   onClick={() => pick(o.value)}
                   className={`flex w-full flex-col gap-0.5 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
                     active
@@ -124,10 +127,10 @@ export function Select({
                   <span className="truncate font-medium">{o.label}</span>
                   {o.hint && <span className="truncate text-2xs text-tertiary">{o.hint}</span>}
                 </button>
-              </li>
+              </div>
             );
           })}
-        </ul>
+        </div>
       )}
     </div>
   );

@@ -84,11 +84,27 @@ const DEFINITION_TYPES = new Set([
   "type_definition",
 ]);
 
-// web-tree-sitter has no bundled types we depend on; treat its nodes structurally.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type TsNode = any;
+// web-tree-sitter is optional; keep the boundary structural so importing this
+// module never makes its runtime package mandatory.
+type TsNode = {
+  type: string;
+  text: string;
+  namedChildCount: number;
+  namedChild(index: number): TsNode;
+  childForFieldName?(name: string): TsNode | null;
+  startPosition: { row: number };
+  startIndex: number;
+  endIndex: number;
+};
 type TsTree = { rootNode: TsNode; delete(): void };
 type TsParser = { parse(input: string): TsTree };
+type TsLanguage = { load(path: string): Promise<unknown> };
+type TsParserConstructor = {
+  new (): TsParser & { setLanguage(language: unknown): void };
+  init(options: { locateFile(name: string): string }): Promise<void>;
+  Language?: TsLanguage;
+};
+type TsModule = { default?: TsParserConstructor; Parser?: TsParserConstructor; Language?: TsLanguage };
 
 const parsers = new Map<string, TsParser>(); // grammar name -> parser with language set
 let state: "idle" | "ready" | "failed" = "idle";
@@ -106,7 +122,7 @@ function nameOf(node: TsNode): string | undefined {
   if (direct) return direct.text as string;
   // C/C++ nest the name inside a declarator chain (function_definition ->
   // function_declarator -> identifier); follow `declarator` fields to it.
-  let d: TsNode = node.childForFieldName?.("declarator");
+  let d: TsNode | null | undefined = node.childForFieldName?.("declarator");
   for (let guard = 0; d && guard < 12; guard++) {
     if (DECLARATOR_NAME_TYPES.has(d.type)) return d.text as string;
     d = d.childForFieldName?.("declarator");
@@ -222,10 +238,12 @@ export async function ensureAstBackend(): Promise<boolean> {
       const require = createRequire(import.meta.url);
       const wtsDir = path.dirname(require.resolve("web-tree-sitter/package.json"));
       const wasmsDir = path.join(path.dirname(require.resolve("tree-sitter-wasms/package.json")), "out");
-      const mod: any = await import("web-tree-sitter");
+      const mod = (await import("web-tree-sitter")) as unknown as TsModule;
       const Parser = mod.default ?? mod.Parser;
+      if (!Parser) return false;
       await Parser.init({ locateFile: (name: string) => path.join(wtsDir, name) });
       const Language = Parser.Language ?? mod.Language;
+      if (!Language) return false;
       for (const g of new Set(Object.values(GRAMMARS))) {
         try {
           const lang = await Language.load(path.join(wasmsDir, `tree-sitter-${g}.wasm`));

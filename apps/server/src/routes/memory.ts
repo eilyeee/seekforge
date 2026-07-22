@@ -96,7 +96,7 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
         content,
         ...(type !== undefined ? { type: type as MemoryCandidateType } : {}),
         // `pending: true` queues the fact instead of writing it to project.md.
-        approve: pending === true ? false : true,
+        approve: pending !== true,
         ...(scope === "user" ? { scope: "user" as const } : {}),
       });
       return sendJson(res, 201, created);

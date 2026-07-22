@@ -151,7 +151,6 @@ export function Sidebar() {
     <aside
       ref={mobile ? mobilePanelRef : undefined}
       role={mobile ? "dialog" : undefined}
-      aria-modal={mobile ? true : undefined}
       aria-label={mobile ? t("nav.group.system") : undefined}
       className={`${mobile ? "fixed inset-y-0 left-0 z-50 flex shadow-xl sm:hidden" : "hidden sm:flex"} w-[220px] shrink-0 flex-col border-r border-subtle bg-surface-raised`}
     >

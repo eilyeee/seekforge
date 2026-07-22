@@ -26,15 +26,17 @@ export function Modal({ title, children, footer, onDismiss, wide }: Props) {
   }, [onDismiss]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-[2px]"
-      onClick={onDismiss}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Close dialog"
+        className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
+        onClick={onDismiss}
+      />
       <div
         role="dialog"
         aria-modal="true"
-        className={`flex max-h-[calc(100vh-2rem)] w-full flex-col ${wide ? "max-w-lg" : "max-w-md"} rounded-xl border border-subtle bg-surface-raised p-5 shadow-2xl shadow-black/50`}
-        onClick={(e) => e.stopPropagation()}
+        className={`relative flex max-h-[calc(100vh-2rem)] w-full flex-col ${wide ? "max-w-lg" : "max-w-md"} rounded-xl border border-subtle bg-surface-raised p-5 shadow-2xl shadow-black/50`}
       >
         {title !== undefined && (
           <div className="mb-3 flex shrink-0 items-center gap-2 text-sm font-semibold text-primary">{title}</div>

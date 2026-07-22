@@ -196,7 +196,7 @@ describe("permission rules", () => {
 
   it("allow command rule matches on a token boundary, not a bare prefix", async () => {
     const ws = makeWorkspace();
-    const { confirm, requests } = scriptedConfirm(false);
+    const { confirm } = scriptedConfirm(false);
     // Allowing `npm run build` must NOT auto-approve the sibling `npm run
     // build-all` — that would smuggle a different script past the gate.
     const rules: PermissionRule[] = [{ action: "allow", tool: "run_command", match: "npm run build" }];

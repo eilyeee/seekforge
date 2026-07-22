@@ -420,9 +420,10 @@ function FindingFixDialog({
     >
       <div className="space-y-3">
         <p className="text-xs text-secondary">{t("security.fixWarning")}</p>
-        <label className="block">
+        <label htmlFor="security-fix-max-cost" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("security.maxCost")}</span>
           <Input
+            id="security-fix-max-cost"
             type="number"
             min="0.01"
             step="0.01"
@@ -431,13 +432,23 @@ function FindingFixDialog({
             className="mt-1 font-mono"
           />
         </label>
-        <label className="block">
+        <label htmlFor="security-fix-verify" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("security.verifyCommand")}</span>
-          <Input value={verify} onChange={(event) => setVerify(event.target.value)} className="mt-1 font-mono" />
+          <Input
+            id="security-fix-verify"
+            value={verify}
+            onChange={(event) => setVerify(event.target.value)}
+            className="mt-1 font-mono"
+          />
         </label>
-        <label className="block">
+        <label htmlFor="security-fix-lint" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("security.lintCommand")}</span>
-          <Input value={lint} onChange={(event) => setLint(event.target.value)} className="mt-1 font-mono" />
+          <Input
+            id="security-fix-lint"
+            value={lint}
+            onChange={(event) => setLint(event.target.value)}
+            className="mt-1 font-mono"
+          />
         </label>
       </div>
     </ConfirmDialog>

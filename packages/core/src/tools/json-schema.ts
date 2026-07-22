@@ -1,5 +1,17 @@
 import type { z } from "zod";
 
+type ZodDef = {
+  typeName: string;
+  shape?: () => Record<string, z.ZodTypeAny>;
+  checks?: Array<{ kind: string; value?: number; inclusive?: boolean }>;
+  type?: z.ZodTypeAny;
+  minLength?: { value?: number };
+  maxLength?: { value?: number };
+  exactLength?: { value?: number };
+  values?: Iterable<string>;
+  innerType?: z.ZodTypeAny;
+};
+
 /**
  * Minimal zod -> JSON Schema converter for the subset used by built-in tools:
  * object / string / number / boolean / array / enum / optional / default / describe,
@@ -7,14 +19,13 @@ import type { z } from "zod";
  * Intentionally NOT a general-purpose converter (no extra dependency).
  */
 export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const def = (schema as any)._def;
+  const def = (schema as unknown as { _def: ZodDef })._def;
   const out: Record<string, unknown> = {};
   if (schema.description) out.description = schema.description;
 
   switch (def.typeName as string) {
     case "ZodObject": {
-      const shape = def.shape() as Record<string, z.ZodTypeAny>;
+      const shape = def.shape?.() ?? {};
       const properties: Record<string, unknown> = {};
       const required: string[] = [];
       for (const [key, value] of Object.entries(shape)) {
@@ -65,7 +76,7 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
       return {
         ...out,
         type: "array",
-        items: zodToJsonSchema(def.type),
+        items: def.type ? zodToJsonSchema(def.type) : {},
         ...(def.minLength?.value !== undefined ? { minItems: def.minLength.value } : {}),
         ...(def.maxLength?.value !== undefined ? { maxItems: def.maxLength.value } : {}),
         ...(def.exactLength?.value !== undefined
@@ -73,10 +84,10 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
           : {}),
       };
     case "ZodEnum":
-      return { ...out, type: "string", enum: [...def.values] };
+      return { ...out, type: "string", enum: [...(def.values ?? [])] };
     case "ZodOptional":
     case "ZodDefault": {
-      const inner = zodToJsonSchema(def.innerType);
+      const inner = def.innerType ? zodToJsonSchema(def.innerType) : {};
       // Outer .describe() wins over the inner one.
       return { ...inner, ...out };
     }

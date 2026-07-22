@@ -66,7 +66,16 @@ export function TabBar({
           return (
             <div
               key={tab.tabId}
+              role="tab"
+              tabIndex={active ? 0 : -1}
+              aria-selected={active}
               onClick={() => onSelect(tab.tabId)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(tab.tabId);
+                }
+              }}
               className={`group relative flex max-w-56 cursor-pointer items-center gap-1.5 rounded-t border-x border-t px-2.5 py-1 text-xs ${
                 active
                   ? "border-strong bg-surface text-primary"
@@ -138,9 +147,11 @@ export function TabBar({
               )}
               {menu === tab.tabId && tab.worktree && (
                 <div
+                  role="menu"
                   className="absolute left-0 top-full z-40 mt-0.5 w-44 rounded border border-strong bg-surface-raised py-1 shadow-lg"
                   onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
@@ -180,6 +191,7 @@ export function TabBar({
         </button>
         {menu === "new" && (
           <div
+            role="menu"
             className="absolute left-0 top-full z-40 w-52 rounded border border-strong bg-surface-raised py-1 shadow-lg"
             onMouseDown={(e) => e.stopPropagation()}
           >

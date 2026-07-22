@@ -5,7 +5,6 @@ import {
   fstatSync,
   fsyncSync,
   openSync,
-  readFileSync,
   readSync,
   renameSync,
   rmSync,

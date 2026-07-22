@@ -8,7 +8,7 @@ import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
 import { createSessionTrace, loadSessionMessages } from "../../src/agent/trace.js";
 import { createDefaultDispatcher } from "../../src/tools/index.js";
-import { call, makeCtx, makeWorkspace } from "./helpers.js";
+import { makeCtx, makeWorkspace } from "./helpers.js";
 
 /**
  * Security regression suite for the "untrusted content is data, not

@@ -37,7 +37,7 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 function sessionIdOf(events: AgentEvent[]): string {
   const created = events.find((e) => e.type === "session.created");
-  if (!created || created.type !== "session.created") throw new Error("no session.created event");
+  if (created?.type !== "session.created") throw new Error("no session.created event");
   return created.sessionId;
 }
 

@@ -187,7 +187,7 @@ export function SessionsView() {
       });
   };
 
-  const noteFor = (id: string, e: unknown): string =>
+  const noteFor = (e: unknown): string =>
     e instanceof ApiError && e.status === 404 ? t("sessions.rewindNoCheckpoints") : String(e);
 
   const startRewind = (id: string) => {
@@ -202,7 +202,7 @@ export function SessionsView() {
         }
       })
       .catch((e: unknown) => {
-        if (requests.isCurrent(operation)) setRewindNotes((n) => ({ ...n, [id]: noteFor(id, e) }));
+        if (requests.isCurrent(operation)) setRewindNotes((n) => ({ ...n, [id]: noteFor(e) }));
       });
   };
 
@@ -227,7 +227,7 @@ export function SessionsView() {
       })
       .catch((e: unknown) => {
         if (requests.isCurrent(operation)) {
-          setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(sessionId, e) }));
+          setRewindNotes((n) => ({ ...n, [sessionId]: noteFor(e) }));
         }
       });
   };
@@ -615,9 +615,10 @@ function PruneDialog({
       onCancel={onClose}
     >
       <div className="space-y-3 text-xs">
-        <label className="block">
+        <label htmlFor="sessions-prune-older-than" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("sessions.pruneOlderThan")}</span>
           <Input
+            id="sessions-prune-older-than"
             value={olderThanDays}
             onChange={(e) => {
               setOlderThanDays(e.target.value.replace(/[^0-9]/g, ""));
@@ -629,9 +630,10 @@ function PruneDialog({
             disabled={busy !== null}
           />
         </label>
-        <label className="block">
+        <label htmlFor="sessions-prune-keep-last" className="block">
           <span className="text-2xs uppercase tracking-wider text-tertiary">{t("sessions.pruneKeepLast")}</span>
           <Input
+            id="sessions-prune-keep-last"
             value={keepLast}
             onChange={(e) => {
               setKeepLast(e.target.value.replace(/[^0-9]/g, ""));

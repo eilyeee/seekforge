@@ -591,6 +591,7 @@ export const views = {
     "security.lintCommand": "lint / typecheck command (optional)",
     // ── Command palette (⌘K) ──────────────────────────────────────
     "palette.placeholder": "Type a command or search…",
+    "palette.close": "Close command palette",
     "palette.empty": "No matches.",
     "palette.sectionViews": "Go to",
     "palette.sectionActions": "Actions",
@@ -1174,6 +1175,7 @@ export const views = {
     "security.lintCommand": "lint / typecheck 命令（可选）",
     // ── Command palette (⌘K) ──────────────────────────────────────
     "palette.placeholder": "输入命令或搜索…",
+    "palette.close": "关闭命令面板",
     "palette.empty": "无匹配项。",
     "palette.sectionViews": "前往",
     "palette.sectionActions": "操作",

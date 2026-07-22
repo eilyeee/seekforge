@@ -395,7 +395,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
   if (method === "POST" && segs.length === 5 && segs[1] === "mcp" && segs[2] === "prompts") {
     const serverName = segs[3]!;
     const promptName = segs[4]!;
-    const config = (loadConfig(workspace).mcpServers ?? {})[serverName];
+    const config = loadConfig(workspace).mcpServers?.[serverName];
     if (!isMcpServerConfig(config))
       return sendApiError(res, 404, "not_found", `MCP server not configured: ${serverName}`);
     if (config.trusted !== true) {
@@ -626,7 +626,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "test") {
     const name = segs[2]!;
-    const config = (loadConfig(workspace).mcpServers ?? {})[name];
+    const config = loadConfig(workspace).mcpServers?.[name];
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
     const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
     const started = Date.now();
@@ -642,7 +642,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "POST" && segs.length === 4 && segs[1] === "mcp" && segs[3] === "tools") {
     const name = segs[2]!;
-    const config = (loadConfig(workspace).mcpServers ?? {})[name];
+    const config = loadConfig(workspace).mcpServers?.[name];
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
     const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
     try {
