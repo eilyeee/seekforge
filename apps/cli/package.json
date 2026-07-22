@@ -39,7 +39,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:sidecar": "bun build --compile src/index.ts --outfile ../desktop/src-tauri/binaries/seekforge-server-${SIDECAR_TARGET:-$(rustc -vV | sed -n 's/host: //p')}",
+    "build:sidecar": "node ../../scripts/build-sidecar.mjs",
     "prepublishOnly": "pnpm --filter @seekforge/desktop build && pnpm build"
   },
   "dependencies": {

@@ -37,7 +37,7 @@ export { MODEL_PRICING, DEFAULT_BASE_URL, DEFAULT_MODEL, DEPRECATED_MODELS, type
 export { parseFallbackToolCalls, buildFallbackToolPrompt } from "./fallback.js";
 export { DeepSeekApiError } from "./http.js";
 export { MAX_PROVIDER_RESPONSE_BYTES } from "./protocol-limits.js";
-export { fetchBalance, type AccountBalance } from "./balance.js";
+export { fetchBalance, verifyDeepSeekAccess, type AccountBalance, type ProviderAccessCheck } from "./balance.js";
 export { wrapProviderWithCache, type ProviderCacheOptions } from "./cache.js";
 export { ProviderProtocolError } from "./mapping.js";
 export {

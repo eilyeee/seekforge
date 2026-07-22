@@ -60,6 +60,10 @@ function startFakeServer(): Promise<{
       res.writeHead(200).end();
       return;
     }
+    if (req.method === "GET") {
+      res.writeHead(405).end();
+      return;
+    }
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
@@ -240,15 +244,76 @@ afterAll(async () => {
   await closeServer();
 });
 
-function makeClient(timeoutMs?: number) {
+function makeClient(timeoutMs?: number, onNotification?: (notification: { method: string; params?: unknown }) => void) {
   return createMcpClient({
     name: "fake-http",
     config: { url, headers: { authorization: "Bearer test-token" } },
     requestTimeoutMs: timeoutMs,
+    ...(onNotification ? { onNotification } : {}),
   });
 }
 
 describe("mcp client over streamable HTTP", () => {
+  it("consumes a standalone GET stream and answers server roots/list requests", async () => {
+    const notifications: Array<{ method: string; params?: unknown }> = [];
+    const serverResponses: unknown[] = [];
+    const streamServer = createServer((req, res) => {
+      if (req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write('data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"source":"get"}}\n\n');
+        res.end('data: {"jsonrpc":"2.0","id":99,"method":"roots/list","params":{}}\n\n');
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+      req.on("end", () => {
+        const message = JSON.parse(body) as { id?: number; method?: string; result?: unknown; error?: unknown };
+        if (message.method === "initialize") {
+          res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "get-session" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "get", version: "1" } },
+            }),
+          );
+          return;
+        }
+        if (message.method === "tools/list") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }));
+          return;
+        }
+        if (message.method === undefined && message.id === 99) serverResponses.push(message);
+        res.writeHead(202).end();
+      });
+    });
+    await new Promise<void>((resolve) => streamServer.listen(0, "127.0.0.1", resolve));
+    const port = (streamServer.address() as { port: number }).port;
+    const client = createMcpClient({
+      name: "get-stream",
+      config: { url: `http://127.0.0.1:${port}/mcp` },
+      workspaceRoots: ["/tmp/project"],
+      onNotification: (notification) => notifications.push(notification),
+    });
+    try {
+      await client.listTools();
+      await vi.waitFor(() => {
+        expect(notifications).toEqual([{ method: "notifications/tools/list_changed", params: { source: "get" } }]);
+        expect(serverResponses).toEqual([
+          {
+            jsonrpc: "2.0",
+            id: 99,
+            result: { roots: [{ uri: "file:///tmp/project", name: "workspace" }] },
+          },
+        ]);
+      });
+    } finally {
+      client.dispose();
+      await new Promise<void>((resolve) => streamServer.close(() => resolve()));
+    }
+  });
+
   it("refreshes an OAuth bearer token once after HTTP 401", async () => {
     const before = getTokenRefreshes();
     const client = createMcpClient({
@@ -295,7 +360,7 @@ describe("mcp client over streamable HTTP", () => {
     }
   });
 
-  it("negotiates protocol headers without advertising unsupported HTTP roots", async () => {
+  it("negotiates protocol headers and advertises supported HTTP roots", async () => {
     requests.length = 0;
     const client = makeClient();
     try {
@@ -303,7 +368,7 @@ describe("mcp client over streamable HTTP", () => {
       const init = requests.find((r) => r.method === "initialize");
       expect(init?.params).toMatchObject({
         protocolVersion: "2025-06-18",
-        capabilities: {},
+        capabilities: { roots: { listChanged: true } },
       });
       expect(init?.headers["mcp-protocol-version"]).toBeUndefined();
       const tools = requests.find((r) => r.method === "tools/list");
@@ -313,11 +378,13 @@ describe("mcp client over streamable HTTP", () => {
     }
   });
 
-  it("parses a text/event-stream response, skipping unrelated SSE events", async () => {
-    const client = makeClient();
+  it("parses an SSE response and delivers interleaved notifications", async () => {
+    const notifications: Array<{ method: string; params?: unknown }> = [];
+    const client = makeClient(undefined, (notification) => notifications.push(notification));
     try {
       const text = await client.callTool("echo", { text: "hi" });
       expect(text).toBe('sse-echo:{"text":"hi"}');
+      expect(notifications).toEqual([{ method: "notifications/progress", params: {} }]);
     } finally {
       client.dispose();
     }

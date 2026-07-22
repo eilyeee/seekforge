@@ -522,6 +522,14 @@ is used; otherwise `command` defines a stdio subprocess.
 }
 ```
 
+For Streamable HTTP servers, SeekForge keeps the optional session GET event
+stream open after initialization. Notifications are consumed without blocking
+normal requests, `roots/list` requests are answered from the configured
+workspace roots, unknown server requests receive JSON-RPC method-not-found, and
+disposing the client aborts the stream. HTTP 404/405 cleanly falls back to
+request-scoped responses. Refresh-token OAuth is supported; obtaining the
+initial authorization grant remains a frontend/operator step.
+
 Servers are merged per name across config layers (later wins):
 **settings > project > global**.
 

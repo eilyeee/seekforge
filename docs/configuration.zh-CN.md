@@ -494,6 +494,12 @@ type McpServerConfig = {
 }
 ```
 
+对于 Streamable HTTP server，SeekForge 会在初始化后保持可选的会话 GET 事件流。
+通知会被消费且不阻塞普通请求；`roots/list` 会依据已配置的工作区根目录回答；
+未知的 server 请求会收到 JSON-RPC method-not-found；释放客户端时会中止该流。
+HTTP 404/405 会干净地回退到请求作用域响应。refresh-token OAuth 已支持；获取
+首次授权仍由前端或运维人员完成。
+
 服务器在各配置层之间按名称合并（后者覆盖前者）：
 **settings > project > global**。
 

@@ -20,36 +20,32 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
-| Desktop and local web workbench | Implemented, maturing | Security Center, MCP editing, team planning, and historical subagent replay ship; expand signed cross-platform packaging. |
+| Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
-| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics and HTTP token refresh ship; complete interactive OAuth and long-lived HTTP streams. |
+| Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics, OAuth token refresh, and long-lived HTTP notification/request streams ship; interactive initial OAuth authorization remains frontend-owned. |
 | Worktrees and isolated execution | Implemented | Writable background and webhook jobs default to worktree isolation in git repositories, with explicit workspace/required-worktree modes. |
 | `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and one bounded CI-log repair ship; expand provider/host compatibility fixtures. |
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
-| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, and trend reports ship. |
-| `@seekforge/core` embedding API | Internal / experimental | Package is private and source-exported; define build, semver, and compatibility policy before public SDK release. |
-| VS Code / JetBrains integration | Not implemented | Start with a thin client over the existing REST/WS server contract. |
+| Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, trend reports, and source-tagged dogfood regressions ship. |
+| `@seekforge/core` embedding API | Internal by policy | The 0.x package stays private; [publication exit criteria](core-package-policy.md) define compiled artifacts, exports, semver, consumer tests, examples, and security docs. |
+| VS Code / JetBrains integration | VS Code bridge implemented; JetBrains pending | Thin VS Code client ships over the REST/WS contract with chat, diff, raw permission review, session resume, questions, and `@file` context. |
 | Remote/team execution service | Design-stage | Stabilize a self-hosted runner contract without weakening local-first defaults. |
 
 ## Near-term priorities
 
-1. Produce signed updater artifacts and add Linux/Windows clean-install Desktop
-   smoke jobs once platform signing credentials are available.
-2. Add run-ledger/event retention, compaction, and operator controls before
-   enabling long-lived remote runners by default.
-3. Expand real-project lifecycle eval fixtures and preserve enough CI trend
+1. Produce signed updater artifacts and add cross-platform clean-install Desktop
+   smoke jobs once platform signing credentials are available; native packages already build in CI.
+2. Expand real-project lifecycle eval fixtures and preserve enough CI trend
    history to detect slow cost/quality drift across releases.
-4. Complete interactive OAuth authorization and long-lived Streamable HTTP MCP
-   notification/request handling; refresh-token operation already ships.
-5. Improve provider compatibility fixtures while keeping DeepSeek-specific cost
+3. Complete interactive initial OAuth authorization for remote MCP servers;
+   refresh-token operation and long-lived Streamable HTTP handling already ship.
+4. Improve provider compatibility fixtures while keeping DeepSeek-specific cost
    and cache-hit reporting first class.
-6. Build a thin VS Code bridge over the versioned `seekforge serve` contract for chat, diffs,
-   permissions, session resume, and `@file` context.
-7. Decide whether to publish `@seekforge/core`; if yes, add compiled artifacts,
-   supported entry points, examples, semver policy, and API compatibility tests.
+5. Harden and package the VS Code bridge, then evaluate a JetBrains client over the same contract.
+6. Revisit `@seekforge/core` publication only after its documented exit criteria are met.
 
 ## Documentation priorities
 

@@ -29,3 +29,17 @@ test("manual release workflows checkout the resolved tag before setup", async ()
     assert.match(source, /git checkout --detach "\$TAG_COMMIT"/);
   }
 });
+
+test("desktop releases build native packages for every supported desktop OS", async () => {
+  const source = await readFile(join(workflows, "release-desktop.yml"), "utf8");
+  for (const target of [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+  ]) {
+    assert.match(source, new RegExp(`target: ${target.replaceAll("-", "\\-")}`));
+  }
+  assert.match(source, /if: runner\.os == 'Linux'/);
+  assert.match(source, /--bundles \$\{\{ matrix\.bundles \}\}/);
+});

@@ -368,6 +368,42 @@ describe("GET /api/balance", () => {
   });
 });
 
+describe("POST /api/provider/verify", () => {
+  it("validates input without echoing the submitted secret", async () => {
+    const res = await post("/api/provider/verify", { apiKey: "short" });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await jsonOf(res))).not.toContain("short");
+  });
+
+  it("reports a successful DeepSeek credential check", async () => {
+    const stub: Server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
+    const stubPort = (stub.address() as { port: number }).port;
+    const verifyWorkspace = makeWorkspace();
+    writeFileIn(verifyWorkspace, ".seekforge/config.json", JSON.stringify({ baseUrl: `http://127.0.0.1:${stubPort}` }));
+    const verifyServer = await startServer({
+      workspace: verifyWorkspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${verifyServer.port}/api/provider/verify`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: "sk-onboarding-test" }),
+      });
+      expect(await jsonOf(res)).toEqual({ ok: true });
+    } finally {
+      await verifyServer.close();
+      await new Promise<void>((resolve) => stub.close(() => resolve()));
+    }
+  });
+});
+
 describe("GET /api/mcp/resources", () => {
   it("lists resources of reachable servers; broken servers contribute none", async () => {
     const res = await authed("/api/mcp/resources");

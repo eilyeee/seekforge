@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchBalance } from "../../src/provider/balance.js";
+import { fetchBalance, verifyDeepSeekAccess } from "../../src/provider/balance.js";
 import { MAX_PROVIDER_RESPONSE_BYTES } from "../../src/provider/protocol-limits.js";
 
 function fetchReturning(json: unknown, ok = true, status = 200): ReturnType<typeof vi.fn> {
@@ -79,5 +79,35 @@ describe("fetchBalance", () => {
 
     expect(await fetchBalance("sk-test")).toBeNull();
     expect(cancelled).toBe(true);
+  });
+});
+
+describe("verifyDeepSeekAccess", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a successful non-billable account request", async () => {
+    fetchReturning({}, true, 200);
+    await expect(verifyDeepSeekAccess("sk-test")).resolves.toEqual({ ok: true });
+  });
+
+  it.each([401, 403])("classifies HTTP %s as invalid credentials", async (status) => {
+    fetchReturning({}, false, status);
+    await expect(verifyDeepSeekAccess("sk-invalid")).resolves.toEqual({ ok: false, reason: "invalid_credentials" });
+  });
+
+  it("distinguishes provider errors from connectivity errors", async () => {
+    fetchReturning({}, false, 503);
+    await expect(verifyDeepSeekAccess("sk-test")).resolves.toEqual({ ok: false, reason: "provider_error" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    );
+    await expect(verifyDeepSeekAccess("sk-test")).resolves.toEqual({ ok: false, reason: "unreachable" });
   });
 });

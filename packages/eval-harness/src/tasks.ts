@@ -69,6 +69,12 @@ export type SessionScenarioStep =
 
 export type SessionScenarioConfig = { steps: SessionScenarioStep[] };
 
+export type TaskProvenance = {
+  /** How the task entered the dataset; dogfood/external tasks must name their source. */
+  kind: "synthetic" | "dogfood" | "external";
+  source?: string;
+};
+
 export type TaskDef = {
   id: string;
   title: string;
@@ -77,6 +83,7 @@ export type TaskDef = {
   task: string;
   checks: Check[];
   notes?: string;
+  provenance?: TaskProvenance;
   /** Omitted is the historical single-run behavior. */
   runner?: TaskRunner;
   expectedStatus?: ExpectedSessionStatus;
@@ -385,6 +392,21 @@ export function validateTask(value: unknown, where: string): TaskDef {
   };
   if (value.runner !== undefined) task.runner = runner as TaskRunner;
   if (value.notes !== undefined) task.notes = requireString(value, "notes", where);
+  if (value.provenance !== undefined) {
+    if (!isRecord(value.provenance)) throw new Error(`${where}: "provenance" must be an object`);
+    const kind = value.provenance.kind;
+    if (kind !== "synthetic" && kind !== "dogfood" && kind !== "external") {
+      throw new Error(`${where}: provenance.kind must be synthetic, dogfood, or external`);
+    }
+    const source = value.provenance.source;
+    if (kind !== "synthetic" && (typeof source !== "string" || source.trim().length === 0)) {
+      throw new Error(`${where}: ${kind} provenance must include a non-empty source`);
+    }
+    task.provenance = {
+      kind,
+      ...(typeof source === "string" && source.trim().length > 0 ? { source: source.trim() } : {}),
+    };
+  }
 
   if (runner === "agent") {
     if (value.loop !== undefined || value.scenario !== undefined) {

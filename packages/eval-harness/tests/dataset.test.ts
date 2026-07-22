@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the fifty-five expected tasks", () => {
+  it("contains the fifty-six expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -58,6 +58,7 @@ describe("evals/ dataset", () => {
       "rename-across-files",
       "rename-helper-fn",
       "rounding-half-even",
+      "run-ledger-byte-cursor",
       "schema-migration",
       "settle-currency-bug",
       "spec-to-feature",
@@ -67,6 +68,14 @@ describe("evals/ dataset", () => {
       "ts-generic-inference",
       "ts-typing-fix",
     ]);
+  });
+
+  it("keeps observed real-project failures identifiable", () => {
+    const observed = tasks.filter(
+      (task) => task.provenance?.kind === "dogfood" || task.provenance?.kind === "external",
+    );
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((task) => Boolean(task.provenance?.source))).toBe(true);
   });
 
   it("every task's fixture exists", () => {
@@ -149,6 +158,8 @@ describe("task validation", () => {
     }
     expect(() => validateTask({ ...valid, mode: "chat" }, "t")).toThrow(/"mode"/);
     expect(() => validateTask({ ...valid, checks: [] }, "t")).toThrow(/"checks"/);
+    expect(() => validateTask({ ...valid, provenance: { kind: "dogfood" } }, "t")).toThrow(/source/);
+    expect(() => validateTask({ ...valid, provenance: { kind: "invented" } }, "t")).toThrow(/provenance.kind/);
     expect(() => validateCheck({ type: "llm_judge", pattern: "x" }, "c")).toThrow(/unknown check type/);
     expect(() => validateCheck({ type: "file_contains", path: "a" }, "c")).toThrow(/"pattern"/);
     expect(() => validateCheck({ type: "file_contains", path: "a", pattern: "(" }, "c")).toThrow(/regex/);

@@ -20,6 +20,8 @@ export type McpClientOptions = {
    * the client still advertises the roots capability but reports an empty list.
    */
   workspaceRoots?: string[];
+  /** Server notifications observed on stdio response streams or Streamable HTTP SSE. */
+  onNotification?: (notification: { method: string; params?: unknown }) => void;
 };
 
 export type McpClient = {
@@ -249,7 +251,17 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
         // notifications (no id) are tolerated silently.
         if (typeof msg["method"] === "string") {
           const method = msg["method"];
-          if (id === undefined || id === null) return; // notification — nothing to answer
+          if (id === undefined || id === null) {
+            try {
+              options.onNotification?.({
+                method,
+                ...(msg["params"] !== undefined ? { params: msg["params"] } : {}),
+              });
+            } catch {
+              // Consumer callbacks are advisory and must not break transport I/O.
+            }
+            return;
+          }
           if (method === "roots/list") {
             proc.stdin.write(
               `${JSON.stringify({ jsonrpc: "2.0", id, result: buildRootsResult(options.workspaceRoots) })}\n`,

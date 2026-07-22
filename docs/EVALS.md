@@ -49,8 +49,8 @@ alternates A→B then B→A to reduce provider-order and time drift.
 
 - `smoke`: ten representative navigation, editing, verification, policy, and
   TypeScript tasks; one sample by default.
-- `nightly`: all 55 tasks; three samples by default.
-- `release`: all 55 tasks; five samples and tighter gates.
+- `nightly`: all 56 tasks; three samples by default.
+- `release`: all 56 tasks; five samples and tighter gates.
 
 Every sample records prompt, completion, cache-hit, and total tokens, including
 the latest cumulative usage emitted before a failed session; tool calls
@@ -219,13 +219,18 @@ A task is a JSON file at `evals/tasks/<id>.json`:
   "fixture": "name of a dir under evals/fixtures/",
   "mode": "edit",
   "task": "the natural-language prompt handed to the agent",
-  "checks": [ /* one or more checks, ALL must pass */ ]
+  "checks": [ /* one or more checks, ALL must pass */ ],
+  "provenance": { "kind": "dogfood", "source": "issue or incident reference" }
 }
 ```
 
 `id` is 1-128 characters, starts with an ASCII letter or digit, and may then
 contain only ASCII letters, digits, `.`, `_`, and `-`. This keeps temporary
 workspace names, report rows, and sample matching portable and unambiguous.
+`provenance` is optional for synthetic tasks. Observed `dogfood` and `external`
+failures must include a non-empty source; the dataset gate keeps those
+real-project regressions identifiable instead of letting them blur into
+invented examples.
 
 A fixture is a **self-contained project** at `evals/fixtures/<name>/`. It must
 be hermetic: only Node built-ins, no `dependencies`/`devDependencies` in its

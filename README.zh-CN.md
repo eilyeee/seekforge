@@ -81,6 +81,10 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | 管理定时任务、历史、重试与 crontab tick——见[定时任务](docs/scheduling.zh-CN.md) |
 | `seekforge sandbox-run "<task>"` | 通过 Docker runner 契约执行任务——见[远程执行](docs/remote.zh-CN.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | 会话打分与自我进化提案审阅（人工把关） |
+
+VS Code 用户可以使用 [`apps/vscode`](apps/vscode/README.md) 中的轻量本地扩展。
+它复用 `seekforge serve`，支持任务、会话续接、权限提示、问题回答、diff 查看与
+当前文件上下文。
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | 深度仓库安全审查、Finding 队列/生命周期、经验证的修复、威胁建模、JSON/Markdown/SARIF 证据导出——见[安全扫描](docs/security-scanning.zh-CN.md) |
 | `seekforge init` | 脚手架生成 `.seekforge/` 与 `AGENTS.md` 模板 |
 | `seekforge mcp add\|list\|remove <name>` | 管理配置中的 MCP server（列出、添加 stdio server、移除）——见 [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md) |
@@ -237,6 +241,7 @@ apps/cli              seekforge CLI（发布到 npm）
 apps/tui              seekforge-tui — Ink 终端 UI（随 npm 包发布）
 apps/server           seekforge serve — 本地 agent server + Web 工作台
 apps/desktop          Tauri 桌面壳
+apps/vscode           基于 seekforge serve 的轻量 VS Code 客户端
 packages/core         agent 循环、provider、工具、记忆、技能、runtime 客户端
 packages/shared       跨端纯类型
 packages/eval-harness 评测运行器（pnpm eval）

@@ -122,6 +122,19 @@ describe("loop.resume", () => {
       expect((await rx.waitFor((f) => f.type === "error")).code).toBe("bad_frame");
     }
   });
+
+  it("reports a resume failure and accepts omitted additive options", async () => {
+    const { server } = await boot({
+      resumeLoop: async () => {
+        throw "resume unavailable";
+      },
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop.resume", loopId: "loop-failed" });
+    const error = await rx.waitFor((frame) => frame.type === "error");
+    expect(error).toMatchObject({ code: "loop_error", message: "resume unavailable" });
+    await rx.waitFor((frame) => frame.type === "idle");
+  });
 });
 
 describe("loop -> loop.event -> idle", () => {
@@ -249,6 +262,22 @@ describe("loop -> loop.event -> idle", () => {
     });
     expect(record.error).toBeUndefined();
   });
+
+  it("records an unexpected loop exception and releases the connection", async () => {
+    const { server } = await boot({
+      runLoop: async () => {
+        throw new Error("verifier exploded");
+      },
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x" });
+    const error = await rx.waitFor((frame) => frame.type === "error");
+    expect(error).toMatchObject({ code: "loop_error", message: "verifier exploded" });
+    await rx.waitFor((frame) => frame.type === "idle");
+
+    sendFrame(ws, { type: "loop", task: "retry", verifyCommand: "x" });
+    expect((await rx.waitFor((frame) => frame.type === "error")).code).toBe("loop_error");
+  });
 });
 
 describe("loop busy rule", () => {
@@ -311,5 +340,27 @@ describe("loop cancel", () => {
     await rx.waitFor((f) => f.type === "idle");
     await waitUntil(() => abortedSeen);
     expect(abortedSeen).toBe(true);
+  });
+
+  it("classifies an exception raised after abort as cancelled", async () => {
+    let entered = false;
+    const { server } = await boot({
+      runLoop: async (_opts, loopOpts) => {
+        entered = true;
+        await new Promise<void>((resolve) => {
+          if (loopOpts.signal?.aborted) resolve();
+          else loopOpts.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new Error("provider aborted");
+      },
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop", task: "long job", verifyCommand: "x" });
+    await rx.waitFor((frame) => frame.type === "run.accepted");
+    await waitUntil(() => entered);
+    sendFrame(ws, { type: "cancel" });
+    const error = await rx.waitFor((frame) => frame.type === "error");
+    expect(error).toMatchObject({ code: "cancelled", message: "provider aborted" });
+    await rx.waitFor((frame) => frame.type === "idle");
   });
 });

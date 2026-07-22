@@ -20,6 +20,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [canContinueOffline, setCanContinueOffline] = useState(false);
 
   const save = async () => {
     const formatError = validateApiKeyFormat(apiKey);
@@ -29,9 +30,18 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
     }
     setError(null);
     setSaving(true);
+    setCanContinueOffline(false);
     try {
+      const key = apiKey.trim();
+      const verification = await api.verifyProvider(key);
+      if (!verification.ok) {
+        setError(t(`onboarding.verify.${verification.reason}`));
+        setCanContinueOffline(verification.reason !== "invalid_credentials");
+        setSaving(false);
+        return;
+      }
       // Global config (~/.seekforge), mirroring the TUI onboarding wizard.
-      await api.setConfig("apiKey", apiKey.trim(), true);
+      await api.setConfig("apiKey", key, true);
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -61,6 +71,7 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
           onChange={(e) => {
             setApiKey(e.target.value);
             if (error) setError(null);
+            if (canContinueOffline) setCanContinueOffline(false);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !saving) void save();
@@ -89,9 +100,30 @@ export function Onboarding({ onDone, onSkip }: { onDone: () => void; onSkip: () 
           <Button variant="ghost" size="sm" onClick={onSkip} disabled={saving}>
             {t("onboarding.skip")}
           </Button>
-          <Button variant="primary" onClick={() => void save()} disabled={saving || apiKey.trim() === ""}>
-            {saving ? t("onboarding.saving") : t("onboarding.saveContinue")}
-          </Button>
+          <div className="flex items-center gap-2">
+            {canContinueOffline && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await api.setConfig("apiKey", apiKey.trim(), true);
+                    onDone();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                    setSaving(false);
+                  }
+                }}
+                disabled={saving}
+              >
+                {t("onboarding.continueOffline")}
+              </Button>
+            )}
+            <Button variant="primary" onClick={() => void save()} disabled={saving || apiKey.trim() === ""}>
+              {saving ? t("onboarding.verifying") : t("onboarding.verifyContinue")}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

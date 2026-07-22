@@ -1,6 +1,7 @@
 import type { McpClientOptions } from "./client.js";
 import { McpError } from "./errors.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SSE_EVENT_CHARS = 1_048_576;
@@ -8,10 +9,7 @@ const MAX_JSON_RESPONSE_BYTES = 1_048_576;
 // Latest stable MCP spec revision; servers version-fallback to their own.
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "seekforge", version: "0.3.0" };
-// This request-scoped HTTP implementation does not yet accept server requests.
-// Do not advertise roots here: a conforming server may otherwise issue
-// roots/list and wait forever for a response. Stdio supports roots fully.
-const CLIENT_CAPABILITIES = {} as const;
+const CLIENT_CAPABILITIES = { roots: { listChanged: true } } as const;
 
 type JsonRpcResponse = {
   jsonrpc?: string;
@@ -19,6 +17,8 @@ type JsonRpcResponse = {
   result?: unknown;
   error?: { code?: number; message?: string };
 };
+
+type JsonRpcMessage = JsonRpcResponse & { method?: unknown; params?: unknown };
 
 function isJsonRpcResponse(value: unknown, id: number): value is JsonRpcResponse {
   return (
@@ -62,10 +62,27 @@ export async function readLimitedResponseText(response: Response, maxBytes = MAX
  * joined and JSON-parsed, and reading stops at the first response whose id
  * matches (further events — server notifications/requests — are ignored).
  */
-async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Promise<JsonRpcResponse> {
+async function consumeSseMessages(
+  body: ReadableStream<Uint8Array>,
+  onMessage: (message: JsonRpcMessage) => boolean | Promise<boolean>,
+): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const processEvent = async (rawEvent: string): Promise<boolean> => {
+    const data = rawEvent
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (!data) return false;
+    try {
+      return await onMessage(JSON.parse(data) as JsonRpcMessage);
+    } catch (error) {
+      if (error instanceof SyntaxError) return false;
+      throw error;
+    }
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -79,21 +96,7 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
         }
         const rawEvent = buffer.slice(0, sep);
         buffer = buffer.slice(sep + (buffer[sep] === "\r" ? 4 : 2));
-        const data = rawEvent
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).replace(/^ /, ""))
-          .join("\n");
-        if (!data) continue;
-        let msg: JsonRpcResponse;
-        try {
-          msg = JSON.parse(data) as JsonRpcResponse;
-        } catch {
-          continue; // not JSON — ignore (e.g. keep-alive payloads)
-        }
-        if (isJsonRpcResponse(msg, id)) {
-          return msg;
-        }
+        if (await processEvent(rawEvent)) return true;
       }
       if (buffer.length > MAX_SSE_EVENT_CHARS) {
         throw new McpError("mcp_parse_error", `SSE event exceeded ${MAX_SSE_EVENT_CHARS} characters`);
@@ -102,28 +105,31 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
         // Some servers/proxies flush the final `data:` event and close the
         // connection without the trailing blank line that delimits events —
         // parse whatever remains in the buffer as a last event before giving up.
-        const data = buffer
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).replace(/^ /, ""))
-          .join("\n");
-        if (data) {
-          try {
-            const msg = JSON.parse(data) as JsonRpcResponse;
-            if (isJsonRpcResponse(msg, id)) {
-              return msg;
-            }
-          } catch {
-            // fall through to the parse error below
-          }
-        }
-        throw new McpError("mcp_parse_error", `SSE stream ended without a response for request ${id}`);
+        return buffer.length > 0 ? processEvent(buffer) : false;
       }
     }
   } finally {
     // Stop reading once we have (or failed to get) the answer.
     await reader.cancel().catch(() => {});
   }
+}
+
+async function readSseResponse(
+  body: ReadableStream<Uint8Array>,
+  id: number,
+  onOtherMessage: (message: JsonRpcMessage) => Promise<void>,
+): Promise<JsonRpcResponse> {
+  let response: JsonRpcResponse | undefined;
+  await consumeSseMessages(body, async (message) => {
+    if (isJsonRpcResponse(message, id)) {
+      response = message;
+      return true;
+    }
+    await onOtherMessage(message);
+    return false;
+  });
+  if (response) return response;
+  throw new McpError("mcp_parse_error", `SSE stream ended without a response for request ${id}`);
 }
 
 /**
@@ -135,7 +141,8 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
  *   `config.headers`.
  * - Both server response styles are handled: a plain JSON body, and a
  *   `text/event-stream` body (the SSE `data:` events are scanned for the
- *   response matching the request id, then the stream is dropped).
+ *   response matching the request id; interleaved notifications and server
+ *   requests are dispatched while the stream is open.
  * - The `mcp-session-id` response header, when present, is echoed on every
  *   subsequent request (and updated if the server rotates it).
  * - `notifications/initialized` is POSTed after a successful initialize.
@@ -145,8 +152,9 @@ async function readSseResponse(body: ReadableStream<Uint8Array>, id: number): Pr
  * `${ENV_VAR}` so secrets live in the environment, not in committed config
  * (e.g. `"Authorization": "Bearer ${GITHUB_MCP_TOKEN}"`). Optional OAuth
  * refresh-token config renews an expired bearer token after HTTP 401. Initial
- * interactive authorization remains frontend-owned. Server-initiated requests and standalone
- * GET streams are also not supported (matching the stdio client's v1 surface).
+ * interactive authorization remains frontend-owned. After initialization, a
+ * standalone GET SSE stream is kept open when the server supports it; roots/list
+ * requests are answered and notifications are delivered to `onNotification`.
  */
 
 /** Expands `${VAR}` in a header value from process.env (missing → empty). */
@@ -169,6 +177,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
   let oauthAccessToken: string | undefined;
   let oauthRefresh: Promise<string> | undefined;
   const inflight = new Set<AbortController>();
+  let eventStreamController: AbortController | undefined;
+  let eventStreamSupported: boolean | undefined;
 
   function headers(): Record<string, string> {
     const configured: Record<string, string> = {};
@@ -244,6 +254,81 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     return oauthRefresh;
   }
 
+  async function sendServerResponse(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {
+    const id = message.id;
+    if (id === undefined || id === null || typeof message.method !== "string") return;
+    const payload =
+      message.method === "roots/list"
+        ? {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              roots: (options.workspaceRoots ?? []).map((root) => ({
+                uri: pathToFileURL(root).href,
+                name: "workspace",
+              })),
+            },
+          }
+        : { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${message.method}` } };
+    const response = await fetch(url!, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await response.body?.cancel().catch(() => {});
+  }
+
+  async function handleServerMessage(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {
+    if (typeof message.method !== "string") return;
+    if (message.id === undefined || message.id === null) {
+      try {
+        options.onNotification?.({
+          method: message.method,
+          ...(message.params !== undefined ? { params: message.params } : {}),
+        });
+      } catch {
+        // Consumer callbacks are advisory and must not tear down the transport.
+      }
+      return;
+    }
+    await sendServerResponse(message, signal);
+  }
+
+  function ensureEventStream(): void {
+    if (disposed || eventStreamController || eventStreamSupported === false || sessionId === undefined) return;
+    const controller = new AbortController();
+    eventStreamController = controller;
+    void (async () => {
+      try {
+        let response = await fetch(url!, { method: "GET", headers: headers(), signal: controller.signal });
+        if (response.status === 401 && options.config.oauth) {
+          await response.body?.cancel().catch(() => {});
+          await refreshAccessToken(controller.signal);
+          response = await fetch(url!, { method: "GET", headers: headers(), signal: controller.signal });
+        }
+        if (response.status === 404 || response.status === 405) {
+          eventStreamSupported = false;
+          await response.body?.cancel().catch(() => {});
+          return;
+        }
+        if (!response.ok || !response.headers.get("content-type")?.includes("text/event-stream") || !response.body) {
+          await response.body?.cancel().catch(() => {});
+          return;
+        }
+        eventStreamSupported = true;
+        await consumeSseMessages(response.body, async (message) => {
+          await handleServerMessage(message, controller.signal);
+          return false;
+        });
+      } catch {
+        // The normal request path remains usable when an optional GET stream fails.
+      } finally {
+        if (eventStreamController === controller) eventStreamController = undefined;
+      }
+    })();
+  }
+
   /** POSTs one JSON-RPC message; `id === undefined` marks a notification (response body ignored). */
   async function post(
     method: string,
@@ -299,6 +384,9 @@ export function createMcpHttpTransport(options: McpClientOptions): {
         // re-initializes cleanly — a restarted server may speak a different
         // version and would reject the stale mcp-protocol-version header.
         if (res.status === 404 && sessionId) {
+          eventStreamController?.abort();
+          eventStreamController = undefined;
+          eventStreamSupported = undefined;
           sessionId = undefined;
           handshake = undefined;
           negotiatedVersion = undefined;
@@ -314,7 +402,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       try {
         if (contentType.includes("text/event-stream")) {
           if (!res.body) throw new McpError("mcp_parse_error", "empty SSE body");
-          return await readSseResponse(res.body, id);
+          return await readSseResponse(res.body, id, (message) => handleServerMessage(message, controller.signal));
         }
         const text = await readLimitedResponseText(res);
         const parsed = JSON.parse(text) as unknown;
@@ -388,8 +476,12 @@ export function createMcpHttpTransport(options: McpClientOptions): {
           negotiatedVersion = result.protocolVersion;
           // A failed notification is non-fatal: the next request surfaces issues.
           await post("notifications/initialized", undefined, undefined).catch(() => {});
+          ensureEventStream();
         })
         .catch((err: unknown) => {
+          eventStreamController?.abort();
+          eventStreamController = undefined;
+          eventStreamSupported = undefined;
           handshake = undefined;
           sessionId = undefined;
           negotiatedVersion = undefined;
@@ -411,6 +503,7 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     async request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
       if (signal?.aborted) throw new McpError("mcp_cancelled", `MCP ${method} request was cancelled`);
       await waitUntilReady(method, signal);
+      ensureEventStream();
       return rawRequest<T>(method, params, signal);
     },
     dispose(): void {
@@ -419,6 +512,8 @@ export function createMcpHttpTransport(options: McpClientOptions): {
       handshake = undefined;
       sessionId = undefined;
       negotiatedVersion = undefined;
+      eventStreamController?.abort();
+      eventStreamController = undefined;
       for (const c of inflight) c.abort();
       inflight.clear();
       if (deleteHeaders) {

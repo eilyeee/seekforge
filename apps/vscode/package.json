@@ -1,0 +1,58 @@
+{
+  "name": "seekforge-vscode",
+  "displayName": "SeekForge",
+  "description": "Thin VS Code client for a local SeekForge server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:seekforge.newTask",
+    "onCommand:seekforge.resumeSession",
+    "onCommand:seekforge.showDiff"
+  ],
+  "main": "./src/extension.cjs",
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "seekforge.newTask",
+        "title": "SeekForge: New Task"
+      },
+      {
+        "command": "seekforge.resumeSession",
+        "title": "SeekForge: Resume Session"
+      },
+      {
+        "command": "seekforge.showDiff",
+        "title": "SeekForge: Show Workspace Diff"
+      }
+    ],
+    "configuration": {
+      "title": "SeekForge",
+      "properties": {
+        "seekforge.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3847",
+          "description": "URL of `seekforge serve`."
+        },
+        "seekforge.token": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token printed by `seekforge serve`."
+        }
+      }
+    }
+  }
+}

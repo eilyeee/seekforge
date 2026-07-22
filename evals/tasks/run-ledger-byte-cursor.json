@@ -1,0 +1,18 @@
+{
+  "id": "run-ledger-byte-cursor",
+  "title": "Resume a UTF-8 event log from a physical byte cursor",
+  "fixture": "run-ledger-byte-cursor",
+  "mode": "edit",
+  "task": "A production run ledger paginates a UTF-8 JSONL file using a byteOffset cursor. The first page works, but resuming after an event containing multibyte text can skip or corrupt later events because src/ledger.js applies the byte offset as a JavaScript string index. Fix the reader so byteOffset remains a physical byte position. Preserve the public return shape and fallback behavior. Do not modify the tests. Run npm test to verify.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/ledger.js", "pattern": "Buffer|readSync" },
+    { "type": "file_not_contains", "path": "src/ledger.js", "pattern": "data\\.slice\\(byteOffset\\)" },
+    { "type": "file_contains", "path": "test/ledger.test.js", "pattern": "修复游标" }
+  ],
+  "provenance": {
+    "kind": "dogfood",
+    "source": "SeekForge boundary-checklist #131: run-ledger replay cursor defect"
+  },
+  "notes": "A minimized regression from SeekForge's own background-run ledger. It distinguishes byte positions from UTF-16 string indices with CJK payload data."
+}

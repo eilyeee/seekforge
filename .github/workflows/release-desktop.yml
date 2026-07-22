@@ -1,29 +1,26 @@
 name: release-desktop
 
-# Builds and publishes the SeekForge desktop app (a macOS DMG) to a GitHub
+# Builds and publishes the SeekForge desktop app for macOS, Linux, and Windows to a GitHub
 # Release whenever a `v*` tag is pushed.
 #
 # NOTE: the auto-updater is OPT-IN and OFF by default. With the shipped config
 # (`bundle.createUpdaterArtifacts: false` + a placeholder `plugins.updater.pubkey`)
-# this workflow produces a working DMG but NO updater payload / `latest.json`,
+# this workflow produces working native installers but NO updater payload / `latest.json`,
 # so installs won't self-update. To ship auto-updatable releases, first do
 # RELEASING.md step 0 (generate the keypair, set createUpdaterArtifacts: true,
 # paste the real pubkey, add the TAURI_SIGNING_* secrets); only then do the
 # updater-payload + latest.json steps below actually run.
 #
 # What this does, end to end:
-#   1. On a `v*` tag (or manual dispatch) it runs a macOS matrix
-#      (Apple Silicon + Intel).
+#   1. On a `v*` tag (or manual dispatch) it runs a native desktop matrix:
+#      macOS (Apple Silicon + Intel), Linux x64, and Windows x64.
 #   2. Each job verifies the tag matches the version in
 #      `apps/desktop/src-tauri/tauri.conf.json`, builds the Tauri bundle,
 #      (when the updater is enabled) signs the updater payload with the Tauri
 #      signing key, optionally code-signs + notarizes with an Apple Developer ID,
-#      and uploads the DMG (+ .app.tar.gz / .sig when present) to the release.
-#   3. When the updater is enabled, tauri-action also generates `latest.json`
-#      (the updater manifest). Because both matrix jobs target the same
-#      `tagName`, tauri-action APPENDS each arch's entry to the SAME
-#      `latest.json` — so the published manifest ends up with both
-#      `darwin-aarch64` and `darwin-x86_64` keys.
+#      and uploads the native package (+ updater payload / .sig when present).
+#   3. When the updater is enabled, tauri-action also generates the shared
+#      `latest.json` updater manifest for supported matrix targets.
 #
 # Coordination with the npm release workflow:
 #   The npm release workflow (.github/workflows/release-npm.yml, owned by a
@@ -54,7 +51,7 @@ on:
         type: string
 
 # Serialize runs per ref: two rapid tag pushes/dispatches would otherwise run
-# overlapping macOS matrix builds racing to append assets to the same GitHub
+# overlapping native matrix builds racing to append assets to the same GitHub
 # Release. Never cancel a release mid-flight — queue instead.
 concurrency:
   group: release-desktop-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -69,15 +66,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-14   # Apple Silicon
+          - platform: macos-14   # Apple Silicon DMG
             target: aarch64-apple-darwin
-          - platform: macos-13   # Intel
+            bundles: dmg
+          - platform: macos-13   # Intel DMG
             target: x86_64-apple-darwin
-          # --- Deferred platforms (uncomment + add per-OS deps to enable) ---
-          # - platform: ubuntu-22.04
-          #   target: x86_64-unknown-linux-gnu
-          # - platform: windows-latest
-          #   target: x86_64-pc-windows-msvc
+            bundles: dmg
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
 
     runs-on: ${{ matrix.platform }}
 
@@ -131,12 +131,18 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          # Keep arch-specific caches separate so the two matrix jobs don't clash.
+          # Keep target-specific caches separate so matrix jobs don't clash.
           key: ${{ matrix.target }}
           workspaces: . -> target
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       # Fail fast if someone tags a version that doesn't match tauri.conf.json.
       # Skipped on workflow_dispatch (no tag ref to compare against).
@@ -157,9 +163,9 @@ jobs:
 
       # Import the Apple Developer ID cert into a temporary keychain — only when
       # the signing secrets are present. Skipped on forks/PRs without secrets so
-      # the build still produces an (unsigned) DMG instead of failing.
+      # the macOS build still produces an unsigned DMG instead of failing.
       - name: Import Apple Developer certificate
-        if: env.APPLE_CERTIFICATE != ''
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -179,22 +185,18 @@ jobs:
           rm -f certificate.p12
 
       # The desktop bundle embeds the CLI as a self-contained sidecar (so a
-      # DMG-only user needs no system `seekforge`). It must exist BEFORE the
+      # package-only user needs no system `seekforge`). It must exist BEFORE the
       # Tauri build, since tauri.conf.json references it via `externalBin`. Built
-      # for THIS matrix arch (host == matrix.target on the native macOS runners).
+      # for THIS matrix target (host == matrix.target on every native runner).
       - name: Setup bun (for the CLI sidecar)
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
 
       - name: Build the CLI sidecar (externalBin)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p apps/desktop/src-tauri/binaries
-          bun build --compile apps/cli/src/index.ts \
-            --outfile "apps/desktop/src-tauri/binaries/seekforge-server-${{ matrix.target }}"
-          test -f "apps/desktop/src-tauri/binaries/seekforge-server-${{ matrix.target }}"
+        env:
+          SIDECAR_TARGET: ${{ matrix.target }}
+        run: pnpm --filter seekforge build:sidecar
 
       - name: Build, sign, and publish desktop release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
@@ -222,4 +224,4 @@ jobs:
           prerelease: false
           # Per-arch target so each matrix job emits one platform entry that
           # tauri-action merges into the shared latest.json.
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}

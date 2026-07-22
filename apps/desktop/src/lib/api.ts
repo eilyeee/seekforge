@@ -280,6 +280,12 @@ export const api = {
   todosOp: (op: { op: "add"; text: string } | { op: "toggle" | "remove"; index: number }, ws?: string) =>
     request<Todo[]>("POST", withWorkspace("/api/todos", ws), op),
   balance: (ws?: string) => request<{ balance: AccountBalance | null }>("GET", withWorkspace("/api/balance", ws)),
+  verifyProvider: (apiKey: string) =>
+    request<{ ok: true } | { ok: false; reason: "invalid_credentials" | "provider_error" | "unreachable" }>(
+      "POST",
+      "/api/provider/verify",
+      { apiKey },
+    ),
   mcpResources: (ws?: string) => request<{ resources: McpResource[] }>("GET", withWorkspace("/api/mcp/resources", ws)),
   mcpPrompts: (ws?: string) => request<{ prompts: McpPrompt[] }>("GET", withWorkspace("/api/mcp/prompts", ws)),
   mcpPrompt: (server: string, name: string, args: Record<string, unknown> = {}, ws?: string, signal?: AbortSignal) =>

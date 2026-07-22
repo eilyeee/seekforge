@@ -83,6 +83,10 @@ export DEEPSEEK_API_KEY=sk-...
 | `seekforge schedule add\|list\|run\|next\|history\|install\|uninstall\|status` | manage scheduled jobs, history, retries, and the crontab tick — see [Scheduling](docs/scheduling.md) |
 | `seekforge sandbox-run "<task>"` | run a task through the Docker runner contract — see [Remote execution](docs/remote.md) |
 | `seekforge evolve analyze\|list\|show\|accept\|reject\|apply` | score sessions and review self-evolution proposals (human-gated) |
+
+VS Code users can run the thin local extension in
+[`apps/vscode`](apps/vscode/README.md). It reuses `seekforge serve` for tasks,
+session resume, permission prompts, questions, diff viewing, and active-file context.
 | `seekforge security scan\|list\|show\|status\|fix\|verify\|threat-model\|export` | deep repository security review, Finding queue/lifecycle, verified remediation, threat modeling, and JSON/Markdown/SARIF evidence export — see [Security scanning](docs/security-scanning.md) |
 | `seekforge init` | scaffold `.seekforge/` and an `AGENTS.md` template |
 | `seekforge mcp add\|list\|remove <name>` | manage MCP servers in config (list, add a stdio server, or remove) — see [docs/mcp.md](docs/mcp.md) |
@@ -255,6 +259,7 @@ apps/cli              the seekforge CLI (published to npm)
 apps/tui              seekforge-tui — Ink terminal UI (ships in the npm package)
 apps/server           seekforge serve — local agent server + web workbench
 apps/desktop          Tauri desktop shell
+apps/vscode           thin VS Code client over seekforge serve
 packages/core         agent loop, provider, tools, memory, skills, runtime client
 packages/shared       cross-cutting plain types
 packages/eval-harness evaluation runner (pnpm eval)

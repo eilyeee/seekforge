@@ -24,6 +24,7 @@ import {
   loadUserCommands,
   MODEL_PRICING,
   resolveProviderPreset,
+  verifyDeepSeekAccess,
   SessionBusyError,
   type HookConfig,
   type HookEntry,
@@ -352,6 +353,19 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const balanceSupported = preset?.capabilities.balance !== false;
     const balance = balanceSupported && config.apiKey ? await fetchBalance(config.apiKey, config.baseUrl) : null;
     return sendJson(res, 200, { balance });
+  }
+
+  // First-run credential check. This uses the non-billable balance endpoint
+  // and never persists or echoes the submitted secret.
+  if (method === "POST" && path === "/api/provider/verify") {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const apiKey = body !== null && typeof body === "object" ? (body as { apiKey?: unknown }).apiKey : undefined;
+    if (typeof apiKey !== "string" || apiKey.trim().length < 8 || apiKey.length > 512) {
+      return sendApiError(res, 400, "bad_request", "apiKey must be a string from 8 to 512 characters");
+    }
+    const config = loadConfig(workspace);
+    return sendJson(res, 200, await verifyDeepSeekAccess(apiKey.trim(), config.baseUrl));
   }
 
   // Resources of every configured MCP server (resources/list), spawned on

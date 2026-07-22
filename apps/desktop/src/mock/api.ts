@@ -611,6 +611,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   if (method === "GET" && path === "/api/balance") return { balance: { currency: "USD", totalBalance: "23.45" } };
+  if (method === "POST" && path === "/api/provider/verify") return { ok: true };
 
   if (method === "GET" && path === "/api/mcp/resources") {
     await delay(400); // spawning takes a moment

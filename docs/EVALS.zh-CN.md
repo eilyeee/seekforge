@@ -45,8 +45,8 @@ pnpm --filter @seekforge/eval-harness eval -- --suite release       # all tasks,
 `evals/config.json` 是纳入版本管理的套件定义与门禁策略：
 
 - `smoke`：十个有代表性的导航、编辑、验证、策略和 TypeScript 任务；默认采样一次。
-- `nightly`：全部 55 个任务；默认采样三次。
-- `release`：全部 55 个任务；采样五次，门禁更严格。
+- `nightly`：全部 56 个任务；默认采样三次。
+- `release`：全部 56 个任务；采样五次，门禁更严格。
 
 每次采样都会记录 prompt、completion、缓存命中和总 token 数（包括失败会话
 终止前最后一次上报的累计用量）；工具调用数和失败的工具调用数；会话错误；
@@ -205,13 +205,17 @@ harness，让它走与原生任务**相同**的确定性门禁。基准测试的
   "fixture": "name of a dir under evals/fixtures/",
   "mode": "edit",
   "task": "the natural-language prompt handed to the agent",
-  "checks": [ /* one or more checks, ALL must pass */ ]
+  "checks": [ /* one or more checks, ALL must pass */ ],
+  "provenance": { "kind": "dogfood", "source": "问题或事故引用" }
 }
 ```
 
 `id` 长度为 1-128 个字符，首字符必须是 ASCII 字母或数字，后续只能包含
 ASCII 字母、数字、`.`、`_` 和 `-`。这样临时工作区名称、报告行和样本匹配
 在各平台上都保持明确且可移植。
+合成任务可以省略 `provenance`。来自实际使用或外部项目的 `dogfood` 与
+`external` 任务必须填写非空 `source`；数据集门禁会据此保证真实项目回归
+可追溯，而不会与凭空设计的样例混在一起。
 
 fixture 是位于 `evals/fixtures/<name>/` 的一个**自包含项目**。它必须是
 封闭自洽（hermetic）的：只用 Node 内置模块，其 `package.json` 中没有

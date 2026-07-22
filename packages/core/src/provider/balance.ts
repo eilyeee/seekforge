@@ -11,6 +11,36 @@ export type AccountBalance = {
   totalBalance: string;
 };
 
+export type ProviderAccessCheck =
+  | { ok: true }
+  | { ok: false; reason: "invalid_credentials" | "provider_error" | "unreachable" };
+
+/**
+ * Verifies that a DeepSeek key can authenticate without starting a billable
+ * chat completion. The response body is deliberately ignored and cancelled:
+ * onboarding needs an auth/connectivity signal, not account data.
+ */
+export async function verifyDeepSeekAccess(apiKey: string, baseUrl?: string): Promise<ProviderAccessCheck> {
+  const base = (baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BALANCE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${base}/user/balance`, {
+      method: "GET",
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    await res.body?.cancel().catch(() => {});
+    if (res.ok) return { ok: true };
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: "invalid_credentials" };
+    return { ok: false, reason: "provider_error" };
+  } catch {
+    return { ok: false, reason: "unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Fetches the DeepSeek account balance (GET {base}/user/balance).
  *

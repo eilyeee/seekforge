@@ -1,6 +1,7 @@
-# Releasing the SeekForge desktop app (macOS DMG + auto-update)
+# Releasing the SeekForge desktop app (macOS, Linux, Windows + auto-update)
 
-The desktop shell ships as a DMG and self-updates via
+The desktop shell ships as macOS DMG, Linux DEB/AppImage, and Windows NSIS
+packages. Signed builds can self-update via
 [`tauri-plugin-updater`](https://v2.tauri.app/plugin/updater/), which polls
 
 ```
@@ -16,8 +17,8 @@ the background; users see it after restarting the app).
 There are two ways to cut a release:
 
 - **[A. CI flow (recommended)](#a-ci-flow-recommended)** — add repo secrets once,
-  push a `v*` tag, and GitHub Actions builds + signs + publishes a multi-arch
-  signed DMG and auto-update manifest for you.
+  push a `v*` tag, and GitHub Actions builds + publishes native macOS, Linux,
+  and Windows packages. Signing is enabled when the platform credentials are configured.
 - **[B. Manual local build (fallback)](#b-manual-local-build-fallback)** — run
   `pnpm tauri build` yourself and publish with `gh`.
 
@@ -72,11 +73,12 @@ to `~/.tauri/seekforge.key.pub`) and also prints the public key.
 ## A. CI flow (recommended)
 
 `.github/workflows/release-desktop.yml` runs on every pushed `v*` tag (and via
-manual **workflow_dispatch**). It builds a macOS matrix — **`macos-14`
-(Apple Silicon / aarch64)** and **`macos-13` (Intel / x86_64)** — signs the
-updater payload, optionally Apple-code-signs + notarizes, and uploads the DMG,
-`.app.tar.gz`, `.sig`, and a merged `latest.json` to the GitHub Release for the
-tag.
+manual **workflow_dispatch**). Its native matrix builds **`macos-14`
+(Apple Silicon / aarch64)**, **`macos-13` (Intel / x86_64)**,
+**`ubuntu-22.04` (x86_64 DEB + AppImage)**, and **Windows x86_64 (NSIS)**.
+Every job compiles a target-qualified CLI sidecar before Tauri packages the
+application. Updater payload signing and Apple code-signing/notarization are
+enabled when their repository secrets are present.
 
 ### A.1 Add repo secrets once
 
@@ -91,7 +93,7 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 
 **Optional** — Apple Developer ID code-signing + notarization. Set **all** of
 these together to ship a signed/notarized build. If they are absent (e.g. a
-fork), the workflow still produces an **unsigned** DMG instead of failing.
+fork), the macOS jobs still produce **unsigned** DMGs instead of failing.
 
 | Secret | Value |
 | --- | --- |
@@ -125,19 +127,17 @@ The workflow then:
 
 1. **Version-consistency guard** — fails immediately if the tag (minus the `v`)
    does not equal `apps/desktop/src-tauri/tauri.conf.json` → `version`.
-2. Builds + signs each arch and uploads to the release for the tag.
-3. Generates `latest.json`. Because both matrix jobs target the same `tagName`,
-   tauri-action **appends** each arch's entry to the **same** `latest.json`, so
-   the published manifest contains both `darwin-aarch64` and `darwin-x86_64`.
+2. Builds each native target and uploads its packages to the release for the tag.
+3. Generates `latest.json`. All native jobs target the same `tagName`, and
+   tauri-action appends supported platform entries to the shared manifest.
 
-### A.3 Multi-arch outcome
+### A.3 Cross-platform outcome
 
-Both arches ship from one tag: `macos-14` builds `aarch64` and `macos-13`
-builds `x86_64`, and tauri-action merges both into a single `latest.json` on the
-release. If you ever observe the second job overwriting rather than merging the
-manifest (a known tauri-action edge case under heavy concurrency), the
-mitigation is `fail-fast: false` (already set, so a flaky job can be re-run) and
-worst case the second arch can be added to `latest.json` manually as in path B.
+All four native jobs publish into one tag and one GitHub Release: two macOS
+DMGs, Linux DEB/AppImage packages, and a Windows NSIS installer. When updater
+artifacts are enabled, tauri-action merges the supported platform entries into
+the shared `latest.json`. If concurrent manifest updates ever conflict, rerun
+the affected matrix job or add its entry manually as in path B.
 
 ### A.4 Coordination with the npm release workflow
 
@@ -169,7 +169,7 @@ pnpm tauri build
 > to `tauri build`. `build:sidecar` derives its triple from `SIDECAR_TARGET` (or
 > the `rustc -vV` host when unset), so a **cross/manual** build must set
 > `SIDECAR_TARGET` to the same triple **before** `tauri build` — otherwise the
-> DMG launches but the embedded server can't exec on the target machine:
+> package launches but the embedded server can't exec on the target machine:
 >
 > ```sh
 > # cross-building for Apple Silicon from an Intel host (and vice versa):
@@ -177,7 +177,8 @@ pnpm tauri build
 > pnpm tauri build --target aarch64-apple-darwin
 > ```
 >
-> CI is already correct: it builds the sidecar per matrix `--target`.
+> CI is already correct: the cross-platform Node builder names `.exe` sidecars
+> on Windows and builds the sidecar per native matrix `--target`.
 
 `tauri build` runs `pnpm --filter @seekforge/desktop build` first (Vite), then
 the sidecar (via `beforeBuildCommand`), then compiles the Rust shell. The
