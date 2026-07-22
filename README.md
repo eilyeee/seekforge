@@ -239,7 +239,7 @@ trusted Rust binary that re-checks containment and the command denylist
 
 ```bash
 cargo build --release
-seekforge config set runtimeBin target/release/seekforge-runtime
+seekforge config set runtimeBin target/release/seekforge-runtime --global
 ```
 
 Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).

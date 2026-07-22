@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isProjectConfigKeyAllowed } from "@seekforge/shared/config-layers";
 import { availableProfiles, loadConfig } from "../config.js";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "../bounded-file.js";
 import { t } from "../i18n.js";
@@ -51,6 +52,11 @@ export function configShowCommand(): void {
 export function configSetCommand(key: string, value: string, opts: { global?: boolean }): void {
   if (!(ALLOWED_KEYS as readonly string[]).includes(key)) {
     console.error(t("err.configSetUnknown", { key, allowed: ALLOWED_KEYS.join(", ") }));
+    process.exitCode = 1;
+    return;
+  }
+  if (!opts.global && !isProjectConfigKeyAllowed(key)) {
+    console.error(t("err.configProjectUserOwned", { key }));
     process.exitCode = 1;
     return;
   }

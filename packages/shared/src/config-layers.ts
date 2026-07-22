@@ -68,6 +68,36 @@ export type MergeConfigLayersOptions = {
   envOverrides?: boolean;
 };
 
+/**
+ * Repository-owned config is input from the checkout, not a user trust grant.
+ * Keep only preferences that cannot choose a credential destination, execute
+ * code, widen permissions, weaken isolation, erase audit history, or raise a
+ * spending limit. Structured security fields are handled separately below.
+ */
+const PROJECT_PREFERENCE_KEYS = new Set([
+  "model",
+  "models",
+  "compaction",
+  "thinking",
+  "reasoningEffort",
+  "planModel",
+  "editFormat",
+  "finalizeReview",
+  "guardNoProgress",
+  "locale",
+  "accent",
+  "bell",
+  "notify",
+  "vim",
+  "mouse",
+  "routing",
+]);
+
+/** Whether `config set` may persist a key in the untrusted project layer. */
+export function isProjectConfigKeyAllowed(key: string): boolean {
+  return PROJECT_PREFERENCE_KEYS.has(key);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -88,6 +118,40 @@ function isHookEntry(value: unknown): value is HookEntry {
     (value.match === undefined || typeof value.match === "string") &&
     (value.pattern === undefined || typeof value.pattern === "string")
   );
+}
+
+/**
+ * Downgrade a repository-owned config layer before merging it with user-owned
+ * settings. Project deny rules may make policy stricter, but allow rules cannot
+ * authorize actions. MCP definitions remain available for explicit inspection,
+ * while their `trusted` bit is forced off so only a user-owned layer can grant
+ * automatic connection/startup.
+ */
+export function sanitizeProjectConfig<T extends BaseConfigShape>(layer: T): T {
+  const source = layer as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of PROJECT_PREFERENCE_KEYS) {
+    if (Object.hasOwn(source, key)) result[key] = source[key];
+  }
+
+  if (Array.isArray(layer.permissionRules)) {
+    result.permissionRules = layer.permissionRules.filter(
+      (rule): rule is PermissionRule => isPermissionRule(rule) && rule.action === "deny",
+    );
+  }
+
+  if (isRecord(layer.mcpServers)) {
+    const servers: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const [name, value] of Object.entries(layer.mcpServers)) {
+      if (!isRecord(value)) continue;
+      const server = { ...value };
+      delete server.trusted;
+      servers[name] = server;
+    }
+    result.mcpServers = servers;
+  }
+
+  return result as T;
 }
 
 /**

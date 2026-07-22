@@ -26,7 +26,7 @@ export const common = {
     // Hooks editor
     "hooks.title": "Hooks",
     "hooks.description":
-      "Shell commands fired around tool calls and lifecycle events. preToolUse and userPromptSubmit can block (non-zero exit, or JSON deny); the rest are advisory. Saved to .seekforge/config.json.",
+      "User-owned shell commands fired around tool calls and lifecycle events. preToolUse and userPromptSubmit can block (non-zero exit, or JSON deny); the rest are advisory. Saved to ~/.seekforge/config.json.",
     "hooks.save": "Save",
     "hooks.saved": "Hooks saved",
     "hooks.loading": "Loading…",
@@ -117,7 +117,7 @@ export const common = {
     // Hooks editor
     "hooks.title": "钩子",
     "hooks.description":
-      "围绕工具调用和生命周期事件触发的 shell 命令。preToolUse 与 userPromptSubmit 可阻断（非零退出或 JSON deny），其余为提示性。保存到 .seekforge/config.json。",
+      "用户级 shell 命令，围绕工具调用和生命周期事件触发。preToolUse 与 userPromptSubmit 可阻断（非零退出或 JSON deny），其余为提示性。保存到 ~/.seekforge/config.json。",
     "hooks.save": "保存",
     "hooks.saved": "钩子已保存",
     "hooks.loading": "加载中…",

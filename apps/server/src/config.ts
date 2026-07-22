@@ -32,7 +32,13 @@ import {
 } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { readFileBounded, readFileDescriptorBounded } from "@seekforge/shared/bounded-file-read";
-import { MAX_CONFIG_FILE_BYTES, mergeConfigLayers, readJsonConfigLayer } from "@seekforge/shared/config-layers";
+import {
+  isProjectConfigKeyAllowed,
+  MAX_CONFIG_FILE_BYTES,
+  mergeConfigLayers,
+  readJsonConfigLayer,
+  sanitizeProjectConfig,
+} from "@seekforge/shared/config-layers";
 
 export const MAX_PROJECT_STATE_FILE_BYTES = 8_000_000;
 
@@ -98,14 +104,14 @@ export type ServerConfig = {
    * Mirrors the CLI/TUI config key. Edit the file directly.
    */
   editFormat?: "patch" | "whole";
-  /** Shell hooks fired around tool calls / lifecycle. Edit the file directly. */
+  /** User-owned shell hooks fired around tool calls / lifecycle. */
   hooks?: HookConfig;
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
   mcpServers?: Record<string, McpServerConfig>;
   /**
    * Fine-grained allow/deny permission rules. First match of each action
-   * category wins (deny scanned before allow); project rules are merged
-   * before global ones. Edit the file directly; not settable via `config set`.
+   * category wins (deny scanned before allow); repository layers may only add
+   * deny rules. Edit trusted rules in user config.
    */
   permissionRules?: PermissionRule[];
   /** Terminal run history cap (default 500). Non-terminal runs are always retained. */
@@ -142,6 +148,12 @@ const ENUM_VALUES: Record<string, readonly string[]> = {
 export class ConfigValueError extends Error {}
 
 export class ProjectPathError extends ConfigValueError {}
+
+/** Root for user-owned SeekForge state; overridable for isolated deployments/tests. */
+export function seekforgeHome(): string {
+  const override = process.env["SEEKFORGE_HOME"];
+  return override && override.length > 0 ? override : homedir();
+}
 
 function fileIdentity(stat: ReturnType<typeof fstatSync>): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
@@ -406,9 +418,9 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
   "notification",
 ];
 
-/** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
+/** Precedence: env > safe project preferences > ~/.seekforge/config.json */
 export function loadConfig(workspace: string): ServerConfig {
-  const global = readJson(join(homedir(), ".seekforge", "config.json"));
+  const global = readJson(join(seekforgeHome(), ".seekforge", "config.json"));
   let project: ServerConfig = {};
   try {
     const raw = readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES);
@@ -416,13 +428,12 @@ export function loadConfig(workspace: string): ServerConfig {
   } catch {
     // A missing, malformed, or physically unsafe project layer is ignored.
   }
-  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
-  // project-over-global; mcpServers merge per server name (project wins);
-  // permissionRules concatenate project-then-global (first match wins); hooks
-  // concatenate per stage global-then-project (every hook runs); then the
-  // provider-aware env API key + SEEKFORGE_RUNTIME_BIN overrides land on top.
-  // Mirrors the CLI minus its local/profile/--settings layers.
-  return mergeConfigLayers<ServerConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
+  // The checkout is untrusted: it may supply ordinary preferences and stricter
+  // deny rules, but cannot route user credentials, execute startup commands,
+  // authorize tools, weaken isolation, or mark an MCP server trusted.
+  return mergeConfigLayers<ServerConfig>([global, sanitizeProjectConfig(project)], {
+    hookStages: HOOK_STAGE_ORDER,
+  });
 }
 
 /** Merged config with the apiKey masked for transport (GET /api/config). */
@@ -452,6 +463,9 @@ export function maskedConfig(workspace: string): Record<string, unknown> {
 export function setConfigValue(workspace: string, key: string, value: unknown, global: boolean): void {
   if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
     throw new ConfigValueError(`unknown key "${key}". Allowed: ${CONFIG_KEYS.join(", ")}`);
+  }
+  if (!global && !isProjectConfigKeyAllowed(key)) {
+    throw new ConfigValueError(`key "${key}" is user-owned; save it with global=true`);
   }
 
   let stored: unknown;
@@ -497,7 +511,7 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
     stored = value;
   }
 
-  const path = join(global ? homedir() : workspace, ".seekforge", "config.json");
+  const path = join(global ? seekforgeHome() : workspace, ".seekforge", "config.json");
   let current: Record<string, unknown> = {};
   // A malformed existing config must NOT be silently overwritten from empty —
   // that would discard every other key the user had (and a non-atomic partial

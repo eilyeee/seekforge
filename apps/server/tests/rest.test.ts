@@ -13,6 +13,8 @@ let workspace: string;
 let server: RunningServer;
 let base: string;
 let mcpFixture: ReturnType<typeof writeFixtureServer>;
+let home: string;
+let savedHome: string | undefined;
 
 const candidate = {
   id: "c1",
@@ -221,9 +223,13 @@ beforeAll(async () => {
   // Env wins over file config; clear it so the fixture apiKey is observable.
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
+  savedHome = process.env["SEEKFORGE_HOME"];
+  home = makeWorkspace();
+  process.env["SEEKFORGE_HOME"] = home;
   workspace = makeWorkspace();
   mcpFixture = writeFixtureServer();
   seedWorkspace(workspace, mcpFixture.serverPath);
+  writeFileIn(home, ".seekforge/config.json", JSON.stringify({ apiKey: "sk-test123456" }));
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
   base = `http://127.0.0.1:${server.port}`;
 });
@@ -231,6 +237,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await server.close();
   mcpFixture.cleanup();
+  if (savedHome === undefined) delete process.env["SEEKFORGE_HOME"];
+  else process.env["SEEKFORGE_HOME"] = savedHome;
 });
 
 describe("auth", () => {
@@ -498,12 +506,12 @@ describe("REST endpoints", () => {
     const ok = await authed("/api/config", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key: "commandAllowlist", value: "pnpm test, pnpm lint" }),
+      body: JSON.stringify({ key: "commandAllowlist", value: "pnpm test, pnpm lint", global: true }),
     });
     expect(ok.status).toBe(200);
     const body = await jsonOf(ok);
     expect(body.commandAllowlist).toEqual(["pnpm test", "pnpm lint"]);
-    const file = JSON.parse(readFileSync(join(workspace, ".seekforge", "config.json"), "utf8"));
+    const file = JSON.parse(readFileSync(join(home, ".seekforge", "config.json"), "utf8"));
     expect(file.commandAllowlist).toEqual(["pnpm test", "pnpm lint"]);
 
     const bad = await authed("/api/config", {
@@ -690,7 +698,7 @@ describe("mcp endpoints", () => {
     });
 
     const broken = body.find((s: { name: string }) => s.name === "broken");
-    expect(broken).toMatchObject({ name: "broken", transport: "stdio", trusted: true, env: {}, source: "project" });
+    expect(broken).toMatchObject({ name: "broken", transport: "stdio", trusted: false, env: {}, source: "project" });
   });
 
   it("POST /api/mcp/:name/test reports per-server connection status", async () => {

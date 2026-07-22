@@ -496,7 +496,7 @@ describe("GET /api/commands", () => {
 });
 
 describe("hooks editor (GET/PUT /api/hooks)", () => {
-  it("writes hooks to the project config and reads them back; rejects bad input", async () => {
+  it("writes hooks to the user config and reads them back; rejects bad input", async () => {
     const put = await authed("/api/hooks", {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -525,15 +525,15 @@ describe("hooks editor (GET/PUT /api/hooks)", () => {
     expect(nullBody.status).toBe(400);
   });
 
-  it("GET /api/hooks treats non-object config JSON as an empty config doc", async () => {
+  it("GET /api/hooks ignores a malformed project layer and returns user hooks", async () => {
     writeFileSync(join(workspace, ".seekforge", "config.json"), "null");
     const res = await authed("/api/hooks");
     expect(res.status).toBe(200);
-    expect(await jsonOf(res)).toEqual({ hooks: {} });
+    expect(await jsonOf(res)).toEqual({ hooks: { preToolUse: [{ command: "echo hi", match: "run_command" }] } });
   });
 
-  it("PUT /api/hooks rejects a symlinked project config without changing its target", async () => {
-    const configPath = join(workspace, ".seekforge", "config.json");
+  it("PUT /api/hooks rejects a symlinked user config without changing its target", async () => {
+    const configPath = join(home, ".seekforge", "config.json");
     const previous = readFileSync(configPath, "utf8");
     const outsidePath = join(makeWorkspace(), "config.json");
     const external = '{"hooks":{"preToolUse":[]}}\n';

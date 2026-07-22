@@ -7,6 +7,7 @@ const TOKEN = "test-token-memory";
 let workspace: string;
 let server: RunningServer;
 let base: string;
+let savedHome: string | undefined;
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${base}${path}`, {
@@ -25,6 +26,8 @@ beforeAll(async () => {
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
   workspace = makeWorkspace();
+  savedHome = process.env["SEEKFORGE_HOME"];
+  process.env["SEEKFORGE_HOME"] = makeWorkspace();
   // project.md with an exact-duplicate bullet so compaction has work to do.
   writeFileIn(
     workspace,
@@ -63,6 +66,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
+  if (savedHome === undefined) delete process.env["SEEKFORGE_HOME"];
+  else process.env["SEEKFORGE_HOME"] = savedHome;
 });
 
 describe("memory stats + compact", () => {
@@ -113,7 +118,7 @@ describe("config set new keys", () => {
   it("PUT /api/config sets escalateOnFailure from a string boolean", async () => {
     const res = await authed("/api/config", {
       method: "PUT",
-      body: JSON.stringify({ key: "escalateOnFailure", value: "true" }),
+      body: JSON.stringify({ key: "escalateOnFailure", value: "true", global: true }),
     });
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
@@ -123,7 +128,7 @@ describe("config set new keys", () => {
   it("PUT /api/config sets memoryAutoApproveConfidence in range", async () => {
     const res = await authed("/api/config", {
       method: "PUT",
-      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: 0.75 }),
+      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: 0.75, global: true }),
     });
     expect(res.status).toBe(200);
     const body = await jsonOf(res);
@@ -133,7 +138,7 @@ describe("config set new keys", () => {
   it("PUT /api/config accepts a numeric string for memoryAutoApproveConfidence", async () => {
     const res = await authed("/api/config", {
       method: "PUT",
-      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: "0.2" }),
+      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: "0.2", global: true }),
     });
     expect(res.status).toBe(200);
     expect((await jsonOf(res)).memoryAutoApproveConfidence).toBe(0.2);
@@ -142,7 +147,7 @@ describe("config set new keys", () => {
   it("PUT /api/config rejects memoryAutoApproveConfidence out of 0..1", async () => {
     const res = await authed("/api/config", {
       method: "PUT",
-      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: 1.5 }),
+      body: JSON.stringify({ key: "memoryAutoApproveConfidence", value: 1.5, global: true }),
     });
     expect(res.status).toBe(400);
     expect((await jsonOf(res)).error.code).toBe("bad_request");

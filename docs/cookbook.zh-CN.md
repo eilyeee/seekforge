@@ -4,7 +4,7 @@
 
 面向具体任务的操作配方。每一节都是 **目标 → 步骤 → 提示** 的结构，只使用真实存在的命令和 flag。完整 flag 列表见 [CLI 参考](cli-reference.zh-CN.md)；配置键见 [Configuration](configuration.zh-CN.md)。
 
-所有 CLI 命令都应在项目目录内执行。先运行一次 `seekforge init` 生成 `.seekforge/` 和 `AGENTS.md`，并确保已设置 API key（`DEEPSEEK_API_KEY` 环境变量，或 `seekforge config set apiKey sk-...`）。
+所有 CLI 命令都应在项目目录内执行。先运行一次 `seekforge init` 生成 `.seekforge/` 和 `AGENTS.md`，并确保已设置 API key（`DEEPSEEK_API_KEY` 环境变量，或 `seekforge config set apiKey sk-... --global`）。
 
 ---
 
@@ -20,7 +20,8 @@ seekforge run "the test in src/parser.test.ts is failing — find the cause and 
 seekforge config set verifyCommand "pnpm test"   # see note below — not settable, edit file instead
 ```
 
-`verifyCommand` **不能**通过 `config set` 设置——请直接写入 `.seekforge/config.json`：
+`verifyCommand` **不能**通过 `config set` 设置——请直接写入用户级
+`~/.seekforge/config.json`：
 
 ```json
 { "verifyCommand": "pnpm test" }
@@ -166,7 +167,8 @@ seekforge mcp list --tools    # list servers and the tools they expose
 seekforge mcp remove filesystem
 ```
 
-HTTP（Streamable）服务器以及 `trusted`/headers 必须通过编辑 `.seekforge/config.json` 中的 `mcpServers` 添加——参见 [Configuration → mcpServers](configuration.zh-CN.md#mcpservers) 和 [MCP 指南](mcp.zh-CN.md)。在 TUI 中，`/mcp` 列出服务器，`/prompts` 列出 MCP prompt（以 `/mcp:<server>:<prompt>` 形式调用）。
+HTTP（Streamable）服务器可在任一层声明，但受信任服务器必须加入
+`~/.seekforge/config.json` 的 `mcpServers`——参见 [Configuration → mcpServers](configuration.zh-CN.md#mcpservers) 和 [MCP 指南](mcp.zh-CN.md)。在 TUI 中，`/mcp` 列出服务器，`/prompts` 列出 MCP prompt（以 `/mcp:<server>:<prompt>` 形式调用）。
 
 **提示：**
 - SeekForge 自己也可以*作为* MCP 服务器运行：`seekforge mcp-serve`（默认只暴露只读工具；对受信任的调用方可加 `--allow-write`）。
@@ -226,11 +228,12 @@ seekforge memory compact --dry-run       # collapse duplicates deterministically
 
 ```bash
 export ARK_API_KEY="…"
-seekforge config set provider ark
+seekforge config set provider ark --global
 seekforge config set model glm-5.2
 ```
 
-Ark 会禁用 DeepSeek 独有的行为（thinking body、cache-hit token、内置定价、余额查询）。除非提供 `modelPricing`，否则上报的成本始终为 `0`。请直接写入 `.seekforge/config.json`（不能通过 `config set` 设置）：
+Ark 会禁用 DeepSeek 独有的行为（thinking body、cache-hit token、内置定价、余额查询）。除非提供 `modelPricing`，否则上报的成本始终为 `0`。请直接写入
+`~/.seekforge/config.json`（不能通过 `config set` 设置）：
 
 ```json
 {

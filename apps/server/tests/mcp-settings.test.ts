@@ -85,7 +85,7 @@ describe("MCP settings scopes and secret preservation", () => {
         refreshToken: "refresh-secret",
         scope: "mcp.read mcp.write",
       },
-      trusted: true,
+      trusted: false,
     });
     expect(project.status).toBe(200);
     const projectText = await project.text();
@@ -124,6 +124,12 @@ describe("MCP settings scopes and secret preservation", () => {
     expect(fallback).toEqual([
       expect.objectContaining({ name: "shared", transport: "stdio", source: "global", shadowedGlobal: false }),
     ]);
+  });
+
+  it("requires global scope before an MCP server can be trusted", async () => {
+    const project = await save({ name: "unsafe", scope: "project", command: "node", trusted: true });
+    expect(project.status).toBe(400);
+    expect(((await project.json()) as { error: { message: string } }).error.message).toMatch(/global scope/);
   });
 
   it("retains masked header, env, and OAuth values without echoing plaintext", async () => {

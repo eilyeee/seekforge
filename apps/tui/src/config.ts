@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
 import { knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
@@ -20,11 +20,11 @@ export type TuiConfig = {
   runtimeBin?: string;
   /** Extra command prefixes allowed to auto-run without confirmation. */
   commandAllowlist?: string[];
-  /** Fine-grained allow/deny permission rules (project rules first). */
+  /** Fine-grained rules; repository config may contribute deny rules only. */
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). */
   mcpServers?: Record<string, McpServerConfig>;
-  /** User-defined shell hooks fired around tool calls. */
+  /** User-owned shell hooks fired around tool calls. */
   hooks?: HookConfig;
   /** TUI accent color (any Ink color name); SEEKFORGE_TUI_ACCENT overrides. */
   accent?: string;
@@ -152,21 +152,11 @@ const HOOK_STAGE_ORDER: readonly HookStage[] = [
   "notification",
 ];
 
-/** Precedence: env > project .seekforge/config.json > ~/.seekforge/config.json */
+/** Precedence: env > safe project preferences > ~/.seekforge/config.json */
 export function mergeTuiConfig(global: TuiConfig, project: TuiConfig): TuiConfig {
-  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
-  // project-over-global; mcpServers merge per server name (project wins);
-  // permissionRules concatenate project-then-global (first match wins); hooks
-  // concatenate per stage global-then-project (every hook runs); then the
-  // provider-aware env API key + SEEKFORGE_RUNTIME_BIN overrides land on top.
-  const merged = mergeConfigLayers<TuiConfig>([global, project], { hookStages: HOOK_STAGE_ORDER });
-  // Unlike ordinary settings, statusLine executes immediately when the TUI
-  // opens. A repository-controlled config must not gain startup code execution.
-  if (project.statusLine !== undefined) {
-    if (global.statusLine === undefined) delete merged.statusLine;
-    else merged.statusLine = global.statusLine;
-  }
-  return merged;
+  // Repository config is downgraded before the shared merge: it cannot route
+  // credentials, execute startup code, authorize tools, or grant MCP trust.
+  return mergeConfigLayers<TuiConfig>([global, sanitizeProjectConfig(project)], { hookStages: HOOK_STAGE_ORDER });
 }
 
 export function loadConfig(projectPath: string): TuiConfig {

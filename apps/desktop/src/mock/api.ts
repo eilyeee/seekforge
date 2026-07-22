@@ -164,7 +164,7 @@ const mockCommands = [
   },
 ];
 
-/** Editable project hooks (mock of /api/hooks). */
+/** Editable user-owned hooks (mock of /api/hooks). */
 let mockHooks: Record<string, unknown> = {};
 
 /** In-memory worktree sessions (mock of the git-backed real server). */

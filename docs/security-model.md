@@ -69,6 +69,16 @@ redirects, command substitutions, and multiline shell programs never use an
 allow rule, configured allowlist, or remembered session approval; they return to
 the normal raw-command confirmation path.
 
+### Repository configuration is not user authority
+
+`.seekforge/config.json`, `.seekforge/config.local.json`, and their profiles are
+untrusted repository input. Before layering, SeekForge keeps only ordinary
+preferences, restrictive `deny` rules, and MCP definitions with trust removed.
+Repository values cannot route a user API key, execute hooks/status/runtime or
+verification commands, add allow rules/allowlists, weaken sandboxing, raise
+budgets, or mark an MCP server trusted. Those capabilities require global user
+config, environment variables, or an explicitly selected settings file.
+
 ---
 
 ## 2. The user sees the raw command / path — never a model paraphrase

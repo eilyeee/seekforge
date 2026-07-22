@@ -2,8 +2,8 @@
 
 > **English** | [简体中文](configuration.zh-CN.md)
 
-SeekForge reads configuration from two JSON files and supports overriding via
-environment variables, CLI flags, and a `--settings` file. All config keys are
+SeekForge reads global and repository configuration layers and supports overriding
+via environment variables, CLI flags, and a `--settings` file. All config keys are
 optional — the tool works out of the box with just an API key.
 
 ## File locations
@@ -11,7 +11,7 @@ optional — the tool works out of the box with just an API key.
 | Location | Path | Created by |
 | --- | --- | --- |
 | **Global** | `~/.seekforge/config.json` | `seekforge config set <key> <value> --global` |
-| **Project** | `<project>/.seekforge/config.json` | `seekforge config set <key> <value>` (no flag) |
+| **Project** | `<project>/.seekforge/config.json` | `seekforge config set <safe-key> <value>` (no flag) |
 
 Both are plain JSON. `seekforge config set` writes with `0o600` permissions
 (user-read-only) regardless of whether `--global` is used. Project config lives
@@ -24,6 +24,25 @@ instead of crashing, and `seekforge doctor` / TUI `/doctor` reports its path.
 Wrong container shapes for `permissionRules`, `mcpServers`, and `hooks` are also
 ignored; malformed permission-rule and hook entries are filtered, while valid
 values from lower-precedence layers remain effective.
+
+### Trust boundary
+
+Project files are repository-owned input, including `.seekforge/config.json`,
+`.seekforge/config.local.json`, and profiles declared in either file. They may
+set ordinary preferences (`model`, `models`, `compaction`, `thinking`,
+`reasoningEffort`, `planModel`, `editFormat`, UI preferences, and similar
+non-authoritative fields), add `deny` permission rules, and declare untrusted
+MCP servers for explicit inspection.
+
+They cannot supply credentials or credential destinations (`apiKey`,
+`provider`, `baseUrl`), execute startup/runtime commands (`runtimeBin`, hooks,
+`statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
+(`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
+sandbox, raise spending limits, auto-approve memory, or change audit retention.
+Those settings must come from `~/.seekforge/config.json`, environment variables,
+or an explicitly selected `--settings` file. A project MCP definition remains
+visible and can be tested by an explicit management action, but `trusted: true`
+is ignored unless the complete entry is user-owned.
 
 ---
 
@@ -40,7 +59,7 @@ never touches disk — but `config set` accepts it for convenience.
 { "apiKey": "sk-..." }
 ```
 
-Settable via `config set`? **Yes**.
+Settable via `config set`? **Yes, with `--global`**.
 When displayed by `config show`, the value is masked to the first 6 characters.
 
 ### `model`
@@ -62,7 +81,7 @@ Custom API base URL for DeepSeek-compatible proxies or self-hosted endpoints.
 { "baseUrl": "https://api.deepseek.com/v1" }
 ```
 
-Settable via `config set`? **Yes**.
+Settable via `config set`? **Yes, with `--global`**.
 
 ### `provider`
 
@@ -78,7 +97,7 @@ so you can point a preset at a proxy while keeping its capability profile.
 
 Leaving `provider` unset behaves exactly as before (full DeepSeek behavior).
 
-Settable via `config set`? **Yes**.
+Settable via `config set`? **Yes, with `--global`**.
 
 ### Volcengine Ark (OpenAI-compatible)
 
@@ -106,7 +125,7 @@ Ark is an OpenAI-compatible endpoint. To use it:
 
 ```bash
 export ARK_API_KEY="…"
-seekforge config set provider ark
+seekforge config set provider ark --global
 seekforge config set model glm-5.2
 ```
 
@@ -129,7 +148,7 @@ TypeScript.
 Also read from the `SEEKFORGE_RUNTIME_BIN` environment variable (highest
 precedence).
 
-Settable via `config set`? **Yes**.
+Settable via `config set`? **Yes, with `--global`**.
 
 ### `commandAllowlist`
 
@@ -150,10 +169,10 @@ command.
 When setting via `seekforge config set`, pass a comma-separated string:
 
 ```bash
-seekforge config set commandAllowlist "pnpm test, cargo build"
+seekforge config set commandAllowlist "pnpm test, cargo build" --global
 ```
 
-Settable via `config set`? **Yes** (as comma-separated string).
+Settable via `config set`? **Yes, with `--global`** (as comma-separated string).
 
 ### `models`
 
@@ -169,7 +188,7 @@ config, so setting it once applies everywhere.
 
 When unset, the server falls back to a built-in default model list.
 
-Settable via `config set`? **Yes** (as comma-separated string).
+Settable via CLI `config set`? **No**. It is available through Server/Desktop settings.
 
 ### `sandbox`
 
@@ -190,7 +209,7 @@ denial-looking sandbox failure prompts once before retrying unsandboxed.
 { "sandbox": "workspace-write" }
 ```
 
-Settable via `config set`? **Yes** — validated against `off` / `read-only` /
+Settable via `config set`? **Yes, with `--global`** — validated against `off` / `read-only` /
 `workspace-write` / `restricted`.
 
 ### `compaction`
@@ -459,9 +478,9 @@ rules are scanned before allow rules, so a matching deny always blocks (even
 readonly tools). Allow rules never override ask-mode blocking and never rescue
 `"dangerous"`-classified calls.
 
-Rules from different config layers are concatenated rather than replaced:
-**settings > project > global**. Because first match wins, settings-layer rules
-take highest precedence among file layers.
+Rules from different config layers are concatenated rather than replaced.
+Repository layers contribute `deny` rules only; trusted global/settings layers
+may contain both actions.
 
 ```json
 {
@@ -528,17 +547,21 @@ normal requests, `roots/list` requests are answered from the configured
 workspace roots, unknown server requests receive JSON-RPC method-not-found, and
 disposing the client aborts the stream. HTTP 404/405 cleanly falls back to
 request-scoped responses. Refresh-token OAuth is supported; obtaining the
-initial authorization grant remains a frontend/operator step.
+initial authorization grant remains a frontend/operator step. OAuth refresh,
+timeouts, and non-2xx checks apply to both ordinary requests and responses to
+server-initiated requests.
 
 Servers are merged per name across config layers (later wins):
 **settings > project > global**.
+Project/local entries always lose `trusted`; to enable automatic connection,
+put the complete reviewed entry in global config or explicit settings.
 
 Settable via `config set`? **No** — use `seekforge mcp add/list/remove` or
 edit the file directly.
 
 ### `hooks`
 
-User-defined shell hooks that fire at various stages of the agent lifecycle.
+User-owned shell hooks that fire at various stages of the agent lifecycle.
 Hooks receive a JSON payload on stdin with the stage name and relevant context
 (`sessionId`, `workspace`, `toolName`, `args`, `command`, `path`, etc.).
 
@@ -597,11 +620,9 @@ prevents the tool call or run from proceeding. All other stages are advisory
 }
 ```
 
-Hook entries are concatenated per stage across config layers for **all** stages
-(`loadConfig` merges every stage the agent supports): **global → project →
-settings**. The settings-layer hooks run last, and a hook defined in a lower
-layer is never silently dropped when a higher layer also defines hooks for a
-different stage.
+Hook entries are concatenated per stage across trusted config layers for **all**
+stages: **global → settings**. Repository hooks are inert. The Desktop hook
+editor writes `~/.seekforge/config.json`.
 
 Settable via `config set`? **No** — edit the file directly.
 
@@ -767,8 +788,8 @@ priority, highest first:
 | **CLI flags** | `--model`, `-y`, `--settings <file>`, … |
 | **`--settings <file>`** | JSON file loaded at runtime |
 | **Selected `--profile` overlay** | A profile chosen via `--profile <name>` / `SEEKFORGE_PROFILE` |
-| **Local config** | `<project>/.seekforge/config.local.json` (gitignored, per-developer) |
-| **Project config** | `<project>/.seekforge/config.json` |
+| **Local config** | `<project>/.seekforge/config.local.json` (repository-trust restrictions apply) |
+| **Project config** | `<project>/.seekforge/config.json` (repository-trust restrictions apply) |
 | **Global config** | `~/.seekforge/config.json` |
 
 Scalar keys (strings, booleans) are simply overwritten — the highest layer
@@ -781,9 +802,9 @@ Three fields merge across layers rather than replace:
 
 | Field | Merge strategy |
 | --- | --- |
-| `mcpServers` | Per-server key merge: `{ ...global, ...project, ...settings }`. Later layers override individual server entries but keep servers from earlier layers that aren't redefined. |
-| `permissionRules` | Concatenated: `[...settings, ...project, ...global]`. First match wins per action category, so settings-layer rules take highest file-layer precedence. |
-| `hooks` | Per-stage concatenation for every stage: global → project → settings. No stage is dropped when only some stages are configured in a given layer. |
+| `mcpServers` | Per-server key merge. Repository entries shadow same-name global entries but are always untrusted; only a complete user-owned entry can enable automatic connection. |
+| `permissionRules` | Concatenated higher-precedence first, but repository layers contribute only valid `deny` rules. |
+| `hooks` | Per-stage concatenation across trusted layers: global → settings. Repository hooks are ignored. |
 
 If a higher layer supplies the wrong runtime shape for one of these fields, that
 value is ignored rather than replacing a valid lower-layer value.
@@ -805,7 +826,7 @@ Does not accept a `--global` flag — it always shows the merged result.
 ### Set
 
 ```bash
-seekforge config set <key> <value>         # writes to project config
+seekforge config set <safe-key> <value>    # writes a safe project preference
 seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 ```
 
@@ -819,7 +840,6 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 | `provider` | string | `deepseek` / `ark` / preset name |
 | `runtimeBin` | string | String |
 | `commandAllowlist` | string[] | Comma-separated string (`"pnpm test, cargo build"`) |
-| `models` | string[] | Comma-separated string (`"deepseek-v4-flash, deepseek-v4-pro"`) |
 | `sandbox` | enum | `off` / `read-only` / `workspace-write` / `restricted` |
 | `compaction` | enum | `mechanical` / `llm` |
 | `thinking` | boolean | `true` / `false` |
@@ -835,6 +855,10 @@ add|list|remove` for MCP servers).
 
 Attempting `config set` with an unlisted key prints an error and lists the
 allowed keys.
+
+Without `--global`, only `model`, `compaction`, `thinking`, and
+`reasoningEffort` from this command's key list are accepted. Credential routing,
+runtime, allowlist, and sandbox settings are user-owned and require `--global`.
 
 ---
 

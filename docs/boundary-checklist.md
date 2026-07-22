@@ -1732,6 +1732,8 @@ ordinary hashes and attacker-chosen inputs can satisfy them.
   object's identity. Treat names and prefixes as display/serialization details.
 - **Caught:** background isolation treated any workspace id beginning with `wt-`
   as a managed worktree, and a normal hashed workspace id could match that prefix.
+- **Also caught:** workspace removal rejected every `wt-*` id instead of asking
+  the worktree manager whether that exact workspace was registered as one.
 
 ## 134. Fail-open degradation must match one explicit benign failure
 
@@ -1763,6 +1765,31 @@ request; awaiting that request can block the stream dispatcher forever.
   it to the transport's parent signal, and remove both timer and listener on settle.
 - **Caught:** Streamable HTTP MCP `roots/list` responses reused the standalone GET
   stream signal and could wait forever while all later SSE messages backed up.
+
+## 137. Authority is not ordinary mergeable configuration data
+
+Layer precedence describes value selection, not who is allowed to grant trust.
+A lower-trust repository layer can otherwise combine with user secrets or policy
+defaults to gain capabilities no individual field reveals on its own.
+
+- **Do:** sanitize each layer before merging according to its provenance. Keep
+  safe preferences and restrictive rules from repositories, but require a
+  user-owned layer for secret destinations, execution hooks/runtime commands,
+  allow rules/allowlists, sandbox policy, budgets, retention, and trust flags.
+- **Caught:** project/local config and profiles could route a user API key to a
+  repository endpoint, start hooks/runtime/MCP, auto-allow commands, weaken the
+  sandbox, or mark their own MCP server trusted.
+
+## 138. Bidirectional HTTP protocol messages need symmetric transport checks
+
+A client answering a server-initiated request is still making an authenticated
+HTTP request. Treating the response POST as fire-and-forget silently loses
+server requests after token expiry or a rejected response.
+
+- **Do:** apply the same OAuth refresh, non-2xx rejection, cancellation, and
+  timeout behavior to protocol response POSTs as to ordinary request POSTs.
+- **Caught:** Streamable HTTP MCP refreshed OAuth for client requests and the
+  standalone GET stream, but not for `roots/list` responses sent back to the server.
 
 ---
 

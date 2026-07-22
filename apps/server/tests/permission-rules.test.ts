@@ -52,15 +52,16 @@ afterEach(() => {
 
 const projectRule: PermissionRule = { action: "deny", tool: "run_command", match: "rm" };
 const globalRule: PermissionRule = { action: "allow", tool: "read_file" };
+const projectAllow: PermissionRule = { action: "allow", tool: "run_command", match: "node" };
 
 describe("loadConfig permissionRules merge", () => {
   it("concatenates project-then-global rules (project first => higher precedence)", () => {
     const workspace = makeWorkspace();
     writeFileIn(home, ".seekforge/config.json", JSON.stringify({ permissionRules: [globalRule] }));
-    writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ permissionRules: [projectRule] }));
+    writeFileIn(workspace, ".seekforge/config.json", JSON.stringify({ permissionRules: [projectAllow, projectRule] }));
 
     const config = loadConfig(workspace);
-    // Project rules come first so a project deny is scanned before any global rule.
+    // A project may tighten policy with deny rules, but cannot auto-authorize.
     expect(config.permissionRules).toEqual([projectRule, globalRule]);
   });
 

@@ -7,7 +7,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -31,7 +30,14 @@ import {
   type McpClientEntry,
   type McpServerConfig,
 } from "@seekforge/core";
-import { loadConfig, maskedConfig, readProjectFile, setConfigValue, writeProjectFileAtomic } from "../config.js";
+import {
+  loadConfig,
+  maskedConfig,
+  readProjectFile,
+  seekforgeHome,
+  setConfigValue,
+  writeProjectFileAtomic,
+} from "../config.js";
 import { readFileBounded } from "@seekforge/shared/bounded-file-read";
 import { MAX_CONFIG_FILE_BYTES } from "@seekforge/shared/config-layers";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
@@ -85,7 +91,7 @@ async function withSettingsMutation<T>(
   operation: () => T,
 ): Promise<T> {
   if (scope === "global") {
-    const lease = acquireSessionLease(homedir(), GLOBAL_CONFIG_LOCK_ID);
+    const lease = acquireSessionLease(seekforgeHome(), GLOBAL_CONFIG_LOCK_ID);
     try {
       return operation();
     } finally {
@@ -114,7 +120,7 @@ function readConfigDoc(workspace: string, scope: McpScope = "project", strict = 
     const raw =
       scope === "project"
         ? readProjectFile(workspace, ".seekforge/config.json", MAX_CONFIG_FILE_BYTES)
-        : readFileBounded(join(homedir(), ".seekforge", "config.json"), MAX_CONFIG_FILE_BYTES).toString("utf8");
+        : readFileBounded(join(seekforgeHome(), ".seekforge", "config.json"), MAX_CONFIG_FILE_BYTES).toString("utf8");
     return raw === undefined ? {} : parseConfigDoc(raw);
   } catch (error) {
     if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -131,7 +137,7 @@ function writeConfigDoc(workspace: string, scope: McpScope, doc: ConfigDoc): voi
     writeProjectFileAtomic(workspace, ".seekforge/config.json", serialized);
     return;
   }
-  const target = join(homedir(), ".seekforge", "config.json");
+  const target = join(seekforgeHome(), ".seekforge", "config.json");
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
     throw new Error("global config must not be a symbolic link");
@@ -198,7 +204,8 @@ function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope
     env: maskedMap(cfg.env),
     headers: maskedMap(cfg.headers),
     ...(cfg.oauth ? { oauth: sanitizedOauth(cfg.oauth) } : {}),
-    trusted: cfg.trusted === true,
+    // A repository cannot grant its own server automatic startup authority.
+    trusted: source === "global" && cfg.trusted === true,
     source,
     shadowedGlobal,
   };
@@ -245,12 +252,17 @@ function validateHooks(input: unknown): { hooks: HookConfig } | { error: string 
   return { hooks: out };
 }
 
-/** Writes the hooks block into the project config.json, preserving other keys. */
+/** Writes user-owned hooks into the global config, preserving other keys. */
 function writeHooks(workspace: string, hooks: HookConfig): void {
-  const doc = readConfigDoc(workspace, "project", true);
-  if (Object.keys(hooks).length === 0) delete doc.hooks;
-  else doc.hooks = hooks;
-  writeProjectFileAtomic(workspace, ".seekforge/config.json", `${JSON.stringify(doc, null, 2)}\n`);
+  try {
+    const doc = readConfigDoc(workspace, "global", true);
+    if (Object.keys(hooks).length === 0) delete doc.hooks;
+    else doc.hooks = hooks;
+    writeConfigDoc(workspace, "global", doc);
+  } catch (error) {
+    if (error instanceof ConfigMutationError) throw error;
+    throw new ConfigMutationError("user config is unavailable, malformed, or not a regular file");
+  }
 }
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
@@ -504,6 +516,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (trusted !== undefined && typeof trusted !== "boolean") {
       return sendApiError(res, 400, "bad_request", "trusted must be a boolean");
     }
+    if (scope === "project" && trusted === true) {
+      return sendApiError(res, 400, "bad_request", "project MCP servers cannot be trusted; use global scope");
+    }
     if (
       env !== undefined &&
       (typeof env !== "object" ||
@@ -633,6 +648,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendJson(res, 200, { ok: true, scope });
     } catch (error) {
       if (settingsBusy(res, error)) return;
+      if (error instanceof ConfigMutationError) return sendApiError(res, 400, "bad_request", error.message);
       throw error;
     }
   }
@@ -701,9 +717,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     return sendJson(res, 200, maskedConfig(workspace));
   }
 
-  // Project hooks (the editable layer): read/write .seekforge/config.json hooks.
+  // Hooks execute shell commands, so the editor reads/writes only user-owned
+  // global config. Repository hooks are retained as inert file content.
   if (method === "GET" && path === "/api/hooks") {
-    return sendJson(res, 200, { hooks: readConfigDoc(workspace).hooks ?? {} });
+    return sendJson(res, 200, { hooks: readConfigDoc(workspace, "global").hooks ?? {} });
   }
   if (method === "PUT" && path === "/api/hooks") {
     const body = await readJsonBody(req, res);
@@ -714,10 +731,11 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", result.error);
     }
     try {
-      await withSettingsMutation(rest, workspace, "project", () => writeHooks(workspace, result.hooks));
+      await withSettingsMutation(rest, workspace, "global", () => writeHooks(workspace, result.hooks));
       return sendJson(res, 200, { hooks: result.hooks });
     } catch (error) {
       if (settingsBusy(res, error)) return;
+      if (error instanceof ConfigMutationError) return sendApiError(res, 400, "bad_request", error.message);
       throw error;
     }
   }

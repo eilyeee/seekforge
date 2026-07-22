@@ -22,6 +22,22 @@ let server: RunningServer;
 let base: string;
 let mcpFixture: ReturnType<typeof writeFixtureServer>;
 let savedHome: string | undefined;
+let savedSeekforgeHome: string | undefined;
+let home: string;
+
+function writeGlobalConfig(config: Record<string, unknown>): void {
+  writeFileIn(home, ".seekforge/config.json", JSON.stringify(config));
+}
+
+function restorePrimaryGlobalConfig(): void {
+  writeGlobalConfig({
+    sandbox: "workspace-write",
+    mcpServers: {
+      fake: { command: process.execPath, args: [mcpFixture.serverPath], trusted: true },
+      broken: { command: "/definitely/not/a/real/binary", trusted: true },
+    },
+  });
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function jsonOf(res: Response): Promise<any> {
@@ -82,7 +98,10 @@ beforeAll(async () => {
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
   savedHome = process.env["HOME"];
-  process.env["HOME"] = makeWorkspace();
+  savedSeekforgeHome = process.env["SEEKFORGE_HOME"];
+  home = makeWorkspace();
+  process.env["HOME"] = home;
+  process.env["SEEKFORGE_HOME"] = home;
 
   workspace = makeWorkspace();
   mcpFixture = writeFixtureServer();
@@ -116,16 +135,14 @@ beforeAll(async () => {
     ".seekforge/config.json",
     JSON.stringify({
       model: "deepseek-v4-flash",
-      sandbox: "workspace-write",
       thinking: true,
       reasoningEffort: "max",
       mcpServers: {
-        fake: { command: process.execPath, args: [mcpFixture.serverPath], trusted: true },
         untrusted: { command: process.execPath, args: [mcpFixture.serverPath], trusted: false },
-        broken: { command: "/definitely/not/a/real/binary", trusted: true },
       },
     }),
   );
+  restorePrimaryGlobalConfig();
 
   server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
   base = `http://127.0.0.1:${server.port}`;
@@ -134,7 +151,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await server.close();
   mcpFixture.cleanup();
-  if (savedHome !== undefined) process.env["HOME"] = savedHome;
+  if (savedHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = savedHome;
+  if (savedSeekforgeHome === undefined) delete process.env["SEEKFORGE_HOME"];
+  else process.env["SEEKFORGE_HOME"] = savedSeekforgeHome;
 });
 
 describe("GET /api/sessions/:id/turns", () => {
@@ -298,11 +318,7 @@ describe("GET /api/balance", () => {
     const stubPort = (stub.address() as { port: number }).port;
 
     const ws2 = makeWorkspace();
-    writeFileIn(
-      ws2,
-      ".seekforge/config.json",
-      JSON.stringify({ apiKey: "sk-balance-test", baseUrl: `http://127.0.0.1:${stubPort}` }),
-    );
+    writeGlobalConfig({ apiKey: "sk-balance-test", baseUrl: `http://127.0.0.1:${stubPort}` });
     const server2 = await startServer({ workspace: ws2, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
     try {
       const res = await fetch(`http://127.0.0.1:${server2.port}/api/balance`, {
@@ -311,6 +327,7 @@ describe("GET /api/balance", () => {
       expect(await jsonOf(res)).toEqual({ balance: { currency: "USD", totalBalance: "12.34" } });
     } finally {
       await server2.close();
+      restorePrimaryGlobalConfig();
       await new Promise<void>((r) => stub.close(() => r()));
     }
   });
@@ -328,11 +345,7 @@ describe("GET /api/balance", () => {
     const stubPort = (stub.address() as { port: number }).port;
 
     const wsArk = makeWorkspace();
-    writeFileIn(
-      wsArk,
-      ".seekforge/config.json",
-      JSON.stringify({ provider: "ark", apiKey: "sk-ark", baseUrl: `http://127.0.0.1:${stubPort}` }),
-    );
+    writeGlobalConfig({ provider: "ark", apiKey: "sk-ark", baseUrl: `http://127.0.0.1:${stubPort}` });
     const serverArk = await startServer({ workspace: wsArk, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
     try {
       const res = await fetch(`http://127.0.0.1:${serverArk.port}/api/balance`, {
@@ -343,6 +356,7 @@ describe("GET /api/balance", () => {
       expect(hit).toBe(false); // no fetch to /user/balance
     } finally {
       await serverArk.close();
+      restorePrimaryGlobalConfig();
       await new Promise<void>((r) => stub.close(() => r()));
     }
   });
@@ -350,11 +364,7 @@ describe("GET /api/balance", () => {
   it("returns {balance: null} when the platform is unreachable (never an error)", async () => {
     const ws3 = makeWorkspace();
     // Port 9 (discard) is never listening locally -> fetch fails fast.
-    writeFileIn(
-      ws3,
-      ".seekforge/config.json",
-      JSON.stringify({ apiKey: "sk-balance-test", baseUrl: "http://127.0.0.1:9" }),
-    );
+    writeGlobalConfig({ apiKey: "sk-balance-test", baseUrl: "http://127.0.0.1:9" });
     const server3 = await startServer({ workspace: ws3, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
     try {
       const res = await fetch(`http://127.0.0.1:${server3.port}/api/balance`, {
@@ -364,6 +374,7 @@ describe("GET /api/balance", () => {
       expect(await jsonOf(res)).toEqual({ balance: null });
     } finally {
       await server3.close();
+      restorePrimaryGlobalConfig();
     }
   });
 });

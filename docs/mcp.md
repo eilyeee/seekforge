@@ -22,6 +22,12 @@ The agent interacts with configured MCP servers through three channels: **tools*
 MCP servers are declared under `mcpServers` in `.seekforge/config.json`
 (project) or `~/.seekforge/config.json` (global).
 
+Project entries are definitions only: repository configuration cannot grant
+itself automatic startup authority, so project `trusted: true` is ignored. To
+trust a reviewed server, copy its complete entry to the global config and set
+`trusted: true` there. Explicit management actions may still connect to a
+selected untrusted project entry for testing or tool inspection.
+
 The config format is Claude Code–compatible:
 
 ```jsonc
@@ -86,8 +92,9 @@ Appends a **stdio** server to `mcpServers` in the project config (add
 `--global` for `~/.seekforge/`). The first token after `<name>` is the command;
 the rest become `args`.
 
-New servers are **untrusted by default** — the CLI prints a reminder to review
-the entry and set `"trusted": true` before automatic Agent connection.
+New project servers are **untrusted** — the CLI prints a reminder to review the
+entry, then copy it to global config with `"trusted": true` before automatic
+Agent connection.
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
@@ -106,7 +113,8 @@ settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.
 ```
 
 Per-server configs are shallow-merged by key: later layers override earlier
-ones. For the full layering model see
+ones. A repository entry that shadows a global entry remains untrusted; trust
+is never inherited across that boundary. For the full layering model see
 [cli-reference.md](cli-reference.md#settings-layering).
 
 ### 1.4 Tool Naming
@@ -169,9 +177,10 @@ loop or unbounded catalog allocation.
 
 ### 1.7 Trust Model
 
-Each server entry has an optional `trusted` boolean (default `false`). Automatic
-agent discovery connects only entries explicitly marked `trusted: true`, because
-the connection itself can start a local process or contact a remote endpoint.
+Each user-owned server entry has an optional `trusted` boolean (default `false`).
+Automatic agent discovery connects only global or explicitly supplied settings
+entries marked `trusted: true`; repository trust flags are stripped because the
+connection itself can start a local process or contact a remote endpoint.
 The trusted server's tools are then classified at the `write` permission level:
 
 | `trusted` | Automatic connection | Tool permission | With `-y` | Without `-y` |

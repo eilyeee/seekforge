@@ -1555,6 +1555,8 @@ endpoint。
   展示或序列化细节。
 - **发现位置：** 后台隔离把所有以 `wt-` 开头的 workspace id 当作受管 worktree，而普通
   工作区的哈希 id 也可能命中此前缀。
+- **同类问题：** workspace 删除接口拒绝所有 `wt-*` id，而没有向 worktree manager
+  查询该 workspace 是否真的登记为 worktree。
 
 ## 134. 失败后放宽策略只能匹配一个明确且良性的失败原因
 
@@ -1584,6 +1586,27 @@ stream dispatcher。
   并在完成时同时移除计时器与监听器。
 - **发现位置：** Streamable HTTP MCP 的 `roots/list` 响应复用了独立 GET stream 的 signal，
   可能永久等待并阻塞后续所有 SSE 消息。
+
+## 137. 授权不是普通的可合并配置数据
+
+分层优先级只描述值如何选择，并不表示哪个来源有权授予信任。否则低信任仓库层
+可与用户密钥或策略默认值组合，获得任何单个字段都未直接表达的能力。
+
+- **正确做法：** 合并前按来源对每一层降权。仓库层可保留安全偏好和限制性规则；密钥
+  目的地、执行 hook/runtime 命令、allow 规则/放行清单、sandbox 策略、预算、
+  保留策略与信任标志必须来自用户级配置。
+- **发现位置：** 项目/local 配置及 profile 可以把用户 API key 路由到仓库端点，
+  启动 hook/runtime/MCP、自动放行命令、削弱 sandbox，或把自身 MCP 标记为可信。
+
+## 138. 双向 HTTP 协议消息需要对称的传输检查
+
+客户端回答服务器发起的请求时，仍然在发送一个需认证的 HTTP 请求。若把响应 POST
+当作 fire-and-forget，令牌过期或响应被拒时，服务器请求会被静默丢失。
+
+- **正确做法：** 协议响应 POST 与普通请求 POST 使用相同的 OAuth 刷新、非 2xx 拒绝、
+  取消和超时行为。
+- **发现位置：** Streamable HTTP MCP 会为客户端请求和独立 GET stream 刷新 OAuth，
+  却不会为发回服务器的 `roots/list` 响应刷新。
 
 ---
 

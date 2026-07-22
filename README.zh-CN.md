@@ -222,7 +222,7 @@ TypeScript 调度器可把文件/命令/git 执行委托给一个小型受信 Ru
 
 ```bash
 cargo build --release
-seekforge config set runtimeBin target/release/seekforge-runtime
+seekforge config set runtimeBin target/release/seekforge-runtime --global
 ```
 
 协议：[`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md)。

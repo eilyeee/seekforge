@@ -275,12 +275,26 @@ export function createMcpHttpTransport(options: McpClientOptions): {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     inflight.add(controller);
     try {
-      const response = await fetch(url!, {
-        method: "POST",
-        headers: headers(),
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      const send = (): Promise<Response> =>
+        fetch(url!, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      let response = await send();
+      if (response.status === 401 && options.config.oauth) {
+        await response.body?.cancel().catch(() => {});
+        await refreshAccessToken(controller.signal);
+        response = await send();
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new McpError(
+          "mcp_http_error",
+          `MCP server "${options.name}" rejected ${String(message.method)} response with HTTP ${response.status}`,
+        );
+      }
       await response.body?.cancel().catch(() => {});
     } catch (error) {
       if (controller.signal.aborted && !signal.aborted) {

@@ -21,6 +21,11 @@ agent 通过三个通道与已配置的 MCP 服务器交互：**tools**（主要
 MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config.json`
 （全局级）的 `mcpServers` 下声明。
 
+项目条目只负责定义：仓库配置不能授予自身自动启动权限，因此项目里的
+`trusted: true` 会被忽略。要信任已审查的服务器，请把完整条目复制到全局配置，
+并在那里设置 `trusted: true`。显式管理操作仍可连接用户选中的未信任项目条目，
+用于测试或检查工具。
+
 配置格式与 Claude Code 兼容：
 
 ```jsonc
@@ -83,8 +88,8 @@ filesystem  (npx -y ..., untrusted)  2 tool(s)
 向项目配置的 `mcpServers` 追加一个 **stdio** 服务器（加 `--global` 则写入
 `~/.seekforge/`）。`<name>` 之后的第一个 token 是命令，其余成为 `args`。
 
-新增服务器**默认不受信任（untrusted）** —— CLI 会提示先审查该条目，再设置
-`"trusted": true` 以允许 Agent 自动连接。
+新增的项目服务器**不受信任（untrusted）** —— CLI 会提示先审查该条目，
+再复制到全局配置并设置 `"trusted": true`，以允许 Agent 自动连接。
 
 ```text
 seekforge mcp add fs npx -y @modelcontextprotocol/server-filesystem .
@@ -103,7 +108,8 @@ settings file  >  project .seekforge/config.json  >  global ~/.seekforge/config.
 ```
 
 每个服务器的配置按键做浅合并（shallow-merge）：后面的层覆盖前面的层。
-完整的分层模型见 [cli-reference.zh-CN.md](cli-reference.zh-CN.md#设置分层)。
+遮蔽全局条目的仓库定义仍不受信任；信任不会跨该边界继承。完整的分层模型见
+[cli-reference.zh-CN.md](cli-reference.zh-CN.md#设置分层)。
 
 ### 1.4 工具命名
 
@@ -157,9 +163,10 @@ stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true
 
 ### 1.7 信任模型
 
-每个服务器条目有一个可选的 `trusted` 布尔值（默认 `false`）。Agent 自动发现
-只连接显式设置为 `trusted: true` 的条目，因为连接本身就可能启动本地进程或访问
-远程端点。已信任服务器的工具随后按 `write` 权限级别分类：
+每个用户级服务器条目有一个可选的 `trusted` 布尔值（默认 `false`）。Agent 自动
+发现只连接全局配置或显式 settings 中设置为 `trusted: true` 的条目；仓库信任标志
+会被剥离，因为连接本身就可能启动本地进程或访问远程端点。已信任服务器的工具随后
+按 `write` 权限级别分类：
 
 | `trusted` | 自动连接 | 工具权限 | 使用 `-y` 时 | 未使用 `-y` 时 |
 |---|---|---|---|---|

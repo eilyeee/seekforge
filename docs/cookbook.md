@@ -9,7 +9,7 @@ commands and flags. For the full flag list see the
 
 All CLI commands run from inside your project. Run `seekforge init` once to
 create `.seekforge/` and `AGENTS.md`, and make sure a key is set
-(`DEEPSEEK_API_KEY` env var, or `seekforge config set apiKey sk-...`).
+(`DEEPSEEK_API_KEY` env var, or `seekforge config set apiKey sk-... --global`).
 
 ---
 
@@ -26,7 +26,7 @@ seekforge config set verifyCommand "pnpm test"   # see note below — not settab
 ```
 
 `verifyCommand` is **not** settable via `config set` — add it to
-`.seekforge/config.json` directly:
+the user-owned `~/.seekforge/config.json` directly:
 
 ```json
 { "verifyCommand": "pnpm test" }
@@ -199,8 +199,8 @@ seekforge mcp list --tools    # list servers and the tools they expose
 seekforge mcp remove filesystem
 ```
 
-HTTP (Streamable) servers and `trusted`/headers must be added by editing
-`.seekforge/config.json` under `mcpServers` — see
+HTTP (Streamable) servers can be declared in either layer, but trusted servers
+must be added to `~/.seekforge/config.json` under `mcpServers` — see
 [Configuration → mcpServers](configuration.md#mcpservers) and the
 [MCP guide](mcp.md). In the TUI, `/mcp` lists servers and `/prompts` lists MCP
 prompts (invoke as `/mcp:<server>:<prompt>`).
@@ -268,13 +268,13 @@ cost.
 
 ```bash
 export ARK_API_KEY="…"
-seekforge config set provider ark
+seekforge config set provider ark --global
 seekforge config set model glm-5.2
 ```
 
 Ark disables DeepSeek-only behaviors (thinking body, cache-hit tokens, built-in
 pricing, balance). Reported cost stays `0` unless you supply `modelPricing`.
-Add it to `.seekforge/config.json` directly (not settable via `config set`):
+Add it to `~/.seekforge/config.json` directly (not settable via `config set`):
 
 ```json
 {

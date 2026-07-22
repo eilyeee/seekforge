@@ -33,6 +33,7 @@ export const common = {
     "err.inputFormatTextStream": '--input-format must be "text" or "stream-json" (got "{format}")',
     "err.configSetUnknown": 'Unknown key "{key}". Allowed: {allowed}',
     "err.configSetBadValue": 'Invalid value for "{key}". Allowed: {allowed}',
+    "err.configProjectUserOwned": 'Config key "{key}" is user-owned; pass --global to set it.',
     "err.mcpConfigRead": "could not read --mcp-config file: {path}",
     "err.mcpConfigReadHint": 'expected JSON: {"mcpServers": {…}} or a {name: server} map',
     "err.mcpConfigInvalidJson":
@@ -66,7 +67,7 @@ export const common = {
     "status.removedMcp": 'removed MCP server "{name}" from {path}',
     "status.addedMcp": 'added MCP server "{name}" ({cmd}) to {path}',
     "status.mcpUntrustedNote":
-      'note: new servers are untrusted by default — review them, then set "trusted": true to allow Agent connection',
+      'note: new project servers are untrusted — review one, then copy it to global config with "trusted": true',
     "status.restoredFile": "restore  {path}",
     "status.deletedFile": "delete   {path}",
     "status.skippedFile": "skip     {path} ({reason})",
@@ -138,6 +139,7 @@ export const common = {
     "err.inputFormatTextStream": '--input-format 必须是 "text" 或 "stream-json"（当前为 "{format}"）',
     "err.configSetUnknown": '未知键 "{key}"。允许的键：{allowed}',
     "err.configSetBadValue": '"{key}" 的值无效。允许的值：{allowed}',
+    "err.configProjectUserOwned": "配置键“{key}”属于用户级；请加 --global 后设置。",
     "err.mcpConfigRead": "无法读取 --mcp-config 文件：{path}",
     "err.mcpConfigReadHint": '需要 JSON：{"mcpServers": {…}} 或 {名称: 服务器} 映射',
     "err.mcpConfigInvalidJson": "拒绝写入：{path} 存在但不是有效 JSON（请先手动修复，以免覆盖配置）",
@@ -169,7 +171,7 @@ export const common = {
     "status.updateNote2": " 例如 pnpm add -g seekforge。SeekForge 不会自动更新全局二进制文件。）",
     "status.removedMcp": '已从 {path} 移除 MCP 服务器 "{name}"',
     "status.addedMcp": '已将 MCP 服务器 "{name}"（{cmd}）添加到 {path}',
-    "status.mcpUntrustedNote": '注意：新服务器默认为不受信任 — 请先审查，再设置 "trusted": true 允许 Agent 连接',
+    "status.mcpUntrustedNote": '注意：新的项目服务器不受信任 — 审查后请复制到全局配置并设置 "trusted": true',
     "status.restoredFile": "恢复    {path}",
     "status.deletedFile": "删除    {path}",
     "status.skippedFile": "跳过    {path}（{reason}）",

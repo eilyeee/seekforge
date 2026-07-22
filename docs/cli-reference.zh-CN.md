@@ -99,6 +99,8 @@
 | `~/.seekforge/config.json`（全局） | 最低 |
 
 对于深合并字段（`mcpServers`、`permissionRules`、`hooks`），settings 层会合并进既有配置，而不是整体替换。
+项目层和 local 层会在合并前降权：只有安全偏好、项目 `deny` 规则和未信任 MCP
+定义会保留。Hook 与用户级授权只能来自全局配置或用户显式选择的 settings 文件。
 
 ## 会话命令
 

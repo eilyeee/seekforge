@@ -99,13 +99,13 @@ async function globalRoutes({ req, res, url, method, segs, rest }: GlobalRouteCt
 
   // Stop hosting a workspace (the launch/default workspace cannot be removed).
   if (method === "DELETE" && segs.length === 3 && segs[1] === "workspaces") {
-    // Worktrees register as `wt-<slug>` workspaces but own a git worktree +
-    // branch on disk — unregistering here would orphan them. They must go
-    // through the worktree merge/discard flow (DELETE /api/worktrees/:id).
-    if (segs[2]!.startsWith("wt-")) {
+    // Worktree identity comes from the authoritative manager, not the display
+    // id prefix: an ordinary hashed workspace id can also begin with `wt-`.
+    if (rest.worktrees.get(segs[2]!) !== undefined) {
       return sendApiError(res, 400, "bad_request", "use DELETE /api/worktrees/:id to remove a worktree");
     }
     const target = rest.registry.resolve(segs[2]!);
+    if (!target) return sendApiError(res, 404, "not_found", `unknown workspace: ${segs[2]}`);
     let guard: ReturnType<typeof acquireWorkspaceSessionGuard> | undefined;
     try {
       if (target) guard = acquireWorkspaceSessionGuard(target.path);

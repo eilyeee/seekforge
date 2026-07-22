@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
-import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
 import { knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
@@ -18,8 +18,8 @@ export type CliConfig = {
   commandAllowlist?: string[];
   /**
    * Fine-grained allow/deny permission rules. First match of each action
-   * category wins (deny scanned before allow); project rules are merged
-   * before global ones. Edit the file directly; not settable via `config set`.
+   * category wins (deny scanned before allow); repository layers may only add
+   * deny rules. Edit trusted rules in user config or --settings.
    */
   permissionRules?: PermissionRule[];
   /** MCP servers (Claude Code-compatible). Edit the file directly; not settable via `config set`. */
@@ -276,7 +276,13 @@ function resolveProfile(
   if (!name) return undefined;
   const { global, project, local } = layers;
   // Order low→high precedence; later entries override earlier on scalars.
-  const sources = [global.profiles?.[name], project.profiles?.[name], local.profiles?.[name]];
+  const projectProfile = project.profiles?.[name];
+  const localProfile = local.profiles?.[name];
+  const sources = [
+    global.profiles?.[name],
+    projectProfile === undefined ? undefined : sanitizeProjectConfig(projectProfile),
+    localProfile === undefined ? undefined : sanitizeProjectConfig(localProfile),
+  ];
   const present = sources.filter((p): p is Partial<CliConfig> => p !== undefined);
   if (present.length === 0) {
     const names = Array.from(
@@ -307,8 +313,8 @@ function resolveProfile(
  *   > .seekforge/config.local.json > project .seekforge/config.json
  *   > ~/.seekforge/config.json
  *
- * config.local.json is the gitignored personal layer (per-developer overrides);
- * it slots just above the shared project config. The --settings layer sits
+ * config.local.json slots just above shared project config, but both are
+ * repository-owned and sanitized before merging. The --settings layer sits
  * above it. A selected profile (--profile <name> or SEEKFORGE_PROFILE) slots
  * just below --settings and above config.local — its fields override the merged
  * base. The profile is looked up across the file layers (project winning over
@@ -326,14 +332,16 @@ export function loadConfig(projectPath: string, settingsPath?: string, profile?:
   const profileName = profile ?? process.env["SEEKFORGE_PROFILE"] ?? undefined;
   const prof = resolveProfile(profileName, { global, project, local }) ?? {};
 
-  // Shared merge algebra (see @seekforge/shared/config-layers): scalars spread
-  // later-wins; mcpServers merge per server name (settings > profile > local >
-  // project > global); permissionRules concatenate higher-precedence first
-  // (first match wins, so settings rules take highest precedence among file
-  // layers); hooks concatenate per stage lower-precedence first (every hook
-  // runs); then the provider-aware env API key + SEEKFORGE_RUNTIME_BIN
-  // overrides land on top.
-  const result = mergeConfigLayers<CliConfig>([global, project, local, prof, settings]);
+  // Repository/local layers retain safe preferences, deny rules, and untrusted
+  // MCP definitions. User-owned global/settings layers retain full authority;
+  // env credentials/runtime overrides land on top.
+  const result = mergeConfigLayers<CliConfig>([
+    global,
+    sanitizeProjectConfig(project),
+    sanitizeProjectConfig(local),
+    prof,
+    settings,
+  ]);
   // `profiles` is a selection mechanism, not effective config — never leak it.
   delete result.profiles;
   return result;

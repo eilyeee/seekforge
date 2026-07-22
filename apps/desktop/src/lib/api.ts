@@ -418,7 +418,7 @@ export const api = {
   /** Available output styles (built-ins + custom .seekforge/output-styles/*.md). */
   outputStyles: (ws?: string) =>
     request<{ styles: { name: string; kind: "builtin" | "custom" }[] }>("GET", withWorkspace("/api/output-styles", ws)),
-  /** Project hooks config (the editable .seekforge/config.json layer). */
+  /** User-owned hooks config (the editable global config layer). */
   hooks: (ws?: string) => request<{ hooks: HooksConfig }>("GET", withWorkspace("/api/hooks", ws)),
   saveHooks: (hooks: HooksConfig, ws?: string) =>
     request<{ hooks: HooksConfig }>("PUT", withWorkspace("/api/hooks", ws), { hooks }),

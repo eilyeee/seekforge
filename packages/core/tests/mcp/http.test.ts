@@ -257,7 +257,16 @@ describe("mcp client over streamable HTTP", () => {
   it("consumes a standalone GET stream and answers server roots/list requests", async () => {
     const notifications: Array<{ method: string; params?: unknown }> = [];
     const serverResponses: unknown[] = [];
+    let responseAttempts = 0;
+    let tokenRefreshes = 0;
     const streamServer = createServer((req, res) => {
+      if (req.url === "/token") {
+        tokenRefreshes++;
+        req.resume();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ access_token: "roots-token" }));
+        return;
+      }
       if (req.method === "GET") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write('data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"source":"get"}}\n\n');
@@ -284,7 +293,14 @@ describe("mcp client over streamable HTTP", () => {
           res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }));
           return;
         }
-        if (message.method === undefined && message.id === 99) serverResponses.push(message);
+        if (message.method === undefined && message.id === 99) {
+          responseAttempts++;
+          if (req.headers.authorization !== "Bearer roots-token") {
+            res.writeHead(401).end();
+            return;
+          }
+          serverResponses.push(message);
+        }
         res.writeHead(202).end();
       });
     });
@@ -292,7 +308,14 @@ describe("mcp client over streamable HTTP", () => {
     const port = (streamServer.address() as { port: number }).port;
     const client = createMcpClient({
       name: "get-stream",
-      config: { url: `http://127.0.0.1:${port}/mcp` },
+      config: {
+        url: `http://127.0.0.1:${port}/mcp`,
+        oauth: {
+          tokenEndpoint: `http://127.0.0.1:${port}/token`,
+          clientId: "client",
+          refreshToken: "refresh",
+        },
+      },
       workspaceRoots: ["/tmp/project"],
       onNotification: (notification) => notifications.push(notification),
     });
@@ -307,6 +330,8 @@ describe("mcp client over streamable HTTP", () => {
             result: { roots: [{ uri: "file:///tmp/project", name: "workspace" }] },
           },
         ]);
+        expect(responseAttempts).toBe(2);
+        expect(tokenRefreshes).toBe(1);
       });
     } finally {
       client.dispose();
@@ -364,7 +389,9 @@ describe("mcp client over streamable HTTP", () => {
       name: "get-stream-timeout",
       config: { url: `http://127.0.0.1:${port}/mcp` },
       workspaceRoots: ["/tmp/project"],
-      requestTimeoutMs: 30,
+      // Leave enough headroom for the initialize handshake under the full
+      // parallel suite while still proving the nested response is bounded.
+      requestTimeoutMs: 250,
     });
     try {
       await client.listTools();

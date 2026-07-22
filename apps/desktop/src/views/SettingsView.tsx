@@ -999,7 +999,7 @@ export function SettingsView() {
   const requests = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [global, setGlobal] = useState(false);
+  const [global, setGlobal] = useState(true);
   const { states, save, reset: resetSaveStates } = useFieldSave(ws, requests);
 
   const [model, setModel] = useState("");

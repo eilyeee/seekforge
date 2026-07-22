@@ -130,11 +130,10 @@ describe("workspace open/remove endpoints", () => {
     expect(bad.status).toBe(400);
   });
 
-  it("DELETE /api/workspaces/:id refuses worktree ids (must use the worktree flow)", async () => {
+  it("does not classify an id as a worktree from its prefix alone", async () => {
     const res = await authed("/api/workspaces/wt-something", { method: "DELETE" });
-    expect(res.status).toBe(400);
-    const err = (await res.json()) as { error: { message: string } };
-    expect(err.error.message).toMatch(/worktree/i);
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("not_found");
   });
 
   it("DELETE /api/workspaces/:id refuses a workspace with an active agent session", async () => {

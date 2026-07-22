@@ -89,7 +89,7 @@ describe("mcp add + delete", () => {
   it("POST /api/mcp adds a server then DELETE removes it", async () => {
     const add = await authed("/api/mcp", {
       method: "POST",
-      body: JSON.stringify({ name: "demo", command: "node", args: ["server.js"], trusted: true }),
+      body: JSON.stringify({ name: "demo", command: "node", args: ["server.js"] }),
     });
     expect(add.status).toBe(200);
     expect((await jsonOf(add)).ok).toBe(true);
@@ -98,7 +98,7 @@ describe("mcp add + delete", () => {
     let cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
     expect(cfg.mcpServers.demo.command).toBe("node");
     expect(cfg.mcpServers.demo.args).toEqual(["server.js"]);
-    expect(cfg.mcpServers.demo.trusted).toBe(true);
+    expect(cfg.mcpServers.demo.trusted).toBeUndefined();
     // Pre-existing keys preserved.
     expect(cfg.apiKey).toBe("sk-test123456");
 
@@ -112,6 +112,15 @@ describe("mcp add + delete", () => {
     cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
     expect(cfg.mcpServers?.demo).toBeUndefined();
     expect(cfg.apiKey).toBe("sk-test123456");
+  });
+
+  it("rejects a project MCP server that grants itself trust", async () => {
+    const res = await authed("/api/mcp", {
+      method: "POST",
+      body: JSON.stringify({ name: "self-trusting", command: "node", trusted: true }),
+    });
+    expect(res.status).toBe(400);
+    expect((await jsonOf(res)).error.message).toMatch(/global scope/);
   });
 
   it("DELETE /api/mcp/:name 404s for an unknown server", async () => {

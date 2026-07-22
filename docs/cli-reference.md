@@ -107,6 +107,10 @@ config layers and env/CLI flags:
 
 For deep-merge fields (`mcpServers`, `permissionRules`, `hooks`), the settings
 layer merges into the existing logic rather than replacing wholesale.
+Repository and local layers are sanitized before this merge: only safe
+preferences, project `deny` rules, and untrusted MCP definitions survive.
+Hooks and user-owned authority come only from global config or the explicitly
+selected settings file.
 
 ## Session commands
 
