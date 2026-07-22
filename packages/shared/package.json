@@ -8,6 +8,8 @@
     "./todos": "./src/todos.ts",
     "./file-refs": "./src/file-refs.ts",
     "./config-layers": "./src/config-layers.ts",
+    "./config-manifest": "./src/config-manifest.ts",
+    "./features": "./src/features.ts",
     "./doctor": "./src/doctor.ts",
     "./workspace-dirs": "./src/workspace-dirs.ts",
     "./format": "./src/format.ts",

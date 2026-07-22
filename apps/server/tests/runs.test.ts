@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -485,6 +485,69 @@ describe("append-only run ledger", () => {
     const second = manager.eventPage(workspace, run.runId, first.nextAfterSeq);
     expect(second).toMatchObject({ nextAfterSeq: total, hasMore: false });
     expect(second.events.map((event) => event.seq)).toEqual([total - 1, total]);
+    const cursor = (manager as unknown as { replayCursors: Map<string, { offset: number }> }).replayCursors.get(
+      `${workspace}\0${run.runId}`,
+    );
+    expect(cursor?.offset).toBe(readFileSync(join(eventDir, `${run.runId}.jsonl`)).byteLength);
+  });
+
+  it("prunes terminal runs by count while retaining active runs and deleting replay files", () => {
+    const workspace = makeWorkspace();
+    const seekforgeDir = join(workspace, ".seekforge");
+    const eventDir = join(seekforgeDir, "run-events");
+    mkdirSync(eventDir, { recursive: true });
+    const base = Date.parse("2026-01-01T00:00:00.000Z");
+    const record = (id: string, status: "queued" | "succeeded", offset: number) => ({
+      runId: id,
+      source: "background",
+      status,
+      attempt: 1,
+      workspace,
+      createdAt: new Date(base + offset).toISOString(),
+      updatedAt: new Date(base + offset).toISOString(),
+    });
+    writeFileSync(
+      join(seekforgeDir, "runs.jsonl"),
+      `${[
+        record("run-old", "succeeded", 0),
+        record("run-new", "succeeded", 1_000),
+        record("run-active", "queued", 2_000),
+      ]
+        .map((value) => JSON.stringify(value))
+        .join("\n")}\n`,
+    );
+    writeFileSync(join(eventDir, "run-old.jsonl"), "old\n");
+    writeFileSync(join(eventDir, "run-new.jsonl"), "new\n");
+
+    const manager = new RunManager();
+    const result = manager.prune(workspace, { maxTerminalRuns: 1 });
+
+    expect(result).toEqual({ removed: ["run-old"], kept: 2 });
+    expect(manager.list(workspace).map((run) => run.runId)).toEqual(["run-active", "run-new"]);
+    expect(existsSync(join(eventDir, "run-old.jsonl"))).toBe(false);
+    expect(existsSync(join(eventDir, "run-new.jsonl"))).toBe(true);
+  });
+
+  it("prunes terminal runs by age through the configured workspace policy", () => {
+    const workspace = makeWorkspace();
+    const seekforgeDir = join(workspace, ".seekforge");
+    mkdirSync(seekforgeDir, { recursive: true });
+    const old = "2020-01-01T00:00:00.000Z";
+    writeFileSync(
+      join(seekforgeDir, "runs.jsonl"),
+      `${JSON.stringify({
+        runId: "run-expired",
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: old,
+        updatedAt: old,
+      })}\n`,
+    );
+
+    const manager = new RunManager(() => ({ maxAgeDays: 30 }));
+    expect(manager.prune(workspace)).toEqual({ removed: ["run-expired"], kept: 0 });
   });
 
   it("does not create missing directories through a project symlink", () => {
@@ -500,6 +563,79 @@ describe("append-only run ledger", () => {
 });
 
 describe("run API and WS replay", () => {
+  it("defaults writable background runs to an isolated git worktree", async () => {
+    const workspace = makeWorkspace();
+    execFileSync("git", ["init"], { cwd: workspace });
+    execFileSync("git", ["config", "user.email", "seekforge@example.invalid"], { cwd: workspace });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: workspace });
+    writeFileSync(join(workspace, ".gitignore"), ".seekforge/\n");
+    writeFileSync(join(workspace, "README.md"), "fixture\n");
+    execFileSync("git", ["add", "."], { cwd: workspace });
+    execFileSync("git", ["commit", "-m", "fixture"], { cwd: workspace });
+    let executionWorkspace: string | undefined;
+    const factory = fakeAgentFactory(async function* () {
+      yield { type: "session.created", sessionId: "isolated-session" };
+      yield { type: "session.completed", report: emptyReport() };
+    });
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      logger: { log: () => {} },
+      createAgent: (options) => {
+        executionWorkspace = options.workspace;
+        return factory(options);
+      },
+    });
+
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ task: "edit independently", mode: "edit", maxCostUsd: 1 }),
+    });
+    const accepted = (await response.json()) as { labels?: Record<string, string> };
+    await waitUntil(() => executionWorkspace !== undefined);
+
+    expect(response.status).toBe(202);
+    expect(accepted.labels).toMatchObject({ isolation: "worktree", worktreeId: expect.stringMatching(/^wt-/) });
+    expect(executionWorkspace).not.toBe(workspace);
+    expect(executionWorkspace).toContain(join(".seekforge", "worktrees"));
+  });
+
+  it("prunes run history through the REST retention endpoint", async () => {
+    const workspace = makeWorkspace();
+    const seekforgeDir = join(workspace, ".seekforge");
+    mkdirSync(seekforgeDir, { recursive: true });
+    const ts = "2020-01-01T00:00:00.000Z";
+    writeFileSync(
+      join(seekforgeDir, "runs.jsonl"),
+      `${JSON.stringify({
+        runId: "run-rest-old",
+        source: "background",
+        status: "succeeded",
+        attempt: 1,
+        workspace,
+        createdAt: ts,
+        updatedAt: ts,
+      })}\n`,
+    );
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      logger: { log: () => {} },
+      createAgent: fakeAgentFactory(async function* () {}),
+    });
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runs/prune`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ maxTerminalRuns: 0 }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ removed: ["run-rest-old"], kept: 0 });
+  });
+
   it.each(["agent", "loop"] as const)("records a failed terminal %s run when scheduling rejects", async (kind) => {
     const workspace = makeWorkspace();
     let agentCalls = 0;

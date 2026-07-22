@@ -29,6 +29,7 @@ import type { TriggerRunHandle } from "./trigger-run.js";
 import { ServerCoordinator } from "./coordinator.js";
 import { RunManager } from "./run-ledger.js";
 import { createStructuredLogger, type StructuredLogger } from "./logger.js";
+import { loadConfig } from "./config.js";
 
 export type { AgentHandle, CreateAgentFn, CreateAgentOptions, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
 export type { ServerConfig } from "./config.js";
@@ -98,7 +99,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const resumeLoop = opts.resumeLoop ?? resumeDefaultLoop;
   const staticRoot = resolveStaticRoot(opts.staticDir);
   const triggerRuns = new Set<TriggerRunHandle>();
-  const runManager = new RunManager();
+  const runManager = new RunManager((workspace) => {
+    const config = loadConfig(workspace);
+    return {
+      maxTerminalRuns: config.runRetentionMaxCount,
+      maxAgeDays: config.runRetentionMaxAgeDays,
+    };
+  });
   const logger = opts.logger ?? createStructuredLogger();
 
   let port = 0; // the real port, known after listen()

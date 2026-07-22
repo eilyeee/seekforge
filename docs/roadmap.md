@@ -24,9 +24,9 @@ not a promise of API stability.
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
 | Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics and HTTP token refresh ship; complete interactive OAuth and long-lived HTTP streams. |
-| Worktrees and isolated execution | Implemented, maturing | Make worktree isolation the default for parallel issue/PR jobs. |
+| Worktrees and isolated execution | Implemented | Writable background and webhook jobs default to worktree isolation in git repositories, with explicit workspace/required-worktree modes. |
 | `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and one bounded CI-log repair ship; expand provider/host compatibility fixtures. |
-| Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, history, cancellation, retry backoff, and WS replay ship; add retention controls. |
+| Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |
 | Eval harness | Implemented | Real Loop/resume/memory scenarios, paired multi-sample A/B, CI history restoration, and trend reports ship. |

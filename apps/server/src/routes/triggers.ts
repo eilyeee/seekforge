@@ -9,6 +9,7 @@ import { readProjectFile, writeProjectFileAtomic } from "../config.js";
 import { acquireSessionLease, SessionBusyError } from "@seekforge/core";
 import { isBodyTooLarge, readBody, readJsonBody, sendApiError, sendJson } from "../http.js";
 import { startManagedTriggerRun } from "../trigger-run.js";
+import { isolateRunWorkspace } from "../run-isolation.js";
 import {
   addTrigger,
   buildTriggerTask,
@@ -116,7 +117,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   return ctx.res.headersSent;
 }
 
-async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx): Promise<void> {
+async function routes({ req, res, url, method, segs, ws, workspace, rest }: RouteCtx): Promise<void> {
   const path = url.pathname;
 
   if (method === "GET" && path === "/api/triggers") {
@@ -196,14 +197,23 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 409, "conflict", "duplicate GitHub delivery");
     }
     try {
+      const isolated = await isolateRunWorkspace(
+        rest,
+        ws,
+        trigger.mode,
+        trigger.isolation,
+        `trigger-${trigger.id}-${Date.now().toString(36)}`,
+      );
+      const executionWorkspace = isolated.workspace;
       const ledgerRun = rest.runManager.create({
         workspace,
         source: "trigger",
-        labels: { triggerId: id },
+        labels: { triggerId: id, ...isolated.labels },
       });
       const run = startManagedTriggerRun({
         createAgent: rest.createAgent,
-        workspace,
+        workspace: executionWorkspace,
+        ledgerWorkspace: workspace,
         task,
         mode: trigger.mode,
         maxCostUsd: trigger.maxCostUsd,
@@ -212,7 +222,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
         ...(trigger.mode === "edit"
           ? {
               schedule: (operation: () => Promise<void>, signal: AbortSignal) =>
-                rest.coordinator.withAgentMutation(workspace, signal, operation),
+                rest.coordinator.withAgentMutation(executionWorkspace, signal, operation),
             }
           : {}),
       });

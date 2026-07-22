@@ -1,5 +1,7 @@
 import { MAX_LOOP_ITERATIONS } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { RUN_RETENTION_MAX_AGE_DAYS, RUN_RETENTION_MAX_COUNT } from "../run-ledger.js";
+import { isolateRunWorkspace, type RunIsolation } from "../run-isolation.js";
 import { HEADLESS_DECLINE, startManagedTriggerRun, type TriggerRunHandle } from "../trigger-run.js";
 import type { RouteCtx } from "./context.js";
 
@@ -17,7 +19,7 @@ function trackRun(rest: RouteCtx["rest"], run: TriggerRunHandle): void {
 }
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
-  const { method, segs, url, res, workspace, rest } = ctx;
+  const { method, segs, url, res, ws, workspace, rest } = ctx;
   if (segs[1] !== "runs") return false;
 
   if (method === "GET" && segs.length === 2) {
@@ -40,6 +42,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       verifyCommand,
       maxIterations,
       requirementMode,
+      isolation = "auto",
     } = body;
     const mode = requestedMode ?? (kind === "loop" ? "edit" : "ask");
     if (kind !== "agent" && kind !== "loop") {
@@ -84,12 +87,29 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       sendApiError(res, 400, "bad_request", 'requirementMode must be "quick", "analyze", or "confirm"');
       return true;
     }
+    if (isolation !== "auto" && isolation !== "workspace" && isolation !== "worktree") {
+      sendApiError(res, 400, "bad_request", 'isolation must be "auto", "workspace", or "worktree"');
+      return true;
+    }
 
-    const ledgerRun = rest.runManager.create({ workspace, source: "background", labels: { kind } });
+    const isolated = await isolateRunWorkspace(
+      rest,
+      ws,
+      mode,
+      isolation as RunIsolation,
+      `background-${Date.now().toString(36)}`,
+    );
+    const executionWorkspace = isolated.workspace;
+    const ledgerRun = rest.runManager.create({
+      workspace,
+      source: "background",
+      labels: { kind, ...isolated.labels },
+    });
     if (kind === "agent") {
       const run = startManagedTriggerRun({
         createAgent: rest.createAgent,
-        workspace,
+        workspace: executionWorkspace,
+        ledgerWorkspace: workspace,
         task,
         mode,
         maxCostUsd,
@@ -98,7 +118,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         ...(mode === "edit"
           ? {
               schedule: (operation: () => Promise<void>, signal: AbortSignal) =>
-                rest.coordinator.withAgentMutation(workspace, signal, operation),
+                rest.coordinator.withAgentMutation(executionWorkspace, signal, operation),
             }
           : {}),
       });
@@ -112,13 +132,13 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
           controller.signal.throwIfAborted();
           const result = await rest.runLoop(
             {
-              workspace,
+              workspace: executionWorkspace,
               confirm: async () => false,
               askUser: async () => HEADLESS_DECLINE,
               extractMemory: mode === "edit",
             },
             {
-              workspace,
+              workspace: executionWorkspace,
               task,
               verifyCommand: verifyCommand as string,
               ...(maxIterations !== undefined ? { maxIterations: maxIterations as number } : {}),
@@ -164,22 +184,24 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
           );
         }
       };
-      const completion = rest.coordinator.withAgentMutation(workspace, controller.signal, execute).catch((err) => {
-        // The coordinator may reject before execute starts (for example when an
-        // already-aborted run is still waiting for a cross-process lease).
-        const cancelled = controller.signal.aborted;
-        const message = err instanceof Error ? err.message : String(err);
-        rest.runManager.update(workspace, ledgerRun.runId, {
-          status: cancelled ? "cancelled" : "failed",
-          error: { code: cancelled ? "cancelled" : "loop_schedule_error", message },
+      const completion = rest.coordinator
+        .withAgentMutation(executionWorkspace, controller.signal, execute)
+        .catch((err) => {
+          // The coordinator may reject before execute starts (for example when an
+          // already-aborted run is still waiting for a cross-process lease).
+          const cancelled = controller.signal.aborted;
+          const message = err instanceof Error ? err.message : String(err);
+          rest.runManager.update(workspace, ledgerRun.runId, {
+            status: cancelled ? "cancelled" : "failed",
+            error: { code: cancelled ? "cancelled" : "loop_schedule_error", message },
+          });
+          rest.runManager.appendFrame(
+            workspace,
+            ledgerRun.runId,
+            { type: "error", code: cancelled ? "cancelled" : "loop_error", message },
+            { cacheSequence: false },
+          );
         });
-        rest.runManager.appendFrame(
-          workspace,
-          ledgerRun.runId,
-          { type: "error", code: cancelled ? "cancelled" : "loop_error", message },
-          { cacheSequence: false },
-        );
-      });
       trackRun(rest, {
         started: completion.then(() => ({ sessionId: finalSessionId })),
         completion,
@@ -187,6 +209,49 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       });
     }
     sendJson(res, 202, rest.runManager.get(workspace, ledgerRun.runId));
+    return true;
+  }
+
+  if (method === "POST" && segs.length === 3 && segs[2] === "prune") {
+    const body = await readJsonBody(ctx.req, res, { emptyOk: true });
+    if (body === undefined) return true;
+    if (!object(body)) {
+      sendApiError(res, 400, "bad_request", "retention policy must be an object");
+      return true;
+    }
+    const { maxTerminalRuns, maxAgeDays } = body;
+    if (
+      maxTerminalRuns !== undefined &&
+      (!Number.isSafeInteger(maxTerminalRuns) ||
+        (maxTerminalRuns as number) < 0 ||
+        (maxTerminalRuns as number) > RUN_RETENTION_MAX_COUNT)
+    ) {
+      sendApiError(res, 400, "bad_request", `maxTerminalRuns must be an integer from 0 to ${RUN_RETENTION_MAX_COUNT}`);
+      return true;
+    }
+    if (
+      maxAgeDays !== undefined &&
+      (typeof maxAgeDays !== "number" ||
+        !Number.isFinite(maxAgeDays) ||
+        maxAgeDays <= 0 ||
+        maxAgeDays > RUN_RETENTION_MAX_AGE_DAYS)
+    ) {
+      sendApiError(
+        res,
+        400,
+        "bad_request",
+        `maxAgeDays must be greater than 0 and at most ${RUN_RETENTION_MAX_AGE_DAYS}`,
+      );
+      return true;
+    }
+    sendJson(
+      res,
+      200,
+      rest.runManager.prune(workspace, {
+        maxTerminalRuns: maxTerminalRuns as number | undefined,
+        maxAgeDays: maxAgeDays as number | undefined,
+      }),
+    );
     return true;
   }
 

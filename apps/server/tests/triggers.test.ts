@@ -35,6 +35,7 @@ describe("validateTrigger", () => {
     if ("trigger" in result) {
       expect(result.trigger.enabled).toBe(true);
       expect(result.trigger.maxCostUsd).toBe(0.5);
+      expect(result.trigger.isolation).toBe("auto");
     }
   });
 
@@ -71,6 +72,10 @@ describe("validateTrigger", () => {
   it("rejects an invalid mode", () => {
     const result = validateTrigger({ ...good, mode: "yolo" });
     expect("error" in result).toBe(true);
+  });
+
+  it("rejects an invalid isolation mode", () => {
+    expect(validateTrigger({ ...good, isolation: "shared" })).toMatchObject({ error: expect.any(String) });
   });
 });
 
@@ -167,6 +172,7 @@ describe("maskTrigger", () => {
       id: "x",
       task: "t",
       mode: "ask",
+      isolation: "workspace",
       maxCostUsd: 1,
       secret: "super-secret-value",
       enabled: true,

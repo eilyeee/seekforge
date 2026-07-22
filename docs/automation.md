@@ -20,7 +20,7 @@ and undone with `seekforge rewind <id>`.
 ## Safety first
 
 A webhook can be called by an external system with no human watching, so a
-triggered run is locked down three ways:
+triggered run is locked down four ways:
 
 1. **Authenticated delivery.** A generic caller uses the server bearer token
    plus the trigger's per-trigger secret. A native GitHub webhook instead signs
@@ -39,6 +39,12 @@ triggered run is locked down three ways:
    never hang waiting for input). An `edit` trigger runs in *acceptEdits* so
    ordinary in-workspace file edits apply autonomously; everything riskier is
    still refused.
+4. **Writable runs are isolated.** An `edit` trigger defaults to
+   `isolation: "auto"`: in a git repository SeekForge creates a dedicated
+   worktree/branch and records its id in the run labels for later review and
+   merge. A non-git workspace falls back to serialized workspace execution.
+   Set `"workspace"` explicitly to opt out or `"worktree"` to require
+   isolation and fail if it cannot be created.
 
 ## The trigger format
 
@@ -51,6 +57,7 @@ owner-only `0600` because it holds secrets). Each trigger is:
     "id": "ci-review",             // stable id; also the URL segment
     "task": "Review the latest push and flag any regressions.",
     "mode": "edit",                // "ask" (read-only) or "edit" (may edit files)
+    "isolation": "auto",           // optional: auto | workspace | worktree
     "maxCostUsd": 0.5,             // REQUIRED hard cost cap (USD)
     "secret": "a-long-random-shared-token", // REQUIRED; min 8 chars
     "enabled": true                // optional; defaults to true

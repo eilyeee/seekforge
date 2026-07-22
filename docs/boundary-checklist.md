@@ -1700,6 +1700,18 @@ a FIFO waits indefinitely for a writer first.
   could block on a FIFO; todo mutations could also treat non-missing read errors
   as an empty list before attempting replacement.
 
+## 131. A cursor must carry a validated physical position, not just a logical id
+
+Replaying page N by scanning from byte zero until logical sequence N makes a
+complete traversal quadratic, even when every individual page is bounded.
+
+- **Do:** cache the byte offset immediately after the last validated record,
+  bind it to every input affecting the parse (workspace, run id, sequence, and
+  file identity), and fall back to byte zero whenever that identity changes.
+  Bound the cursor cache as carefully as the returned page.
+- **Caught:** Server run-event REST/WS replay re-read the complete JSONL prefix
+  for every `afterSeq` page.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

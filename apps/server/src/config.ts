@@ -108,6 +108,10 @@ export type ServerConfig = {
    * before global ones. Edit the file directly; not settable via `config set`.
    */
   permissionRules?: PermissionRule[];
+  /** Terminal run history cap (default 500). Non-terminal runs are always retained. */
+  runRetentionMaxCount?: number;
+  /** Optional terminal run age limit in days. Omit to retain by count only. */
+  runRetentionMaxAgeDays?: number;
 };
 
 export const CONFIG_KEYS = [
@@ -188,10 +192,14 @@ export function visitProjectFileLines(
   workspace: string,
   rel: string,
   maxLineBytes: number,
-  visit: (line: string) => boolean,
+  visit: (line: string, nextOffset: number) => boolean,
+  startOffset = 0,
 ): void {
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0) {
     throw new RangeError("maxLineBytes must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0) {
+    throw new RangeError("startOffset must be a non-negative safe integer");
   }
   const target = projectPath(workspace, rel, false);
   let fd: number | undefined;
@@ -206,20 +214,23 @@ export function visitProjectFileLines(
 
     const chunk = Buffer.allocUnsafe(64 * 1024);
     let pending = Buffer.alloc(0);
+    let position = startOffset;
     for (;;) {
-      const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
+      const bytesRead = readSync(fd, chunk, 0, chunk.length, position);
       if (bytesRead === 0) break;
+      position += bytesRead;
       pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
       let newline: number;
       while ((newline = pending.indexOf(0x0a)) !== -1) {
         if (newline > maxLineBytes) return;
         const line = pending.subarray(0, newline).toString("utf8");
         pending = pending.subarray(newline + 1);
-        if (!visit(line)) return;
+        const nextOffset = position - pending.length;
+        if (!visit(line, nextOffset)) return;
       }
       if (pending.length > maxLineBytes) return;
     }
-    if (pending.length > 0 && pending.length <= maxLineBytes) visit(pending.toString("utf8"));
+    if (pending.length > 0 && pending.length <= maxLineBytes) visit(pending.toString("utf8"), position);
   } finally {
     if (fd !== undefined) closeSync(fd);
   }

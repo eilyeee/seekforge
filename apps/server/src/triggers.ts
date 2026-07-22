@@ -18,12 +18,15 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { readProjectFile, writeProjectFileAtomic } from "./config.js";
 
 export type TriggerMode = "ask" | "edit";
+export type TriggerIsolation = "auto" | "workspace" | "worktree";
 
 export type Trigger = {
   id: string;
   /** The prompt handed to the agent when this trigger fires. */
   task: string;
   mode: TriggerMode;
+  /** Writable triggers default to an isolated worktree when the workspace is a git repository. */
+  isolation: TriggerIsolation;
   /** REQUIRED hard cap on cumulative spend (USD) for the triggered run. */
   maxCostUsd: number;
   /** Shared secret the caller must present (constant-time compared). */
@@ -47,7 +50,7 @@ export function validateTrigger(input: unknown): { trigger: Trigger } | { error:
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     return { error: "trigger must be an object" };
   }
-  const { id, task, mode, maxCostUsd, secret, enabled } = input as Record<string, unknown>;
+  const { id, task, mode, isolation, maxCostUsd, secret, enabled } = input as Record<string, unknown>;
   if (typeof id !== "string" || id.trim() === "") {
     return { error: "id must be a non-empty string" };
   }
@@ -60,6 +63,9 @@ export function validateTrigger(input: unknown): { trigger: Trigger } | { error:
   }
   if (mode !== "ask" && mode !== "edit") {
     return { error: 'mode must be "ask" or "edit"' };
+  }
+  if (isolation !== undefined && isolation !== "auto" && isolation !== "workspace" && isolation !== "worktree") {
+    return { error: 'isolation must be "auto", "workspace", or "worktree" when present' };
   }
   if (typeof maxCostUsd !== "number" || !Number.isFinite(maxCostUsd) || maxCostUsd <= 0) {
     return { error: "maxCostUsd is required and must be a finite positive number" };
@@ -75,6 +81,7 @@ export function validateTrigger(input: unknown): { trigger: Trigger } | { error:
       id: id.trim(),
       task,
       mode,
+      isolation: (isolation as TriggerIsolation | undefined) ?? "auto",
       maxCostUsd,
       secret,
       // Default to enabled; only an explicit `false` disables.

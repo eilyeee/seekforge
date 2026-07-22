@@ -47,6 +47,8 @@ export type StartTriggerRunInput = {
   maxTotalTokens?: number;
   runManager?: RunManager;
   runId?: string;
+  /** Ledger/replay owner when execution happens in an isolated worktree. */
+  ledgerWorkspace?: string;
   /** Optional workspace mutation scheduler shared with other server surfaces. */
   schedule?: (operation: () => Promise<void>, signal: AbortSignal) => Promise<void>;
 };
@@ -64,8 +66,9 @@ export type TriggerRunHandle = {
  */
 export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunHandle {
   const controller = new AbortController();
+  const ledgerWorkspace = input.ledgerWorkspace ?? input.workspace;
   const maxTotalTokens = input.maxTotalTokens ?? DEFAULT_MAX_TRIGGER_TOTAL_TOKENS;
-  if (input.runManager && input.runId) input.runManager.start(input.runId, input.workspace, controller);
+  if (input.runManager && input.runId) input.runManager.start(input.runId, ledgerWorkspace, controller);
   let resolveStarted!: (value: { sessionId: string }) => void;
   let rejectStarted!: (error: Error) => void;
   const started = new Promise<{ sessionId: string }>((resolve, reject) => {
@@ -99,20 +102,20 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
       })) {
         if (event.type === "session.created") sessionId = event.sessionId;
         if (input.runManager && input.runId) {
-          input.runManager.appendFrame(input.workspace, input.runId, {
+          input.runManager.appendFrame(ledgerWorkspace, input.runId, {
             type: "event",
             sessionId,
             event,
           });
         }
         if (event.type === "session.created") {
-          input.runManager?.update(input.workspace, input.runId ?? "", { sessionId: event.sessionId });
+          input.runManager?.update(ledgerWorkspace, input.runId ?? "", { sessionId: event.sessionId });
           if (!settled) {
             settled = true;
             resolveStarted({ sessionId: event.sessionId });
           }
         } else if (event.type === "usage.updated") {
-          input.runManager?.update(input.workspace, input.runId ?? "", { costUsd: event.usage.costUsd });
+          input.runManager?.update(ledgerWorkspace, input.runId ?? "", { costUsd: event.usage.costUsd });
           // Cumulative guards — SOFT, reactive caps: we abort on the first usage
           // event at/over a ceiling, so the in-flight model turn that crossed it
           // can overshoot by one call. The token ceiling is independent of cost
@@ -121,14 +124,14 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           if (event.usage.costUsd >= input.maxCostUsd || totalTokens >= maxTotalTokens) controller.abort();
         } else if (event.type === "session.completed") {
           terminalStatus = "succeeded";
-          input.runManager?.update(input.workspace, input.runId ?? "", {
+          input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
             status: terminalStatus,
             costUsd: event.report.usage.costUsd,
           });
           if (event.report.usage.costUsd >= input.maxCostUsd) controller.abort();
         } else if (event.type === "session.failed") {
           terminalStatus = event.error.code === "cancelled" ? "cancelled" : "failed";
-          input.runManager?.update(input.workspace, input.runId ?? "", {
+          input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
             status: terminalStatus,
             error: { code: event.error.code, message: event.error.message },
           });
@@ -137,13 +140,13 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       terminalStatus = controller.signal.aborted ? "cancelled" : "failed";
-      input.runManager?.update(input.workspace, input.runId ?? "", {
+      input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
         status: terminalStatus,
         error: { code: terminalStatus === "cancelled" ? "cancelled" : "trigger_error", message },
       });
       if (input.runManager && input.runId) {
         input.runManager.appendFrame(
-          input.workspace,
+          ledgerWorkspace,
           input.runId,
           { type: "error", code: terminalStatus === "cancelled" ? "cancelled" : "agent_error", message },
           { cacheSequence: false },
@@ -167,7 +170,7 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
           rejectStarted(new Error("triggered run produced no session"));
         }
         if (terminalStatus === undefined) {
-          input.runManager?.update(input.workspace, input.runId ?? "", {
+          input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
             status: controller.signal.aborted ? "cancelled" : "failed",
             error: { code: "incomplete", message: "triggered run ended without a terminal event" },
           });
@@ -181,7 +184,7 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
   const completion = scheduled.catch((error: unknown) => {
     const cancelled = controller.signal.aborted;
     const message = error instanceof Error ? error.message : String(error);
-    input.runManager?.update(input.workspace, input.runId ?? "", {
+    input.runManager?.update(ledgerWorkspace, input.runId ?? "", {
       status: cancelled ? "cancelled" : "failed",
       error: {
         code: cancelled ? "cancelled" : "trigger_schedule_error",
@@ -190,7 +193,7 @@ export function startManagedTriggerRun(input: StartTriggerRunInput): TriggerRunH
     });
     if (input.runManager && input.runId) {
       input.runManager.appendFrame(
-        input.workspace,
+        ledgerWorkspace,
         input.runId,
         { type: "error", code: cancelled ? "cancelled" : "agent_error", message },
         { cacheSequence: false },

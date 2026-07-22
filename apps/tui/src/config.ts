@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 /**
@@ -90,39 +91,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Every recognized top-level config key — the source of truth for typo detection. */
-export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "apiKey",
-  "model",
-  "baseUrl",
-  "provider",
-  "runtimeBin",
-  "commandAllowlist",
-  "permissionRules",
-  "mcpServers",
-  "hooks",
-  "accent",
-  "bell",
-  "notify",
-  "vim",
-  "sandbox",
-  "statusLine",
-  "costBudgetUsd",
-  "modelPricing",
-  "thinking",
-  "reasoningEffort",
-  "compaction",
-  "mouse",
-  "locale",
-  "visionModel",
-  "llmCache",
-  "planModel",
-  "routing",
-  "escalateOnFailure",
-  "memoryAutoApproveConfidence",
-  "lintCommand",
-  "autoLint",
-  "editFormat",
-]);
+export const KNOWN_CONFIG_KEYS = knownConfigKeys("tui");
 
 /**
  * Unrecognized top-level keys across the config layers — a typo like "modle" is

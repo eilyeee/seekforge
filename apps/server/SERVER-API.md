@@ -99,7 +99,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/runs/:id/events?afterSeq=N | at most 500 persisted WS events with `seq > N`, returned as `{events,nextAfterSeq,hasMore}`; continue with `nextAfterSeq` while `hasMore` |
 | POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged. Returns 409 when the run is owned by another server process, because this process cannot signal its `AbortController` |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
-| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm"}`; loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
+| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm", isolation?:"auto"|"workspace"|"worktree"}`; writable runs default to worktree isolation in git repositories, loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
+| POST /api/runs/prune | compact run history immediately. Optional body `{maxTerminalRuns?, maxAgeDays?}` overrides the workspace retention policy for this prune; active runs are always retained; returns `{removed, kept}` |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |
@@ -267,7 +268,10 @@ are stored under `.seekforge/run-events/<runId>.jsonl`. Ledger appends and
 compaction share a cross-process lease. `GET /api/runs/:id/events` streams the
 event log and returns at most 500 events per page as
 `{events,nextAfterSeq,hasMore}`; while `hasMore` is true, pass `nextAfterSeq`
-back as `afterSeq`. Terminal history remains queryable after restart. Nested
+back as `afterSeq`. Sequential pages reuse a validated byte cursor while the
+event file identity is unchanged, so replay work is linear in the returned page
+rather than repeatedly scanning the entire prefix. Terminal history remains
+queryable after restart. Nested
 frame strings are redacted before JSON
 serialization, and ledger writes and compaction cleanup reject symlinked project
 path components. A frame that would exceed the replay JSONL line limit is
@@ -276,6 +280,11 @@ history. `seq` is scoped to one run. Snapshot status is one of
 `queued`, `running`, `waiting`, `succeeded`, `failed`, or `cancelled`;
 `waiting` is a non-failure terminal snapshot used when a confirm-mode Loop has
 persisted requirements and awaits an explicit resume approval.
+
+Automatic ledger compaction retains 500 terminal runs by default. A workspace
+may set `runRetentionMaxCount` and/or `runRetentionMaxAgeDays` in
+`.seekforge/config.json`; non-terminal runs are never pruned. Removing a ledger
+record also removes its per-run replay JSONL on a best-effort, path-safe basis.
 
 Dispatched children are observable through structured `AgentEvent` variants:
 

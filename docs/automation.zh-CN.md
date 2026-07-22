@@ -10,11 +10,12 @@ SeekForge 的服务器可以在**外部事件**到达时运行任务——GitHub
 
 ## 安全为先
 
-webhook 可能被外部系统在无人盯守的情况下调用，因此被触发的运行有三重锁定：
+webhook 可能被外部系统在无人盯守的情况下调用，因此被触发的运行有四重锁定：
 
 1. **认证投递。** 通用调用方使用服务器 bearer token 加上该触发器的独立 secret。原生 GitHub webhook 则改为用该触发器 secret 对请求体逐字节签名并发送 `X-Hub-Signature-256`；它不需要发明自定义的 GitHub header，也不需要暴露服务器 bearer token。secret 比较采用常量时间算法。
 2. **成本预算是强制的。** 每个触发器都必须提供 `maxCostUsd`。一旦累计花费达到预算，运行就会平缓终止（追踪记录会保留）。没有预算的触发器在**创建时即被拒绝**——不存在注册一个无上限触发器的途径。
 3. **运行是无头的。** 被触发的运行与交互式运行使用同一引擎，但处于机器（非交互）模式：agent 的审批回调会**自动拒绝**一切原本需要弹出提示的操作。危险命令保持被拒，命令执行 / 环境变更一律拒绝（没有人来批准它们，而被触发的运行绝不能挂起等待输入）。`edit` 类触发器运行在 *acceptEdits* 模式下，普通的工作区内文件编辑可以自主进行；风险更高的一切仍被拒绝。
+4. **可写运行默认隔离。** `edit` 触发器默认使用 `isolation: "auto"`：在 Git 仓库中，SeekForge 会创建独立 worktree/分支，并把其 id 写进 run label，便于之后审阅和合并；非 Git 工作区则回退到串行的原工作区执行。显式设为 `"workspace"` 可关闭隔离，设为 `"worktree"` 则要求必须成功隔离，否则直接失败。
 
 ## 触发器格式
 
@@ -26,6 +27,7 @@ webhook 可能被外部系统在无人盯守的情况下调用，因此被触发
     "id": "ci-review",             // stable id; also the URL segment
     "task": "Review the latest push and flag any regressions.",
     "mode": "edit",                // "ask" (read-only) or "edit" (may edit files)
+    "isolation": "auto",           // optional: auto | workspace | worktree
     "maxCostUsd": 0.5,             // REQUIRED hard cost cap (USD)
     "secret": "a-long-random-shared-token", // REQUIRED; min 8 chars
     "enabled": true                // optional; defaults to true

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { acquireSessionLease, redactSecrets, SessionBusyError } from "@seekforge/core";
+export { SERVER_CAPABILITIES, SEEKFORGE_PROTOCOL_VERSION as SERVER_PROTOCOL_VERSION } from "@seekforge/shared/features";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   appendProjectFile,
@@ -10,17 +11,6 @@ import {
   visitProjectFileLines,
   writeProjectFileAtomic,
 } from "./config.js";
-
-export const SERVER_PROTOCOL_VERSION = 1;
-export const SERVER_CAPABILITIES = [
-  "runs.v1",
-  "runs.cancel",
-  "runs.background",
-  "runs.background-disconnect-continues",
-  "ws.replay",
-  "ws.disconnect-cancels",
-  "metrics.v1",
-] as const;
 
 export type RunSource = "ws" | "loop" | "schedule" | "trigger" | "background";
 export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
@@ -51,6 +41,15 @@ export type RunEventPage = {
   nextAfterSeq: number;
   hasMore: boolean;
 };
+
+export type RunRetentionPolicy = {
+  /** Maximum terminal runs kept. Non-terminal runs are never removed. */
+  maxTerminalRuns?: number;
+  /** Remove terminal runs older than this many days. Omit to disable age pruning. */
+  maxAgeDays?: number;
+};
+
+export type RunPruneResult = { removed: string[]; kept: number };
 
 type ActiveRun = { workspace: string; controller: AbortController };
 
@@ -190,6 +189,16 @@ export function readRunEventPage(
   afterSeq = 0,
   limit = RUN_EVENT_REPLAY_LIMIT,
 ): RunEventPage {
+  return readRunEventPageAt(workspace, id, afterSeq, limit, 0).page;
+}
+
+function readRunEventPageAt(
+  workspace: string,
+  id: string,
+  afterSeq: number,
+  limit: number,
+  startOffset: number,
+): { page: RunEventPage; nextOffset: number } {
   if (
     !/^run-[A-Za-z0-9-]+$/.test(id) ||
     !Number.isSafeInteger(afterSeq) ||
@@ -197,32 +206,43 @@ export function readRunEventPage(
     !Number.isSafeInteger(limit) ||
     limit <= 0
   ) {
-    return { events: [], nextAfterSeq: afterSeq, hasMore: false };
+    return { page: { events: [], nextAfterSeq: afterSeq, hasMore: false }, nextOffset: startOffset };
   }
   const events: RunEvent[] = [];
-  let lastSeq = 0;
+  let lastSeq = startOffset > 0 ? afterSeq : 0;
   let hasMore = false;
-  visitProjectFileLines(workspace, `.seekforge/run-events/${id}.jsonl`, RUN_EVENT_MAX_LINE_BYTES, (line) => {
-    if (line.trim() === "") return true;
-    let value: unknown;
-    try {
-      value = JSON.parse(line) as unknown;
-    } catch {
-      return false;
-    }
-    if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
-    const seq = value["seq"] as number;
-    if (seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) return false;
-    lastSeq = seq;
-    if (seq <= afterSeq) return true;
-    if (events.length === limit) {
-      hasMore = true;
-      return false;
-    }
-    events.push(value as RunEvent);
-    return true;
-  });
-  return { events, nextAfterSeq: events.at(-1)?.seq ?? afterSeq, hasMore };
+  let nextOffset = startOffset;
+  visitProjectFileLines(
+    workspace,
+    `.seekforge/run-events/${id}.jsonl`,
+    RUN_EVENT_MAX_LINE_BYTES,
+    (line, offset) => {
+      if (line.trim() === "") return true;
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        return false;
+      }
+      if (!plainObject(value) || value["runId"] !== id || !Number.isSafeInteger(value["seq"])) return false;
+      const seq = value["seq"] as number;
+      if (seq <= lastSeq || seq <= 0 || !validTimestamp(value["ts"]) || !plainObject(value["frame"])) return false;
+      lastSeq = seq;
+      if (seq <= afterSeq) return true;
+      if (events.length === limit) {
+        hasMore = true;
+        return false;
+      }
+      events.push(value as RunEvent);
+      nextOffset = offset;
+      return true;
+    },
+    startOffset,
+  );
+  return {
+    page: { events, nextAfterSeq: events.at(-1)?.seq ?? afterSeq, hasMore },
+    nextOffset,
+  };
 }
 
 export function readRunEvents(workspace: string, id: string, afterSeq = 0): RunEvent[] {
@@ -238,8 +258,12 @@ export const RUNS_LEDGER_COMPACTION_THRESHOLD = 1000;
 
 /** After compaction, retain at most this many runs (most-recently-updated). */
 export const RUNS_LEDGER_MAX_RETAINED = 500;
+export const RUN_RETENTION_MAX_COUNT = 100_000;
+export const RUN_RETENTION_MAX_AGE_DAYS = 36_500;
+const RUN_REPLAY_CURSOR_CACHE_SIZE = 512;
 
 type LedgerState = { lines: number; identity: string | undefined };
+type ReplayCursor = { afterSeq: number; offset: number; identity: string | undefined };
 
 const LEDGER_LEASE_ID = "server-run-ledger";
 const LEDGER_LEASE_TIMEOUT_MS = 30_000;
@@ -272,6 +296,8 @@ export class RunManager {
   /** Per-workspace line count plus file identity used to detect peer-process writes. */
   private readonly ledger = new Map<string, LedgerState>();
   private readonly frameListeners = new Map<string, Set<(event: RunEvent, fileIdentity: string) => void>>();
+  /** Exact-file cursors make sequential replay pages O(page size), not O(history size). */
+  private readonly replayCursors = new Map<string, ReplayCursor>();
   private started = 0;
   private completed = 0;
   private failed = 0;
@@ -279,6 +305,8 @@ export class RunManager {
   private httpRequests = 0;
   private httpErrors = 0;
   private httpDurationMs = 0;
+
+  constructor(private readonly retentionForWorkspace?: (workspace: string) => RunRetentionPolicy) {}
 
   create(input: {
     workspace: string;
@@ -454,7 +482,29 @@ export class RunManager {
   }
 
   eventPage(workspace: string, id: string, afterSeq = 0): RunEventPage {
-    return readRunEventPage(workspace, id, afterSeq);
+    const key = `${workspace}\0${id}`;
+    const identity = this.eventFileIdentity(workspace, id);
+    const cursor = this.replayCursors.get(key);
+    const startOffset = cursor?.afterSeq === afterSeq && cursor.identity === identity ? cursor.offset : 0;
+    const result = readRunEventPageAt(workspace, id, afterSeq, RUN_EVENT_REPLAY_LIMIT, startOffset);
+    this.replayCursors.delete(key);
+    this.replayCursors.set(key, {
+      afterSeq: result.page.nextAfterSeq,
+      offset: result.nextOffset,
+      identity,
+    });
+    if (this.replayCursors.size > RUN_REPLAY_CURSOR_CACHE_SIZE) {
+      const oldest = this.replayCursors.keys().next().value;
+      if (oldest !== undefined) this.replayCursors.delete(oldest);
+    }
+    return result.page;
+  }
+
+  prune(workspace: string, policy?: RunRetentionPolicy): RunPruneResult {
+    return withLedgerLease(workspace, () => {
+      const state = this.ensureLedger(workspace);
+      return this.compactLedger(workspace, state, policy ?? this.retentionForWorkspace?.(workspace));
+    });
   }
 
   metrics(): Record<string, number> {
@@ -486,7 +536,9 @@ export class RunManager {
       appendProjectFile(record.workspace, ".seekforge/runs.jsonl", `${JSON.stringify(record)}\n`);
       state.lines += 1;
       state.identity = projectFileIdentity(record.workspace, ".seekforge/runs.jsonl");
-      if (state.lines > RUNS_LEDGER_COMPACTION_THRESHOLD) this.compactLedger(record.workspace, state);
+      if (state.lines > RUNS_LEDGER_COMPACTION_THRESHOLD) {
+        this.compactLedger(record.workspace, state, this.retentionForWorkspace?.(record.workspace));
+      }
     });
   }
 
@@ -525,12 +577,29 @@ export class RunManager {
    * would make that update a silent no-op — the terminal state never appended,
    * the active/seq maps leaked, and the completed/failed metrics never bumped.
    */
-  private compactLedger(workspace: string, state: LedgerState): void {
+  private compactLedger(workspace: string, state: LedgerState, policy: RunRetentionPolicy = {}): RunPruneResult {
     const isTerminal = (status: RunStatus): boolean =>
       status === "waiting" || status === "succeeded" || status === "failed" || status === "cancelled";
     const all = readRunLedger(workspace); // most-recently-updated first
     const nonTerminal = all.filter((record) => !isTerminal(record.status));
-    const terminal = all.filter((record) => isTerminal(record.status)).slice(0, RUNS_LEDGER_MAX_RETAINED);
+    const maxTerminalRuns =
+      Number.isSafeInteger(policy.maxTerminalRuns) &&
+      (policy.maxTerminalRuns ?? -1) >= 0 &&
+      (policy.maxTerminalRuns ?? Number.POSITIVE_INFINITY) <= RUN_RETENTION_MAX_COUNT
+        ? (policy.maxTerminalRuns as number)
+        : RUNS_LEDGER_MAX_RETAINED;
+    const maxAgeMs =
+      typeof policy.maxAgeDays === "number" &&
+      Number.isFinite(policy.maxAgeDays) &&
+      policy.maxAgeDays > 0 &&
+      policy.maxAgeDays <= RUN_RETENTION_MAX_AGE_DAYS
+        ? policy.maxAgeDays * 24 * 60 * 60 * 1000
+        : undefined;
+    const cutoff = maxAgeMs === undefined ? undefined : Date.now() - maxAgeMs;
+    const terminal = all
+      .filter((record) => isTerminal(record.status))
+      .filter((record) => cutoff === undefined || Date.parse(record.updatedAt) >= cutoff)
+      .slice(0, maxTerminalRuns);
     const retained = [...nonTerminal, ...terminal];
     const ordered = [...retained].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const serialized = ordered.length > 0 ? `${ordered.map((r) => JSON.stringify(r)).join("\n")}\n` : "";
@@ -545,6 +614,7 @@ export class RunManager {
     for (const record of all) {
       if (retainedIds.has(record.runId)) continue;
       this.seq.delete(record.runId);
+      this.replayCursors.delete(`${workspace}\0${record.runId}`);
       // Path-safety: ids are internally generated, but never derive a filesystem
       // path from one containing a separator or traversal.
       if (/[/\\]|\.\./.test(record.runId)) continue;
@@ -554,6 +624,10 @@ export class RunManager {
         // best-effort: an events file that can't be removed is harmless garbage
       }
     }
+    return {
+      removed: all.filter((record) => !retainedIds.has(record.runId)).map((record) => record.runId),
+      kept: retained.length,
+    };
   }
 
   private lastSeq(workspace: string, id: string): number {

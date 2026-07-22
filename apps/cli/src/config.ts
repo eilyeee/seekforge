@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers } from "@seekforge/shared/config-layers";
+import { knownConfigKeys } from "@seekforge/shared/config-manifest";
 import { FileTooLargeError, MAX_CONFIG_FILE_BYTES, readTextFileBounded } from "./bounded-file.js";
 
 export type CliConfig = {
@@ -188,35 +189,7 @@ export function availableProfiles(projectPath: string): string[] {
 }
 
 /** Every recognized top-level config key — the source of truth for typo detection. */
-export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "apiKey",
-  "model",
-  "baseUrl",
-  "provider",
-  "runtimeBin",
-  "commandAllowlist",
-  "permissionRules",
-  "mcpServers",
-  "hooks",
-  "sandbox",
-  "compaction",
-  "thinking",
-  "reasoningEffort",
-  "locale",
-  "maxCostUsd",
-  "modelPricing",
-  "planModel",
-  "escalateOnFailure",
-  "verifyCommand",
-  "autoVerify",
-  "lintCommand",
-  "autoLint",
-  "editFormat",
-  "finalizeReview",
-  "guardNoProgress",
-  "memoryAutoApproveConfidence",
-  "profiles",
-]);
+export const KNOWN_CONFIG_KEYS = knownConfigKeys("cli");
 
 /**
  * Unrecognized top-level keys across the config layers — a typo like "modle" is
