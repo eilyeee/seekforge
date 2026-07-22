@@ -1,0 +1,19 @@
+{
+  "id": "config-doc-allowlist",
+  "title": "Align configuration documentation with the CLI allowlist",
+  "fixture": "config-doc-allowlist",
+  "mode": "edit",
+  "task": "README.md advertises one key that `seekforge config set` does not accept. Correct the documentation so the CLI list exactly reflects apps/cli/src/config.ts while retaining the separate Desktop capability statement. Do not change the CLI implementation or tests. Run npm test.",
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_not_contains", "path": "README.md", "pattern": "config set apiKey\\|model\\|baseUrl\\|provider\\|models" },
+    { "type": "file_contains", "path": "README.md", "pattern": "Desktop.*models" },
+    { "type": "file_contains", "path": "apps/cli/src/config.ts", "pattern": "ALLOWED_KEYS" },
+    { "type": "file_contains", "path": "test/allowlist.test.js", "pattern": "advertises unsupported key" }
+  ],
+  "provenance": {
+    "kind": "dogfood",
+    "source": "SeekForge 2026-07-22 feature audit: root README config-set capability drift"
+  },
+  "notes": "A minimized real documentation/implementation drift found while dogfooding SeekForge."
+}

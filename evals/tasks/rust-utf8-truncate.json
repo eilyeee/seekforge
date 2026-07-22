@@ -1,0 +1,14 @@
+{
+  "id": "rust-utf8-truncate",
+  "title": "Make Rust byte clipping safe at UTF-8 boundaries",
+  "fixture": "rust-utf8-truncate",
+  "mode": "edit",
+  "task": "clip_utf8 panics when max_bytes lands inside a multibyte character. Return the longest prefix no larger than max_bytes that ends on a valid char boundary. Keep the borrowed return type and do not edit tests. Run `cargo test`.",
+  "checks": [
+    { "type": "command_succeeds", "command": "cargo test" },
+    { "type": "file_contains", "path": "src/lib.rs", "pattern": "is_char_boundary|floor_char_boundary|char_indices" },
+    { "type": "file_not_contains", "path": "src/lib.rs", "pattern": "&value\\[\\.\\.max_bytes\\]" },
+    { "type": "file_contains", "path": "tests/clip.rs", "pattern": "ab修复" }
+  ],
+  "notes": "Adds a Rust ownership-preserving UTF-8 boundary repair to the cross-language suite."
+}

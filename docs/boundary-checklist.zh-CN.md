@@ -1611,6 +1611,16 @@ stream dispatcher。
 - **发现位置：** Streamable HTTP MCP 会为客户端请求和独立 GET stream 刷新 OAuth，
   却不会为发回服务器的 `roots/list` 响应刷新。
 
+## 139. 改写 transport URL 的 scheme 或 path 之前必须先校验
+
+修改 URL 并不能证明输入原本就指向预期 transport。否则 `file:`、`ftp:` 或携带凭据的
+URL 可能被改写成看似合理的 WebSocket 字符串，直到很晚才失败，甚至带着意外权限连接。
+
+- **正确做法：** 只解析一次，先对白名单中的原始 scheme 做校验，丢弃无关 query 与
+  fragment，再从已校验值推导 HTTP/WebSocket endpoint。打开连接前拒绝不支持的协议。
+- **发现位置：** VS Code bridge 会把任意配置的服务器 scheme 改写成 `ws:`/`wss:`，
+  却没有先要求它是 HTTP(S) 服务器 URL。
+
 ---
 
 *每当修复一个边界缺陷，就在这里添加一条：模式、修复方式和文件——而不只是

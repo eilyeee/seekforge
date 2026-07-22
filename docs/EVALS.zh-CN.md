@@ -13,9 +13,11 @@
    任务采样三次，并对质量、成本、token 用量、工具失败、会话错误以及
    pass→fail 回归设卡。因为它花钱且不确定，所以**不在** PR 门禁上。
 
-确定性门禁还会运行 `pnpm test:coverage:critical`。其刻意收窄的阈值覆盖了
-风险最高的 URL、浏览器、命令分类和 provider 缓存边界。这是一个回归下限，
-而不是宣称某个全仓库覆盖率百分比能衡量 agent 质量。
+确定性门禁还会运行范围明确的 `test:coverage:critical`、
+`test:coverage:security`、`test:coverage:protocol`、`test:coverage:ws` 与
+`test:coverage:server`。它们共同覆盖高风险的 URL/浏览器/命令/缓存、
+权限/沙箱/Agent Loop、共享帧协议、Server WebSocket、运行账本和触发器边界。
+这些数字是回归底线，并不表示单一的全仓库覆盖率百分比能够衡量质量。
 
 ## 在本地运行评测
 
@@ -44,9 +46,10 @@ pnpm --filter @seekforge/eval-harness eval -- --suite release       # all tasks,
 
 `evals/config.json` 是纳入版本管理的套件定义与门禁策略：
 
-- `smoke`：十个有代表性的导航、编辑、验证、策略和 TypeScript 任务；默认采样一次。
-- `nightly`：全部 56 个任务；默认采样三次。
-- `release`：全部 56 个任务；采样五次，门禁更严格。
+- `smoke`：十四个有代表性的导航、编辑、验证、策略、恢复、记忆、dogfood、
+  Python 和 TypeScript 任务；默认采样一次。
+- `nightly`：全部 62 个任务；默认采样三次。
+- `release`：全部 62 个任务；采样五次，门禁更严格。
 
 每次采样都会记录 prompt、completion、缓存命中和总 token 数（包括失败会话
 终止前最后一次上报的累计用量）；工具调用数和失败的工具调用数；会话错误；
@@ -218,9 +221,10 @@ ASCII 字母、数字、`.`、`_` 和 `-`。这样临时工作区名称、报告
 可追溯，而不会与凭空设计的样例混在一起。
 
 fixture 是位于 `evals/fixtures/<name>/` 的一个**自包含项目**。它必须是
-封闭自洽（hermetic）的：只用 Node 内置模块，其 `package.json` 中没有
-`dependencies`/`devDependencies`（数据集门禁会强制检查）。harness 会把它
-复制到一个临时目录，执行 `git init`，然后在那里运行 agent。
+封闭自洽（hermetic）的：没有第三方依赖，其 `package.json` 中没有
+`dependencies`/`devDependencies`（数据集门禁会强制检查）。Node、Python、
+Go 和 Rust fixture 只使用各自的标准工具链。harness 会把它复制到一个临时目录，
+执行 `git init`，然后在那里运行 agent。
 
 检查项（见 `packages/eval-harness/src/task-runner.ts`）是确定性的 ——
 没有 LLM 评判。文件检查拒绝符号链接和超过 5 MiB 的文件；命令的 `cwd`
@@ -298,8 +302,8 @@ fixture 是位于 `evals/fixtures/<name>/` 的一个**自包含项目**。它必
 
 当真实使用（dogfooding）中出现真正的失手 —— agent 搞砸了本该能处理的事情 ——
 就把它收录到这里，不要让它凭空消失。把该失败最小化成上文格式的
-**封闭自洽 fixture**（只用 Node 内置模块、一个把通过条件编码进去的失败
-`node --test`，外加一个 `file_not_contains` 约束防止 agent 靠改测试「通过」），
+**封闭自洽 fixture**（只使用标准工具链能力、一个把通过条件编码进去的失败
+确定性测试，外加一个 `file_not_contains` 约束防止 agent 靠改测试「通过」），
 然后在 `packages/eval-harness/tests/dataset.test.ts` 中注册其 id。
 
 有两点保证了可以放心地积极这么做：

@@ -43,3 +43,10 @@ test("desktop releases build native packages for every supported desktop OS", as
   assert.match(source, /if: runner\.os == 'Linux'/);
   assert.match(source, /--bundles \$\{\{ matrix\.bundles \}\}/);
 });
+
+test("integration workflow exercises deterministic server and Desktop browser E2E paths", async () => {
+  const source = await readFile(join(workflows, "integration.yml"), "utf8");
+  assert.match(source, /node scripts\/serve-e2e\.mjs/);
+  assert.match(source, /node scripts\/playwright-smoke\.mjs/);
+  assert.match(source, /pnpm install --frozen-lockfile/);
+});

@@ -113,14 +113,17 @@ jobs:
       - name: Critical boundary coverage
         run: pnpm test:coverage:critical
 
-      # Permission gating, OS sandbox, the agent loop, and the WS protocol are
-      # the enforcement surfaces of a local-first agent — a regression that
-      # guts their tests must fail the build, not just lower a number nobody
-      # reads. Thresholds sit slightly below current measured coverage.
+      # Permission gating, OS sandbox, the agent loop, and both halves of the
+      # WS protocol are enforcement surfaces of a local-first agent. A
+      # regression that guts their tests must fail the build, not just lower a
+      # number nobody reads. Thresholds sit slightly below current coverage.
       - name: Security boundary coverage
         run: pnpm test:coverage:security
 
-      - name: WS protocol coverage
+      - name: Shared WS frame protocol coverage
+        run: pnpm test:coverage:protocol
+
+      - name: Server WS lifecycle coverage
         run: pnpm test:coverage:ws
 
       # Run-ledger (JSONL torn-write repair, compaction retention, seq recovery)

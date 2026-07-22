@@ -14,10 +14,12 @@ Two layers protect against regressions:
    use, tool failures, session errors, and pass→fail regressions. Because it costs
    money and is non-deterministic, it is **not** on the PR gate.
 
-The deterministic gate also runs `pnpm test:coverage:critical`. Its deliberately
-scoped thresholds cover the highest-risk URL, browser, command-classification,
-and provider-cache boundaries. This is a regression floor, not a claim that a
-single whole-repository percentage measures agent quality.
+The deterministic gate also runs the scoped coverage floors
+`test:coverage:critical`, `test:coverage:security`, `test:coverage:protocol`,
+`test:coverage:ws`, and `test:coverage:server`. Together they cover the
+highest-risk URL/browser/command/cache, permission/sandbox/loop, shared frame,
+server WebSocket, run-ledger, and trigger boundaries. These are regression
+floors, not a claim that a single whole-repository percentage measures quality.
 
 ## Running evals locally
 
@@ -47,10 +49,10 @@ alternates A→B then B→A to reduce provider-order and time drift.
 
 `evals/config.json` is the versioned suite definition and gate policy:
 
-- `smoke`: ten representative navigation, editing, verification, policy, and
-  TypeScript tasks; one sample by default.
-- `nightly`: all 56 tasks; three samples by default.
-- `release`: all 56 tasks; five samples and tighter gates.
+- `smoke`: fourteen representative navigation, editing, verification, policy,
+  resume, memory, dogfood, Python, and TypeScript tasks; one sample by default.
+- `nightly`: all 62 tasks; three samples by default.
+- `release`: all 62 tasks; five samples and tighter gates.
 
 Every sample records prompt, completion, cache-hit, and total tokens, including
 the latest cumulative usage emitted before a failed session; tool calls
@@ -233,9 +235,10 @@ real-project regressions identifiable instead of letting them blur into
 invented examples.
 
 A fixture is a **self-contained project** at `evals/fixtures/<name>/`. It must
-be hermetic: only Node built-ins, no `dependencies`/`devDependencies` in its
-`package.json` (the dataset gate enforces this). The harness copies it to a
-throwaway dir, `git init`s it, then runs the agent there.
+be hermetic: no third-party dependencies and no `dependencies`/
+`devDependencies` in its `package.json` (the dataset gate enforces this).
+Node, Python, Go, and Rust fixtures use only their standard toolchains. The
+harness copies it to a throwaway dir, `git init`s it, then runs the agent there.
 
 Checks (see `packages/eval-harness/src/task-runner.ts`) are deterministic — no
 LLM judges. File checks reject symlinks and files over 5 MiB; command `cwd`
@@ -317,10 +320,11 @@ After that the task runs exactly like a native one
 
 When real-world dogfooding hits a genuine miss — the agent botches something it
 should have handled — capture it here instead of letting it evaporate. Minimize
-the failure into a **hermetic fixture** in the exact format above (only Node
-built-ins, a failing `node --test` that encodes the pass condition, plus a
-`file_not_contains` guard so the agent can't "pass" by editing the test), then
-register the id in `packages/eval-harness/tests/dataset.test.ts`.
+the failure into a **hermetic fixture** in the exact format above (only
+standard-toolchain facilities, a failing deterministic test that encodes the
+pass condition, plus a `file_not_contains` guard so the agent can't "pass" by
+editing the test), then register the id in
+`packages/eval-harness/tests/dataset.test.ts`.
 
 Two things make this safe to do eagerly:
 

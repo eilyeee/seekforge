@@ -1,0 +1,24 @@
+{
+  "id": "loop-resume-two-stage",
+  "title": "Persist and resume a deliberately staged verification loop",
+  "fixture": "loop-resume-two-stage",
+  "mode": "edit",
+  "runner": "loop",
+  "task": "Fix exactly one remaining TODO in src/math.js per loop iteration, in stage-number order. Do not fix both in the same agent session and do not edit tests. After one TODO is fixed, finish immediately; the loop verifier will decide whether another persisted iteration is required.",
+  "loop": {
+    "verifyCommand": "npm test",
+    "maxIterations": 1,
+    "expectedStatus": "passed",
+    "resume": {
+      "expectedInitialStatus": "exhausted",
+      "additionalIterations": 1
+    }
+  },
+  "checks": [
+    { "type": "command_succeeds", "command": "npm test" },
+    { "type": "file_contains", "path": "src/math.js", "pattern": "value < min\\) return min" },
+    { "type": "file_contains", "path": "src/math.js", "pattern": "value > max\\) return max" },
+    { "type": "file_contains", "path": "test/math.test.js", "pattern": "clamps both bounds" }
+  ],
+  "notes": "Forces an exhausted first loop state and then exercises persisted resume with one additional iteration."
+}

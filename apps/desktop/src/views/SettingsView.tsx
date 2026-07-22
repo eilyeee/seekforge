@@ -9,6 +9,7 @@ import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../c
 import type { ConfigKey, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 import type { WorkspaceAsyncCoordinator } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
+import { buildMcpServerDraft, recordOf, rowsOf, type KeyValueRow } from "./mcp-editor-model";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -301,23 +302,6 @@ function McpSection() {
   );
 }
 
-type KeyValueRow = { key: string; value: string };
-
-function rowsOf(values: Record<string, string>): KeyValueRow[] {
-  return Object.entries(values).map(([key, value]) => ({ key, value }));
-}
-
-function recordOf(rows: KeyValueRow[]): Record<string, string> | null {
-  const values: Record<string, string> = {};
-  for (const row of rows) {
-    const key = row.key.trim();
-    if (!key) continue;
-    if (values[key] !== undefined) return null;
-    values[key] = row.value;
-  }
-  return values;
-}
-
 function KeyValueEditor({
   label,
   rows,
@@ -435,27 +419,23 @@ export function McpEditorDialog({
       setBusy(false);
       return;
     }
-    const cfg =
-      transport === "stdio"
-        ? { name: name.trim(), scope, command: command.trim(), args, env: envValues, trusted }
-        : {
-            name: name.trim(),
-            scope,
-            url: url.trim(),
-            headers: headerValues,
-            ...(oauthEnabled
-              ? {
-                  oauth: {
-                    tokenEndpoint: tokenEndpoint.trim(),
-                    clientId: clientId.trim(),
-                    refreshToken,
-                    ...(clientSecret !== "" ? { clientSecret } : {}),
-                    ...(oauthScope.trim() !== "" ? { scope: oauthScope.trim() } : {}),
-                  },
-                }
-              : {}),
-            trusted,
-          };
+    const cfg = buildMcpServerDraft({
+      name,
+      scope,
+      transport,
+      command,
+      args,
+      env: envValues,
+      url,
+      headers: headerValues,
+      oauthEnabled,
+      tokenEndpoint,
+      clientId,
+      clientSecret,
+      refreshToken,
+      oauthScope,
+      trusted,
+    });
     api
       .mcpAdd(cfg, operation.workspaceId)
       .then(() => {

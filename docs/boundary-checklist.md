@@ -1795,6 +1795,18 @@ server requests after token expiry or a rejected response.
 - **Caught:** Streamable HTTP MCP refreshed OAuth for client requests and the
   standalone GET stream, but not for `roots/list` responses sent back to the server.
 
+## 139. Validate a transport URL before rewriting its scheme or path
+
+URL mutation does not prove that the input named the expected transport. A
+`file:`, `ftp:`, or credential-bearing URL can otherwise be transformed into a
+plausible WebSocket string and fail late or connect with unintended authority.
+
+- **Do:** parse once, allowlist the original schemes, discard unrelated query
+  and fragment state, then derive the HTTP/WebSocket endpoint from that
+  validated value. Reject unsupported protocols before opening a connection.
+- **Caught:** the VS Code bridge rewrote every configured server scheme to
+  `ws:`/`wss:` without first requiring an HTTP(S) server URL.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

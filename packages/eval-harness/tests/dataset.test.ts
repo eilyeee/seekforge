@@ -9,7 +9,7 @@ import { assertFixturesExist, loadTasks, validateCheck, validateTask } from "../
 describe("evals/ dataset", () => {
   const tasks = loadTasks(tasksDir);
 
-  it("contains the fifty-six expected tasks", () => {
+  it("contains the sixty-two expected tasks", () => {
     expect(tasks.map((t) => t.id)).toEqual([
       "add-function",
       "add-missing-tests",
@@ -23,6 +23,7 @@ describe("evals/ dataset", () => {
       "cjk-find-checkout",
       "cjk-large-paginate",
       "cjk-review-edge",
+      "config-doc-allowlist",
       "cross-module-bug",
       "deprecated-api-migration",
       "error-handling",
@@ -33,6 +34,7 @@ describe("evals/ dataset", () => {
       "feature-edge-cases",
       "fix-without-regression",
       "foreach-await-bug",
+      "go-pagination-window",
       "guarded-no-delete",
       "hard-buried-bug-scale",
       "hard-csv-parser",
@@ -43,9 +45,11 @@ describe("evals/ dataset", () => {
       "hard-thread-actor",
       "json-config-edit",
       "large-context-nav",
+      "loop-resume-two-stage",
       "loop-verify-green",
       "memory-convention-recall",
       "memory-error-convention",
+      "memory-rejection-lifecycle",
       "multi-file-extract-helper",
       "multi-root-shared-util",
       "no-progress-flaky-guard",
@@ -54,11 +58,13 @@ describe("evals/ dataset", () => {
       "pagination-window-fix",
       "perf-nested-loop",
       "pipeline-transform-bug",
+      "python-path-normalization",
       "regression-guard",
       "rename-across-files",
       "rename-helper-fn",
       "rounding-half-even",
       "run-ledger-byte-cursor",
+      "rust-utf8-truncate",
       "schema-migration",
       "settle-currency-bug",
       "spec-to-feature",
@@ -82,7 +88,7 @@ describe("evals/ dataset", () => {
     expect(() => assertFixturesExist(tasks, fixturesDir)).not.toThrow();
   });
 
-  it("every fixture uses only node built-ins (no dependencies to install)", () => {
+  it("every fixture declares no package dependencies", () => {
     for (const task of tasks) {
       const pkgPath = join(fixturesDir, task.fixture, "package.json");
       expect(existsSync(pkgPath), `${task.fixture}/package.json`).toBe(true);

@@ -1,0 +1,13 @@
+{
+  "id": "python-path-normalization",
+  "title": "Fix leading parent traversal in a typed Python path normalizer",
+  "fixture": "python-path-normalization",
+  "mode": "edit",
+  "task": "The Python helper normalize_segments raises IndexError when a path contains leading or excess `..` segments. Treat traversal above the logical root as a no-op while preserving normal internal parent resolution. Do not edit the tests. Run `python3 -m unittest discover -s test`.",
+  "checks": [
+    { "type": "command_succeeds", "command": "python3 -m unittest discover -s test" },
+    { "type": "file_contains", "path": "src/paths.py", "pattern": "if output|len\\(output\\)" },
+    { "type": "file_contains", "path": "test/test_paths.py", "pattern": "clamps_leading_and_extra_parents" }
+  ],
+  "notes": "Adds a dependency-free Python boundary case to a dataset that was previously almost entirely JavaScript."
+}

@@ -5,6 +5,11 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eilyeee/seekforge.git",
+    "directory": "apps/vscode"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -13,19 +18,25 @@
     "Other"
   ],
   "activationEvents": [
+    "onCommand:seekforge.setToken",
     "onCommand:seekforge.newTask",
     "onCommand:seekforge.resumeSession",
     "onCommand:seekforge.showDiff"
   ],
   "main": "./src/extension.cjs",
   "scripts": {
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "package": "pnpm dlx @vscode/vsce@3.6.0 package --no-dependencies"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "contributes": {
     "commands": [
+      {
+        "command": "seekforge.setToken",
+        "title": "SeekForge: Set Server Token"
+      },
       {
         "command": "seekforge.newTask",
         "title": "SeekForge: New Task"
@@ -50,7 +61,8 @@
         "seekforge.token": {
           "type": "string",
           "default": "",
-          "description": "Bearer token printed by `seekforge serve`."
+          "description": "Deprecated plaintext token. Run `SeekForge: Set Server Token` to store it in VS Code SecretStorage.",
+          "deprecationMessage": "Use `SeekForge: Set Server Token`; existing values are migrated to SecretStorage automatically."
         }
       }
     }

@@ -1,0 +1,14 @@
+{
+  "id": "go-pagination-window",
+  "title": "Repair a generic Go pagination end boundary",
+  "fixture": "go-pagination-window",
+  "mode": "edit",
+  "task": "The generic Go Window helper drops the last element when a page ends exactly at the slice boundary. Fix the half-open range calculation without changing the public API or tests. Run `go test ./...`.",
+  "checks": [
+    { "type": "command_succeeds", "command": "go test ./..." },
+    { "type": "file_contains", "path": "window.go", "pattern": "end = len\\(items\\)" },
+    { "type": "file_not_contains", "path": "window.go", "pattern": "end = len\\(items\\) - 1" },
+    { "type": "file_contains", "path": "window_test.go", "pattern": "TestWindowIncludesExactEnd" }
+  ],
+  "notes": "Exercises Go generic syntax and an exclusive-end boundary with no third-party modules."
+}

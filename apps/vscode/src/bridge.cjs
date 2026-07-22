@@ -2,13 +2,48 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const MAX_SELECTION_CHARS = 20_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
+
+function normalizeServerUrl(serverUrl) {
+  const url = new URL(serverUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("SeekForge server URL must use http or https");
+  }
+  if (url.username || url.password) {
+    throw new Error("SeekForge server URL must not include credentials");
+  }
+  url.hash = "";
+  url.search = "";
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.toString().replace(/\/$/, "");
+}
 
 function websocketUrl(serverUrl, token) {
-  const url = new URL(serverUrl);
+  const url = new URL(normalizeServerUrl(serverUrl));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/$/, "")}/ws`;
   url.search = token ? `?token=${encodeURIComponent(token)}` : "";
   return url.toString();
+}
+
+function abortError(message) {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+async function readStoredToken(secretStorage, legacyToken = "") {
+  const stored = await secretStorage.get("seekforge.token");
+  if (stored) return stored;
+  if (!legacyToken) return "";
+  await secretStorage.store("seekforge.token", legacyToken);
+  return legacyToken;
+}
+
+async function writeStoredToken(secretStorage, token) {
+  if (token) await secretStorage.store("seekforge.token", token);
+  else await secretStorage.delete("seekforge.token");
 }
 
 function withWorkspace(pathname, workspaceId) {
@@ -54,19 +89,42 @@ function permissionDetail(request) {
 }
 
 class SeekForgeBridge {
-  constructor({ serverUrl, token, WebSocketImpl, fetchImpl = fetch }) {
-    this.serverUrl = serverUrl.replace(/\/$/, "");
+  constructor({
+    serverUrl,
+    token,
+    WebSocketImpl,
+    fetchImpl = fetch,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    runTimeoutMs = DEFAULT_RUN_TIMEOUT_MS,
+  }) {
+    this.serverUrl = normalizeServerUrl(serverUrl);
     this.token = token;
     this.WebSocketImpl = WebSocketImpl;
     this.fetchImpl = fetchImpl;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.runTimeoutMs = runTimeoutMs;
   }
 
-  async request(pathname) {
-    const response = await this.fetchImpl(`${this.serverUrl}${pathname}`, {
-      headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
-    });
-    if (!response.ok) throw new Error(`SeekForge HTTP ${response.status}`);
-    return response.json();
+  async request(pathname, options = {}) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(options.signal?.reason);
+    if (options.signal?.aborted) onAbort();
+    else options.signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(abortError("SeekForge request timed out")), this.requestTimeoutMs);
+    try {
+      const response = await this.fetchImpl(`${this.serverUrl}${pathname}`, {
+        headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`SeekForge HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (controller.signal.aborted) throw abortError("SeekForge request was cancelled or timed out");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async workspaceId(workspacePath) {
@@ -82,18 +140,40 @@ class SeekForgeBridge {
     return match.id;
   }
 
-  run(frame, onFrame) {
+  run(frame, onFrame, options = {}) {
     return new Promise((resolve, reject) => {
       const socket = new this.WebSocketImpl(websocketUrl(this.serverUrl, this.token));
       let settled = false;
+      let opened = false;
+      const timer = setTimeout(() => finish(abortError("SeekForge run timed out")), this.runTimeoutMs);
+      const onAbort = () => {
+        if (opened) {
+          try {
+            socket.send(JSON.stringify({ type: "cancel" }));
+          } catch {
+            // Closing below still releases the local connection.
+          }
+        }
+        finish(abortError("SeekForge run cancelled"));
+      };
       const finish = (error) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
         socket.close();
         if (error) reject(error);
         else resolve();
       };
-      socket.on("open", () => socket.send(JSON.stringify(frame)));
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      socket.on("open", () => {
+        opened = true;
+        socket.send(JSON.stringify(frame));
+      });
       socket.on("message", async (data) => {
         let message;
         try {
@@ -119,11 +199,16 @@ class SeekForgeBridge {
 }
 
 module.exports = {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_RUN_TIMEOUT_MS,
   MAX_SELECTION_CHARS,
   SeekForgeBridge,
+  normalizeServerUrl,
   permissionDetail,
+  readStoredToken,
   taskWithEditorContext,
   websocketUrl,
   withWorkspace,
+  writeStoredToken,
   workspaceRootForEditor,
 };

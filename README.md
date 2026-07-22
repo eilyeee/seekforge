@@ -97,7 +97,7 @@ session resume, permission prompts, questions, diff viewing, and active-file con
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
 | `seekforge memory compact [--dry-run] [--prune-unused <days>]` | collapse duplicate and near-duplicate facts in project.md (deterministic); `--prune-unused` requires a non-negative integer and archives never-used facts older than `<days>` to `project-archive.md` |
 | `seekforge memory stats` | print memory extraction-quality stats — approved/pending/rejected counts, used fraction, rejection rate (read-only); inspect this before tuning `memoryAutoApproveConfidence` |
-| `seekforge config show\|set <key> <value> [-g]` | `set` accepts the scalar/array keys: `apiKey`, `model`, `baseUrl`, `provider`, `runtimeBin`, `commandAllowlist`, `models`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`. Structured keys (`permissionRules`, `hooks`, `mcpServers`, `planModel`) are **edited directly in `.seekforge/config.json`** — not via `config set`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > personal `.seekforge/config.local.json` > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
+| `seekforge config show\|set <key> <value> [-g]` | `set` accepts: `apiKey`, `model`, `baseUrl`, `provider`, `runtimeBin`, `commandAllowlist`, `sandbox`, `thinking` / `reasoningEffort`, `compaction`. Server/Desktop also manage the selectable `models` list. Structured keys (`permissionRules`, `hooks`, `mcpServers`, `planModel`) are **edited directly in `.seekforge/config.json`** — not via CLI `config set`. Config layers: env vars > CLI flags > [`--settings <file>`](docs/cli-reference.md#settings-layering) > personal `.seekforge/config.local.json` > project `.seekforge/config.json` > global `~/.seekforge/config.json`. Full reference: [docs/configuration.md](docs/configuration.md) |
 
 Headless single-run via `seekforge -p "<prompt>"` accepts the same flags as
 `seekforge run` plus `--ask`, `--input-format` (text | stream-json),
@@ -250,7 +250,9 @@ Protocol: [`crates/runtime/PROTOCOL.md`](crates/runtime/PROTOCOL.md).
   a fallback text protocol exists in the provider but is not wired into the
   loop). Use the DeepSeek V4 models instead — they combine thinking with
   tool calling.
-- macOS / Linux only.
+- Native Desktop packages target macOS, Linux, and Windows. The optional OS
+  command sandbox currently supports macOS (seatbelt) and Linux (bwrap) only;
+  requesting it on Windows fails closed instead of running unsandboxed.
 
 ## Monorepo layout
 

@@ -36,9 +36,10 @@ previous session rather than starting a new trace.
 
 ## Fixture conventions
 
-- Tiny (a handful of files), CommonJS, tests via `node --test` with zero
-  dependencies — `package.json` must not declare `dependencies` or
-  `devDependencies` (enforced by `tests/dataset.test.ts`).
+- Tiny (a handful of files), with zero third-party dependencies. Most use
+  `node --test`; Python, Go, and Rust fixtures use their standard toolchains.
+  `package.json` must not declare `dependencies` or `devDependencies`
+  (enforced by `tests/dataset.test.ts`).
 - One exception: `ts-typing-fix` typechecks through a version-pinned
   `npx --yes --package typescript@5.7.3 tsc`, which npx caches after the
   first run, so the fixture itself still installs nothing.
@@ -62,9 +63,9 @@ pnpm --filter @seekforge/eval-harness eval -- --suite nightly --junit evals/repo
 
 | Suite | Tasks | Default samples | Intended use |
 | --- | ---: | ---: | --- |
-| `smoke` | 10 representative tasks | 1 | quick model/config check |
-| `nightly` | all 55 tasks | 3 | weekly regression and efficiency gate |
-| `release` | all 55 tasks | 5 | release qualification with tighter gates |
+| `smoke` | 14 representative tasks | 1 | quick model/config check |
+| `nightly` | all 62 tasks | 3 | weekly regression and efficiency gate |
+| `release` | all 62 tasks | 5 | release qualification with tighter gates |
 
 Use `--repeat <n>` (1 to 20) to override the sample count and `--task a,b` to narrow the
 chosen suite. `--require-api-key` turns a missing provider key into a non-zero

@@ -5,12 +5,16 @@
       "tasks": [
         "add-function",
         "ask-codebase",
+        "config-doc-allowlist",
         "cross-module-bug",
         "failing-test-fix",
         "guarded-no-delete",
         "json-config-edit",
+        "loop-resume-two-stage",
         "loop-verify-green",
+        "memory-rejection-lifecycle",
         "multi-root-shared-util",
+        "python-path-normalization",
         "ts-generic-inference",
         "ts-typing-fix"
       ],

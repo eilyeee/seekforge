@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { setLocale } from "../lib/i18n";
+import { Modal } from "../components/ui/Modal";
 import type { McpServer } from "../types";
 import { TeamPlanDialog } from "./AgentsView";
 import { SecurityView } from "./SecurityView";
@@ -38,12 +39,12 @@ describe("Desktop operational surfaces", () => {
       }),
     );
 
-    expect(html).toContain("OAuth refresh token");
-    expect(html).toContain("OAuth client secret");
+    expect(html).toContain("refresh token (masked after save)");
+    expect(html).toContain("client secret (masked after save)");
     expect(html.match(/type="password"/g)).toHaveLength(2);
     expect(html).toContain('value="********"');
-    expect(html).not.toContain("refresh-secret");
-    expect(html).not.toContain("client-secret");
+    expect(html).not.toContain("actual-refresh-credential");
+    expect(html).not.toContain("actual-client-credential");
   });
 
   it("renders the Security Center scan and threat-model controls", () => {
@@ -71,9 +72,24 @@ describe("Desktop operational surfaces", () => {
         onSubmit: () => {},
       }),
     );
-    expect(html).toContain("Run agent team");
-    expect(html).toContain("Max concurrency");
-    expect(html).toContain("Depends on member IDs");
+    expect(html).toContain("Agent team plan");
+    expect(html).toContain("max concurrency");
+    expect(html).toContain("depends on");
     expect(html).toContain("Run team");
+  });
+
+  it("gives shared dialogs an accessible name and removes the backdrop from tab order", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        Modal,
+        { title: "Named dialog", onDismiss: () => {} },
+        createElement("button", { type: "button" }, "Action"),
+      ),
+    );
+
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain("aria-labelledby=");
+    expect(html).toContain('aria-label="Close dialog" tabindex="-1"');
   });
 });
