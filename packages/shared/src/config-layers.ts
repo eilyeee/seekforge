@@ -127,11 +127,51 @@ function isHookEntry(value: unknown): value is HookEntry {
  * while their `trusted` bit is forced off so only a user-owned layer can grant
  * automatic connection/startup.
  */
-export function sanitizeProjectConfig<T extends BaseConfigShape>(layer: T): T {
+export function sanitizeProjectConfig<T extends BaseConfigShape>(layer: T): T;
+export function sanitizeProjectConfig(layer: unknown): BaseConfigShape;
+export function sanitizeProjectConfig(layer: unknown): BaseConfigShape {
+  if (!isRecord(layer)) return {};
   const source = layer as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   for (const key of PROJECT_PREFERENCE_KEYS) {
-    if (Object.hasOwn(source, key)) result[key] = source[key];
+    if (!Object.hasOwn(source, key)) continue;
+    const value = source[key];
+    switch (key) {
+      case "model":
+      case "planModel":
+      case "accent":
+        if (typeof value === "string") result[key] = value;
+        break;
+      case "models":
+        if (Array.isArray(value) && value.every((item) => typeof item === "string")) result[key] = [...value];
+        break;
+      case "compaction":
+        if (value === "mechanical" || value === "llm") result[key] = value;
+        break;
+      case "reasoningEffort":
+        if (value === "high" || value === "max") result[key] = value;
+        break;
+      case "editFormat":
+        if (value === "patch" || value === "whole") result[key] = value;
+        break;
+      case "locale":
+        if (value === "en" || value === "zh-CN") result[key] = value;
+        break;
+      case "thinking":
+      case "finalizeReview":
+      case "guardNoProgress":
+      case "bell":
+      case "notify":
+      case "vim":
+      case "mouse":
+        if (typeof value === "boolean") result[key] = value;
+        break;
+      case "routing":
+        if (isRecord(value)) {
+          result[key] = typeof value.planModel === "string" ? { planModel: value.planModel } : {};
+        }
+        break;
+    }
   }
 
   if (Array.isArray(layer.permissionRules)) {
@@ -151,7 +191,7 @@ export function sanitizeProjectConfig<T extends BaseConfigShape>(layer: T): T {
     result.mcpServers = servers;
   }
 
-  return result as T;
+  return result as BaseConfigShape;
 }
 
 /**

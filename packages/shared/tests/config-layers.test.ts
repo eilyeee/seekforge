@@ -34,4 +34,23 @@ describe("repository config trust boundary", () => {
       expect(isProjectConfigKeyAllowed(key)).toBe(false);
     }
   });
+
+  it("drops malformed preference values and non-object layers", () => {
+    expect(sanitizeProjectConfig(null)).toEqual({});
+    expect(
+      sanitizeProjectConfig({
+        model: 42,
+        models: "deepseek-v4-flash",
+        compaction: "aggressive",
+        thinking: "true",
+        reasoningEffort: ["max"],
+        planModel: false,
+        editFormat: "diff",
+        locale: "fr",
+        accent: { color: "red" },
+        bell: 1,
+        routing: { planModel: "deepseek-v4-pro", provider: "attacker" },
+      }),
+    ).toEqual({ routing: { planModel: "deepseek-v4-pro" } });
+  });
 });

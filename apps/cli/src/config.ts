@@ -133,7 +133,7 @@ export type CliConfig = {
   profiles?: Record<string, Partial<CliConfig>>;
 };
 
-function isPlainObject(v: unknown): boolean {
+function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -175,6 +175,15 @@ export function configParseErrors(projectPath: string): string[] {
   return broken;
 }
 
+/** Object-valued profile names only; malformed entries are inert. */
+function validProfileNames(config: CliConfig): string[] {
+  const profiles = config.profiles as unknown;
+  if (!isPlainObject(profiles)) return [];
+  return Object.entries(profiles)
+    .filter((entry) => isPlainObject(entry[1]))
+    .map((entry) => entry[0]);
+}
+
 /** Profile names defined across the global/project/local config layers, sorted. */
 export function availableProfiles(projectPath: string): string[] {
   const names = new Set<string>();
@@ -183,7 +192,7 @@ export function availableProfiles(projectPath: string): string[] {
     join(projectPath, ".seekforge", "config.json"),
     join(projectPath, ".seekforge", "config.local.json"),
   ]) {
-    for (const name of Object.keys(readJson(path).profiles ?? {})) names.add(name);
+    for (const name of validProfileNames(readJson(path))) names.add(name);
   }
   return [...names].sort();
 }
@@ -275,23 +284,24 @@ function resolveProfile(
 ): Partial<CliConfig> | undefined {
   if (!name) return undefined;
   const { global, project, local } = layers;
+  const profileAt = (config: CliConfig): Partial<CliConfig> | undefined => {
+    const profiles = config.profiles as unknown;
+    if (!isPlainObject(profiles)) return undefined;
+    const candidate = (profiles as Record<string, unknown>)[name];
+    return isPlainObject(candidate) ? (candidate as Partial<CliConfig>) : undefined;
+  };
   // Order low→high precedence; later entries override earlier on scalars.
-  const projectProfile = project.profiles?.[name];
-  const localProfile = local.profiles?.[name];
+  const globalProfile = profileAt(global);
+  const projectProfile = profileAt(project);
+  const localProfile = profileAt(local);
   const sources = [
-    global.profiles?.[name],
+    globalProfile,
     projectProfile === undefined ? undefined : sanitizeProjectConfig(projectProfile),
     localProfile === undefined ? undefined : sanitizeProjectConfig(localProfile),
   ];
   const present = sources.filter((p): p is Partial<CliConfig> => p !== undefined);
   if (present.length === 0) {
-    const names = Array.from(
-      new Set([
-        ...Object.keys(global.profiles ?? {}),
-        ...Object.keys(project.profiles ?? {}),
-        ...Object.keys(local.profiles ?? {}),
-      ]),
-    ).sort();
+    const names = Array.from(new Set([global, project, local].flatMap(validProfileNames))).sort();
     const list = names.length > 0 ? names.join(", ") : "(none defined)";
     throw Object.assign(new Error(`unknown profile "${name}"`), {
       hint: `available profiles: ${list}`,

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "vitest";
-import { configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
+import { availableProfiles, configParseErrors, loadConfig, unknownConfigKeys } from "../config.js";
 import { configSetCommand } from "../commands/config.js";
 
 /**
@@ -416,6 +416,15 @@ test("unknown profile throws an error listing available profile names", () => {
       );
     },
   );
+  cleanup();
+});
+
+test("malformed profile entries are inert instead of crashing config loading", () => {
+  const { projectPath, cleanup } = setupProject({
+    profiles: { missing: null, array: ["not", "a", "profile"] },
+  });
+  assert.throws(() => loadConfig(projectPath, undefined, "missing"), /unknown profile "missing"/);
+  assert.deepEqual(availableProfiles(projectPath), []);
   cleanup();
 });
 

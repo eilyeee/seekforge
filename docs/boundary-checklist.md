@@ -206,6 +206,10 @@ path leaves every other path exposed.
 - **Also caught:** safely ignoring a non-object config is not enough if doctor
   still reports it as valid merely because `JSON.parse` succeeded. Configuration
   diagnostics must validate the expected top-level shape too.
+- **Also caught:** a repository-config sanitizer copied allegedly safe preferences
+  without validating their value types, and a selected `null` profile crashed
+  before sanitization. Validate each retained field and treat only object-valued
+  profile entries as selectable layers.
 
 ## 9. "Read-only vs mutating" classification: check each command's real effect
 
