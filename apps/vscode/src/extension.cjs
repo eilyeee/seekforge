@@ -1,6 +1,12 @@
 const vscode = require("vscode");
 const WebSocket = require("ws");
-const { SeekForgeBridge, permissionDetail, taskWithEditorContext, withWorkspace } = require("./bridge.cjs");
+const {
+  SeekForgeBridge,
+  permissionDetail,
+  taskWithEditorContext,
+  withWorkspace,
+  workspaceRootForEditor,
+} = require("./bridge.cjs");
 
 function configuredBridge() {
   const config = vscode.workspace.getConfiguration("seekforge");
@@ -11,8 +17,10 @@ function configuredBridge() {
   });
 }
 
-async function runTask(output, resumeSessionId) {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+async function runTask(output, options = {}) {
+  const { resumeSessionId } = options;
+  const workspaceRoot =
+    options.workspaceRoot ?? workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
   if (!workspaceRoot) {
     void vscode.window.showErrorMessage("Open a workspace folder before starting SeekForge.");
     return;
@@ -23,7 +31,7 @@ async function runTask(output, resumeSessionId) {
   if (!mode) return;
 
   const bridge = configuredBridge();
-  const workspaceId = await bridge.workspaceId(workspaceRoot);
+  const workspaceId = options.workspaceId ?? (await bridge.workspaceId(workspaceRoot));
   const task = taskWithEditorContext(prompt, vscode.window.activeTextEditor, workspaceRoot);
   const frame = resumeSessionId
     ? {
@@ -32,9 +40,9 @@ async function runTask(output, resumeSessionId) {
         task,
         mode,
         approvalMode: "confirm",
-        ...(workspaceId ? { ws: workspaceId } : {}),
+        ws: workspaceId,
       }
-    : { type: "start", task, mode, approvalMode: "confirm", ...(workspaceId ? { ws: workspaceId } : {}) };
+    : { type: "start", task, mode, approvalMode: "confirm", ws: workspaceId };
 
   output.clear();
   output.show(true);
@@ -82,18 +90,28 @@ function activate(context) {
     vscode.commands.registerCommand("seekforge.newTask", () => runTask(output)),
     vscode.commands.registerCommand("seekforge.resumeSession", async () => {
       const bridge = configuredBridge();
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+      if (!workspaceRoot) {
+        void vscode.window.showErrorMessage("Open a workspace folder before resuming a SeekForge session.");
+        return;
+      }
       const workspaceId = await bridge.workspaceId(workspaceRoot);
       const sessions = await bridge.request(withWorkspace("/api/sessions", workspaceId));
       const picked = await vscode.window.showQuickPick(
         sessions.map((session) => ({ label: session.task, description: session.id, session })),
         { placeHolder: "Resume a SeekForge session" },
       );
-      if (picked) await runTask(output, picked.session.id);
+      if (picked) {
+        await runTask(output, { resumeSessionId: picked.session.id, workspaceRoot, workspaceId });
+      }
     }),
     vscode.commands.registerCommand("seekforge.showDiff", async () => {
       const bridge = configuredBridge();
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const workspaceRoot = workspaceRootForEditor(vscode.workspace, vscode.window.activeTextEditor);
+      if (!workspaceRoot) {
+        void vscode.window.showErrorMessage("Open a workspace folder before showing a SeekForge diff.");
+        return;
+      }
       const workspaceId = await bridge.workspaceId(workspaceRoot);
       const result = await bridge.request(withWorkspace("/api/diff", workspaceId));
       const document = await vscode.workspace.openTextDocument({

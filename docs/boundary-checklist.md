@@ -1712,6 +1712,58 @@ complete traversal quadratic, even when every individual page is bounded.
 - **Caught:** Server run-event REST/WS replay re-read the complete JSONL prefix
   for every `afterSeq` page.
 
+## 132. A higher-trust secret must not inherit its destination from a lower-trust layer
+
+Scalar precedence can combine values that were safe separately into an unsafe
+credential route: a user-owned key plus a repository-owned endpoint.
+
+- **Do:** keep destination provenance through config merging, or pin credential
+  verification and other secret-bearing bootstrap calls to a user-owned/official
+  endpoint. Never let project configuration redirect a newly submitted secret.
+- **Caught:** Server onboarding loaded project `baseUrl` before verifying a
+  DeepSeek key, so a checked-out repository could receive the key as Bearer auth.
+
+## 133. Security identity comes from registration, not a naming convention
+
+Prefixes and generated-looking strings are classifications, not proof of origin;
+ordinary hashes and attacker-chosen inputs can satisfy them.
+
+- **Do:** query the authoritative registry/owner map when behavior depends on an
+  object's identity. Treat names and prefixes as display/serialization details.
+- **Caught:** background isolation treated any workspace id beginning with `wt-`
+  as a managed worktree, and a normal hashed workspace id could match that prefix.
+
+## 134. Fail-open degradation must match one explicit benign failure
+
+Catching a broad error family around a security boundary turns operational
+failures into permission or isolation widening.
+
+- **Do:** inspect the typed error code and degrade only for the documented benign
+  case; propagate busy, conflict, infrastructure, and unknown failures.
+- **Caught:** automatic run isolation fell back to the base workspace for every
+  `WorktreeError`, not only `not_a_git_repo`.
+
+## 135. Defaults must not replace a missing cross-system correlation id
+
+A compatibility default is safe only when the caller intentionally omitted the
+identifier. It is unsafe when a client tried to resolve an external resource and
+resolution failed.
+
+- **Do:** distinguish omission from failed lookup, bind async follow-up state to
+  the selected resource, and fail closed before sending a mutating request.
+- **Caught:** the VS Code client omitted `ws` after a workspace-path mismatch, so
+  the Server selected its unrelated default workspace.
+
+## 136. Every request on a long-lived transport still needs its own deadline
+
+The lifetime of an SSE/WebSocket session is not a valid timeout for a nested HTTP
+request; awaiting that request can block the stream dispatcher forever.
+
+- **Do:** give each nested request an operation-local controller and timer, link
+  it to the transport's parent signal, and remove both timer and listener on settle.
+- **Caught:** Streamable HTTP MCP `roots/list` responses reused the standalone GET
+  stream signal and could wait forever while all later SSE messages backed up.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -364,8 +364,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (typeof apiKey !== "string" || apiKey.trim().length < 8 || apiKey.length > 512) {
       return sendApiError(res, 400, "bad_request", "apiKey must be a string from 8 to 512 characters");
     }
-    const config = loadConfig(workspace);
-    return sendJson(res, 200, await verifyDeepSeekAccess(apiKey.trim(), config.baseUrl));
+    return sendJson(res, 200, await verifyDeepSeekAccess(apiKey.trim()));
   }
 
   // Resources of every configured MCP server (resources/list), spawned on

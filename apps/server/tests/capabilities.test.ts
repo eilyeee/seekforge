@@ -10,7 +10,7 @@ import { existsSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSyn
 import { createServer, type Server } from "node:http";
 import { basename, dirname, join } from "node:path";
 import { acquireSessionLease } from "@seekforge/core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
@@ -375,8 +375,10 @@ describe("POST /api/provider/verify", () => {
     expect(JSON.stringify(await jsonOf(res))).not.toContain("short");
   });
 
-  it("reports a successful DeepSeek credential check", async () => {
+  it("checks credentials against official DeepSeek without trusting the project baseUrl", async () => {
+    let projectEndpointRequests = 0;
     const stub: Server = createServer((_req, res) => {
+      projectEndpointRequests++;
       res.writeHead(200, { "content-type": "application/json" });
       res.end("{}");
     });
@@ -390,6 +392,16 @@ describe("POST /api/provider/verify", () => {
       token: TOKEN,
       createAgent: unusedAgentFactory,
     });
+    const actualFetch = globalThis.fetch;
+    let credentialTarget: string | undefined;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const target = String(input);
+      if (target === "https://api.deepseek.com/user/balance") {
+        credentialTarget = target;
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return actualFetch(input, init);
+    });
     try {
       const res = await fetch(`http://127.0.0.1:${verifyServer.port}/api/provider/verify`, {
         method: "POST",
@@ -397,7 +409,10 @@ describe("POST /api/provider/verify", () => {
         body: JSON.stringify({ apiKey: "sk-onboarding-test" }),
       });
       expect(await jsonOf(res)).toEqual({ ok: true });
+      expect(credentialTarget).toBe("https://api.deepseek.com/user/balance");
+      expect(projectEndpointRequests).toBe(0);
     } finally {
+      fetchSpy.mockRestore();
       await verifyServer.close();
       await new Promise<void>((resolve) => stub.close(() => resolve()));
     }

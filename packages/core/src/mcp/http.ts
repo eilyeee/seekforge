@@ -270,13 +270,31 @@ export function createMcpHttpTransport(options: McpClientOptions): {
             },
           }
         : { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${message.method}` } };
-    const response = await fetch(url!, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await response.body?.cancel().catch(() => {});
+    const controller = new AbortController();
+    const offAbort = onAbortOnce(signal, () => controller.abort());
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    inflight.add(controller);
+    try {
+      const response = await fetch(url!, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      await response.body?.cancel().catch(() => {});
+    } catch (error) {
+      if (controller.signal.aborted && !signal.aborted) {
+        throw new McpError(
+          "mcp_timeout",
+          `MCP server "${options.name}" did not accept ${String(message.method)} response within ${timeoutMs}ms`,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      offAbort();
+      inflight.delete(controller);
+    }
   }
 
   async function handleServerMessage(message: JsonRpcMessage, signal: AbortSignal): Promise<void> {

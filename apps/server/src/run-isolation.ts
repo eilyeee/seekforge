@@ -21,8 +21,9 @@ export async function isolateRunWorkspace(
   isolation: RunIsolation,
   name: string,
 ): Promise<IsolatedRunWorkspace> {
-  if (mode === "ask" || isolation === "workspace" || base.id.startsWith("wt-")) {
-    return { workspace: base.path, labels: { isolation: base.id.startsWith("wt-") ? "worktree" : "workspace" } };
+  const managedWorktree = rest.worktrees.get(base.id) !== undefined;
+  if (mode === "ask" || isolation === "workspace" || managedWorktree) {
+    return { workspace: base.path, labels: { isolation: managedWorktree ? "worktree" : "workspace" } };
   }
   try {
     const worktree = await rest.worktrees.create(base, name);
@@ -35,7 +36,7 @@ export async function isolateRunWorkspace(
       },
     };
   } catch (error) {
-    if (isolation !== "auto" || !(error instanceof WorktreeError)) throw error;
+    if (isolation !== "auto" || !(error instanceof WorktreeError) || error.code !== "not_a_git_repo") throw error;
     return {
       workspace: base.path,
       labels: { isolation: "workspace", isolationFallback: error.code },

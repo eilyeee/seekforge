@@ -1,6 +1,13 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { permissionDetail, taskWithEditorContext, websocketUrl, withWorkspace } = require("../src/bridge.cjs");
+const {
+  SeekForgeBridge,
+  permissionDetail,
+  taskWithEditorContext,
+  websocketUrl,
+  withWorkspace,
+  workspaceRootForEditor,
+} = require("../src/bridge.cjs");
 
 test("builds an authenticated websocket URL without preserving unrelated query state", () => {
   assert.equal(websocketUrl("https://agent.example/base/", "a b"), "wss://agent.example/base/ws?token=a%20b");
@@ -9,6 +16,28 @@ test("builds an authenticated websocket URL without preserving unrelated query s
 
 test("adds a workspace id safely", () => {
   assert.equal(withWorkspace("/api/diff", "ws / one"), "/api/diff?ws=ws%20%2F%20one");
+});
+
+test("selects the active editor's workspace in a multi-root window", () => {
+  const first = { uri: { fsPath: "/repo/first" } };
+  const second = { uri: { fsPath: "/repo/second" } };
+  const activeUri = { fsPath: "/repo/second/src/app.ts" };
+  const workspaceApi = {
+    workspaceFolders: [first, second],
+    getWorkspaceFolder: (uri) => (uri === activeUri ? second : undefined),
+  };
+
+  assert.equal(workspaceRootForEditor(workspaceApi, { document: { uri: activeUri } }), "/repo/second");
+  assert.equal(workspaceRootForEditor(workspaceApi, undefined), "/repo/first");
+});
+
+test("fails closed when the server does not host the selected workspace", async () => {
+  const fetchImpl = async () =>
+    new Response(JSON.stringify({ workspaces: [{ id: "first", path: "/repo/first" }] }), { status: 200 });
+  const bridge = new SeekForgeBridge({ serverUrl: "http://localhost", token: "", WebSocketImpl: class {}, fetchImpl });
+
+  await assert.rejects(bridge.workspaceId("/repo/second"), /does not host the VS Code workspace/);
+  assert.equal(await bridge.workspaceId("/repo/first/"), "first");
 });
 
 test("includes only active files inside the workspace", () => {

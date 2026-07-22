@@ -12,3 +12,8 @@ raw commands/paths/diffs in permission prompts, answers agent questions, and
 adds the active file or selection as `@file` context. It deliberately remains a
 thin client: orchestration, permissions, traces, and workspace coordination stay
 inside the local SeekForge server.
+
+In a multi-root window, commands target the workspace containing the active
+editor (falling back to the first folder when no editor is active). The extension
+refuses to run when that folder is not hosted by the configured server; it never
+silently falls back to the server's default workspace.

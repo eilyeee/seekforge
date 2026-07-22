@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const path = require("node:path");
 
 const MAX_SELECTION_CHARS = 20_000;
@@ -14,6 +15,22 @@ function withWorkspace(pathname, workspaceId) {
   if (!workspaceId) return pathname;
   const separator = pathname.includes("?") ? "&" : "?";
   return `${pathname}${separator}ws=${encodeURIComponent(workspaceId)}`;
+}
+
+function canonicalWorkspacePath(workspacePath) {
+  let resolved = path.resolve(workspacePath);
+  try {
+    resolved = fs.realpathSync.native(resolved);
+  } catch {
+    // The server may report a path that disappeared after it started.
+  }
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function workspaceRootForEditor(workspaceApi, editor) {
+  const uri = editor?.document?.uri;
+  const active = uri && workspaceApi?.getWorkspaceFolder?.(uri);
+  return active?.uri?.fsPath ?? workspaceApi?.workspaceFolders?.[0]?.uri?.fsPath;
 }
 
 function taskWithEditorContext(task, editor, workspaceRoot) {
@@ -53,10 +70,16 @@ class SeekForgeBridge {
   }
 
   async workspaceId(workspacePath) {
-    if (!workspacePath) return "";
+    if (!workspacePath) throw new Error("Open a workspace folder before connecting to SeekForge");
     const body = await this.request("/api/workspaces");
-    const match = body.workspaces?.find((workspace) => workspace.path === workspacePath);
-    return typeof match?.id === "string" ? match.id : "";
+    const wanted = canonicalWorkspacePath(workspacePath);
+    const match = body.workspaces?.find(
+      (workspace) => typeof workspace.path === "string" && canonicalWorkspacePath(workspace.path) === wanted,
+    );
+    if (typeof match?.id !== "string" || match.id.length === 0) {
+      throw new Error(`SeekForge server does not host the VS Code workspace: ${workspacePath}`);
+    }
+    return match.id;
   }
 
   run(frame, onFrame) {
@@ -102,4 +125,5 @@ module.exports = {
   taskWithEditorContext,
   websocketUrl,
   withWorkspace,
+  workspaceRootForEditor,
 };

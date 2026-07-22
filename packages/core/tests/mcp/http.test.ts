@@ -314,6 +314,68 @@ describe("mcp client over streamable HTTP", () => {
     }
   });
 
+  it("bounds a hanging response to a server request on the standalone GET stream", async () => {
+    let responsePostStarted = false;
+    let responsePostClosed = false;
+    const streamServer = createServer((req, res) => {
+      if (req.method === "DELETE") {
+        req.resume();
+        res.writeHead(200).end();
+        return;
+      }
+      if (req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write('data: {"jsonrpc":"2.0","id":99,"method":"roots/list","params":{}}\n\n');
+        return;
+      }
+      let body = "";
+      req.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+      req.on("end", () => {
+        const message = JSON.parse(body) as { id?: number; method?: string };
+        if (message.method === "initialize") {
+          res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "timeout-session" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "get", version: "1" } },
+            }),
+          );
+          return;
+        }
+        if (message.method === "tools/list") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }));
+          return;
+        }
+        if (message.method === undefined && message.id === 99) {
+          responsePostStarted = true;
+          res.on("close", () => {
+            responsePostClosed = true;
+          });
+          return;
+        }
+        res.writeHead(202).end();
+      });
+    });
+    await new Promise<void>((resolve) => streamServer.listen(0, "127.0.0.1", resolve));
+    const port = (streamServer.address() as { port: number }).port;
+    const client = createMcpClient({
+      name: "get-stream-timeout",
+      config: { url: `http://127.0.0.1:${port}/mcp` },
+      workspaceRoots: ["/tmp/project"],
+      requestTimeoutMs: 30,
+    });
+    try {
+      await client.listTools();
+      await vi.waitFor(() => expect(responsePostStarted).toBe(true));
+      await vi.waitFor(() => expect(responsePostClosed).toBe(true));
+    } finally {
+      client.dispose();
+      await new Promise<void>((resolve) => streamServer.close(() => resolve()));
+    }
+  });
+
   it("refreshes an OAuth bearer token once after HTTP 401", async () => {
     const before = getTokenRefreshes();
     const client = createMcpClient({
