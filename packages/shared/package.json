@@ -11,6 +11,7 @@
     "./doctor": "./src/doctor.ts",
     "./workspace-dirs": "./src/workspace-dirs.ts",
     "./format": "./src/format.ts",
+    "./ws-protocol": "./src/ws-protocol.ts",
     "./protocol-limits": "./src/protocol-limits.ts",
     "./bounded-file-read": "./src/bounded-file-read.ts"
   },

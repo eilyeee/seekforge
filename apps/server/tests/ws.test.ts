@@ -933,7 +933,7 @@ describe("permission bridge", () => {
     expect(resultSeen).toBe(false);
   });
 
-  it("denies malformed selectedHunks instead of widening approval to every hunk", async () => {
+  it("rejects malformed selectedHunks and denies instead of widening approval to every hunk", async () => {
     let resultSeen: import("@seekforge/shared").ConfirmResult | undefined;
     const { server } = await boot(
       fakeAgentFactory(async function* (opts) {
@@ -958,6 +958,8 @@ describe("permission bridge", () => {
       selectedHunks: [0, -1, "2"],
     });
 
+    const error = await rx.waitFor((f) => f.type === "error");
+    expect(error).toMatchObject({ code: "bad_frame", message: expect.stringContaining("selectedHunks") });
     await rx.waitFor((f) => f.type === "idle");
     expect(resultSeen).toBe(false);
   });

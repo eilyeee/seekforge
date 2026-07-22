@@ -185,7 +185,11 @@ cost-bounded** agent run of the trigger's task and returns `202` with the new
 One WS connection drives at most one *running* session at a time.
 All frames are UTF-8 JSON text objects with a `type` field and are capped at 1 MB
 before JSON parsing. A larger frame closes the connection with WebSocket code
-1009; a binary frame receives `bad_frame`.
+1009; a binary frame receives `bad_frame`. Every client frame is decoded by the
+shared runtime protocol boundary (`@seekforge/shared/ws-protocol`) before it can
+reach connection state. The decoder validates every frame variant, optional
+field, enum, numeric limit, and safe id; TypeScript's `ClientFrame` type is not
+treated as runtime validation.
 
 The server first sends `{"type":"hello","protocolVersion":1,"capabilities":[...],"disconnectPolicy":"cancel","backgroundDisconnectPolicy":"continue"}`.
 Every accepted run receives a stable `runId`; persisted run frames carry a
@@ -294,7 +298,9 @@ Rules:
   `{"type":"error","code":"unknown_session"}`.
 - `permission.request` pauses the run until the matching `permission.response`
   arrives (or the socket closes, or 120 s pass without a response — both
-  treated as denied).
+  treated as denied). A malformed response is `bad_frame`; if its `requestId`
+  can be recovered, the pending request is denied immediately so malformed
+  `selectedHunks` can never widen a partial approval.
 - `question.request` (ask_user tool) pauses the run until the matching
   `question.answer` arrives. The socket closing or 120 s without an answer
   resolve the question as `"(the user declined to answer)"`; an empty

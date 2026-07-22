@@ -26,19 +26,10 @@ import {
   type ToolSpec,
   type McpClientEntry,
 } from "@seekforge/core";
-import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
+import type { ConfirmResult, PermissionRequest, RunOverrides } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
 
-/** Per-run model overrides from a start/send frame (win over config). */
-export type RunOverrides = {
-  model?: string;
-  thinking?: boolean;
-  reasoningEffort?: "high" | "max";
-  /** Output style name (built-in or custom), resolved to appendSystemPrompt. */
-  outputStyle?: string;
-  /** Run-local sandbox override (frame wins over project config). */
-  sandbox?: "off" | "read-only" | "workspace-write" | "restricted";
-};
+export type { RunOverrides } from "@seekforge/shared";
 
 export type CreateAgentOptions = {
   workspace: string;

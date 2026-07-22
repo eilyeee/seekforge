@@ -15,13 +15,21 @@ import {
   MAX_STEER_MESSAGE_LENGTH,
   createDispatchManager,
   detectThinkingKeyword,
-  isValidLoopId,
   readSessionMeta,
   resolveOutputStyle,
   type DispatchManager,
 } from "@seekforge/core";
-import type { ApiErrorCode, ApprovalMode, ConfirmResult, PermissionRequest, ServerFrame } from "@seekforge/shared";
-import type { CreateAgentFn, ResumeLoopFn, RunLoopFn, RunOverrides } from "./agent.js";
+import type {
+  ApiErrorCode,
+  ApprovalMode,
+  ClientFrame,
+  ConfirmResult,
+  PermissionRequest,
+  RunOverrides,
+  ServerFrame,
+} from "@seekforge/shared";
+import { decodeClientFrame } from "@seekforge/shared/ws-protocol";
+import type { CreateAgentFn, ResumeLoopFn, RunLoopFn } from "./agent.js";
 import { isSafeId } from "./ids.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -81,34 +89,8 @@ type RunSubscription = {
   timer?: NodeJS.Timeout;
 };
 
-/**
- * Validates the optional per-run override fields of a start/send frame.
- * Returns the overrides object (undefined when none are present) or an
- * error string describing the first invalid field.
- */
-export function parseRunOverrides(frame: Record<string, unknown>): { overrides?: RunOverrides } | { error: string } {
+function runOverrides(frame: RunOverrides): { overrides?: RunOverrides } {
   const { model, thinking, reasoningEffort, outputStyle, sandbox } = frame;
-  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
-    return { error: "model must be a non-empty string when present" };
-  }
-  if (thinking !== undefined && typeof thinking !== "boolean") {
-    return { error: "thinking must be a boolean when present" };
-  }
-  if (reasoningEffort !== undefined && reasoningEffort !== "high" && reasoningEffort !== "max") {
-    return { error: 'reasoningEffort must be "high" or "max" when present' };
-  }
-  if (outputStyle !== undefined && (typeof outputStyle !== "string" || outputStyle.length === 0)) {
-    return { error: "outputStyle must be a non-empty string when present" };
-  }
-  if (
-    sandbox !== undefined &&
-    sandbox !== "off" &&
-    sandbox !== "read-only" &&
-    sandbox !== "workspace-write" &&
-    sandbox !== "restricted"
-  ) {
-    return { error: 'sandbox must be "off", "read-only", "workspace-write", or "restricted" when present' };
-  }
   const overrides: RunOverrides = {
     ...(model !== undefined ? { model } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
@@ -626,39 +608,22 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       fail("bad_frame", "frames must be UTF-8 JSON text, not binary data");
       return;
     }
-    let frame: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(String(data));
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("not an object");
-      }
-      frame = parsed as Record<string, unknown>;
-    } catch {
-      fail("bad_frame", "frames must be JSON objects with a type field");
+    const decoded = decodeClientFrame(String(data), {
+      maxLoopIterations: MAX_LOOP_ITERATIONS,
+      maxSteerMessageLength: MAX_STEER_MESSAGE_LENGTH,
+    });
+    if (!decoded.ok) {
+      if (decoded.permissionRequestId) pending.get(decoded.permissionRequestId)?.(false);
+      fail("bad_frame", decoded.error);
       return;
     }
+    const frame: ClientFrame = decoded.frame;
 
     switch (frame["type"]) {
       case "start": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { task, mode, approvalMode, plan, ws: wsId } = frame;
-        if (typeof task !== "string" || task.trim().length === 0) {
-          return fail("bad_frame", "start.task must be a non-empty string");
-        }
-        if (mode !== "edit" && mode !== "ask") {
-          return fail("bad_frame", 'start.mode must be "edit" or "ask"');
-        }
-        if (approvalMode !== "auto" && approvalMode !== "acceptEdits" && approvalMode !== "confirm") {
-          return fail("bad_frame", 'start.approvalMode must be "auto", "acceptEdits", or "confirm"');
-        }
-        if (plan !== undefined && typeof plan !== "boolean") {
-          return fail("bad_frame", "start.plan must be a boolean when present");
-        }
-        if (wsId !== undefined && typeof wsId !== "string") {
-          return fail("bad_frame", "start.ws must be a string when present");
-        }
-        const parsed = parseRunOverrides(frame);
-        if ("error" in parsed) return fail("bad_frame", `start.${parsed.error}`);
+        const parsed = runOverrides(frame);
         // Omitted ws -> the default (first) workspace, preserving old clients.
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
@@ -683,25 +648,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "send": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { sessionId, task, mode, approvalMode, ws: wsId } = frame;
-        if (typeof sessionId !== "string" || typeof task !== "string" || task.trim().length === 0) {
-          return fail("bad_frame", "send needs sessionId and a non-empty task");
-        }
-        if (mode !== undefined && mode !== "edit" && mode !== "ask") {
-          return fail("bad_frame", 'send.mode must be "edit" or "ask" when present');
-        }
-        if (
-          approvalMode !== undefined &&
-          approvalMode !== "auto" &&
-          approvalMode !== "acceptEdits" &&
-          approvalMode !== "confirm"
-        ) {
-          return fail("bad_frame", 'send.approvalMode must be "auto", "acceptEdits", or "confirm" when present');
-        }
-        if (wsId !== undefined && typeof wsId !== "string") {
-          return fail("bad_frame", "send.ws must be a string when present");
-        }
-        const parsed = parseRunOverrides(frame);
-        if ("error" in parsed) return fail("bad_frame", `send.${parsed.error}`);
+        const parsed = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         // isSafeId keeps a traversal-shaped id from ever reaching the session
@@ -742,37 +689,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "loop": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { task, verifyCommand, maxIterations, budget, requirementMode, ws: wsId } = frame;
-        if (typeof task !== "string" || task.trim().length === 0) {
-          return fail("bad_frame", "loop.task must be a non-empty string");
-        }
-        if (typeof verifyCommand !== "string" || verifyCommand.trim().length === 0) {
-          return fail("bad_frame", "loop.verifyCommand must be a non-empty string");
-        }
-        if (
-          maxIterations !== undefined &&
-          (typeof maxIterations !== "number" ||
-            !Number.isInteger(maxIterations) ||
-            maxIterations <= 0 ||
-            maxIterations > MAX_LOOP_ITERATIONS)
-        ) {
-          return fail("bad_frame", `loop.maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
-        }
-        if (budget !== undefined && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)) {
-          return fail("bad_frame", "loop.budget must be a finite positive number when present");
-        }
-        if (
-          requirementMode !== undefined &&
-          requirementMode !== "quick" &&
-          requirementMode !== "analyze" &&
-          requirementMode !== "confirm"
-        ) {
-          return fail("bad_frame", 'loop.requirementMode must be "quick", "analyze", or "confirm"');
-        }
-        if (wsId !== undefined && typeof wsId !== "string") {
-          return fail("bad_frame", "loop.ws must be a string when present");
-        }
-        const parsedOverrides = parseRunOverrides(frame);
-        if ("error" in parsedOverrides) return fail("bad_frame", `loop.${parsedOverrides.error}`);
+        const parsedOverrides = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop" });
@@ -803,32 +720,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       case "loop.resume": {
         if (running) return fail("busy", "a session is already running on this connection");
         const { loopId, addedIterations, addedBudget, approveRequirements, ws: wsId } = frame;
-        if (typeof loopId !== "string" || !isValidLoopId(loopId)) {
-          return fail("bad_frame", "loop.resume.loopId must be a safe non-empty id");
-        }
-        if (
-          addedIterations !== undefined &&
-          (typeof addedIterations !== "number" ||
-            !Number.isInteger(addedIterations) ||
-            addedIterations <= 0 ||
-            addedIterations > MAX_LOOP_ITERATIONS)
-        ) {
-          return fail("bad_frame", `loop.resume.addedIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
-        }
-        if (approveRequirements !== undefined && typeof approveRequirements !== "boolean") {
-          return fail("bad_frame", "loop.resume.approveRequirements must be a boolean when present");
-        }
-        if (
-          addedBudget !== undefined &&
-          (typeof addedBudget !== "number" || !Number.isFinite(addedBudget) || addedBudget <= 0)
-        ) {
-          return fail("bad_frame", "loop.resume.addedBudget must be a finite positive number when present");
-        }
-        if (wsId !== undefined && typeof wsId !== "string") {
-          return fail("bad_frame", "loop.resume.ws must be a string when present");
-        }
-        const parsedOverrides = parseRunOverrides(frame);
-        if ("error" in parsedOverrides) return fail("bad_frame", `loop.resume.${parsedOverrides.error}`);
+        const parsedOverrides = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         const ledgerRun = deps.runManager.create({ workspace: workspace.path, source: "loop", labels: { loopId } });
@@ -857,45 +749,30 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "permission.response": {
         const { requestId, approved, remember, selectedHunks } = frame;
-        const settle = typeof requestId === "string" ? pending.get(requestId) : undefined;
+        const settle = pending.get(requestId);
         if (!settle) return fail("unknown_request", `no pending permission request: ${String(requestId)}`);
-        const allow = approved === true;
-        // selectedHunks: per-hunk selection for multi-hunk apply_patch calls.
-        const validSelectedHunks =
-          Array.isArray(selectedHunks) &&
-          selectedHunks.length > 0 &&
-          selectedHunks.length <= 10_000 &&
-          selectedHunks.every((index) => Number.isSafeInteger(index) && index >= 0);
-        if (allow && selectedHunks !== undefined && !validSelectedHunks) {
-          settle(false);
-        } else if (allow && validSelectedHunks) {
+        if (approved && selectedHunks) {
           settle({ allow: true, selectedHunks });
-        } else if (allow && remember === "session") {
+        } else if (approved && remember === "session") {
           // remember:"session" forwards the richer ConfirmResult so core grows
           // its session allowlist; a plain allow/deny stays a bare boolean.
           settle({ allow: true, remember: "session" });
         } else {
-          settle(allow);
+          settle(approved);
         }
         return;
       }
 
       case "question.answer": {
         const { id, answer } = frame;
-        const settle = typeof id === "string" ? pendingQuestions.get(id) : undefined;
+        const settle = pendingQuestions.get(id);
         if (!settle) return fail("unknown_request", `no pending question: ${String(id)}`);
         settle(typeof answer === "string" && answer.length > 0 ? answer : DECLINED_ANSWER);
         return;
       }
 
       case "subagent.cancel": {
-        if (Object.keys(frame).some((key) => key !== "type" && key !== "dispatchId")) {
-          return fail("bad_frame", "subagent.cancel accepts only dispatchId");
-        }
         const { dispatchId } = frame;
-        if (typeof dispatchId !== "string" || !/^ag-[1-9]\d*$/.test(dispatchId) || dispatchId.length > 64) {
-          return fail("bad_frame", "subagent.cancel.dispatchId must be a valid dispatch id");
-        }
         if (!running || !activeDispatchManager) {
           return fail("not_running", "no controllable agent run is active");
         }
@@ -906,16 +783,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       }
 
       case "subagent.steer": {
-        if (Object.keys(frame).some((key) => key !== "type" && key !== "dispatchId" && key !== "message")) {
-          return fail("bad_frame", "subagent.steer accepts only dispatchId and message");
-        }
         const { dispatchId, message } = frame;
-        if (typeof dispatchId !== "string" || !/^ag-[1-9]\d*$/.test(dispatchId) || dispatchId.length > 64) {
-          return fail("bad_frame", "subagent.steer.dispatchId must be a valid dispatch id");
-        }
-        if (typeof message !== "string" || message.trim().length === 0 || message.length > MAX_STEER_MESSAGE_LENGTH) {
-          return fail("bad_frame", `subagent.steer.message must contain 1-${MAX_STEER_MESSAGE_LENGTH} characters`);
-        }
         if (!running || !activeDispatchManager) {
           return fail("not_running", "no controllable agent run is active");
         }
@@ -936,15 +804,6 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "subscribe": {
         const { runId, afterSeq, ws: wsId } = frame;
-        if (typeof runId !== "string" || !/^run-[A-Za-z0-9-]+$/.test(runId)) {
-          return fail("bad_frame", "subscribe.runId must be a valid run id");
-        }
-        if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || (afterSeq as number) < 0)) {
-          return fail("bad_frame", "subscribe.afterSeq must be a non-negative safe integer");
-        }
-        if (wsId !== undefined && typeof wsId !== "string") {
-          return fail("bad_frame", "subscribe.ws must be a string when present");
-        }
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
         if (!deps.runManager.get(workspace.path, runId)) return fail("unknown_run", `run not found: ${runId}`);
@@ -954,7 +813,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         const subscription: RunSubscription = {
           workspace: workspace.path,
           runId,
-          afterSeq: (afterSeq as number | undefined) ?? 0,
+          afterSeq: afterSeq ?? 0,
           catchingUp: true,
         };
         subscriptions.set(key, subscription);
