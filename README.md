@@ -207,7 +207,9 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   later sessions as a short brief, and the agent can pull more on demand with
   the read-only `search_memory` tool. Inspect extraction quality with
   `seekforge memory stats`; set `memoryAutoApproveConfidence` to auto-approve
-  high-confidence facts.
+  high-confidence facts. Optional user-owned `memoryMaintenance` automatically
+  compacts approved facts after count/size thresholds and can archive never-used
+  stale facts; it is deterministic, interval-limited, and disabled by default.
 - **Sessions** are JSONL traces under `.seekforge/sessions/<id>/` —
   messages, tool calls, and events are fully auditable.
 

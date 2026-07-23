@@ -15,7 +15,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<string>) {
   const [states, setStates] = useState<Partial<Record<ConfigKey, SaveState>>>({});
-  const save = async (key: ConfigKey, value: string, global: boolean): Promise<ServerConfig | null> => {
+  const save = async (key: ConfigKey, value: unknown, global: boolean): Promise<ServerConfig | null> => {
     const operation = requests.capture(workspaceId);
     if (!operation) return null;
     setStates((s) => ({ ...s, [key]: "saving" }));
@@ -35,10 +35,18 @@ function useFieldSave(workspaceId: string, requests: WorkspaceAsyncCoordinator<s
   return { states, save, reset: () => setStates({}) };
 }
 
-function SaveButton({ state, onClick }: { state: SaveState; onClick: () => void }) {
+function SaveButton({
+  state,
+  onClick,
+  disabled = false,
+}: {
+  state: SaveState;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   const t = useT();
   return (
-    <Button variant="ghost" size="md" onClick={onClick} disabled={state === "saving"} className="shrink-0">
+    <Button variant="ghost" size="md" onClick={onClick} disabled={disabled || state === "saving"} className="shrink-0">
       {state === "saving"
         ? t("settings.saveSaving")
         : state === "saved"
@@ -999,6 +1007,26 @@ export function SettingsView() {
   const [planModel, setPlanModel] = useState("");
   const [escalateOnFailure, setEscalateOnFailure] = useState(false);
   const [memoryAutoApprove, setMemoryAutoApprove] = useState("");
+  const [memoryMaintenanceEnabled, setMemoryMaintenanceEnabled] = useState(false);
+  const [memoryMaintenanceMinFacts, setMemoryMaintenanceMinFacts] = useState("100");
+  const [memoryMaintenanceMinBytes, setMemoryMaintenanceMinBytes] = useState("65536");
+  const [memoryMaintenanceInterval, setMemoryMaintenanceInterval] = useState("24");
+  const [memoryMaintenancePruneDays, setMemoryMaintenancePruneDays] = useState("");
+  const maintenanceMinFacts = Number(memoryMaintenanceMinFacts);
+  const maintenanceMinBytes = Number(memoryMaintenanceMinBytes);
+  const maintenanceInterval = Number(memoryMaintenanceInterval);
+  const maintenancePruneDays = Number(memoryMaintenancePruneDays);
+  const memoryMaintenanceValid =
+    /^[0-9]+$/.test(memoryMaintenanceMinFacts) &&
+    Number.isSafeInteger(maintenanceMinFacts) &&
+    maintenanceMinFacts > 0 &&
+    /^[0-9]+$/.test(memoryMaintenanceMinBytes) &&
+    Number.isSafeInteger(maintenanceMinBytes) &&
+    maintenanceMinBytes > 0 &&
+    memoryMaintenanceInterval.trim() !== "" &&
+    Number.isFinite(maintenanceInterval) &&
+    maintenanceInterval >= 0 &&
+    (memoryMaintenancePruneDays === "" || (Number.isFinite(maintenancePruneDays) && maintenancePruneDays >= 0));
   useEffect(() => {
     const request = requests.beginLatest(ws);
     if (!request) return;
@@ -1027,6 +1055,14 @@ export function SettingsView() {
           config.memoryAutoApproveConfidence === undefined || config.memoryAutoApproveConfidence === null
             ? ""
             : String(config.memoryAutoApproveConfidence),
+        );
+        const maintenance = config.memoryMaintenance;
+        setMemoryMaintenanceEnabled(maintenance?.enabled ?? false);
+        setMemoryMaintenanceMinFacts(String(maintenance?.minFacts ?? 100));
+        setMemoryMaintenanceMinBytes(String(maintenance?.minBytes ?? 65536));
+        setMemoryMaintenanceInterval(String(maintenance?.minIntervalHours ?? 24));
+        setMemoryMaintenancePruneDays(
+          maintenance?.pruneUnusedDays === undefined ? "" : String(maintenance.pruneUnusedDays),
         );
       })
       .catch((e: unknown) => {
@@ -1267,6 +1303,72 @@ export function SettingsView() {
                 <SaveButton
                   state={states.memoryAutoApproveConfidence ?? "idle"}
                   onClick={() => void save("memoryAutoApproveConfidence", memoryAutoApprove, global)}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label={t("settings.memoryMaintenanceLabel")}
+                description={t("settings.memoryMaintenanceHint")}
+                stacked
+              >
+                <div className="grid w-full gap-2 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 text-xs text-secondary sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={memoryMaintenanceEnabled}
+                      onChange={(event) => setMemoryMaintenanceEnabled(event.target.checked)}
+                      className="accent-accent"
+                    />
+                    {t("settings.memoryMaintenanceEnabled")}
+                  </label>
+                  <Input
+                    aria-label={t("settings.memoryMaintenanceMinFacts")}
+                    value={memoryMaintenanceMinFacts}
+                    onChange={(event) => setMemoryMaintenanceMinFacts(event.target.value.replace(/[^0-9]/g, ""))}
+                    inputMode="numeric"
+                    placeholder={t("settings.memoryMaintenanceMinFacts")}
+                    className="font-mono"
+                  />
+                  <Input
+                    aria-label={t("settings.memoryMaintenanceMinBytes")}
+                    value={memoryMaintenanceMinBytes}
+                    onChange={(event) => setMemoryMaintenanceMinBytes(event.target.value.replace(/[^0-9]/g, ""))}
+                    inputMode="numeric"
+                    placeholder={t("settings.memoryMaintenanceMinBytes")}
+                    className="font-mono"
+                  />
+                  <Input
+                    aria-label={t("settings.memoryMaintenanceInterval")}
+                    value={memoryMaintenanceInterval}
+                    onChange={(event) => setMemoryMaintenanceInterval(event.target.value.replace(/[^0-9.]/g, ""))}
+                    inputMode="decimal"
+                    placeholder={t("settings.memoryMaintenanceInterval")}
+                    className="font-mono"
+                  />
+                  <Input
+                    aria-label={t("settings.memoryMaintenancePruneDays")}
+                    value={memoryMaintenancePruneDays}
+                    onChange={(event) => setMemoryMaintenancePruneDays(event.target.value.replace(/[^0-9.]/g, ""))}
+                    inputMode="decimal"
+                    placeholder={t("settings.memoryMaintenancePruneDays")}
+                    className="font-mono"
+                  />
+                </div>
+                <SaveButton
+                  state={states.memoryMaintenance ?? "idle"}
+                  disabled={!memoryMaintenanceValid}
+                  onClick={() =>
+                    void save(
+                      "memoryMaintenance",
+                      {
+                        enabled: memoryMaintenanceEnabled,
+                        minFacts: maintenanceMinFacts,
+                        minBytes: maintenanceMinBytes,
+                        minIntervalHours: maintenanceInterval,
+                        ...(memoryMaintenancePruneDays === "" ? {} : { pruneUnusedDays: maintenancePruneDays }),
+                      },
+                      true,
+                    )
+                  }
                 />
               </SettingsRow>
               <SettingsRow label={t("settings.escalateOnFailureLabel")}>

@@ -67,6 +67,20 @@ export {
 } from "./compact.js";
 
 export {
+  DEFAULT_MEMORY_MAINTENANCE_INTERVAL_HOURS,
+  DEFAULT_MEMORY_MAINTENANCE_MIN_BYTES,
+  DEFAULT_MEMORY_MAINTENANCE_MIN_FACTS,
+  maybeMaintainProjectMemory,
+  memoryMaintenanceStatePath,
+  readMemoryMaintenanceState,
+  resolveMemoryMaintenanceConfig,
+  type MemoryMaintenanceConfig,
+  type MemoryMaintenanceOutcome,
+  type MemoryMaintenanceState,
+  type ResolvedMemoryMaintenanceConfig,
+} from "./maintenance.js";
+
+export {
   extractMemoryFromSession,
   type ExtractMemoryInput,
   type ExtractMemoryResult,

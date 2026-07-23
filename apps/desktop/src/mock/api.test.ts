@@ -9,6 +9,7 @@ import type {
   McpServer,
   MemoryStats,
   PruneResult,
+  ServerConfig,
   SessionMeta,
   Skill,
   TreeResponse,
@@ -237,7 +238,7 @@ describe("mockRequest — commands + session compact", () => {
 });
 
 describe("mockRequest — config new keys", () => {
-  it("accepts planModel / escalateOnFailure / memoryAutoApproveConfidence", async () => {
+  it("accepts planModel / escalation / memory settings", async () => {
     await mockRequest("PUT", "/api/config", { key: "planModel", value: "deepseek-v4-pro" });
     await mockRequest("PUT", "/api/config", { key: "escalateOnFailure", value: "true" });
     const cfg = (await mockRequest("PUT", "/api/config", {
@@ -247,5 +248,15 @@ describe("mockRequest — config new keys", () => {
     expect(cfg.planModel).toBe("deepseek-v4-pro");
     expect(cfg.escalateOnFailure).toBe(true);
     expect(cfg.memoryAutoApproveConfidence).toBe(0.9);
+    const maintained = (await mockRequest("PUT", "/api/config", {
+      key: "memoryMaintenance",
+      value: { enabled: true, minFacts: 20, minBytes: 4096, minIntervalHours: 6 },
+    })) as ServerConfig;
+    expect(maintained.memoryMaintenance).toEqual({
+      enabled: true,
+      minFacts: 20,
+      minBytes: 4096,
+      minIntervalHours: 6,
+    });
   });
 });

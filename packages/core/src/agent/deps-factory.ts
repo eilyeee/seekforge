@@ -41,6 +41,7 @@
  */
 
 import type { ChatProvider, ModelPricing, RetryInfo } from "../provider/index.js";
+import { resolveMemoryMaintenanceConfig, type MemoryMaintenanceConfig } from "../memory/index.js";
 import { createDeepSeekProvider, resolveProviderConfig } from "../provider/index.js";
 import { createRetryBus, type AgentCoreDeps, type RetryBus } from "./loop.js";
 
@@ -99,6 +100,7 @@ export type BuildAgentCoreDepsInput = Omit<ProviderBuildInput, "onRetry"> & {
   planModel?: string;
   escalateOnFailure?: boolean;
   memoryAutoApproveConfidence?: number;
+  memoryMaintenance?: MemoryMaintenanceConfig;
   /** Only a non-blank string adds the key. */
   lintCommand?: string;
   /** Only an explicit `false` adds the key (default-on knob). */
@@ -130,6 +132,7 @@ export type AgentCoreDepsCommon = Pick<
   | "planModel"
   | "escalateOnFailure"
   | "memoryAutoApproveConfidence"
+  | "memoryMaintenance"
   | "lintCommand"
   | "autoLint"
   | "editFormat"
@@ -155,6 +158,7 @@ export function buildAgentCoreDeps(
   ) {
     throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
   }
+  const memoryMaintenance = resolveMemoryMaintenanceConfig(input.memoryMaintenance);
   // One retry bus shared by every provider this factory builds; the active
   // run routes its retries into the agent event stream (provider.retry).
   const retryBus = createRetryBus();
@@ -185,6 +189,7 @@ export function buildAgentCoreDeps(
     ...(input.memoryAutoApproveConfidence !== undefined
       ? { memoryAutoApproveConfidence: input.memoryAutoApproveConfidence }
       : {}),
+    ...(input.memoryMaintenance !== undefined ? { memoryMaintenance } : {}),
     ...(typeof input.lintCommand === "string" && input.lintCommand.trim() ? { lintCommand: input.lintCommand } : {}),
     ...(input.autoLint === false ? { autoLint: false } : {}),
     ...(input.editFormat ? { editFormat: input.editFormat } : {}),

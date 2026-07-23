@@ -17,6 +17,7 @@ export const COMMON_CONFIG_KEYS = [
   "planModel",
   "escalateOnFailure",
   "memoryAutoApproveConfidence",
+  "memoryMaintenance",
   "lintCommand",
   "autoLint",
   "editFormat",

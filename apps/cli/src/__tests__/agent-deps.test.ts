@@ -17,22 +17,30 @@ test("sandbox passes through (and 'off' is dropped)", () => {
   assert.equal(deps(base).sandbox, undefined);
 });
 
-test("planModel / compaction / escalateOnFailure / memoryAutoApproveConfidence pass through", () => {
+test("planModel / compaction / escalation / memory settings pass through", () => {
   const d = deps({
     ...base,
     planModel: "deepseek-v4-pro",
     compaction: "llm",
     escalateOnFailure: true,
     memoryAutoApproveConfidence: 0.8,
+    memoryMaintenance: { enabled: true, minFacts: 25, minIntervalHours: 12 },
   });
   assert.equal(d.planModel, "deepseek-v4-pro");
   assert.equal(d.compaction, "llm");
   assert.equal(d.escalateOnFailure, true);
   assert.equal(d.memoryAutoApproveConfidence, 0.8);
+  assert.deepEqual(d.memoryMaintenance, {
+    enabled: true,
+    minFacts: 25,
+    minBytes: 64 * 1024,
+    minIntervalHours: 12,
+  });
   // Defaults: absent when not configured.
   const bare = deps(base);
   assert.equal(bare.planModel, undefined);
   assert.equal(bare.escalateOnFailure, undefined);
+  assert.equal(bare.memoryMaintenance, undefined);
 });
 
 test("commandAllowlist and hooks pass through", () => {

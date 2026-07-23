@@ -6,6 +6,7 @@ import type { AgentEvent, ChatMessage, ChatResponse, ToolCall, ToolResult } from
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import { createDefaultDispatcher, type ToolContext, type ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
+import { readMemoryMaintenanceState } from "../../src/memory/index.js";
 import {
   createSessionTrace,
   listSessions,
@@ -1058,6 +1059,38 @@ describe("agent loop: auxiliary usage accounting", () => {
       expect(
         readSessionMeta(workspace, created?.type === "session.created" ? created.sessionId : "")?.usage?.costUsd,
       ).toBe(0.002);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("runs configured maintenance after auto-approved extraction", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-memory-maintenance-"));
+    try {
+      const provider = fakeProvider([
+        response({ content: "done" }),
+        response({
+          content:
+            '```json\n{"summary":"## Task\\ndone","facts":[{"content":"tests need the isolated harness","type":"tech","confidence":0.95}]}\n```',
+        }),
+      ]);
+      const agent = createAgentCore({
+        provider,
+        dispatcher: fakeDispatcher({ ok: true }),
+        confirm: async () => true,
+        extractMemory: true,
+        memoryAutoApproveConfidence: 0.9,
+        memoryMaintenance: { enabled: true, minFacts: 1, minBytes: 4 * 1024 * 1024, minIntervalHours: 0 },
+      });
+      const events = await collect(
+        agent.runTask({ projectPath: workspace, task: "complete the edit", mode: "edit", approvalMode: "auto" }),
+      );
+
+      expect(events.some((event) => event.type === "session.completed")).toBe(true);
+      expect(readMemoryMaintenanceState(workspace)).toMatchObject({
+        version: 1,
+        lastResult: { before: 1, after: 1 },
+      });
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

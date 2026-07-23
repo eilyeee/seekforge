@@ -39,10 +39,11 @@ They cannot supply credentials or credential destinations (`apiKey`,
 `statusLine`, `lintCommand`, `verifyCommand`), auto-authorize actions
 (`commandAllowlist`, `allow` permission rules, MCP `trusted`), weaken the
 sandbox, raise spending limits, auto-approve memory, or change audit retention.
-Those settings must come from `~/.seekforge/config.json`, environment variables,
-or an explicitly selected `--settings` file. A project MCP definition remains
-visible and can be tested by an explicit management action, but `trusted: true`
-is ignored unless the complete entry is user-owned.
+Automatic memory maintenance is also user-owned because it can archive project
+facts. Those settings must come from `~/.seekforge/config.json`, environment
+variables, or an explicitly selected `--settings` file. A project MCP definition
+remains visible and can be tested by an explicit management action, but
+`trusted: true` is ignored unless the complete entry is user-owned.
 
 ---
 
@@ -455,6 +456,41 @@ toward this run). Edit the file directly; not settable via `config set`.
 
 **Default off.** When set to a number in `0..1`, auto-extracted memory facts whose model confidence is `>= ` the threshold are written directly to `project.md` as approved (instead of being queued as pending candidates for review); facts below the threshold still wait for `seekforge memory approve`. Inspect extraction quality first with `seekforge memory stats`. Edit the file directly; not settable via `config set`.
 
+### `memoryMaintenance`
+
+**Default off.** Enables deterministic maintenance of approved project memory
+after a successful approved-memory write. It uses the same cross-process memory
+lease as manual compaction, never calls a model, and never fails the foreground
+Agent, CLI, TUI, or REST operation if housekeeping fails.
+
+```json
+{
+  "memoryMaintenance": {
+    "enabled": true,
+    "minFacts": 100,
+    "minBytes": 65536,
+    "minIntervalHours": 24,
+    "pruneUnusedDays": 180
+  }
+}
+```
+
+Maintenance becomes due when either `minFacts` or `minBytes` is reached and the
+minimum interval has elapsed. The defaults are 100 facts, 65,536 UTF-8 bytes,
+and 24 hours. Duplicate and near-duplicate facts are compacted deterministically.
+`minFacts` is a positive integer up to 1,000,000; `minBytes` is a positive
+integer up to 4 MiB; `minIntervalHours` is `0..8760`; and `pruneUnusedDays`,
+when present, is `0..36500`. Unknown nested keys and non-finite values are
+rejected rather than ignored.
+`pruneUnusedDays` is optional and disabled by default; when present, only facts
+that have never been used and are at least that old are moved to
+`project-archive.md`—they are not deleted. The last successful result is stored
+at `.seekforge/memory/maintenance.json` and shown in the Desktop Memory view.
+
+This is a user-owned setting: repository config and repository profiles cannot
+enable or tune it. Configure it in Desktop Settings or edit trusted global/user
+settings directly. It is intentionally not accepted by CLI `config set`.
+
 ### `permissionRules`
 
 Fine-grained allow/deny permission rules that augment the built-in 5-level
@@ -848,9 +884,10 @@ seekforge config set <key> <value> --global # writes to ~/.seekforge/config.json
 The remaining keys — `planModel`, `escalateOnFailure`, `maxCostUsd`,
 `modelPricing`, `verifyCommand`, `autoVerify`, `lintCommand`, `autoLint`,
 `editFormat`, `finalizeReview`, `guardNoProgress`,
-`memoryAutoApproveConfidence`, `permissionRules`, `mcpServers`, `hooks` — are
-**not settable** via `config set`. They must be edited directly in the JSON
-config file, or managed through their dedicated subcommands (`seekforge mcp
+`memoryAutoApproveConfidence`, `memoryMaintenance`, `permissionRules`,
+`mcpServers`, `hooks` — are **not settable** via `config set`. They must be
+edited directly in the JSON config file, configured through Desktop/Server where
+supported, or managed through their dedicated subcommands (`seekforge mcp
 add|list|remove` for MCP servers).
 
 Attempting `config set` with an unlisted key prints an error and lists the

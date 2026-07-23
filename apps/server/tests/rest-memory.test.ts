@@ -153,6 +153,33 @@ describe("config set new keys", () => {
     expect((await jsonOf(res)).error.code).toBe("bad_request");
   });
 
+  it("validates trusted automatic memory maintenance and exposes its last run", async () => {
+    let res = await authed("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        key: "memoryMaintenance",
+        global: true,
+        value: { enabled: true, minFacts: 1, minBytes: 4 * 1024 * 1024, minIntervalHours: 0 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await jsonOf(res)).memoryMaintenance).toMatchObject({ enabled: true, minFacts: 1, minIntervalHours: 0 });
+
+    res = await authed("/api/memory/fact", {
+      method: "POST",
+      body: JSON.stringify({ content: "automatic maintenance trigger", type: "tech" }),
+    });
+    expect(res.status).toBe(201);
+    const memory = await jsonOf(authed("/api/memory"));
+    expect(memory.maintenance).toMatchObject({ version: 1, lastResult: { before: expect.any(Number) } });
+
+    res = await authed("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({ key: "memoryMaintenance", global: true, value: { enabled: true, minFacts: 0 } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("PUT /api/config sets planModel and clears it when empty", async () => {
     let res = await authed("/api/config", {
       method: "PUT",

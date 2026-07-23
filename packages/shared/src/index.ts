@@ -523,15 +523,34 @@ export type MemoryFact = {
   lastUsedAt?: string;
 };
 
-/**
- * GET /api/memory response. NOTE: the server (rest.ts) returns `facts` in
- * addition to what SERVER-API.md's prose table lists — the table is stale;
- * code is the source of truth, so `facts` is part of the contract.
- */
+/** Last successful automatic project-memory maintenance run. */
+export type MemoryMaintenanceState = {
+  version: 1;
+  lastRunAt: string;
+  lastResult: {
+    before: number;
+    after: number;
+    removed: number;
+    merged: number;
+    archived: number;
+  };
+};
+
+/** GET /api/memory response. */
 export type MemoryResponse = {
   projectMd: string | null;
   candidates: MemoryCandidate[];
   facts: MemoryFact[];
+  maintenance: MemoryMaintenanceState | null;
+};
+
+/** Opt-in deterministic automatic maintenance for approved project memory. */
+export type MemoryMaintenanceConfig = {
+  enabled?: boolean;
+  minFacts?: number;
+  minBytes?: number;
+  minIntervalHours?: number;
+  pruneUnusedDays?: number;
 };
 
 /** GET /api/config payload (apiKey masked; engine knobs always present). */
@@ -555,9 +574,11 @@ export type ServerConfig = {
   escalateOnFailure?: boolean;
   /** Auto-approve extracted memory candidates at/above this confidence (0..1). */
   memoryAutoApproveConfidence?: number;
+  /** Deterministic threshold/interval-based project-memory maintenance. */
+  memoryMaintenance?: MemoryMaintenanceConfig;
 };
 
-/** PUT /api/config `key` values (same keys as `seekforge config set`). */
+/** PUT /api/config keys shared by Server and Desktop. */
 export type ConfigKey =
   | "apiKey"
   | "model"
@@ -571,7 +592,8 @@ export type ConfigKey =
   | "reasoningEffort"
   | "planModel"
   | "escalateOnFailure"
-  | "memoryAutoApproveConfidence";
+  | "memoryAutoApproveConfidence"
+  | "memoryMaintenance";
 
 /** GET /api/memory/stats — mirror of @seekforge/core MemoryStats. */
 export type MemoryStats = {

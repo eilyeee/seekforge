@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
+import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
 import { knownConfigKeys } from "@seekforge/shared/config-manifest";
@@ -69,6 +69,8 @@ export type TuiConfig = {
   escalateOnFailure?: boolean;
   /** Auto-approve extracted memories at/above this confidence (0-1); unset = no auto-approve. */
   memoryAutoApproveConfidence?: number;
+  /** Opt-in deterministic project-memory maintenance; trusted layers only. */
+  memoryMaintenance?: MemoryMaintenanceConfig;
   /** Self-lint gate (parallel to verifyCommand): lint command run before finishing after edits. */
   lintCommand?: string;
   /** Default true (when lintCommand set): run the lint command automatically on completion. */

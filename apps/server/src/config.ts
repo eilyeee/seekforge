@@ -28,7 +28,9 @@ import {
   MODEL_PRICING,
   type HookConfig,
   type McpServerConfig,
+  type MemoryMaintenanceConfig,
   type ModelPricing,
+  resolveMemoryMaintenanceConfig,
 } from "@seekforge/core";
 import type { HookStage, PermissionRule } from "@seekforge/shared";
 import { readFileBounded, readFileDescriptorBounded } from "@seekforge/shared/bounded-file-read";
@@ -87,6 +89,8 @@ export type ServerConfig = {
    * Edit the file directly; not settable via `config set`.
    */
   memoryAutoApproveConfidence?: number;
+  /** Opt-in deterministic project-memory maintenance; trusted layers only. */
+  memoryMaintenance?: MemoryMaintenanceConfig;
   /**
    * Self-lint gate (parallel to a verify gate): a shell command (e.g. "pnpm
    * lint") the loop runs before finishing when files were edited but not linted
@@ -136,6 +140,7 @@ export const CONFIG_KEYS = [
   "planModel",
   "escalateOnFailure",
   "memoryAutoApproveConfidence",
+  "memoryMaintenance",
 ] as const;
 
 /** Allowed values for the enum-typed config keys. */
@@ -453,13 +458,11 @@ export function maskedConfig(workspace: string): Record<string, unknown> {
     compaction: merged.compaction ?? "mechanical",
     thinking: merged.thinking ?? false,
     reasoningEffort: merged.reasoningEffort ?? null,
+    memoryMaintenance: resolveMemoryMaintenanceConfig(merged.memoryMaintenance),
   };
 }
 
-/**
- * Same keys/validation as `seekforge config set`.
- * Throws ConfigValueError on an unknown key or a bad value (HTTP 400).
- */
+/** Server/Desktop config mutation boundary. Throws ConfigValueError on bad input. */
 export function setConfigValue(workspace: string, key: string, value: unknown, global: boolean): void {
   if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
     throw new ConfigValueError(`unknown key "${key}". Allowed: ${CONFIG_KEYS.join(", ")}`);
@@ -497,6 +500,14 @@ export function setConfigValue(workspace: string, key: string, value: unknown, g
       throw new ConfigValueError("memoryAutoApproveConfidence must be a number between 0 and 1");
     }
     stored = num;
+  } else if (key === "memoryMaintenance") {
+    // Structured, trusted-only policy. Validation also rejects unknown nested
+    // keys so a typo cannot silently disable a threshold or archival guard.
+    try {
+      stored = resolveMemoryMaintenanceConfig(value);
+    } catch (error) {
+      throw new ConfigValueError(error instanceof Error ? error.message : String(error));
+    }
   } else if (key in ENUM_VALUES) {
     if (typeof value !== "string") throw new ConfigValueError(`${key} must be a string`);
     // reasoningEffort: empty clears it (back to the API default).

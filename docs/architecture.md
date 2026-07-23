@@ -64,6 +64,12 @@ Session traces are append-only JSONL and remain the source of truth for agent
 runs. Automatic context compaction writes a fingerprinted derivative snapshot;
 resume uses it only while its source prefix still matches. Context admission
 budgets the complete provider request, including advertised tool schemas.
+Approved project-memory writes may trigger opt-in deterministic maintenance.
+It shares the cross-process memory transaction lease, checks count/byte and
+persisted interval gates, and stores only the last successful summary in
+`.seekforge/memory/maintenance.json`; housekeeping failures never change the
+foreground operation's result, and stale-fact archival requires explicit
+user-owned configuration.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

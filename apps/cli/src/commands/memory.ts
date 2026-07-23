@@ -6,12 +6,14 @@ import {
   listProjectFacts,
   MEMORY_CANDIDATE_TYPES,
   memoryStats,
+  maybeMaintainProjectMemory,
   projectMemoryPath,
   rejectMemoryCandidate,
   removeCandidate,
   removeProjectFact,
   type MemoryCandidateType,
 } from "@seekforge/core";
+import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 
 export function memoryListCommand(): void {
@@ -84,6 +86,7 @@ export function memoryAddCommand(words: string[], opts: { type?: string; pending
       approve: !opts.pending,
       ...(opts.user ? { scope: "user" as const } : {}),
     });
+    if (!opts.user && !opts.pending) maybeMaintainProjectMemory(workspace, loadConfig(workspace).memoryMaintenance);
     if (opts.user) {
       console.log(t("cmd.memory.addedUser", { type: candidate.type, content: candidate.content }));
     } else if (opts.pending) {
@@ -120,7 +123,9 @@ export function memoryRemoveCommand(selector: string): void {
 
 export function memoryApproveCommand(id: string, opts: { user?: boolean } = {}): void {
   try {
-    const c = approveMemoryCandidate(process.cwd(), id, opts.user ? "user" : "project");
+    const workspace = process.cwd();
+    const c = approveMemoryCandidate(workspace, id, opts.user ? "user" : "project");
+    if (!opts.user) maybeMaintainProjectMemory(workspace, loadConfig(workspace).memoryMaintenance);
     console.log(t("cmd.memory.approved", { content: c.content }));
   } catch (err) {
     console.error((err as Error).message);

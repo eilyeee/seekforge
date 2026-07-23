@@ -128,14 +128,14 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
-| GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[]}` |
+| GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[], facts: MemoryFact[], maintenance: MemoryMaintenanceState \| null}`; maintenance is the last successful automatic-compaction summary, never a live mutation |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
 | GET /api/output-styles | `{styles: [{name, kind: "builtin"\|"custom"}]}` — selectable output styles: the in-package built-ins plus every custom `.seekforge/output-styles/*.md` of the workspace |
 | POST /api/commands/expand | body `{name, args}` → `{text}` — expands a custom slash command server-side: interpolates `args` into `$ARGUMENTS` / `$1`..`$9` and runs any ``!`shell` `` injections in the workspace (`/bin/sh -c`, 10 s timeout, 1 MB stdout cap; cwd = workspace), returning the final text. Shell expansion shares the repository/workspace mutation guard and returns 409 while another process owns the workspace. `name` resolves over the project + user command layers (project wins); 400 on missing/empty `name`, 404 `unknown command: <name>` |
 | GET /api/hooks | `{hooks}` — the user-owned hooks block from `~/.seekforge/config.json` (`{}` when none) |
 | PUT /api/hooks | body `{hooks}` — replaces the user-owned `~/.seekforge/config.json` hooks block (other config keys preserved; an empty/omitted hooks block is dropped), returns `{hooks}`. Validated against the 9 stages (`preToolUse`, `postToolUse`, `sessionStart`, `userPromptSubmit`, `preCompact`, `stop`, `subagentStop`, `notification`, `sessionEnd`); each entry needs a non-empty `command` plus optional string `match`/`pattern`. 400 on an unknown stage or malformed shape; global updates use the cross-process settings lease |
-| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` (always present, with effective defaults `"off"` / `"mechanical"` / `false` / `null`); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
+| GET /api/config | config with `apiKey` masked (`sk-xxx****`), plus `{model, baseUrl, runtimeBin, commandAllowlist}` and the engine knobs `{sandbox, compaction, thinking, reasoningEffort}` plus resolved `memoryMaintenance` defaults (always present); `mcpServers` is omitted (env values may be secret — see GET /api/mcp) |
 | GET /api/agents | `AgentDefinition[]` without prompt bodies (id, name, scope, mode, model?, tools?, description, triggers, ...) |
 | GET /api/agents/:id | full definition incl. prompt body (404 unknown) |
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
@@ -152,7 +152,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/security/findings/:id/fix | body `{maxCostUsd, verifyCommand, lintCommand?}`; runs a cost-bounded edit Agent, exact sandboxed checks, and a fresh scan |
 | GET /api/security/export?format=json\|markdown\|sarif | rendered compliance evidence package and filename |
 | POST /api/rewind | body `{sessionId, dryRun?}` → rewindSession result; 404 on unknown session or zero checkpoints |
-| PUT /api/config | body `{key, value, global?}` — same keys/validation as `seekforge config set`; 400 on unknown keys or user-owned keys attempted without `global:true`. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
+| PUT /api/config | body `{key, value, global?}` — supports the ordinary CLI config keys plus Server/Desktop structured settings such as `models` and `memoryMaintenance`; nested maintenance fields are strictly validated. Returns 400 on unknown keys or user-owned keys attempted without `global:true`. Project updates share the repository/workspace session guard; global updates use a separate cross-process settings lease; conflicts return 409 `session_busy` |
 | GET /api/triggers | webhook triggers `{id, task, mode, maxCostUsd, secret:"***", enabled}[]` — secrets always masked |
 | POST /api/triggers | body `{id, task, mode:"ask"\|"edit", maxCostUsd, secret, enabled?}` → `201` masked trigger. `maxCostUsd` and `secret` (≥8 chars) are **required**; 400 on missing/invalid, 409 duplicate id |
 | DELETE /api/triggers/:id | `{deleted: true}`; 404 unknown id |

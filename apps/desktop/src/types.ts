@@ -23,6 +23,8 @@ export type {
   MemoryCandidate,
   MemoryFact,
   MemoryResponse,
+  MemoryMaintenanceConfig,
+  MemoryMaintenanceState,
   ServerConfig,
   ConfigKey,
   MemoryStats,

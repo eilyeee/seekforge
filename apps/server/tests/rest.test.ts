@@ -403,6 +403,7 @@ describe("REST endpoints", () => {
     expect(body.projectMd).toContain("existing fact");
     expect(body.candidates).toHaveLength(1);
     expect(body.candidates[0].id).toBe("c1");
+    expect(body.maintenance).toBeNull();
   });
 
   it("POST /api/memory/:id/approve updates the candidate and project.md", async () => {

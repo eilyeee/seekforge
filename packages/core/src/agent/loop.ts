@@ -26,7 +26,14 @@ import {
   type ToolContext,
   type ToolDispatcher,
 } from "../tools/index.js";
-import { buildMemoryBrief, extractMemoryFromSession, recordFactExposure } from "../memory/index.js";
+import {
+  buildMemoryBrief,
+  extractMemoryFromSession,
+  maybeMaintainProjectMemory,
+  recordFactExposure,
+  resolveMemoryMaintenanceConfig,
+  type MemoryMaintenanceConfig,
+} from "../memory/index.js";
 import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
 import {
   AGENT_RESULT_TOOL,
@@ -168,6 +175,8 @@ export type AgentCoreDeps = {
    * Threaded into extractMemoryFromSession; unset = every fact stays pending.
    */
   memoryAutoApproveConfidence?: number;
+  /** Opt-in deterministic post-write maintenance for approved project memory. */
+  memoryMaintenance?: MemoryMaintenanceConfig;
   /** Rust execution backend; passed through to tools via ToolContext. */
   runtime?: RuntimeClient;
   /**
@@ -370,6 +379,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   ) {
     throw new RangeError("memoryAutoApproveConfidence must be a finite number between 0 and 1");
   }
+  const memoryMaintenance = resolveMemoryMaintenanceConfig(deps.memoryMaintenance);
   for (const def of deps.subagents ?? []) {
     if (def.mode !== "ask" && def.mode !== "edit") {
       throw new Error(`invalid subagent mode for ${def.id}: ${String(def.mode)}`);
@@ -1470,6 +1480,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 report = { ...report, usage };
                 yield emit({ type: "usage.updated", usage });
                 throwIfCancelled();
+              }
+              if (
+                memoryMaintenance.enabled &&
+                extraction.candidates.some((candidate) => candidate.status === "approved")
+              ) {
+                // Best-effort by contract: maintenance reports failure in its
+                // outcome and must never turn a completed user task into a failure.
+                maybeMaintainProjectMemory(input.projectPath, memoryMaintenance);
               }
               yield emit({ type: "step.completed", title: "extracting memory" });
             } catch {

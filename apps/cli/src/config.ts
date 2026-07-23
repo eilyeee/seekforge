@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { HookConfig, McpServerConfig, ModelPricing } from "@seekforge/core";
+import type { HookConfig, McpServerConfig, MemoryMaintenanceConfig, ModelPricing } from "@seekforge/core";
 import type { PermissionRule } from "@seekforge/shared";
 import { mergeConfigLayers, sanitizeProjectConfig } from "@seekforge/shared/config-layers";
 import { knownConfigKeys } from "@seekforge/shared/config-manifest";
@@ -123,6 +123,8 @@ export type CliConfig = {
    * Edit the file directly; not settable via `config set`.
    */
   memoryAutoApproveConfidence?: number;
+  /** Opt-in deterministic project-memory maintenance; trusted layers only. */
+  memoryMaintenance?: MemoryMaintenanceConfig;
   /**
    * Named config overlays selectable via `--profile <name>` (or the
    * SEEKFORGE_PROFILE env var). Each profile is a partial CliConfig whose fields

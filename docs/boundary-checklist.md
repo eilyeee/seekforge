@@ -1807,6 +1807,21 @@ plausible WebSocket string and fail late or connect with unintended authority.
 - **Caught:** the VS Code bridge rewrote every configured server scheme to
   `ws:`/`wss:` without first requiring an HTTP(S) server URL.
 
+## 140. Best-effort maintenance must not own the foreground result
+
+Housekeeping runs after a user-visible mutation has already succeeded. If its
+config, state, lease, or write fails, propagating that error reports the original
+operation as failed even though its durable effect already happened; rewriting
+malformed housekeeping state can also destroy the only diagnostic evidence.
+
+- **Do:** validate maintenance policy at the trust boundary, use the domain's
+  shared transaction lease, preserve corrupt state, return a typed maintenance
+  outcome, and keep foreground success independent from that outcome. Persist a
+  throttle timestamp only after maintenance itself succeeds.
+- **Caught:** `packages/core/src/memory/maintenance.ts` and its CLI/TUI/Server/
+  Agent callers needed automatic compaction without making an approved memory
+  write fail or allowing repository config to opt into stale-fact archival.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

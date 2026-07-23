@@ -213,7 +213,7 @@ export const api = {
       withWorkspace(`/api/diff${staged ? "?staged=1" : ""}`, ws),
     ),
   config: (ws?: string) => request<ServerConfig>("GET", withWorkspace("/api/config", ws)),
-  setConfig: (key: ConfigKey, value: string, global?: boolean, ws?: string) =>
+  setConfig: (key: ConfigKey, value: unknown, global?: boolean, ws?: string) =>
     request<ServerConfig>("PUT", withWorkspace("/api/config", ws), {
       key,
       value,

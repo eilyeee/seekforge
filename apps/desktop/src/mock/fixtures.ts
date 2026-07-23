@@ -423,4 +423,10 @@ export const mockConfig: ServerConfig = {
   planModel: "",
   escalateOnFailure: false,
   memoryAutoApproveConfidence: undefined,
+  memoryMaintenance: {
+    enabled: false,
+    minFacts: 100,
+    minBytes: 65536,
+    minIntervalHours: 24,
+  },
 };

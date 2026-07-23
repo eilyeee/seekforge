@@ -297,6 +297,7 @@ export const views = {
     "memory.compact.title": "compact memory",
     "memory.compact.description":
       "Collapse exact duplicates and merge near-duplicate bullets. Optionally archive stale, never-used facts.",
+    "memory.compact.lastAutomatic": "last automatic run {age}: {before} → {after}; archived {archived}",
     "memory.compact.pruneLabel": "prune unused facts older than (days)",
     "memory.compact.prunePlaceholder": "e.g. 60 (blank = don't prune)",
     "memory.compact.previewBtn": "Preview",
@@ -412,6 +413,14 @@ export const views = {
     "settings.memoryAutoApproveHint":
       "Auto-approve extracted memory candidates at or above this confidence. Blank disables auto-approval.",
     "settings.memoryAutoApprovePlaceholder": "e.g. 0.9 (blank = off)",
+    "settings.memoryMaintenanceLabel": "automatic memory maintenance (user setting)",
+    "settings.memoryMaintenanceHint":
+      "Deterministically deduplicate and merge approved project memory after a threshold and interval. Archival is optional; maintenance never calls a model.",
+    "settings.memoryMaintenanceEnabled": "enable automatic maintenance",
+    "settings.memoryMaintenanceMinFacts": "minimum facts (default 100)",
+    "settings.memoryMaintenanceMinBytes": "minimum bytes (default 65536)",
+    "settings.memoryMaintenanceInterval": "minimum interval hours (default 24)",
+    "settings.memoryMaintenancePruneDays": "archive never-used facts after days (blank = off)",
     // MCP add / remove
     "settings.mcpAddTitle": "Add MCP server",
     "settings.mcpEditTitle": "Edit MCP server",
@@ -886,6 +895,7 @@ export const views = {
     // Compact control
     "memory.compact.title": "压缩记忆",
     "memory.compact.description": "合并完全重复的条目以及高度相似的条目。可选择归档长期未使用的陈旧事实。",
+    "memory.compact.lastAutomatic": "上次自动整理于 {age}：{before} → {after}；归档 {archived}",
     "memory.compact.pruneLabel": "归档早于以下天数的未使用事实",
     "memory.compact.prunePlaceholder": "例如 60（留空 = 不归档）",
     "memory.compact.previewBtn": "预览",
@@ -999,6 +1009,14 @@ export const views = {
     "settings.memoryAutoApproveLabel": "memoryAutoApproveConfidence（0..1，留空 = 关闭）",
     "settings.memoryAutoApproveHint": "对置信度达到该值及以上的记忆候选自动批准。留空则关闭自动批准。",
     "settings.memoryAutoApprovePlaceholder": "例如 0.9（留空 = 关闭）",
+    "settings.memoryMaintenanceLabel": "自动记忆整理（用户级设置）",
+    "settings.memoryMaintenanceHint":
+      "达到阈值和间隔后，确定性地去重并合并已批准的项目记忆。归档为可选项；整理过程不会调用模型。",
+    "settings.memoryMaintenanceEnabled": "启用自动整理",
+    "settings.memoryMaintenanceMinFacts": "最少事实数（默认 100）",
+    "settings.memoryMaintenanceMinBytes": "最少字节数（默认 65536）",
+    "settings.memoryMaintenanceInterval": "最短间隔小时数（默认 24）",
+    "settings.memoryMaintenancePruneDays": "从未使用事实的归档天数（留空 = 关闭）",
     // MCP add / remove
     "settings.mcpAddTitle": "添加 MCP 服务器",
     "settings.mcpEditTitle": "编辑 MCP 服务器",

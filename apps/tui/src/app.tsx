@@ -15,6 +15,7 @@ import {
   listMemoryCandidates,
   listProjectFacts,
   listSessions,
+  maybeMaintainProjectMemory,
   rejectMemoryCandidate,
   loadAgentDefinitions,
   projectMemoryPath,
@@ -1111,6 +1112,7 @@ export function App({
           }
           try {
             const c = addMemoryFact(projectPath, { content: command.arg, type: "convention" });
+            maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
             notice(`remembered → project.md: ${c.content}`);
           } catch (err) {
             notice(`error: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -2322,8 +2324,10 @@ export function App({
             return;
           }
           try {
-            if (key === "a") approveMemoryCandidate(projectPath, candidate.id, overlay.scope);
-            else rejectMemoryCandidate(projectPath, candidate.id);
+            if (key === "a") {
+              approveMemoryCandidate(projectPath, candidate.id, overlay.scope);
+              if (overlay.scope === "project") maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
+            } else rejectMemoryCandidate(projectPath, candidate.id);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             notice(`memory ${key === "a" ? "approve" : "reject"} failed: ${message}`, "error");

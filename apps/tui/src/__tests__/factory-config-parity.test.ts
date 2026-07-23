@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The TUI factory must reach config parity with the CLI: the flat documented
 // `planModel` key (taking precedence over the back-compat nested
-// `routing.planModel`) and `memoryAutoApproveConfidence` must reach core's
+// `routing.planModel`) and memory settings must reach core's
 // createAgentCore deps. We mock core to capture the deps rather than build a
 // real agent.
 const createAgentCore = vi.fn(() => ({}) as never);
@@ -51,10 +51,28 @@ describe("createTuiAgent config parity", () => {
     expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ memoryAutoApproveConfidence: 0.9 }));
   });
 
-  it("omits planModel and memoryAutoApproveConfidence when unset", () => {
+  it("forwards resolved automatic memory maintenance when set", () => {
+    createTuiAgent({
+      ...baseOpts,
+      config: { memoryMaintenance: { enabled: true, minFacts: 20, minIntervalHours: 6 } },
+    } as never);
+    expect(createAgentCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryMaintenance: {
+          enabled: true,
+          minFacts: 20,
+          minBytes: 64 * 1024,
+          minIntervalHours: 6,
+        },
+      }),
+    );
+  });
+
+  it("omits planModel and memory settings when unset", () => {
     createTuiAgent({ ...baseOpts, config: {} } as never);
     const deps = (createAgentCore.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect(deps).not.toHaveProperty("planModel");
     expect(deps).not.toHaveProperty("memoryAutoApproveConfidence");
+    expect(deps).not.toHaveProperty("memoryMaintenance");
   });
 });

@@ -287,7 +287,12 @@ export function MemoryView() {
             <aside className="space-y-6 lg:col-span-1">
               <StatsPanel stats={stats} />
 
-              <CompactControl key={ws} workspaceId={ws} onApplied={() => refresh(ws)} />
+              <CompactControl
+                key={ws}
+                workspaceId={ws}
+                maintenance={memory.maintenance}
+                onApplied={() => refresh(ws)}
+              />
 
               <section>
                 <div className="mb-3 flex items-center gap-2">
@@ -470,7 +475,15 @@ function StatRow({ label, value }: { label: string; value: string }) {
 }
 
 /** Dry-run preview → apply compaction, with an optional prune-unused-days input. */
-function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApplied: () => void }) {
+function CompactControl({
+  workspaceId,
+  maintenance,
+  onApplied,
+}: {
+  workspaceId: string;
+  maintenance: MemoryResponse["maintenance"];
+  onApplied: () => void;
+}) {
   const t = useT();
   const [pruneDays, setPruneDays] = useState("");
   const [preview, setPreview] = useState<CompactResult | null>(null);
@@ -522,6 +535,16 @@ function CompactControl({ workspaceId, onApplied }: { workspaceId: string; onApp
       </div>
       <Card className="p-4">
         <p className="text-xs leading-relaxed text-tertiary">{t("memory.compact.description")}</p>
+        {maintenance && (
+          <p className="mt-2 rounded-md bg-surface-overlay px-2 py-1.5 font-mono text-2xs text-tertiary">
+            {t("memory.compact.lastAutomatic", {
+              age: relativeAge(t, maintenance.lastRunAt),
+              before: maintenance.lastResult.before,
+              after: maintenance.lastResult.after,
+              archived: maintenance.lastResult.archived,
+            })}
+          </p>
+        )}
         <label htmlFor="memory-prune-days" className="mt-3 block text-2xs uppercase tracking-wider text-tertiary">
           {t("memory.compact.pruneLabel")}
         </label>

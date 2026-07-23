@@ -371,7 +371,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   if (method === "GET" && path === "/api/memory") {
-    return { projectMd: mockProjectMd, candidates, facts: facts.map((f) => ({ ...f })) };
+    return { projectMd: mockProjectMd, candidates, facts: facts.map((f) => ({ ...f })), maintenance: null };
   }
   if (method === "GET" && path === "/api/memory/stats") {
     const pending = candidates.filter((c) => c.status === "pending").length;
@@ -502,6 +502,9 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
         else config.memoryAutoApproveConfidence = Number(v);
         break;
       }
+      case "memoryMaintenance":
+        config.memoryMaintenance = { ...(value as NonNullable<ServerConfig["memoryMaintenance"]>) };
+        break;
       default:
         throw new Error(`unknown config key: ${String(key)}`);
     }

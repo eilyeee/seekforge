@@ -9,6 +9,7 @@ import {
   listSessions,
   loadAgentDefinitions,
   loadUserCommands,
+  maybeMaintainProjectMemory,
   readSessionMeta,
 } from "@seekforge/core";
 import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
@@ -175,6 +176,7 @@ export async function replCommand(opts: {
         }
         try {
           const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+          maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
           console.log(t("repl.remembered", { content: c.content }));
         } catch (err) {
           console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
@@ -341,6 +343,7 @@ export async function replCommand(opts: {
             }
             try {
               const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
+              maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
               console.log(t("repl.remembered", { content: c.content }));
             } catch (err) {
               console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
