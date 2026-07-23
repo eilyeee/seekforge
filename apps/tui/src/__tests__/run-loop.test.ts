@@ -58,6 +58,7 @@ describe("runLoop", () => {
   });
 
   it("uses an explicit command budget instead of the config default", async () => {
+    const control = { marker: "control" };
     await runLoop("fix it", "pnpm test", new AbortController().signal, {
       config: { costBudgetUsd: 2.5 },
       model: "test-model",
@@ -66,12 +67,13 @@ describe("runLoop", () => {
       maxIterations: 12,
       costBudgetUsd: 0.75,
       requirementMode: "analyze",
+      control: control as never,
       onEvent: vi.fn(),
     });
 
     expect(runAutoLoop).toHaveBeenCalledWith(
       { marker: "agent-deps" },
-      expect.objectContaining({ maxIterations: 12, costBudgetUsd: 0.75, requirementMode: "analyze" }),
+      expect.objectContaining({ maxIterations: 12, costBudgetUsd: 0.75, requirementMode: "analyze", control }),
     );
   });
 });
@@ -86,6 +88,7 @@ describe("resumeLoop", () => {
     resumeAutoLoop.mockResolvedValue(result);
     const signal = new AbortController().signal;
     const onEvent = vi.fn();
+    const control = { marker: "control" };
     await resumeLoop("loop-1", signal, {
       config: {},
       model: "test-model",
@@ -94,6 +97,7 @@ describe("resumeLoop", () => {
       addedIterations: 3,
       addedCostBudgetUsd: 0.5,
       approveRequirements: true,
+      control: control as never,
       onEvent,
     });
     expect(resumeAutoLoop).toHaveBeenCalledWith(
@@ -104,6 +108,7 @@ describe("resumeLoop", () => {
         additionalIterations: 3,
         additionalCostBudgetUsd: 0.5,
         approveRequirements: true,
+        control,
         signal,
         onEvent,
       }),

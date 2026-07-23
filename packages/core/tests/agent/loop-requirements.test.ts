@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildAcceptanceReviewPrompt,
@@ -7,6 +10,7 @@ import {
   formatAcceptanceGaps,
   parseLoopAcceptanceReview,
   parseLoopRequirementSpec,
+  validateLoopAcceptanceEvidence,
 } from "../../src/agent/loop-requirements.js";
 
 const validSpec = {
@@ -92,6 +96,35 @@ describe("loop requirement parsing", () => {
       complete: false,
       criteria: [{ id: "AC-1", status: "unknown" }],
     });
+  });
+
+  it("downgrades unverifiable claims and retains checked path or command evidence", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-acceptance-"));
+    try {
+      writeFileSync(join(workspace, "feature.ts"), "export const feature = true;\n");
+      const spec = parseLoopRequirementSpec(validSpec)!;
+      const unverifiable = validateLoopAcceptanceEvidence(
+        workspace,
+        spec,
+        { complete: true, criteria: [{ id: "AC-1", status: "met", evidence: ["missing.ts"] }], gaps: [] },
+        { commands: ["pnpm test"], verifierOutput: "all green" },
+      );
+      expect(unverifiable).toMatchObject({ complete: false, criteria: [{ status: "unknown", evidence: [] }] });
+      const verified = validateLoopAcceptanceEvidence(
+        workspace,
+        spec,
+        {
+          complete: true,
+          criteria: [{ id: "AC-1", status: "met", evidence: ["path:feature.ts", "command:pnpm test"] }],
+          gaps: [],
+        },
+        { commands: ["pnpm test"], verifierOutput: "all green" },
+      );
+      expect(verified.complete).toBe(true);
+      expect(verified.criteria[0]?.evidence).toEqual(["path:feature.ts", "command:pnpm test"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

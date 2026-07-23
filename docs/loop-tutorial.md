@@ -358,6 +358,22 @@ Event stream types (`LoopEvent`):
 `resumeAutoLoop` restores both worker/reviewer sessions and cumulative resource
 usage. Resume can add iteration, cost, token, duration, and verifier capacity.
 
+## 11.5. Deeper Loop workflows
+
+```bash
+seekforge loop "finish the parser" --verify "pnpm typecheck" \
+  --verify-stage tests="pnpm test" --flaky-retries 1 --stable-passes 2 \
+  --stuck-recoveries 1 --worktree --deliver checkpoint
+seekforge loop-history <loop-id> --after 0 --limit 100
+seekforge loop-recover
+seekforge loop-dag ./loop-dag.json --budget 2
+```
+
+The Desktop panel exposes the verification pipeline, stability/flaky/stuck
+controls, and safe-boundary Pause/Continue/Steer actions. Rollback and delivery
+require a retained Loop worktree. For draft-PR delivery, use `--deliver pr` with
+an authenticated `gh` installation.
+
 ## 12. Practical advice and FAQ
 
 **How do I pick a verify command?** Fast and deterministic. It runs every

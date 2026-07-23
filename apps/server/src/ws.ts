@@ -14,10 +14,12 @@ import {
   MAX_LOOP_ITERATIONS,
   MAX_STEER_MESSAGE_LENGTH,
   createDispatchManager,
+  createLoopControl,
   detectThinkingKeyword,
   readSessionMeta,
   resolveOutputStyle,
   type DispatchManager,
+  type LoopControl,
 } from "@seekforge/core";
 import type {
   ApiErrorCode,
@@ -107,6 +109,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
   let running = false;
   let controller: AbortController | undefined;
   let activeDispatchManager: DispatchManager | undefined;
+  let activeLoopControl: LoopControl | undefined;
   let requestCounter = 0;
   let activeRunId: string | undefined;
   let activeWorkspace: string | undefined;
@@ -470,11 +473,18 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       verifyTimeoutMs?: number;
       agentTimeoutMs?: number;
       maxAgentRetries?: number;
+      verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+      stablePasses?: number;
+      flakyRetries?: number;
+      maxNoProgressRecoveries?: number;
+      rollbackOnRegression?: boolean;
       requirementMode?: "quick" | "analyze" | "confirm";
       overrides?: RunOverrides;
+      control: LoopControl;
     },
     runController: AbortController,
   ): Promise<void> => {
+    activeLoopControl = input.control;
     try {
       runController.signal.throwIfAborted();
       const result = await deps.runLoop(
@@ -504,10 +514,18 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           ...(input.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: input.verifyTimeoutMs } : {}),
           ...(input.agentTimeoutMs !== undefined ? { agentTimeoutMs: input.agentTimeoutMs } : {}),
           ...(input.maxAgentRetries !== undefined ? { maxAgentRetries: input.maxAgentRetries } : {}),
+          ...(input.verificationPlan !== undefined ? { verificationPlan: input.verificationPlan } : {}),
+          ...(input.stablePasses !== undefined ? { stablePasses: input.stablePasses } : {}),
+          ...(input.flakyRetries !== undefined ? { flakyRetries: input.flakyRetries } : {}),
+          ...(input.maxNoProgressRecoveries !== undefined
+            ? { maxNoProgressRecoveries: input.maxNoProgressRecoveries }
+            : {}),
+          ...(input.rollbackOnRegression !== undefined ? { rollbackOnRegression: input.rollbackOnRegression } : {}),
           ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
           onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
+          control: input.control,
         },
       );
       deps.runManager.update(input.workspace, runId, {
@@ -541,6 +559,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       if (controller === runController) controller = undefined;
       activeRunId = undefined;
       activeWorkspace = undefined;
+      if (activeLoopControl === input.control) activeLoopControl = undefined;
       denyAllPending();
       if (!closed) send({ type: "idle" });
     }
@@ -558,9 +577,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       addedVerifyRuns?: number;
       approveRequirements?: boolean;
       overrides?: RunOverrides;
+      control: LoopControl;
     },
     runController: AbortController,
   ): Promise<void> => {
+    activeLoopControl = input.control;
     try {
       runController.signal.throwIfAborted();
       const result = await deps.resumeLoop(
@@ -583,6 +604,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           approvalMode: "acceptEdits",
           signal: runController.signal,
           onEvent: (event) => sendRun(runId, input.workspace, { type: "loop.event", event }),
+          control: input.control,
         },
       );
       deps.runManager.update(input.workspace, runId, {
@@ -616,6 +638,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       if (controller === runController) controller = undefined;
       activeRunId = undefined;
       activeWorkspace = undefined;
+      if (activeLoopControl === input.control) activeLoopControl = undefined;
       denyAllPending();
       if (!closed) send({ type: "idle" });
     }
@@ -717,6 +740,11 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           verifyTimeoutMs,
           agentTimeoutMs,
           maxAgentRetries,
+          verificationPlan,
+          stablePasses,
+          flakyRetries,
+          maxNoProgressRecoveries,
+          rollbackOnRegression,
           requirementMode,
           ws: wsId,
         } = frame;
@@ -743,8 +771,14 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
                 ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
                 ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
+                ...(verificationPlan !== undefined ? { verificationPlan } : {}),
+                ...(stablePasses !== undefined ? { stablePasses } : {}),
+                ...(flakyRetries !== undefined ? { flakyRetries } : {}),
+                ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
+                ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
                 ...(requirementMode !== undefined ? { requirementMode } : {}),
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
+                control: createLoopControl(),
               },
               runController,
             ),
@@ -787,6 +821,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
                 ...(approveRequirements !== undefined ? { approveRequirements } : {}),
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
+                control: createLoopControl(),
               },
               runController,
             ),
@@ -828,6 +863,24 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
         const result = activeDispatchManager.cancel(dispatchId);
         if (!result.ok) return fail(result.code, result.message);
         send({ type: "subagent.control", dispatchId, operation: "cancel", status: "accepted" });
+        return;
+      }
+
+      case "loop.pause": {
+        if (!running || !activeLoopControl) return fail("not_running", "no controllable Loop is active");
+        activeLoopControl.pause();
+        return;
+      }
+
+      case "loop.control.resume": {
+        if (!running || !activeLoopControl) return fail("not_running", "no controllable Loop is active");
+        activeLoopControl.resume();
+        return;
+      }
+
+      case "loop.steer": {
+        if (!running || !activeLoopControl) return fail("not_running", "no controllable Loop is active");
+        activeLoopControl.steer(frame.message);
         return;
       }
 
@@ -903,6 +956,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
     subscriptions.clear();
     denyAllPending();
     activeDispatchManager?.disposeAll();
+    activeLoopControl?.resume();
     if (activeRunId && activeWorkspace) deps.runManager.cancel(activeWorkspace, activeRunId);
     else controller?.abort();
   });

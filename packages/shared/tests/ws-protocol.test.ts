@@ -18,6 +18,14 @@ const validFrames = [
     verifyTimeoutMs: 10_000,
     agentTimeoutMs: 30_000,
     maxAgentRetries: 0,
+    verificationPlan: [
+      { id: "types", command: "pnpm typecheck" },
+      { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+    ],
+    stablePasses: 2,
+    flakyRetries: 1,
+    maxNoProgressRecoveries: 1,
+    rollbackOnRegression: false,
   },
   {
     type: "loop.resume",
@@ -32,6 +40,9 @@ const validFrames = [
   { type: "question.answer", id: "q1", answer: "yes" },
   { type: "subagent.cancel", dispatchId: "ag-1" },
   { type: "subagent.steer", dispatchId: "ag-2", message: "focus on tests" },
+  { type: "loop.pause" },
+  { type: "loop.control.resume" },
+  { type: "loop.steer", message: "focus on the parser" },
   { type: "subscribe", runId: "run-abc-123", afterSeq: 0 },
   { type: "cancel" },
 ] as const;
@@ -45,12 +56,16 @@ const invalidFrames = [
   { type: "loop", task: "fix", verifyCommand: "test", maxIterations: 101 },
   { type: "loop", task: "fix", verifyCommand: "test", tokenBudget: 0 },
   { type: "loop", task: "fix", verifyCommand: "test", maxAgentRetries: -1 },
+  { type: "loop", task: "fix", verifyCommand: "test", stablePasses: 6 },
+  { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "../bad", command: "test" }] },
+  { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "test", command: "" }] },
   { type: "loop.resume", loopId: "../escape" },
   { type: "loop.resume", loopId: "loop-1", addedDurationMs: 0 },
   { type: "permission.response", requestId: "p1", approved: "yes" },
   { type: "question.answer", id: "q1", answer: 42 },
   { type: "subagent.cancel", dispatchId: "../ag-1" },
   { type: "subagent.steer", dispatchId: "ag-1", message: "" },
+  { type: "loop.steer", message: "" },
   { type: "subscribe", runId: "../run-1" },
   { type: "unknown" },
 ] as const;
@@ -112,6 +127,9 @@ describe("WS client protocol decoder", () => {
         { type: "subagent.steer", dispatchId: "ag-1", message: "four" },
         { ...limits, maxSteerMessageLength: 3 },
       ),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseClientFrame({ type: "loop.steer", message: "four" }, { ...limits, maxSteerMessageLength: 3 }),
     ).toMatchObject({ ok: false });
   });
 });

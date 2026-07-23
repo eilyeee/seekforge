@@ -205,8 +205,16 @@ type AppStore = {
     verifyTimeoutMs?: number;
     agentTimeoutMs?: number;
     maxAgentRetries?: number;
+    verificationPlan?: Array<{ id: string; command: string }>;
+    stablePasses?: number;
+    flakyRetries?: number;
+    maxNoProgressRecoveries?: number;
+    rollbackOnRegression?: boolean;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
+  pauseLoop: () => void;
+  continueLoop: () => void;
+  steerLoop: (message: string) => void;
   /** Resumes the persisted loop represented by the active tab's completed result. */
   resumeLoop: (opts: {
     loopId: string;
@@ -609,6 +617,11 @@ export const useStore = create<AppStore>()((set, get) => {
       verifyTimeoutMs,
       agentTimeoutMs,
       maxAgentRetries,
+      verificationPlan,
+      stablePasses,
+      flakyRetries,
+      maxNoProgressRecoveries,
+      rollbackOnRegression,
       requirementMode,
     }) => {
       const tab = activeTab(get().tabs);
@@ -627,6 +640,11 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
         ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
         ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
+        ...(verificationPlan !== undefined ? { verificationPlan } : {}),
+        ...(stablePasses !== undefined ? { stablePasses } : {}),
+        ...(flakyRetries !== undefined ? { flakyRetries } : {}),
+        ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
+        ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
         ...(requirementMode !== undefined ? { requirementMode } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
@@ -651,6 +669,21 @@ export const useStore = create<AppStore>()((set, get) => {
           wsError: null,
         }),
       }));
+    },
+
+    pauseLoop: () => {
+      const tab = activeTab(get().tabs);
+      if (tab.loopRunning) ensureWs(tab.tabId).send({ type: "loop.pause" });
+    },
+
+    continueLoop: () => {
+      const tab = activeTab(get().tabs);
+      if (tab.loopRunning) ensureWs(tab.tabId).send({ type: "loop.control.resume" });
+    },
+
+    steerLoop: (message) => {
+      const tab = activeTab(get().tabs);
+      if (tab.loopRunning && message.trim()) ensureWs(tab.tabId).send({ type: "loop.steer", message: message.trim() });
     },
 
     resumeLoop: ({

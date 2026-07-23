@@ -42,6 +42,41 @@ describe("parseVerifyDiagnostics", () => {
     expect(result.diagnostics).toContainEqual({ file: "src/parser.rs", line: 42, message: "expected error" });
   });
 
+  it.each([
+    ["typescript", "src/main.ts(12,4): error TS2322: Type 'string' is not assignable", "src/main.ts"],
+    ["eslint", "ESLint\nsrc/main.ts:8:3 error Unexpected any no-explicit-any\n1 problem (1 error)", "src/main.ts"],
+    ["go", "--- FAIL: TestParser (0.01s)\n parser_test.go:21: expected error\nFAIL pkg/parser", "parser_test.go"],
+    ["dotnet", "Test Run Failed.\nProgram.cs(9,2): error CS1002: ; expected\nFailed! - Failed: 1", "Program.cs"],
+  ])("extracts %s diagnostics", (framework, output, file) => {
+    const result = parseVerifyDiagnostics(output);
+    expect(result.framework).toBe(framework);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.file === file)).toBe(true);
+  });
+
+  it("extracts SARIF findings", () => {
+    const result = parseVerifyDiagnostics(
+      JSON.stringify({
+        version: "2.1.0",
+        runs: [
+          {
+            results: [
+              {
+                ruleId: "SEC-1",
+                message: { text: "unsafe call" },
+                locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 7 } } }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      framework: "sarif",
+      failedTests: ["SEC-1"],
+      diagnostics: [{ file: "src/a.ts", line: 7, message: "unsafe call" }],
+    });
+  });
+
   it("produces a stable fingerprint across timing, ANSI, path separators, and ordering noise", () => {
     const first = parseVerifyDiagnostics(`Vitest\n× b 20ms\n× a 10ms\nError: boom\n at tests\\a.test.ts:7:1`);
     const second = parseVerifyDiagnostics(

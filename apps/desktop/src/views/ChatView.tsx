@@ -53,6 +53,9 @@ export function ChatView() {
     truncateAtItem,
     startLoop,
     resumeLoop,
+    pauseLoop,
+    continueLoop,
+    steerLoop,
   } = useStore.getState();
   const workspaceName = (ws: string) => workspaces.find((w) => w.id === ws)?.name;
 
@@ -408,6 +411,9 @@ export function ChatView() {
         onRun={startLoop}
         onResume={resumeLoop}
         onStop={cancel}
+        onPause={pauseLoop}
+        onContinue={continueLoop}
+        onSteer={steerLoop}
       />
 
       <div

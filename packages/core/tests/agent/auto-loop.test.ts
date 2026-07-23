@@ -6,8 +6,14 @@ import type { ChatMessage, ChatResponse, ToolCall, ToolResult } from "@seekforge
 import type { ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-import { resumeAutoLoop, runAutoLoop, type LoopEvent, type LoopOptions } from "../../src/agent/auto-loop.js";
-import { loadLoopState } from "../../src/agent/loop-state.js";
+import {
+  autoResumeInterruptedLoops,
+  resumeAutoLoop,
+  runAutoLoop,
+  type LoopEvent,
+  type LoopOptions,
+} from "../../src/agent/auto-loop.js";
+import { createLoopState, loadLoopState } from "../../src/agent/loop-state.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -77,7 +83,7 @@ const REQUIREMENT_SPEC = JSON.stringify({
 const acceptance = (status: "met" | "unmet" | "unknown") =>
   JSON.stringify({
     complete: status === "met",
-    criteria: [{ id: "AC-1", status, evidence: status === "met" ? ["src/feature.ts"] : [] }],
+    criteria: [{ id: "AC-1", status, evidence: status === "met" ? ["command:echo test"] : [] }],
     gaps: status === "met" ? [] : ["feature is missing"],
   });
 
@@ -230,6 +236,85 @@ describe("runAutoLoop", () => {
     expect(result.sessionId).toBe("");
     // No run happened.
     expect(provider.chats).toBe(0);
+  });
+
+  it("recovers and automatically resumes an orphaned durable loop", async () => {
+    createLoopState({
+      loopId: "orphan-auto",
+      task: "already done",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    const results = await autoResumeInterruptedLoops(mkDeps().deps, workspace);
+    expect(results).toMatchObject([{ status: "passed", loopId: "orphan-auto", iterations: 0 }]);
+    expect(loadLoopState(workspace, "orphan-auto")?.status).toBe("passed");
+  });
+
+  it("runs an ordered verification pipeline and ignores optional stage failures", async () => {
+    const commands: string[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async (_workspace, command) => {
+        commands.push(command);
+        return command === "lint" ? { code: 1, output: "lint warning" } : { code: 0, output: "ok" };
+      }),
+      verificationPlan: [
+        { id: "types", command: "typecheck" },
+        { id: "lint", command: "lint", required: false },
+        { id: "tests", command: "test" },
+      ],
+    });
+    expect(result.status).toBe("passed");
+    expect(commands).toEqual(["typecheck", "lint", "test"]);
+    expect(result.stageResults?.map((stage) => [stage.id, stage.code])).toEqual([
+      ["types", 0],
+      ["lint", 1],
+      ["tests", 0],
+    ]);
+  });
+
+  it("detects flaky verification and requires consecutive stable passes", async () => {
+    let checks = 0;
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async () => {
+        checks++;
+        return checks === 1 ? { code: 1, output: "transient" } : { code: 0, output: "ok" };
+      }),
+      flakyRetries: 1,
+      stablePasses: 2,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("passed");
+    expect(result.verifyRuns).toBe(3);
+    expect(result.flaky).toBe(true);
+    expect(result.passStreak).toBe(2);
+    expect(events).toContainEqual({ type: "verify.flaky", iteration: 0, stageId: "verify", attempts: 2 });
+  });
+
+  it("rolls back a first-iteration regression inside a retained Loop worktree", async () => {
+    const isolated = join(workspace, ".seekforge", "worktrees", "loop-test");
+    mkdirSync(isolated, { recursive: true });
+    let checks = 0;
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(isolated, async () => {
+        checks++;
+        if (checks === 1) return { code: 1, output: "Vitest\n× tests/a.test.ts > a\nTest Files 1 failed" };
+        if (checks === 2) {
+          return {
+            code: 1,
+            output: "Vitest\n× tests/a.test.ts > a\n× tests/b.test.ts > b\nTest Files 2 failed",
+          };
+        }
+        return { code: 0, output: "ok" };
+      }),
+      rollbackOnRegression: true,
+      maxIterations: 2,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("passed");
+    expect(events.some((event) => event.type === "loop.rollback" && event.iteration === 1)).toBe(true);
   });
 
   it("analyzes requirements before a green pre-check and requires acceptance evidence", async () => {
@@ -627,6 +712,7 @@ describe("runAutoLoop", () => {
     const result = await runAutoLoop(deps, {
       ...baseOpts(workspace, async () => ({ code: 1, output: "identical output" })),
       maxIterations: 8,
+      maxNoProgressRecoveries: 0,
     });
     expect(result.status).toBe("no_progress");
     // The first no-op run is compared with the pre-check fingerprint.
@@ -647,6 +733,7 @@ describe("runAutoLoop", () => {
         return { code: 1, output: "identical output" };
       }),
       maxIterations: 3,
+      maxNoProgressRecoveries: 0,
     });
 
     expect(result.status).toBe("no_progress");
@@ -662,6 +749,7 @@ describe("runAutoLoop", () => {
         output: `vitest\n × parser rejects bad input ${++call * 10}ms`,
       })),
       maxIterations: 8,
+      maxNoProgressRecoveries: 0,
     });
     expect(result.status).toBe("no_progress");
     expect(result.iterations).toBe(1);
@@ -698,12 +786,26 @@ describe("runAutoLoop", () => {
           writeFileSync(target, `outside-${++checks}`);
           return { code: 1, output: "identical failure" };
         }),
+        maxNoProgressRecoveries: 0,
       });
       expect(result.status).toBe("no_progress");
       expect(result.iterations).toBe(1);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("re-diagnoses once before stopping a stuck loop", async () => {
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async () => ({ code: 1, output: "identical output" })),
+      maxNoProgressRecoveries: 1,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("no_progress");
+    expect(result.iterations).toBe(2);
+    expect(result.recoveryAttempts).toBe(1);
+    expect(events).toContainEqual({ type: "loop.recovery", iteration: 1, attempt: 1, reason: "cycle" });
   });
 
   it("parses early diagnostics while exposing only the 4KB output tail", async () => {

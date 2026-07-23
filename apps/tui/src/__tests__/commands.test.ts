@@ -236,6 +236,17 @@ describe("parseInput /loop-resume", () => {
   });
 });
 
+describe("parseInput loop controls", () => {
+  it("parses pause, continuation, and free-form steering", () => {
+    expect(parseInput("/loop-pause")).toEqual({ kind: "slash", command: { name: "loop-pause" } });
+    expect(parseInput("/loop-continue")).toEqual({ kind: "slash", command: { name: "loop-continue" } });
+    expect(parseInput("/loop-steer focus on the parser regression")).toEqual({
+      kind: "slash",
+      command: { name: "loop-steer", arg: "focus on the parser regression" },
+    });
+  });
+});
+
 describe("parseInput v3 additions", () => {
   it("parses the new management commands", () => {
     expect(parseInput("/backtrack")).toEqual({ kind: "slash", command: { name: "backtrack" } });

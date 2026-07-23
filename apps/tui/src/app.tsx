@@ -11,6 +11,7 @@ import {
   buildSessionAudit,
   renderSessionAuditMarkdown,
   compactSessionNow,
+  createLoopControl,
   createBackgroundTasks,
   createMemoryMaintenanceScheduler,
   listMemoryCandidates,
@@ -45,6 +46,7 @@ import {
   type BackgroundTasks,
   type McpClientEntry,
   type McpPromptRef,
+  type LoopControl,
   type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
@@ -298,6 +300,7 @@ export function App({
   // Per-tab foreground run state: each tab can run its own task; Esc/Ctrl+C
   // and prompt keys always act on the ACTIVE tab's entries only.
   const runsByTabRef = useRef<Map<number, RunEntry>>(new Map());
+  const loopControlsByTabRef = useRef<Map<number, { runId: number; control: LoopControl }>>(new Map());
   const pendingPermissionByTabRef = useRef<Map<number, PendingPermission>>(new Map());
   const pendingQuestionByTabRef = useRef<Map<number, PendingQuestion>>(new Map());
   // Ctrl+B run detachment: ids of runs sent to the background, their
@@ -773,6 +776,10 @@ export function App({
         verifyTimeoutMs?: number;
         agentTimeoutMs?: number;
         maxAgentRetries?: number;
+        stablePasses?: number;
+        flakyRetries?: number;
+        maxNoProgressRecoveries?: number;
+        rollbackOnRegression?: boolean;
         requirementMode?: "quick" | "analyze" | "confirm";
       } = {},
     ) => {
@@ -782,6 +789,8 @@ export function App({
       const reservation = reserveRun(runsByTabRef.current, runTabId, runId);
       if (!reservation) return;
       const { controller } = reservation;
+      const loopControl = createLoopControl();
+      loopControlsByTabRef.current.set(runTabId, { runId, control: loopControl });
       const ownsThisRun = (): boolean => ownsRun(runsByTabRef.current, reservation);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       dispatchTab({ type: "user", text: `/loop ${verifyCommand}` });
@@ -802,7 +811,14 @@ export function App({
           ...(options.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: options.verifyTimeoutMs } : {}),
           ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
           ...(options.maxAgentRetries !== undefined ? { maxAgentRetries: options.maxAgentRetries } : {}),
+          ...(options.stablePasses !== undefined ? { stablePasses: options.stablePasses } : {}),
+          ...(options.flakyRetries !== undefined ? { flakyRetries: options.flakyRetries } : {}),
+          ...(options.maxNoProgressRecoveries !== undefined
+            ? { maxNoProgressRecoveries: options.maxNoProgressRecoveries }
+            : {}),
+          ...(options.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
           ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
+          control: loopControl,
           onEvent: (event) => {
             if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
             for (const line of formatLoopEvent(event)) {
@@ -819,6 +835,7 @@ export function App({
           dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
         }
       } finally {
+        if (loopControlsByTabRef.current.get(runTabId)?.runId === runId) loopControlsByTabRef.current.delete(runTabId);
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
@@ -853,6 +870,8 @@ export function App({
       const reservation = reserveRun(runsByTabRef.current, runTabId, runId);
       if (!reservation) return;
       const { controller } = reservation;
+      const loopControl = createLoopControl();
+      loopControlsByTabRef.current.set(runTabId, { runId, control: loopControl });
       const ownsThisRun = (): boolean => ownsRun(runsByTabRef.current, reservation);
       const detached = (): boolean => detachedRunsRef.current.has(runId);
       dispatchTab({ type: "user", text: `/loop-resume ${loopId}` });
@@ -865,6 +884,7 @@ export function App({
           mcpToolSpecs,
           pluginContributions,
           ...options,
+          control: loopControl,
           onEvent: (event) => {
             if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
             for (const line of formatLoopEvent(event))
@@ -878,6 +898,7 @@ export function App({
         if (ownsThisRun() && !controller.signal.aborted)
           dispatchTab({ type: "notice", tone: "error", text: `loop error: ${message}` });
       } finally {
+        if (loopControlsByTabRef.current.get(runTabId)?.runId === runId) loopControlsByTabRef.current.delete(runTabId);
         if (detached()) {
           detachedRunsRef.current.delete(runId);
           detachedControllersRef.current.delete(runId);
@@ -905,6 +926,7 @@ export function App({
     detachedRunsRef.current.add(entry.runId);
     detachedControllersRef.current.set(entry.runId, entry.controller);
     runsByTabRef.current.delete(tabId);
+    if (loopControlsByTabRef.current.get(tabId)?.runId === entry.runId) loopControlsByTabRef.current.delete(tabId);
     // A pending permission would block the detached run forever: deny it now.
     const perm = pendingPermissionByTabRef.current.get(tabId);
     if (perm) {
@@ -1074,6 +1096,12 @@ export function App({
             ...(command.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: command.verifyTimeoutMs } : {}),
             ...(command.agentTimeoutMs !== undefined ? { agentTimeoutMs: command.agentTimeoutMs } : {}),
             ...(command.maxAgentRetries !== undefined ? { maxAgentRetries: command.maxAgentRetries } : {}),
+            ...(command.stablePasses !== undefined ? { stablePasses: command.stablePasses } : {}),
+            ...(command.flakyRetries !== undefined ? { flakyRetries: command.flakyRetries } : {}),
+            ...(command.maxNoProgressRecoveries !== undefined
+              ? { maxNoProgressRecoveries: command.maxNoProgressRecoveries }
+              : {}),
+            ...(command.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
             ...(command.requirementMode !== undefined ? { requirementMode: command.requirementMode } : {}),
           });
           break;
@@ -1102,6 +1130,41 @@ export function App({
             ...(command.addedVerifyRuns !== undefined ? { addedVerifyRuns: command.addedVerifyRuns } : {}),
             ...(command.approveRequirements ? { approveRequirements: true } : {}),
           });
+          break;
+        }
+        case "loop-pause": {
+          const active = loopControlsByTabRef.current.get(activeIdRef.current);
+          if (!active) {
+            notice("no active loop in this tab", "error");
+            break;
+          }
+          active.control.pause();
+          notice("loop will pause at the next safe boundary");
+          break;
+        }
+        case "loop-continue": {
+          const active = loopControlsByTabRef.current.get(activeIdRef.current);
+          if (!active) {
+            notice("no active loop in this tab", "error");
+            break;
+          }
+          active.control.resume();
+          notice("loop continuation requested");
+          break;
+        }
+        case "loop-steer": {
+          const guidance = command.arg?.trim();
+          if (!guidance) {
+            notice("usage: /loop-steer <guidance>", "error");
+            break;
+          }
+          const active = loopControlsByTabRef.current.get(activeIdRef.current);
+          if (!active) {
+            notice("no active loop in this tab", "error");
+            break;
+          }
+          active.control.steer(guidance);
+          notice("loop guidance queued for the next safe boundary");
           break;
         }
         case "approve": {

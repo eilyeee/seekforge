@@ -15,7 +15,13 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { LoopEvent, LoopStatus } from "./auto-loop.js";
+import type {
+  LoopEvent,
+  LoopIterationSnapshot,
+  LoopStageResult,
+  LoopStatus,
+  LoopVerificationStage,
+} from "./auto-loop.js";
 import {
   DEFAULT_LOOP_AGENT_RETRIES,
   DEFAULT_LOOP_AGENT_TIMEOUT_MS,
@@ -38,13 +44,23 @@ import {
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
 
-export type PersistedLoopStatus = "running" | LoopStatus;
+export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
 export type LoopState = {
+  schemaVersion?: 2;
   loopId: string;
   task: string;
   workspace: string;
   verifyCommand: string;
+  verificationPlan?: LoopVerificationStage[];
+  stablePasses?: number;
+  flakyRetries?: number;
+  maxNoProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
+  passStreak?: number;
+  recoveryAttempts?: number;
+  stageResults?: LoopStageResult[];
+  snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
   costBudgetUsd: number | null;
   tokenBudget?: number | null;
@@ -83,11 +99,17 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   sessionId?: string;
   lastVerify?: LoopVerifyResult | null;
   requirementMode?: LoopRequirementMode;
+  verificationPlan?: LoopVerificationStage[];
+  stablePasses?: number;
+  flakyRetries?: number;
+  maxNoProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
 };
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "running",
+  "paused",
   "passed",
   "exhausted",
   "no_progress",
@@ -95,12 +117,93 @@ const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "cancelled",
   "verify_error",
   "agent_error",
+  "interrupted",
   "requirements_pending",
 ]);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isSafeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const isIsoDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
+
+function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
+  const ids = new Set<string>();
+  const result: LoopVerificationStage[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      !LOOP_ID_RE.test(item.id) ||
+      ids.has(item.id) ||
+      typeof item.command !== "string" ||
+      item.command.trim() === "" ||
+      item.command.length > 8_192 ||
+      (item.required !== undefined && typeof item.required !== "boolean") ||
+      (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0))
+    )
+      return null;
+    ids.add(item.id);
+    result.push({
+      id: item.id,
+      command: item.command,
+      ...(typeof item.required === "boolean" ? { required: item.required } : {}),
+      ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
+    });
+  }
+  return result;
+}
+
+function parseStageResults(value: unknown): LoopStageResult[] | null {
+  if (!Array.isArray(value) || value.length > 16) return null;
+  const result: LoopStageResult[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      typeof item.command !== "string" ||
+      !isFiniteNumber(item.code) ||
+      !Number.isInteger(item.code) ||
+      typeof item.output !== "string" ||
+      !isSafeInteger(item.attempts) ||
+      item.attempts <= 0 ||
+      typeof item.flaky !== "boolean" ||
+      !isSafeInteger(item.durationMs) ||
+      item.durationMs < 0
+    )
+      return null;
+    result.push(item as LoopStageResult);
+  }
+  return result;
+}
+
+function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
+  if (!Array.isArray(value) || value.length > MAX_LOOP_ITERATIONS) return null;
+  const result: LoopIterationSnapshot[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !isSafeInteger(item.iteration) ||
+      item.iteration < 0 ||
+      !isIsoDate(item.ts) ||
+      typeof item.diagnosticsFingerprint !== "string" ||
+      (item.workspaceFingerprint !== null && typeof item.workspaceFingerprint !== "string") ||
+      !isSafeInteger(item.failedTests) ||
+      item.failedTests < 0
+    )
+      return null;
+    const stageResults = parseStageResults(item.stageResults);
+    if (stageResults === null) return null;
+    result.push({
+      iteration: item.iteration,
+      ts: item.ts,
+      diagnosticsFingerprint: item.diagnosticsFingerprint,
+      workspaceFingerprint: item.workspaceFingerprint,
+      failedTests: item.failedTests,
+      stageResults,
+    });
+  }
+  return result;
+}
 
 export function isValidLoopId(loopId: string): boolean {
   return LOOP_ID_RE.test(loopId);
@@ -147,12 +250,100 @@ export type LoopLogWriter = {
   close: () => void;
 };
 
+export type LoopHistoryEntry = { seq: number; ts: string; event: LoopEvent };
+
+const loopLogSegments = (target: string): string[] =>
+  Array.from({ length: MAX_LOOP_LOG_SEGMENTS }, (_, index) => (index === 0 ? target : `${target}.${index}`)).reverse();
+
+function lastLoopSequence(target: string): number {
+  let cursor = 0;
+  for (const file of loopLogSegments(target)) {
+    let raw: string;
+    try {
+      raw = readUtf8FileBoundedSync(file, MAX_LOOP_LOG_BYTES);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      break;
+    }
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      try {
+        const row = JSON.parse(line) as unknown;
+        if (!isRecord(row)) break;
+        cursor = isSafeInteger(row.seq) && row.seq > cursor ? row.seq : cursor + 1;
+      } catch {
+        break;
+      }
+    }
+  }
+  return cursor;
+}
+
+/** Reads the bounded current + rotated Loop JSONL history in chronological order. */
+export function readLoopHistory(
+  workspace: string,
+  loopId: string,
+  options: { afterSeq?: number; limit?: number } = {},
+): LoopHistoryEntry[] {
+  const target = loopLogFile(workspace, loopId);
+  const afterSeq = Number.isSafeInteger(options.afterSeq) && options.afterSeq! >= 0 ? options.afterSeq! : 0;
+  const limit = Number.isSafeInteger(options.limit) ? Math.max(1, Math.min(options.limit!, 2_000)) : 500;
+  const eventTypes = new Set([
+    "iteration.start",
+    "run.completed",
+    "verify.output",
+    "verify",
+    "verify.stage.started",
+    "verify.stage.completed",
+    "verify.flaky",
+    "loop.paused",
+    "loop.resumed",
+    "loop.steered",
+    "loop.recovery",
+    "loop.snapshot",
+    "loop.rollback",
+    "requirements.started",
+    "requirements.completed",
+    "requirements.reviewed",
+    "loop.warning",
+    "loop.done",
+  ]);
+  const result: LoopHistoryEntry[] = [];
+  let cursor = 0;
+  for (const file of loopLogSegments(target)) {
+    let raw: string;
+    try {
+      raw = readUtf8FileBoundedSync(file, MAX_LOOP_LOG_BYTES);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      break;
+    }
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      let row: unknown;
+      try {
+        row = JSON.parse(line) as unknown;
+      } catch {
+        break;
+      }
+      if (!isRecord(row) || !isIsoDate(row.ts) || typeof row.type !== "string" || !eventTypes.has(row.type)) break;
+      cursor = isSafeInteger(row.seq) && row.seq > cursor ? row.seq : cursor + 1;
+      if (cursor <= afterSeq) continue;
+      const { ts, seq: _seq, ...event } = row;
+      result.push({ seq: cursor, ts: ts as string, event: event as LoopEvent });
+      if (result.length >= limit) return result;
+    }
+  }
+  return result;
+}
+
 /** Batches event writes and rotates bounded log segments before appending. */
 export function createLoopLogWriter(workspace: string, loopId: string): LoopLogWriter {
   const target = loopLogFile(workspace, loopId);
   let pending = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  let sequence = lastLoopSequence(target);
 
   const rotate = (incomingBytes: number): void => {
     let currentBytes = 0;
@@ -200,7 +391,7 @@ export function createLoopLogWriter(workspace: string, loopId: string): LoopLogW
   return {
     append: (event) => {
       if (closed) return;
-      pending += `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`;
+      pending += `${JSON.stringify({ seq: ++sequence, ts: new Date().toISOString(), ...event })}\n`;
       if (Buffer.byteLength(pending) >= 64 * 1024) flush();
       else schedule();
     },
@@ -468,13 +659,43 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
       ? null
       : parseLoopAcceptanceReview(value.acceptanceReview, requirements);
   const requirementsApprovedAt = value.requirementsApprovedAt === undefined ? null : value.requirementsApprovedAt;
+  const verificationPlan =
+    value.verificationPlan === undefined ? undefined : parseVerificationPlan(value.verificationPlan);
+  const stablePasses = value.stablePasses === undefined ? 1 : value.stablePasses;
+  const flakyRetries = value.flakyRetries === undefined ? 0 : value.flakyRetries;
+  const maxNoProgressRecoveries = value.maxNoProgressRecoveries === undefined ? 1 : value.maxNoProgressRecoveries;
+  const passStreak = value.passStreak === undefined ? 0 : value.passStreak;
+  const recoveryAttempts = value.recoveryAttempts === undefined ? 0 : value.recoveryAttempts;
+  const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
+  const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
+  const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
   if (
+    (value.schemaVersion !== undefined && value.schemaVersion !== 2) ||
     typeof value.loopId !== "string" ||
     !isValidLoopId(value.loopId) ||
     typeof value.task !== "string" ||
     typeof value.workspace !== "string" ||
     !isAbsolute(value.workspace) ||
     typeof value.verifyCommand !== "string" ||
+    (value.verificationPlan !== undefined && verificationPlan === null) ||
+    !isSafeInteger(stablePasses) ||
+    stablePasses <= 0 ||
+    stablePasses > 5 ||
+    !isSafeInteger(flakyRetries) ||
+    flakyRetries < 0 ||
+    flakyRetries > 5 ||
+    !isSafeInteger(maxNoProgressRecoveries) ||
+    maxNoProgressRecoveries < 0 ||
+    maxNoProgressRecoveries > 5 ||
+    !isSafeInteger(passStreak) ||
+    passStreak < 0 ||
+    passStreak > stablePasses ||
+    !isSafeInteger(recoveryAttempts) ||
+    recoveryAttempts < 0 ||
+    recoveryAttempts > maxNoProgressRecoveries ||
+    stageResults === null ||
+    snapshots === null ||
+    typeof rollbackOnRegression !== "boolean" ||
     !Number.isInteger(value.maxIterations) ||
     !isFiniteNumber(value.maxIterations) ||
     value.maxIterations <= 0 ||
@@ -539,10 +760,20 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const workspace = requireWorkspace(value.workspace);
   if (expectedWorkspace !== undefined && workspace !== requireWorkspace(expectedWorkspace)) return null;
   return {
+    schemaVersion: 2,
     loopId: value.loopId,
     task: value.task,
     workspace,
     verifyCommand: value.verifyCommand,
+    ...(verificationPlan ? { verificationPlan } : {}),
+    stablePasses: stablePasses as number,
+    flakyRetries: flakyRetries as number,
+    maxNoProgressRecoveries: maxNoProgressRecoveries as number,
+    passStreak: passStreak as number,
+    recoveryAttempts: recoveryAttempts as number,
+    stageResults: stageResults as LoopStageResult[],
+    snapshots: snapshots as LoopIterationSnapshot[],
+    rollbackOnRegression,
     maxIterations: value.maxIterations,
     costBudgetUsd: budget,
     tokenBudget: tokenBudget as number | null,
@@ -589,10 +820,20 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     throw new Error(`Loop state already exists: ${id}`);
   }
   const state: LoopState = {
+    schemaVersion: 2,
     loopId: id,
     task: input.task,
     workspace: requireWorkspace(input.workspace),
     verifyCommand: input.verifyCommand,
+    ...(input.verificationPlan ? { verificationPlan: input.verificationPlan } : {}),
+    stablePasses: input.stablePasses ?? 1,
+    flakyRetries: input.flakyRetries ?? 0,
+    maxNoProgressRecoveries: input.maxNoProgressRecoveries ?? 1,
+    passStreak: 0,
+    recoveryAttempts: 0,
+    stageResults: [],
+    snapshots: [],
+    rollbackOnRegression: input.rollbackOnRegression ?? false,
     maxIterations: input.maxIterations,
     costBudgetUsd: input.costBudgetUsd ?? null,
     tokenBudget: input.tokenBudget ?? null,
@@ -658,6 +899,19 @@ export function listLoopStates(workspace: string): LoopState[] {
     .map((name) => loadLoopState(workspace, name.slice(0, -5)))
     .filter((state): state is LoopState => state !== null)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+/** Marks durable running or paused records whose process/lease disappeared as resumable interruptions. */
+export function recoverInterruptedLoops(workspace: string): LoopState[] {
+  const recovered: LoopState[] = [];
+  for (const state of listLoopStates(workspace)) {
+    if ((state.status !== "running" && state.status !== "paused") || isLoopLeaseActive(workspace, state.loopId))
+      continue;
+    const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };
+    saveLoopState(workspace, next);
+    recovered.push(next);
+  }
+  return recovered;
 }
 
 export function removeLoopState(workspace: string, loopId: string): boolean {

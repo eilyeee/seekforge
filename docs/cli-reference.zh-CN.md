@@ -162,6 +162,12 @@
 | `--verify-timeout <seconds>` | 单次校验超时。 |
 | `--agent-timeout <seconds>` | 单次 Agent 尝试超时。 |
 | `--agent-retries <n>` | 网络、超时和限流瞬时错误的重试次数；默认 1。 |
+| `--verify-stage <id=command>` | 追加一个有序验证阶段；重复使用可组成流水线。 |
+| `--stable-passes <n>` | 要求完整流水线连续通过 1-5 次。 |
+| `--flaky-retries <n>` | 对失败阶段重试 0-5 次，并记录抖动通过。 |
+| `--stuck-recoveries <n>` | 在 `no_progress` 前用新策略重新诊断 0-5 次。 |
+| `--rollback-regressions` | 回退增加解析失败数的迭代；仅限保留的 Loop worktree。 |
+| `--deliver <mode>` | 通过后执行 `checkpoint`、`merge`、写 `patch` 或创建草稿 `pr`；仅限保留 worktree。 |
 | `--requirements quick\|analyze\|confirm` | `quick` 仅依据验证命令；`analyze` 冻结需求并执行验收审查；`confirm` 在分析后暂停，等待显式批准。 |
 | `--worktree [name]` | 在新建并保留的 git worktree 中运行；可选择其分支后缀。 |
 | `-y, --yes` | 省去自主编辑提示；循环运行本就使用 `acceptEdits`。 |
@@ -171,9 +177,13 @@
 每次调用都会把编排状态持久化到 `.seekforge/loops/`。`loop-resume` 可用
 `--add-iters`、`--add-budget`、`--add-tokens`、`--add-duration` 和
 `--add-verifies` 追加额度，并恢复 worker/reviewer 会话、冻结需求与累计资源用量。
-对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流。
+对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流，并可用 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 在安全边界控制运行。
 
-`seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录。`seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的 worktree 因其改动会被丢弃，需要显式加 `--force`。
+`seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；`loop-history`
+回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-dag <file>`
+以共享预算执行 JSON 依赖图。TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续和引导。
+`seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
+worktree 因其改动会被丢弃，需要显式加 `--force`。
 
 ## 仓库安全
 

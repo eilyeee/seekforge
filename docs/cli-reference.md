@@ -181,6 +181,12 @@ cooperative cancellation.
 | `--verify-timeout <seconds>` | Timeout for one verifier execution. |
 | `--agent-timeout <seconds>` | Timeout for one agent attempt. |
 | `--agent-retries <n>` | Retries for transient network, timeout, and rate-limit failures; defaults to 1. |
+| `--verify-stage <id=command>` | Append an ordered verification stage; repeat the flag for a pipeline. |
+| `--stable-passes <n>` | Require 1-5 consecutive full-pipeline passes. |
+| `--flaky-retries <n>` | Retry a failed stage 0-5 times and record flaky passes. |
+| `--stuck-recoveries <n>` | Re-diagnose with a new strategy 0-5 times before `no_progress`. |
+| `--rollback-regressions` | Rewind iterations that increase parsed failures; retained Loop worktrees only. |
+| `--deliver <mode>` | After passing, `checkpoint`, `merge`, write a `patch`, or create a draft `pr`; retained worktrees only. |
 | `--requirements quick\|analyze\|confirm` | `quick` uses verifier-only completion; `analyze` freezes requirements and performs acceptance reviews; `confirm` pauses for explicit approval after analysis. |
 | `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
@@ -193,9 +199,15 @@ verifier runs with `--add-iters`, `--add-budget`, `--add-tokens`,
 `--add-duration`, and `--add-verifies`. It restores worker/reviewer sessions,
 frozen requirements, and cumulative resource use. For `--worktree` loops, run it inside the
 retained worktree shown at startup. Verification output streams while checks run;
-the interactive TUI exposes the same workflow through `/loop`.
+the interactive TUI exposes the same workflow through `/loop`, with
+`/loop-pause`, `/loop-continue`, and `/loop-steer <guidance>` for safe-boundary
+runtime control.
 
 `seekforge loop-list`, `loop-show`, and `loop-delete` manage persisted records.
+`loop-history` replays durable events, `loop-recover` marks orphaned owners as
+`interrupted`, and `loop-dag <file>` executes a JSON dependency graph with shared
+budgets. The TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
+pause, resume, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;
 dirty worktrees require explicit `--force` because their changes are discarded.
 

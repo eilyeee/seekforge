@@ -20,6 +20,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createWorktree,
+  checkpointWorktree,
+  createWorktreePatch,
   isWorktreeDirty,
   listGitWorktrees,
   mergeWorktree,
@@ -134,6 +136,22 @@ describe("isWorktreeDirty + worktreeAhead", () => {
     git(path, "commit", "-q", "-m", "work");
     expect(await isWorktreeDirty(path)).toBe(false);
     expect(await worktreeAhead(repo, branch)).toBe(1);
+  });
+});
+
+describe("worktree delivery", () => {
+  it("checkpoints untracked files and emits the complete branch patch", async () => {
+    const { path, branch } = await createWorktree(repo, "delivery");
+    writeFileSync(join(path, "new.txt"), "delivered\n");
+    expect(await checkpointWorktree(path, "feat: delivery")).toBe(true);
+    const patch = await createWorktreePatch(repo, branch);
+    expect(patch).toContain("new.txt");
+    expect(patch).toContain("delivered");
+    expect(await checkpointWorktree(path)).toBe(false);
+  });
+
+  it("rejects patch generation for an unrelated branch namespace", async () => {
+    await expect(createWorktreePatch(repo, "main")).rejects.toThrow(/unsafe worktree branch/);
   });
 });
 

@@ -117,6 +117,11 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       verifyTimeoutMs,
       agentTimeoutMs,
       maxAgentRetries,
+      verificationPlan,
+      stablePasses,
+      flakyRetries,
+      maxNoProgressRecoveries,
+      rollbackOnRegression,
       requirementMode,
     } = frame;
     if (typeof task !== "string" || task.trim().length === 0) return bad("loop.task must be a non-empty string");
@@ -142,12 +147,52 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       ["verifyTimeoutMs", verifyTimeoutMs, false],
       ["agentTimeoutMs", agentTimeoutMs, false],
       ["maxAgentRetries", maxAgentRetries, true],
+      ["stablePasses", stablePasses, false],
+      ["flakyRetries", flakyRetries, true],
+      ["maxNoProgressRecoveries", maxNoProgressRecoveries, true],
     ] as const) {
       if (
         value !== undefined &&
         (typeof value !== "number" || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1))
       ) {
         return bad(`loop.${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
+      }
+    }
+    if (typeof stablePasses === "number" && stablePasses > 5) return bad("loop.stablePasses must be 1-5");
+    if (typeof flakyRetries === "number" && flakyRetries > 5) return bad("loop.flakyRetries must be 0-5");
+    if (typeof maxNoProgressRecoveries === "number" && maxNoProgressRecoveries > 5) {
+      return bad("loop.maxNoProgressRecoveries must be 0-5");
+    }
+    if (rollbackOnRegression !== undefined && typeof rollbackOnRegression !== "boolean") {
+      return bad("loop.rollbackOnRegression must be a boolean when present");
+    }
+    if (verificationPlan !== undefined) {
+      if (!Array.isArray(verificationPlan) || verificationPlan.length === 0 || verificationPlan.length > 16) {
+        return bad("loop.verificationPlan must contain 1-16 stages");
+      }
+      const ids = new Set<string>();
+      for (const stage of verificationPlan) {
+        if (
+          !isRecord(stage) ||
+          typeof stage.id !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id) ||
+          ids.has(stage.id)
+        ) {
+          return bad("loop.verificationPlan stage ids must be unique and safe");
+        }
+        ids.add(stage.id);
+        if (typeof stage.command !== "string" || stage.command.trim() === "" || stage.command.length > 8_192) {
+          return bad(`loop.verificationPlan.${stage.id}.command must be a bounded non-empty string`);
+        }
+        if (stage.required !== undefined && typeof stage.required !== "boolean") {
+          return bad(`loop.verificationPlan.${stage.id}.required must be boolean`);
+        }
+        if (
+          stage.timeoutMs !== undefined &&
+          (!Number.isSafeInteger(stage.timeoutMs) || (stage.timeoutMs as number) <= 0)
+        ) {
+          return bad(`loop.verificationPlan.${stage.id}.timeoutMs must be a positive safe integer`);
+        }
       }
     }
     if (
@@ -252,6 +297,18 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       const message = frame["message"];
       if (typeof message !== "string" || message.trim().length === 0 || message.length > limits.maxSteerMessageLength) {
         return bad(`subagent.steer.message must contain 1-${limits.maxSteerMessageLength} characters`);
+      }
+    }
+    return { ok: true, frame: frame as ClientFrame };
+  }
+
+  if (type === "loop.pause" || type === "loop.control.resume" || type === "loop.steer") {
+    const allowed = type === "loop.steer" ? new Set(["type", "message"]) : new Set(["type"]);
+    if (Object.keys(frame).some((key) => !allowed.has(key))) return bad(`${type} contains unsupported fields`);
+    if (type === "loop.steer") {
+      const message = frame["message"];
+      if (typeof message !== "string" || message.trim().length === 0 || message.length > limits.maxSteerMessageLength) {
+        return bad(`loop.steer.message must contain 1-${limits.maxSteerMessageLength} characters`);
       }
     }
     return { ok: true, frame: frame as ClientFrame };

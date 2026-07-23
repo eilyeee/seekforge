@@ -2003,6 +2003,62 @@ an append-only file remains unbounded across iterations and resumes.
   number of segments, and flush at lifecycle boundaries.
 - **Caught:** verifier output could append roughly 1.6 MiB per check to an unlimited Loop log.
 
+## 158. Structured plans must be validated at every public ingress
+
+Checking only that a plan is an array lets malformed ids, duplicate stages, empty
+commands, and invalid timeouts reach a deeper executor under a trusted type cast.
+
+- **Do:** validate shape, bounds, unique safe ids, optional booleans, and positive
+  timeouts before constructing the typed request.
+- **Caught:** REST background Loop accepted unvalidated `verificationPlan` entries
+  while the WebSocket path rejected them.
+
+## 159. Delivery artifacts must cover the whole branch delta
+
+A dirty-worktree diff omits already committed work and cannot represent untracked
+files, so a successful-looking patch can silently be empty or incomplete.
+
+- **Do:** checkpoint the retained worktree, then generate a binary patch for the
+  complete branch relative to the base checkout.
+- **Caught:** Loop `--deliver patch` originally diffed only worktree `HEAD`.
+
+## 160. Parallel graph workers need distinct physical workspaces and partitioned budgets
+
+A callback name is not isolation: two nodes can resolve to the same checkout, and
+giving every concurrent node the full remaining budget multiplies the intended cap.
+
+- **Do:** resolve and compare physical workspace identities before each batch and
+  divide shared cost/token capacity across simultaneously scheduled nodes.
+- **Caught:** Loop DAG concurrency initially trusted `workspaceForNode` without
+  checking its results and duplicated the remaining shared budget.
+
+## 161. Replay cursors must survive retention and writer restarts
+
+An index recomputed from retained rows shifts when the oldest segment rotates,
+so a previously issued cursor can skip every newer event.
+
+- **Do:** persist a monotonic sequence on each row, recover the last sequence when
+  reopening a writer, and retain a bounded legacy-row fallback.
+- **Caught:** Loop history originally numbered only the currently retained JSONL rows.
+
+## 162. Orchestration iterations are not conversation turns
+
+Retries, analysis sessions, and resumed runs make an orchestration counter diverge
+from the user-message index used by checkpoints and trace truncation.
+
+- **Do:** capture the actual session user-turn boundary before the operation and
+  use that same boundary for filesystem rewind and trace truncation.
+- **Caught:** Loop regression rollback initially derived a session turn from the
+  Loop iteration number.
+
+## 163. Every nonterminal persisted status needs orphan recovery
+
+Recovering only `running` records strands a process that crashed after persisting
+`paused`: no owner remains to resume it, but startup recovery ignores it.
+
+- **Do:** enumerate every lease-owned nonterminal state when detecting orphaned work.
+- **Caught:** Loop recovery initially omitted durable `paused` records.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

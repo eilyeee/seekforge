@@ -49,6 +49,14 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "resume a persisted loop with optional added limits",
     group: "run",
   },
+  { name: "loop-pause", summary: "pause the active loop at its next safe boundary", group: "run" },
+  { name: "loop-continue", summary: "continue the paused loop in this tab", group: "run" },
+  {
+    name: "loop-steer",
+    args: "<guidance>",
+    summary: "guide the active loop at its next safe boundary",
+    group: "run",
+  },
   {
     name: "approve",
     args: "[auto|confirm|plan]",
@@ -170,6 +178,10 @@ export type SlashCommand =
       verifyTimeoutMs?: number;
       agentTimeoutMs?: number;
       maxAgentRetries?: number;
+      stablePasses?: number;
+      flakyRetries?: number;
+      maxNoProgressRecoveries?: number;
+      rollbackOnRegression?: boolean;
       requirementMode?: "quick" | "analyze" | "confirm";
       error?: string;
     }
@@ -184,6 +196,9 @@ export type SlashCommand =
       approveRequirements?: boolean;
       error?: string;
     }
+  | { name: "loop-pause" }
+  | { name: "loop-continue" }
+  | { name: "loop-steer"; arg?: string }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
@@ -263,6 +278,10 @@ function parseLoopFirstLine(
   verifyTimeoutMs?: number;
   agentTimeoutMs?: number;
   maxAgentRetries?: number;
+  stablePasses?: number;
+  flakyRetries?: number;
+  maxNoProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
   addedTokenBudget?: number;
   addedDurationMs?: number;
   addedVerifyRuns?: number;
@@ -279,6 +298,10 @@ function parseLoopFirstLine(
   let verifyTimeoutMs: number | undefined;
   let agentTimeoutMs: number | undefined;
   let maxAgentRetries: number | undefined;
+  let stablePasses: number | undefined;
+  let flakyRetries: number | undefined;
+  let maxNoProgressRecoveries: number | undefined;
+  let rollbackOnRegression = false;
   let addedTokenBudget: number | undefined;
   let addedDurationMs: number | undefined;
   let addedVerifyRuns: number | undefined;
@@ -289,11 +312,20 @@ function parseLoopFirstLine(
   const budgetFlag = resume ? "--add-budget" : "--budget";
   const optionPattern = resume
     ? /^--(?:add-iterations|add-budget|add-tokens|add-duration|add-verifies|approve-requirements)(?:=|\s|$)/
-    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|requirements)(?:=|\s|$)/;
+    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|stable-passes|flaky-retries|stuck-recoveries|rollback-regressions|requirements)(?:=|\s|$)/;
   const valuePattern = resume
     ? /^(--add-iterations|--add-budget|--add-tokens|--add-duration|--add-verifies)(?:=|\s+)(\S+)(?:\s+|$)/
-    : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
+    : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--stable-passes|--flaky-retries|--stuck-recoveries|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
   while (optionPattern.test(rest)) {
+    if (!resume && /^--rollback-regressions(?:\s+|$)/.test(rest)) {
+      if (rollbackOnRegression) return { error: "--rollback-regressions may only be specified once" };
+      rollbackOnRegression = true;
+      rest = rest.replace(/^--rollback-regressions(?:\s+|$)/, "").trimStart();
+      continue;
+    }
+    if (!resume && /^--rollback-regressions=/.test(rest)) {
+      return { error: "--rollback-regressions is a boolean flag and takes no value" };
+    }
     if (resume && /^--approve-requirements(?:\s+|$)/.test(rest)) {
       if (approveRequirements) return { error: "--approve-requirements may only be specified once" };
       approveRequirements = true;
@@ -345,7 +377,7 @@ function parseLoopFirstLine(
         option === "--verify-timeout" ||
         option === "--agent-timeout" ||
         option === "--add-duration";
-      const allowZero = option === "--agent-retries";
+      const allowZero = option === "--agent-retries" || option === "--flaky-retries" || option === "--stuck-recoveries";
       const valid = secondsOption
         ? /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(raw)
         : /^[0-9]+$/.test(raw);
@@ -354,6 +386,12 @@ function parseLoopFirstLine(
       if (!valid || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
         return { error: `${option} must be ${allowZero ? "a non-negative" : "a positive"} number` };
       }
+      if (
+        (option === "--stable-passes" || option === "--flaky-retries" || option === "--stuck-recoveries") &&
+        value > 5
+      ) {
+        return { error: `${option} must be at most 5` };
+      }
       const slots: Record<string, [number | undefined, (next: number) => void]> = {
         "--token-budget": [tokenBudget, (next) => (tokenBudget = next)],
         "--max-duration": [maxDurationMs, (next) => (maxDurationMs = next)],
@@ -361,6 +399,9 @@ function parseLoopFirstLine(
         "--verify-timeout": [verifyTimeoutMs, (next) => (verifyTimeoutMs = next)],
         "--agent-timeout": [agentTimeoutMs, (next) => (agentTimeoutMs = next)],
         "--agent-retries": [maxAgentRetries, (next) => (maxAgentRetries = next)],
+        "--stable-passes": [stablePasses, (next) => (stablePasses = next)],
+        "--flaky-retries": [flakyRetries, (next) => (flakyRetries = next)],
+        "--stuck-recoveries": [maxNoProgressRecoveries, (next) => (maxNoProgressRecoveries = next)],
         "--add-tokens": [addedTokenBudget, (next) => (addedTokenBudget = next)],
         "--add-duration": [addedDurationMs, (next) => (addedDurationMs = next)],
         "--add-verifies": [addedVerifyRuns, (next) => (addedVerifyRuns = next)],
@@ -383,6 +424,10 @@ function parseLoopFirstLine(
     ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
     ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
     ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
+    ...(stablePasses !== undefined ? { stablePasses } : {}),
+    ...(flakyRetries !== undefined ? { flakyRetries } : {}),
+    ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
+    ...(rollbackOnRegression ? { rollbackOnRegression: true } : {}),
     ...(addedTokenBudget !== undefined ? { addedTokenBudget } : {}),
     ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
     ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
@@ -410,6 +455,8 @@ const NO_ARG = new Set([
   "new",
   "sessions",
   "backtrack",
+  "loop-pause",
+  "loop-continue",
   "fork",
   "diff",
   "review",
@@ -448,6 +495,7 @@ const REST_ARG = new Set([
   "worktree",
   "agent-steer",
   "agent-cancel",
+  "loop-steer",
 ]);
 /** Commands taking a single word argument. */
 const WORD_ARG = new Set([

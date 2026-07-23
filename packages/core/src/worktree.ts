@@ -165,6 +165,24 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   return (await git(worktreePath, ["status", "--porcelain"])) !== "";
 }
 
+/** Commits all dirty worktree changes with an explicit bounded message. */
+export async function checkpointWorktree(
+  worktreePath: string,
+  message = "seekforge loop checkpoint",
+): Promise<boolean> {
+  if (!(await isWorktreeDirty(worktreePath))) return false;
+  const bounded = message.trim().slice(0, 200) || "seekforge loop checkpoint";
+  await git(worktreePath, ["add", "-A"]);
+  await git(worktreePath, ["commit", "-m", bounded]);
+  return true;
+}
+
+/** Produces a binary-safe patch for a retained SeekForge branch relative to the base checkout. */
+export async function createWorktreePatch(basePath: string, branch: string): Promise<string> {
+  if (!branch.startsWith("seekforge/")) throw new WorktreeGitError("git_error", `unsafe worktree branch: ${branch}`);
+  return git(basePath, ["diff", "--binary", `HEAD...${branch}`]);
+}
+
 /** Commits on `branch` that are not on the base repo's current HEAD. */
 export async function worktreeAhead(basePath: string, branch: string): Promise<number> {
   return Number((await git(basePath, ["rev-list", "--count", `HEAD..${branch}`])) || "0");

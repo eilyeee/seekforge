@@ -84,6 +84,7 @@ CLI).
 `/todo [add|done|rm]` `/add-dir [path]`
 `/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
 `/agent-cancel <dispatch-id>` `/skills` `/plugins` `/mcp` (incl. resources) `/init`
+`/loop` `/loop-resume` `/loop-pause` `/loop-continue` `/loop-steer <guidance>`
 `/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
 `/export [path]` `/copy` `/editor` `/quit` — plus custom commands from
 `.seekforge/commands/`.

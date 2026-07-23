@@ -106,12 +106,21 @@ should load one `PluginContributions` snapshot and pass it as
 Instead of a single `runTask`, drive to a verify command's exit 0:
 
 ```ts
-import { resumeAutoLoop, runAutoLoop } from "@seekforge/core";
+import { createLoopControl, resumeAutoLoop, runAutoLoop, runLoopDag } from "@seekforge/core";
 
-const result = await runAutoLoop(deps, {
+const control = createLoopControl();
+
+const running = runAutoLoop(deps, {
   task: "make the suite pass",
   workspace: process.cwd(),
   verifyCommand: "pnpm test",
+  verificationPlan: [
+    { id: "types", command: "pnpm typecheck" },
+    { id: "tests", command: "pnpm test" },
+  ],
+  stablePasses: 2,
+  flakyRetries: 1,
+  maxNoProgressRecoveries: 1,
   maxIterations: 8,
   costBudgetUsd: 1,
   tokenBudget: 100_000,
@@ -121,9 +130,23 @@ const result = await runAutoLoop(deps, {
   agentTimeoutMs: 15 * 60_000,
   maxAgentRetries: 2,
   approvalMode: "acceptEdits",
+  control,
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
 });
-// result also includes a persisted loopId.
+
+control.pause();                 // observed at the next safe boundary
+control.steer("focus on parser tests");
+control.resume();
+const result = await running;
+
+const graph = await runLoopDag(deps, {
+  workspace: process.cwd(),
+  nodes: [
+    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test" },
+    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"] },
+  ],
+});
+// result includes a persisted loopId.
 
 const resumed = await resumeAutoLoop(deps, result.loopId!, {
   workspace: process.cwd(),
@@ -142,6 +165,9 @@ reported through bounded `loop.warning` events without masking verification.
 `LoopResult.status` distinguishes `passed`, guardrail `budget` exits (with
 `budgetReason`), verifier failures, cancellation, no-progress/exhaustion, and
 `agent_error` (with structured provider/session error details).
+`autoResumeInterruptedLoops` recovers durable `running` records whose lease owner
+disappeared. Final success extracts memory once and settles selected-skill
+effectiveness once for the whole Loop.
 
 ## Extension points
 

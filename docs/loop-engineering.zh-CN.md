@@ -193,6 +193,30 @@ seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
+### Loop v2 控制
+
+- 重复传入 `--verify-stage <id=command>` 可组成有序验证流水线。必需阶段失败会停止流水线；
+  Core API 阶段可设置 `required: false`。
+- `--flaky-retries 0..5` 会在编辑前重跑失败阶段，之后通过时记录 `verify.flaky`；
+  `--stable-passes 1..5` 要求完整流水线连续通过。
+- `--stuck-recoveries 0..5` 会在返回 `no_progress` 前做有界的重新诊断并改用不同策略；
+  `--rollback-regressions` 只允许在保留的 Loop worktree 中回滚退化迭代。
+- `loop-history <id> [--after N] [--limit N]` 回放轮转后的 JSONL 事件历史；
+  `loop-recover` 把失去 owner 的 `running` 或 `paused` 记录标为 `interrupted`，嵌入方可调用
+  `autoResumeInterruptedLoops` 自动继续。
+- `loop-dag <file>` 以共享预算顺序执行 JSON 依赖图。Core `runLoopDag` 还支持有界并行，
+  但每个节点必须解析到不同的物理工作区。
+- `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
+  Loop 分支，并通过 `gh` 创建草稿 PR。
+- WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
+  的迭代边界生效。
+- TUI 提供等价的 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 命令，且只控制
+  当前标签页中的 Loop。
+
+每轮快照会持久化阶段结果、标准化后的诊断/工作区指纹、解析出的失败数、恢复次数和连续
+通过次数。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
+Agent 迭代重复记账。
+
 编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
 会话。这样评审上下文不会进入编辑对话，同时两条 trace 都可审计。
 
@@ -208,6 +232,9 @@ type LoopOptions = {
   task: string;
   workspace: string;
   verifyCommand: string;        // 固定验证器；分析模式还要求验收通过
+  verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+  stablePasses?: number; flakyRetries?: number;
+  maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
   requirementMode?: "quick" | "analyze" | "confirm"; // 默认 quick
   approveRequirements?: boolean; // 恢复 confirm 模式
   maxIterations?: number;       // default 8
@@ -221,17 +248,20 @@ type LoopOptions = {
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
   signal?: AbortSignal;         // cooperative stop
+  control?: LoopControl;        // 在安全边界暂停/继续/引导
   onEvent?: (e: LoopEvent) => void;
   loopId?: string; persist?: boolean; // persistence defaults on
   verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
-  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "requirements_pending";
+  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "interrupted" | "requirements_pending";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
   loopId?: string; requirements?: LoopRequirementSpec;
   acceptanceReview?: LoopAcceptanceReview; budgetReason?: "cost" | "tokens" | "duration" | "verify_runs";
   agentError?: AgentError;
+  stageResults?: LoopStageResult[]; flaky?: boolean; passStreak?: number;
+  recoveryAttempts?: number;
 };
 ```
 

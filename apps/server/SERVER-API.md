@@ -105,7 +105,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/runs/:id/events?afterSeq=N | at most 500 persisted WS events with `seq > N`, returned as `{events,nextAfterSeq,hasMore}`; continue with `nextAfterSeq` while `hasMore` |
 | POST /api/runs/:id/cancel | cooperatively cancel an active run; terminal runs are returned unchanged. Returns 409 when the run is owned by another server process, because this process cannot signal its `AbortController` |
 | DELETE /api/runs/:id | alias of the cancel endpoint |
-| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, requirementMode?:"quick"|"analyze"|"confirm", isolation?:"auto"|"workspace"|"worktree"}`; writable runs default to worktree isolation in git repositories, loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
+| POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, verificationPlan?:[{id,command,required?,timeoutMs?}], stablePasses?, flakyRetries?, maxNoProgressRecoveries?, rollbackOnRegression?, requirementMode?:"quick"|"analyze"|"confirm", isolation?:"auto"|"workspace"|"worktree"}`; writable runs default to worktree isolation in git repositories, loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
 | POST /api/runs/prune | compact run history immediately. Optional body `{maxTerminalRuns?, maxAgeDays?}` overrides the workspace retention policy for this prune; active runs are always retained; returns `{removed, kept}` |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
@@ -236,12 +236,18 @@ edit the same workspace concurrently; read-only ask runs remain parallel.
                    "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?} // the session's own (plan -> execute)
 {"type": "permission.response", "requestId": "p1", "approved": true}
 {"type": "question.answer", "id": "q1", "answer": "Option A"} // answer a pending question.request
-{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?, "requirementMode": "quick"|"analyze"|"confirm"?, "ws": "<id>"?,
+{"type": "loop", "task": "...", "verifyCommand": "pnpm test", "maxIterations": 8?, "budget": 0.5?,
+                 "verificationPlan": [{"id":"types","command":"pnpm typecheck","required":true,"timeoutMs":120000}]?,
+                 "stablePasses": 2?, "flakyRetries": 1?, "maxNoProgressRecoveries": 1?, "rollbackOnRegression": false?,
+                 "requirementMode": "quick"|"analyze"|"confirm"?, "ws": "<id>"?,
                  "model": "..."?, "thinking": true?, "reasoningEffort": "high"|"max"?}
                  // quick: verifier-only; analyzed modes also require acceptance evidence
 {"type": "loop.resume", "loopId": "loop-...", "addedIterations": 2?, "addedBudget": 0.25?, "approveRequirements": true?, "ws": "<id>"?}
 {"type": "subagent.steer", "dispatchId": "ag-1", "message": "focus on the parser tests"}
 {"type": "subagent.cancel", "dispatchId": "ag-1"}       // cancel one child; parent run continues
+{"type": "loop.pause"}                                     // pause at the next safe Loop boundary
+{"type": "loop.steer", "message": "focus on parser tests"}
+{"type": "loop.control.resume"}
 {"type": "cancel"}                                            // cancel the running session OR loop
 {"type": "subscribe", "runId": "run-...", "afterSeq": 42, "ws": "<id>"?}
 ```
@@ -255,6 +261,10 @@ non-boolean thinking, an effort other than `"high"`/`"max"`) →
 positive integer, `budget` a finite positive number, and `requirementMode` one
 of `quick|analyze|confirm` when present (else `bad_frame`). Resume cannot change
 the persisted mode; `approveRequirements: true` releases a confirm-mode gate.
+Verification plans contain 1-16 ordered stages with unique safe ids and bounded
+commands. Stability, flaky retry, and no-progress recovery counts are capped at
+5. Loop control frames are bound to the active Loop on that connection and are
+consumed only at safe iteration boundaries; idle controls return `not_running`.
 
 `ws` selects the workspace id (default: first workspace when omitted). The run
 executes in that workspace's path; `send` looks the session up in that
@@ -277,7 +287,7 @@ return `bad_frame`.
 {"type": "event", "sessionId": "...", "event": <AgentEvent>}  // every AgentEvent, incl. session.completed/failed
 {"type": "permission.request", "requestId": "p1", "request": <PermissionRequest>}
 {"type": "question.request", "id": "q1", "question": "...", "options": ["...", "..."]}  // ask_user tool
-{"type": "loop.event", "event": <LoopEvent>}                  // includes requirements.*, iteration.*, verify, and loop.done
+{"type": "loop.event", "event": <LoopEvent>}                  // includes requirements.*, iteration.*, verify.stage.*, verify.flaky, loop.snapshot/recovery/rollback, and loop.done
 {"type": "error", "code": "...", "message": "..."}            // protocol-level errors (bad frame, busy, ...)
 {"type": "idle"}                                              // sent when a run/loop finishes and a new start/send/loop is accepted
 ```

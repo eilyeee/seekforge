@@ -279,6 +279,21 @@ const result = await runAutoLoop(deps, {
 `resumeAutoLoop` 会恢复 worker/reviewer 会话和累计资源用量，并可追加迭代、成本、Token、
 时长及校验次数额度。
 
+## 11.5. 更深入的 Loop 工作流
+
+```bash
+seekforge loop "finish the parser" --verify "pnpm typecheck" \
+  --verify-stage tests="pnpm test" --flaky-retries 1 --stable-passes 2 \
+  --stuck-recoveries 1 --worktree --deliver checkpoint
+seekforge loop-history <loop-id> --after 0 --limit 100
+seekforge loop-recover
+seekforge loop-dag ./loop-dag.json --budget 2
+```
+
+Desktop 面板提供验证流水线、稳定/抖动/卡住控制，以及只在安全边界生效的暂停、继续和引导。
+回滚与交付要求保留的 Loop worktree。要交付草稿 PR，请使用 `--deliver pr`，并确保 `gh`
+已完成认证。
+
 ## 12. 实践建议与 FAQ
 
 **verify 命令怎么选？** 越快越好、越确定越好。它每轮都要跑，慢命令直接拖慢整个循环，还容易撞

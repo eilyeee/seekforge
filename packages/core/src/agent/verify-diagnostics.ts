@@ -1,7 +1,20 @@
 import { createHash } from "node:crypto";
 import { MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
 
-export type VerifyFramework = "vitest" | "jest" | "pytest" | "cargo" | "unknown";
+export type VerifyFramework =
+  | "vitest"
+  | "jest"
+  | "pytest"
+  | "cargo"
+  | "typescript"
+  | "eslint"
+  | "go"
+  | "maven"
+  | "gradle"
+  | "dotnet"
+  | "junit"
+  | "sarif"
+  | "unknown";
 
 export type VerifyDiagnostic = {
   file?: string;
@@ -42,11 +55,19 @@ function clean(value: string, maxLength: number): string {
 }
 
 function detectFramework(output: string): VerifyFramework {
+  if (/"version"\s*:\s*"2\.1\.0"[\s\S]*"runs"\s*:/i.test(output)) return "sarif";
+  if (/<testsuites?\b|<testcase\b/i.test(output)) return "junit";
   if (/\b(?:vitest|vite-node)\b/i.test(output) || /\bTest Files\s+\d+ failed/i.test(output)) return "vitest";
   if (/\bjest\b/i.test(output) || /\bTest Suites:\s+\d+ failed/i.test(output)) return "jest";
   if (/\bpytest\b/i.test(output) || /={2,}\s+(?:FAILURES|short test summary info)\s+={2,}/i.test(output))
     return "pytest";
   if (/\b(?:cargo test|running \d+ tests?)\b/i.test(output) && /\btest result:/i.test(output)) return "cargo";
+  if (/\berror TS\d+:/i.test(output)) return "typescript";
+  if (/\beslint\b/i.test(output) || /\b\d+ problems? \(\d+ errors?/i.test(output)) return "eslint";
+  if (/^--- FAIL:|^FAIL\s+\S+/m.test(output)) return "go";
+  if (/\[ERROR\]\s+Tests run:|maven-surefire-plugin/i.test(output)) return "maven";
+  if (/> Task :.*(?:test|check).*FAILED|\bGradle build failed\b/i.test(output)) return "gradle";
+  if (/\bFailed!\s+- Failed:|\bTest Run Failed\b|\.cs\(\d+,\d+\):\s+error/i.test(output)) return "dotnet";
   return "unknown";
 }
 
@@ -70,7 +91,15 @@ function extractFailedTests(output: string, framework: VerifyFramework): string[
       ? [/^FAILED\s+(.+?)(?:\s+-\s+.*)?$/gm, /^_{2,}\s+(.+?)\s+_{2,}$/gm]
       : framework === "cargo"
         ? [/^test\s+(.+?)\s+\.\.\.\s+FAILED\s*$/gm, /^\s*(.+?)\s+--- FAILED\s*$/gm]
-        : [/^\s*[×✕]\s+(.+?)(?:\s+\d+ms)?\s*$/gm, /^\s*FAIL\s+(.+?)\s*$/gm, /^\s*●\s+(.+?)\s*$/gm];
+        : framework === "go"
+          ? [/^--- FAIL:\s+(.+?)(?:\s+\(|$)/gm]
+          : framework === "maven" || framework === "gradle"
+            ? [/^\s*(?:\[ERROR\]\s+)?([\w.$]+(?:\.[\w$]+)*)\s+(?:Time elapsed.*<<< FAILURE!|FAILED)$/gm]
+            : framework === "dotnet"
+              ? [/^\s*Failed\s+(.+?)(?:\s+\[|$)/gm]
+              : framework === "junit"
+                ? [/<testcase\b[^>]*\bname=["']([^"']+)["'][^>]*>[\s\S]*?<failure\b/gm]
+                : [/^\s*[×✕]\s+(.+?)(?:\s+\d+ms)?\s*$/gm, /^\s*FAIL\s+(.+?)\s*$/gm, /^\s*●\s+(.+?)\s*$/gm];
   for (const pattern of patterns) {
     for (const match of output.matchAll(pattern)) found.push(match[1] ?? "");
   }
@@ -88,10 +117,18 @@ function extractDiagnostics(output: string, framework: VerifyFramework): VerifyD
             /^\s*-->\s+(.+?\.rs):(\d+)(?::\d+)?\s*$/,
             /^(?:thread .+?\s+)?panicked at\s+['"]?(.+?)['"]?,\s+(.+?\.rs):(\d+)(?::\d+)?\s*$/,
           ]
-        : [
-            /^at\s+(?:.*?\s+\()?((?:[A-Za-z]:)?[^():]+\.[cm]?[jt]sx?):(\d+):\d+\)?\s*$/,
-            /^([^:]+\.[cm]?[jt]sx?):(\d+)(?::\d+)?\s*(?:[-:]\s*)?(.+)$/,
-          ];
+        : framework === "typescript"
+          ? [/^(.+?\.[cm]?[jt]sx?)\((\d+),\d+\):\s+error\s+TS\d+:\s+(.+)$/]
+          : framework === "eslint"
+            ? [/^(.+?\.[cm]?[jt]sx?):(\d+):\d+\s+error\s+(.+)$/]
+            : framework === "go"
+              ? [/^\s*(.+?\.go):(\d+):\s+(.+)$/]
+              : framework === "dotnet"
+                ? [/^(.+?\.cs)\((\d+),\d+\):\s+(?:error|warning)\s+\w+:\s+(.+)$/]
+                : [
+                    /^at\s+(?:.*?\s+\()?((?:[A-Za-z]:)?[^():]+\.[cm]?[jt]sx?):(\d+):\d+\)?\s*$/,
+                    /^([^:]+\.[cm]?[jt]sx?):(\d+)(?::\d+)?\s*(?:[-:]\s*)?(.+)$/,
+                  ];
 
   let pendingMessage = "";
   for (const rawLine of lines) {
@@ -121,6 +158,35 @@ function extractDiagnostics(output: string, framework: VerifyFramework): VerifyD
   return result;
 }
 
+function extractSarif(output: string): { tests: string[]; diagnostics: VerifyDiagnostic[] } | null {
+  try {
+    const parsed = JSON.parse(output) as { runs?: Array<{ results?: unknown[] }> };
+    const rows = parsed.runs?.flatMap((run) => run.results ?? []) ?? [];
+    const tests: string[] = [];
+    const diagnostics: VerifyDiagnostic[] = [];
+    for (const row of rows.slice(0, 1_000)) {
+      if (!row || typeof row !== "object") continue;
+      const value = row as Record<string, unknown>;
+      const ruleId = typeof value.ruleId === "string" ? value.ruleId : "sarif";
+      const messageValue = value.message as { text?: unknown } | undefined;
+      const message = typeof messageValue?.text === "string" ? messageValue.text : ruleId;
+      const location = (value.locations as Array<Record<string, unknown>> | undefined)?.[0];
+      const physical = location?.physicalLocation as Record<string, unknown> | undefined;
+      const artifact = physical?.artifactLocation as { uri?: unknown } | undefined;
+      const region = physical?.region as { startLine?: unknown } | undefined;
+      tests.push(ruleId);
+      diagnostics.push({
+        ...(typeof artifact?.uri === "string" ? { file: artifact.uri } : {}),
+        ...(typeof region?.startLine === "number" ? { line: region.startLine } : {}),
+        message,
+      });
+    }
+    return { tests, diagnostics };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeForFingerprint(value: string): string {
   return value
     .replace(/\\/g, "/")
@@ -141,9 +207,14 @@ export function parseVerifyDiagnostics(output: string, options: VerifyDiagnostic
       : `${output.slice(0, MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}\n... output omitted ...\n${output.slice(-MAX_VERIFY_DIAGNOSTIC_INPUT / 2)}`;
   const boundedOutput = boundedInput.replace(ANSI_PATTERN, "");
   const framework = detectFramework(boundedOutput);
+  const sarif = framework === "sarif" ? extractSarif(boundedOutput) : null;
   const allFailedTests =
-    framework === "unknown" ? [] : uniqueBounded(extractFailedTests(boundedOutput, framework), 10_000, maxText);
-  const allDiagnostics = (framework === "unknown" ? [] : extractDiagnostics(boundedOutput, framework))
+    framework === "unknown"
+      ? []
+      : uniqueBounded(sarif?.tests ?? extractFailedTests(boundedOutput, framework), 10_000, maxText);
+  const allDiagnostics = (
+    framework === "unknown" ? [] : (sarif?.diagnostics ?? extractDiagnostics(boundedOutput, framework))
+  )
     .map((item) => ({
       ...item,
       file: item.file ? clean(item.file, maxText) : undefined,

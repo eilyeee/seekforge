@@ -514,6 +514,11 @@ describe("store: loop mode", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
+      verificationPlan: [{ id: "types", command: "pnpm typecheck" }],
+      stablePasses: 2,
+      flakyRetries: 1,
+      maxNoProgressRecoveries: 2,
+      rollbackOnRegression: true,
       requirementMode: "confirm",
     });
     const loop = sent.find((f) => f.type === "loop");
@@ -529,6 +534,11 @@ describe("store: loop mode", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
+      verificationPlan: [{ id: "types", command: "pnpm typecheck" }],
+      stablePasses: 2,
+      flakyRetries: 1,
+      maxNoProgressRecoveries: 2,
+      rollbackOnRegression: true,
       requirementMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);
@@ -536,6 +546,18 @@ describe("store: loop mode", () => {
     expect(tab.loopRunning).toBe(true);
     expect(tab.loop.events).toEqual([]);
     expect(tab.loop.result).toBeNull();
+  });
+
+  it("sends safe-boundary pause, resume, and steering frames", () => {
+    useStore.getState().startLoop({ task: "t", verifyCommand: "v" });
+    useStore.getState().pauseLoop();
+    useStore.getState().continueLoop();
+    useStore.getState().steerLoop("focus on tests");
+    expect(sent.slice(-3)).toEqual([
+      { type: "loop.pause" },
+      { type: "loop.control.resume" },
+      { type: "loop.steer", message: "focus on tests" },
+    ]);
   });
 
   it("omits maxIterations/budget when not provided", () => {

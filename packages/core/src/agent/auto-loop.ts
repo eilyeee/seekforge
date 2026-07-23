@@ -10,6 +10,7 @@
  */
 import type { AgentError, ApprovalMode } from "@seekforge/shared";
 import { randomUUID } from "node:crypto";
+import { resolve, sep } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
@@ -17,6 +18,7 @@ import {
   createLoopLogWriter,
   createLoopState,
   loadLoopState,
+  recoverInterruptedLoops,
   saveLoopState,
   type LoopState,
 } from "./loop-state.js";
@@ -33,6 +35,11 @@ import { recordProgressFingerprint } from "./loop-logic.js";
 import { createWorkspaceFingerprinter } from "./workspace-fingerprint.js";
 import { classifyAgentError } from "./errors.js";
 import { abortablePromise } from "../util/abort.js";
+import type { LoopControl } from "./loop-control.js";
+import { extractMemoryFromSession } from "../memory/extract.js";
+import { loadSessionMessages, truncateSessionAtUserTurn } from "./trace.js";
+import { rewindSessionToTurn } from "./session-rewind.js";
+import { logSkillOutcome, selectedSkillIdsForSession } from "../skills/index.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -42,6 +49,7 @@ import {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,
   parseLoopRequirementSpec,
+  validateLoopAcceptanceEvidence,
   type LoopAcceptanceReview,
   type LoopRequirementMode,
   type LoopRequirementSpec,
@@ -55,9 +63,36 @@ export type LoopStatus =
   | "cancelled" // aborted via signal
   | "verify_error" // the verify command could not be run at all
   | "agent_error" // the edit agent failed before verification could be meaningful
+  | "interrupted" // a previous owner disappeared and the durable loop can be resumed
   | "requirements_pending"; // analyzed requirements await explicit approval
 
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
+
+export type LoopVerificationStage = {
+  id: string;
+  command: string;
+  required?: boolean;
+  timeoutMs?: number;
+};
+
+export type LoopStageResult = {
+  id: string;
+  command: string;
+  code: number;
+  output: string;
+  attempts: number;
+  flaky: boolean;
+  durationMs: number;
+};
+
+export type LoopIterationSnapshot = {
+  iteration: number;
+  ts: string;
+  diagnosticsFingerprint: string;
+  workspaceFingerprint: string | null;
+  failedTests: number;
+  stageResults: LoopStageResult[];
+};
 
 export type LoopOptions = {
   /** The goal handed to the agent on the first iteration. */
@@ -66,6 +101,16 @@ export type LoopOptions = {
   workspace: string;
   /** Shell command whose exit 0 means "done" (the success criterion). */
   verifyCommand: string;
+  /** Optional ordered verification pipeline. The legacy verifyCommand becomes one stage when omitted. */
+  verificationPlan?: LoopVerificationStage[];
+  /** Require this many consecutive full-pipeline passes. Default 1, maximum 5. */
+  stablePasses?: number;
+  /** Rerun a failed stage this many times before editing, to identify flaky verification. Default 0. */
+  flakyRetries?: number;
+  /** Re-diagnose this many stuck/cyclic states before returning no_progress. Default 1. */
+  maxNoProgressRecoveries?: number;
+  /** Revert an iteration that increases parsed failures. Allowed only in a retained Loop worktree. */
+  rollbackOnRegression?: boolean;
   /** Max run iterations before giving up. Default 8. */
   maxIterations?: number;
   /** Hard cap on cumulative cost (USD) across iterations. */
@@ -92,6 +137,8 @@ export type LoopOptions = {
   signal?: AbortSignal;
   /** Per-iteration progress callback. */
   onEvent?: (event: LoopEvent) => void;
+  /** Optional safe-boundary pause/resume/steering channel. */
+  control?: LoopControl;
   /** Stable persisted id; generated when omitted. */
   loopId?: string;
   /** Requirement gate. `quick` preserves verifier-only behavior. Default quick. */
@@ -120,6 +167,15 @@ export type LoopEvent =
   | { type: "run.completed"; iteration: number; costUsd: number }
   | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
+  | { type: "verify.stage.started"; iteration: number; stageId: string; attempt: number }
+  | { type: "verify.stage.completed"; iteration: number; result: LoopStageResult }
+  | { type: "verify.flaky"; iteration: number; stageId: string; attempts: number }
+  | { type: "loop.paused"; iteration: number }
+  | { type: "loop.resumed"; iteration: number }
+  | { type: "loop.steered"; iteration: number; count: number }
+  | { type: "loop.recovery"; iteration: number; attempt: number; reason: "stuck" | "cycle" }
+  | { type: "loop.snapshot"; snapshot: LoopIterationSnapshot }
+  | { type: "loop.rollback"; iteration: number; restored: string[]; deleted: string[] }
   | { type: "requirements.started"; phase: "analysis" | "review" }
   | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
   | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
@@ -130,6 +186,9 @@ export type LoopResult = {
   status: LoopStatus;
   iterations: number;
   costUsd: number;
+  tokensUsed?: number;
+  verifyRuns?: number;
+  elapsedMs?: number;
   sessionId: string;
   finalVerify: { code: number; output: string };
   /** Stable id of the persisted orchestration state. */
@@ -140,6 +199,10 @@ export type LoopResult = {
   budgetReason?: LoopBudgetReason;
   /** Preserved terminal agent error when status=agent_error. */
   agentError?: AgentError;
+  stageResults?: LoopStageResult[];
+  flaky?: boolean;
+  passStreak?: number;
+  recoveryAttempts?: number;
 };
 
 /** Tail-cap captured output to ~4 KB so continuations/results stay bounded. */
@@ -312,6 +375,37 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   positiveSafeInteger("verifyTimeoutMs", opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs);
   positiveSafeInteger("agentTimeoutMs", opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs);
   positiveSafeInteger("maxAgentRetries", opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries, true);
+  positiveSafeInteger("stablePasses", opts.stablePasses ?? opts.resumeState?.stablePasses ?? 1);
+  positiveSafeInteger("flakyRetries", opts.flakyRetries ?? opts.resumeState?.flakyRetries ?? 0, true);
+  positiveSafeInteger(
+    "maxNoProgressRecoveries",
+    opts.maxNoProgressRecoveries ?? opts.resumeState?.maxNoProgressRecoveries ?? 1,
+    true,
+  );
+  if ((opts.stablePasses ?? opts.resumeState?.stablePasses ?? 1) > 5)
+    throw new RangeError("Loop stablePasses must be 1-5");
+  if ((opts.flakyRetries ?? opts.resumeState?.flakyRetries ?? 0) > 5)
+    throw new RangeError("Loop flakyRetries must be 0-5");
+  if ((opts.maxNoProgressRecoveries ?? opts.resumeState?.maxNoProgressRecoveries ?? 1) > 5) {
+    throw new RangeError("Loop maxNoProgressRecoveries must be 0-5");
+  }
+  const configuredPlan = opts.verificationPlan ?? opts.resumeState?.verificationPlan;
+  if (configuredPlan !== undefined) {
+    if (!Array.isArray(configuredPlan) || configuredPlan.length === 0 || configuredPlan.length > 16) {
+      throw new RangeError("Loop verificationPlan must contain 1 to 16 stages");
+    }
+    const ids = new Set<string>();
+    for (const stage of configuredPlan) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(stage.id) || ids.has(stage.id)) {
+        throw new Error(`Loop verification stage id must be unique and safe: ${stage.id}`);
+      }
+      ids.add(stage.id);
+      if (stage.command.trim() === "" || stage.command.length > 8_192) {
+        throw new Error(`Loop verification stage command is invalid: ${stage.id}`);
+      }
+      positiveSafeInteger(`verificationPlan.${stage.id}.timeoutMs`, stage.timeoutMs);
+    }
+  }
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
@@ -375,6 +469,20 @@ async function runAutoLoopWithLease(
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS;
   const agentTimeoutMs = opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS;
   const maxAgentRetries = opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries ?? DEFAULT_LOOP_AGENT_RETRIES;
+  const verificationPlan: LoopVerificationStage[] = opts.verificationPlan ??
+    opts.resumeState?.verificationPlan ?? [{ id: "verify", command: opts.verifyCommand }];
+  const stablePasses = Math.min(opts.stablePasses ?? opts.resumeState?.stablePasses ?? 1, 5);
+  const flakyRetries = Math.min(opts.flakyRetries ?? opts.resumeState?.flakyRetries ?? 0, 5);
+  const maxNoProgressRecoveries = Math.min(
+    opts.maxNoProgressRecoveries ?? opts.resumeState?.maxNoProgressRecoveries ?? 1,
+    5,
+  );
+  const rollbackOnRegression = opts.rollbackOnRegression ?? opts.resumeState?.rollbackOnRegression ?? false;
+  if (rollbackOnRegression) {
+    const parts = resolve(opts.workspace).split(sep);
+    const isolated = parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
+    if (!isolated) throw new Error("rollbackOnRegression requires a retained .seekforge/worktrees workspace");
+  }
   const verify =
     opts.verify ??
     ((workspace, command, signal, onOutput) =>
@@ -395,9 +503,12 @@ async function runAutoLoopWithLease(
     throw new Error(`Cannot select loop model without providerForModel: ${opts.model}`);
   }
 
+  const loopProvider = opts.model && deps.providerForModel ? deps.providerForModel(opts.model) : deps.provider;
   const agent = createAgentCore({
     ...deps,
-    ...(opts.model && deps.providerForModel ? { provider: deps.providerForModel(opts.model) } : {}),
+    extractMemory: false,
+    deferSkillOutcome: true,
+    provider: loopProvider,
     ...(opts.escalateOnFailure !== undefined ? { escalateOnFailure: opts.escalateOnFailure } : {}),
     ...(opts.planModel ? { planModel: opts.planModel } : {}),
   });
@@ -411,6 +522,7 @@ async function runAutoLoopWithLease(
           hooks: undefined,
           subagents: [],
           extractMemory: false,
+          deferSkillOutcome: true,
           ...(opts.model && deps.providerForModel ? { provider: deps.providerForModel(opts.model) } : {}),
           ...(opts.planModel ? { planModel: opts.planModel } : {}),
         });
@@ -439,6 +551,11 @@ async function runAutoLoopWithLease(
         agentTimeoutMs,
         maxAgentRetries,
         requirementMode,
+        verificationPlan,
+        stablePasses,
+        flakyRetries,
+        maxNoProgressRecoveries,
+        rollbackOnRegression,
       });
     } catch (error) {
       persistenceWarning(error);
@@ -473,14 +590,30 @@ async function runAutoLoopWithLease(
   const priorElapsedMs = opts.resumeState?.elapsedMs ?? 0;
   const runStartedAt = Date.now();
   let sessionId = opts.resumeState?.sessionId ?? "";
+  const workerSessionIds = new Set(sessionId ? [sessionId] : []);
   let reviewerSessionId = opts.resumeState?.reviewerSessionId ?? "";
   let requirements = opts.resumeState?.requirements ?? null;
   let acceptanceReview = opts.resumeState?.acceptanceReview ?? null;
   let requirementsApprovedAt = opts.resumeState?.requirementsApprovedAt ?? null;
+  let passStreak = opts.resumeState?.passStreak ?? 0;
+  let recoveryAttempts = opts.resumeState?.recoveryAttempts ?? 0;
+  let lastStageResults = opts.resumeState?.stageResults ?? [];
+  let flakyObserved = lastStageResults.some((result) => result.flaky);
+  const snapshots = [...(opts.resumeState?.snapshots ?? [])];
+  const allChangedPaths = new Set<string>();
+  let steeringGuidance: string[] = [];
+  let skillOutcomeRecorded = false;
 
   const done = (result: LoopResult): LoopResult => {
     const withRequirements = {
       ...result,
+      tokensUsed,
+      verifyRuns,
+      elapsedMs: elapsedMs(),
+      stageResults: lastStageResults,
+      flaky: flakyObserved,
+      passStreak,
+      recoveryAttempts,
       ...(requirements ? { requirements } : {}),
       ...(acceptanceReview ? { acceptanceReview } : {}),
     };
@@ -497,9 +630,28 @@ async function runAutoLoopWithLease(
         elapsedMs: priorElapsedMs + (Date.now() - runStartedAt),
         reviewerSessionId,
         lastAgentError: withId.agentError ?? null,
+        passStreak,
+        recoveryAttempts,
+        stageResults: lastStageResults,
+        snapshots,
       },
       true,
     );
+    const outcomeSessionId = sessionId || reviewerSessionId;
+    if (!skillOutcomeRecorded && outcomeSessionId) {
+      skillOutcomeRecorded = true;
+      const skillIds = [
+        ...new Set([
+          ...[...workerSessionIds].flatMap((id) => selectedSkillIdsForSession(opts.workspace, id)),
+          ...selectedSkillIdsForSession(opts.workspace, reviewerSessionId),
+        ]),
+      ];
+      logSkillOutcome(opts.workspace, outcomeSessionId, skillIds, {
+        success: withId.status === "passed",
+        verified: withId.status === "passed",
+        costUsd,
+      });
+    }
     emit({ type: "loop.done", result: withId });
     return withId;
   };
@@ -518,31 +670,94 @@ async function runAutoLoopWithLease(
     if (maxVerifyRuns !== undefined && verifyRuns >= maxVerifyRuns) return "verify_runs";
     return null;
   };
-  const executeVerify = async (
+  const applyControl = async (iteration: number): Promise<void> => {
+    if (!opts.control) return;
+    const paused = opts.control.state() === "paused";
+    if (paused) {
+      persist({ status: "paused" }, true);
+      emit({ type: "loop.paused", iteration });
+    }
+    const control = await opts.control.waitAtBoundary(opts.signal);
+    if (paused && control.resumed) {
+      persist({ status: "running" }, true);
+      emit({ type: "loop.resumed", iteration });
+    }
+    if (control.guidance.length > 0) {
+      steeringGuidance.push(...control.guidance);
+      emit({ type: "loop.steered", iteration, count: control.guidance.length });
+    }
+  };
+
+  const settleLoopMemory = async (finalVerify: { code: number; output: string }): Promise<void> => {
+    if (!deps.extractMemory || !sessionId) return;
+    try {
+      const extraction = await extractMemoryFromSession(loopProvider, {
+        workspace: opts.workspace,
+        sessionId,
+        task: opts.task,
+        report: {
+          summary: "Autonomous Loop completed with all required verification stages passing.",
+          changedFiles: [...allChangedPaths],
+          commandsRun: verificationPlan.map((stage) => stage.command),
+          verification: finalVerify.output,
+          usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 },
+        },
+        messages: loadSessionMessages(opts.workspace, sessionId),
+        ...(deps.memoryAutoApproveConfidence !== undefined
+          ? { autoApproveConfidence: deps.memoryAutoApproveConfidence }
+          : {}),
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      });
+      if (extraction.usage) {
+        costUsd += extraction.usage.costUsd;
+        tokensUsed += extraction.usage.promptTokens + extraction.usage.completionTokens;
+        persist({ costUsd, tokensUsed }, true);
+      }
+    } catch {
+      // Final memory settlement is best-effort and cannot change a passed Loop.
+    }
+  };
+  const executeStage = async (
     iteration: number,
+    stage: LoopVerificationStage,
+    attempt: number,
   ): Promise<
-    | { kind: "result"; result: { code: number; output: string }; diagnostics: string }
-    | { kind: "budget"; reason: LoopBudgetReason }
+    { kind: "result"; result: LoopStageResult; diagnostics: string } | { kind: "budget"; reason: LoopBudgetReason }
   > => {
     const before = currentBudgetReason();
     if (before !== null) return { kind: "budget", reason: before };
     verifyRuns++;
     persist({ verifyRuns, elapsedMs: elapsedMs() }, true);
-    const remainingDuration = maxDurationMs === undefined ? verifyTimeoutMs : maxDurationMs - elapsedMs();
+    const configuredTimeout = stage.timeoutMs ?? verifyTimeoutMs;
+    const remainingDuration = maxDurationMs === undefined ? configuredTimeout : maxDurationMs - elapsedMs();
     if (remainingDuration <= 0) return { kind: "budget", reason: "duration" };
-    const durationLimited = remainingDuration <= verifyTimeoutMs;
-    const timeoutMs = Math.max(1, Math.min(verifyTimeoutMs, remainingDuration));
+    const durationLimited = remainingDuration <= configuredTimeout;
+    const timeoutMs = Math.max(1, Math.min(configuredTimeout, remainingDuration));
     const timeoutController = new AbortController();
     const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
     timeout.unref?.();
     const runSignal = AbortSignal.any([timeoutController.signal, ...(opts.signal ? [opts.signal] : [])]);
+    const startedAt = Date.now();
+    emit({ type: "verify.stage.started", iteration, stageId: stage.id, attempt });
     try {
       const captured = await abortablePromise(
-        captureVerify(verify, opts.workspace, opts.verifyCommand, runSignal, liveVerifyOutput(iteration, emit)),
+        captureVerify(verify, opts.workspace, stage.command, runSignal, liveVerifyOutput(iteration, emit)),
         runSignal,
         () => new Error(`verification timed out after ${timeoutMs}ms`),
       );
-      return { kind: "result", ...captured };
+      return {
+        kind: "result",
+        result: {
+          id: stage.id,
+          command: stage.command,
+          code: captured.result.code,
+          output: captured.result.output,
+          attempts: attempt,
+          flaky: false,
+          durationMs: Date.now() - startedAt,
+        },
+        diagnostics: captured.diagnostics,
+      };
     } catch (error) {
       if (timeoutController.signal.aborted && !opts.signal?.aborted && durationLimited) {
         return { kind: "budget", reason: "duration" };
@@ -552,6 +767,63 @@ async function runAutoLoopWithLease(
       clearTimeout(timeout);
       persist({ verifyRuns, elapsedMs: elapsedMs() });
     }
+  };
+
+  const executeVerify = async (
+    iteration: number,
+  ): Promise<
+    | { kind: "result"; result: { code: number; output: string }; diagnostics: string; stages: LoopStageResult[] }
+    | { kind: "budget"; reason: LoopBudgetReason }
+  > => {
+    const stages: LoopStageResult[] = [];
+    let failedDiagnostics = "";
+    let failedCode = 0;
+    for (const stage of verificationPlan) {
+      let completed: LoopStageResult | undefined;
+      let diagnostics = "";
+      for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
+        const captured = await executeStage(iteration, stage, attempt);
+        if (captured.kind === "budget") return captured;
+        completed = captured.result;
+        diagnostics = captured.diagnostics;
+        if (completed.code === 0 || attempt > flakyRetries) break;
+      }
+      if (!completed) throw new Error(`verification stage ended without a result: ${stage.id}`);
+      if (completed.code === 0 && completed.attempts > 1) {
+        completed = { ...completed, flaky: true };
+        flakyObserved = true;
+        emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
+      }
+      stages.push(completed);
+      emit({ type: "verify.stage.completed", iteration, result: completed });
+      if (completed.code !== 0 && stage.required !== false) {
+        failedCode = completed.code;
+        failedDiagnostics = diagnostics;
+        break;
+      }
+    }
+    lastStageResults = stages;
+    const output = tail(stages.map((stage) => `[${stage.id}] ${stage.output}`).join("\n"));
+    return {
+      kind: "result",
+      result: { code: failedCode, output },
+      diagnostics: failedDiagnostics || stages.map((stage) => stage.output).join("\n"),
+      stages,
+    };
+  };
+
+  const executeStableVerify = async (iteration: number): ReturnType<typeof executeVerify> => {
+    let captured = await executeVerify(iteration);
+    if (captured.kind === "budget") return captured;
+    passStreak = captured.result.code === 0 ? Math.min(stablePasses, passStreak + 1) : 0;
+    persist({ passStreak, stageResults: lastStageResults });
+    while (captured.result.code === 0 && passStreak < stablePasses) {
+      captured = await executeVerify(iteration);
+      if (captured.kind === "budget") return captured;
+      passStreak = captured.result.code === 0 ? Math.min(stablePasses, passStreak + 1) : 0;
+      persist({ passStreak, stageResults: lastStageResults });
+    }
+    return captured;
   };
 
   const runReadOnlyPhase = async (
@@ -621,8 +893,14 @@ async function runAutoLoopWithLease(
     if (requirements === null) throw new Error("Cannot review missing loop requirements");
     emit({ type: "requirements.started", phase: "review" });
     const phase = await runReadOnlyPhase(buildAcceptanceReviewPrompt(requirements, verifyResult), false);
-    const parsed =
+    const parsedRaw =
       phase.completed && phase.summary !== null ? parseLoopAcceptanceReview(phase.summary, requirements) : null;
+    const parsed = parsedRaw
+      ? validateLoopAcceptanceEvidence(opts.workspace, requirements, parsedRaw, {
+          commands: verificationPlan.map((stage) => stage.command),
+          verifierOutput: verifyResult.output,
+        })
+      : null;
     acceptanceReview =
       parsed ??
       fallbackLoopAcceptanceReview(requirements, "Acceptance review did not return valid structured evidence.");
@@ -702,7 +980,8 @@ async function runAutoLoopWithLease(
     return finish("cancelled", cancelledVerify);
   }
   try {
-    const captured = await executeVerify(0);
+    await applyControl(0);
+    const captured = await executeStableVerify(0);
     if (captured.kind === "budget") {
       return finishBudget(captured.reason, {
         code: -1,
@@ -719,10 +998,16 @@ async function runAutoLoopWithLease(
     return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
   }
   if (preVerify.code === 0) {
-    if (requirements === null) return finish("passed", preVerify);
+    if (requirements === null) {
+      await settleLoopMemory(preVerify);
+      return finish("passed", preVerify);
+    }
     const review = await reviewRequirements(preVerify);
     if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
-    if (review.complete) return finish("passed", preVerify);
+    if (review.complete) {
+      await settleLoopMemory(preVerify);
+      return finish("passed", preVerify);
+    }
     const budget = currentBudgetReason();
     if (budget !== null) return finishBudget(budget, preVerify);
   }
@@ -734,6 +1019,19 @@ async function runAutoLoopWithLease(
   let previousAcceptance = acceptanceFingerprint(acceptanceReview);
   const fingerprinter = createWorkspaceFingerprinter(opts.workspace);
   let previousWorkspace = await fingerprinter.fingerprint();
+  if (snapshots.length === 0 && iterations === 0) {
+    const initialSnapshot: LoopIterationSnapshot = {
+      iteration: 0,
+      ts: new Date().toISOString(),
+      diagnosticsFingerprint: previousDiagnostics.fingerprint,
+      workspaceFingerprint: previousWorkspace,
+      failedTests: previousDiagnostics.failedTests.length,
+      stageResults: lastStageResults,
+    };
+    snapshots.push(initialSnapshot);
+    persist({ snapshots, stageResults: lastStageResults, passStreak });
+    emit({ type: "loop.snapshot", snapshot: initialSnapshot });
+  }
   const progressFingerprints: string[] = [];
   recordProgressFingerprint(
     progressFingerprints,
@@ -748,9 +1046,18 @@ async function runAutoLoopWithLease(
     }
     const beforeIterationBudget = currentBudgetReason();
     if (beforeIterationBudget !== null) return finishBudget(beforeIterationBudget, lastVerify);
+    try {
+      await applyControl(i);
+    } catch {
+      if (opts.signal?.aborted) return finish("cancelled", lastVerify);
+      throw new Error("Loop control failed while paused");
+    }
     emit({ type: "iteration.start", iteration: i });
+    const rollbackTurnIndex = sessionId
+      ? loadSessionMessages(opts.workspace, sessionId).filter((message) => message.role === "user").length
+      : 0;
 
-    const continuation =
+    let continuation =
       requirements !== null
         ? requirementContinuation(
             opts.task,
@@ -766,6 +1073,12 @@ async function runAutoLoopWithLease(
               previousDiagnostics,
               lastVerify.output,
             )}\n\nFix the root cause so it passes.`;
+    if (steeringGuidance.length > 0) {
+      continuation += `\n\nUser guidance for this iteration (guidance only; frozen verification and acceptance remain authoritative):\n${steeringGuidance
+        .map((message) => `- ${message}`)
+        .join("\n")}`;
+      steeringGuidance = [];
+    }
 
     let runSucceeded = false;
     const changedPaths = new Set<string>();
@@ -797,6 +1110,7 @@ async function runAutoLoopWithLease(
         for await (const ev of events) {
           if (ev.type === "session.created") {
             if (!sessionId) sessionId = ev.sessionId;
+            workerSessionIds.add(ev.sessionId);
             persist({ costUsd: costUsd + runCost, tokensUsed: tokensUsed + runTokens, sessionId });
           } else if (ev.type === "usage.updated") {
             // Usage is cumulative within this attempt. Failed attempts still
@@ -816,6 +1130,7 @@ async function runAutoLoopWithLease(
             runSucceeded = true;
           } else if (ev.type === "file.changed") {
             changedPaths.add(ev.path);
+            allChangedPaths.add(ev.path);
           } else if (ev.type === "tool.started" && !READ_ONLY_AGENT_TOOLS.has(ev.toolName)) {
             forceFullFingerprint = true;
           } else if (ev.type === "session.failed") {
@@ -860,7 +1175,7 @@ async function runAutoLoopWithLease(
     let v: { code: number; output: string };
     let verifyDiagnostics = "";
     try {
-      const captured = await executeVerify(i);
+      const captured = await executeStableVerify(i);
       if (captured.kind === "budget") return finishBudget(captured.reason, lastVerify);
       v = captured.result;
       verifyDiagnostics = captured.diagnostics;
@@ -872,18 +1187,61 @@ async function runAutoLoopWithLease(
     }
     lastVerify = v;
     const diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
-    const currentWorkspace = await fingerprinter.fingerprint({
+    let currentWorkspace = await fingerprinter.fingerprint({
       forcePaths: changedPaths,
       forceAll: forceFullFingerprint,
     });
     persist({ iterations: i, costUsd, sessionId, lastVerify: v });
     emit({ type: "verify", iteration: i, code: v.code, passed: v.code === 0, output: v.output });
+    const previousSnapshot = snapshots.at(-1);
+    const snapshot: LoopIterationSnapshot = {
+      iteration: i,
+      ts: new Date().toISOString(),
+      diagnosticsFingerprint: diagnostics.fingerprint,
+      workspaceFingerprint: currentWorkspace,
+      failedTests: diagnostics.failedTests.length,
+      stageResults: lastStageResults,
+    };
+    snapshots.push(snapshot);
+    if (snapshots.length > MAX_LOOP_ITERATIONS) snapshots.splice(0, snapshots.length - MAX_LOOP_ITERATIONS);
+    persist({ snapshots, stageResults: lastStageResults, passStreak });
+    emit({ type: "loop.snapshot", snapshot });
+    if (
+      rollbackOnRegression &&
+      sessionId &&
+      previousSnapshot &&
+      previousSnapshot.failedTests > 0 &&
+      snapshot.failedTests > previousSnapshot.failedTests
+    ) {
+      const rewind = rewindSessionToTurn(opts.workspace, sessionId, rollbackTurnIndex);
+      if (rollbackTurnIndex === 0) {
+        sessionId = "";
+        persist({ sessionId }, true);
+      } else {
+        truncateSessionAtUserTurn(opts.workspace, sessionId, rollbackTurnIndex);
+      }
+      emit({ type: "loop.rollback", iteration: i, restored: rewind.restored, deleted: rewind.deleted });
+      steeringGuidance.push(
+        `Iteration ${i} increased the parsed failure count and was rolled back. Use a different, narrower fix.`,
+      );
+      currentWorkspace = await fingerprinter.fingerprint({ forceAll: true });
+      previousDiagnostics = diagnostics;
+      previousAcceptance = acceptanceFingerprint(acceptanceReview);
+      previousWorkspace = currentWorkspace;
+      continue;
+    }
 
     if (v.code === 0) {
-      if (requirements === null) return finish("passed", v);
+      if (requirements === null) {
+        await settleLoopMemory(v);
+        return finish("passed", v);
+      }
       const review = await reviewRequirements(v);
       if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
-      if (review.complete) return finish("passed", v);
+      if (review.complete) {
+        await settleLoopMemory(v);
+        return finish("passed", v);
+      }
     }
 
     // --- Guardrails (checked before spending another iteration). -----------
@@ -906,6 +1264,19 @@ async function runAutoLoopWithLease(
         : `${diagnostics.fingerprint}:${acceptanceFingerprint(acceptanceReview)}:${currentWorkspace}`,
     );
     if ((sameFailure && sameWorkspace) || cyclePeriod !== null) {
+      if (recoveryAttempts < maxNoProgressRecoveries) {
+        recoveryAttempts++;
+        const reason = cyclePeriod !== null ? "cycle" : "stuck";
+        emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason });
+        persist({ recoveryAttempts }, true);
+        steeringGuidance.push(
+          `Recovery attempt ${recoveryAttempts}: the previous strategy ${reason === "cycle" ? "cycled" : "made no observable progress"}. Re-read the failing area, challenge the current diagnosis, and use a materially different approach before editing.`,
+        );
+        previousDiagnostics = diagnostics;
+        previousAcceptance = currentAcceptance;
+        previousWorkspace = currentWorkspace;
+        continue;
+      }
       return finish("no_progress", v);
     }
     previousDiagnostics = diagnostics;
@@ -931,6 +1302,11 @@ export async function resumeAutoLoop(
     | "verifyTimeoutMs"
     | "agentTimeoutMs"
     | "maxAgentRetries"
+    | "verificationPlan"
+    | "stablePasses"
+    | "flakyRetries"
+    | "maxNoProgressRecoveries"
+    | "rollbackOnRegression"
     | "requirementMode"
     | "resumeState"
   > & {
@@ -1013,4 +1389,25 @@ export async function resumeAutoLoop(
     ...(maxVerifyRuns !== undefined && maxVerifyRuns !== null ? { maxVerifyRuns } : {}),
     resumeState: { ...state, maxIterations, costBudgetUsd, tokenBudget, maxDurationMs, maxVerifyRuns },
   });
+}
+
+/** Recovers orphaned durable loops and resumes them sequentially under their original limits. */
+export async function autoResumeInterruptedLoops(
+  deps: AgentCoreDeps,
+  workspace: string,
+  options: { signal?: AbortSignal; onEvent?: (loopId: string, event: LoopEvent) => void } = {},
+): Promise<LoopResult[]> {
+  const recovered = recoverInterruptedLoops(workspace);
+  const results: LoopResult[] = [];
+  for (const state of recovered) {
+    options.signal?.throwIfAborted();
+    results.push(
+      await resumeAutoLoop(deps, state.loopId, {
+        workspace,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onEvent ? { onEvent: (event) => options.onEvent?.(state.loopId, event) } : {}),
+      }),
+    );
+  }
+  return results;
 }

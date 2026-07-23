@@ -148,6 +148,15 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
       case "requirements.started":
       case "requirements.completed":
       case "requirements.reviewed":
+      case "verify.stage.started":
+      case "verify.stage.completed":
+      case "verify.flaky":
+      case "loop.paused":
+      case "loop.resumed":
+      case "loop.steered":
+      case "loop.recovery":
+      case "loop.snapshot":
+      case "loop.rollback":
         // Requirement progress is rendered separately from iteration rows.
         break;
     }

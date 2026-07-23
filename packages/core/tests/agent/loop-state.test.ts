@@ -23,6 +23,8 @@ import {
   removeLoopState,
   saveLoopState,
   createLoopLogWriter,
+  readLoopHistory,
+  recoverInterruptedLoops,
 } from "../../src/agent/loop-state.js";
 
 describe("loop state persistence", () => {
@@ -50,6 +52,49 @@ describe("loop state persistence", () => {
     expect(existsSync(`${target}.1`)).toBe(true);
     expect(readFileSync(target, "utf8")).toContain('"type":"verify.output"');
     expect(readFileSync(`${target}.1`, "utf8")).toContain('"type":"verify.output"');
+  });
+
+  it("replays bounded history after a sequence cursor", () => {
+    const writer = createLoopLogWriter(workspace, "history");
+    writer.append({ type: "iteration.start", iteration: 1 });
+    writer.append({ type: "loop.paused", iteration: 1 });
+    writer.append({ type: "loop.resumed", iteration: 1 });
+    writer.close();
+    expect(readLoopHistory(workspace, "history", { afterSeq: 1, limit: 1 })).toMatchObject([
+      { seq: 2, event: { type: "loop.paused", iteration: 1 } },
+    ]);
+    const resumed = createLoopLogWriter(workspace, "history");
+    resumed.append({ type: "loop.steered", iteration: 1, count: 1 });
+    resumed.close();
+    expect(readLoopHistory(workspace, "history", { afterSeq: 3 })).toMatchObject([
+      { seq: 4, event: { type: "loop.steered", iteration: 1, count: 1 } },
+    ]);
+  });
+
+  it("marks orphaned running or paused records as interrupted but preserves live owners", () => {
+    const orphan = createLoopState({ loopId: "orphan", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const paused = createLoopState({
+      loopId: "paused-orphan",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...paused, status: "paused" });
+    const live = createLoopState({ loopId: "live", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const lease = acquireLoopLease(workspace, live.loopId, true);
+    try {
+      expect(
+        recoverInterruptedLoops(workspace)
+          .map((state) => state.loopId)
+          .sort(),
+      ).toEqual([orphan.loopId, paused.loopId].sort());
+      expect(loadLoopState(workspace, orphan.loopId)?.status).toBe("interrupted");
+      expect(loadLoopState(workspace, paused.loopId)?.status).toBe("interrupted");
+      expect(loadLoopState(workspace, live.loopId)?.status).toBe("running");
+    } finally {
+      lease.release();
+    }
   });
 
   it("creates, loads, updates, lists, and removes state", () => {
@@ -245,6 +290,15 @@ describe("loop state persistence", () => {
       writeFileSync(file, content);
       expect(loadLoopState(workspace, "bad")).toBeNull();
     }
+  });
+
+  it("rejects an unknown explicit schema version", () => {
+    const state = createLoopState({ loopId: "future", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    writeFileSync(
+      join(workspace, ".seekforge", "loops", "future.json"),
+      JSON.stringify({ ...state, schemaVersion: 99 }),
+    );
+    expect(loadLoopState(workspace, "future")).toBeNull();
   });
 
   it("returns null for an oversized state file without buffering it", () => {

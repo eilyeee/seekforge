@@ -1,16 +1,28 @@
 import {
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
+  checkpointWorktree,
+  createWorktreePatch,
+  listGitWorktrees,
+  mergeWorktree,
   listLoopStates,
   loadLoopState,
+  readLoopHistory,
+  recoverInterruptedLoops,
+  readFileIfExists,
   loadAgentDefinitions,
   removeLoopState,
   resumeAutoLoop,
   runAutoLoop,
+  runLoopDag,
+  type LoopDagNode,
   type LoopEvent,
   type LoopResult,
   type LoopRequirementMode,
 } from "@seekforge/core";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
 import { dim, fail, green, red } from "../colors.js";
@@ -38,6 +50,12 @@ export type LoopOptions = {
   verifyTimeoutSeconds?: number;
   agentTimeoutSeconds?: number;
   agentRetries?: number;
+  verifyStages?: string[];
+  stablePasses?: number;
+  flakyRetries?: number;
+  noProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
+  deliver?: "checkpoint" | "merge" | "patch" | "pr";
   /** Run autonomously (acceptEdits). The loop is autonomous regardless. */
   yes?: boolean;
   /** Override model. */
@@ -62,6 +80,12 @@ export type LoopResumeOptions = Omit<
   | "agentTimeoutSeconds"
   | "agentRetries"
   | "requirements"
+  | "verifyStages"
+  | "stablePasses"
+  | "flakyRetries"
+  | "noProgressRecoveries"
+  | "rollbackOnRegression"
+  | "deliver"
 > & {
   addIters?: number;
   addBudget?: number;
@@ -99,6 +123,24 @@ export function formatLoopEvent(event: LoopEvent): string {
       const tail = outputTail(event.output);
       return tail ? `${head}\n${tail}` : head;
     }
+    case "verify.stage.started":
+      return `  verifier ${event.stageId} · attempt ${event.attempt}`;
+    case "verify.stage.completed":
+      return `  ${event.result.code === 0 ? "✓" : "✗"} verifier ${event.result.id} · ${event.result.durationMs}ms${event.result.flaky ? " · flaky" : ""}`;
+    case "verify.flaky":
+      return `Warning: verifier ${event.stageId} passed after ${event.attempts} attempts (flaky)`;
+    case "loop.paused":
+      return `Loop paused at boundary ${event.iteration}`;
+    case "loop.resumed":
+      return `Loop resumed at boundary ${event.iteration}`;
+    case "loop.steered":
+      return `Loop accepted ${event.count} guidance message(s)`;
+    case "loop.recovery":
+      return `Loop recovery ${event.attempt} after ${event.reason}`;
+    case "loop.snapshot":
+      return `  snapshot ${event.snapshot.iteration} · ${event.snapshot.failedTests} parsed failure(s)`;
+    case "loop.rollback":
+      return `  rollback ${event.iteration} · restored ${event.restored.length}, deleted ${event.deleted.length}`;
     case "requirements.started":
       return event.phase === "analysis" ? t("cmd.loop.reqAnalyzing") : t("cmd.loop.reqReviewing");
     case "requirements.completed":
@@ -151,6 +193,28 @@ export function loopExitCode(status: LoopResult["status"]): 1 | 2 | undefined {
   return status === "passed" ? undefined : 1;
 }
 
+export function verificationPlanFromOptions(opts: Pick<LoopOptions, "verify" | "verifyStages">) {
+  if (!opts.verifyStages?.length) return undefined;
+  const ids = new Set(["verify"]);
+  return [
+    { id: "verify", command: opts.verify },
+    ...opts.verifyStages.map((value) => {
+      const separator = value.indexOf("=");
+      if (separator <= 0 || separator === value.length - 1) {
+        throw new Error(`Invalid --verify-stage ${JSON.stringify(value)}; expected id=command`);
+      }
+      const id = value.slice(0, separator);
+      const command = value.slice(separator + 1);
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id) || ids.has(id)) {
+        throw new Error(`Invalid or duplicate --verify-stage id: ${id}`);
+      }
+      if (command.trim() === "" || command.length > 8_192) throw new Error(`Invalid --verify-stage command: ${id}`);
+      ids.add(id);
+      return { id, command };
+    }),
+  ];
+}
+
 export async function loopCommand(task: string, opts: LoopOptions): Promise<void> {
   if (task.trim() === "") {
     fail("Loop task must be non-empty");
@@ -164,6 +228,13 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
   }
   if (opts.maxIters !== undefined && opts.maxIters > MAX_LOOP_ITERATIONS) {
     fail(`--max-iters must be between 1 and ${MAX_LOOP_ITERATIONS}`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    verificationPlanFromOptions(opts);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     return;
   }
@@ -287,6 +358,134 @@ export async function loopShowCommand(loopId: string): Promise<void> {
   }
 }
 
+export async function loopHistoryCommand(loopId: string, opts: { after?: number; limit?: number } = {}): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    if (!workspace) throw new Error(`Persisted loop not found: ${loopId}`);
+    const entries = readLoopHistory(workspace, loopId, { afterSeq: opts.after, limit: opts.limit });
+    if (entries.length === 0) {
+      console.log("No loop history events.");
+      return;
+    }
+    console.log(entries.map((entry) => JSON.stringify(entry)).join("\n"));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopRecoverCommand(): Promise<void> {
+  try {
+    const recovered = (await loopWorkspaces()).flatMap((workspace) => recoverInterruptedLoops(workspace));
+    if (recovered.length === 0) {
+      console.log("No interrupted loops found.");
+      return;
+    }
+    console.log(recovered.map((state) => `${state.loopId}\tinterrupted\t${state.workspace}`).join("\n"));
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopDagCommand(
+  file: string,
+  opts: {
+    budget?: number;
+    tokenBudget?: number;
+    maxDurationSeconds?: number;
+    yes?: boolean;
+    model?: string;
+    profile?: string;
+  },
+): Promise<void> {
+  const workspace = process.cwd();
+  const preflight = await preflightLoop(workspace, opts);
+  if (!preflight) return;
+  const raw = readFileIfExists(resolve(workspace, file), 512 * 1024);
+  if (raw === undefined) {
+    fail(`Loop DAG file not found: ${file}`);
+    process.exitCode = 1;
+    return;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    fail(`Loop DAG file is not valid JSON: ${file}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !Array.isArray((value as { nodes?: unknown }).nodes)
+  ) {
+    fail("Loop DAG must be an object with a nodes array");
+    process.exitCode = 1;
+    return;
+  }
+  const nodes = (value as { nodes: unknown[] }).nodes.map((node): LoopDagNode => {
+    if (typeof node !== "object" || node === null || Array.isArray(node))
+      throw new Error("Loop DAG nodes must be objects");
+    const item = node as Record<string, unknown>;
+    if (typeof item.id !== "string" || typeof item.task !== "string" || typeof item.verifyCommand !== "string") {
+      throw new Error("Each Loop DAG node requires string id, task, and verifyCommand fields");
+    }
+    if (
+      item.dependsOn !== undefined &&
+      (!Array.isArray(item.dependsOn) || !item.dependsOn.every((id) => typeof id === "string"))
+    ) {
+      throw new Error(`Loop DAG node ${item.id} dependsOn must be a string array`);
+    }
+    return {
+      id: item.id,
+      task: item.task,
+      verifyCommand: item.verifyCommand,
+      ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
+    };
+  });
+  const { config, model } = preflight;
+  const mcp = await prepareMcp(config, workspace);
+  const { deps, dispose } = createCliAgentDeps({
+    config,
+    workspace,
+    pluginContributions: mcp.pluginContributions,
+    model,
+    mcpToolSpecs: mcp.specs,
+    confirm: async () => false,
+    extractMemory: true,
+    subagents: loadAgentDefinitions(workspace, mcp.pluginContributions),
+  });
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.on("SIGINT", onSigint);
+  try {
+    const results = await runLoopDag(deps, {
+      workspace,
+      nodes,
+      maxConcurrency: 1,
+      ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
+      ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
+      ...(opts.maxDurationSeconds !== undefined ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) } : {}),
+      signal: controller.signal,
+      onNodeEvent: (nodeId, event) => console.log(`[${nodeId}] ${formatLoopEvent(event)}`),
+    });
+    console.log(
+      results.map((result) => `${result.id}\t${result.status}${result.reason ? `\t${result.reason}` : ""}`).join("\n"),
+    );
+    if (results.some((result) => result.status !== "passed")) process.exitCode = 1;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+    dispose();
+    mcp.dispose();
+  }
+}
+
 export async function loopDeleteCommand(loopId: string): Promise<void> {
   try {
     const workspace = await findLoopWorkspace(loopId, false);
@@ -404,6 +603,7 @@ async function runPreparedLoop(
   process.on("SIGINT", onSigint);
 
   try {
+    const verificationPlan = resume ? undefined : verificationPlanFromOptions(opts as LoopOptions);
     const common = {
       ...(model ? { model } : {}),
       ...(config.planModel ? { planModel: config.planModel } : {}),
@@ -421,6 +621,17 @@ async function runPreparedLoop(
           task: taskOrLoopId,
           workspace: projectPath,
           verifyCommand: (opts as LoopOptions).verify,
+          ...(verificationPlan ? { verificationPlan } : {}),
+          ...((opts as LoopOptions).stablePasses !== undefined
+            ? { stablePasses: (opts as LoopOptions).stablePasses }
+            : {}),
+          ...((opts as LoopOptions).flakyRetries !== undefined
+            ? { flakyRetries: (opts as LoopOptions).flakyRetries }
+            : {}),
+          ...((opts as LoopOptions).noProgressRecoveries !== undefined
+            ? { maxNoProgressRecoveries: (opts as LoopOptions).noProgressRecoveries }
+            : {}),
+          ...((opts as LoopOptions).rollbackOnRegression ? { rollbackOnRegression: true } : {}),
           maxIterations: (opts as LoopOptions).maxIters ?? 8,
           ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
           ...((opts as LoopOptions).tokenBudget !== undefined
@@ -449,6 +660,9 @@ async function runPreparedLoop(
     // approval, not a failure — scripts resume with --approve-requirements
     // rather than treating it like an exhausted/failed loop.
     const exitCode = loopExitCode(result.status);
+    if (result.status === "passed" && (opts as LoopOptions).deliver) {
+      await deliverLoop(projectPath, result.loopId ?? "loop", (opts as LoopOptions).deliver!);
+    }
     if (exitCode !== undefined) process.exitCode = exitCode;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
@@ -458,6 +672,75 @@ async function runPreparedLoop(
     dispose();
     mcp.dispose();
   }
+}
+
+async function deliverLoop(
+  projectPath: string,
+  loopId: string,
+  mode: "checkpoint" | "merge" | "patch" | "pr",
+): Promise<void> {
+  const repository = await resolveLoopRepository(projectPath);
+  const workspace = resolve(projectPath);
+  if (workspace === resolve(repository.basePath))
+    throw new Error("Loop delivery requires an isolated retained worktree");
+  const entry = (await listGitWorktrees(repository.basePath)).find(
+    (candidate) => resolve(candidate.path) === workspace,
+  );
+  if (!entry?.branch.startsWith("seekforge/loop-"))
+    throw new Error("Current workspace is not a retained Loop worktree");
+  if (mode === "checkpoint") {
+    const committed = await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
+    console.log(
+      committed ? `Committed Loop worktree: ${entry.branch}` : `Loop worktree already clean: ${entry.branch}`,
+    );
+    return;
+  }
+  if (mode === "merge") {
+    const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
+    if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
+    console.log(`Merged Loop worktree branch: ${entry.branch}`);
+    return;
+  }
+  if (mode === "pr") {
+    await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
+    const base = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: repository.basePath,
+      encoding: "utf8",
+    });
+    if (base.status !== 0 || !base.stdout.trim())
+      throw new Error(base.stderr.trim() || "Could not resolve base branch");
+    const pushed = spawnSync("git", ["push", "-u", "origin", entry.branch], { cwd: workspace, encoding: "utf8" });
+    if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not push Loop worktree branch");
+    const pr = spawnSync(
+      "gh",
+      [
+        "pr",
+        "create",
+        "--draft",
+        "--base",
+        base.stdout.trim(),
+        "--head",
+        entry.branch,
+        "--title",
+        `Loop: ${loopId}`,
+        "--body",
+        `Automated Loop delivery for ${loopId}. Verification passed before delivery.`,
+      ],
+      { cwd: workspace, encoding: "utf8" },
+    );
+    if (pr.error && (pr.error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new Error("GitHub CLI (gh) is required");
+    if (pr.status !== 0) throw new Error(pr.stderr.trim() || "Could not create draft pull request");
+    console.log(`Created draft pull request: ${pr.stdout.trim()}`);
+    return;
+  }
+  await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
+  const patch = await createWorktreePatch(repository.basePath, entry.branch);
+  if (!patch) throw new Error("Loop worktree has no changes to deliver");
+  const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, patch, { encoding: "utf8", mode: 0o600 });
+  console.log(`Wrote Loop patch: ${target}`);
 }
 
 async function loopWorkspaces(): Promise<string[]> {

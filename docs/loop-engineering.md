@@ -213,6 +213,35 @@ seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
+### Loop v2 controls
+
+- Repeat `--verify-stage <id=command>` for an ordered verification pipeline.
+  Required stages stop the pipeline; Core API stages may set `required: false`.
+- `--flaky-retries 0..5` reruns a failed stage before editing and records a
+  `verify.flaky` event when it later passes. `--stable-passes 1..5` requires
+  consecutive full-pipeline passes.
+- `--stuck-recoveries 0..5` performs bounded re-diagnosis with a different
+  strategy before returning `no_progress`. `--rollback-regressions` rewinds a
+  regression only inside a retained Loop worktree.
+- `loop-history <id> [--after N] [--limit N]` replays the rotated JSONL event
+  history. `loop-recover` marks orphaned `running` or `paused` records as `interrupted`;
+  embedders can call `autoResumeInterruptedLoops` to continue them.
+- `loop-dag <file>` runs a JSON dependency graph sequentially with shared
+  budgets. Core `runLoopDag` also supports bounded parallel batches when every
+  node resolves to a distinct physical workspace.
+- `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
+  from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
+  pull request through `gh`.
+- WebSocket clients can send `loop.pause`, `loop.control.resume`, and
+  `loop.steer`; controls take effect only at safe iteration boundaries.
+- TUI users have the equivalent `/loop-pause`, `/loop-continue`, and
+  `/loop-steer <guidance>` commands scoped to the active tab's Loop.
+
+Iteration snapshots persist stage results, normalized diagnostic/workspace
+fingerprints, parsed failure counts, recovery attempts, and pass streaks. Loop
+success performs memory extraction once and records selected-skill effectiveness
+once for the whole Loop rather than once per internal agent iteration.
+
 Edit iterations reuse **one worker session**. Requirement analysis and acceptance
 review reuse a separate reviewer session recorded in Loop state, keeping evaluator
 context out of the worker conversation while preserving both auditable traces.
@@ -229,6 +258,9 @@ type LoopOptions = {
   task: string;
   workspace: string;
   verifyCommand: string;        // fixed verifier; analyzed modes also require acceptance
+  verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+  stablePasses?: number; flakyRetries?: number;
+  maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
   requirementMode?: "quick" | "analyze" | "confirm"; // default quick
   approveRequirements?: boolean; // resume a confirm-mode loop
   maxIterations?: number;       // default 8
@@ -242,17 +274,20 @@ type LoopOptions = {
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
   signal?: AbortSignal;         // cooperative stop
+  control?: LoopControl;        // safe-boundary pause/resume/steer
   onEvent?: (e: LoopEvent) => void;
   loopId?: string; persist?: boolean; // persistence defaults on
   verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
-  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "requirements_pending";
+  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "interrupted" | "requirements_pending";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
   loopId?: string; requirements?: LoopRequirementSpec;
   acceptanceReview?: LoopAcceptanceReview; budgetReason?: "cost" | "tokens" | "duration" | "verify_runs";
   agentError?: AgentError;
+  stageResults?: LoopStageResult[]; flaky?: boolean; passStreak?: number;
+  recoveryAttempts?: number;
 };
 ```
 

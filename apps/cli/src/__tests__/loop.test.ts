@@ -19,6 +19,7 @@ import {
   loopExitCode,
   outputTail,
   resumeExtensionOptions,
+  verificationPlanFromOptions,
 } from "../commands/loop.js";
 import {
   cleanupLoopWorktree,
@@ -41,6 +42,15 @@ test("outputTail keeps short output verbatim", () => {
 });
 test("outputTail on empty string is empty", () => {
   assert.equal(outputTail(""), "");
+});
+
+test("verificationPlanFromOptions validates and orders repeated stages", () => {
+  assert.deepEqual(verificationPlanFromOptions({ verify: "pnpm typecheck", verifyStages: ["tests=pnpm test"] }), [
+    { id: "verify", command: "pnpm typecheck" },
+    { id: "tests", command: "pnpm test" },
+  ]);
+  assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["verify=again"] }), /duplicate/);
+  assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["bad/id=test"] }), /Invalid/);
 });
 
 // --- formatLoopEvent --------------------------------------------------------

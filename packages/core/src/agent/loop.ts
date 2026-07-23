@@ -203,6 +203,8 @@ export type AgentCoreDeps = {
   skillSnapshot?: readonly Skill[];
   /** Disable skill selection/injection for controlled evaluations. Default true. */
   injectSkills?: boolean;
+  /** Defer skill outcome attribution to an outer orchestration layer. */
+  deferSkillOutcome?: boolean;
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
@@ -1615,18 +1617,20 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           });
 
           sessionEndStatus = "completed";
-          logSkillOutcome(
-            input.projectPath,
-            sessionId,
-            skillSelections.map((selection) => selection.skill.id),
-            {
-              success: true,
-              ...(deps.verifyCommand ? { verified: workspaceMutationCount === 0 || verifyRanSinceEdit } : {}),
-              turns: turnsUsed,
-              toolCalls: toolCallCount,
-              costUsd: usage.costUsd,
-            },
-          );
+          if (!deps.deferSkillOutcome) {
+            logSkillOutcome(
+              input.projectPath,
+              sessionId,
+              skillSelections.map((selection) => selection.skill.id),
+              {
+                success: true,
+                ...(deps.verifyCommand ? { verified: workspaceMutationCount === 0 || verifyRanSinceEdit } : {}),
+                turns: turnsUsed,
+                toolCalls: toolCallCount,
+                costUsd: usage.costUsd,
+              },
+            );
+          }
           yield emit({ type: "session.completed", report });
           // stop fires after a SUCCESSFUL top-level completion only (never on
           // failure/cancel — sessionEnd covers those). Advisory.
@@ -1658,7 +1662,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
           const cancelled = code === "cancelled";
-          if (!cancelled) {
+          if (!cancelled && !deps.deferSkillOutcome) {
             logSkillOutcome(
               input.projectPath,
               sessionId,

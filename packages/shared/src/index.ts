@@ -814,8 +814,27 @@ export type LoopStatus =
   | "cancelled"
   | "verify_error"
   | "agent_error"
+  | "interrupted"
   | "requirements_pending";
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
+export type LoopVerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number };
+export type LoopStageResult = {
+  id: string;
+  command: string;
+  code: number;
+  output: string;
+  attempts: number;
+  flaky: boolean;
+  durationMs: number;
+};
+export type LoopIterationSnapshot = {
+  iteration: number;
+  ts: string;
+  diagnosticsFingerprint: string;
+  workspaceFingerprint: string | null;
+  failedTests: number;
+  stageResults: LoopStageResult[];
+};
 export type LoopRequirementMode = "quick" | "analyze" | "confirm";
 export type LoopRequirementSpec = {
   version: 1;
@@ -841,6 +860,9 @@ export type LoopResult = {
   iterations: number;
   /** Total cost across all iterations. */
   costUsd: number;
+  tokensUsed?: number;
+  verifyRuns?: number;
+  elapsedMs?: number;
   /** Session id of the underlying agent run. */
   sessionId: string;
   /** Output + exit code of the last verify command. */
@@ -851,6 +873,10 @@ export type LoopResult = {
   acceptanceReview?: LoopAcceptanceReview;
   budgetReason?: LoopBudgetReason;
   agentError?: AgentError;
+  stageResults?: LoopStageResult[];
+  flaky?: boolean;
+  passStreak?: number;
+  recoveryAttempts?: number;
 };
 
 /** A single streamed loop event (server LoopEvent). */
@@ -859,6 +885,15 @@ export type LoopEvent =
   | { type: "run.completed"; iteration: number; costUsd: number }
   | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
+  | { type: "verify.stage.started"; iteration: number; stageId: string; attempt: number }
+  | { type: "verify.stage.completed"; iteration: number; result: LoopStageResult }
+  | { type: "verify.flaky"; iteration: number; stageId: string; attempts: number }
+  | { type: "loop.paused"; iteration: number }
+  | { type: "loop.resumed"; iteration: number }
+  | { type: "loop.steered"; iteration: number; count: number }
+  | { type: "loop.recovery"; iteration: number; attempt: number; reason: "stuck" | "cycle" }
+  | { type: "loop.snapshot"; snapshot: LoopIterationSnapshot }
+  | { type: "loop.rollback"; iteration: number; restored: string[]; deleted: string[] }
   | { type: "requirements.started"; phase: "analysis" | "review" }
   | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
   | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
@@ -977,6 +1012,11 @@ export type ClientFrame =
       type: "loop";
       task: string;
       verifyCommand: string;
+      verificationPlan?: LoopVerificationStage[];
+      stablePasses?: number;
+      flakyRetries?: number;
+      maxNoProgressRecoveries?: number;
+      rollbackOnRegression?: boolean;
       /** Hard cap on run→verify cycles (server default when omitted). */
       maxIterations?: number;
       /** Optional total USD budget; the loop stops once exceeded. */
@@ -1017,6 +1057,9 @@ export type ClientFrame =
   | { type: "subscribe"; runId: string; afterSeq?: number; ws?: string }
   | { type: "subagent.cancel"; dispatchId: string }
   | { type: "subagent.steer"; dispatchId: string; message: string }
+  | { type: "loop.pause" }
+  | { type: "loop.control.resume" }
+  | { type: "loop.steer"; message: string }
   | { type: "cancel" };
 
 /** WS server → client frames (path /ws). */

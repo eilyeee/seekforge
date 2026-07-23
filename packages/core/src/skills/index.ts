@@ -29,6 +29,7 @@ export {
   logSkillUsage,
   MAX_SKILL_USAGE_BYTES,
   readSkillEffectiveness,
+  selectedSkillIdsForSession,
   type SkillOutcome,
 } from "./usage.js";
 export { createSkillScaffold } from "./scaffold.js";

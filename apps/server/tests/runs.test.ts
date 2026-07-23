@@ -698,6 +698,7 @@ describe("run API and WS replay", () => {
   it("defaults Loop runs to edit mode and rejects ask mode", async () => {
     const workspace = makeWorkspace();
     let extractMemory: boolean | undefined;
+    let loopOptions: import("@seekforge/core").LoopOptions | undefined;
     server = await startServer({
       workspace,
       port: 0,
@@ -706,6 +707,7 @@ describe("run API and WS replay", () => {
       createAgent: fakeAgentFactory(async function* () {}),
       runLoop: async (agentOpts, opts) => {
         extractMemory = agentOpts.extractMemory;
+        loopOptions = opts;
         const result = {
           status: "requirements_pending" as const,
           iterations: 0,
@@ -728,6 +730,10 @@ describe("run API and WS replay", () => {
         verifyCommand: "pnpm test",
         maxCostUsd: 1,
         requirementMode: "confirm",
+        verificationPlan: [{ id: "tests", command: "pnpm test" }],
+        stablePasses: 2,
+        flakyRetries: 1,
+        maxNoProgressRecoveries: 2,
       }),
     });
     expect(response.status).toBe(202);
@@ -741,6 +747,12 @@ describe("run API and WS replay", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(extractMemory).toBe(true);
+    expect(loopOptions).toMatchObject({
+      verificationPlan: [{ id: "tests", command: "pnpm test" }],
+      stablePasses: 2,
+      flakyRetries: 1,
+      maxNoProgressRecoveries: 2,
+    });
     expect(record?.error).toBeUndefined();
 
     const rejected = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
@@ -758,6 +770,19 @@ describe("run API and WS replay", () => {
     expect(await rejected.json()).toMatchObject({
       error: { code: "bad_request", message: 'loop mode must be "edit"' },
     });
+
+    const invalidPlan = await fetch(`http://127.0.0.1:${server.port}/api/runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        kind: "loop",
+        task: "loop",
+        verifyCommand: "pnpm test",
+        maxCostUsd: 1,
+        verificationPlan: [{ id: "../bad", command: "pnpm test" }],
+      }),
+    });
+    expect(invalidPlan.status).toBe(400);
   });
 
   it("advertises capabilities, queries a run, and replays afterSeq", async () => {

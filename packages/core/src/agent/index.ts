@@ -65,17 +65,34 @@ export {
   type ProviderBuildInput,
 } from "./deps-factory.js";
 export {
+  createLoopControl,
+  type LoopControl,
+  type LoopControlState,
+} from "./loop-control.js";
+export {
+  runLoopDag,
+  type LoopDagNode,
+  type LoopDagNodeResult,
+  type LoopDagOptions,
+} from "./loop-dag.js";
+export {
   resumeAutoLoop,
+  autoResumeInterruptedLoops,
   runAutoLoop,
   type LoopOptions,
   type LoopResult,
   type LoopEvent,
   type LoopStatus,
+  type LoopBudgetReason,
+  type LoopVerificationStage,
+  type LoopStageResult,
+  type LoopIterationSnapshot,
 } from "./auto-loop.js";
 export {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,
   parseLoopRequirementSpec,
+  validateLoopAcceptanceEvidence,
   type LoopAcceptanceReview,
   type LoopAcceptanceStatus,
   type LoopRequirement,
@@ -92,10 +109,13 @@ export {
   isValidLoopId,
   listLoopStates,
   loadLoopState,
+  readLoopHistory,
+  recoverInterruptedLoops,
   removeLoopState,
   saveLoopState,
   type CreateLoopStateInput,
   type LoopState,
+  type LoopHistoryEntry,
   type LoopVerifyResult,
   type PersistedLoopStatus,
 } from "./loop-state.js";

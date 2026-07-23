@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { logSkillOutcome, logSkillUsage, readSkillEffectiveness } from "../../src/skills/index.js";
+import {
+  logSkillOutcome,
+  logSkillUsage,
+  readSkillEffectiveness,
+  selectedSkillIdsForSession,
+} from "../../src/skills/index.js";
 import type { SkillSelection } from "../../src/skills/index.js";
 import { makeSkill, makeTempDir } from "./helpers.js";
 
@@ -46,6 +51,14 @@ describe("logSkillUsage", () => {
     const ws = makeTempDir();
     logSkillUsage(ws, "s1", []);
     expect(fs.existsSync(path.join(ws, ".seekforge", "skills-usage.jsonl"))).toBe(false);
+  });
+
+  it("returns the bounded unique selection ids for one resumed session", () => {
+    const ws = makeTempDir();
+    logSkillUsage(ws, "s1", [sel("a"), sel("b")]);
+    logSkillUsage(ws, "s2", [sel("other")]);
+    logSkillUsage(ws, "s1", [sel("a")]);
+    expect(selectedSkillIdsForSession(ws, "s1")).toEqual(["a", "b"]);
   });
 
   it("never follows a linked telemetry target or changes its destination", () => {

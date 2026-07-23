@@ -108,6 +108,36 @@ export function logSkillOutcome(
   );
 }
 
+/** Returns the bounded set of skills selected for one session across resumed turns. */
+export function selectedSkillIdsForSession(workspace: string, sessionId: string): string[] {
+  let raw: string | undefined;
+  try {
+    raw = readWorkspaceStateFile(realpathSync(workspace), USAGE_REL_PATH, MAX_SKILL_USAGE_BYTES);
+  } catch {
+    return [];
+  }
+  if (!raw) return [];
+  const ids = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    try {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      if (
+        row.type === "selection" &&
+        row.sessionId === sessionId &&
+        typeof row.skillId === "string" &&
+        SKILL_ID_RE.test(row.skillId)
+      ) {
+        ids.add(row.skillId);
+        if (ids.size >= 64) break;
+      }
+    } catch {
+      break;
+    }
+  }
+  return [...ids];
+}
+
 type MutableEffectiveness = {
   selections: Set<string>;
   outcomes: Map<string, { success: boolean; verified?: boolean; turns?: number; toolCalls?: number; costUsd?: number }>;

@@ -9,6 +9,37 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type VerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number };
+
+function verificationStages(value: unknown): VerificationStage[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
+  const ids = new Set<string>();
+  const stages: VerificationStage[] = [];
+  for (const item of value) {
+    if (
+      !object(item) ||
+      typeof item.id !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item.id) ||
+      ids.has(item.id) ||
+      typeof item.command !== "string" ||
+      item.command.trim() === "" ||
+      item.command.length > 8_192 ||
+      (item.required !== undefined && typeof item.required !== "boolean") ||
+      (item.timeoutMs !== undefined && (!Number.isSafeInteger(item.timeoutMs) || (item.timeoutMs as number) <= 0))
+    ) {
+      return null;
+    }
+    ids.add(item.id);
+    stages.push({
+      id: item.id,
+      command: item.command,
+      ...(typeof item.required === "boolean" ? { required: item.required } : {}),
+      ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
+    });
+  }
+  return stages;
+}
+
 function trackRun(rest: RouteCtx["rest"], run: TriggerRunHandle): void {
   rest.triggerRuns?.add(run);
   void run.started.catch(() => {});
@@ -47,6 +78,11 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       verifyTimeoutMs,
       agentTimeoutMs,
       maxAgentRetries,
+      verificationPlan,
+      stablePasses,
+      flakyRetries,
+      maxNoProgressRecoveries,
+      rollbackOnRegression,
       requirementMode,
       isolation = "auto",
     } = body;
@@ -91,6 +127,9 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       ["verifyTimeoutMs", verifyTimeoutMs, false],
       ["agentTimeoutMs", agentTimeoutMs, false],
       ["maxAgentRetries", maxAgentRetries, true],
+      ["stablePasses", stablePasses, false],
+      ["flakyRetries", flakyRetries, true],
+      ["maxNoProgressRecoveries", maxNoProgressRecoveries, true],
     ] as const) {
       if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < (allowZero ? 0 : 1))) {
         sendApiError(
@@ -101,6 +140,27 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
         );
         return true;
       }
+    }
+    if (typeof stablePasses === "number" && stablePasses > 5) {
+      sendApiError(res, 400, "bad_request", "stablePasses must be 1-5");
+      return true;
+    }
+    if (typeof flakyRetries === "number" && flakyRetries > 5) {
+      sendApiError(res, 400, "bad_request", "flakyRetries must be 0-5");
+      return true;
+    }
+    if (typeof maxNoProgressRecoveries === "number" && maxNoProgressRecoveries > 5) {
+      sendApiError(res, 400, "bad_request", "maxNoProgressRecoveries must be 0-5");
+      return true;
+    }
+    if (rollbackOnRegression !== undefined && typeof rollbackOnRegression !== "boolean") {
+      sendApiError(res, 400, "bad_request", "rollbackOnRegression must be boolean");
+      return true;
+    }
+    const parsedVerificationPlan = verificationPlan === undefined ? undefined : verificationStages(verificationPlan);
+    if (verificationPlan !== undefined && parsedVerificationPlan === null) {
+      sendApiError(res, 400, "bad_request", "verificationPlan must contain 1-16 valid stages with unique safe ids");
+      return true;
     }
     if (
       requirementMode !== undefined &&
@@ -172,6 +232,15 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs: verifyTimeoutMs as number } : {}),
               ...(agentTimeoutMs !== undefined ? { agentTimeoutMs: agentTimeoutMs as number } : {}),
               ...(maxAgentRetries !== undefined ? { maxAgentRetries: maxAgentRetries as number } : {}),
+              ...(parsedVerificationPlan !== undefined && parsedVerificationPlan !== null
+                ? { verificationPlan: parsedVerificationPlan }
+                : {}),
+              ...(stablePasses !== undefined ? { stablePasses: stablePasses as number } : {}),
+              ...(flakyRetries !== undefined ? { flakyRetries: flakyRetries as number } : {}),
+              ...(maxNoProgressRecoveries !== undefined
+                ? { maxNoProgressRecoveries: maxNoProgressRecoveries as number }
+                : {}),
+              ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
               ...(requirementMode !== undefined ? { requirementMode } : {}),
               costBudgetUsd: maxCostUsd,
               approvalMode: "acceptEdits",

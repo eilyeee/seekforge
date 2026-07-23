@@ -171,6 +171,14 @@ describe("loop -> loop.event -> idle", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
+      verificationPlan: [
+        { id: "types", command: "pnpm typecheck" },
+        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+      ],
+      stablePasses: 2,
+      flakyRetries: 1,
+      maxNoProgressRecoveries: 2,
+      rollbackOnRegression: false,
       requirementMode: "analyze",
     });
 
@@ -200,6 +208,14 @@ describe("loop -> loop.event -> idle", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
+      verificationPlan: [
+        { id: "types", command: "pnpm typecheck" },
+        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+      ],
+      stablePasses: 2,
+      flakyRetries: 1,
+      maxNoProgressRecoveries: 2,
+      rollbackOnRegression: false,
       requirementMode: "analyze",
       approvalMode: "acceptEdits",
     });
@@ -252,6 +268,13 @@ describe("loop -> loop.event -> idle", () => {
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: 0 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", budget: -1 });
     await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", requirementMode: "analysis" });
+    await expectBadFrame({ type: "loop", task: "go", verifyCommand: "x", stablePasses: 6 });
+    await expectBadFrame({
+      type: "loop",
+      task: "go",
+      verifyCommand: "x",
+      verificationPlan: [{ id: "bad/id", command: "test" }],
+    });
 
     sendFrame(ws, { type: "loop", task: "go", verifyCommand: "x", ws: "unknown-ws" });
     const err = await rx.waitFor((f) => f.type === "error");
@@ -295,6 +318,41 @@ describe("loop -> loop.event -> idle", () => {
 
     sendFrame(ws, { type: "loop", task: "retry", verifyCommand: "x" });
     expect((await rx.waitFor((frame) => frame.type === "error")).code).toBe("loop_error");
+  });
+});
+
+describe("loop controls", () => {
+  it("pauses, accepts steering, and resumes at a safe boundary", async () => {
+    let releaseBoundary!: () => void;
+    const boundary = new Promise<void>((resolve) => {
+      releaseBoundary = resolve;
+    });
+    let guidance: string[] = [];
+    let controlSeen: NonNullable<LoopOptions["control"]> | undefined;
+    const { server } = await boot({
+      runLoop: fakeLoopFactory(async (_opts, loopOpts) => {
+        controlSeen = loopOpts.control;
+        loopOpts.onEvent?.({ type: "iteration.start", iteration: 1 });
+        await boundary;
+        guidance = (await loopOpts.control!.waitAtBoundary()).guidance;
+        const result = loopResult();
+        loopOpts.onEvent?.({ type: "loop.done", result });
+        return result;
+      }),
+    });
+    const { ws, rx } = await open(server.port);
+    sendFrame(ws, { type: "loop", task: "long job", verifyCommand: "x" });
+    await rx.waitFor((frame) => frame.type === "loop.event");
+    sendFrame(ws, { type: "loop.pause" });
+    await waitUntil(() => controlSeen?.state() === "paused");
+    releaseBoundary();
+    sendFrame(ws, { type: "loop.steer", message: "focus on tests" });
+    sendFrame(ws, { type: "loop.control.resume" });
+    await rx.waitFor((frame) => frame.type === "idle");
+    expect(guidance).toEqual(["focus on tests"]);
+
+    sendFrame(ws, { type: "loop.pause" });
+    expect((await rx.waitFor((frame) => frame.type === "error")).code).toBe("not_running");
   });
 });
 

@@ -16,7 +16,10 @@ import {
   loopCleanupCommand,
   loopCommand,
   loopDeleteCommand,
+  loopDagCommand,
   loopListCommand,
+  loopHistoryCommand,
+  loopRecoverCommand,
   loopResumeCommand,
   loopShowCommand,
 } from "./commands/loop.js";
@@ -141,6 +144,13 @@ function parseNonNegativeInt(val: string): number {
 function parseRequirementMode(val: string): "quick" | "analyze" | "confirm" {
   if (val !== "quick" && val !== "analyze" && val !== "confirm") {
     throw new InvalidArgumentError('must be "quick", "analyze", or "confirm"');
+  }
+  return val;
+}
+
+function parseLoopDelivery(val: string): "checkpoint" | "merge" | "patch" | "pr" {
+  if (val !== "checkpoint" && val !== "merge" && val !== "patch" && val !== "pr") {
+    throw new InvalidArgumentError('must be "checkpoint", "merge", "patch", or "pr"');
   }
   return val;
 }
@@ -432,6 +442,12 @@ program
   .command("loop")
   .argument("<task>", "task to drive to green (the verify command's exit 0)")
   .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
+  .option("--verify-stage <id=command>", "append an ordered verification stage", collect, [])
+  .option("--stable-passes <n>", "required consecutive full-pipeline passes (1-5)", parsePositiveInt)
+  .option("--flaky-retries <n>", "reruns of a failed verifier stage before editing (0-5)", parseNonNegativeInt)
+  .option("--stuck-recoveries <n>", "strategy resets before no_progress (0-5)", parseNonNegativeInt)
+  .option("--rollback-regressions", "rollback iterations that increase failures (isolated worktree only)")
+  .option("--deliver <mode>", "after passing: checkpoint, merge, patch, or draft PR (worktree only)", parseLoopDelivery)
   .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
   .option("--token-budget <n>", "cumulative prompt + completion token cap", parsePositiveInt)
@@ -459,6 +475,12 @@ program
         verifyTimeout?: number;
         agentTimeout?: number;
         agentRetries?: number;
+        verifyStage?: string[];
+        stablePasses?: number;
+        flakyRetries?: number;
+        stuckRecoveries?: number;
+        rollbackRegressions?: boolean;
+        deliver?: "checkpoint" | "merge" | "patch" | "pr";
         yes?: boolean;
         model?: string;
         profile?: string;
@@ -476,11 +498,50 @@ program
         verifyTimeoutSeconds: opts.verifyTimeout,
         agentTimeoutSeconds: opts.agentTimeout,
         agentRetries: opts.agentRetries,
+        verifyStages: opts.verifyStage,
+        stablePasses: opts.stablePasses,
+        flakyRetries: opts.flakyRetries,
+        noProgressRecoveries: opts.stuckRecoveries,
+        rollbackOnRegression: opts.rollbackRegressions,
+        deliver: opts.deliver,
         yes: opts.yes,
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
         worktree: opts.worktree,
         requirements: opts.requirements,
+      });
+    },
+  );
+
+program
+  .command("loop-dag")
+  .argument("<file>", "JSON DAG with nodes: id, task, verifyCommand, and optional dependsOn")
+  .option("--budget <usd>", "shared cumulative cost cap in USD", parsePositiveFloat)
+  .option("--token-budget <n>", "shared prompt + completion token cap", parsePositiveInt)
+  .option("--max-duration <seconds>", "shared wall-clock budget in seconds", parsePositiveFloat)
+  .option("-y, --yes", "authorize the workspace without prompting")
+  .option("-m, --model <model>", "override model")
+  .option("--profile <name>", "use a named config profile")
+  .description("run a dependency graph of Loop tasks sequentially with shared budgets")
+  .action(
+    async (
+      file: string,
+      opts: {
+        budget?: number;
+        tokenBudget?: number;
+        maxDuration?: number;
+        yes?: boolean;
+        model?: string;
+        profile?: string;
+      },
+    ) => {
+      await loopDagCommand(file, {
+        budget: opts.budget,
+        tokenBudget: opts.tokenBudget,
+        maxDurationSeconds: opts.maxDuration,
+        yes: opts.yes,
+        model: opts.model,
+        profile: opts.profile ?? rootProfile(),
       });
     },
   );
@@ -532,6 +593,17 @@ program
   .description("list persisted loops in the base checkout and retained loop worktrees")
   .action(loopListCommand);
 program.command("loop-show").argument("<loop-id>").description("show a persisted loop").action(loopShowCommand);
+program
+  .command("loop-history")
+  .argument("<loop-id>")
+  .option("--after <seq>", "return events after this sequence", parseNonNegativeInt)
+  .option("--limit <n>", "maximum events (1-2000)", parsePositiveInt)
+  .description("replay persisted Loop events as JSONL")
+  .action((loopId: string, opts: { after?: number; limit?: number }) => loopHistoryCommand(loopId, opts));
+program
+  .command("loop-recover")
+  .description("mark orphaned running or paused loops as interrupted and resumable")
+  .action(loopRecoverCommand);
 program
   .command("loop-delete")
   .argument("<loop-id>")

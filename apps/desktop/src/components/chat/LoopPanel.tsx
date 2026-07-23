@@ -28,6 +28,11 @@ type Props = {
     verifyTimeoutMs?: number;
     agentTimeoutMs?: number;
     maxAgentRetries?: number;
+    verificationPlan?: Array<{ id: string; command: string }>;
+    stablePasses?: number;
+    flakyRetries?: number;
+    maxNoProgressRecoveries?: number;
+    rollbackOnRegression?: boolean;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
   onResume: (opts: {
@@ -41,6 +46,9 @@ type Props = {
   }) => void;
   /** Stops a running loop (sends `cancel` via the store). */
   onStop: () => void;
+  onPause: () => void;
+  onContinue: () => void;
+  onSteer: (message: string) => void;
 };
 
 const DEFAULT_MAX_ITERATIONS = 8;
@@ -50,7 +58,17 @@ const DEFAULT_MAX_ITERATIONS = 8;
  * by default so normal chat is unaffected. Drives an autonomous
  * run→verify→fix loop on the server and renders the streamed progress.
  */
-export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onStop }: Props) {
+export function LoopPanel({
+  progress,
+  running,
+  loopRunning,
+  onRun,
+  onResume,
+  onStop,
+  onPause,
+  onContinue,
+  onSteer,
+}: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState("");
@@ -63,6 +81,12 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
   const [verifyTimeout, setVerifyTimeout] = useState("120");
   const [agentTimeout, setAgentTimeout] = useState("1800");
   const [agentRetries, setAgentRetries] = useState("1");
+  const [verificationStages, setVerificationStages] = useState("");
+  const [stablePasses, setStablePasses] = useState("1");
+  const [flakyRetries, setFlakyRetries] = useState("0");
+  const [stuckRecoveries, setStuckRecoveries] = useState("1");
+  const [rollbackRegressions, setRollbackRegressions] = useState(false);
+  const [steering, setSteering] = useState("");
   const [requirementMode, setRequirementMode] = useState<"quick" | "analyze" | "confirm">("quick");
   const [addedIterations, setAddedIterations] = useState("");
   const [addedBudget, setAddedBudget] = useState("");
@@ -78,6 +102,32 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
   const verifyLimit = parseBudgetInput(verifyTimeout);
   const agentLimit = parseBudgetInput(agentTimeout);
   const retries = parsePositiveIntegerInput(agentRetries, true);
+  const stableParsed = parsePositiveIntegerInput(stablePasses);
+  const flakyParsed = parsePositiveIntegerInput(flakyRetries, true);
+  const recoveriesParsed = parsePositiveIntegerInput(stuckRecoveries, true);
+  const stable = {
+    ...stableParsed,
+    ...(stableParsed.value !== undefined && stableParsed.value > 5 ? { error: "range" } : {}),
+  };
+  const flaky = {
+    ...flakyParsed,
+    ...(flakyParsed.value !== undefined && flakyParsed.value > 5 ? { error: "range" } : {}),
+  };
+  const recoveries = {
+    ...recoveriesParsed,
+    ...(recoveriesParsed.value !== undefined && recoveriesParsed.value > 5 ? { error: "range" } : {}),
+  };
+  const parsedStages = verificationStages
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf("=");
+      return separator > 0 && separator < line.length - 1
+        ? { id: line.slice(0, separator).trim(), command: line.slice(separator + 1).trim() }
+        : null;
+    });
+  const stageError = parsedStages.some((stage) => stage === null);
   const addedIters = parseIterationInput(addedIterations, true);
   const addedBud = parseBudgetInput(addedBudget);
   const addedTokenBud = parsePositiveIntegerInput(addedTokens);
@@ -96,9 +146,10 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
     !verifyLimit.error &&
     !agentLimit.error &&
     !retries.error;
+  const canRunV2 = canRun && !stable.error && !flaky.error && !recoveries.error && !stageError;
 
   const run = () => {
-    if (!canRun) return;
+    if (!canRunV2) return;
     onRun({
       task: task.trim(),
       verifyCommand: verify.trim(),
@@ -110,12 +161,28 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
       ...(verifyLimit.value !== undefined ? { verifyTimeoutMs: Math.round(verifyLimit.value * 1_000) } : {}),
       ...(agentLimit.value !== undefined ? { agentTimeoutMs: Math.round(agentLimit.value * 1_000) } : {}),
       ...(retries.value !== undefined ? { maxAgentRetries: retries.value } : {}),
+      ...(parsedStages.length > 0
+        ? {
+            verificationPlan: [
+              { id: "verify", command: verify.trim() },
+              ...(parsedStages.filter(Boolean) as Array<{ id: string; command: string }>),
+            ],
+          }
+        : {}),
+      ...(stable.value !== undefined ? { stablePasses: stable.value } : {}),
+      ...(flaky.value !== undefined ? { flakyRetries: flaky.value } : {}),
+      ...(recoveries.value !== undefined ? { maxNoProgressRecoveries: recoveries.value } : {}),
+      ...(rollbackRegressions ? { rollbackOnRegression: true } : {}),
       requirementMode,
     });
   };
 
   const rows = loopRows(progress.events);
   const warnings = loopWarnings(progress.events);
+  const pauseState = [...progress.events]
+    .reverse()
+    .find((event) => event.type === "loop.paused" || event.type === "loop.resumed");
+  const paused = pauseState?.type === "loop.paused";
   const result = progress.result;
   const requirementSpec = progress.requirements;
   const acceptanceReview = progress.acceptanceReview;
@@ -229,11 +296,18 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
               </label>
 
               {loopRunning ? (
-                <Button variant="danger" onClick={onStop}>
-                  {t("chat.loop.stop")}
-                </Button>
+                <div className="flex gap-1">
+                  {paused ? (
+                    <Button onClick={onContinue}>{t("chat.loop.continue")}</Button>
+                  ) : (
+                    <Button onClick={onPause}>{t("chat.loop.pause")}</Button>
+                  )}
+                  <Button variant="danger" onClick={onStop}>
+                    {t("chat.loop.stop")}
+                  </Button>
+                </div>
               ) : (
-                <Button variant="primary" onClick={run} disabled={!canRun}>
+                <Button variant="primary" onClick={run} disabled={!canRunV2}>
                   {t("chat.loop.run")}
                 </Button>
               )}
@@ -254,6 +328,15 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                   ],
                   ["loop-agent-timeout", "chat.loop.agentTimeout", agentTimeout, setAgentTimeout, agentLimit.error],
                   ["loop-agent-retries", "chat.loop.agentRetries", agentRetries, setAgentRetries, retries.error],
+                  ["loop-stable-passes", "chat.loop.stablePasses", stablePasses, setStablePasses, stable.error],
+                  ["loop-flaky-retries", "chat.loop.flakyRetries", flakyRetries, setFlakyRetries, flaky.error],
+                  [
+                    "loop-stuck-recoveries",
+                    "chat.loop.stuckRecoveries",
+                    stuckRecoveries,
+                    setStuckRecoveries,
+                    recoveries.error,
+                  ],
                 ].map(([id, label, value, setter, error]) => (
                   <label key={String(id)} htmlFor={String(id)} className="flex w-32 flex-col gap-1">
                     <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
@@ -262,7 +345,14 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                     <Input
                       id={String(id)}
                       type="number"
-                      min={String(id).includes("retries") ? 0 : 1}
+                      min={String(id).includes("retries") || String(id).includes("recoveries") ? 0 : 1}
+                      max={
+                        String(id).includes("passes") ||
+                        String(id).includes("retries") ||
+                        String(id).includes("recoveries")
+                          ? 5
+                          : undefined
+                      }
                       value={String(value)}
                       onChange={(event) => (setter as (next: string) => void)(event.target.value)}
                       disabled={running}
@@ -272,7 +362,48 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                   </label>
                 ))}
               </div>
+              <div className="mt-2 flex flex-col gap-2">
+                <label htmlFor="loop-verification-stages" className="flex flex-col gap-1">
+                  <span className="text-2xs text-tertiary">{t("chat.loop.verificationStages")}</span>
+                  <TextArea
+                    id="loop-verification-stages"
+                    rows={2}
+                    value={verificationStages}
+                    onChange={(event) => setVerificationStages(event.target.value)}
+                    disabled={running}
+                    placeholder="lint=pnpm lint"
+                  />
+                  {stageError && <span className="text-2xs text-danger">{t("chat.loop.invalidStages")}</span>}
+                </label>
+                <label className="flex items-center gap-2 text-xs text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={rollbackRegressions}
+                    onChange={(event) => setRollbackRegressions(event.target.checked)}
+                    disabled={running}
+                  />
+                  {t("chat.loop.rollbackRegressions")}
+                </label>
+              </div>
             </details>
+            {loopRunning && (
+              <div className="flex gap-2">
+                <Input
+                  value={steering}
+                  onChange={(event) => setSteering(event.target.value)}
+                  placeholder={t("chat.loop.steerPlaceholder")}
+                />
+                <Button
+                  onClick={() => {
+                    onSteer(steering);
+                    setSteering("");
+                  }}
+                  disabled={!steering.trim()}
+                >
+                  {t("chat.loop.steer")}
+                </Button>
+              </div>
+            )}
           </div>
 
           {(rows.length > 0 || warnings.length > 0 || result) && (

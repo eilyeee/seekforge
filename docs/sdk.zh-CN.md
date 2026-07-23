@@ -89,12 +89,21 @@ MCP/hook/agent，应只加载一份 `PluginContributions` 快照并通过
 不做单次 `runTask`，而是驱动到某个验证命令退出码为 0：
 
 ```ts
-import { resumeAutoLoop, runAutoLoop } from "@seekforge/core";
+import { createLoopControl, resumeAutoLoop, runAutoLoop, runLoopDag } from "@seekforge/core";
 
-const result = await runAutoLoop(deps, {
+const control = createLoopControl();
+
+const running = runAutoLoop(deps, {
   task: "make the suite pass",
   workspace: process.cwd(),
   verifyCommand: "pnpm test",
+  verificationPlan: [
+    { id: "types", command: "pnpm typecheck" },
+    { id: "tests", command: "pnpm test" },
+  ],
+  stablePasses: 2,
+  flakyRetries: 1,
+  maxNoProgressRecoveries: 1,
   maxIterations: 8,
   costBudgetUsd: 1,
   tokenBudget: 100_000,
@@ -104,9 +113,23 @@ const result = await runAutoLoop(deps, {
   agentTimeoutMs: 15 * 60_000,
   maxAgentRetries: 2,
   approvalMode: "acceptEdits",
+  control,
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
 });
-// result also includes a persisted loopId.
+
+control.pause();                 // 在下一个安全边界生效
+control.steer("focus on parser tests");
+control.resume();
+const result = await running;
+
+const graph = await runLoopDag(deps, {
+  workspace: process.cwd(),
+  nodes: [
+    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test" },
+    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"] },
+  ],
+});
+// result includes a persisted loopId.
 
 const resumed = await resumeAutoLoop(deps, result.loopId!, {
   workspace: process.cwd(),
@@ -122,6 +145,8 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含
 `budgetReason`）、验证器错误、取消、无进展/迭代耗尽，以及带结构化 provider/session
 错误详情的 `agent_error`。
+`autoResumeInterruptedLoops` 会恢复租约 owner 已消失的持久化 `running` 记录。最终成功时
+只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
 
 ## 扩展点
 

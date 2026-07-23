@@ -4,6 +4,7 @@ import {
   isValidLoopId,
   runAutoLoop,
   resumeAutoLoop,
+  type LoopControl,
   type LoopEvent,
   type LoopResult,
   type LoopRequirementMode,
@@ -30,7 +31,12 @@ export type RunLoopDeps = {
   verifyTimeoutMs?: number;
   agentTimeoutMs?: number;
   maxAgentRetries?: number;
+  stablePasses?: number;
+  flakyRetries?: number;
+  maxNoProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
   requirementMode?: LoopRequirementMode;
+  control?: LoopControl;
   /** Forwards each LoopEvent to the caller for transcript rendering. */
   onEvent: (event: LoopEvent) => void;
 };
@@ -78,7 +84,12 @@ export async function runLoop(
       ...(deps.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: deps.verifyTimeoutMs } : {}),
       ...(deps.agentTimeoutMs !== undefined ? { agentTimeoutMs: deps.agentTimeoutMs } : {}),
       ...(deps.maxAgentRetries !== undefined ? { maxAgentRetries: deps.maxAgentRetries } : {}),
+      ...(deps.stablePasses !== undefined ? { stablePasses: deps.stablePasses } : {}),
+      ...(deps.flakyRetries !== undefined ? { flakyRetries: deps.flakyRetries } : {}),
+      ...(deps.maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries: deps.maxNoProgressRecoveries } : {}),
+      ...(deps.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
       ...(deps.requirementMode !== undefined ? { requirementMode: deps.requirementMode } : {}),
+      ...(deps.control ? { control: deps.control } : {}),
       approvalMode: "acceptEdits",
       signal,
       onEvent: deps.onEvent,
@@ -125,6 +136,7 @@ export async function resumeLoop(
       ...(deps.addedDurationMs !== undefined ? { additionalDurationMs: deps.addedDurationMs } : {}),
       ...(deps.addedVerifyRuns !== undefined ? { additionalVerifyRuns: deps.addedVerifyRuns } : {}),
       ...(deps.approveRequirements !== undefined ? { approveRequirements: deps.approveRequirements } : {}),
+      ...(deps.control ? { control: deps.control } : {}),
     });
   } finally {
     dispose();
