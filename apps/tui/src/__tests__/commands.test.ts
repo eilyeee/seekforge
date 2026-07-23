@@ -112,6 +112,27 @@ describe("parseInput /loop", () => {
     });
   });
 
+  it("parses multi-dimensional loop guardrails", () => {
+    expect(
+      parseInput(
+        "/loop --token-budget 1000 --max-duration 2.5 --max-verifies 4 --verify-timeout 3 --agent-timeout 5 --agent-retries 0 pnpm test\nFix tests",
+      ),
+    ).toEqual({
+      kind: "slash",
+      command: {
+        name: "loop",
+        verify: "pnpm test",
+        task: "Fix tests",
+        tokenBudget: 1000,
+        maxDurationMs: 2500,
+        maxVerifyRuns: 4,
+        verifyTimeoutMs: 3000,
+        agentTimeoutMs: 5000,
+        maxAgentRetries: 0,
+      },
+    });
+  });
+
   it("parses requirement analysis and confirmation options", () => {
     expect(parseInput("/loop --requirements=confirm pnpm test\nBuild the whole feature")).toEqual({
       kind: "slash",
@@ -151,6 +172,8 @@ describe("parseInput /loop", () => {
     ["--budget 1e999", "--budget must be a finite number greater than 0"],
     ["--budget 0x10", "--budget must be a finite number greater than 0"],
     ["--budget", "--budget requires a value"],
+    ["--token-budget", "--token-budget requires a value"],
+    ["--max-duration", "--max-duration requires a value"],
   ])("rejects invalid loop option %s", (option, error) => {
     expect(parseInput(`/loop ${option}\nnothing`)).toEqual({
       kind: "slash",
@@ -174,6 +197,19 @@ describe("parseInput /loop-resume", () => {
     });
   });
 
+  it("parses additive token, duration, and verifier limits", () => {
+    expect(parseInput("/loop-resume --add-tokens 500 --add-duration 2.5 --add-verifies 3 loop-abc")).toEqual({
+      kind: "slash",
+      command: {
+        name: "loop-resume",
+        loopId: "loop-abc",
+        addedTokenBudget: 500,
+        addedDurationMs: 2500,
+        addedVerifyRuns: 3,
+      },
+    });
+  });
+
   it("parses explicit requirement approval", () => {
     expect(parseInput("/loop-resume --approve-requirements loop-abc")).toEqual({
       kind: "slash",
@@ -193,6 +229,9 @@ describe("parseInput /loop-resume", () => {
     });
     expect(parseInput("/loop-resume --add-budget 1 --add-budget 2 loop-abc")).toMatchObject({
       command: { name: "loop-resume", error: "--add-budget may only be specified once" },
+    });
+    expect(parseInput("/loop-resume --add-tokens")).toMatchObject({
+      command: { name: "loop-resume", error: "--add-tokens requires a value" },
     });
   });
 });

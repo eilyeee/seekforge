@@ -767,6 +767,12 @@ export function App({
       options: {
         maxIterations?: number;
         costBudgetUsd?: number;
+        tokenBudget?: number;
+        maxDurationMs?: number;
+        maxVerifyRuns?: number;
+        verifyTimeoutMs?: number;
+        agentTimeoutMs?: number;
+        maxAgentRetries?: number;
         requirementMode?: "quick" | "analyze" | "confirm";
       } = {},
     ) => {
@@ -790,6 +796,12 @@ export function App({
           pluginContributions,
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
+          ...(options.tokenBudget !== undefined ? { tokenBudget: options.tokenBudget } : {}),
+          ...(options.maxDurationMs !== undefined ? { maxDurationMs: options.maxDurationMs } : {}),
+          ...(options.maxVerifyRuns !== undefined ? { maxVerifyRuns: options.maxVerifyRuns } : {}),
+          ...(options.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: options.verifyTimeoutMs } : {}),
+          ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
+          ...(options.maxAgentRetries !== undefined ? { maxAgentRetries: options.maxAgentRetries } : {}),
           ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
           onEvent: (event) => {
             if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
@@ -826,7 +838,14 @@ export function App({
   const resumeLoopTask = useCallback(
     async (
       loopId: string,
-      options: { addedIterations?: number; addedCostBudgetUsd?: number; approveRequirements?: boolean } = {},
+      options: {
+        addedIterations?: number;
+        addedCostBudgetUsd?: number;
+        addedTokenBudget?: number;
+        addedDurationMs?: number;
+        addedVerifyRuns?: number;
+        approveRequirements?: boolean;
+      } = {},
     ) => {
       const runId = ++runIdCounterRef.current;
       const runTabId = activeIdRef.current;
@@ -1049,6 +1068,12 @@ export function App({
           void runLoopTask(task, verifyCommand, {
             ...(command.maxIterations !== undefined ? { maxIterations: command.maxIterations } : {}),
             ...(command.costBudgetUsd !== undefined ? { costBudgetUsd: command.costBudgetUsd } : {}),
+            ...(command.tokenBudget !== undefined ? { tokenBudget: command.tokenBudget } : {}),
+            ...(command.maxDurationMs !== undefined ? { maxDurationMs: command.maxDurationMs } : {}),
+            ...(command.maxVerifyRuns !== undefined ? { maxVerifyRuns: command.maxVerifyRuns } : {}),
+            ...(command.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: command.verifyTimeoutMs } : {}),
+            ...(command.agentTimeoutMs !== undefined ? { agentTimeoutMs: command.agentTimeoutMs } : {}),
+            ...(command.maxAgentRetries !== undefined ? { maxAgentRetries: command.maxAgentRetries } : {}),
             ...(command.requirementMode !== undefined ? { requirementMode: command.requirementMode } : {}),
           });
           break;
@@ -1072,6 +1097,9 @@ export function App({
           void resumeLoopTask(command.loopId, {
             ...(command.addedIterations !== undefined ? { addedIterations: command.addedIterations } : {}),
             ...(command.addedCostBudgetUsd !== undefined ? { addedCostBudgetUsd: command.addedCostBudgetUsd } : {}),
+            ...(command.addedTokenBudget !== undefined ? { addedTokenBudget: command.addedTokenBudget } : {}),
+            ...(command.addedDurationMs !== undefined ? { addedDurationMs: command.addedDurationMs } : {}),
+            ...(command.addedVerifyRuns !== undefined ? { addedVerifyRuns: command.addedVerifyRuns } : {}),
             ...(command.approveRequirements ? { approveRequirements: true } : {}),
           });
           break;

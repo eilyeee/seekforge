@@ -93,6 +93,9 @@ describe("loop.resume", () => {
       loopId: "loop-abc",
       addedIterations: 3,
       addedBudget: 0.75,
+      addedTokenBudget: 2_000,
+      addedDurationMs: 30_000,
+      addedVerifyRuns: 2,
       approveRequirements: true,
     });
     await rx.waitFor((f) => f.type === "loop.event");
@@ -102,6 +105,9 @@ describe("loop.resume", () => {
       workspace,
       additionalIterations: 3,
       additionalCostBudgetUsd: 0.75,
+      additionalTokenBudget: 2_000,
+      additionalDurationMs: 30_000,
+      additionalVerifyRuns: 2,
       approveRequirements: true,
       approvalMode: "acceptEdits",
     });
@@ -159,6 +165,12 @@ describe("loop -> loop.event -> idle", () => {
       verifyCommand: "pnpm test",
       maxIterations: 4,
       budget: 1.5,
+      tokenBudget: 20_000,
+      maxDurationMs: 60_000,
+      maxVerifyRuns: 6,
+      verifyTimeoutMs: 10_000,
+      agentTimeoutMs: 30_000,
+      maxAgentRetries: 0,
       requirementMode: "analyze",
     });
 
@@ -182,6 +194,12 @@ describe("loop -> loop.event -> idle", () => {
       verifyCommand: "pnpm test",
       maxIterations: 4,
       costBudgetUsd: 1.5,
+      tokenBudget: 20_000,
+      maxDurationMs: 60_000,
+      maxVerifyRuns: 6,
+      verifyTimeoutMs: 10_000,
+      agentTimeoutMs: 30_000,
+      maxAgentRetries: 0,
       requirementMode: "analyze",
       approvalMode: "acceptEdits",
     });

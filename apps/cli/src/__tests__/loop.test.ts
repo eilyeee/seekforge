@@ -164,11 +164,24 @@ test("loop resume adapter exposes core support or fails clearly", () => {
 });
 
 test("loop resume extensions map to core options without adding absent limits", () => {
-  assert.deepEqual(resumeExtensionOptions({ addIters: 3, addBudget: 1.25, approveRequirements: true }), {
-    additionalIterations: 3,
-    additionalCostBudgetUsd: 1.25,
-    approveRequirements: true,
-  });
+  assert.deepEqual(
+    resumeExtensionOptions({
+      addIters: 3,
+      addBudget: 1.25,
+      addTokens: 500,
+      addDurationSeconds: 2.5,
+      addVerifyRuns: 2,
+      approveRequirements: true,
+    }),
+    {
+      additionalIterations: 3,
+      additionalCostBudgetUsd: 1.25,
+      additionalTokenBudget: 500,
+      additionalDurationMs: 2500,
+      additionalVerifyRuns: 2,
+      approveRequirements: true,
+    },
+  );
   assert.deepEqual(resumeExtensionOptions({}), {});
 });
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AgentError } from "@seekforge/shared";
 import {
   appendFileSync,
   closeSync,
@@ -7,6 +8,7 @@ import {
   openSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -14,7 +16,15 @@ import {
 import { execFileSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LoopEvent, LoopStatus } from "./auto-loop.js";
-import { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
+import {
+  DEFAULT_LOOP_AGENT_RETRIES,
+  DEFAULT_LOOP_AGENT_TIMEOUT_MS,
+  DEFAULT_LOOP_VERIFY_TIMEOUT_MS,
+  LOOP_LOG_FLUSH_INTERVAL_MS,
+  MAX_LOOP_ITERATIONS,
+  MAX_LOOP_LOG_BYTES,
+  MAX_LOOP_LOG_SEGMENTS,
+} from "./loop-constants.js";
 import { resolveForWrite, resolveInsideWorkspace } from "../tools/sandbox.js";
 import { FileTooLargeError, readUtf8FileBoundedSync } from "../util/fs.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
@@ -37,10 +47,21 @@ export type LoopState = {
   verifyCommand: string;
   maxIterations: number;
   costBudgetUsd: number | null;
+  tokenBudget?: number | null;
+  maxDurationMs?: number | null;
+  maxVerifyRuns?: number | null;
+  verifyTimeoutMs?: number;
+  agentTimeoutMs?: number;
+  maxAgentRetries?: number;
   iterations: number;
   costUsd: number;
+  tokensUsed?: number;
+  verifyRuns?: number;
+  elapsedMs?: number;
   sessionId: string;
+  reviewerSessionId?: string;
   lastVerify: LoopVerifyResult | null;
+  lastAgentError?: AgentError | null;
   /** Optional in the type so callers can still represent legacy persisted records. */
   requirementMode?: LoopRequirementMode;
   requirements?: LoopRequirementSpec | null;
@@ -53,6 +74,12 @@ export type LoopState = {
 export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verifyCommand" | "maxIterations"> & {
   loopId?: string;
   costBudgetUsd?: number | null;
+  tokenBudget?: number | null;
+  maxDurationMs?: number | null;
+  maxVerifyRuns?: number | null;
+  verifyTimeoutMs?: number;
+  agentTimeoutMs?: number;
+  maxAgentRetries?: number;
   sessionId?: string;
   lastVerify?: LoopVerifyResult | null;
   requirementMode?: LoopRequirementMode;
@@ -67,10 +94,12 @@ const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "budget",
   "cancelled",
   "verify_error",
+  "agent_error",
   "requirements_pending",
 ]);
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isSafeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const isIsoDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
 
 export function isValidLoopId(loopId: string): boolean {
@@ -107,10 +136,81 @@ function loopLogFile(workspace: string, loopId: string): string {
  * already surfaced through the state-persistence warning.
  */
 export function appendLoopLog(workspace: string, loopId: string, event: LoopEvent): void {
+  const writer = createLoopLogWriter(workspace, loopId);
+  writer.append(event);
+  writer.flush();
+}
+
+export type LoopLogWriter = {
+  append: (event: LoopEvent) => void;
+  flush: () => void;
+  close: () => void;
+};
+
+/** Batches event writes and rotates bounded log segments before appending. */
+export function createLoopLogWriter(workspace: string, loopId: string): LoopLogWriter {
   const target = loopLogFile(workspace, loopId);
-  mkdirSync(dirname(target), { recursive: true });
-  const line = `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`;
-  appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
+  let pending = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+
+  const rotate = (incomingBytes: number): void => {
+    let currentBytes = 0;
+    try {
+      currentBytes = statSync(target).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (currentBytes === 0 || currentBytes + incomingBytes <= MAX_LOOP_LOG_BYTES) return;
+    for (let segment = MAX_LOOP_LOG_SEGMENTS - 1; segment >= 1; segment--) {
+      const source = segment === 1 ? target : `${target}.${segment - 1}`;
+      const destination = `${target}.${segment}`;
+      try {
+        rmSync(destination, { force: true });
+        renameSync(source, destination);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  };
+
+  const flush = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    if (pending === "") return;
+    const batch = pending;
+    pending = "";
+    mkdirSync(dirname(target), { recursive: true });
+    rotate(Buffer.byteLength(batch));
+    appendFileSync(target, batch, { encoding: "utf8", mode: 0o600 });
+  };
+
+  const schedule = (): void => {
+    if (timer !== undefined) return;
+    timer = setTimeout(() => {
+      try {
+        flush();
+      } catch {
+        // Scheduled observability writes are best-effort and cannot fail the loop.
+      }
+    }, LOOP_LOG_FLUSH_INTERVAL_MS);
+    timer.unref?.();
+  };
+
+  return {
+    append: (event) => {
+      if (closed) return;
+      pending += `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`;
+      if (Buffer.byteLength(pending) >= 64 * 1024) flush();
+      else schedule();
+    },
+    flush,
+    close: () => {
+      if (closed) return;
+      closed = true;
+      flush();
+    },
+  };
 }
 
 const activeLeases = new Set<string>();
@@ -349,7 +449,18 @@ export function acquireLoopLease(workspace: string, loopId: string, persist: boo
 function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState | null {
   if (!isRecord(value)) return null;
   const budget = value.costBudgetUsd;
+  const tokenBudget = value.tokenBudget === undefined ? null : value.tokenBudget;
+  const maxDurationMs = value.maxDurationMs === undefined ? null : value.maxDurationMs;
+  const maxVerifyRuns = value.maxVerifyRuns === undefined ? null : value.maxVerifyRuns;
+  const verifyTimeoutMs = value.verifyTimeoutMs === undefined ? DEFAULT_LOOP_VERIFY_TIMEOUT_MS : value.verifyTimeoutMs;
+  const agentTimeoutMs = value.agentTimeoutMs === undefined ? DEFAULT_LOOP_AGENT_TIMEOUT_MS : value.agentTimeoutMs;
+  const maxAgentRetries = value.maxAgentRetries === undefined ? DEFAULT_LOOP_AGENT_RETRIES : value.maxAgentRetries;
+  const tokensUsed = value.tokensUsed === undefined ? 0 : value.tokensUsed;
+  const verifyRuns = value.verifyRuns === undefined ? 0 : value.verifyRuns;
+  const elapsedMs = value.elapsedMs === undefined ? 0 : value.elapsedMs;
+  const reviewerSessionId = value.reviewerSessionId === undefined ? "" : value.reviewerSessionId;
   const verify = value.lastVerify;
+  const agentError = value.lastAgentError === undefined ? null : value.lastAgentError;
   const requirementMode = value.requirementMode === undefined ? "quick" : value.requirementMode;
   const requirements = value.requirements === undefined ? null : parseLoopRequirementSpec(value.requirements);
   const acceptanceReview =
@@ -369,18 +480,42 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     value.maxIterations <= 0 ||
     value.maxIterations > MAX_LOOP_ITERATIONS ||
     (budget !== null && (!isFiniteNumber(budget) || budget <= 0)) ||
+    (tokenBudget !== null && (!isSafeInteger(tokenBudget) || tokenBudget <= 0)) ||
+    (maxDurationMs !== null && (!isSafeInteger(maxDurationMs) || maxDurationMs <= 0)) ||
+    (maxVerifyRuns !== null && (!isSafeInteger(maxVerifyRuns) || maxVerifyRuns <= 0)) ||
+    !isSafeInteger(verifyTimeoutMs) ||
+    verifyTimeoutMs <= 0 ||
+    !isSafeInteger(agentTimeoutMs) ||
+    agentTimeoutMs <= 0 ||
+    !isSafeInteger(maxAgentRetries) ||
+    maxAgentRetries < 0 ||
     !Number.isInteger(value.iterations) ||
     !isFiniteNumber(value.iterations) ||
     value.iterations < 0 ||
     value.iterations > value.maxIterations ||
     !isFiniteNumber(value.costUsd) ||
     value.costUsd < 0 ||
+    !isSafeInteger(tokensUsed) ||
+    tokensUsed < 0 ||
+    !isSafeInteger(verifyRuns) ||
+    verifyRuns < 0 ||
+    (maxVerifyRuns !== null && verifyRuns > maxVerifyRuns) ||
+    !isSafeInteger(elapsedMs) ||
+    elapsedMs < 0 ||
     typeof value.sessionId !== "string" ||
+    typeof reviewerSessionId !== "string" ||
     (verify !== null &&
       (!isRecord(verify) ||
         !Number.isInteger(verify.code) ||
         !isFiniteNumber(verify.code) ||
         typeof verify.output !== "string")) ||
+    (agentError !== null &&
+      (!isRecord(agentError) ||
+        typeof agentError.code !== "string" ||
+        typeof agentError.message !== "string" ||
+        (agentError.hint !== undefined && typeof agentError.hint !== "string") ||
+        (agentError.recoverable !== undefined && typeof agentError.recoverable !== "boolean") ||
+        (agentError.sessionId !== undefined && typeof agentError.sessionId !== "string"))) ||
     !isLoopRequirementMode(requirementMode) ||
     (value.requirements !== undefined && value.requirements !== null && requirements === null) ||
     (value.acceptanceReview !== undefined && value.acceptanceReview !== null && acceptanceReview === null) ||
@@ -410,10 +545,30 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     verifyCommand: value.verifyCommand,
     maxIterations: value.maxIterations,
     costBudgetUsd: budget,
+    tokenBudget: tokenBudget as number | null,
+    maxDurationMs: maxDurationMs as number | null,
+    maxVerifyRuns: maxVerifyRuns as number | null,
+    verifyTimeoutMs: verifyTimeoutMs as number,
+    agentTimeoutMs: agentTimeoutMs as number,
+    maxAgentRetries: maxAgentRetries as number,
     iterations: value.iterations,
     costUsd: value.costUsd,
+    tokensUsed: tokensUsed as number,
+    verifyRuns: verifyRuns as number,
+    elapsedMs: elapsedMs as number,
     sessionId: value.sessionId,
+    reviewerSessionId,
     lastVerify: verify === null ? null : { code: verify.code as number, output: verify.output as string },
+    lastAgentError:
+      agentError === null
+        ? null
+        : {
+            code: agentError.code as string,
+            message: agentError.message as string,
+            ...(typeof agentError.hint === "string" ? { hint: agentError.hint } : {}),
+            ...(typeof agentError.recoverable === "boolean" ? { recoverable: agentError.recoverable } : {}),
+            ...(typeof agentError.sessionId === "string" ? { sessionId: agentError.sessionId } : {}),
+          },
     requirementMode,
     requirements,
     acceptanceReview,
@@ -440,10 +595,21 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     verifyCommand: input.verifyCommand,
     maxIterations: input.maxIterations,
     costBudgetUsd: input.costBudgetUsd ?? null,
+    tokenBudget: input.tokenBudget ?? null,
+    maxDurationMs: input.maxDurationMs ?? null,
+    maxVerifyRuns: input.maxVerifyRuns ?? null,
+    verifyTimeoutMs: input.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS,
+    agentTimeoutMs: input.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS,
+    maxAgentRetries: input.maxAgentRetries ?? DEFAULT_LOOP_AGENT_RETRIES,
     iterations: 0,
     costUsd: 0,
+    tokensUsed: 0,
+    verifyRuns: 0,
+    elapsedMs: 0,
     sessionId: input.sessionId ?? "",
+    reviewerSessionId: "",
     lastVerify: input.lastVerify ?? null,
+    lastAgentError: null,
     requirementMode: input.requirementMode ?? "quick",
     requirements: null,
     acceptanceReview: null,
@@ -505,5 +671,8 @@ export function removeLoopState(workspace: string, loopId: string): boolean {
     throw error;
   }
   rmSync(loopLogFile(workspace, loopId), { force: true });
+  for (let segment = 1; segment < MAX_LOOP_LOG_SEGMENTS; segment++) {
+    rmSync(`${loopLogFile(workspace, loopId)}.${segment}`, { force: true });
+  }
   return true;
 }

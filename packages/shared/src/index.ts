@@ -803,6 +803,7 @@ export type SearchResult = { hits: SearchHit[]; truncated: boolean; error?: stri
  * - budget: the USD budget was exceeded.
  * - cancelled: the user stopped the loop (cancel frame / closed socket).
  * - verify_error: the verify command itself could not be run.
+ * - agent_error: the edit agent failed before verification was meaningful.
  * - requirements_pending: confirm-mode requirements await explicit approval.
  */
 export type LoopStatus =
@@ -812,7 +813,9 @@ export type LoopStatus =
   | "budget"
   | "cancelled"
   | "verify_error"
+  | "agent_error"
   | "requirements_pending";
+export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
 export type LoopRequirementMode = "quick" | "analyze" | "confirm";
 export type LoopRequirementSpec = {
   version: 1;
@@ -846,6 +849,8 @@ export type LoopResult = {
   loopId?: string;
   requirements?: LoopRequirementSpec;
   acceptanceReview?: LoopAcceptanceReview;
+  budgetReason?: LoopBudgetReason;
+  agentError?: AgentError;
 };
 
 /** A single streamed loop event (server LoopEvent). */
@@ -857,7 +862,7 @@ export type LoopEvent =
   | { type: "requirements.started"; phase: "analysis" | "review" }
   | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
   | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
-  | { type: "loop.warning"; warning: "persistence" | "requirements"; message: string }
+  | { type: "loop.warning"; warning: "persistence" | "requirements" | "observer"; message: string }
   | { type: "loop.done"; result: LoopResult };
 
 /**
@@ -976,6 +981,18 @@ export type ClientFrame =
       maxIterations?: number;
       /** Optional total USD budget; the loop stops once exceeded. */
       budget?: number;
+      /** Optional total prompt + completion token budget. */
+      tokenBudget?: number;
+      /** Optional total wall-clock budget in milliseconds. */
+      maxDurationMs?: number;
+      /** Optional cap on verifier executions, including the pre-check. */
+      maxVerifyRuns?: number;
+      /** Timeout for one verifier execution in milliseconds. */
+      verifyTimeoutMs?: number;
+      /** Timeout for one agent attempt in milliseconds. */
+      agentTimeoutMs?: number;
+      /** Retries for transient agent failures. */
+      maxAgentRetries?: number;
       requirementMode?: LoopRequirementMode;
       ws?: string;
     } & RunOverrides)
@@ -987,6 +1004,12 @@ export type ClientFrame =
       addedIterations?: number;
       /** Additional USD added on top of the persisted cumulative budget. */
       addedBudget?: number;
+      /** Additional prompt + completion tokens. */
+      addedTokenBudget?: number;
+      /** Additional wall-clock milliseconds. */
+      addedDurationMs?: number;
+      /** Additional verifier executions. */
+      addedVerifyRuns?: number;
       /** Approve a persisted confirm-mode requirement specification. */
       approveRequirements?: boolean;
       ws?: string;

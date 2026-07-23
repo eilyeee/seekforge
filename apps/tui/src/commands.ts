@@ -39,7 +39,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   { name: "plan", args: "<task>", summary: "plan read-only first, confirm, then execute", group: "run" },
   {
     name: "loop",
-    args: "[--max-iterations N] [--budget USD] <verify command>",
+    args: "[guardrails] <verify command>",
     summary: "auto-loop: run→verify until the command passes (task = composer lines below)",
     group: "run",
   },
@@ -164,6 +164,12 @@ export type SlashCommand =
       task?: string;
       maxIterations?: number;
       costBudgetUsd?: number;
+      tokenBudget?: number;
+      maxDurationMs?: number;
+      maxVerifyRuns?: number;
+      verifyTimeoutMs?: number;
+      agentTimeoutMs?: number;
+      maxAgentRetries?: number;
       requirementMode?: "quick" | "analyze" | "confirm";
       error?: string;
     }
@@ -172,6 +178,9 @@ export type SlashCommand =
       loopId?: string;
       addedIterations?: number;
       addedCostBudgetUsd?: number;
+      addedTokenBudget?: number;
+      addedDurationMs?: number;
+      addedVerifyRuns?: number;
       approveRequirements?: boolean;
       error?: string;
     }
@@ -248,6 +257,15 @@ function parseLoopFirstLine(
   verify?: string;
   maxIterations?: number;
   costBudgetUsd?: number;
+  tokenBudget?: number;
+  maxDurationMs?: number;
+  maxVerifyRuns?: number;
+  verifyTimeoutMs?: number;
+  agentTimeoutMs?: number;
+  maxAgentRetries?: number;
+  addedTokenBudget?: number;
+  addedDurationMs?: number;
+  addedVerifyRuns?: number;
   requirementMode?: "quick" | "analyze" | "confirm";
   approveRequirements?: boolean;
   error?: string;
@@ -255,17 +273,26 @@ function parseLoopFirstLine(
   let rest = input.trim();
   let maxIterations: number | undefined;
   let costBudgetUsd: number | undefined;
+  let tokenBudget: number | undefined;
+  let maxDurationMs: number | undefined;
+  let maxVerifyRuns: number | undefined;
+  let verifyTimeoutMs: number | undefined;
+  let agentTimeoutMs: number | undefined;
+  let maxAgentRetries: number | undefined;
+  let addedTokenBudget: number | undefined;
+  let addedDurationMs: number | undefined;
+  let addedVerifyRuns: number | undefined;
   let requirementMode: "quick" | "analyze" | "confirm" | undefined;
   let approveRequirements = false;
 
   const iterationFlag = resume ? "--add-iterations" : "--max-iterations";
   const budgetFlag = resume ? "--add-budget" : "--budget";
   const optionPattern = resume
-    ? /^--(?:add-iterations|add-budget|approve-requirements)(?:=|\s|$)/
-    : /^--(?:max-iterations|budget|requirements)(?:=|\s|$)/;
+    ? /^--(?:add-iterations|add-budget|add-tokens|add-duration|add-verifies|approve-requirements)(?:=|\s|$)/
+    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|requirements)(?:=|\s|$)/;
   const valuePattern = resume
-    ? /^(--add-iterations|--add-budget)(?:=|\s+)(\S+)(?:\s+|$)/
-    : /^(--max-iterations|--budget|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
+    ? /^(--add-iterations|--add-budget|--add-tokens|--add-duration|--add-verifies)(?:=|\s+)(\S+)(?:\s+|$)/
+    : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
   while (optionPattern.test(rest)) {
     if (resume && /^--approve-requirements(?:\s+|$)/.test(rest)) {
       if (approveRequirements) return { error: "--approve-requirements may only be specified once" };
@@ -282,11 +309,7 @@ function parseLoopFirstLine(
     }
     const match = valuePattern.exec(rest);
     if (!match) {
-      const option = rest.startsWith(iterationFlag)
-        ? iterationFlag
-        : rest.startsWith(budgetFlag)
-          ? budgetFlag
-          : "--requirements";
+      const option = /^--[a-z-]+/.exec(rest)?.[0] ?? "--requirements";
       return { error: `${option} requires a value` };
     }
     const option = match[1] ?? "";
@@ -310,12 +333,42 @@ function parseLoopFirstLine(
       if (!Number.isFinite(value) || value <= 0)
         return { error: `${budgetFlag} must be a finite number greater than 0` };
       costBudgetUsd = value;
-    } else {
+    } else if (option === "--requirements") {
       if (requirementMode !== undefined) return { error: "--requirements may only be specified once" };
       if (raw !== "quick" && raw !== "analyze" && raw !== "confirm") {
         return { error: '--requirements must be "quick", "analyze", or "confirm"' };
       }
       requirementMode = raw;
+    } else {
+      const secondsOption =
+        option === "--max-duration" ||
+        option === "--verify-timeout" ||
+        option === "--agent-timeout" ||
+        option === "--add-duration";
+      const allowZero = option === "--agent-retries";
+      const valid = secondsOption
+        ? /^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(raw)
+        : /^[0-9]+$/.test(raw);
+      const parsed = Number(raw);
+      const value = secondsOption ? Math.round(parsed * 1_000) : parsed;
+      if (!valid || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
+        return { error: `${option} must be ${allowZero ? "a non-negative" : "a positive"} number` };
+      }
+      const slots: Record<string, [number | undefined, (next: number) => void]> = {
+        "--token-budget": [tokenBudget, (next) => (tokenBudget = next)],
+        "--max-duration": [maxDurationMs, (next) => (maxDurationMs = next)],
+        "--max-verifies": [maxVerifyRuns, (next) => (maxVerifyRuns = next)],
+        "--verify-timeout": [verifyTimeoutMs, (next) => (verifyTimeoutMs = next)],
+        "--agent-timeout": [agentTimeoutMs, (next) => (agentTimeoutMs = next)],
+        "--agent-retries": [maxAgentRetries, (next) => (maxAgentRetries = next)],
+        "--add-tokens": [addedTokenBudget, (next) => (addedTokenBudget = next)],
+        "--add-duration": [addedDurationMs, (next) => (addedDurationMs = next)],
+        "--add-verifies": [addedVerifyRuns, (next) => (addedVerifyRuns = next)],
+      };
+      const slot = slots[option];
+      if (!slot) return { error: `unsupported loop option: ${option}` };
+      if (slot[0] !== undefined) return { error: `${option} may only be specified once` };
+      slot[1](value);
     }
     rest = rest.slice(match[0].length).trimStart();
   }
@@ -324,6 +377,15 @@ function parseLoopFirstLine(
     ...(rest ? { verify: rest } : {}),
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
+    ...(maxVerifyRuns !== undefined ? { maxVerifyRuns } : {}),
+    ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
+    ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
+    ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
+    ...(addedTokenBudget !== undefined ? { addedTokenBudget } : {}),
+    ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
+    ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
     ...(requirementMode !== undefined ? { requirementMode } : {}),
     ...(approveRequirements ? { approveRequirements: true } : {}),
   };
@@ -335,6 +397,9 @@ function parseLoopResume(input: string): Omit<Extract<SlashCommand, { name: "loo
     ...(parsed.verify ? { loopId: parsed.verify } : {}),
     ...(parsed.maxIterations !== undefined ? { addedIterations: parsed.maxIterations } : {}),
     ...(parsed.costBudgetUsd !== undefined ? { addedCostBudgetUsd: parsed.costBudgetUsd } : {}),
+    ...(parsed.addedTokenBudget !== undefined ? { addedTokenBudget: parsed.addedTokenBudget } : {}),
+    ...(parsed.addedDurationMs !== undefined ? { addedDurationMs: parsed.addedDurationMs } : {}),
+    ...(parsed.addedVerifyRuns !== undefined ? { addedVerifyRuns: parsed.addedVerifyRuns } : {}),
     ...(parsed.approveRequirements ? { approveRequirements: true } : {}),
     ...(parsed.error ? { error: parsed.error } : {}),
   };

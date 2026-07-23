@@ -8,13 +8,13 @@
  * NOTE: the public types + signature below are the contract the CLI builds
  * against; the implementation is filled in separately.
  */
-import type { ApprovalMode } from "@seekforge/shared";
+import type { AgentError, ApprovalMode } from "@seekforge/shared";
 import { randomUUID } from "node:crypto";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
   acquireLoopLease,
-  appendLoopLog,
+  createLoopLogWriter,
   createLoopState,
   loadLoopState,
   saveLoopState,
@@ -23,8 +23,16 @@ import {
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
 import { MAX_LOOP_ITERATIONS, MAX_LOOP_WARNING_LENGTH, MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
+import {
+  DEFAULT_LOOP_AGENT_RETRIES,
+  DEFAULT_LOOP_AGENT_TIMEOUT_MS,
+  DEFAULT_LOOP_VERIFY_TIMEOUT_MS,
+  LOOP_CHECKPOINT_INTERVAL_MS,
+} from "./loop-constants.js";
 import { recordProgressFingerprint } from "./loop-logic.js";
-import { workspaceFingerprint } from "./workspace-fingerprint.js";
+import { createWorkspaceFingerprinter } from "./workspace-fingerprint.js";
+import { classifyAgentError } from "./errors.js";
+import { abortablePromise } from "../util/abort.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -46,7 +54,10 @@ export type LoopStatus =
   | "budget" // hit costBudgetUsd
   | "cancelled" // aborted via signal
   | "verify_error" // the verify command could not be run at all
+  | "agent_error" // the edit agent failed before verification could be meaningful
   | "requirements_pending"; // analyzed requirements await explicit approval
+
+export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
 
 export type LoopOptions = {
   /** The goal handed to the agent on the first iteration. */
@@ -59,6 +70,18 @@ export type LoopOptions = {
   maxIterations?: number;
   /** Hard cap on cumulative cost (USD) across iterations. */
   costBudgetUsd?: number;
+  /** Hard cap on cumulative prompt + completion tokens. */
+  tokenBudget?: number;
+  /** Hard cap on cumulative wall-clock time, including resumed runs. */
+  maxDurationMs?: number;
+  /** Hard cap on verifier executions, including the initial pre-check. */
+  maxVerifyRuns?: number;
+  /** Timeout for one verifier execution. Default 120 seconds. */
+  verifyTimeoutMs?: number;
+  /** Timeout for one agent attempt. Default 30 minutes. */
+  agentTimeoutMs?: number;
+  /** Retries for transient agent failures. Default 1. */
+  maxAgentRetries?: number;
   /** Approval mode for each run; default "acceptEdits" (autonomous edits). */
   approvalMode?: ApprovalMode;
   model?: string;
@@ -100,7 +123,7 @@ export type LoopEvent =
   | { type: "requirements.started"; phase: "analysis" | "review" }
   | { type: "requirements.completed"; spec: LoopRequirementSpec; approvalRequired: boolean }
   | { type: "requirements.reviewed"; review: LoopAcceptanceReview }
-  | { type: "loop.warning"; warning: "persistence" | "requirements"; message: string }
+  | { type: "loop.warning"; warning: "persistence" | "requirements" | "observer"; message: string }
   | { type: "loop.done"; result: LoopResult };
 
 export type LoopResult = {
@@ -113,6 +136,10 @@ export type LoopResult = {
   loopId?: string;
   requirements?: LoopRequirementSpec;
   acceptanceReview?: LoopAcceptanceReview;
+  /** Which multi-dimensional guardrail produced status=budget. */
+  budgetReason?: LoopBudgetReason;
+  /** Preserved terminal agent error when status=agent_error. */
+  agentError?: AgentError;
 };
 
 /** Tail-cap captured output to ~4 KB so continuations/results stay bounded. */
@@ -207,10 +234,11 @@ async function defaultVerify(
   deps: AgentCoreDeps,
   workspace: string,
   command: string,
+  timeoutMs: number,
   signal?: AbortSignal,
   onOutput?: (stream: "stdout" | "stderr", chunk: string) => void,
 ): Promise<{ code: number; output: string }> {
-  const result = await runShellCommand(command, workspace, 120_000, {
+  const result = await runShellCommand(command, workspace, timeoutMs, {
     sandbox: deps.sandbox,
     workspace,
     signal,
@@ -221,20 +249,37 @@ async function defaultVerify(
 
 const MAX_LIVE_VERIFY_EVENTS = 100;
 const MAX_LIVE_VERIFY_CHUNK = 16_384;
+const MAX_LIVE_VERIFY_BYTES = 512 * 1024;
+const READ_ONLY_AGENT_TOOLS = new Set([
+  "read_file",
+  "search_text",
+  "glob",
+  "list_files",
+  "git_status",
+  "git_diff",
+  "update_plan",
+]);
 
 function liveVerifyOutput(
   iteration: number,
   emit: (event: LoopEvent) => void,
 ): (stream: "stdout" | "stderr", chunk: string) => void {
   let emitted = 0;
+  let emittedBytes = 0;
   return (stream, chunk) => {
-    if (emitted >= MAX_LIVE_VERIFY_EVENTS || chunk.length === 0) return;
+    if (emitted >= MAX_LIVE_VERIFY_EVENTS || emittedBytes >= MAX_LIVE_VERIFY_BYTES || chunk.length === 0) return;
+    const remaining = Math.min(MAX_LIVE_VERIFY_CHUNK, MAX_LIVE_VERIFY_BYTES - emittedBytes);
+    const raw = Buffer.from(chunk);
+    let start = Math.max(0, raw.byteLength - remaining);
+    while (start < raw.byteLength && (raw[start]! & 0xc0) === 0x80) start++;
+    const bounded = start === 0 ? chunk : raw.subarray(start).toString("utf8");
     emitted += 1;
+    emittedBytes += Buffer.byteLength(bounded);
     emit({
       type: "verify.output",
       iteration,
       stream,
-      chunk: chunk.slice(-MAX_LIVE_VERIFY_CHUNK),
+      chunk: bounded,
     });
   };
 }
@@ -255,26 +300,60 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       throw new RangeError("Loop costBudgetUsd must be a finite positive number");
     }
   }
+  const positiveSafeInteger = (name: string, value: number | null | undefined, allowZero = false): void => {
+    if (value === undefined || value === null) return;
+    if (!Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
+      throw new RangeError(`Loop ${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
+    }
+  };
+  positiveSafeInteger("tokenBudget", opts.tokenBudget ?? opts.resumeState?.tokenBudget);
+  positiveSafeInteger("maxDurationMs", opts.maxDurationMs ?? opts.resumeState?.maxDurationMs);
+  positiveSafeInteger("maxVerifyRuns", opts.maxVerifyRuns ?? opts.resumeState?.maxVerifyRuns);
+  positiveSafeInteger("verifyTimeoutMs", opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs);
+  positiveSafeInteger("agentTimeoutMs", opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs);
+  positiveSafeInteger("maxAgentRetries", opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries, true);
   const persistenceEnabled = opts.persist !== false;
   const loopId = opts.resumeState?.loopId ?? opts.loopId ?? `loop-${randomUUID()}`;
   // Mirror the event stream into an append-only `.seekforge/loops/<id>.log`
   // (JSONL) so the run has a durable record, not just ephemeral terminal output.
   // Logging is best-effort and must never break the loop; a persistently broken
   // directory still surfaces via the state-persistence warning below.
+  const logWriter = persistenceEnabled ? createLoopLogWriter(opts.workspace, loopId) : undefined;
+  let eventObserver = opts.onEvent;
   const emit = (event: LoopEvent): void => {
     if (persistenceEnabled) {
       try {
-        appendLoopLog(opts.workspace, loopId, event);
+        logWriter?.append(event);
       } catch {
         /* observability only */
       }
     }
-    opts.onEvent?.(event);
+    if (eventObserver) {
+      try {
+        eventObserver(event);
+      } catch (error) {
+        eventObserver = undefined;
+        try {
+          logWriter?.append({
+            type: "loop.warning",
+            warning: "observer",
+            message: `Loop event observer disabled after throwing: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        } catch {
+          /* observability only */
+        }
+      }
+    }
   };
   const lease = acquireLoopLease(opts.workspace, loopId, persistenceEnabled);
   try {
     return await runAutoLoopWithLease(deps, opts, emit, persistenceEnabled, loopId);
   } finally {
+    try {
+      logWriter?.close();
+    } catch {
+      /* observability only */
+    }
     lease.release();
   }
 }
@@ -286,13 +365,20 @@ async function runAutoLoopWithLease(
   persistenceEnabled: boolean,
   loopId: string,
 ): Promise<LoopResult> {
-  const verify =
-    opts.verify ??
-    ((workspace, command, signal, onOutput) => defaultVerify(deps, workspace, command, signal, onOutput));
   const requestedIterations = opts.maxIterations ?? opts.resumeState?.maxIterations ?? 8;
   const maxIterations = Math.min(requestedIterations, MAX_LOOP_ITERATIONS);
   const configuredCostBudget = opts.costBudgetUsd ?? opts.resumeState?.costBudgetUsd;
   const costBudgetUsd = configuredCostBudget ?? undefined;
+  const tokenBudget = opts.tokenBudget ?? opts.resumeState?.tokenBudget ?? undefined;
+  const maxDurationMs = opts.maxDurationMs ?? opts.resumeState?.maxDurationMs ?? undefined;
+  const maxVerifyRuns = opts.maxVerifyRuns ?? opts.resumeState?.maxVerifyRuns ?? undefined;
+  const verifyTimeoutMs = opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS;
+  const agentTimeoutMs = opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS;
+  const maxAgentRetries = opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries ?? DEFAULT_LOOP_AGENT_RETRIES;
+  const verify =
+    opts.verify ??
+    ((workspace, command, signal, onOutput) =>
+      defaultVerify(deps, workspace, command, verifyTimeoutMs, signal, onOutput));
   const approvalMode: ApprovalMode = opts.approvalMode ?? "acceptEdits";
   const requirementMode = opts.resumeState?.requirementMode ?? opts.requirementMode ?? "quick";
   if (!isLoopRequirementMode(requirementMode))
@@ -346,6 +432,12 @@ async function runAutoLoopWithLease(
         verifyCommand: opts.verifyCommand,
         maxIterations,
         costBudgetUsd: costBudgetUsd ?? null,
+        tokenBudget: tokenBudget ?? null,
+        maxDurationMs: maxDurationMs ?? null,
+        maxVerifyRuns: maxVerifyRuns ?? null,
+        verifyTimeoutMs,
+        agentTimeoutMs,
+        maxAgentRetries,
         requirementMode,
       });
     } catch (error) {
@@ -359,11 +451,15 @@ async function runAutoLoopWithLease(
       persistenceWarning(error);
     }
   }
-  const persist = (patch: Partial<LoopState>): void => {
+  let lastCheckpointAt = Date.now();
+  const persist = (patch: Partial<LoopState>, force = false): void => {
     if (state === undefined) return;
     state = { ...state, ...patch, updatedAt: new Date().toISOString() };
+    const now = Date.now();
+    if (!force && now - lastCheckpointAt < LOOP_CHECKPOINT_INTERVAL_MS) return;
     try {
       saveLoopState(opts.workspace, state);
+      lastCheckpointAt = now;
     } catch (error) {
       persistenceWarning(error);
     }
@@ -372,7 +468,12 @@ async function runAutoLoopWithLease(
   // progresses so `finish` always reads the latest values.
   let iterations = opts.resumeState?.iterations ?? 0;
   let costUsd = opts.resumeState?.costUsd ?? 0;
+  let tokensUsed = opts.resumeState?.tokensUsed ?? 0;
+  let verifyRuns = opts.resumeState?.verifyRuns ?? 0;
+  const priorElapsedMs = opts.resumeState?.elapsedMs ?? 0;
+  const runStartedAt = Date.now();
   let sessionId = opts.resumeState?.sessionId ?? "";
+  let reviewerSessionId = opts.resumeState?.reviewerSessionId ?? "";
   let requirements = opts.resumeState?.requirements ?? null;
   let acceptanceReview = opts.resumeState?.acceptanceReview ?? null;
   let requirementsApprovedAt = opts.resumeState?.requirementsApprovedAt ?? null;
@@ -384,31 +485,93 @@ async function runAutoLoopWithLease(
       ...(acceptanceReview ? { acceptanceReview } : {}),
     };
     const withId = state === undefined ? withRequirements : { ...withRequirements, loopId: state.loopId };
-    persist({
-      status: withId.status,
-      iterations: withId.iterations,
-      costUsd: withId.costUsd,
-      sessionId: withId.sessionId,
-      lastVerify: withId.finalVerify,
-    });
+    persist(
+      {
+        status: withId.status,
+        iterations: withId.iterations,
+        costUsd: withId.costUsd,
+        sessionId: withId.sessionId,
+        lastVerify: withId.finalVerify,
+        tokensUsed,
+        verifyRuns,
+        elapsedMs: priorElapsedMs + (Date.now() - runStartedAt),
+        reviewerSessionId,
+        lastAgentError: withId.agentError ?? null,
+      },
+      true,
+    );
     emit({ type: "loop.done", result: withId });
     return withId;
   };
   const finish = (status: LoopStatus, finalVerify: { code: number; output: string }): LoopResult =>
     done({ status, iterations, costUsd, sessionId, finalVerify });
+  const finishBudget = (budgetReason: LoopBudgetReason, finalVerify: { code: number; output: string }): LoopResult =>
+    done({ status: "budget", budgetReason, iterations, costUsd, sessionId, finalVerify });
+  const finishAgentError = (agentError: AgentError, finalVerify: { code: number; output: string }): LoopResult =>
+    done({ status: "agent_error", agentError, iterations, costUsd, sessionId, finalVerify });
   const cancelledVerify = { code: -1, output: "cancelled" };
+  const elapsedMs = (): number => priorElapsedMs + (Date.now() - runStartedAt);
+  const currentBudgetReason = (pendingCost = 0, pendingTokens = 0): LoopBudgetReason | null => {
+    if (costBudgetUsd !== undefined && costUsd + pendingCost >= costBudgetUsd) return "cost";
+    if (tokenBudget !== undefined && tokensUsed + pendingTokens >= tokenBudget) return "tokens";
+    if (maxDurationMs !== undefined && elapsedMs() >= maxDurationMs) return "duration";
+    if (maxVerifyRuns !== undefined && verifyRuns >= maxVerifyRuns) return "verify_runs";
+    return null;
+  };
+  const executeVerify = async (
+    iteration: number,
+  ): Promise<
+    | { kind: "result"; result: { code: number; output: string }; diagnostics: string }
+    | { kind: "budget"; reason: LoopBudgetReason }
+  > => {
+    const before = currentBudgetReason();
+    if (before !== null) return { kind: "budget", reason: before };
+    verifyRuns++;
+    persist({ verifyRuns, elapsedMs: elapsedMs() }, true);
+    const remainingDuration = maxDurationMs === undefined ? verifyTimeoutMs : maxDurationMs - elapsedMs();
+    if (remainingDuration <= 0) return { kind: "budget", reason: "duration" };
+    const durationLimited = remainingDuration <= verifyTimeoutMs;
+    const timeoutMs = Math.max(1, Math.min(verifyTimeoutMs, remainingDuration));
+    const timeoutController = new AbortController();
+    const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+    timeout.unref?.();
+    const runSignal = AbortSignal.any([timeoutController.signal, ...(opts.signal ? [opts.signal] : [])]);
+    try {
+      const captured = await abortablePromise(
+        captureVerify(verify, opts.workspace, opts.verifyCommand, runSignal, liveVerifyOutput(iteration, emit)),
+        runSignal,
+        () => new Error(`verification timed out after ${timeoutMs}ms`),
+      );
+      return { kind: "result", ...captured };
+    } catch (error) {
+      if (timeoutController.signal.aborted && !opts.signal?.aborted && durationLimited) {
+        return { kind: "budget", reason: "duration" };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      persist({ verifyRuns, elapsedMs: elapsedMs() });
+    }
+  };
 
   const runReadOnlyPhase = async (
     prompt: string,
     plan: boolean,
-  ): Promise<{ summary: string | null; completed: boolean; failure: string | null }> => {
+  ): Promise<{ summary: string | null; completed: boolean; failure: AgentError | null }> => {
     if (reviewAgent === null) throw new Error("Read-only requirement phase is unavailable in quick mode");
     let phaseCost = 0;
+    let phaseTokens = 0;
     let completedSummary: string | null = null;
     let completed = false;
-    let failure: string | null = null;
+    let failure: AgentError | null = null;
     const budgetController = new AbortController();
-    const runSignal = opts.signal ? AbortSignal.any([opts.signal, budgetController.signal]) : budgetController.signal;
+    const timeoutController = new AbortController();
+    const remainingDuration = maxDurationMs === undefined ? agentTimeoutMs : Math.max(1, maxDurationMs - elapsedMs());
+    const timeoutMs = Math.min(agentTimeoutMs, remainingDuration);
+    const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+    timeout.unref?.();
+    const signals = [budgetController.signal, timeoutController.signal, ...(opts.signal ? [opts.signal] : [])];
+    const runSignal = AbortSignal.any(signals);
     const events = reviewAgent.runTask({
       task: prompt,
       projectPath: opts.workspace,
@@ -416,26 +579,41 @@ async function runAutoLoopWithLease(
       plan,
       approvalMode: "auto",
       signal: runSignal,
-      ...(sessionId ? { resumeSessionId: sessionId } : {}),
+      ...(reviewerSessionId ? { resumeSessionId: reviewerSessionId } : {}),
     });
-    for await (const event of events) {
-      if (event.type === "session.created") {
-        if (!sessionId) sessionId = event.sessionId;
-        persist({ sessionId, costUsd: costUsd + phaseCost });
-      } else if (event.type === "usage.updated") {
-        phaseCost = event.usage.costUsd;
-        persist({ sessionId, costUsd: costUsd + phaseCost });
-        if (costBudgetUsd !== undefined && costUsd + phaseCost >= costBudgetUsd) budgetController.abort();
-      } else if (event.type === "session.completed") {
-        phaseCost = event.report.usage.costUsd;
-        completedSummary = event.report.summary;
-        completed = true;
-      } else if (event.type === "session.failed") {
-        failure = event.error.message;
+    try {
+      for await (const event of events) {
+        if (event.type === "session.created") {
+          if (!reviewerSessionId) reviewerSessionId = event.sessionId;
+          persist({ reviewerSessionId, costUsd: costUsd + phaseCost, tokensUsed: tokensUsed + phaseTokens });
+        } else if (event.type === "usage.updated") {
+          phaseCost = event.usage.costUsd;
+          phaseTokens = event.usage.promptTokens + event.usage.completionTokens;
+          persist({
+            reviewerSessionId,
+            costUsd: costUsd + phaseCost,
+            tokensUsed: tokensUsed + phaseTokens,
+            elapsedMs: elapsedMs(),
+          });
+          if (currentBudgetReason(phaseCost, phaseTokens) !== null) budgetController.abort();
+        } else if (event.type === "session.completed") {
+          phaseCost = event.report.usage.costUsd;
+          phaseTokens = event.report.usage.promptTokens + event.report.usage.completionTokens;
+          completedSummary = event.report.summary;
+          completed = true;
+        } else if (event.type === "session.failed") {
+          failure = event.error;
+        }
       }
+    } finally {
+      clearTimeout(timeout);
     }
     costUsd += phaseCost;
-    persist({ sessionId, costUsd });
+    tokensUsed += phaseTokens;
+    if (timeoutController.signal.aborted && !opts.signal?.aborted && currentBudgetReason() === null) {
+      failure = { code: "timeout", message: `review agent exceeded ${timeoutMs}ms` };
+    }
+    persist({ reviewerSessionId, costUsd, tokensUsed, elapsedMs: elapsedMs() }, true);
     return { summary: completedSummary, completed, failure };
   };
 
@@ -453,7 +631,7 @@ async function runAutoLoopWithLease(
         type: "loop.warning",
         warning: "requirements",
         message: phase.failure
-          ? `Acceptance review failed; completion remains blocked: ${phase.failure}`
+          ? `Acceptance review failed; completion remains blocked: ${phase.failure.message}`
           : "Acceptance review output was invalid; completion remains blocked.",
       });
     }
@@ -470,14 +648,13 @@ async function runAutoLoopWithLease(
     const phase = await runReadOnlyPhase(buildRequirementAnalysisPrompt(opts.task, opts.verifyCommand), true);
     if (!phase.completed) {
       if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
-      if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-        return finish("budget", { code: -1, output: "cost budget reached during requirement analysis" });
-      }
+      const budget = currentBudgetReason();
+      if (budget !== null) return finishBudget(budget, { code: -1, output: `${budget} budget reached` });
       emit({
         type: "loop.warning",
         warning: "requirements",
         message: phase.failure
-          ? `Requirement analysis failed: ${phase.failure}`
+          ? `Requirement analysis failed: ${phase.failure.message}`
           : "Requirement analysis ended without a completed session.",
       });
       return finish("no_progress", { code: -1, output: "requirement analysis did not complete" });
@@ -506,8 +683,9 @@ async function runAutoLoopWithLease(
     });
   }
   if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
-  if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-    return finish("budget", { code: -1, output: "cost budget reached during requirement analysis" });
+  const requirementBudget = currentBudgetReason();
+  if (requirementBudget !== null) {
+    return finishBudget(requirementBudget, { code: -1, output: `${requirementBudget} budget reached` });
   }
   if (requirementMode === "confirm" && requirementsApprovedAt === null) {
     if (!opts.approveRequirements || !canApprovePersistedRequirements) {
@@ -524,13 +702,13 @@ async function runAutoLoopWithLease(
     return finish("cancelled", cancelledVerify);
   }
   try {
-    const captured = await captureVerify(
-      verify,
-      opts.workspace,
-      opts.verifyCommand,
-      opts.signal,
-      liveVerifyOutput(0, emit),
-    );
+    const captured = await executeVerify(0);
+    if (captured.kind === "budget") {
+      return finishBudget(captured.reason, {
+        code: -1,
+        output: `${captured.reason} budget reached before verification`,
+      });
+    }
     preVerify = captured.result;
     preVerifyDiagnostics = captured.diagnostics;
   } catch (error) {
@@ -545,7 +723,8 @@ async function runAutoLoopWithLease(
     const review = await reviewRequirements(preVerify);
     if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
     if (review.complete) return finish("passed", preVerify);
-    if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) return finish("budget", preVerify);
+    const budget = currentBudgetReason();
+    if (budget !== null) return finishBudget(budget, preVerify);
   }
   persist({ lastVerify: preVerify });
 
@@ -553,7 +732,8 @@ async function runAutoLoopWithLease(
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousAcceptance = acceptanceFingerprint(acceptanceReview);
-  let previousWorkspace = await workspaceFingerprint(opts.workspace);
+  const fingerprinter = createWorkspaceFingerprinter(opts.workspace);
+  let previousWorkspace = await fingerprinter.fingerprint();
   const progressFingerprints: string[] = [];
   recordProgressFingerprint(
     progressFingerprints,
@@ -566,9 +746,8 @@ async function runAutoLoopWithLease(
     if (opts.signal?.aborted) {
       return finish("cancelled", lastVerify);
     }
-    if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-      return finish("budget", lastVerify);
-    }
+    const beforeIterationBudget = currentBudgetReason();
+    if (beforeIterationBudget !== null) return finishBudget(beforeIterationBudget, lastVerify);
     emit({ type: "iteration.start", iteration: i });
 
     const continuation =
@@ -588,56 +767,101 @@ async function runAutoLoopWithLease(
               lastVerify.output,
             )}\n\nFix the root cause so it passes.`;
 
-    let runCost = 0;
-    const budgetController = new AbortController();
-    const runSignal = opts.signal ? AbortSignal.any([opts.signal, budgetController.signal]) : budgetController.signal;
-    const events = agent.runTask({
-      task: continuation,
-      projectPath: opts.workspace,
-      mode: "edit",
-      approvalMode,
-      signal: runSignal,
-      ...(sessionId ? { resumeSessionId: sessionId } : {}),
-    });
-    for await (const ev of events) {
-      if (ev.type === "session.created") {
-        if (!sessionId) {
-          sessionId = ev.sessionId;
-          persist({ costUsd: costUsd + runCost, sessionId });
+    let runSucceeded = false;
+    const changedPaths = new Set<string>();
+    let forceFullFingerprint = false;
+    for (let attempt = 0; attempt <= maxAgentRetries && !runSucceeded; attempt++) {
+      let runCost = 0;
+      let runTokens = 0;
+      let failure: AgentError | null = null;
+      const budgetController = new AbortController();
+      const timeoutController = new AbortController();
+      const remainingDuration = maxDurationMs === undefined ? agentTimeoutMs : Math.max(1, maxDurationMs - elapsedMs());
+      const timeoutMs = Math.min(agentTimeoutMs, remainingDuration);
+      const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
+      timeout.unref?.();
+      const runSignal = AbortSignal.any([
+        budgetController.signal,
+        timeoutController.signal,
+        ...(opts.signal ? [opts.signal] : []),
+      ]);
+      const events = agent.runTask({
+        task: continuation,
+        projectPath: opts.workspace,
+        mode: "edit",
+        approvalMode,
+        signal: runSignal,
+        ...(sessionId ? { resumeSessionId: sessionId } : {}),
+      });
+      try {
+        for await (const ev of events) {
+          if (ev.type === "session.created") {
+            if (!sessionId) sessionId = ev.sessionId;
+            persist({ costUsd: costUsd + runCost, tokensUsed: tokensUsed + runTokens, sessionId });
+          } else if (ev.type === "usage.updated") {
+            // Usage is cumulative within this attempt. Failed attempts still
+            // count so retries cannot silently overshoot either budget.
+            runCost = ev.usage.costUsd;
+            runTokens = ev.usage.promptTokens + ev.usage.completionTokens;
+            persist({
+              costUsd: costUsd + runCost,
+              tokensUsed: tokensUsed + runTokens,
+              sessionId,
+              elapsedMs: elapsedMs(),
+            });
+            if (currentBudgetReason(runCost, runTokens) !== null) budgetController.abort();
+          } else if (ev.type === "session.completed") {
+            runCost = ev.report.usage.costUsd;
+            runTokens = ev.report.usage.promptTokens + ev.report.usage.completionTokens;
+            runSucceeded = true;
+          } else if (ev.type === "file.changed") {
+            changedPaths.add(ev.path);
+          } else if (ev.type === "tool.started" && !READ_ONLY_AGENT_TOOLS.has(ev.toolName)) {
+            forceFullFingerprint = true;
+          } else if (ev.type === "session.failed") {
+            failure = ev.error;
+          }
         }
-      } else if (ev.type === "usage.updated") {
-        // Cumulative spend within this run. Tracked here so a failed run — which
-        // emits no FinalReport — still contributes its real cost to the budget
-        // guard below; otherwise repeated expensive failures overshoot silently.
-        runCost = ev.usage.costUsd;
-        persist({ costUsd: costUsd + runCost, sessionId });
-        if (costBudgetUsd !== undefined && costUsd + runCost >= costBudgetUsd) {
-          budgetController.abort();
-        }
-      } else if (ev.type === "session.completed") {
-        runCost = ev.report.usage.costUsd;
+      } finally {
+        clearTimeout(timeout);
       }
-    }
-    costUsd += runCost;
-    if (opts.signal?.aborted) {
-      persist({ costUsd, sessionId });
-      return finish("cancelled", lastVerify);
+      costUsd += runCost;
+      tokensUsed += runTokens;
+      persist({ costUsd, tokensUsed, sessionId, elapsedMs: elapsedMs() }, true);
+      if (opts.signal?.aborted) return finish("cancelled", lastVerify);
+      const budget = currentBudgetReason();
+      if (budget !== null) {
+        iterations = i;
+        persist({ iterations, costUsd, tokensUsed, sessionId }, true);
+        return finishBudget(budget, lastVerify);
+      }
+      if (timeoutController.signal.aborted) {
+        failure = { code: "timeout", message: `agent attempt exceeded ${timeoutMs}ms`, recoverable: true, sessionId };
+      }
+      if (runSucceeded) {
+        break;
+      }
+      failure ??= {
+        code: "agent_error",
+        message: "agent run ended without session.completed or session.failed",
+        recoverable: true,
+        sessionId,
+      };
+      persist({ lastAgentError: failure }, true);
+      const kind = classifyAgentError({ code: failure.code, message: failure.message }).kind;
+      const transient = kind === "network" || kind === "timeout" || kind === "rate_limit";
+      if (!transient || attempt >= maxAgentRetries) return finishAgentError(failure, lastVerify);
     }
     iterations = i;
-    persist({ iterations: i, costUsd, sessionId });
+    persist({ iterations: i, costUsd, tokensUsed, sessionId, lastAgentError: null }, true);
     emit({ type: "run.completed", iteration: i, costUsd });
 
     // Verify the run's effect.
     let v: { code: number; output: string };
     let verifyDiagnostics = "";
     try {
-      const captured = await captureVerify(
-        verify,
-        opts.workspace,
-        opts.verifyCommand,
-        opts.signal,
-        liveVerifyOutput(i, emit),
-      );
+      const captured = await executeVerify(i);
+      if (captured.kind === "budget") return finishBudget(captured.reason, lastVerify);
       v = captured.result;
       verifyDiagnostics = captured.diagnostics;
     } catch (error) {
@@ -648,7 +872,10 @@ async function runAutoLoopWithLease(
     }
     lastVerify = v;
     const diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
-    const currentWorkspace = await workspaceFingerprint(opts.workspace);
+    const currentWorkspace = await fingerprinter.fingerprint({
+      forcePaths: changedPaths,
+      forceAll: forceFullFingerprint,
+    });
     persist({ iterations: i, costUsd, sessionId, lastVerify: v });
     emit({ type: "verify", iteration: i, code: v.code, passed: v.code === 0, output: v.output });
 
@@ -663,9 +890,8 @@ async function runAutoLoopWithLease(
     if (opts.signal?.aborted) {
       return finish("cancelled", v);
     }
-    if (costBudgetUsd !== undefined && costUsd >= costBudgetUsd) {
-      return finish("budget", v);
-    }
+    const afterIterationBudget = currentBudgetReason();
+    if (afterIterationBudget !== null) return finishBudget(afterIterationBudget, v);
     // Structured diagnostics ignore incidental timing/format noise. Pair them
     // with repository content so repeated edits still count as progress.
     const currentAcceptance = acceptanceFingerprint(acceptanceReview);
@@ -695,11 +921,25 @@ export async function resumeAutoLoop(
   loopId: string,
   opts: Omit<
     LoopOptions,
-    "task" | "verifyCommand" | "maxIterations" | "costBudgetUsd" | "requirementMode" | "resumeState"
+    | "task"
+    | "verifyCommand"
+    | "maxIterations"
+    | "costBudgetUsd"
+    | "tokenBudget"
+    | "maxDurationMs"
+    | "maxVerifyRuns"
+    | "verifyTimeoutMs"
+    | "agentTimeoutMs"
+    | "maxAgentRetries"
+    | "requirementMode"
+    | "resumeState"
   > & {
     workspace: string;
     additionalIterations?: number;
     additionalCostBudgetUsd?: number;
+    additionalTokenBudget?: number;
+    additionalDurationMs?: number;
+    additionalVerifyRuns?: number;
   },
 ): Promise<LoopResult> {
   const state = loadLoopState(opts.workspace, loopId);
@@ -709,6 +949,15 @@ export async function resumeAutoLoop(
     (!Number.isSafeInteger(opts.additionalIterations) || opts.additionalIterations <= 0)
   ) {
     throw new Error("additionalIterations must be a positive safe integer");
+  }
+  for (const [name, value] of [
+    ["additionalTokenBudget", opts.additionalTokenBudget],
+    ["additionalDurationMs", opts.additionalDurationMs],
+    ["additionalVerifyRuns", opts.additionalVerifyRuns],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error(`${name} must be a positive safe integer`);
+    }
   }
   if (
     opts.additionalCostBudgetUsd !== undefined &&
@@ -723,7 +972,35 @@ export async function resumeAutoLoop(
   if (costBudgetUsd !== null && !Number.isFinite(costBudgetUsd)) {
     throw new Error("resulting cost budget must be finite");
   }
-  const { additionalIterations: _additionalIterations, additionalCostBudgetUsd: _additionalBudget, ...runOpts } = opts;
+  const tokenBudget =
+    opts.additionalTokenBudget === undefined
+      ? state.tokenBudget
+      : (state.tokenBudget ?? state.tokensUsed ?? 0) + opts.additionalTokenBudget;
+  const maxDurationMs =
+    opts.additionalDurationMs === undefined
+      ? state.maxDurationMs
+      : (state.maxDurationMs ?? state.elapsedMs ?? 0) + opts.additionalDurationMs;
+  const maxVerifyRuns =
+    opts.additionalVerifyRuns === undefined
+      ? state.maxVerifyRuns
+      : (state.maxVerifyRuns ?? state.verifyRuns ?? 0) + opts.additionalVerifyRuns;
+  for (const [name, value] of [
+    ["token budget", tokenBudget],
+    ["duration budget", maxDurationMs],
+    ["verify run budget", maxVerifyRuns],
+  ] as const) {
+    if (value !== undefined && value !== null && !Number.isSafeInteger(value)) {
+      throw new Error(`resulting ${name} must be a safe integer`);
+    }
+  }
+  const {
+    additionalIterations: _additionalIterations,
+    additionalCostBudgetUsd: _additionalBudget,
+    additionalTokenBudget: _additionalTokens,
+    additionalDurationMs: _additionalDuration,
+    additionalVerifyRuns: _additionalVerifies,
+    ...runOpts
+  } = opts;
   return runAutoLoop(deps, {
     ...runOpts,
     task: state.task,
@@ -731,6 +1008,9 @@ export async function resumeAutoLoop(
     verifyCommand: state.verifyCommand,
     maxIterations,
     ...(costBudgetUsd !== null ? { costBudgetUsd } : {}),
-    resumeState: { ...state, maxIterations, costBudgetUsd },
+    ...(tokenBudget !== undefined && tokenBudget !== null ? { tokenBudget } : {}),
+    ...(maxDurationMs !== undefined && maxDurationMs !== null ? { maxDurationMs } : {}),
+    ...(maxVerifyRuns !== undefined && maxVerifyRuns !== null ? { maxVerifyRuns } : {}),
+    resumeState: { ...state, maxIterations, costBudgetUsd, tokenBudget, maxDurationMs, maxVerifyRuns },
   });
 }

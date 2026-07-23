@@ -464,6 +464,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       verifyCommand: string;
       maxIterations?: number;
       budget?: number;
+      tokenBudget?: number;
+      maxDurationMs?: number;
+      maxVerifyRuns?: number;
+      verifyTimeoutMs?: number;
+      agentTimeoutMs?: number;
+      maxAgentRetries?: number;
       requirementMode?: "quick" | "analyze" | "confirm";
       overrides?: RunOverrides;
     },
@@ -492,6 +498,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           verifyCommand: input.verifyCommand,
           ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
           ...(input.budget !== undefined ? { costBudgetUsd: input.budget } : {}),
+          ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}),
+          ...(input.maxDurationMs !== undefined ? { maxDurationMs: input.maxDurationMs } : {}),
+          ...(input.maxVerifyRuns !== undefined ? { maxVerifyRuns: input.maxVerifyRuns } : {}),
+          ...(input.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: input.verifyTimeoutMs } : {}),
+          ...(input.agentTimeoutMs !== undefined ? { agentTimeoutMs: input.agentTimeoutMs } : {}),
+          ...(input.maxAgentRetries !== undefined ? { maxAgentRetries: input.maxAgentRetries } : {}),
           ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
@@ -541,6 +553,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       loopId: string;
       addedIterations?: number;
       addedBudget?: number;
+      addedTokenBudget?: number;
+      addedDurationMs?: number;
+      addedVerifyRuns?: number;
       approveRequirements?: boolean;
       overrides?: RunOverrides;
     },
@@ -561,6 +576,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           workspace: input.workspace,
           ...(input.addedIterations !== undefined ? { additionalIterations: input.addedIterations } : {}),
           ...(input.addedBudget !== undefined ? { additionalCostBudgetUsd: input.addedBudget } : {}),
+          ...(input.addedTokenBudget !== undefined ? { additionalTokenBudget: input.addedTokenBudget } : {}),
+          ...(input.addedDurationMs !== undefined ? { additionalDurationMs: input.addedDurationMs } : {}),
+          ...(input.addedVerifyRuns !== undefined ? { additionalVerifyRuns: input.addedVerifyRuns } : {}),
           ...(input.approveRequirements !== undefined ? { approveRequirements: input.approveRequirements } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
@@ -688,7 +706,20 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "loop": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { task, verifyCommand, maxIterations, budget, requirementMode, ws: wsId } = frame;
+        const {
+          task,
+          verifyCommand,
+          maxIterations,
+          budget,
+          tokenBudget,
+          maxDurationMs,
+          maxVerifyRuns,
+          verifyTimeoutMs,
+          agentTimeoutMs,
+          maxAgentRetries,
+          requirementMode,
+          ws: wsId,
+        } = frame;
         const parsedOverrides = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
@@ -706,6 +737,12 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 verifyCommand,
                 ...(maxIterations !== undefined ? { maxIterations } : {}),
                 ...(budget !== undefined ? { budget } : {}),
+                ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+                ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
+                ...(maxVerifyRuns !== undefined ? { maxVerifyRuns } : {}),
+                ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
+                ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
+                ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
                 ...(requirementMode !== undefined ? { requirementMode } : {}),
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
               },
@@ -719,7 +756,16 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
 
       case "loop.resume": {
         if (running) return fail("busy", "a session is already running on this connection");
-        const { loopId, addedIterations, addedBudget, approveRequirements, ws: wsId } = frame;
+        const {
+          loopId,
+          addedIterations,
+          addedBudget,
+          addedTokenBudget,
+          addedDurationMs,
+          addedVerifyRuns,
+          approveRequirements,
+          ws: wsId,
+        } = frame;
         const parsedOverrides = runOverrides(frame);
         const workspace = deps.registry.resolve(wsId);
         if (!workspace) return fail("unknown_workspace", `unknown workspace: ${String(wsId)}`);
@@ -736,6 +782,9 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 loopId,
                 ...(addedIterations !== undefined ? { addedIterations } : {}),
                 ...(addedBudget !== undefined ? { addedBudget } : {}),
+                ...(addedTokenBudget !== undefined ? { addedTokenBudget } : {}),
+                ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
+                ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
                 ...(approveRequirements !== undefined ? { approveRequirements } : {}),
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
               },

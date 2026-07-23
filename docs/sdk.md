@@ -113,6 +113,13 @@ const result = await runAutoLoop(deps, {
   workspace: process.cwd(),
   verifyCommand: "pnpm test",
   maxIterations: 8,
+  costBudgetUsd: 1,
+  tokenBudget: 100_000,
+  maxDurationMs: 30 * 60_000,
+  maxVerifyRuns: 12,
+  verifyTimeoutMs: 10 * 60_000,
+  agentTimeoutMs: 15 * 60_000,
+  maxAgentRetries: 2,
   approvalMode: "acceptEdits",
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
 });
@@ -122,6 +129,9 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
   workspace: process.cwd(),
   additionalIterations: 4,
   additionalCostBudgetUsd: 0.5,
+  additionalTokenBudget: 50_000,
+  additionalDurationMs: 10 * 60_000,
+  additionalVerifyRuns: 4,
 });
 ```
 
@@ -129,6 +139,9 @@ Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are
 hard-capped at 100. Persisted Loops hold an exclusive lease; write failures are
 reported through bounded `loop.warning` events without masking verification.
+`LoopResult.status` distinguishes `passed`, guardrail `budget` exits (with
+`budgetReason`), verifier failures, cancellation, no-progress/exhaustion, and
+`agent_error` (with structured provider/session error details).
 
 ## Extension points
 

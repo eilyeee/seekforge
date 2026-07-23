@@ -131,6 +131,13 @@ function parsePositiveInt(val: string): number {
   return n;
 }
 
+function parseNonNegativeInt(val: string): number {
+  if (!/^[0-9]+$/.test(val)) throw new InvalidArgumentError("must be a non-negative integer");
+  const n = Number(val);
+  if (!Number.isSafeInteger(n)) throw new InvalidArgumentError("must be a non-negative integer");
+  return n;
+}
+
 function parseRequirementMode(val: string): "quick" | "analyze" | "confirm" {
   if (val !== "quick" && val !== "analyze" && val !== "confirm") {
     throw new InvalidArgumentError('must be "quick", "analyze", or "confirm"');
@@ -427,6 +434,12 @@ program
   .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
   .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
+  .option("--token-budget <n>", "cumulative prompt + completion token cap", parsePositiveInt)
+  .option("--max-duration <seconds>", "total wall-clock budget in seconds", parsePositiveFloat)
+  .option("--max-verifies <n>", "maximum verifier executions including the pre-check", parsePositiveInt)
+  .option("--verify-timeout <seconds>", "timeout for one verifier execution", parsePositiveFloat)
+  .option("--agent-timeout <seconds>", "timeout for one agent attempt", parsePositiveFloat)
+  .option("--agent-retries <n>", "retries for transient agent failures (default 1)", parseNonNegativeInt)
   .option("--requirements <mode>", "requirement gate: quick, analyze, or confirm", parseRequirementMode, "quick")
   .option("-y, --yes", "run autonomously (acceptEdits) without the auto-approve note")
   .option("-m, --model <model>", "override model")
@@ -440,6 +453,12 @@ program
         verify: string;
         maxIters?: number;
         budget?: number;
+        tokenBudget?: number;
+        maxDuration?: number;
+        maxVerifies?: number;
+        verifyTimeout?: number;
+        agentTimeout?: number;
+        agentRetries?: number;
         yes?: boolean;
         model?: string;
         profile?: string;
@@ -451,6 +470,12 @@ program
         verify: opts.verify,
         maxIters: opts.maxIters,
         budget: opts.budget,
+        tokenBudget: opts.tokenBudget,
+        maxDurationSeconds: opts.maxDuration,
+        maxVerifyRuns: opts.maxVerifies,
+        verifyTimeoutSeconds: opts.verifyTimeout,
+        agentTimeoutSeconds: opts.agentTimeout,
+        agentRetries: opts.agentRetries,
         yes: opts.yes,
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
@@ -467,6 +492,9 @@ program
   .option("-m, --model <model>", "override model")
   .option("--add-iters <n>", "add iterations to the persisted loop limit", parsePositiveInt)
   .option("--add-budget <usd>", "add USD to the persisted cost budget", parsePositiveFloat)
+  .option("--add-tokens <n>", "add tokens to the persisted token budget", parsePositiveInt)
+  .option("--add-duration <seconds>", "add wall-clock seconds to the persisted duration budget", parsePositiveFloat)
+  .option("--add-verifies <n>", "add verifier executions to the persisted limit", parsePositiveInt)
   .option("--approve-requirements", "approve a persisted confirm-mode requirement specification")
   .option("--profile <name>", "use a named config profile (also SEEKFORGE_PROFILE env)")
   .description("resume a persisted autonomous loop with its remaining limits and verification state")
@@ -478,6 +506,9 @@ program
         model?: string;
         addIters?: number;
         addBudget?: number;
+        addTokens?: number;
+        addDuration?: number;
+        addVerifies?: number;
         approveRequirements?: boolean;
         profile?: string;
       },
@@ -487,6 +518,9 @@ program
         model: opts.model,
         addIters: opts.addIters,
         addBudget: opts.addBudget,
+        addTokens: opts.addTokens,
+        addDurationSeconds: opts.addDuration,
+        addVerifyRuns: opts.addVerifies,
         approveRequirements: opts.approveRequirements,
         profile: opts.profile ?? rootProfile(),
       });

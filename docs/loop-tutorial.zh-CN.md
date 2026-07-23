@@ -118,10 +118,11 @@ seekforge loop "<任务>" --verify "<命令>" \
 | `passed` | verify 退出 0，且启用需求分析时验收通过 |
 | `requirements_pending` | `confirm` 规格已持久化，等待显式批准 |
 | `cancelled` | 收到中止信号（Ctrl-C / Stop 按钮），协作式停止，trace 保留 |
-| `budget` | 累计观测花费 ≥ `--budget`（已在途的请求可能让最终账单略微超一点） |
+| `budget` | 成本、Token、总时长或校验次数达到配置上限；`budgetReason` 标明具体护栏 |
 | `no_progress` | **卡住了**：结构化诊断指纹没变 **且** 工作区内容指纹没变 |
 | `exhausted` | 达到 `--max-iters` 上限 |
 | `verify_error` | verify 命令根本跑不起来 / 超时 / 在执行器边界失败 |
+| `agent_error` | 编辑 Agent 在瞬时错误重试耗尽后仍失败；该失败尝试不会误进校验 |
 
 检查顺序（进入下一轮前）：`aborted` → `budget` → `no_progress`（诊断与工作区都没变）→ `exhausted`。
 
@@ -201,10 +202,11 @@ seekforge loop-cleanup <name> [--force] # 清理 worktree
   锁，记录 owner 的进程身份和 PID，拒绝并发运行；进程退出或 PID 复用后能回收锁。刚写坏的锁在短暂
   宽限期内 fail-closed，防止半写的锁被别人抢走。
 - **持久化失败降级**：落盘失败只报一次 `loop.warning`，不会顶替掉验证结果本身。
-- **花费与 session 随事件 checkpoint**：session id 和累计用量在事件到达时就落盘，崩溃后 resume 能
-  复用 session 并把已花的钱算进账。
-- **事件日志追加落盘**：每个 `LoopEvent`（迭代开始、run 花费、流式验证输出、通过/失败、汇总）都
-  以 JSONL 追加进 `.seekforge/loops/<id>.log`。这是**尽力而为的可观测记录**：写日志失败会被吞掉、
+- **合并 checkpoint**：session id 与累计成本、Token、时长最多合并 250ms 再原子写入；迭代和终态
+  边界强制刷新，减少写放大且不丢失已完成状态。
+- **有界事件日志**：每个 `LoopEvent`（迭代开始、run 花费、流式验证输出、通过/失败、汇总）都
+  以 JSONL 批量追加进 `.seekforge/loops/<id>.log`；每 4 MiB 轮转，保留当前文件和两个旧分段。
+  这是**尽力而为的可观测记录**：写日志失败会被吞掉、
   绝不打断循环（真正坏掉的目录会通过上面的持久化告警暴露）。`persist: false` 时不写日志；`loop-delete`
   会连同状态一起删掉它。日志文件在 `.seekforge/loops/` 前缀内，不参与工作区指纹，因此不会干扰
   `no_progress` 判断。
@@ -249,13 +251,19 @@ const result = await runAutoLoop(deps, {
   verifyCommand: "pnpm test",           // 退出 0 == 成功
   maxIterations: 8,                     // 默认 8，硬顶 100
   costBudgetUsd: 2.0,                   // 累计观测花费达到就停（可选）
+  tokenBudget: 200_000,                 // prompt + completion Token
+  maxDurationMs: 30 * 60_000,           // 可跨恢复累计的总时长
+  maxVerifyRuns: 12,                    // 包含首次预检查
+  verifyTimeoutMs: 120_000,
+  agentTimeoutMs: 30 * 60_000,
+  maxAgentRetries: 1,
   approvalMode: "acceptEdits",          // 默认就是它
   signal: controller.signal,            // 协作式中止（可选）
   onEvent: (e) => { /* iteration.start | run.completed | verify.output | verify | loop.warning | loop.done */ },
   // verify: 可注入自定义验证器（测试用），默认走真实 shell 执行 + 沙箱
 });
 
-// result.status 还包括 confirm 模式的 "requirements_pending"
+// result.status 还包括 "requirements_pending" 和 "agent_error"
 // result.iterations / result.costUsd / result.sessionId / result.finalVerify / result.loopId
 ```
 
@@ -265,11 +273,11 @@ const result = await runAutoLoop(deps, {
 - `run.completed` — 第 n 轮 agent 跑完，带累计花费
 - `verify.output` — 验证命令的流式输出块（每次验证有事件数和块大小上限）
 - `verify` — 验证结果（退出码 + 是否通过 + 输出尾巴）
-- `loop.warning` — 目前只有持久化失败告警
+- `loop.warning` — 持久化、需求或观察回调被禁用告警
 - `loop.done` — 最终 `LoopResult`
 
-`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?, additionalCostBudgetUsd? })`
-恢复迭代数、花费、session、命令、护栏，再叠加可选的追加额度。
+`resumeAutoLoop` 会恢复 worker/reviewer 会话和累计资源用量，并可追加迭代、成本、Token、
+时长及校验次数额度。
 
 ## 12. 实践建议与 FAQ
 

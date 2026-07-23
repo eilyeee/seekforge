@@ -508,6 +508,12 @@ describe("store: loop mode", () => {
       verifyCommand: "pnpm test",
       maxIterations: 5,
       budget: 1.5,
+      tokenBudget: 10_000,
+      maxDurationMs: 60_000,
+      maxVerifyRuns: 6,
+      verifyTimeoutMs: 10_000,
+      agentTimeoutMs: 30_000,
+      maxAgentRetries: 0,
       requirementMode: "confirm",
     });
     const loop = sent.find((f) => f.type === "loop");
@@ -517,6 +523,12 @@ describe("store: loop mode", () => {
       verifyCommand: "pnpm test",
       maxIterations: 5,
       budget: 1.5,
+      tokenBudget: 10_000,
+      maxDurationMs: 60_000,
+      maxVerifyRuns: 6,
+      verifyTimeoutMs: 10_000,
+      agentTimeoutMs: 30_000,
+      maxAgentRetries: 0,
       requirementMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);
@@ -548,14 +560,23 @@ describe("store: loop mode", () => {
       },
     });
     const completed = activeTab(useStore.getState().tabs).loop;
-    useStore
-      .getState()
-      .resumeLoop({ loopId: "loop-abc", addedIterations: 3, addedBudget: 0.5, approveRequirements: true });
+    useStore.getState().resumeLoop({
+      loopId: "loop-abc",
+      addedIterations: 3,
+      addedBudget: 0.5,
+      addedTokenBudget: 500,
+      addedDurationMs: 5_000,
+      addedVerifyRuns: 2,
+      approveRequirements: true,
+    });
     expect(sent.find((f) => (f as { type: string }).type === "loop.resume")).toMatchObject({
       type: "loop.resume",
       loopId: "loop-abc",
       addedIterations: 3,
       addedBudget: 0.5,
+      addedTokenBudget: 500,
+      addedDurationMs: 5_000,
+      addedVerifyRuns: 2,
       approveRequirements: true,
     });
     const tab = activeTab(useStore.getState().tabs);

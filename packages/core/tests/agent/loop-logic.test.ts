@@ -1,6 +1,8 @@
 import type { TokenUsage, ToolResult } from "@seekforge/shared";
 import { describe, expect, it } from "vitest";
 import {
+  buildTurnProgressFingerprint,
+  createActionProgressTracker,
   addUsage,
   canonicalArgs,
   classifyAutoGateResult,
@@ -64,6 +66,28 @@ describe("action cycle detection", () => {
     const history: string[] = [];
     for (let i = 0; i < 12; i++) recordProgressFingerprint(history, `step-${i}`);
     expect(history).toEqual(["step-4", "step-5", "step-6", "step-7", "step-8", "step-9", "step-10", "step-11"]);
+  });
+});
+
+describe("turn progress fingerprint", () => {
+  it("changes when the same successful action returns different bounded evidence", () => {
+    const calls = [{ id: "1", name: "run_command", argumentsJson: '{"command":"build"}' }];
+    const first = buildTurnProgressFingerprint(calls, [{ ok: true, data: { output: "phase 1" } }], ["out.txt"]);
+    const second = buildTurnProgressFingerprint(calls, [{ ok: true, data: { output: "phase 2" } }], ["out.txt"]);
+    expect(first).not.toBe(second);
+  });
+
+  it("tracks repeated failures and bounded action cycles as one run-local component", () => {
+    const tracker = createActionProgressTracker();
+    const calls = [{ id: "1", name: "run_command", argumentsJson: '{"command":"build"}' }];
+    expect(tracker.observe(calls, [{ ok: false, error: { code: "failed", message: "red" } }], [])).toEqual({
+      repeatedFailure: false,
+      cyclePeriod: null,
+    });
+    expect(tracker.observe(calls, [{ ok: false, error: { code: "failed", message: "red" } }], [])).toEqual({
+      repeatedFailure: true,
+      cyclePeriod: 1,
+    });
   });
 });
 

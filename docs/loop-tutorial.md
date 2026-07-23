@@ -154,10 +154,11 @@ verification, these stop conditions are checked in order:
 | `passed` | verify exited 0 and analyzed requirements, when enabled, passed acceptance |
 | `requirements_pending` | a `confirm` specification is persisted and awaits explicit approval |
 | `cancelled` | abort signal (Ctrl-C / Stop button); cooperative stop, trace preserved |
-| `budget` | cumulative observed cost ≥ `--budget` (an in-flight request may make the final bill slightly exceed it) |
+| `budget` | a configured cost, token, duration, or verifier-run budget was reached; `budgetReason` identifies it |
 | `no_progress` | **stuck**: structured diagnostics fingerprint unchanged **and** workspace content fingerprint unchanged |
 | `exhausted` | reached the `--max-iters` cap |
 | `verify_error` | verify command could not run at all / timed out / failed at the executor boundary |
+| `agent_error` | the edit agent failed after transient retry policy was exhausted; verifier is not run for that failed attempt |
 
 Check order (before spending another round): `aborted` → `budget` →
 `no_progress` (diagnostics and workspace both unchanged) → `exhausted`.
@@ -265,12 +266,14 @@ You never manage this by hand, but knowing it helps with debugging:
   short grace period so a partially written lock cannot be stolen.
 - **Persistence failure degrades gracefully**: a failed write is reported
   once as `loop.warning` and never replaces the verification result.
-- **Cost and session checkpoint as events arrive**: the session id and
-  cumulative usage are persisted the moment their events land, so a resume
-  after a crash reuses the session and accounts for spend already observed.
-- **Append-only event log**: every `LoopEvent` (iteration start, run cost,
+- **Coalesced checkpoints**: session ids and cumulative cost/tokens/time are
+  merged for at most 250 ms between atomic writes; iteration and terminal
+  boundaries force a flush, limiting write amplification without losing a
+  completed state.
+- **Bounded event log**: every `LoopEvent` (iteration start, run cost,
   streamed verify output, pass/fail, summary) is appended as JSONL to
-  `.seekforge/loops/<id>.log`. This is **best-effort observability**: a
+  `.seekforge/loops/<id>.log`. Writes are batched and rotate at 4 MiB, retaining
+  the current file plus two older segments. This is **best-effort observability**: a
   failed log write is swallowed and never interrupts the loop (a genuinely
   broken directory still surfaces through the persistence warning above).
   With `persist: false` no log is written; `loop-delete` removes it together
@@ -326,13 +329,19 @@ const result = await runAutoLoop(deps, {
   verifyCommand: "pnpm test",           // exit 0 == success
   maxIterations: 8,                     // default 8, hard cap 100
   costBudgetUsd: 2.0,                   // stop at cumulative observed cost (optional)
+  tokenBudget: 200_000,                 // prompt + completion tokens (optional)
+  maxDurationMs: 30 * 60_000,           // resume-aware wall-clock budget
+  maxVerifyRuns: 12,                    // includes the pre-check
+  verifyTimeoutMs: 120_000,
+  agentTimeoutMs: 30 * 60_000,
+  maxAgentRetries: 1,                   // transient network/timeout/rate-limit failures
   approvalMode: "acceptEdits",          // the default
   signal: controller.signal,            // cooperative abort (optional)
   onEvent: (e) => { /* iteration.start | run.completed | verify.output | verify | loop.warning | loop.done */ },
   // verify: injectable custom verifier (for tests); defaults to a real shell exec + sandbox
 });
 
-// result.status also includes "requirements_pending" for confirm mode
+// result.status also includes "requirements_pending" and "agent_error"
 // result.iterations / result.costUsd / result.sessionId / result.finalVerify / result.loopId
 ```
 
@@ -343,12 +352,11 @@ Event stream types (`LoopEvent`):
 - `verify.output` — streamed verify output chunk (per-verification event
   count and chunk size are capped)
 - `verify` — verification result (exit code + passed + output tail)
-- `loop.warning` — currently only the persistence-failure warning
+- `loop.warning` — persistence, requirement, or disabled observer warning
 - `loop.done` — the final `LoopResult`
 
-`resumeAutoLoop(deps, loopId, { workspace, additionalIterations?,
-additionalCostBudgetUsd? })` restores iterations, cost, session, command,
-and guardrails, then applies the optional additive limits.
+`resumeAutoLoop` restores both worker/reviewer sessions and cumulative resource
+usage. Resume can add iteration, cost, token, duration, and verifier capacity.
 
 ## 12. Practical advice and FAQ
 

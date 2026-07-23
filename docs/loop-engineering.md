@@ -213,8 +213,9 @@ seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
-The whole loop is **one session** (each iteration resumes it), so it is a single
-auditable trace.
+Edit iterations reuse **one worker session**. Requirement analysis and acceptance
+review reuse a separate reviewer session recorded in Loop state, keeping evaluator
+context out of the worker conversation while preserving both auditable traces.
 
 Worktrees are deliberately retained for inspection. Run `loop-resume` from the
 worktree directory when the original loop used `--worktree`.
@@ -232,6 +233,12 @@ type LoopOptions = {
   approveRequirements?: boolean; // resume a confirm-mode loop
   maxIterations?: number;       // default 8
   costBudgetUsd?: number;       // stop after observed cumulative usage reaches it
+  tokenBudget?: number;         // cumulative prompt + completion tokens
+  maxDurationMs?: number;       // cumulative wall-clock budget, resume-aware
+  maxVerifyRuns?: number;       // includes the initial pre-check
+  verifyTimeoutMs?: number;     // default 120 seconds per verifier
+  agentTimeoutMs?: number;      // default 30 minutes per attempt
+  maxAgentRetries?: number;     // transient failures; default 1
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
   signal?: AbortSignal;         // cooperative stop
@@ -240,25 +247,26 @@ type LoopOptions = {
   verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
-  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "requirements_pending";
+  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "requirements_pending";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
   loopId?: string; requirements?: LoopRequirementSpec;
-  acceptanceReview?: LoopAcceptanceReview;
+  acceptanceReview?: LoopAcceptanceReview; budgetReason?: "cost" | "tokens" | "duration" | "verify_runs";
+  agentError?: AgentError;
 };
 ```
 
-`resumeAutoLoop(deps, loopId, { workspace, approveRequirements?, additionalIterations?,
-additionalCostBudgetUsd? })` restores the frozen requirements, iteration count, cost, session,
-command, and guardrails, then applies optional additive limits.
+`resumeAutoLoop` also accepts additive cost, token, duration, verifier-run, and
+iteration capacity. It restores cumulative elapsed time, tokens, verifier count,
+worker/reviewer sessions, command, and frozen requirements.
 
 ## Guardrails (all on by default)
 
 Checked before spending another iteration, in order:
 
 1. `signal.aborted` → `cancelled`
-2. observed cumulative cost ≥ `costBudgetUsd` → cancel the active run and return
-   `budget` after verification
+2. any configured cost, token, duration, or verifier-run limit is reached →
+   cancel active work and return `budget` with `budgetReason`
 3. normalized structured diagnostics unchanged **and** the workspace content
    fingerprint unchanged → `no_progress` (stuck)
 4. reached `maxIterations` → `exhausted`
@@ -266,6 +274,10 @@ Checked before spending another iteration, in order:
 A `verify_error` is returned when the verify command cannot start, times out, or
 otherwise fails at the executor boundary. Its final output includes bounded
 stdout/stderr diagnostics when available.
+
+An edit-agent failure is never sent blindly into the verifier. Network, timeout,
+and rate-limit failures retry up to `maxAgentRetries`; an unrecovered failure
+returns `agent_error` with the original `AgentError`.
 
 ## Verification
 

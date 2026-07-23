@@ -479,8 +479,11 @@ describe("runAutoLoop", () => {
       onEvent: (event) => events.push(event),
     });
     const output = events.filter((event) => event.type === "verify.output");
-    expect(output).toHaveLength(100);
-    expect(output.every((event) => event.type === "verify.output" && event.chunk.length === 16_384)).toBe(true);
+    expect(output).toHaveLength(32);
+    expect(output.every((event) => event.type === "verify.output" && Buffer.byteLength(event.chunk) <= 16_384)).toBe(
+      true,
+    );
+    expect(output.reduce((total, event) => total + Buffer.byteLength(event.chunk), 0)).toBeLessThanOrEqual(512 * 1024);
   });
 
   it("exhausted when verify never passes within maxIterations", async () => {
@@ -518,6 +521,105 @@ describe("runAutoLoop", () => {
     expect(result.status).toBe("budget");
     expect(result.iterations).toBe(1);
     expect(result.costUsd).toBeCloseTo(0.001, 6);
+  });
+
+  it("stops on the cumulative token budget and reports its reason", async () => {
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, failNTimes(3)),
+      tokenBudget: 10,
+    });
+    expect(result).toMatchObject({ status: "budget", budgetReason: "tokens", iterations: 1 });
+    expect(loadLoopState(workspace, result.loopId!)?.tokensUsed).toBe(15);
+  });
+
+  it("stops before an edit when the verifier-run budget is exhausted", async () => {
+    const { deps, provider } = mkDeps();
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(workspace, failNTimes(3)),
+      maxVerifyRuns: 1,
+    });
+    expect(result).toMatchObject({ status: "budget", budgetReason: "verify_runs", iterations: 0 });
+    expect(provider.chats).toBe(0);
+  });
+
+  it("enforces the total wall-clock budget while verification is active", async () => {
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return { code: 1, output: "late" };
+      }),
+      maxDurationMs: 10,
+    });
+    expect(result).toMatchObject({ status: "budget", budgetReason: "duration", iterations: 0 });
+  });
+
+  it("returns agent_error without running a misleading post-failure verifier", async () => {
+    let verifies = 0;
+    const provider = alwaysDone("flash");
+    provider.chat = async () => {
+      throw Object.assign(new Error("invalid api key"), { status: 401 });
+    };
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, async () => ({ code: ++verifies === 1 ? 1 : 0, output: "red" })),
+        maxAgentRetries: 2,
+      },
+    );
+    expect(result.status).toBe("agent_error");
+    expect(result.agentError?.message).toContain("invalid api key");
+    expect(result.iterations).toBe(0);
+    expect(verifies).toBe(1);
+  });
+
+  it("retries a transient agent failure and then verifies the successful attempt", async () => {
+    const provider = alwaysDone("flash");
+    let attempts = 0;
+    provider.chat = async (request) => {
+      attempts++;
+      provider.chats++;
+      provider.seen.push(request.messages);
+      if (attempts === 1) throw new Error("ECONNRESET network error");
+      return text("done");
+    };
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      { ...baseOpts(workspace, failNTimes(1)), maxAgentRetries: 1 },
+    );
+    expect(result.status).toBe("passed");
+    expect(result.iterations).toBe(1);
+    expect(attempts).toBe(2);
+  });
+
+  it("isolates requirement review history from the edit session", async () => {
+    const provider = scripted("flash", [REQUIREMENT_SPEC, "implemented", acceptance("met")]);
+    const result = await runAutoLoop(
+      { provider, dispatcher: noopDispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, failNTimes(1)),
+        requirementMode: "analyze",
+      },
+    );
+    const state = loadLoopState(workspace, result.loopId!);
+    expect(result.status).toBe("passed");
+    expect(state?.reviewerSessionId).toBeTruthy();
+    expect(state?.sessionId).toBeTruthy();
+    expect(state?.reviewerSessionId).not.toBe(state?.sessionId);
+  });
+
+  it("disables a throwing event observer without interrupting the loop", async () => {
+    let calls = 0;
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, failNTimes(1)),
+      onEvent: () => {
+        calls++;
+        throw new Error("render crashed");
+      },
+    });
+    expect(result.status).toBe("passed");
+    expect(calls).toBe(1);
+    const log = readFileSync(join(workspace, ".seekforge", "loops", `${result.loopId}.log`), "utf8");
+    expect(log).toContain("observer disabled");
   });
 
   it("stops on no_progress when verify output never changes", async () => {
@@ -854,6 +956,30 @@ describe("runAutoLoop", () => {
     expect(loadLoopState(workspace, stopped.loopId!)?.costBudgetUsd).toBeCloseTo(0.0025, 6);
   });
 
+  it("resumes with added token, duration, and verifier capacity", async () => {
+    const stopped = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, failNTimes(3)),
+      tokenBudget: 10,
+      maxDurationMs: 5_000,
+      maxVerifyRuns: 5,
+    });
+    expect(stopped).toMatchObject({ status: "budget", budgetReason: "tokens", iterations: 1 });
+
+    const resumed = await resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+      workspace,
+      additionalTokenBudget: 20,
+      additionalDurationMs: 1_000,
+      additionalVerifyRuns: 1,
+      verify: async () => ({ code: 0, output: "green" }),
+    });
+    expect(resumed).toMatchObject({ status: "passed", iterations: 1 });
+    expect(loadLoopState(workspace, stopped.loopId!)).toMatchObject({
+      tokenBudget: 30,
+      maxDurationMs: 6_000,
+      maxVerifyRuns: 6,
+    });
+  });
+
   it("rejects invalid additive resume limits at the core boundary", async () => {
     const stopped = await runAutoLoop(mkDeps().deps, {
       ...baseOpts(workspace, failNTimes(1)),
@@ -878,5 +1004,17 @@ describe("runAutoLoop", () => {
         additionalCostBudgetUsd: Number.MAX_VALUE,
       }),
     ).rejects.toThrow(/resulting cost budget must be finite/);
+    await expect(
+      resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+        workspace,
+        additionalTokenBudget: 0,
+      }),
+    ).rejects.toThrow(/additionalTokenBudget must be a positive safe integer/);
+    await expect(
+      resumeAutoLoop(mkDeps().deps, stopped.loopId!, {
+        workspace,
+        additionalDurationMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).rejects.toThrow(/resulting duration budget must be a safe integer/);
   });
 });

@@ -193,8 +193,8 @@ seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
-整个 loop 是**一个会话**（每次迭代都恢复该会话），因此它是一条可审计的
-完整 trace。
+编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
+会话。这样评审上下文不会进入编辑对话，同时两条 trace 都可审计。
 
 worktree 被有意保留以供检查。若原始 loop 使用了 `--worktree`，
 请在该 worktree 目录中运行 `loop-resume`。
@@ -212,6 +212,12 @@ type LoopOptions = {
   approveRequirements?: boolean; // 恢复 confirm 模式
   maxIterations?: number;       // default 8
   costBudgetUsd?: number;       // stop after observed cumulative usage reaches it
+  tokenBudget?: number;         // 累计 prompt + completion Token
+  maxDurationMs?: number;       // 可跨恢复累计的墙钟时间
+  maxVerifyRuns?: number;       // 包含首次预检查
+  verifyTimeoutMs?: number;     // 单次校验默认 120 秒
+  agentTimeoutMs?: number;      // 单次 Agent 尝试默认 30 分钟
+  maxAgentRetries?: number;     // 瞬时错误默认重试 1 次
   approvalMode?: ApprovalMode;  // default "acceptEdits"
   model?: string; planModel?: string; escalateOnFailure?: boolean;
   signal?: AbortSignal;         // cooperative stop
@@ -220,30 +226,35 @@ type LoopOptions = {
   verify?: (workspace, command, signal, onOutput) => Promise<{ code; output }>;
 };
 type LoopResult = {
-  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "requirements_pending";
+  status: "passed" | "exhausted" | "no_progress" | "budget" | "cancelled" | "verify_error" | "agent_error" | "requirements_pending";
   iterations: number; costUsd: number; sessionId: string;
   finalVerify: { code: number; output: string };
   loopId?: string; requirements?: LoopRequirementSpec;
-  acceptanceReview?: LoopAcceptanceReview;
+  acceptanceReview?: LoopAcceptanceReview; budgetReason?: "cost" | "tokens" | "duration" | "verify_runs";
+  agentError?: AgentError;
 };
 ```
 
-`resumeAutoLoop(deps, loopId, { workspace, approveRequirements?, additionalIterations?,
-additionalCostBudgetUsd? })` 恢复冻结需求、迭代计数、成本、会话、命令和护栏，
-然后应用可选的追加限额。
+`resumeAutoLoop` 可追加迭代、成本、Token、时长和校验次数，并恢复累计时长、Token、
+校验次数、worker/reviewer 会话、命令与冻结需求。编辑迭代复用一个 worker 会话；
+需求分析和验收复用另一个 reviewer 会话，避免评审上下文污染编辑对话。
 
 ## 护栏（默认全部开启）
 
 在花费下一次迭代之前按以下顺序检查：
 
 1. `signal.aborted` → `cancelled`
-2. 观测累计成本 ≥ `costBudgetUsd` → 取消进行中的运行，在验证后返回 `budget`
+2. 任一成本、Token、时长或校验次数护栏达到上限 → 取消进行中的工作并返回带
+   `budgetReason` 的 `budget`
 3. 归一化的结构化诊断未变**且**工作区内容 fingerprint 未变 →
    `no_progress`（卡住）
 4. 达到 `maxIterations` → `exhausted`
 
 当验证命令无法启动、超时或在执行器边界以其他方式失败时，返回 `verify_error`。
 可用时，其最终输出包含有界的 stdout/stderr 诊断信息。
+
+编辑 Agent 失败后不会再盲目运行校验。网络、超时和限流错误最多按
+`maxAgentRetries` 重试；仍失败则返回保留原始错误的 `agent_error`。
 
 ## 验证
 

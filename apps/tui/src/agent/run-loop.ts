@@ -24,6 +24,12 @@ export type RunLoopDeps = {
   maxIterations: number;
   /** Optional command-level override; otherwise inherits config.costBudgetUsd. */
   costBudgetUsd?: number;
+  tokenBudget?: number;
+  maxDurationMs?: number;
+  maxVerifyRuns?: number;
+  verifyTimeoutMs?: number;
+  agentTimeoutMs?: number;
+  maxAgentRetries?: number;
   requirementMode?: LoopRequirementMode;
   /** Forwards each LoopEvent to the caller for transcript rendering. */
   onEvent: (event: LoopEvent) => void;
@@ -66,6 +72,12 @@ export async function runLoop(
       verifyCommand,
       maxIterations: deps.maxIterations,
       ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
+      ...(deps.tokenBudget !== undefined ? { tokenBudget: deps.tokenBudget } : {}),
+      ...(deps.maxDurationMs !== undefined ? { maxDurationMs: deps.maxDurationMs } : {}),
+      ...(deps.maxVerifyRuns !== undefined ? { maxVerifyRuns: deps.maxVerifyRuns } : {}),
+      ...(deps.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: deps.verifyTimeoutMs } : {}),
+      ...(deps.agentTimeoutMs !== undefined ? { agentTimeoutMs: deps.agentTimeoutMs } : {}),
+      ...(deps.maxAgentRetries !== undefined ? { maxAgentRetries: deps.maxAgentRetries } : {}),
       ...(deps.requirementMode !== undefined ? { requirementMode: deps.requirementMode } : {}),
       approvalMode: "acceptEdits",
       signal,
@@ -82,6 +94,9 @@ export async function resumeLoop(
   deps: Omit<RunLoopDeps, "maxIterations" | "costBudgetUsd"> & {
     addedIterations?: number;
     addedCostBudgetUsd?: number;
+    addedTokenBudget?: number;
+    addedDurationMs?: number;
+    addedVerifyRuns?: number;
     approveRequirements?: boolean;
   },
 ): Promise<LoopResult> {
@@ -106,6 +121,9 @@ export async function resumeLoop(
       onEvent: deps.onEvent,
       ...(deps.addedIterations !== undefined ? { additionalIterations: deps.addedIterations } : {}),
       ...(deps.addedCostBudgetUsd !== undefined ? { additionalCostBudgetUsd: deps.addedCostBudgetUsd } : {}),
+      ...(deps.addedTokenBudget !== undefined ? { additionalTokenBudget: deps.addedTokenBudget } : {}),
+      ...(deps.addedDurationMs !== undefined ? { additionalDurationMs: deps.addedDurationMs } : {}),
+      ...(deps.addedVerifyRuns !== undefined ? { additionalVerifyRuns: deps.addedVerifyRuns } : {}),
       ...(deps.approveRequirements !== undefined ? { approveRequirements: deps.approveRequirements } : {}),
     });
   } finally {

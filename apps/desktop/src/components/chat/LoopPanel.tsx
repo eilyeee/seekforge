@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useT } from "../../lib/i18n";
 import { loopRows, loopStatusTone, loopWarnings, formatCost, type LoopProgress } from "../../lib/loop";
-import { MAX_LOOP_ITERATIONS, parseBudgetInput, parseIterationInput } from "../../lib/loop-input";
+import {
+  MAX_LOOP_ITERATIONS,
+  parseBudgetInput,
+  parseIterationInput,
+  parsePositiveIntegerInput,
+} from "../../lib/loop-input";
 import { Badge, Button, Card, IconChevron, Input, Select, TextArea } from "../ui";
 
 type Props = {
@@ -17,12 +22,21 @@ type Props = {
     verifyCommand: string;
     maxIterations?: number;
     budget?: number;
+    tokenBudget?: number;
+    maxDurationMs?: number;
+    maxVerifyRuns?: number;
+    verifyTimeoutMs?: number;
+    agentTimeoutMs?: number;
+    maxAgentRetries?: number;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
   onResume: (opts: {
     loopId: string;
     addedIterations?: number;
     addedBudget?: number;
+    addedTokenBudget?: number;
+    addedDurationMs?: number;
+    addedVerifyRuns?: number;
     approveRequirements?: boolean;
   }) => void;
   /** Stops a running loop (sends `cancel` via the store). */
@@ -43,16 +57,45 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
   const [verify, setVerify] = useState("");
   const [maxIterations, setMaxIterations] = useState(String(DEFAULT_MAX_ITERATIONS));
   const [budget, setBudget] = useState("");
+  const [tokenBudget, setTokenBudget] = useState("");
+  const [maxDuration, setMaxDuration] = useState("");
+  const [maxVerifyRuns, setMaxVerifyRuns] = useState("");
+  const [verifyTimeout, setVerifyTimeout] = useState("120");
+  const [agentTimeout, setAgentTimeout] = useState("1800");
+  const [agentRetries, setAgentRetries] = useState("1");
   const [requirementMode, setRequirementMode] = useState<"quick" | "analyze" | "confirm">("quick");
   const [addedIterations, setAddedIterations] = useState("");
   const [addedBudget, setAddedBudget] = useState("");
+  const [addedTokens, setAddedTokens] = useState("");
+  const [addedDuration, setAddedDuration] = useState("");
+  const [addedVerifies, setAddedVerifies] = useState("");
 
   const max = parseIterationInput(maxIterations);
   const bud = parseBudgetInput(budget);
+  const tokenBud = parsePositiveIntegerInput(tokenBudget);
+  const duration = parseBudgetInput(maxDuration);
+  const verifies = parsePositiveIntegerInput(maxVerifyRuns);
+  const verifyLimit = parseBudgetInput(verifyTimeout);
+  const agentLimit = parseBudgetInput(agentTimeout);
+  const retries = parsePositiveIntegerInput(agentRetries, true);
   const addedIters = parseIterationInput(addedIterations, true);
   const addedBud = parseBudgetInput(addedBudget);
+  const addedTokenBud = parsePositiveIntegerInput(addedTokens);
+  const addedDurationBudget = parseBudgetInput(addedDuration);
+  const addedVerifyBudget = parsePositiveIntegerInput(addedVerifies);
 
-  const canRun = !running && task.trim() !== "" && verify.trim() !== "" && !max.error && !bud.error;
+  const canRun =
+    !running &&
+    task.trim() !== "" &&
+    verify.trim() !== "" &&
+    !max.error &&
+    !bud.error &&
+    !tokenBud.error &&
+    !duration.error &&
+    !verifies.error &&
+    !verifyLimit.error &&
+    !agentLimit.error &&
+    !retries.error;
 
   const run = () => {
     if (!canRun) return;
@@ -61,6 +104,12 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
       verifyCommand: verify.trim(),
       ...(max.value !== undefined ? { maxIterations: max.value } : {}),
       ...(bud.value !== undefined ? { budget: bud.value } : {}),
+      ...(tokenBud.value !== undefined ? { tokenBudget: tokenBud.value } : {}),
+      ...(duration.value !== undefined ? { maxDurationMs: Math.round(duration.value * 1_000) } : {}),
+      ...(verifies.value !== undefined ? { maxVerifyRuns: verifies.value } : {}),
+      ...(verifyLimit.value !== undefined ? { verifyTimeoutMs: Math.round(verifyLimit.value * 1_000) } : {}),
+      ...(agentLimit.value !== undefined ? { agentTimeoutMs: Math.round(agentLimit.value * 1_000) } : {}),
+      ...(retries.value !== undefined ? { maxAgentRetries: retries.value } : {}),
       requirementMode,
     });
   };
@@ -189,6 +238,41 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                 </Button>
               )}
             </div>
+            <details className="rounded border border-subtle px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium text-secondary">{t("chat.loop.advanced")}</summary>
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                {[
+                  ["loop-token-budget", "chat.loop.tokenBudget", tokenBudget, setTokenBudget, tokenBud.error],
+                  ["loop-max-duration", "chat.loop.maxDuration", maxDuration, setMaxDuration, duration.error],
+                  ["loop-max-verifies", "chat.loop.maxVerifies", maxVerifyRuns, setMaxVerifyRuns, verifies.error],
+                  [
+                    "loop-verify-timeout",
+                    "chat.loop.verifyTimeout",
+                    verifyTimeout,
+                    setVerifyTimeout,
+                    verifyLimit.error,
+                  ],
+                  ["loop-agent-timeout", "chat.loop.agentTimeout", agentTimeout, setAgentTimeout, agentLimit.error],
+                  ["loop-agent-retries", "chat.loop.agentRetries", agentRetries, setAgentRetries, retries.error],
+                ].map(([id, label, value, setter, error]) => (
+                  <label key={String(id)} htmlFor={String(id)} className="flex w-32 flex-col gap-1">
+                    <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
+                      {t(String(label))}
+                    </span>
+                    <Input
+                      id={String(id)}
+                      type="number"
+                      min={String(id).includes("retries") ? 0 : 1}
+                      value={String(value)}
+                      onChange={(event) => (setter as (next: string) => void)(event.target.value)}
+                      disabled={running}
+                      aria-invalid={error !== undefined}
+                      className={error ? "border-danger" : ""}
+                    />
+                  </label>
+                ))}
+              </div>
+            </details>
           </div>
 
           {(rows.length > 0 || warnings.length > 0 || result) && (
@@ -288,14 +372,64 @@ export function LoopPanel({ progress, running, loopRunning, onRun, onResume, onS
                         />
                         {addedBud.error && <span className="text-2xs text-danger">{t("chat.loop.invalidBudget")}</span>}
                       </label>
+                      {[
+                        [
+                          "loop-added-tokens",
+                          "chat.loop.addedTokens",
+                          addedTokens,
+                          setAddedTokens,
+                          addedTokenBud.error,
+                        ],
+                        [
+                          "loop-added-duration",
+                          "chat.loop.addedDuration",
+                          addedDuration,
+                          setAddedDuration,
+                          addedDurationBudget.error,
+                        ],
+                        [
+                          "loop-added-verifies",
+                          "chat.loop.addedVerifies",
+                          addedVerifies,
+                          setAddedVerifies,
+                          addedVerifyBudget.error,
+                        ],
+                      ].map(([id, label, value, setter, error]) => (
+                        <label key={String(id)} htmlFor={String(id)} className="flex w-32 flex-col gap-1">
+                          <span className="text-2xs text-tertiary">{t(String(label))}</span>
+                          <Input
+                            id={String(id)}
+                            value={String(value)}
+                            onChange={(event) => (setter as (next: string) => void)(event.target.value)}
+                            type="number"
+                            min={1}
+                            aria-invalid={error !== undefined}
+                            className={error ? "border-danger" : ""}
+                            placeholder={t("chat.loop.optional")}
+                          />
+                        </label>
+                      ))}
                       <Button
                         variant="primary"
-                        disabled={!!addedIters.error || !!addedBud.error}
+                        disabled={
+                          !!addedIters.error ||
+                          !!addedBud.error ||
+                          !!addedTokenBud.error ||
+                          !!addedDurationBudget.error ||
+                          !!addedVerifyBudget.error
+                        }
                         onClick={() =>
                           onResume({
                             loopId: result.loopId!,
                             ...(addedIters.value !== undefined ? { addedIterations: addedIters.value } : {}),
                             ...(addedBud.value !== undefined ? { addedBudget: addedBud.value } : {}),
+                            ...(addedTokenBud.value !== undefined ? { addedTokenBudget: addedTokenBud.value } : {}),
+                            ...(addedDurationBudget.value !== undefined
+                              ? { addedDurationMs: Math.round(addedDurationBudget.value * 1_000) }
+                              : {}),
+                            ...(addedVerifyBudget.value !== undefined
+                              ? { addedVerifyRuns: addedVerifyBudget.value }
+                              : {}),
                             ...(result.status === "requirements_pending" ? { approveRequirements: true } : {}),
                           })
                         }

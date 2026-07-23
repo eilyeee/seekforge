@@ -32,6 +32,12 @@ export type LoopOptions = {
   maxIters?: number;
   /** Cumulative cost cap in USD. */
   budget?: number;
+  tokenBudget?: number;
+  maxDurationSeconds?: number;
+  maxVerifyRuns?: number;
+  verifyTimeoutSeconds?: number;
+  agentTimeoutSeconds?: number;
+  agentRetries?: number;
   /** Run autonomously (acceptEdits). The loop is autonomous regardless. */
   yes?: boolean;
   /** Override model. */
@@ -43,9 +49,25 @@ export type LoopOptions = {
   requirements?: LoopRequirementMode;
 };
 
-export type LoopResumeOptions = Omit<LoopOptions, "verify" | "worktree" | "maxIters" | "budget"> & {
+export type LoopResumeOptions = Omit<
+  LoopOptions,
+  | "verify"
+  | "worktree"
+  | "maxIters"
+  | "budget"
+  | "tokenBudget"
+  | "maxDurationSeconds"
+  | "maxVerifyRuns"
+  | "verifyTimeoutSeconds"
+  | "agentTimeoutSeconds"
+  | "agentRetries"
+  | "requirements"
+> & {
   addIters?: number;
   addBudget?: number;
+  addTokens?: number;
+  addDurationSeconds?: number;
+  addVerifyRuns?: number;
   approveRequirements?: boolean;
 };
 
@@ -183,6 +205,9 @@ type ResumeAutoLoop = (
     escalateOnFailure?: boolean;
     additionalIterations?: number;
     additionalCostBudgetUsd?: number;
+    additionalTokenBudget?: number;
+    additionalDurationMs?: number;
+    additionalVerifyRuns?: number;
     approveRequirements?: boolean;
   },
 ) => Promise<LoopResult>;
@@ -199,10 +224,18 @@ export async function loopResumeCommand(loopId: string, opts: LoopResumeOptions)
 export function resumeExtensionOptions(opts: LoopResumeOptions): {
   additionalIterations?: number;
   additionalCostBudgetUsd?: number;
+  additionalTokenBudget?: number;
+  additionalDurationMs?: number;
+  additionalVerifyRuns?: number;
 } {
   return {
     ...(opts.addIters !== undefined ? { additionalIterations: opts.addIters } : {}),
     ...(opts.addBudget !== undefined ? { additionalCostBudgetUsd: opts.addBudget } : {}),
+    ...(opts.addTokens !== undefined ? { additionalTokenBudget: opts.addTokens } : {}),
+    ...(opts.addDurationSeconds !== undefined
+      ? { additionalDurationMs: Math.round(opts.addDurationSeconds * 1_000) }
+      : {}),
+    ...(opts.addVerifyRuns !== undefined ? { additionalVerifyRuns: opts.addVerifyRuns } : {}),
     ...(opts.approveRequirements !== undefined ? { approveRequirements: opts.approveRequirements } : {}),
   };
 }
@@ -214,6 +247,9 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
     `task: ${state.task}`,
     `iterations: ${state.iterations}/${state.maxIterations}`,
     `cost: ${formatCostUsd(state.costUsd)}${state.costBudgetUsd === null ? "" : ` / ${formatCostUsd(state.costBudgetUsd)}`}`,
+    `tokens: ${state.tokensUsed ?? 0}${state.tokenBudget == null ? "" : ` / ${state.tokenBudget}`}`,
+    `elapsed: ${state.elapsedMs ?? 0}ms${state.maxDurationMs == null ? "" : ` / ${state.maxDurationMs}ms`}`,
+    `verifies: ${state.verifyRuns ?? 0}${state.maxVerifyRuns == null ? "" : ` / ${state.maxVerifyRuns}`}`,
     `updated: ${state.updatedAt}`,
     `workspace: ${state.workspace}`,
     `verify: ${state.verifyCommand}`,
@@ -387,6 +423,24 @@ async function runPreparedLoop(
           verifyCommand: (opts as LoopOptions).verify,
           maxIterations: (opts as LoopOptions).maxIters ?? 8,
           ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
+          ...((opts as LoopOptions).tokenBudget !== undefined
+            ? { tokenBudget: (opts as LoopOptions).tokenBudget }
+            : {}),
+          ...((opts as LoopOptions).maxDurationSeconds !== undefined
+            ? { maxDurationMs: Math.round((opts as LoopOptions).maxDurationSeconds! * 1_000) }
+            : {}),
+          ...((opts as LoopOptions).maxVerifyRuns !== undefined
+            ? { maxVerifyRuns: (opts as LoopOptions).maxVerifyRuns }
+            : {}),
+          ...((opts as LoopOptions).verifyTimeoutSeconds !== undefined
+            ? { verifyTimeoutMs: Math.round((opts as LoopOptions).verifyTimeoutSeconds! * 1_000) }
+            : {}),
+          ...((opts as LoopOptions).agentTimeoutSeconds !== undefined
+            ? { agentTimeoutMs: Math.round((opts as LoopOptions).agentTimeoutSeconds! * 1_000) }
+            : {}),
+          ...((opts as LoopOptions).agentRetries !== undefined
+            ? { maxAgentRetries: (opts as LoopOptions).agentRetries }
+            : {}),
           approvalMode: "acceptEdits",
           ...((opts as LoopOptions).requirements ? { requirementMode: (opts as LoopOptions).requirements } : {}),
           ...common,

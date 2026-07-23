@@ -199,6 +199,12 @@ type AppStore = {
     verifyCommand: string;
     maxIterations?: number;
     budget?: number;
+    tokenBudget?: number;
+    maxDurationMs?: number;
+    maxVerifyRuns?: number;
+    verifyTimeoutMs?: number;
+    agentTimeoutMs?: number;
+    maxAgentRetries?: number;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
   /** Resumes the persisted loop represented by the active tab's completed result. */
@@ -206,6 +212,9 @@ type AppStore = {
     loopId: string;
     addedIterations?: number;
     addedBudget?: number;
+    addedTokenBudget?: number;
+    addedDurationMs?: number;
+    addedVerifyRuns?: number;
     approveRequirements?: boolean;
   }) => void;
   executePlan: () => void;
@@ -589,7 +598,19 @@ export const useStore = create<AppStore>()((set, get) => {
       return true;
     },
 
-    startLoop: ({ task, verifyCommand, maxIterations, budget, requirementMode }) => {
+    startLoop: ({
+      task,
+      verifyCommand,
+      maxIterations,
+      budget,
+      tokenBudget,
+      maxDurationMs,
+      maxVerifyRuns,
+      verifyTimeoutMs,
+      agentTimeoutMs,
+      maxAgentRetries,
+      requirementMode,
+    }) => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || task.trim() === "" || verifyCommand.trim() === "") return;
       const client = ensureWs(tab.tabId);
@@ -600,6 +621,12 @@ export const useStore = create<AppStore>()((set, get) => {
         verifyCommand,
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         ...(budget !== undefined ? { budget } : {}),
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(maxDurationMs !== undefined ? { maxDurationMs } : {}),
+        ...(maxVerifyRuns !== undefined ? { maxVerifyRuns } : {}),
+        ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs } : {}),
+        ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
+        ...(maxAgentRetries !== undefined ? { maxAgentRetries } : {}),
         ...(requirementMode !== undefined ? { requirementMode } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.
@@ -626,7 +653,15 @@ export const useStore = create<AppStore>()((set, get) => {
       }));
     },
 
-    resumeLoop: ({ loopId, addedIterations, addedBudget, approveRequirements }) => {
+    resumeLoop: ({
+      loopId,
+      addedIterations,
+      addedBudget,
+      addedTokenBudget,
+      addedDurationMs,
+      addedVerifyRuns,
+      approveRequirements,
+    }) => {
       const tab = activeTab(get().tabs);
       if (tab.chat.running || loopId.trim() === "") return;
       const client = ensureWs(tab.tabId);
@@ -636,6 +671,9 @@ export const useStore = create<AppStore>()((set, get) => {
         loopId,
         ...(addedIterations !== undefined ? { addedIterations } : {}),
         ...(addedBudget !== undefined ? { addedBudget } : {}),
+        ...(addedTokenBudget !== undefined ? { addedTokenBudget } : {}),
+        ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
+        ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),
         ...(approveRequirements !== undefined ? { approveRequirements } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         ...overridesOf(tab),

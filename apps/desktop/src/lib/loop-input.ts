@@ -23,3 +23,12 @@ export function parseBudgetInput(raw: string): NumericInput {
   if (!Number.isFinite(value) || value <= 0) return { error: "positive" };
   return { value };
 }
+
+export function parsePositiveIntegerInput(raw: string, allowZero = false): NumericInput {
+  const text = raw.trim();
+  if (text === "") return {};
+  if (!/^[0-9]+$/.test(text)) return { error: "integer" };
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) return { error: "integer" };
+  return { value };
+}

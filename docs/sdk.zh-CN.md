@@ -96,6 +96,13 @@ const result = await runAutoLoop(deps, {
   workspace: process.cwd(),
   verifyCommand: "pnpm test",
   maxIterations: 8,
+  costBudgetUsd: 1,
+  tokenBudget: 100_000,
+  maxDurationMs: 30 * 60_000,
+  maxVerifyRuns: 12,
+  verifyTimeoutMs: 10 * 60_000,
+  agentTimeoutMs: 15 * 60_000,
+  maxAgentRetries: 2,
   approvalMode: "acceptEdits",
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
 });
@@ -105,10 +112,16 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
   workspace: process.cwd(),
   additionalIterations: 4,
   additionalCostBudgetUsd: 0.5,
+  additionalTokenBudget: 50_000,
+  additionalDurationMs: 10 * 60_000,
+  additionalVerifyRuns: 4,
 });
 ```
 
 循环状态以原子方式存储在 `.seekforge/loops/` 下；只有当嵌入方自己拥有等效的持久化编排时，才应设置 `persist: false`。迭代次数硬性上限为 100。持久化的 Loop 持有独占租约；写入失败会通过有界的 `loop.warning` 事件上报，不会掩盖验证结果。
+`LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含
+`budgetReason`）、验证器错误、取消、无进展/迭代耗尽，以及带结构化 provider/session
+错误详情的 `agent_error`。
 
 ## 扩展点
 

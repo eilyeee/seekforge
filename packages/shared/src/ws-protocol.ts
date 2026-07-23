@@ -106,7 +106,19 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
   }
 
   if (type === "loop") {
-    const { task, verifyCommand, maxIterations, budget, requirementMode } = frame;
+    const {
+      task,
+      verifyCommand,
+      maxIterations,
+      budget,
+      tokenBudget,
+      maxDurationMs,
+      maxVerifyRuns,
+      verifyTimeoutMs,
+      agentTimeoutMs,
+      maxAgentRetries,
+      requirementMode,
+    } = frame;
     if (typeof task !== "string" || task.trim().length === 0) return bad("loop.task must be a non-empty string");
     if (typeof verifyCommand !== "string" || verifyCommand.trim().length === 0) {
       return bad("loop.verifyCommand must be a non-empty string");
@@ -122,6 +134,21 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     }
     if (budget !== undefined && (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0)) {
       return bad("loop.budget must be a finite positive number when present");
+    }
+    for (const [name, value, allowZero] of [
+      ["tokenBudget", tokenBudget, false],
+      ["maxDurationMs", maxDurationMs, false],
+      ["maxVerifyRuns", maxVerifyRuns, false],
+      ["verifyTimeoutMs", verifyTimeoutMs, false],
+      ["agentTimeoutMs", agentTimeoutMs, false],
+      ["maxAgentRetries", maxAgentRetries, true],
+    ] as const) {
+      if (
+        value !== undefined &&
+        (typeof value !== "number" || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1))
+      ) {
+        return bad(`loop.${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`);
+      }
     }
     if (
       requirementMode !== undefined &&
@@ -139,7 +166,15 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
   }
 
   if (type === "loop.resume") {
-    const { loopId, addedIterations, addedBudget, approveRequirements } = frame;
+    const {
+      loopId,
+      addedIterations,
+      addedBudget,
+      addedTokenBudget,
+      addedDurationMs,
+      addedVerifyRuns,
+      approveRequirements,
+    } = frame;
     if (typeof loopId !== "string" || !LOOP_ID_RE.test(loopId)) {
       return bad("loop.resume.loopId must be a safe non-empty id");
     }
@@ -160,6 +195,15 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       (typeof addedBudget !== "number" || !Number.isFinite(addedBudget) || addedBudget <= 0)
     ) {
       return bad("loop.resume.addedBudget must be a finite positive number when present");
+    }
+    for (const [name, value] of [
+      ["addedTokenBudget", addedTokenBudget],
+      ["addedDurationMs", addedDurationMs],
+      ["addedVerifyRuns", addedVerifyRuns],
+    ] as const) {
+      if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) {
+        return bad(`loop.resume.${name} must be a positive safe integer`);
+      }
     }
     const wsError = workspaceError(frame, "loop.resume");
     if (wsError) return bad(wsError);

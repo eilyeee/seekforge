@@ -41,6 +41,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       maxCostUsd,
       verifyCommand,
       maxIterations,
+      tokenBudget,
+      maxDurationMs,
+      maxVerifyRuns,
+      verifyTimeoutMs,
+      agentTimeoutMs,
+      maxAgentRetries,
       requirementMode,
       isolation = "auto",
     } = body;
@@ -77,6 +83,24 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     ) {
       sendApiError(res, 400, "bad_request", `maxIterations must be an integer from 1 to ${MAX_LOOP_ITERATIONS}`);
       return true;
+    }
+    for (const [name, value, allowZero] of [
+      ["tokenBudget", tokenBudget, false],
+      ["maxDurationMs", maxDurationMs, false],
+      ["maxVerifyRuns", maxVerifyRuns, false],
+      ["verifyTimeoutMs", verifyTimeoutMs, false],
+      ["agentTimeoutMs", agentTimeoutMs, false],
+      ["maxAgentRetries", maxAgentRetries, true],
+    ] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < (allowZero ? 0 : 1))) {
+        sendApiError(
+          res,
+          400,
+          "bad_request",
+          `${name} must be ${allowZero ? "a non-negative" : "a positive"} safe integer`,
+        );
+        return true;
+      }
     }
     if (
       requirementMode !== undefined &&
@@ -142,6 +166,12 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
               task,
               verifyCommand: verifyCommand as string,
               ...(maxIterations !== undefined ? { maxIterations: maxIterations as number } : {}),
+              ...(tokenBudget !== undefined ? { tokenBudget: tokenBudget as number } : {}),
+              ...(maxDurationMs !== undefined ? { maxDurationMs: maxDurationMs as number } : {}),
+              ...(maxVerifyRuns !== undefined ? { maxVerifyRuns: maxVerifyRuns as number } : {}),
+              ...(verifyTimeoutMs !== undefined ? { verifyTimeoutMs: verifyTimeoutMs as number } : {}),
+              ...(agentTimeoutMs !== undefined ? { agentTimeoutMs: agentTimeoutMs as number } : {}),
+              ...(maxAgentRetries !== undefined ? { maxAgentRetries: maxAgentRetries as number } : {}),
               ...(requirementMode !== undefined ? { requirementMode } : {}),
               costBudgetUsd: maxCostUsd,
               approvalMode: "acceptEdits",

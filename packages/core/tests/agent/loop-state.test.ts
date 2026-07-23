@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -21,6 +22,7 @@ import {
   loadLoopState,
   removeLoopState,
   saveLoopState,
+  createLoopLogWriter,
 } from "../../src/agent/loop-state.js";
 
 describe("loop state persistence", () => {
@@ -30,6 +32,24 @@ describe("loop state persistence", () => {
   });
   afterEach(() => {
     rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("batches and rotates loop logs at the bounded segment size", () => {
+    const writer = createLoopLogWriter(workspace, "loop-rotation");
+    for (let index = 0; index < 300; index++) {
+      writer.append({
+        type: "verify.output",
+        iteration: 1,
+        stream: "stdout",
+        chunk: `${index}:${"x".repeat(16_384)}`,
+      });
+    }
+    writer.close();
+    const target = join(workspace, ".seekforge", "loops", "loop-rotation.log");
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(`${target}.1`)).toBe(true);
+    expect(readFileSync(target, "utf8")).toContain('"type":"verify.output"');
+    expect(readFileSync(`${target}.1`, "utf8")).toContain('"type":"verify.output"');
   });
 
   it("creates, loads, updates, lists, and removes state", () => {

@@ -175,6 +175,12 @@ cooperative cancellation.
 | `--verify <command>` | Required success criterion; exit code 0 passes. |
 | `--max-iters <n>` | Maximum agent iterations; defaults to 8 and cannot exceed 100. |
 | `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
+| `--token-budget <n>` | Stop at cumulative prompt + completion tokens. |
+| `--max-duration <seconds>` | Resume-aware total wall-clock budget. |
+| `--max-verifies <n>` | Maximum verifier executions, including the initial pre-check. |
+| `--verify-timeout <seconds>` | Timeout for one verifier execution. |
+| `--agent-timeout <seconds>` | Timeout for one agent attempt. |
+| `--agent-retries <n>` | Retries for transient network, timeout, and rate-limit failures; defaults to 1. |
 | `--requirements quick\|analyze\|confirm` | `quick` uses verifier-only completion; `analyze` freezes requirements and performs acceptance reviews; `confirm` pauses for explicit approval after analysis. |
 | `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
@@ -182,8 +188,10 @@ cooperative cancellation.
 | `--profile <name>` | Apply a named configuration profile. |
 
 Every invocation persists orchestration state in `.seekforge/loops/`. Use
-`seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters N] [--add-budget USD]` to continue with the saved session, cost, frozen requirements, and
-remaining iterations. For `--worktree` loops, run that command inside the
+`seekforge loop-resume <loop-id>` can add iterations, USD, tokens, duration, or
+verifier runs with `--add-iters`, `--add-budget`, `--add-tokens`,
+`--add-duration`, and `--add-verifies`. It restores worker/reviewer sessions,
+frozen requirements, and cumulative resource use. For `--worktree` loops, run it inside the
 retained worktree shown at startup. Verification output streams while checks run;
 the interactive TUI exposes the same workflow through `/loop`.
 

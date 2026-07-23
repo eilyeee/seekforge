@@ -71,10 +71,9 @@ import { nextFinalizeNudge, type FinalizeKind } from "./finalize.js";
 import {
   ZERO_USAGE,
   addUsage,
-  canonicalArgs,
+  createActionProgressTracker,
   classifyAutoGateResult,
   commandResultSatisfiesGate,
-  detectActionCycle,
   selectAutoGate,
 } from "./loop-logic.js";
 import { buildRelevantFiles, buildRepoOverview, lazyFileGraph, scanRepo } from "./repo-map.js";
@@ -957,8 +956,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           const wrapupInjected = new Set<number>();
           // Stuck detection: signatures (name+args) of tool calls that have
           // FAILED, so an identical re-failure can be caught as a loop.
-          const seenFailedSigs = new Set<string>();
-          const recentActionFingerprints: string[] = [];
+          const actionProgress = createActionProgressTracker();
           let reflectionCooldown = 0;
           // Default-off failure escalation (see AgentCoreDeps): one-shot.
           let escalated = false;
@@ -1511,26 +1509,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             // TUI/desktop backtrack targets all depend on (they count user
             // messages). A resumed run simply replays without it.
             if (reflectionCooldown > 0) reflectionCooldown--;
-            let repeatedFailure = false;
-            for (let i = 0; i < turnCalls.length; i++) {
-              const r = callResults[i];
-              if (!r || r.ok) continue;
-              const sig = `${turnCalls[i]!.name}:${canonicalArgs(turnCalls[i]!.argumentsJson)}`;
-              if (seenFailedSigs.has(sig)) repeatedFailure = true;
-              seenFailedSigs.add(sig);
-            }
-            const turnFingerprint =
-              turnCalls
-                .map((call, index) => {
-                  const result = callResults[index];
-                  const outcome = result?.ok ? "ok" : `error:${result?.error?.code ?? "unknown"}`;
-                  return `${call.name}:${canonicalArgs(call.argumentsJson)}:${outcome}`;
-                })
-                .sort()
-                .join("|") + `:files=${[...changedFiles].sort().join(",")}`;
-            recentActionFingerprints.push(turnFingerprint);
-            if (recentActionFingerprints.length > 8) recentActionFingerprints.shift();
-            const cyclePeriod = detectActionCycle(recentActionFingerprints);
+            const { repeatedFailure, cyclePeriod } = actionProgress.observe(turnCalls, callResults, changedFiles);
             const cyclicStagnation = cyclePeriod !== null;
             const stuck = repeatedFailure || cyclicStagnation;
             if (stuck && reflectionCooldown === 0) {

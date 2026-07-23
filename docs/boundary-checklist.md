@@ -1966,6 +1966,43 @@ it, every no-op iteration looks like product progress and loop guards never fire
 - **Caught:** skill outcome rows in `.seekforge/skills-usage.jsonl` prevented
   Auto-Loop `no_progress` detection.
 
+## 154. Orchestrators must consume explicit child terminal events
+
+An async event stream can end normally after reporting `session.failed`. Treating
+stream exhaustion as success sends broken work into later gates and destroys the
+original failure classification.
+
+- **Do:** record completed/failed terminal events explicitly, retry only a bounded
+  transient taxonomy, and preserve the original error in the orchestration result.
+- **Caught:** Auto-Loop ignored edit-agent `session.failed` and still ran the verifier.
+
+## 155. Progress persistence must not turn telemetry frequency into write frequency
+
+Cumulative usage updates can arrive once per model turn. Atomically rewriting the
+whole state snapshot for every update amplifies foreground filesystem latency.
+
+- **Do:** merge frequent snapshots behind a short bounded checkpoint interval and
+  force a synchronous flush at iteration, cancellation, error, and terminal boundaries.
+- **Caught:** Auto-Loop rewrote its state file on every `usage.updated` event.
+
+## 156. Observability callbacks are not lifecycle authority
+
+A rendering or embedding callback can throw. Letting that exception escape abandons
+the operation while its durable state still says `running`.
+
+- **Do:** isolate observer exceptions, disable the broken observer, record a bounded
+  warning, and continue the authoritative operation.
+- **Caught:** an Auto-Loop `onEvent` exception could interrupt the loop and release its lease.
+
+## 157. Bounded event counts also need a byte budget and retention policy
+
+An event-count cap does not bound storage when each event carries a large payload;
+an append-only file remains unbounded across iterations and resumes.
+
+- **Do:** cap payload bytes, batch writes, rotate by total bytes, retain a fixed
+  number of segments, and flush at lifecycle boundaries.
+- **Caught:** verifier output could append roughly 1.6 MiB per check to an unlimited Loop log.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

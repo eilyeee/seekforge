@@ -156,13 +156,22 @@
 | `--verify <command>` | 必填的成功标准；退出码 0 视为通过。 |
 | `--max-iters <n>` | agent 迭代上限；默认 8，不能超过 100。 |
 | `--budget <usd>` | 观测到的累计用量达到该值时停止后续工作。在途的 provider 请求可能使最终账单略微超出。 |
+| `--token-budget <n>` | 累计 prompt + completion Token 达到上限时停止。 |
+| `--max-duration <seconds>` | 可跨恢复累计的总墙钟时间。 |
+| `--max-verifies <n>` | 校验执行次数上限，包含首次预检查。 |
+| `--verify-timeout <seconds>` | 单次校验超时。 |
+| `--agent-timeout <seconds>` | 单次 Agent 尝试超时。 |
+| `--agent-retries <n>` | 网络、超时和限流瞬时错误的重试次数；默认 1。 |
 | `--requirements quick\|analyze\|confirm` | `quick` 仅依据验证命令；`analyze` 冻结需求并执行验收审查；`confirm` 在分析后暂停，等待显式批准。 |
 | `--worktree [name]` | 在新建并保留的 git worktree 中运行；可选择其分支后缀。 |
 | `-y, --yes` | 省去自主编辑提示；循环运行本就使用 `acceptEdits`。 |
 | `-m, --model <model>` | 覆盖已配置的模型。 |
 | `--profile <name>` | 应用一个具名配置 profile。 |
 
-每次调用都会把编排状态持久化到 `.seekforge/loops/`。用 `seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters N] [--add-budget USD]` 可以带着保存的会话、成本、冻结需求和剩余迭代次数继续。对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流。
+每次调用都会把编排状态持久化到 `.seekforge/loops/`。`loop-resume` 可用
+`--add-iters`、`--add-budget`、`--add-tokens`、`--add-duration` 和
+`--add-verifies` 追加额度，并恢复 worker/reviewer 会话、冻结需求与累计资源用量。
+对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流。
 
 `seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录。`seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的 worktree 因其改动会被丢弃，需要显式加 `--force`。
 

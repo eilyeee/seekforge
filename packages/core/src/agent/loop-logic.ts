@@ -1,4 +1,5 @@
-import type { ToolResult } from "@seekforge/shared";
+import type { ProviderToolCall, ToolResult } from "@seekforge/shared";
+import { createHash } from "node:crypto";
 import { commandInvokes } from "../tools/run-command.js";
 import type { FinalizeKind } from "./finalize.js";
 
@@ -27,6 +28,67 @@ export function canonicalArgs(argumentsJson: string | undefined): string {
   } catch {
     return argumentsJson;
   }
+}
+
+function resultDigest(result: ToolResult | undefined): string {
+  if (!result) return "missing";
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(
+      sortKeys({ ok: result.ok, error: result.error?.code, data: result.data, meta: result.meta }),
+    );
+  } catch {
+    serialized = `${result.ok}:${result.error?.code ?? "unknown"}`;
+  }
+  const bounded =
+    serialized.length <= 65_536 ? serialized : `${serialized.slice(0, 32_768)}${serialized.slice(-32_768)}`;
+  return createHash("sha256").update(bounded).digest("hex").slice(0, 16);
+}
+
+/** Stable turn signature that includes bounded tool outcomes, not only filenames. */
+export function buildTurnProgressFingerprint(
+  calls: readonly ProviderToolCall[],
+  results: readonly (ToolResult | undefined)[],
+  changedFiles: Iterable<string>,
+): string {
+  const actions = calls
+    .map((call, index) => {
+      const result = results[index];
+      const outcome = result?.ok ? "ok" : `error:${result?.error?.code ?? "unknown"}`;
+      return `${call.name}:${canonicalArgs(call.argumentsJson)}:${outcome}:${resultDigest(result)}`;
+    })
+    .sort()
+    .join("|");
+  return `${actions}:files=${[...changedFiles].sort().join(",")}`;
+}
+
+export type ActionProgress = { repeatedFailure: boolean; cyclePeriod: number | null };
+
+/** Run-local bounded state for repeated failures and cyclic tool behavior. */
+export function createActionProgressTracker(maxHistory = 8): {
+  observe: (
+    calls: readonly ProviderToolCall[],
+    results: readonly (ToolResult | undefined)[],
+    changedFiles: Iterable<string>,
+  ) => ActionProgress;
+} {
+  const seenFailed = new Set<string>();
+  const history: string[] = [];
+  return {
+    observe: (calls, results, changedFiles) => {
+      let repeatedFailure = false;
+      for (let index = 0; index < calls.length; index++) {
+        const result = results[index];
+        if (!result || result.ok) continue;
+        const signature = `${calls[index]!.name}:${canonicalArgs(calls[index]!.argumentsJson)}`;
+        if (seenFailed.has(signature)) repeatedFailure = true;
+        seenFailed.add(signature);
+      }
+      history.push(buildTurnProgressFingerprint(calls, results, changedFiles));
+      if (history.length > maxHistory) history.splice(0, history.length - maxHistory);
+      return { repeatedFailure, cyclePeriod: detectActionCycle(history) };
+    },
+  };
 }
 
 /** Detects a repeated suffix cycle (A→A, A→B→A→B, up to maxPeriod). */
