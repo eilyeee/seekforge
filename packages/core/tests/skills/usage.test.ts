@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { logSkillUsage } from "../../src/skills/index.js";
+import { logSkillOutcome, logSkillUsage, readSkillEffectiveness } from "../../src/skills/index.js";
 import type { SkillSelection } from "../../src/skills/index.js";
 import { makeSkill, makeTempDir } from "./helpers.js";
 
@@ -56,5 +56,26 @@ describe("logSkillUsage", () => {
     fs.symlinkSync(outside, path.join(ws, ".seekforge", "skills-usage.jsonl"));
     expect(() => logSkillUsage(ws, "s1", [sel("a")])).not.toThrow();
     expect(fs.readFileSync(outside, "utf8")).toBe("sentinel\n");
+  });
+
+  it("correlates terminal outcomes and learns only after three samples", () => {
+    const ws = makeTempDir();
+    for (let index = 0; index < 3; index++) {
+      const sessionId = `s${index}`;
+      logSkillUsage(ws, sessionId, [sel("reliable")]);
+      logSkillOutcome(ws, sessionId, ["reliable"], { success: true, toolCalls: 2, costUsd: 0.01 });
+    }
+    const [stats] = readSkillEffectiveness(ws);
+    expect(stats).toMatchObject({
+      skillId: "reliable",
+      selections: 3,
+      completedOutcomes: 3,
+      successes: 3,
+      successRate: 1,
+      averageToolCalls: 2,
+      averageCostUsd: 0.01,
+    });
+    expect(stats!.learnedAdjustment).toBeGreaterThan(0);
+    expect(stats!.learnedAdjustment).toBeLessThanOrEqual(0.75);
   });
 });

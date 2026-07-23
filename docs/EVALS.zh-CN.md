@@ -101,7 +101,8 @@ Git SHA、数据集 SHA-256、Node 版本和平台。这样既不破坏旧的报
 ### 变体（用于 `--variant` / `--ab`）
 
 `--list-variants` 打印变体注册表。当前变体（见 `src/variants.ts`）：
-`control`（基线）、`terse-prompt`、`llm-compaction`、`no-memory`、
+`control`（基线）、`terse-prompt`、`llm-compaction`、`no-memory`、**`no-skills`**
+（禁用技能选择和注入，用于测量其净效果）、
 **`verify-gate`**（启用自验证 finalize 门禁，`verifyCommand=npm test`）、
 **`no-auto-verify`**（verify-gate 但仅提示不强制）、**`no-retrieval`**（禁用
 任务相关候选清单）、**`review-gate`**（启用 `finalizeReview`）、

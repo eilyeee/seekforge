@@ -10,11 +10,14 @@ import type { Skill, SkillScope } from "./types.js";
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 const skillJsonSchema = z.object({
+  apiVersion: z.literal(1).optional(),
   id: z.string().regex(SKILL_ID_RE),
   name: boundedText(120),
   description: z.string().max(2_000),
   tags: z.array(boundedText(100)).max(64),
   triggers: z.array(boundedText(200)).max(64),
+  negativeTriggers: z.array(boundedText(200)).max(64).optional(),
+  taskTypes: z.array(boundedText(50)).max(32).optional(),
   appliesTo: z
     .object({
       languages: z.array(boundedText(50)).max(32).optional(),
@@ -25,7 +28,12 @@ const skillJsonSchema = z.object({
   priority: z.number().optional(),
   enabled: z.boolean().optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
+  dependsOn: z.array(z.string().regex(SKILL_ID_RE)).max(32).optional(),
+  conflictsWith: z.array(z.string().regex(SKILL_ID_RE)).max(32).optional(),
+  order: z.number().int().min(-10_000).max(10_000).optional(),
 });
+
+export const CURRENT_SKILL_API_VERSION = 1 as const;
 
 export const MAX_SKILL_DEFINITION_BYTES = 256 * 1024;
 const MAX_SKILL_METADATA_BYTES = 64 * 1024;
@@ -36,7 +44,15 @@ export type SkillDiagnostic = {
   scope: SkillScope;
   path: string;
   id?: string;
-  code: "invalid_root" | "invalid_id" | "invalid_metadata" | "missing_definition" | "invalid_definition";
+  code:
+    | "invalid_root"
+    | "invalid_id"
+    | "invalid_metadata"
+    | "missing_definition"
+    | "invalid_definition"
+    | "legacy_metadata"
+    | "missing_dependency"
+    | "dependency_cycle";
   message: string;
 };
 export type SkillLoadResult = { skills: Skill[]; diagnostics: SkillDiagnostic[] };
@@ -61,7 +77,46 @@ export function loadSkillsDetailedFromDirs(dirs: SkillsDir[]): SkillLoadResult {
     diagnostics.push(...loaded.diagnostics);
     for (const skill of loaded.skills) byId.set(skill.id, skill);
   }
-  return { skills: [...byId.values()].filter((skill) => skill.enabled), diagnostics };
+  const skills = [...byId.values()].filter((skill) => skill.enabled);
+  const enabled = new Set(skills.map((skill) => skill.id));
+  for (const skill of skills) {
+    for (const dependency of skill.dependsOn ?? []) {
+      if (!enabled.has(dependency)) {
+        diagnostics.push({
+          scope: skill.scope,
+          path: skill.id,
+          id: skill.id,
+          code: "missing_dependency",
+          message: `dependency ${dependency} is missing or disabled`,
+        });
+      }
+    }
+  }
+  const state = new Map<string, "visiting" | "done">();
+  const cyclic = new Set<string>();
+  const visit = (id: string, stack: string[]): void => {
+    if (state.get(id) === "done") return;
+    if (state.get(id) === "visiting") {
+      for (const member of stack.slice(stack.indexOf(id))) cyclic.add(member);
+      return;
+    }
+    state.set(id, "visiting");
+    const skill = byId.get(id);
+    for (const dependency of skill?.dependsOn ?? []) if (enabled.has(dependency)) visit(dependency, [...stack, id]);
+    state.set(id, "done");
+  };
+  for (const skill of skills) visit(skill.id, []);
+  for (const id of [...cyclic].sort()) {
+    const skill = byId.get(id)!;
+    diagnostics.push({
+      scope: skill.scope,
+      path: id,
+      id,
+      code: "dependency_cycle",
+      message: "skill dependency graph contains a cycle",
+    });
+  }
+  return { skills, diagnostics };
 }
 
 function readSkillsRoot({ scope, path: root }: SkillsDir): SkillLoadResult {
@@ -102,7 +157,7 @@ function readSkillsRoot({ scope, path: root }: SkillsDir): SkillLoadResult {
     }
     const loaded = readSkillDir(scope, entry.name, path.join(rootReal, entry.name));
     if (loaded.skill) skills.push(loaded.skill);
-    if (loaded.diagnostic) diagnostics.push(loaded.diagnostic);
+    if (loaded.diagnostics) diagnostics.push(...loaded.diagnostics);
   }
   return { skills, diagnostics };
 }
@@ -115,9 +170,9 @@ function readSkillDir(
   scope: SkillScope,
   directoryId: string,
   dir: string,
-): { skill?: Skill; diagnostic?: SkillDiagnostic } {
+): { skill?: Skill; diagnostics?: SkillDiagnostic[] } {
   const invalid = (code: SkillDiagnostic["code"], message: string) => ({
-    diagnostic: { scope, path: dir, id: directoryId, code, message },
+    diagnostics: [{ scope, path: dir, id: directoryId, code, message }],
   });
   let raw: unknown;
   try {
@@ -151,15 +206,21 @@ function readSkillDir(
     }
     return {
       skill: {
+        apiVersion: CURRENT_SKILL_API_VERSION,
         id: marker.data.id,
         scope,
         name: marker.data.id,
         description: "",
         tags: [],
         triggers: [],
+        negativeTriggers: [],
+        taskTypes: [],
         priority: 50,
         enabled: false,
         risk: "medium",
+        dependsOn: [],
+        conflictsWith: [],
+        order: 0,
         content: "",
       },
     };
@@ -183,12 +244,15 @@ function readSkillDir(
   }
   return {
     skill: {
+      apiVersion: CURRENT_SKILL_API_VERSION,
       id: json.id,
       scope,
       name: json.name,
       description: json.description,
       tags: json.tags,
       triggers: json.triggers,
+      negativeTriggers: json.negativeTriggers ?? [],
+      taskTypes: json.taskTypes ?? [],
       appliesTo: json.appliesTo,
       // Clamp to [0,100]: select.ts folds priority/100 into the score as a
       // tie-breaker, so an out-of-range value (e.g. a crafted priority: 500) would
@@ -196,8 +260,24 @@ function readSkillDir(
       priority: Math.max(0, Math.min(100, json.priority ?? 50)),
       enabled: json.enabled ?? true,
       risk: json.risk ?? "medium",
+      dependsOn: json.dependsOn ?? [],
+      conflictsWith: json.conflictsWith ?? [],
+      order: json.order ?? 0,
       content,
     },
+    ...(json.apiVersion === undefined
+      ? {
+          diagnostics: [
+            {
+              scope,
+              path: dir,
+              id: directoryId,
+              code: "legacy_metadata" as const,
+              message: "skill.json has no apiVersion; run skill repair to migrate it to version 1",
+            },
+          ],
+        }
+      : {}),
   };
 }
 

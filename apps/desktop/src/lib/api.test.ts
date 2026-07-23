@@ -78,6 +78,8 @@ describe("captured workspace routing", () => {
     await api.skillCreate("new-skill", ws);
     await api.skillImport("/tmp/SKILL.md", false, ws);
     await api.skillDelete("skill/1", "project", ws);
+    await api.skillStats(ws);
+    await api.skillRepair(false, "skill/1", ws);
     await api.doctor(ws);
     await api.tree("src dir", ws);
     await api.readFile("src/a b.ts", ws);
@@ -101,6 +103,8 @@ describe("captured workspace routing", () => {
       { url: "/api/skills?ws=captured-workspace", method: "POST" },
       { url: "/api/skills/import?ws=captured-workspace", method: "POST" },
       { url: "/api/skills/skill%2F1?scope=project&ws=captured-workspace", method: "DELETE" },
+      { url: "/api/skills/stats?ws=captured-workspace", method: "GET" },
+      { url: "/api/skills/repair?ws=captured-workspace", method: "POST" },
       { url: "/api/doctor?ws=captured-workspace", method: "GET" },
       { url: "/api/tree?path=src%20dir&ws=captured-workspace", method: "GET" },
       { url: "/api/file?path=src%2Fa%20b.ts&ws=captured-workspace", method: "GET" },

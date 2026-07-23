@@ -12,14 +12,20 @@ describe("createSkillScaffold", () => {
 
     const json = JSON.parse(fs.readFileSync(path.join(dir, "skill.json"), "utf8"));
     expect(json).toEqual({
+      apiVersion: 1,
       id: "my-skill",
       name: "my-skill",
       description: "",
       tags: [],
       triggers: [],
+      negativeTriggers: [],
+      taskTypes: [],
       priority: 50,
       enabled: true,
       risk: "medium",
+      dependsOn: [],
+      conflictsWith: [],
+      order: 0,
     });
 
     const md = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");

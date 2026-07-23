@@ -57,6 +57,13 @@ describe("variant registry", () => {
     expect(out.taskSuffix).toBe("keep");
   });
 
+  it("no-skills disables skill injection only", () => {
+    expect(getVariant("no-skills").apply({ taskSuffix: "keep" })).toEqual({
+      taskSuffix: "keep",
+      injectSkills: false,
+    });
+  });
+
   it("review-gate enables finalizeReview only", () => {
     const out = getVariant("review-gate").apply({ compaction: "mechanical" });
     expect(out.finalizeReview).toBe(true);

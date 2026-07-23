@@ -134,6 +134,8 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/diagnostics | `{diagnostics: SkillDiagnostic[]}` for malformed, mismatched, linked, or otherwise unsafe skill installations |
+| GET /api/skills/stats | `{stats: SkillEffectiveness[]}` derived from bounded local selection/outcome telemetry |
+| POST /api/skills/repair | body `{global?, id?}` → atomically add the current API version to safely repairable legacy metadata |
 | GET /api/skills/:id | full `Skill` |
 | POST /api/skills | body `{id}` → scaffold a project skill under the repository/workspace mutation guard |
 | POST /api/skills/import | body `{path, global?}` → atomically import an external skill; project imports are workspace-coordinated |

@@ -19,6 +19,8 @@ import {
   listPlugins,
   removePlugin,
   removeSkill,
+  readSkillEffectiveness,
+  repairSkills,
   resolveSkillsStoreRoot,
   seekforgeHome,
   setEvolutionProposalStatus,
@@ -119,6 +121,29 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
 
   if (method === "GET" && path === "/api/skills/diagnostics") {
     return sendJson(res, 200, { diagnostics: loadSkillsDetailed(workspace).diagnostics });
+  }
+
+  if (method === "GET" && path === "/api/skills/stats") {
+    return sendJson(res, 200, { stats: readSkillEffectiveness(workspace) });
+  }
+
+  if (method === "POST" && path === "/api/skills/repair") {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const { global, id } = (body ?? {}) as { global?: unknown; id?: unknown };
+    if ((global !== undefined && typeof global !== "boolean") || (id !== undefined && typeof id !== "string")) {
+      return sendApiError(res, 400, "bad_request", "body must be {global?: boolean, id?: string}");
+    }
+    try {
+      const mutate = async () => repairSkills(workspace, { global: global === true, ...(id ? { id } : {}) });
+      const result = global === true ? await mutate() : await rest.coordinator.withRepository(workspace, mutate);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot repair skills while the workspace is active");
+      }
+      return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
   }
 
   // Import an external (Claude-Code-style) SKILL.md. Checked before the

@@ -34,7 +34,14 @@ import {
   resolveMemoryMaintenanceConfig,
   type MemoryMaintenanceConfig,
 } from "../memory/index.js";
-import { buildSkillBrief, loadSkills, logSkillUsage, selectSkills } from "../skills/index.js";
+import {
+  buildSkillBrief,
+  loadSkills,
+  logSkillOutcome,
+  logSkillUsage,
+  selectSkills,
+  type Skill,
+} from "../skills/index.js";
 import {
   AGENT_RESULT_TOOL,
   AGENT_SEND_TOOL,
@@ -193,6 +200,10 @@ export type AgentCoreDeps = {
   allowedTools?: string[];
   /** One run-local plugin contribution snapshot shared by this Agent assembly. */
   pluginContributions?: PluginContributions;
+  /** Content-level skill snapshot; prevents mid-run store edits from changing prompts. */
+  skillSnapshot?: readonly Skill[];
+  /** Disable skill selection/injection for controlled evaluations. Default true. */
+  injectSkills?: boolean;
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
@@ -439,6 +450,24 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   // so it never affects a normally-configured window.)
   const budgetTokens = Math.max(1, Math.floor(windowTokens * limits.contextBudgetRatio) - OUTPUT_RESERVE_TOKENS);
   const depth = deps._depth ?? 0;
+  const skillSnapshot = deps.skillSnapshot?.map((skill) => ({
+    ...skill,
+    tags: [...skill.tags],
+    triggers: [...skill.triggers],
+    ...(skill.negativeTriggers ? { negativeTriggers: [...skill.negativeTriggers] } : {}),
+    ...(skill.taskTypes ? { taskTypes: [...skill.taskTypes] } : {}),
+    ...(skill.dependsOn ? { dependsOn: [...skill.dependsOn] } : {}),
+    ...(skill.conflictsWith ? { conflictsWith: [...skill.conflictsWith] } : {}),
+    ...(skill.appliesTo
+      ? {
+          appliesTo: {
+            ...(skill.appliesTo.languages ? { languages: [...skill.appliesTo.languages] } : {}),
+            ...(skill.appliesTo.frameworks ? { frameworks: [...skill.appliesTo.frameworks] } : {}),
+            ...(skill.appliesTo.filePatterns ? { filePatterns: [...skill.appliesTo.filePatterns] } : {}),
+          },
+        }
+      : {}),
+  }));
   const confirmQueue = deps._confirmQueue ?? createConfirmQueue();
   // dispatch_agent is only advertised at depth 0 — dispatched runs never recurse.
   const roster: AgentDefinition[] = depth === 0 ? (deps.subagents ?? []) : [];
@@ -636,9 +665,11 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         let runTurnIndex = 0;
         let messages: ChatMessage[];
         const skillSelections =
-          input.systemPromptOverride !== undefined || (input.mode === "ask" && !input.plan)
+          input.systemPromptOverride !== undefined ||
+          (input.mode === "ask" && !input.plan) ||
+          deps.injectSkills === false
             ? []
-            : selectSkills(input.task, loadSkills(input.projectPath, deps.pluginContributions), {
+            : selectSkills(input.task, skillSnapshot ?? loadSkills(input.projectPath, deps.pluginContributions), {
                 workspace: input.projectPath,
               });
         if (skillSelections.length > 0) {
@@ -825,6 +856,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         let usage = ZERO_USAGE;
         let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
         let toolCallCount = 0;
+        let turnsUsed = 0;
         const changedFiles = new Set<string>();
         let workspaceMutationCount = 0;
         const commandsRun: string[] = [];
@@ -943,6 +975,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           let lintRanSinceEdit = false;
 
           for (let turn = 0; turn < limits.maxAgentTurns; turn++) {
+            turnsUsed = turn + 1;
             throwIfCancelled();
             // Surface events from background dispatches between turns.
             for (const ev of queue.drainNow()) yield ev;
@@ -1603,6 +1636,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           });
 
           sessionEndStatus = "completed";
+          logSkillOutcome(
+            input.projectPath,
+            sessionId,
+            skillSelections.map((selection) => selection.skill.id),
+            {
+              success: true,
+              ...(deps.verifyCommand ? { verified: workspaceMutationCount === 0 || verifyRanSinceEdit } : {}),
+              turns: turnsUsed,
+              toolCalls: toolCallCount,
+              costUsd: usage.costUsd,
+            },
+          );
           yield emit({ type: "session.completed", report });
           // stop fires after a SUCCESSFUL top-level completion only (never on
           // failure/cancel — sessionEnd covers those). Advisory.
@@ -1634,6 +1679,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             ...(lastPlanItems ? { plan: lastPlanItems } : {}),
           });
           const cancelled = code === "cancelled";
+          if (!cancelled) {
+            logSkillOutcome(
+              input.projectPath,
+              sessionId,
+              skillSelections.map((selection) => selection.skill.id),
+              { success: false, verified: false, turns: turnsUsed, toolCalls: toolCallCount, costUsd: usage.costUsd },
+            );
+          }
           yield emit({
             type: "session.failed",
             error: {

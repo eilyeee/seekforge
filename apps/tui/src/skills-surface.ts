@@ -8,7 +8,13 @@
  * disabled flag: a builtin id absent from the loaded set was disabled via an
  * override marker (see core skills/manage.ts).
  */
-import { BUILTIN_SKILLS, loadSkills, loadSkillsDetailed, type PluginContributions } from "@seekforge/core";
+import {
+  BUILTIN_SKILLS,
+  loadSkills,
+  loadSkillsDetailed,
+  readSkillEffectiveness,
+  type PluginContributions,
+} from "@seekforge/core";
 
 /** Structural row for the /skills list; mapped from core's Skill. */
 export type SkillRow = {
@@ -16,6 +22,8 @@ export type SkillRow = {
   description?: string;
   scope?: string;
   disabled?: boolean;
+  selections?: number;
+  successRate?: number;
 };
 
 /** Collapses whitespace runs and caps to `max` chars with an ellipsis. */
@@ -38,7 +46,11 @@ export function formatSkillLines(skills: ReadonlyArray<SkillRow>): string[] {
     const desc = s.description ? `  ${collapse(s.description, 60)}` : "";
     const builtin = s.scope === "builtin" ? "  [builtin]" : "";
     const disabled = s.disabled ? "  [disabled]" : "";
-    return `${s.id}${scope}${desc}${builtin}${disabled}`;
+    const stats =
+      s.selections === undefined
+        ? ""
+        : `  [used ${s.selections}${s.successRate === undefined ? "" : `, ${Math.round(s.successRate * 100)}% success`}]`;
+    return `${s.id}${scope}${desc}${builtin}${disabled}${stats}`;
   });
 }
 
@@ -51,12 +63,15 @@ export function formatSkillLines(skills: ReadonlyArray<SkillRow>): string[] {
  */
 export function loadSkillsWithStatus(workspace: string, contributions?: PluginContributions): SkillRow[] {
   const loaded = loadSkills(workspace, contributions);
+  const stats = new Map(readSkillEffectiveness(workspace).map((row) => [row.skillId, row]));
   const loadedIds = new Set(loaded.map((s) => s.id));
   const rows: SkillRow[] = loaded.map((s) => ({
     id: s.id,
     description: s.description,
     scope: s.scope,
     disabled: false,
+    ...(stats.get(s.id)?.selections !== undefined ? { selections: stats.get(s.id)!.selections } : {}),
+    ...(stats.get(s.id)?.successRate !== undefined ? { successRate: stats.get(s.id)!.successRate } : {}),
   }));
   for (const builtin of BUILTIN_SKILLS) {
     if (loadedIds.has(builtin.id)) continue;

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUILTIN_SKILLS, selectSkills } from "../../src/skills/index.js";
+import { BUILTIN_SKILLS, clearSkillSignalCache, selectSkills } from "../../src/skills/index.js";
 import { makeSkill, makeTempDir } from "./helpers.js";
 
 describe("selectSkills", () => {
@@ -99,5 +99,44 @@ describe("selectSkills", () => {
   it("validates the caller-provided selection cap", () => {
     expect(() => selectSkills("fix", [], { max: -1 })).toThrow(RangeError);
     expect(() => selectSkills("fix", [], { max: 65 })).toThrow(RangeError);
+  });
+
+  it("uses negative triggers as a hard automatic-selection veto", () => {
+    const skill = makeSkill("backend-only", { triggers: ["fix"], negativeTriggers: ["frontend"] });
+    expect(selectSkills("fix the frontend", [skill])).toEqual([]);
+    expect(selectSkills("fix the backend", [skill])).toHaveLength(1);
+  });
+
+  it("retrieves a skill from descriptive content when metadata has no explicit match", () => {
+    const skill = makeSkill("database-tuning", {
+      description: "Diagnose slow PostgreSQL query plans and missing indexes",
+      content: "# Database tuning\n\n## Procedure\n\nInspect PostgreSQL explain plans and index selectivity.\n",
+    });
+    const selected = selectSkills("Our PostgreSQL query plan is slow", [skill]);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]!.reason).toMatch(/lexical|semantic/);
+  });
+
+  it("injects dependencies first and resolves conflicts by ranking", () => {
+    const base = makeSkill("base", { order: 10 });
+    const preferred = makeSkill("preferred", {
+      triggers: ["ship"],
+      dependsOn: ["base"],
+      conflictsWith: ["legacy"],
+    });
+    const legacy = makeSkill("legacy", { triggers: ["ship"], priority: 10, conflictsWith: ["preferred"] });
+    expect(selectSkills("ship it", [legacy, preferred, base], { max: 3 }).map((item) => item.skill.id)).toEqual([
+      "base",
+      "preferred",
+    ]);
+  });
+
+  it("invalidates cached workspace signals after a directory identity changes", () => {
+    const ws = makeTempDir();
+    const skill = makeSkill("rust", { appliesTo: { languages: ["rust"] } });
+    clearSkillSignalCache();
+    expect(selectSkills("anything", [skill], { workspace: ws })).toEqual([]);
+    fs.writeFileSync(path.join(ws, "main.rs"), "fn main() {}\n");
+    expect(selectSkills("anything", [skill], { workspace: ws })).toHaveLength(1);
   });
 });

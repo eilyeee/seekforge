@@ -8,6 +8,7 @@ import {
   createRuntimeClient,
   loadMcpToolSpecs,
   loadPluginContributions,
+  loadSkills,
   mergePluginHooks,
   mergePluginMcpServers,
   wrapProviderWithCache,
@@ -117,6 +118,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
     pluginContributions,
+    skillSnapshot: loadSkills(workspace, pluginContributions),
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
   };

@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
 import { writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
+import { CURRENT_SKILL_API_VERSION } from "./load.js";
 import { SKILL_ID_RE, skillsStoreRoot, withSkillMutation } from "./storage.js";
 
 export type ManageSkillOptions = { global?: boolean };
@@ -129,6 +130,56 @@ export function setSkillEnabled(
 }
 
 export type RemoveSkillResult = { id: string; path: string };
+
+export type RepairSkillsResult = {
+  repaired: Array<{ id: string; path: string }>;
+  skipped: Array<{ id: string; reason: string }>;
+};
+
+/** Safely migrates legacy object-shaped skill.json files to the current API version. */
+export function repairSkills(workspace: string, opts: ManageSkillOptions & { id?: string } = {}): RepairSkillsResult {
+  if (opts.id !== undefined) requireSkillId(opts.id);
+  const global = opts.global ?? false;
+  return withSkillMutation(workspace, global, () => {
+    const root = skillsStoreRoot(workspace, global, false);
+    if (!root) return { repaired: [], skipped: [] };
+    const ids = opts.id
+      ? [opts.id]
+      : fs
+          .readdirSync(root, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory() && SKILL_ID_RE.test(entry.name))
+          .map((entry) => entry.name)
+          .sort();
+    const result: RepairSkillsResult = { repaired: [], skipped: [] };
+    for (const id of ids) {
+      const jsonPath = path.join(root, id, "skill.json");
+      if (!skillDirExists(root, id)) {
+        result.skipped.push({ id, reason: "missing physical skill.json" });
+        continue;
+      }
+      try {
+        const value = JSON.parse(readUtf8FileBoundedSync(jsonPath, MAX_SKILL_METADATA_BYTES)) as unknown;
+        if (typeof value !== "object" || value === null || Array.isArray(value)) {
+          result.skipped.push({ id, reason: "metadata is not an object" });
+          continue;
+        }
+        const metadata = value as Record<string, unknown>;
+        if (metadata.apiVersion !== undefined && metadata.apiVersion !== CURRENT_SKILL_API_VERSION) {
+          result.skipped.push({ id, reason: `unsupported apiVersion ${String(metadata.apiVersion)}` });
+          continue;
+        }
+        if (metadata.apiVersion === CURRENT_SKILL_API_VERSION) continue;
+        metadata.apiVersion = CURRENT_SKILL_API_VERSION;
+        metadata.id = id;
+        writeWorkspaceStateFileAtomic(root, path.join(id, "skill.json"), `${JSON.stringify(metadata, null, 2)}\n`);
+        result.repaired.push({ id, path: jsonPath });
+      } catch (error) {
+        result.skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return result;
+  });
+}
 
 /**
  * Deletes a project (default) or global skill directory. Builtins cannot be

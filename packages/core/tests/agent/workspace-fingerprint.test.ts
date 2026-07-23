@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,5 +34,15 @@ describe("workspaceFingerprint", () => {
     writeFileSync(large, "");
     truncateSync(large, 65 * 1024 * 1024);
     await expect(workspaceFingerprint(root)).resolves.toBeNull();
+  });
+
+  it("ignores generated skill effectiveness telemetry", async () => {
+    const root = workspace();
+    writeFileSync(join(root, "source.ts"), "one\n");
+    const before = await workspaceFingerprint(root);
+    mkdirSync(join(root, ".seekforge"));
+    writeFileSync(join(root, ".seekforge", "skills-usage.jsonl"), '{"type":"outcome"}\n');
+    const after = await workspaceFingerprint(root);
+    expect(after).toBe(before);
   });
 });

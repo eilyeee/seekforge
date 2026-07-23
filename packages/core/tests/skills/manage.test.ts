@@ -1,7 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUILTIN_SKILLS, loadSkillsFromDirs, removeSkill, setSkillEnabled } from "../../src/skills/index.js";
+import {
+  BUILTIN_SKILLS,
+  loadSkillsFromDirs,
+  removeSkill,
+  repairSkills,
+  setSkillEnabled,
+} from "../../src/skills/index.js";
 import { makeTempDir, skillJson, writeSkillDir } from "./helpers.js";
 
 const MD = "# Skill\n\n## Procedure\n\n1. do it\n";
@@ -101,5 +107,27 @@ describe("removeSkill", () => {
   it("throws on an unknown id", () => {
     const ws = makeTempDir();
     expect(() => removeSkill(ws, "ghost")).toThrow(/unknown skill/i);
+  });
+});
+
+describe("repairSkills", () => {
+  it("migrates legacy object metadata without replacing user fields", () => {
+    const ws = makeTempDir();
+    const root = path.join(ws, ".seekforge", "skills");
+    writeSkillDir(root, "alpha", skillJson("alpha", { custom: "kept" }), MD);
+    const result = repairSkills(ws);
+    expect(result.repaired.map((item) => item.id)).toEqual(["alpha"]);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "alpha", "skill.json"), "utf8"))).toMatchObject({
+      apiVersion: 1,
+      id: "alpha",
+      custom: "kept",
+    });
+  });
+
+  it("skips scalar metadata instead of inventing a definition", () => {
+    const ws = makeTempDir();
+    const root = path.join(ws, ".seekforge", "skills");
+    writeSkillDir(root, "alpha", "null", MD);
+    expect(repairSkills(ws).skipped).toEqual([{ id: "alpha", reason: "metadata is not an object" }]);
   });
 });

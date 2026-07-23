@@ -1925,6 +1925,47 @@ an incomplete hash as equality can stop useful work.
 - **Caught:** Auto-Loop convergence synchronously read dirty workspace content
   without a total budget.
 
+## 150. Learned ranking signals must remain bounded and non-authoritative
+
+Success telemetry is correlated, sparse, and sometimes stale. Treating a raw
+success rate as authority lets a few lucky runs dominate selection or security.
+
+- **Do:** require a minimum sample count, shrink by confidence, cap the score
+  adjustment, and keep it outside permission and risk decisions.
+- **Caught:** adaptive skill effectiveness in `packages/core/src/skills` needed
+  to improve ranking without turning telemetry into an execution grant.
+
+## 151. Filesystem signal caches must validate the scanned frontier
+
+A root directory timestamp does not change when a file is added inside an
+already-existing nested directory, so a root-only cache key silently goes stale.
+
+- **Do:** retain and validate physical identities and modification stamps for
+  every scanned directory plus separately-read manifests; bound cache entries.
+- **Caught:** the skills workspace-language/path cache could otherwise miss a
+  newly-added nested source file indefinitely.
+
+## 152. Dependency selection must resolve as one bounded graph operation
+
+Selecting a procedure before discovering its missing, cyclic, risky, or
+conflicting prerequisite can inject an unusable half-plan or exceed prompt caps.
+
+- **Do:** resolve dependencies before committing a candidate, count the whole
+  bundle against one budget, reject invalid bundles, and topologically order the
+  final set with deterministic tie-breakers.
+- **Caught:** skill `dependsOn`/`conflictsWith` orchestration in
+  `packages/core/src/skills/select.ts`.
+
+## 153. New observability files must be excluded from progress signals
+
+Adding bounded telemetry is still a workspace mutation. If convergence hashes
+it, every no-op iteration looks like product progress and loop guards never fire.
+
+- **Do:** classify every new agent-generated state file at the progress boundary
+  and add a regression that changes only that file.
+- **Caught:** skill outcome rows in `.seekforge/skills-usage.jsonl` prevented
+  Auto-Loop `no_progress` detection.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

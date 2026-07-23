@@ -5,6 +5,7 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  loadSkills,
   loadPluginContributions,
   mergePluginHooks,
   mergePluginMcpServers,
@@ -127,6 +128,7 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     permissionRules: opts.permissionRules ?? config.permissionRules,
     ...(opts.allowedTools ? { allowedTools: opts.allowedTools } : {}),
     pluginContributions,
+    skillSnapshot: loadSkills(workspace, pluginContributions),
     subagents: opts.subagents,
     hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
     // CLI-only self-verification / finalize knobs (not part of the shared core).

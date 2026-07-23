@@ -96,15 +96,21 @@ export function importExternalSkill(
   }
   const parsed = parseFrontmatterSkill(readUtf8FileBoundedSync(file, MAX_SKILL_DEFINITION_BYTES));
   const meta: Omit<Skill, "scope" | "content"> = {
+    apiVersion: 1,
     id: parsed.id,
     name: parsed.name,
     description: parsed.description,
     tags: parsed.tags,
     triggers: parsed.triggers,
+    negativeTriggers: [],
+    taskTypes: [],
     priority: 50,
     enabled: true,
     // Imported skills default to medium trust (docs/14 §7).
     risk: "medium",
+    dependsOn: [],
+    conflictsWith: [],
+    order: 0,
   };
   const install = (): { dir: string; skill: ParsedExternalSkill } => {
     const rootStat = fs.lstatSync(opts.targetRoot, { throwIfNoEntry: false });

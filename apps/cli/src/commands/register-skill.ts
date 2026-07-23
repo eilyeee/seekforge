@@ -6,7 +6,9 @@ import {
   skillImportCommand,
   skillListCommand,
   skillRemoveCommand,
+  skillRepairCommand,
   skillShowCommand,
+  skillStatsCommand,
 } from "./skill.js";
 
 export function registerSkillCommands(program: Command): void {
@@ -16,6 +18,20 @@ export function registerSkillCommands(program: Command): void {
     .description("list available skills (project > global > builtin)")
     .action(() => {
       skillListCommand();
+    });
+  skill
+    .command("stats")
+    .description("show local skill effectiveness and learned weights")
+    .action(() => {
+      skillStatsCommand();
+    });
+  skill
+    .command("repair")
+    .option("-g, --global", "repair ~/.seekforge/skills instead of project skills")
+    .option("--id <skill-id>", "repair one skill only")
+    .description("migrate safely repairable skill metadata")
+    .action((opts: { global?: boolean; id?: string }) => {
+      skillRepairCommand(opts);
     });
   skill
     .command("show")

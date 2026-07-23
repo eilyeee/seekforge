@@ -225,6 +225,8 @@ export const views = {
     "skills.deleteConfirm": "Delete",
     "skills.actionError": "Action failed: {error}",
     "skills.diagnosticsTitle": "{count} invalid skill definition(s) were skipped",
+    "skills.repairBtn": "Repair metadata",
+    "skills.statsLine": "used {used} · outcomes {outcomes} · success {success} · weight {weight}",
 
     // ── AgentsView ────────────────────────────────────────────────
     "agents.title": "Agents",
@@ -853,6 +855,8 @@ export const views = {
     "skills.deleteConfirm": "删除",
     "skills.actionError": "操作失败：{error}",
     "skills.diagnosticsTitle": "已跳过 {count} 个无效技能定义",
+    "skills.repairBtn": "修复元数据",
+    "skills.statsLine": "使用 {used} 次 · 结果 {outcomes} 次 · 成功率 {success} · 权重 {weight}",
 
     // ── AgentsView ────────────────────────────────────────────────
     "agents.title": "子代理",

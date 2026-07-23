@@ -328,6 +328,23 @@ export const api = {
         message: string;
       }>;
     }>("GET", withWorkspace("/api/skills/diagnostics", ws)),
+  skillStats: (ws?: string) =>
+    request<{
+      stats: Array<{
+        skillId: string;
+        selections: number;
+        completedOutcomes: number;
+        successes: number;
+        successRate?: number;
+        learnedAdjustment: number;
+      }>;
+    }>("GET", withWorkspace("/api/skills/stats", ws)),
+  skillRepair: (global = false, id?: string, ws?: string) =>
+    request<{ repaired: Array<{ id: string; path: string }>; skipped: Array<{ id: string; reason: string }> }>(
+      "POST",
+      withWorkspace("/api/skills/repair", ws),
+      { global, ...(id ? { id } : {}) },
+    ),
 
   pluginCreate: (id: string, ws?: string) =>
     request<{ manifest: PluginRecord["manifest"]; path: string }>("POST", withWorkspace("/api/plugins", ws), { id }),

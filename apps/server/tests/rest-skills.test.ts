@@ -59,6 +59,19 @@ afterAll(async () => {
 });
 
 describe("skill management", () => {
+  it("exposes effectiveness stats and repairs legacy metadata", async () => {
+    let res = await authed("/api/skills/stats");
+    expect(res.status).toBe(200);
+    expect(await jsonOf(res)).toEqual({ stats: [] });
+
+    res = await authed("/api/skills/repair", { method: "POST", body: JSON.stringify({ id: "demo-skill" }) });
+    expect(res.status).toBe(200);
+    expect((await jsonOf(res)).repaired).toHaveLength(1);
+    expect(
+      JSON.parse(readFileSync(join(workspace, ".seekforge/skills/demo-skill/skill.json"), "utf8")).apiVersion,
+    ).toBe(1);
+  });
+
   it("PUT /api/skills/:id disables then re-enables a project skill", async () => {
     let res = await authed("/api/skills/demo-skill", {
       method: "PUT",

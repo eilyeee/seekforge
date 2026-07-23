@@ -9,7 +9,7 @@
  * Skills are procedure suggestions only — they never grant permissions.
  */
 
-export type { Skill, SkillScope, SkillSelection } from "./types.js";
+export type { Skill, SkillEffectiveness, SkillScope, SkillSelection } from "./types.js";
 export { BUILTIN_SKILLS } from "./builtins.js";
 export {
   loadSkills,
@@ -19,17 +19,26 @@ export {
   type SkillDiagnostic,
   type SkillLoadResult,
   type SkillsDir,
+  CURRENT_SKILL_API_VERSION,
 } from "./load.js";
 export { SKILL_ID_RE, resolveSkillsStoreRoot } from "./storage.js";
-export { selectSkills, type SelectSkillsOptions } from "./select.js";
+export { clearSkillSignalCache, selectSkills, type SelectSkillsOptions } from "./select.js";
 export { buildSkillBrief, SKILL_BRIEF_MAX_CHARS } from "./brief.js";
-export { logSkillUsage, MAX_SKILL_USAGE_BYTES } from "./usage.js";
+export {
+  logSkillOutcome,
+  logSkillUsage,
+  MAX_SKILL_USAGE_BYTES,
+  readSkillEffectiveness,
+  type SkillOutcome,
+} from "./usage.js";
 export { createSkillScaffold } from "./scaffold.js";
 export {
   removeSkill,
+  repairSkills,
   setSkillEnabled,
   type ManageSkillOptions,
   type RemoveSkillResult,
+  type RepairSkillsResult,
   type SetSkillEnabledResult,
 } from "./manage.js";
 export {

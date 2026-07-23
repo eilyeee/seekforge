@@ -39,11 +39,21 @@ function ScopeChip({ scope }: { scope: SkillScope }) {
 }
 
 type Filter = "all" | SkillScope;
+type SkillStats = {
+  skillId: string;
+  selections: number;
+  completedOutcomes: number;
+  successRate?: number;
+  learnedAdjustment: number;
+};
 
 export function SkillsView() {
   const t = useT();
   const [skills, setSkills] = useState<Skill[] | null>(null);
-  const [diagnostics, setDiagnostics] = useState<Array<{ id?: string; path: string; message: string }>>([]);
+  const [diagnostics, setDiagnostics] = useState<Array<{ id?: string; path: string; code: string; message: string }>>(
+    [],
+  );
+  const [stats, setStats] = useState<SkillStats[]>([]);
   const [detail, setDetail] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -57,11 +67,12 @@ export function SkillsView() {
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
     if (!request) return;
-    Promise.all([api.skills(workspaceId), api.skillDiagnostics(workspaceId)])
-      .then(([nextSkills, diagnosticResult]) => {
+    Promise.all([api.skills(workspaceId), api.skillDiagnostics(workspaceId), api.skillStats(workspaceId)])
+      .then(([nextSkills, diagnosticResult, statsResult]) => {
         if (requests.isCurrent(request)) {
           setSkills(nextSkills);
           setDiagnostics(diagnosticResult.diagnostics);
+          setStats(statsResult.stats);
         }
       })
       .catch((e: unknown) => {
@@ -73,6 +84,7 @@ export function SkillsView() {
     setSkills(null);
     setDetail(null);
     setDiagnostics([]);
+    setStats([]);
     setError(null);
     setFilter("all");
     setQuery("");
@@ -131,6 +143,22 @@ export function SkillsView() {
       });
   };
 
+  const repairSkills = () => {
+    const operation = requests.capture(ws);
+    if (!operation) return;
+    setError(null);
+    api
+      .skillRepair(false, undefined, operation.workspaceId)
+      .then(() => {
+        if (requests.isCurrent(operation)) refresh(operation.workspaceId);
+      })
+      .catch((e: unknown) => {
+        if (requests.isCurrent(operation)) setError(t("skills.actionError", { error: String(e) }));
+      });
+  };
+
+  const statsById = useMemo(() => new Map(stats.map((row) => [row.skillId, row])), [stats]);
+
   const counts = useMemo(() => {
     const c = { all: 0, builtin: 0, global: 0, project: 0 };
     for (const s of skills ?? []) {
@@ -188,6 +216,11 @@ export function SkillsView() {
           <p className="mt-1 text-xs text-tertiary">{t("skills.subtitle")}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {diagnostics.some((diagnostic) => diagnostic.code === "legacy_metadata") && (
+            <Button size="sm" onClick={repairSkills}>
+              {t("skills.repairBtn")}
+            </Button>
+          )}
           <Button size="sm" onClick={() => setDialog("import")}>
             {t("skills.importBtn")}
           </Button>
@@ -280,6 +313,19 @@ export function SkillsView() {
                     {!skill.enabled && <Badge tone="danger">{t("skills.disabled")}</Badge>}
                   </div>
                   <p className="mt-1 truncate text-xs text-secondary">{skill.description}</p>
+                  {statsById.get(skill.id) && (
+                    <p className="mt-1 font-mono text-2xs text-tertiary">
+                      {t("skills.statsLine", {
+                        used: statsById.get(skill.id)!.selections,
+                        outcomes: statsById.get(skill.id)!.completedOutcomes,
+                        success:
+                          statsById.get(skill.id)!.successRate === undefined
+                            ? "-"
+                            : `${Math.round(statsById.get(skill.id)!.successRate! * 100)}%`,
+                        weight: statsById.get(skill.id)!.learnedAdjustment.toFixed(3),
+                      })}
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {skill.scope === "builtin" ? (

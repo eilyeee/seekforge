@@ -109,7 +109,8 @@ iteration limits are validated while loading the dataset.
 ### Variants (for `--variant` / `--ab`)
 
 `--list-variants` prints the registry. Current variants (see `src/variants.ts`):
-`control` (baseline), `terse-prompt`, `llm-compaction`, `no-memory`,
+`control` (baseline), `terse-prompt`, `llm-compaction`, `no-memory`, **`no-skills`**
+(disables skill selection/injection to measure its net effect),
 **`verify-gate`** (enables the self-verification finalize gate, `verifyCommand=npm test`),
 **`no-auto-verify`** (verify-gate but nudge-only), **`no-retrieval`** (disables the
 task-relevant shortlist), **`review-gate`** (enables `finalizeReview`),

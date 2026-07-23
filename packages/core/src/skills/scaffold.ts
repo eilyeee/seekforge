@@ -50,14 +50,20 @@ export function createSkillScaffold(workspace: string, id: string): string {
     fs.mkdirSync(dir, { mode: 0o700 });
     try {
       const skillJson = {
+        apiVersion: 1,
         id,
         name: id,
         description: "",
         tags: [],
         triggers: [],
+        negativeTriggers: [],
+        taskTypes: [],
         priority: 50,
         enabled: true,
         risk: "medium",
+        dependsOn: [],
+        conflictsWith: [],
+        order: 0,
       };
       writeWorkspaceStateFileAtomic(root, path.join(id, "skill.json"), `${JSON.stringify(skillJson, null, 2)}\n`);
       writeWorkspaceStateFileAtomic(root, path.join(id, "SKILL.md"), SKILL_MD_TEMPLATE);

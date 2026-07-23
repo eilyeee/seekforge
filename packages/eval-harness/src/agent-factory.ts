@@ -49,6 +49,7 @@ export function createDefaultAgentFactory(config: EvalConfig, options: AgentBuil
       ...(options.injectRelevantFiles === false ? { injectRelevantFiles: false } : {}),
       ...(options.finalizeReview ? { finalizeReview: true } : {}),
       ...(options.guardNoProgress ? { guardNoProgress: true } : {}),
+      ...(options.injectSkills === false ? { injectSkills: false } : {}),
       ...(options.planModel ? { planModel: options.planModel } : {}),
       // Same key/endpoint, different model — needed for plan/escalation.
       ...(options.planModel ? { providerForModel: (m: string) => buildProvider(providerInput, m) } : {}),

@@ -3,6 +3,8 @@ import {
   importExternalSkill,
   loadSkills,
   loadSkillsDetailed,
+  readSkillEffectiveness,
+  repairSkills,
   removeSkill,
   resolveSkillsStoreRoot,
   seekforgeHome,
@@ -22,6 +24,32 @@ export function skillListCommand(): void {
   }
   for (const diagnostic of loaded.diagnostics) {
     console.error(`warning: skipped skill ${diagnostic.id ?? diagnostic.path}: ${diagnostic.message}`);
+  }
+}
+
+export function skillStatsCommand(): void {
+  const stats = readSkillEffectiveness(process.cwd());
+  if (stats.length === 0) {
+    console.log("No skill effectiveness data yet.");
+    return;
+  }
+  for (const row of stats) {
+    const rate = row.successRate === undefined ? "-" : `${Math.round(row.successRate * 100)}%`;
+    const adjustment = row.learnedAdjustment === 0 ? "0.000" : row.learnedAdjustment.toFixed(3);
+    console.log(
+      `${row.skillId}\tselected=${row.selections}\toutcomes=${row.completedOutcomes}\tsuccess=${rate}\tweight=${adjustment}`,
+    );
+  }
+}
+
+export function skillRepairCommand(opts: { global?: boolean; id?: string }): void {
+  try {
+    const result = repairSkills(process.cwd(), opts);
+    console.log(`Repaired ${result.repaired.length} skill metadata file(s); skipped ${result.skipped.length}.`);
+    for (const skipped of result.skipped) console.error(`warning: ${skipped.id}: ${skipped.reason}`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   }
 }
 

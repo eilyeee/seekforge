@@ -60,6 +60,8 @@ export type AgentBuildOptions = {
   finalizeReview?: boolean;
   /** Premature-finish guard (AgentCoreDeps.guardNoProgress). */
   guardNoProgress?: boolean;
+  /** Skill selection/injection (default true). */
+  injectSkills?: boolean;
 };
 
 export type Variant = {
@@ -101,6 +103,11 @@ export const VARIANTS: Variant[] = [
     name: "no-memory",
     describe: "Disables project-memory injection — pair with a memory-seeded task to measure memory's value.",
     apply: (base) => ({ ...base, injectMemory: false }),
+  },
+  {
+    name: "no-skills",
+    describe: "Disables skill selection and prompt injection to measure the net value of the skills system.",
+    apply: (base) => ({ ...base, injectSkills: false }),
   },
   {
     name: "verify-gate",

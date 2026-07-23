@@ -9,6 +9,7 @@ const MAX_FINGERPRINT_FILES = 20_000;
 const FINGERPRINT_TIMEOUT_MS = 5_000;
 const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
 const INTERNAL_PREFIXES = [".seekforge/loops/", ".seekforge/memory/", ".seekforge/sessions/", ".seekforge/uploads/"];
+const INTERNAL_FILES = new Set([".seekforge/skills-usage.jsonl"]);
 const FALLBACK_IGNORES = new Set([".git", "node_modules", "dist", "build", "coverage", "target"]);
 
 class FingerprintLimitError extends Error {}
@@ -35,7 +36,8 @@ function git(cwd: string, args: string[]): Promise<string> {
 }
 
 function internalPath(path: string): boolean {
-  return INTERNAL_PREFIXES.some((prefix) => path.startsWith(prefix));
+  const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
+  return INTERNAL_FILES.has(normalized) || INTERNAL_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 type Budget = { bytes: number; files: number; deadline: number };
@@ -101,7 +103,11 @@ async function gitFingerprint(workspace: string, budget: Budget): Promise<string
     .sort();
   const relevantStatus = status
     .split("\0")
-    .filter((record) => !INTERNAL_PREFIXES.some((prefix) => record.includes(` ${prefix}`)))
+    .filter(
+      (record) =>
+        !INTERNAL_PREFIXES.some((prefix) => record.includes(` ${prefix}`)) &&
+        ![...INTERNAL_FILES].some((file) => record.includes(` ${file}`)),
+    )
     .join("\0");
   hash.update(relevantStatus);
   for (const path of paths) {
