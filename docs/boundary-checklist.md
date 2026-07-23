@@ -1872,6 +1872,59 @@ approval also goes stale when installed content changes underneath it.
 - **Caught:** the first-class plugin lifecycle in `packages/core/src/plugins`
   needed project discovery without repository-granted hook/MCP authority.
 
+## 145. Resumed execution must rebuild every task-scoped prompt contribution
+
+Reusing a conversation trace does not make task-dependent system context valid
+for the new user turn.
+
+- **Do:** reconstruct mode, plan, memory, skills, and other current-task prompt
+  inputs before both fresh and resumed requests; keep persisted history separate.
+- **Caught:** `packages/core/src/agent/loop.ts` selected skills only in the fresh
+  session branch, so later Auto-Loop iterations silently lost their procedures.
+
+## 146. The advertised request catalog is an execution capability boundary
+
+A registered tool can be absent from one provider request because of policy or
+context-budget selection. Registry membership alone must not authorize a stale
+or fabricated call.
+
+- **Do:** bind execution to the exact post-filter tool-name set sent with that
+  request, in addition to global allowlists and dispatcher permission checks.
+- **Caught:** context trimming could omit a large MCP tool while the dispatcher
+  would still execute a model-supplied call to its known name.
+
+## 147. Mutable extension stores need physical identities and transactions
+
+Validation at load time is insufficient when enable/import/remove can follow a
+linked component, race an Agent, or expose half of a multi-file installation.
+
+- **Do:** validate every parent and leaf as physical, serialize across processes,
+  acquire the workspace mutation guard, and publish multi-file updates by atomic
+  rename with rollback. Bind metadata ids to directory names.
+- **Caught:** `packages/core/src/skills` lifecycle operations wrote files directly
+  and could race or follow unsafe skill store paths.
+
+## 148. Best-effort telemetry must be bounded, non-blocking, and non-authoritative
+
+An observability sink can be a FIFO, link, oversized file, or concurrent writer;
+none may stall or fail the foreground operation it observes.
+
+- **Do:** use no-follow/non-blocking regular-file checks, bounded records and
+  storage, writer serialization, rotation, and catch failures outside the domain
+  result.
+- **Caught:** skill selection usage appended without a size limit or physical-file
+  validation and could grow forever or target a special file.
+
+## 149. Progress fingerprints must have an explicit uncertainty state
+
+Synchronously hashing an unbounded workspace can freeze the Agent, while treating
+an incomplete hash as equality can stop useful work.
+
+- **Do:** fingerprint asynchronously with file/byte/time caps and return `null`
+  when the sample is incomplete; only compare two complete samples for no-progress.
+- **Caught:** Auto-Loop convergence synchronously read dirty workspace content
+  without a total budget.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -11,10 +11,19 @@
 
 export type { Skill, SkillScope, SkillSelection } from "./types.js";
 export { BUILTIN_SKILLS } from "./builtins.js";
-export { loadSkills, loadSkillsFromDirs, type SkillsDir } from "./load.js";
+export {
+  loadSkills,
+  loadSkillsDetailed,
+  loadSkillsDetailedFromDirs,
+  loadSkillsFromDirs,
+  type SkillDiagnostic,
+  type SkillLoadResult,
+  type SkillsDir,
+} from "./load.js";
+export { SKILL_ID_RE, resolveSkillsStoreRoot } from "./storage.js";
 export { selectSkills, type SelectSkillsOptions } from "./select.js";
 export { buildSkillBrief, SKILL_BRIEF_MAX_CHARS } from "./brief.js";
-export { logSkillUsage } from "./usage.js";
+export { logSkillUsage, MAX_SKILL_USAGE_BYTES } from "./usage.js";
 export { createSkillScaffold } from "./scaffold.js";
 export {
   removeSkill,

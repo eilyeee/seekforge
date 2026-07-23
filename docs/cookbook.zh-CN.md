@@ -187,9 +187,11 @@ seekforge skill import ./path/to/SKILL.md    # import Claude-style skill (-g glo
 seekforge skill enable|disable|remove <id>
 ```
 
-Skill 在 `SKILL.md` 中携带 YAML frontmatter；循环会按任务自动挑选相关的 skill。TUI：`/skills` 列出已安装的 skill。
+原生 Skill 使用与 `SKILL.md` 并列的 `skill.json` 元数据；导入的 YAML frontmatter
+会被转换为该布局。Agent 会为每次新任务或恢复任务重新挑选相关 skill；TUI `/skills`
+还会报告无效安装。
 
-**提示：** skill 的格式与选择逻辑见 `packages/core/src/skills/`。
+**提示：** 格式、选择、风险和诊断见[技能指南](skills.zh-CN.md)。
 
 ---
 

@@ -290,6 +290,7 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   if (method === "GET" && path === "/api/skills") return skills.map((s) => ({ ...s }));
+  if (method === "GET" && path === "/api/skills/diagnostics") return { diagnostics: [] };
 
   if (method === "GET" && path === "/api/plugins") return plugins.map((plugin) => ({ ...plugin }));
   if (method === "POST" && path === "/api/plugins") {

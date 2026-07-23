@@ -58,6 +58,10 @@ plugin hooks run before user-configured hooks.
 Plugin skill/agent roots load in plugin-id order. A later plugin can replace an
 earlier plugin's same-id contribution, while user global/project definitions
 always load later and therefore win. Prefer plugin-prefixed skill and agent IDs.
+Each Agent or Loop assembly takes one contribution snapshot and reuses its
+approved roots/configuration for skills, subagents, hooks, and MCP servers.
+Installed digest changes are revalidated when the next assembly is created;
+do not mutate an installed plugin while a run is active.
 
 ## Safety boundaries
 

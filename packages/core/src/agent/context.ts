@@ -168,7 +168,7 @@ export function selectToolDefinitionsForBudget(
   const selected: typeof ranked = [];
   let used = 0;
   for (const entry of ranked) {
-    if (selected.length > 0 && used + entry.tokens > maxTokens) continue;
+    if (used + entry.tokens > maxTokens) continue;
     selected.push(entry);
     used += entry.tokens;
   }

@@ -1,7 +1,12 @@
-import { symlinkSync, writeFileSync } from "node:fs";
+import { symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUILTIN_SKILLS, loadSkillsFromDirs } from "../../src/skills/index.js";
+import {
+  BUILTIN_SKILLS,
+  loadSkillsDetailed,
+  loadSkillsDetailedFromDirs,
+  loadSkillsFromDirs,
+} from "../../src/skills/index.js";
 import { MAX_SKILL_DEFINITION_BYTES } from "../../src/skills/load.js";
 import { makeTempDir, skillJson, writeSkillDir } from "./helpers.js";
 
@@ -101,8 +106,56 @@ describe("loadSkillsFromDirs", () => {
     expect(skills.find((s) => s.id === "linked")).toBeUndefined();
   });
 
+  it("does not let metadata ids escape their directory identity and reports why", () => {
+    const project = makeTempDir();
+    writeSkillDir(project, "safe-dir", skillJson("different-id"), MD);
+    const result = loadSkillsDetailedFromDirs([{ scope: "project", path: project }]);
+    expect(result.skills.find((skill) => skill.id === "different-id")).toBeUndefined();
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        id: "safe-dir",
+        code: "invalid_id",
+        message: expect.stringContaining("does not match"),
+      }),
+    ]);
+  });
+
+  it("rejects linked metadata leaves and returns an actionable diagnostic", () => {
+    const project = makeTempDir();
+    const outside = makeTempDir();
+    const dir = writeSkillDir(project, "linked-meta", skillJson("linked-meta"), MD);
+    const target = join(outside, "skill.json");
+    writeFileSync(target, JSON.stringify(skillJson("linked-meta")));
+    unlinkSync(join(dir, "skill.json"));
+    symlinkSync(target, join(dir, "skill.json"));
+
+    const result = loadSkillsDetailedFromDirs([{ scope: "project", path: project }]);
+    expect(result.skills.find((skill) => skill.id === "linked-meta")).toBeUndefined();
+    expect(result.diagnostics[0]).toMatchObject({ id: "linked-meta", code: "invalid_metadata" });
+  });
+
   it("ignores missing skills roots", () => {
     const skills = loadSkillsFromDirs([{ scope: "project", path: "/nonexistent/path/skills" }]);
     expect(skills.length).toBe(BUILTIN_SKILLS.length);
+  });
+
+  it("does not load through a linked project store parent", () => {
+    const workspace = makeTempDir();
+    const outside = makeTempDir();
+    const outsideSkills = join(outside, "skills");
+    writeSkillDir(outsideSkills, "injected", skillJson("injected"), MD);
+    symlinkSync(outside, join(workspace, ".seekforge"));
+
+    const result = loadSkillsDetailed(workspace, {
+      skillRoots: [],
+      agentRoots: [],
+      mcpServers: {},
+      hooks: {},
+      plugins: [],
+    });
+    expect(result.skills.find((skill) => skill.id === "injected")).toBeUndefined();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ scope: "project", code: "invalid_root" })]),
+    );
   });
 });

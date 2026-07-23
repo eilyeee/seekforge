@@ -301,8 +301,12 @@ export function loadPluginContributions(workspace: string): PluginContributions 
   return result;
 }
 
-export function mergePluginHooks(workspace: string, configured: HookConfig | undefined): HookConfig | undefined {
-  const pluginHooks = loadPluginContributions(workspace).hooks;
+export function mergePluginHooks(
+  workspace: string,
+  configured: HookConfig | undefined,
+  contributions = loadPluginContributions(workspace),
+): HookConfig | undefined {
+  const pluginHooks = contributions.hooks;
   const merged: HookConfig = {};
   mergeHooks(merged, pluginHooks);
   mergeHooks(merged, configured);
@@ -312,8 +316,9 @@ export function mergePluginHooks(workspace: string, configured: HookConfig | und
 export function mergePluginMcpServers(
   workspace: string,
   configured: Record<string, McpServerConfig> | undefined,
+  contributions = loadPluginContributions(workspace),
 ): Record<string, McpServerConfig> {
-  return { ...loadPluginContributions(workspace).mcpServers, ...(configured ?? {}) };
+  return { ...contributions.mcpServers, ...(configured ?? {}) };
 }
 
 export type { PluginState };

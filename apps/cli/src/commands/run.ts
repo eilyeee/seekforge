@@ -345,6 +345,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     created = createCliAgent({
       config,
       workspace: projectPath,
+      pluginContributions: mcp.pluginContributions,
       model,
       mcpToolSpecs: mcp.specs,
       // stream-json input consumes process.stdin as an async generator; a live
@@ -354,7 +355,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       onModelDelta: emitPartial ?? renderer?.modelDelta,
       onReasoningDelta: renderer?.reasoningDelta,
       extractMemory: mode === "edit",
-      subagents: loadAgentDefinitions(projectPath),
+      subagents: loadAgentDefinitions(projectPath, mcp.pluginContributions),
       ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
       ...(permissionRules ? { permissionRules } : {}),
       ...(allowedTools.length > 0 ? { allowedTools } : {}),

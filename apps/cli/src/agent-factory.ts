@@ -5,12 +5,14 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  loadPluginContributions,
   mergePluginHooks,
   mergePluginMcpServers,
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
   type RuntimeClient,
+  type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, PermissionRule } from "@seekforge/shared";
@@ -44,6 +46,8 @@ export type CliAgentOptions = {
   permissionRules?: PermissionRule[];
   /** Exact per-run allow-list; unlike permission rules this also covers future/MCP/dispatch tools. */
   allowedTools?: string[];
+  /** Run-local contribution snapshot shared across plugin MCP/hooks/skills/agents. */
+  pluginContributions?: PluginContributions;
 };
 
 export type CliAgent = {
@@ -65,6 +69,8 @@ export type CliAgentDeps = {
  */
 export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
   const { config } = opts;
+  const workspace = opts.workspace ?? process.cwd();
+  const pluginContributions = opts.pluginContributions ?? loadPluginContributions(workspace);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin) {
@@ -120,8 +126,9 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     runtime,
     permissionRules: opts.permissionRules ?? config.permissionRules,
     ...(opts.allowedTools ? { allowedTools: opts.allowedTools } : {}),
+    pluginContributions,
     subagents: opts.subagents,
-    hooks: mergePluginHooks(opts.workspace ?? process.cwd(), config.hooks),
+    hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
     // CLI-only self-verification / finalize knobs (not part of the shared core).
     ...(typeof config.verifyCommand === "string" && config.verifyCommand.trim()
       ? { verifyCommand: config.verifyCommand }
@@ -150,11 +157,12 @@ export function createCliAgent(opts: CliAgentOptions): CliAgent {
 export async function prepareMcp(
   config: CliConfig,
   workspacePath?: string,
-): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
+): Promise<{ specs: ToolSpec[]; dispose: () => void; pluginContributions: PluginContributions }> {
   const workspace = workspacePath ?? process.cwd();
-  const servers = mergePluginMcpServers(workspace, config.mcpServers);
+  const pluginContributions = loadPluginContributions(workspace);
+  const servers = mergePluginMcpServers(workspace, config.mcpServers, pluginContributions);
   if (Object.keys(servers).length === 0) {
-    return { specs: [], dispose: () => {} };
+    return { specs: [], dispose: () => {}, pluginContributions };
   }
-  return loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
+  return { ...(await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined)), pluginContributions };
 }

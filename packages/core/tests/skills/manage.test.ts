@@ -60,6 +60,17 @@ describe("setSkillEnabled — builtins via override marker", () => {
       enabled: false,
     });
   });
+
+  it("does not edit through a linked metadata leaf", () => {
+    const ws = makeTempDir();
+    const root = path.join(ws, ".seekforge", "skills");
+    const outside = path.join(makeTempDir(), "outside.json");
+    const dir = writeSkillDir(root, "alpha", undefined, MD);
+    fs.writeFileSync(outside, JSON.stringify(skillJson("alpha")));
+    fs.symlinkSync(outside, path.join(dir, "skill.json"));
+    expect(() => setSkillEnabled(ws, "alpha", false)).toThrow(/unknown skill/i);
+    expect(JSON.parse(fs.readFileSync(outside, "utf8"))).toEqual(skillJson("alpha"));
+  });
 });
 
 describe("removeSkill", () => {

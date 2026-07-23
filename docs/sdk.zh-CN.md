@@ -80,7 +80,9 @@ for await (const event of agent.runTask({
 
 `runTask` 以流的形式产出 `AgentEvent`：`session.created`、`model.message`、`tool.started`/`tool.completed`、`permission.required`、`usage.updated`、`file.changed`、`session.completed`、`session.failed` 等（完整见 `packages/shared/src/index.ts` 中的 `AgentEvent` 联合类型）。
 
-Skills 和项目记忆会在运行期间从工作区的 `.seekforge/` 自动发现——不需要通过 `deps` 传入。
+Skills 和项目记忆会在运行期间从工作区的 `.seekforge/` 自动发现。若界面层还会组装插件
+MCP/hook/agent，应只加载一份 `PluginContributions` 快照并通过
+`deps.pluginContributions` 传入；core 会用同一快照加载技能。
 
 ## 自主循环
 

@@ -154,6 +154,11 @@ describe("request token estimation", () => {
     expect(selected.map((entry) => entry.name)).toEqual(["read_file", "deploy_service"]);
     expect(estimateToolDefinitionsTokens(selected)).toBeLessThanOrEqual(budget);
   });
+
+  it("returns no tools when even the best candidate exceeds the available catalog budget", () => {
+    const tools = [tool("read_file", "x".repeat(1_000))];
+    expect(selectToolDefinitionsForBudget(tools, [msg("user", "read the file")], 1)).toEqual([]);
+  });
 });
 
 describe("persisted compaction snapshots", () => {

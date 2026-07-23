@@ -102,6 +102,7 @@ async function main(): Promise<void> {
       initialModel={model}
       mcpToolSpecs={mcp.specs}
       mcpEntries={mcp.entries}
+      pluginContributions={mcp.pluginContributions}
       {...(continueSessionId ? { initialSessionId: continueSessionId } : {})}
       {...(version ? { version } : {})}
       {...(extra?.updateNotice ? { updateNotice: extra.updateNotice } : {})}

@@ -32,6 +32,8 @@ export type FinalizeState = {
   planItems?: PlanItem[];
   /** Number of files changed this run (apply_patch/write_file successes). */
   changedFiles: number;
+  /** Successful calls that may have changed the workspace, including commands and MCP tools. */
+  workspaceMutations?: number;
   /** Configured verify command (deps.verifyCommand), if any. */
   verifyCommand?: string;
   /** Whether the verify command has run since the most recent edit. */
@@ -65,6 +67,8 @@ export type FinalizeNudge = {
 
 /** The highest-priority unmet finalize check, or null when the run may finish. */
 export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
+  const mutationCount = Math.max(s.changedFiles, s.workspaceMutations ?? 0);
+  const mutationLabel = s.workspaceMutations === undefined ? "file(s)" : "workspace-mutating operation(s)";
   // 0. Premature finish: an edit-mode run that declares done having changed
   // nothing AND barely used any tools never really engaged. Push back once.
   // (A run that investigated — many reads/searches — and concluded no change is
@@ -73,7 +77,7 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
     s.guardNoProgress &&
     !s.fired.has("progress") &&
     s.mode === "edit" &&
-    s.changedFiles === 0 &&
+    mutationCount === 0 &&
     s.toolCalls < MIN_PROGRESS_TOOL_CALLS
   ) {
     return {
@@ -107,7 +111,7 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
   const verifyCommand = s.verifyCommand?.trim();
   if (
     !s.fired.has("verify") &&
-    s.changedFiles > 0 &&
+    mutationCount > 0 &&
     verifyCommand !== undefined &&
     verifyCommand !== "" &&
     !s.verifyRanSinceEdit
@@ -116,7 +120,7 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
       kind: "verify",
       notice: "Changes not yet verified — asking the agent to run the verify command.",
       message:
-        `[harness] You changed ${s.changedFiles} file(s) but have not run the verification ` +
+        `[harness] You made ${mutationCount} ${mutationLabel} but have not run the verification ` +
         `command since the last edit. Run \`${verifyCommand}\` with run_command, fix anything it ` +
         "reports, then finish. If it genuinely cannot run here, say so explicitly rather than skipping it.",
     };
@@ -127,7 +131,7 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
   const lintCommand = s.lintCommand?.trim();
   if (
     !s.fired.has("lint") &&
-    s.changedFiles > 0 &&
+    mutationCount > 0 &&
     lintCommand !== undefined &&
     lintCommand !== "" &&
     !s.lintRanSinceEdit
@@ -136,14 +140,14 @@ export function nextFinalizeNudge(s: FinalizeState): FinalizeNudge | null {
       kind: "lint",
       notice: "Changes not yet linted — asking the agent to run the lint command.",
       message:
-        `[harness] You changed ${s.changedFiles} file(s) but have not run the lint ` +
+        `[harness] You made ${mutationCount} ${mutationLabel} but have not run the lint ` +
         `command since the last edit. Run \`${lintCommand}\` with run_command, fix anything it ` +
         "reports, then finish. If it genuinely cannot run here, say so explicitly rather than skipping it.",
     };
   }
 
   // 3. Review quality: one self-review pass over the diff before finishing.
-  if (!s.fired.has("review") && s.reviewEnabled && s.changedFiles > 0) {
+  if (!s.fired.has("review") && s.reviewEnabled && mutationCount > 0) {
     return {
       kind: "review",
       notice: "Doing a final self-review of the changes.",

@@ -130,6 +130,7 @@ export async function replCommand(opts: {
     const { agent, dispose } = createCliAgent({
       config: runConfig,
       workspace: projectPath,
+      pluginContributions: mcp.pluginContributions,
       model: runOpts?.model ?? model,
       ...(runOpts?.permissionRules ? { permissionRules: runOpts.permissionRules } : {}),
       ...(runOpts?.allowedTools ? { allowedTools: runOpts.allowedTools } : {}),
@@ -138,7 +139,7 @@ export async function replCommand(opts: {
       onReasoningDelta: renderer.reasoningDelta,
       askUser: makeAskUser(rl),
       extractMemory: true,
-      subagents: loadAgentDefinitions(projectPath),
+      subagents: loadAgentDefinitions(projectPath, mcp.pluginContributions),
       mcpToolSpecs: mcp.specs,
     });
     const controller = new AbortController();

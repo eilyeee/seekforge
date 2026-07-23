@@ -223,10 +223,11 @@ seekforge skill import ./path/to/SKILL.md    # import Claude-style skill (-g glo
 seekforge skill enable|disable|remove <id>
 ```
 
-Skills carry YAML frontmatter in `SKILL.md`; the loop selects relevant ones per
-task automatically. TUI: `/skills` lists installed skills.
+Native skills use `skill.json` metadata beside `SKILL.md`; imported YAML
+frontmatter is converted to that layout. The agent selects relevant skills for
+every fresh or resumed task. TUI `/skills` also reports invalid installations.
 
-**Tips:** see `packages/core/src/skills/` for the skill format and selection.
+**Tips:** see the [Skills guide](skills.md) for format, selection, risk, and diagnostics.
 
 ---
 

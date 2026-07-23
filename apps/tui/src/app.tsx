@@ -45,6 +45,7 @@ import {
   type BackgroundTasks,
   type McpClientEntry,
   type McpPromptRef,
+  type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest } from "@seekforge/shared";
@@ -157,7 +158,7 @@ import {
   startCompletion,
   type TabPathCompletion,
 } from "./path-complete.js";
-import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
+import { formatSkillLines, loadSkillDiagnosticLines, loadSkillsWithStatus } from "./skills-surface.js";
 import { formatPluginLines } from "./plugins-surface.js";
 import { attachSkillContent, expandSkillCommand, findSkillByCommand, skillCommandSpecs } from "./skill-commands.js";
 import { applyVimKey, initialVim, type VimState } from "./vim.js";
@@ -189,6 +190,7 @@ export type AppProps = {
   projectPath: string;
   initialModel: string;
   mcpToolSpecs: ToolSpec[];
+  pluginContributions: PluginContributions;
   /** Live MCP connections (resource listing / @mcp: references). */
   mcpEntries?: McpClientEntry[];
   /** Resume this session on launch (-c / --continue). */
@@ -223,6 +225,7 @@ export function App({
   projectPath,
   initialModel,
   mcpToolSpecs,
+  pluginContributions,
   mcpEntries = [],
   initialSessionId,
   version,
@@ -340,7 +343,7 @@ export function App({
 
   // Installed skills double as "/skill:<id>" palette commands.
   const skillRowsRef = useRef<ReturnType<typeof loadSkillsWithStatus> | null>(null);
-  if (skillRowsRef.current === null) skillRowsRef.current = loadSkillsWithStatus(projectPath);
+  if (skillRowsRef.current === null) skillRowsRef.current = loadSkillsWithStatus(projectPath, pluginContributions);
   const appStartRef = useRef(Date.now());
 
   // MCP prompts double as "/mcp:<server>:<prompt>" palette commands. Fetched
@@ -660,6 +663,7 @@ export function App({
           model: runModel,
           projectPath,
           mcpToolSpecs,
+          pluginContributions,
           mode: opts?.mode ?? "edit",
           plan: opts?.plan ?? false,
           approvalMode: approvalModeFor(runApproval),
@@ -747,7 +751,7 @@ export function App({
         ring(`Task finished: ${clipLine(task, 60)}`);
       }
     },
-    [projectPath, mcpToolSpecs, syncBg, ring, config.costBudgetUsd],
+    [projectPath, mcpToolSpecs, pluginContributions, syncBg, ring, config.costBudgetUsd],
   );
 
   /**
@@ -783,6 +787,7 @@ export function App({
           model: modelRef.current,
           projectPath,
           mcpToolSpecs,
+          pluginContributions,
           maxIterations: options.maxIterations ?? 8,
           ...(options.costBudgetUsd !== undefined ? { costBudgetUsd: options.costBudgetUsd } : {}),
           ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
@@ -815,7 +820,7 @@ export function App({
         }
       }
     },
-    [projectPath, mcpToolSpecs, syncBg, ring],
+    [projectPath, mcpToolSpecs, pluginContributions, syncBg, ring],
   );
 
   const resumeLoopTask = useCallback(
@@ -839,6 +844,7 @@ export function App({
           model: modelRef.current,
           projectPath,
           mcpToolSpecs,
+          pluginContributions,
           ...options,
           onEvent: (event) => {
             if (!shouldRenderLoopEvent(event, ownsThisRun(), detached())) return;
@@ -866,7 +872,7 @@ export function App({
         }
       }
     },
-    [projectPath, mcpToolSpecs, syncBg, ring],
+    [projectPath, mcpToolSpecs, pluginContributions, syncBg, ring],
   );
 
   /** Ctrl+B: detach the ACTIVE tab's run; its chat continues in a fresh session. */
@@ -1464,7 +1470,7 @@ export function App({
           break;
         }
         case "agents":
-          for (const line of formatAgentLines(loadAgentDefinitions(projectPath))) notice(line);
+          for (const line of formatAgentLines(loadAgentDefinitions(projectPath, pluginContributions))) notice(line);
           break;
         case "agent-cancel": {
           const parts = command.arg?.trim().split(/\s+/).filter(Boolean) ?? [];
@@ -1500,7 +1506,8 @@ export function App({
           break;
         }
         case "skills":
-          for (const line of formatSkillLines(loadSkillsWithStatus(projectPath))) notice(line);
+          for (const line of formatSkillLines(loadSkillsWithStatus(projectPath, pluginContributions))) notice(line);
+          for (const line of loadSkillDiagnosticLines(projectPath, pluginContributions)) notice(line, "error");
           break;
         case "plugins":
           for (const line of formatPluginLines(listPlugins(projectPath))) notice(line);

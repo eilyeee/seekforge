@@ -224,6 +224,7 @@ export const views = {
     "skills.deleteBody": "This removes the skill's SKILL.md from the {scope} scope. This cannot be undone.",
     "skills.deleteConfirm": "Delete",
     "skills.actionError": "Action failed: {error}",
+    "skills.diagnosticsTitle": "{count} invalid skill definition(s) were skipped",
 
     // ── AgentsView ────────────────────────────────────────────────
     "agents.title": "Agents",
@@ -851,6 +852,7 @@ export const views = {
     "skills.deleteBody": "这将从 {scope} 作用域中移除该技能的 SKILL.md。此操作无法撤销。",
     "skills.deleteConfirm": "删除",
     "skills.actionError": "操作失败：{error}",
+    "skills.diagnosticsTitle": "已跳过 {count} 个无效技能定义",
 
     // ── AgentsView ────────────────────────────────────────────────
     "agents.title": "子代理",

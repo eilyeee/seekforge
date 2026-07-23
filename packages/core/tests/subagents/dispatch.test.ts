@@ -323,7 +323,7 @@ describe("dispatch_agent (loop-level)", () => {
     expect(dispatcher.calls).toHaveLength(0);
     const nestedToolMsg = provider.requests[2]!.messages.at(-1)!;
     expect(nestedToolMsg.role).toBe("tool");
-    expect(nestedToolMsg.content).toContain("tool_not_allowed");
+    expect(nestedToolMsg.content).toContain("tool_not_advertised");
   });
 
   it("maps a nested failure to a subagent_failed tool error", async () => {

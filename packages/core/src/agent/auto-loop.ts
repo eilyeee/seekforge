@@ -9,10 +9,7 @@
  * against; the implementation is filled in separately.
  */
 import type { ApprovalMode } from "@seekforge/shared";
-import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { closeSync, lstatSync, openSync, readlinkSync, readSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
@@ -27,6 +24,7 @@ import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
 import { MAX_LOOP_ITERATIONS, MAX_LOOP_WARNING_LENGTH, MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
 import { recordProgressFingerprint } from "./loop-logic.js";
+import { workspaceFingerprint } from "./workspace-fingerprint.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -142,140 +140,6 @@ async function captureVerify(
   const raw = await verify(workspace, command, signal, capture);
   const aggregate = diagnosticAggregate(streamed ? `${raw.output}\n${streamed}` : raw.output);
   return { result: { code: raw.code, output: tail(streamed || raw.output) }, diagnostics: aggregate };
-}
-
-function workspaceFingerprint(workspace: string): string | null {
-  const hashFile = (hash: ReturnType<typeof createHash>, absolute: string, path: string): void => {
-    const stat = lstatSync(absolute);
-    hash.update(`\0${path}\0${stat.mode}\0${stat.size}\0`);
-    if (stat.isSymbolicLink()) {
-      hash.update(readlinkSync(absolute));
-      return;
-    }
-    if (stat.isDirectory()) {
-      try {
-        hash.update(
-          execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
-            cwd: absolute,
-            encoding: "utf8",
-            maxBuffer: 8 * 1024 * 1024,
-            stdio: ["ignore", "pipe", "ignore"],
-          }),
-        );
-      } catch {
-        hash.update("<unreadable-directory>");
-      }
-      return;
-    }
-    if (!stat.isFile()) return;
-    const buffer = Buffer.allocUnsafe(Math.min(Math.max(stat.size, 1), 1_000_000));
-    const fd = openSync(absolute, "r");
-    try {
-      let position = 0;
-      for (;;) {
-        const bytes = readSync(fd, buffer, 0, buffer.length, position);
-        if (bytes === 0) break;
-        hash.update(buffer.subarray(0, bytes));
-        position += bytes;
-      }
-    } finally {
-      closeSync(fd);
-    }
-  };
-  try {
-    const hash = createHash("sha256");
-    try {
-      hash.update(
-        execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
-          cwd: workspace,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        }),
-      );
-    } catch {
-      hash.update("<unborn-head>");
-    }
-    const status = execFileSync("git", ["status", "--porcelain=v2", "-z", "--untracked-files=all"], {
-      cwd: workspace,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const pathCommands = [
-      ["diff", "--name-only", "-z"],
-      ["diff", "--cached", "--name-only", "-z"],
-      ["ls-files", "--others", "--exclude-standard", "-z"],
-    ];
-    const paths = [
-      ...new Set(
-        pathCommands
-          .flatMap((args) =>
-            execFileSync("git", args, {
-              cwd: workspace,
-              encoding: "utf8",
-              maxBuffer: 32 * 1024 * 1024,
-              stdio: ["ignore", "pipe", "ignore"],
-            }).split("\0"),
-          )
-          .filter(
-            (path) =>
-              Boolean(path) &&
-              !path.startsWith(".seekforge/loops/") &&
-              !path.startsWith(".seekforge/memory/") &&
-              !path.startsWith(".seekforge/sessions/") &&
-              !path.startsWith(".seekforge/uploads/"),
-          ),
-      ),
-    ].sort();
-    const relevantStatus = status
-      .split("\0")
-      .filter(
-        (record) =>
-          !record.includes(" .seekforge/loops/") &&
-          !record.includes(" .seekforge/memory/") &&
-          !record.includes(" .seekforge/sessions/") &&
-          !record.includes(" .seekforge/uploads/"),
-      )
-      .join("\0");
-    hash.update(relevantStatus);
-    for (const path of paths) {
-      try {
-        hashFile(hash, join(workspace, path), path);
-      } catch {
-        hash.update("<unreadable>");
-      }
-    }
-    return hash.digest("hex");
-  } catch {
-    try {
-      const hash = createHash("sha256");
-      const visit = (directory: string, relative = ""): void => {
-        for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-          a.name.localeCompare(b.name),
-        )) {
-          const path = relative ? `${relative}/${entry.name}` : entry.name;
-          if (
-            path === ".git" ||
-            path.startsWith(".git/") ||
-            path.startsWith(".seekforge/loops/") ||
-            path.startsWith(".seekforge/memory/") ||
-            path.startsWith(".seekforge/sessions/") ||
-            path.startsWith(".seekforge/uploads/")
-          )
-            continue;
-          const absolute = join(workspace, path);
-          if (entry.isDirectory()) visit(absolute, path);
-          else if (entry.isFile() || entry.isSymbolicLink()) {
-            hashFile(hash, absolute, path);
-          }
-        }
-      };
-      visit(workspace);
-      return hash.digest("hex");
-    } catch {
-      return null;
-    }
-  }
 }
 
 function diagnosticPrompt(diagnostics: VerifyDiagnostics, fallback: string): string {
@@ -689,7 +553,7 @@ async function runAutoLoopWithLease(
   let lastVerify = preVerify;
   let previousDiagnostics = parseVerifyDiagnostics(preVerifyDiagnostics);
   let previousAcceptance = acceptanceFingerprint(acceptanceReview);
-  let previousWorkspace = workspaceFingerprint(opts.workspace);
+  let previousWorkspace = await workspaceFingerprint(opts.workspace);
   const progressFingerprints: string[] = [];
   recordProgressFingerprint(
     progressFingerprints,
@@ -784,7 +648,7 @@ async function runAutoLoopWithLease(
     }
     lastVerify = v;
     const diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
-    const currentWorkspace = workspaceFingerprint(opts.workspace);
+    const currentWorkspace = await workspaceFingerprint(opts.workspace);
     persist({ iterations: i, costUsd, sessionId, lastVerify: v });
     emit({ type: "verify", iteration: i, code: v.code, passed: v.code === 0, output: v.output });
 

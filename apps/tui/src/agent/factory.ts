@@ -7,6 +7,7 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  loadPluginContributions,
   mergePluginHooks,
   mergePluginMcpServers,
   wrapProviderWithCache,
@@ -16,6 +17,7 @@ import {
   type BackgroundTasks,
   type DispatchManager,
   type McpClientEntry,
+  type PluginContributions,
   type RuntimeClient,
   type ToolSpec,
 } from "@seekforge/core";
@@ -36,6 +38,8 @@ export type TuiAgentOptions = {
   subagents?: AgentDefinition[];
   /** Extra tools from MCP servers (see prepareMcp). */
   mcpToolSpecs?: ToolSpec[];
+  /** Request-local plugin snapshot shared by skills, agents, hooks, and MCP. */
+  pluginContributions?: PluginContributions;
   /** Shared background-task manager: tasks survive across turns (app owns it). */
   background?: BackgroundTasks;
   /** ask_user channel (TUI question overlay). */
@@ -56,6 +60,8 @@ export type TuiAgent = {
  */
 export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; dispose: () => void } {
   const { config } = opts;
+  const workspace = opts.workspace ?? process.cwd();
+  const pluginContributions = opts.pluginContributions ?? loadPluginContributions(workspace);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin) {
@@ -109,7 +115,8 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
-    hooks: mergePluginHooks(opts.workspace ?? process.cwd(), config.hooks),
+    hooks: mergePluginHooks(workspace, config.hooks, pluginContributions),
+    pluginContributions,
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
   };
@@ -135,11 +142,18 @@ export function createTuiAgent(opts: TuiAgentOptions): TuiAgent {
 export async function prepareMcp(
   config: TuiConfig,
   workspacePath?: string,
-): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
+): Promise<{
+  specs: ToolSpec[];
+  entries: McpClientEntry[];
+  pluginContributions: PluginContributions;
+  dispose: () => void;
+}> {
   const workspace = workspacePath ?? process.cwd();
-  const servers = mergePluginMcpServers(workspace, config.mcpServers);
+  const pluginContributions = loadPluginContributions(workspace);
+  const servers = mergePluginMcpServers(workspace, config.mcpServers, pluginContributions);
   if (Object.keys(servers).length === 0) {
-    return { specs: [], entries: [], dispose: () => {} };
+    return { specs: [], entries: [], pluginContributions, dispose: () => {} };
   }
-  return loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
+  const loaded = await loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
+  return { ...loaded, pluginContributions };
 }

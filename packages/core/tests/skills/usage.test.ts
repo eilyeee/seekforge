@@ -47,4 +47,14 @@ describe("logSkillUsage", () => {
     logSkillUsage(ws, "s1", []);
     expect(fs.existsSync(path.join(ws, ".seekforge", "skills-usage.jsonl"))).toBe(false);
   });
+
+  it("never follows a linked telemetry target or changes its destination", () => {
+    const ws = makeTempDir();
+    const outside = path.join(makeTempDir(), "outside.jsonl");
+    fs.writeFileSync(outside, "sentinel\n");
+    fs.mkdirSync(path.join(ws, ".seekforge"));
+    fs.symlinkSync(outside, path.join(ws, ".seekforge", "skills-usage.jsonl"));
+    expect(() => logSkillUsage(ws, "s1", [sel("a")])).not.toThrow();
+    expect(fs.readFileSync(outside, "utf8")).toBe("sentinel\n");
+  });
 });

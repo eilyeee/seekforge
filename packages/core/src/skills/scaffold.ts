@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-
-const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+import { writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
+import { SKILL_ID_RE, skillsStoreRoot, withSkillMutation } from "./storage.js";
 
 const SKILL_MD_TEMPLATE = `# <skill name>
 
@@ -43,22 +43,28 @@ export function createSkillScaffold(workspace: string, id: string): string {
   if (!SKILL_ID_RE.test(id)) {
     throw new Error(`invalid skill id "${id}": must match ${SKILL_ID_RE}`);
   }
-  const dir = path.join(workspace, ".seekforge", "skills", id);
-  if (fs.existsSync(dir)) {
-    throw new Error(`skill directory already exists: ${dir}`);
-  }
-  fs.mkdirSync(dir, { recursive: true });
-  const skillJson = {
-    id,
-    name: id,
-    description: "",
-    tags: [],
-    triggers: [],
-    priority: 50,
-    enabled: true,
-    risk: "medium",
-  };
-  fs.writeFileSync(path.join(dir, "skill.json"), JSON.stringify(skillJson, null, 2) + "\n");
-  fs.writeFileSync(path.join(dir, "SKILL.md"), SKILL_MD_TEMPLATE);
-  return dir;
+  return withSkillMutation(workspace, false, () => {
+    const root = skillsStoreRoot(workspace, false, true)!;
+    const dir = path.join(root, id);
+    if (fs.existsSync(dir)) throw new Error(`skill directory already exists: ${dir}`);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    try {
+      const skillJson = {
+        id,
+        name: id,
+        description: "",
+        tags: [],
+        triggers: [],
+        priority: 50,
+        enabled: true,
+        risk: "medium",
+      };
+      writeWorkspaceStateFileAtomic(root, path.join(id, "skill.json"), `${JSON.stringify(skillJson, null, 2)}\n`);
+      writeWorkspaceStateFileAtomic(root, path.join(id, "SKILL.md"), SKILL_MD_TEMPLATE);
+      return dir;
+    } catch (error) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+  });
 }

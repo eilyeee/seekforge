@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -54,6 +54,16 @@ describe("parseFrontmatterSkill", () => {
     expect(s.id).toBe("chomp-skill");
     expect(s.description).toBe("first line second line");
   });
+
+  it("bounds imported metadata so a successful import remains loadable", () => {
+    const triggers = Array.from({ length: 100 }, (_, index) => `trigger-${index}`).join("|");
+    const parsed = parseFrontmatterSkill(
+      `---\nname: bounded-import\ntrigger: ${triggers}\ntags: ${"x".repeat(150)},tag\n---\nbody`,
+    );
+    expect(parsed.triggers).toHaveLength(64);
+    expect(parsed.tags[0]).toHaveLength(100);
+    expect(() => parseFrontmatterSkill(`---\nname: ${"a".repeat(129)}\n---\nbody`)).toThrow(/invalid/);
+  });
 });
 
 describe("importExternalSkill", () => {
@@ -89,5 +99,22 @@ describe("importExternalSkill", () => {
     importExternalSkill(src, { targetRoot: target });
     expect(() => importExternalSkill(src, { targetRoot: target })).toThrow(/--force/);
     expect(() => importExternalSkill(src, { targetRoot: target, force: true })).not.toThrow();
+  });
+
+  it("rejects linked sources and linked force-replacement targets", () => {
+    const linkRoot = mkdtempSync(join(tmpdir(), "sf-import-link-"));
+    const outside = mkdtempSync(join(tmpdir(), "sf-import-outside-"));
+    try {
+      const linkedSource = join(linkRoot, "SKILL.md");
+      symlinkSync(join(src, "SKILL.md"), linkedSource);
+      expect(() => importExternalSkill(linkedSource, { targetRoot: target })).toThrow(/symbolic link/);
+
+      symlinkSync(outside, join(target, "meta-theory"));
+      expect(() => importExternalSkill(src, { targetRoot: target, force: true })).toThrow(/physical/);
+      expect(readFileSync(join(src, "SKILL.md"), "utf8")).toBe(META_KIM_STYLE);
+    } finally {
+      rmSync(linkRoot, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

@@ -43,6 +43,7 @@ type Filter = "all" | SkillScope;
 export function SkillsView() {
   const t = useT();
   const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Array<{ id?: string; path: string; message: string }>>([]);
   const [detail, setDetail] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -56,10 +57,12 @@ export function SkillsView() {
   const refresh = (workspaceId = ws) => {
     const request = requests.beginLatest(workspaceId);
     if (!request) return;
-    api
-      .skills(workspaceId)
-      .then((nextSkills) => {
-        if (requests.isCurrent(request)) setSkills(nextSkills);
+    Promise.all([api.skills(workspaceId), api.skillDiagnostics(workspaceId)])
+      .then(([nextSkills, diagnosticResult]) => {
+        if (requests.isCurrent(request)) {
+          setSkills(nextSkills);
+          setDiagnostics(diagnosticResult.diagnostics);
+        }
       })
       .catch((e: unknown) => {
         if (requests.isCurrent(request)) setError(String(e));
@@ -69,6 +72,7 @@ export function SkillsView() {
   useEffect(() => {
     setSkills(null);
     setDetail(null);
+    setDiagnostics([]);
     setError(null);
     setFilter("all");
     setQuery("");
@@ -238,6 +242,16 @@ export function SkillsView() {
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {error && <Card className="mb-3 border-danger/40 bg-danger/10 p-2 text-xs text-danger">{error}</Card>}
+        {diagnostics.length > 0 && (
+          <Card className="mb-3 border-warn/40 bg-warn/10 p-3 text-xs text-warn">
+            <p className="font-medium">{t("skills.diagnosticsTitle", { count: diagnostics.length })}</p>
+            {diagnostics.slice(0, 5).map((diagnostic) => (
+              <p key={`${diagnostic.path}:${diagnostic.message}`} className="mt-1 font-mono text-2xs">
+                {diagnostic.id ?? diagnostic.path}: {diagnostic.message}
+              </p>
+            ))}
+          </Card>
+        )}
         {skills === null ? (
           <p className="text-tertiary">{t("skills.loading")}</p>
         ) : skills.length === 0 ? (

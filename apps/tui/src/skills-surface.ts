@@ -8,7 +8,7 @@
  * disabled flag: a builtin id absent from the loaded set was disabled via an
  * override marker (see core skills/manage.ts).
  */
-import { BUILTIN_SKILLS, loadSkills } from "@seekforge/core";
+import { BUILTIN_SKILLS, loadSkills, loadSkillsDetailed, type PluginContributions } from "@seekforge/core";
 
 /** Structural row for the /skills list; mapped from core's Skill. */
 export type SkillRow = {
@@ -49,8 +49,8 @@ export function formatSkillLines(skills: ReadonlyArray<SkillRow>): string[] {
  * override marker; it is re-added here with disabled:true so /skills can show
  * it. Disabled non-builtin skills have no surviving record and stay hidden.
  */
-export function loadSkillsWithStatus(workspace: string): SkillRow[] {
-  const loaded = loadSkills(workspace);
+export function loadSkillsWithStatus(workspace: string, contributions?: PluginContributions): SkillRow[] {
+  const loaded = loadSkills(workspace, contributions);
   const loadedIds = new Set(loaded.map((s) => s.id));
   const rows: SkillRow[] = loaded.map((s) => ({
     id: s.id,
@@ -68,4 +68,12 @@ export function loadSkillsWithStatus(workspace: string): SkillRow[] {
     });
   }
   return rows;
+}
+
+/** Actionable warnings for malformed or unsafe skill installations. */
+export function loadSkillDiagnosticLines(workspace: string, contributions?: PluginContributions): string[] {
+  return loadSkillsDetailed(workspace, contributions).diagnostics.map(
+    (diagnostic) =>
+      `warning [${diagnostic.code}] ${diagnostic.id ?? diagnostic.path}: ${collapse(diagnostic.message, 100)}`,
+  );
 }

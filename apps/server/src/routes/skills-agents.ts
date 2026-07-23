@@ -3,7 +3,6 @@
  * agent definitions + import, and the self-evolution proposal review flow.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   applyProposal,
@@ -16,9 +15,12 @@ import {
   listEvolutionProposals,
   loadAgentDefinitions,
   loadSkills,
+  loadSkillsDetailed,
   listPlugins,
   removePlugin,
   removeSkill,
+  resolveSkillsStoreRoot,
+  seekforgeHome,
   setEvolutionProposalStatus,
   setSkillEnabled,
   setPluginEnabled,
@@ -115,6 +117,10 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     );
   }
 
+  if (method === "GET" && path === "/api/skills/diagnostics") {
+    return sendJson(res, 200, { diagnostics: loadSkillsDetailed(workspace).diagnostics });
+  }
+
   // Import an external (Claude-Code-style) SKILL.md. Checked before the
   // GET-by-id route so :id never captures "import".
   if (method === "POST" && segs.length === 3 && segs[1] === "skills" && segs[2] === "import") {
@@ -124,12 +130,18 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (typeof src !== "string" || src.trim() === "") {
       return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
     }
-    const targetRoot =
-      global === true ? join(homedir(), ".seekforge", "skills") : join(workspace, ".seekforge", "skills");
     try {
-      const { dir, skill } = importExternalSkill(src, { targetRoot });
+      const mutate = async () => {
+        const targetRoot = resolveSkillsStoreRoot(global === true ? seekforgeHome() : workspace, true)!;
+        return importExternalSkill(src, { targetRoot, guardWorkspace: workspace, global: global === true });
+      };
+      const { dir, skill } =
+        global === true ? await mutate() : await rest.coordinator.withRepository(workspace, mutate);
       return sendJson(res, 200, { ok: true, dir, skill });
     } catch (err) {
+      if (err instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot import a skill while the workspace is active");
+      }
       return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
     }
   }
@@ -143,9 +155,12 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", "body must be {id: string}");
     }
     try {
-      const dir = createSkillScaffold(workspace, id);
+      const dir = await rest.coordinator.withRepository(workspace, async () => createSkillScaffold(workspace, id));
       return sendJson(res, 200, { ok: true, dir });
     } catch (err) {
+      if (err instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot create a skill while the workspace is active");
+      }
       return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
     }
   }
@@ -174,9 +189,13 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", `cannot modify builtin skill "${id}"`);
     }
     try {
-      const result = setSkillEnabled(workspace, id, enabled, { global });
+      const mutate = async () => setSkillEnabled(workspace, id, enabled, { global });
+      const result = global ? await mutate() : await rest.coordinator.withRepository(workspace, mutate);
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
+      if (err instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot update a skill while the workspace is active");
+      }
       return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
     }
   }
@@ -192,9 +211,14 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", `cannot remove builtin skill "${id}"`);
     }
     try {
-      const result = removeSkill(workspace, id, { global: scope === "global" });
+      const global = scope === "global";
+      const mutate = async () => removeSkill(workspace, id, { global });
+      const result = global ? await mutate() : await rest.coordinator.withRepository(workspace, mutate);
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
+      if (err instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot remove a skill while the workspace is active");
+      }
       return sendApiError(res, 400, "bad_request", err instanceof Error ? err.message : String(err));
     }
   }
@@ -218,7 +242,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       return sendApiError(res, 400, "bad_request", "body must be {path: string, global?: boolean}");
     }
     const targetRoot =
-      global === true ? join(homedir(), ".seekforge", "agents") : join(workspace, ".seekforge", "agents");
+      global === true ? join(seekforgeHome(), ".seekforge", "agents") : join(workspace, ".seekforge", "agents");
     try {
       const { dir, agent, droppedTools } = importExternalAgent(src, { targetRoot });
       return sendJson(res, 200, { ok: true, dir, agent, droppedTools });

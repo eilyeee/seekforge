@@ -55,4 +55,20 @@ describe("buildSkillBrief", () => {
     expect(brief).toContain("## first");
     expect(brief).toContain("## second");
   });
+
+  it("recognizes localized workflow headings and identifies provenance and risk", () => {
+    const selection = sel("localized", "# 技能\n\n## 步骤\n1. 执行\n\n## 其他\n不要注入");
+    const brief = buildSkillBrief([selection]);
+    expect(brief).toContain("## localized [builtin, risk=low]");
+    expect(brief).toContain("1. 执行");
+    expect(brief).not.toContain("不要注入");
+  });
+
+  it("reserves prompt space fairly so a later skill is not erased", () => {
+    const huge = `## Procedure\n${"x".repeat(5000)}`;
+    const brief = buildSkillBrief([sel("first", huge), sel("second", huge), sel("third", huge)]);
+    expect(brief).toContain("## first");
+    expect(brief).toContain("## second");
+    expect(brief).toContain("## third");
+  });
 });

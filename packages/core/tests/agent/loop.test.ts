@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,7 +37,10 @@ function fakeDispatcher(result: ToolResult): ToolDispatcher & { calls: ToolCall[
   const calls: ToolCall[] = [];
   return {
     calls,
-    list: () => [{ name: "read_file", description: "d", parameters: {} }],
+    list: () =>
+      ["read_file", "apply_patch", "write_file", "run_command", "update_plan", "ask_user", "needs_permission"].map(
+        (name) => ({ name, description: "d", parameters: {} }),
+      ),
     execute: async (call: ToolCall, _ctx: ToolContext) => {
       calls.push(call);
       return result;
@@ -134,6 +137,26 @@ describe("agent loop", () => {
     expect(events.some((e) => e.type === "tool.completed")).toBe(true);
   });
 
+  it("keeps truncated tool output valid JSON and within its exact character cap", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "read_file", argumentsJson: '{"path":"a.ts"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "final" }),
+    ]);
+    const agent = createAgentCore({
+      provider,
+      dispatcher: fakeDispatcher({ ok: true, data: { content: '"\\'.repeat(2_000) } }),
+      confirm: async () => true,
+      limits: { toolOutputMaxChars: 128 },
+    });
+    await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const output = provider.requests[1]!.messages.at(-1)!.content;
+    expect(output.length).toBeLessThanOrEqual(128);
+    expect(JSON.parse(output)).toMatchObject({ ok: true, data: { truncated: true } });
+  });
+
   it("hides and rejects every tool outside the exact runtime allow-list", async () => {
     const provider = fakeProvider([
       response({
@@ -167,6 +190,39 @@ describe("agent loop", () => {
     expect(completed && completed.type === "tool.completed" ? completed.result.error?.code : undefined).toBe(
       "tool_not_allowed",
     );
+  });
+
+  it("rejects a fabricated call to a tool omitted from this turn's context-budget catalog", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "huge_optional_tool", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "blocked" }),
+    ]);
+    const calls: ToolCall[] = [];
+    const dispatcher: ToolDispatcher = {
+      list: () => [
+        { name: "read_file", description: "read", parameters: {} },
+        { name: "huge_optional_tool", description: "x".repeat(20_000), parameters: {} },
+      ],
+      execute: async (call) => {
+        calls.push(call);
+        return { ok: true };
+      },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      contextWindowTokens: 20_000,
+    });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(provider.requests[0]!.tools?.map((tool) => tool.name)).toEqual(["read_file"]);
+    expect(calls).toEqual([]);
+    expect(events.find((event) => event.type === "tool.completed")).toMatchObject({
+      result: { ok: false, error: { code: "tool_not_advertised" } },
+    });
   });
 
   it("returns an invalid_json tool result for malformed argumentsJson", async () => {
@@ -445,6 +501,51 @@ describe("agent loop", () => {
     expect(replayedSystem.content).not.toContain("Mode: PLAN");
     // the plan itself must still be in the replayed history
     expect(execProvider.requests[0]!.messages.some((m) => m.content.includes("## Plan"))).toBe(true);
+  });
+
+  it("reselects and injects task-relevant skills on a resumed session", async () => {
+    const skillDir = join(workspace, ".seekforge", "skills", "resume-helper");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "skill.json"),
+      JSON.stringify({
+        id: "resume-helper",
+        name: "Resume helper",
+        description: "Keep continuation work consistent",
+        tags: [],
+        triggers: ["continue-special"],
+        risk: "low",
+      }),
+    );
+    writeFileSync(join(skillDir, "SKILL.md"), "# Resume helper\n\n## Procedure\n1. preserve the invariant\n");
+
+    const first = createAgentCore({
+      provider: fakeProvider([response({ content: "seed" })]),
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    const firstEvents = await collect(first.runTask({ ...baseInput, projectPath: workspace, task: "seed" }));
+    const created = firstEvents.find((event) => event.type === "session.created");
+    const sessionId = created?.type === "session.created" ? created.sessionId : "";
+
+    const resumedProvider = fakeProvider([response({ content: "continued" })]);
+    const resumed = createAgentCore({
+      provider: resumedProvider,
+      dispatcher: fakeDispatcher({ ok: true }),
+      confirm: async () => true,
+    });
+    await collect(
+      resumed.runTask({
+        ...baseInput,
+        projectPath: workspace,
+        task: "continue-special now",
+        resumeSessionId: sessionId,
+      }),
+    );
+    expect(resumedProvider.requests[0]!.messages[0]!.content).toContain("## resume-helper [project, risk=low]");
+    expect(resumedProvider.requests[0]!.messages[0]!.content).toContain("preserve the invariant");
+    const usage = readFileSync(join(workspace, ".seekforge", "skills-usage.jsonl"), "utf8");
+    expect(usage).toContain('"skillId":"resume-helper"');
   });
 
   it("a run that fails mid-way leaves a resumable trace (interruption recovery)", async () => {
@@ -814,6 +915,25 @@ describe("agent loop: turn-budget wrap-up", () => {
     const traced = loadSessionMessages(workspace, sessionId);
     expect(traced.filter((m) => m.role === "user")).toHaveLength(1);
     expect(traced.some((m) => m.content.includes("[harness]"))).toBe(false);
+  });
+
+  it("treats successful executable commands as workspace mutations even without a changed path", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "run_command", argumentsJson: '{"command":"generator"}' }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "done" }),
+      response({ content: "done" }),
+    ]);
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "run_command", description: "run", parameters: {} }],
+      execute: async () => ({ ok: true, meta: { permission: "execute", command: "generator" } }),
+    };
+    const agent = createAgentCore({ provider, dispatcher, confirm: async () => true, verifyCommand: "exit 1" });
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(events.some((event) => event.type === "file.changed")).toBe(false);
+    expect(events.some((event) => event.type === "notice" && event.message.includes("Auto-verifying"))).toBe(true);
   });
 
   it("finalize gate: a failed auto-verify re-runs after the model edits again, but not without a new edit", async () => {

@@ -1,8 +1,10 @@
 import {
   createDispatchManager,
   loadAgentDefinitions,
+  loadPluginContributions,
   type BackgroundTasks,
   type DispatchManager,
+  type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
 import type { ApprovalMode, ConfirmResult, PermissionRequest } from "@seekforge/shared";
@@ -18,6 +20,7 @@ export type RunSessionDeps = {
   model: string;
   projectPath: string;
   mcpToolSpecs: ToolSpec[];
+  pluginContributions?: PluginContributions;
   /** ask = read-only investigation; edit = normal. */
   mode: "ask" | "edit";
   /** Plan flavor: read-only run that produces an implementation plan. */
@@ -51,6 +54,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
   // transcript doesn't repaint on every chunk (anti-flicker).
   const buffered = createBufferedDispatch(deps.dispatch);
   const dispatchManager = createDispatchManager();
+  const pluginContributions = deps.pluginContributions ?? loadPluginContributions(deps.projectPath);
 
   const { agent, dispose } = createTuiAgent({
     config: deps.config,
@@ -60,8 +64,9 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
     onModelDelta: (chunk) => buffered.dispatch({ type: "model-delta", chunk }),
     onReasoningDelta: (chunk) => buffered.dispatch({ type: "thinking-delta", chunk }),
     extractMemory: true,
-    subagents: loadAgentDefinitions(deps.projectPath),
+    subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
     mcpToolSpecs: deps.mcpToolSpecs,
+    pluginContributions,
     background: deps.background,
     askUser: deps.askUser,
     dispatchManager,

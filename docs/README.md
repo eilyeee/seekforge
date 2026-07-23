@@ -20,6 +20,8 @@ and quick start; this folder holds the reference docs.
   resources, prompts, and `${ENV}` header expansion.
 - [Plugins](plugins.md) — first-class skill/agent/MCP/hook bundles, digest-bound
   approval, lifecycle commands, and security boundaries.
+- [Skills](skills.md) — native format, precedence, automatic selection,
+  lifecycle safety, diagnostics, and usage telemetry.
 - [Browser / visual verification](browser.md) — the optional Playwright-backed
   `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
   `browser_console` tools and the frontend verify loop.

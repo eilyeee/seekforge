@@ -71,4 +71,33 @@ describe("selectSkills", () => {
     const ids = selectSkills("fix it", skills).map((s) => s.skill.id);
     expect(ids).toEqual(["high", "low"]);
   });
+
+  it("counts duplicate normalized metadata only once and matches Latin words at boundaries", () => {
+    const skill = makeSkill("deduped", { triggers: ["fix", " FIX "], tags: ["bug", "BUG"] });
+    expect(selectSkills("please fix this bug", [skill])[0]!.score).toBeCloseTo(4 + 2 + 0.5);
+    expect(selectSkills("use a prefix and debugged output", [skill])).toEqual([]);
+  });
+
+  it("matches workspace languages and file patterns", () => {
+    const ws = makeTempDir();
+    fs.mkdirSync(path.join(ws, "src"));
+    fs.writeFileSync(path.join(ws, "src", "agent.ts"), "export {};\n");
+    const skill = makeSkill("ts-agent", {
+      appliesTo: { languages: ["TypeScript"], filePatterns: ["src/**/*.ts"] },
+    });
+    const selected = selectSkills("unrelated request", [skill], { workspace: ws });
+    expect(selected[0]!.reason).toContain("language typescript");
+    expect(selected[0]!.reason).toContain("file src/**/*.ts");
+  });
+
+  it("requires explicit opt-in for high-risk auto selection", () => {
+    const skill = makeSkill("dangerous", { risk: "high", triggers: ["deploy"] });
+    expect(selectSkills("deploy now", [skill])).toEqual([]);
+    expect(selectSkills("deploy now", [skill], { allowHighRisk: true })).toHaveLength(1);
+  });
+
+  it("validates the caller-provided selection cap", () => {
+    expect(() => selectSkills("fix", [], { max: -1 })).toThrow(RangeError);
+    expect(() => selectSkills("fix", [], { max: 65 })).toThrow(RangeError);
+  });
 });

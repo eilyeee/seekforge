@@ -318,6 +318,16 @@ export const api = {
       "DELETE",
       withWorkspace(`/api/skills/${encodeURIComponent(id)}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, ws),
     ),
+  skillDiagnostics: (ws?: string) =>
+    request<{
+      diagnostics: Array<{
+        scope: SkillScope;
+        path: string;
+        id?: string;
+        code: string;
+        message: string;
+      }>;
+    }>("GET", withWorkspace("/api/skills/diagnostics", ws)),
 
   pluginCreate: (id: string, ws?: string) =>
     request<{ manifest: PluginRecord["manifest"]; path: string }>("POST", withWorkspace("/api/plugins", ws), { id }),

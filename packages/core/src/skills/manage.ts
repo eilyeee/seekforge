@@ -7,22 +7,18 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { seekforgeHome } from "../memory/store.js";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
+import { writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
+import { SKILL_ID_RE, skillsStoreRoot, withSkillMutation } from "./storage.js";
 
 export type ManageSkillOptions = { global?: boolean };
-const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_SKILL_METADATA_BYTES = 64 * 1024;
 
 function requireSkillId(id: string): void {
   if (!SKILL_ID_RE.test(id)) {
     throw new Error(`invalid skill id "${id}": must match ${SKILL_ID_RE}`);
   }
-}
-
-function skillsRoot(workspace: string, global: boolean): string {
-  return global ? path.join(seekforgeHome(), ".seekforge", "skills") : path.join(workspace, ".seekforge", "skills");
 }
 
 function isBuiltin(id: string): boolean {
@@ -32,7 +28,12 @@ function isBuiltin(id: string): boolean {
 /** True when a skill dir with a skill.json exists under the given root. */
 function skillDirExists(root: string, id: string): boolean {
   try {
-    return fs.statSync(path.join(root, id, "skill.json")).isFile();
+    const dir = path.join(root, id);
+    const dirStat = fs.lstatSync(dir);
+    const metadataStat = fs.lstatSync(path.join(dir, "skill.json"));
+    return (
+      !dirStat.isSymbolicLink() && dirStat.isDirectory() && !metadataStat.isSymbolicLink() && metadataStat.isFile()
+    );
   } catch {
     return false;
   }
@@ -66,59 +67,65 @@ export function setSkillEnabled(
   opts: ManageSkillOptions = {},
 ): SetSkillEnabledResult {
   requireSkillId(id);
-  const root = skillsRoot(workspace, opts.global ?? false);
-  const dir = path.join(root, id);
-  const jsonPath = path.join(dir, "skill.json");
+  const global = opts.global ?? false;
+  return withSkillMutation(workspace, global, () => {
+    const existingRoot = skillsStoreRoot(workspace, global, false);
+    const root = existingRoot ?? skillsStoreRoot(workspace, global, true)!;
+    const dir = path.join(root, id);
+    const jsonPath = path.join(dir, "skill.json");
 
-  const hasMd = (() => {
-    try {
-      return fs.statSync(path.join(dir, "SKILL.md")).isFile();
-    } catch {
-      return false;
-    }
-  })();
+    const hasMd = (() => {
+      try {
+        const stat = fs.lstatSync(path.join(dir, "SKILL.md"));
+        return !stat.isSymbolicLink() && stat.isFile();
+      } catch {
+        return false;
+      }
+    })();
 
-  // Re-enabling a builtin whose dir is only a disable marker (no SKILL.md):
-  // remove the marker so the in-package builtin resurfaces cleanly.
-  if (enabled && isBuiltin(id) && skillDirExists(root, id) && !hasMd) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    return { id, enabled: true, action: "marker", path: jsonPath };
-  }
-
-  if (skillDirExists(root, id)) {
-    // Flip enabled in place, preserving the rest of skill.json.
-    let parsed: Record<string, unknown>;
-    try {
-      const value = JSON.parse(readUtf8FileBoundedSync(fs.realpathSync(jsonPath), MAX_SKILL_METADATA_BYTES)) as unknown;
-      parsed =
-        typeof value === "object" && value !== null && !Array.isArray(value)
-          ? (value as Record<string, unknown>)
-          : { id };
-    } catch {
-      parsed = { id };
-    }
-    parsed.enabled = enabled;
-    fs.writeFileSync(jsonPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-    return { id, enabled, action: "edited", path: jsonPath };
-  }
-
-  // No own dir in this layer.
-  if (enabled) {
-    // Re-enabling a builtin = remove any disable marker we previously wrote.
-    if (isBuiltin(id)) {
-      // Nothing to remove and no own dir → already enabled by default.
+    // Re-enabling a builtin whose dir is only a disable marker (no SKILL.md):
+    // remove the marker so the in-package builtin resurfaces cleanly.
+    if (enabled && isBuiltin(id) && skillDirExists(root, id) && !hasMd) {
+      fs.rmSync(dir, { recursive: true, force: true });
       return { id, enabled: true, action: "marker", path: jsonPath };
     }
-    throw new Error(`unknown skill "${id}" (no skill to enable in this layer)`);
-  }
 
-  if (!isBuiltin(id)) {
-    throw new Error(`unknown skill "${id}" (nothing to disable in this layer)`);
-  }
-  // Disable a builtin: write a minimal override marker.
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(jsonPath, JSON.stringify({ id, enabled: false }, null, 2) + "\n", "utf8");
-  return { id, enabled: false, action: "marker", path: jsonPath };
+    if (skillDirExists(root, id)) {
+      // Flip enabled in place, preserving the rest of skill.json. Physical-leaf
+      // validation above plus atomic replacement prevents symlink write-through.
+      let parsed: Record<string, unknown>;
+      try {
+        const value = JSON.parse(readUtf8FileBoundedSync(jsonPath, MAX_SKILL_METADATA_BYTES)) as unknown;
+        parsed =
+          typeof value === "object" && value !== null && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : { id };
+      } catch {
+        parsed = { id };
+      }
+      parsed.id = id;
+      parsed.enabled = enabled;
+      writeWorkspaceStateFileAtomic(root, path.join(id, "skill.json"), `${JSON.stringify(parsed, null, 2)}\n`);
+      return { id, enabled, action: "edited", path: jsonPath };
+    }
+
+    // No own dir in this layer.
+    if (enabled) {
+      if (isBuiltin(id)) {
+        return { id, enabled: true, action: "marker", path: jsonPath };
+      }
+      throw new Error(`unknown skill "${id}" (no skill to enable in this layer)`);
+    }
+
+    if (!isBuiltin(id)) throw new Error(`unknown skill "${id}" (nothing to disable in this layer)`);
+    fs.mkdirSync(dir, { mode: 0o700 });
+    writeWorkspaceStateFileAtomic(
+      root,
+      path.join(id, "skill.json"),
+      `${JSON.stringify({ id, enabled: false }, null, 2)}\n`,
+    );
+    return { id, enabled: false, action: "marker", path: jsonPath };
+  });
 }
 
 export type RemoveSkillResult = { id: string; path: string };
@@ -129,14 +136,19 @@ export type RemoveSkillResult = { id: string; path: string };
  */
 export function removeSkill(workspace: string, id: string, opts: ManageSkillOptions = {}): RemoveSkillResult {
   requireSkillId(id);
-  const root = skillsRoot(workspace, opts.global ?? false);
-  const dir = path.join(root, id);
-  if (!skillDirExists(root, id)) {
-    if (isBuiltin(id)) {
-      throw new Error(`cannot remove builtin "${id}" (disable it instead)`);
+  const global = opts.global ?? false;
+  return withSkillMutation(workspace, global, () => {
+    const root = skillsStoreRoot(workspace, global, false);
+    if (!root) {
+      if (isBuiltin(id)) throw new Error(`cannot remove builtin "${id}" (disable it instead)`);
+      throw new Error(`unknown skill "${id}" (no skill directory to remove)`);
     }
-    throw new Error(`unknown skill "${id}" (no skill directory to remove)`);
-  }
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { id, path: dir };
+    const dir = path.join(root, id);
+    if (!skillDirExists(root, id)) {
+      if (isBuiltin(id)) throw new Error(`cannot remove builtin "${id}" (disable it instead)`);
+      throw new Error(`unknown skill "${id}" (no physical skill directory to remove)`);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { id, path: dir };
+  });
 }

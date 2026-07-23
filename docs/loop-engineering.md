@@ -102,6 +102,21 @@ arrive. The iteration counter advances only after the agent run completes, so a
 crash resumes an interrupted iteration without consuming an iteration slot while
 still reusing the session and accounting for already observed spend.
 
+Every iteration reconstructs task-scoped prompt state, including automatic
+skill selection, even when it resumes the same session. The provider may call
+only tools advertised in that exact request after context-budget trimming;
+fabricated calls to known-but-omitted tools fail before dispatch. Successful
+write/dangerous tools, executable commands, mutating MCP calls, and editing
+subagents all invalidate prior verify/lint evidence even when no single changed
+path is available.
+
+Convergence fingerprints run asynchronously with a five-second, 20,000-file,
+64-MiB budget. Git repositories hash HEAD, status, and dirty/untracked content;
+non-Git workspaces use an ignore-aware traversal. If a safe fingerprint cannot
+be produced within the limits, that sample is `null` and Loop skips the
+unchanged-workspace conclusion instead of blocking the event loop or declaring
+false `no_progress`.
+
 Only one process may own a persisted Loop at a time. A token-protected lock next
 to the state file records the owner's process identity as well as its PID, rejects
 concurrent runs, and recovers locks after process exit or PID reuse. Fresh

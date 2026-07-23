@@ -6,6 +6,7 @@ const dispose = vi.fn();
 
 vi.mock("@seekforge/core", () => ({
   loadAgentDefinitions: vi.fn(() => []),
+  loadPluginContributions: vi.fn(() => ({ skillRoots: [], agentRoots: [], mcpServers: {}, hooks: {} })),
   isValidLoopId: vi.fn((loopId: string) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(loopId)),
   runAutoLoop,
   resumeAutoLoop,

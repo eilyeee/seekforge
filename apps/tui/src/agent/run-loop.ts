@@ -1,11 +1,13 @@
 import {
   loadAgentDefinitions,
+  loadPluginContributions,
   isValidLoopId,
   runAutoLoop,
   resumeAutoLoop,
   type LoopEvent,
   type LoopResult,
   type LoopRequirementMode,
+  type PluginContributions,
   type ToolSpec,
 } from "@seekforge/core";
 import type { TuiConfig } from "../config.js";
@@ -17,6 +19,7 @@ export type RunLoopDeps = {
   model: string;
   projectPath: string;
   mcpToolSpecs: ToolSpec[];
+  pluginContributions?: PluginContributions;
   /** Max run→verify iterations before giving up (caller supplies the default). */
   maxIterations: number;
   /** Optional command-level override; otherwise inherits config.costBudgetUsd. */
@@ -43,14 +46,16 @@ export async function runLoop(
   signal: AbortSignal,
   deps: RunLoopDeps,
 ): Promise<LoopResult> {
+  const pluginContributions = deps.pluginContributions ?? loadPluginContributions(deps.projectPath);
   const { deps: agentDeps, dispose } = buildTuiDeps({
     config: deps.config,
     workspace: deps.projectPath,
     model: deps.model,
     confirm: async () => false,
     extractMemory: true,
-    subagents: loadAgentDefinitions(deps.projectPath),
+    subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
     mcpToolSpecs: deps.mcpToolSpecs,
+    pluginContributions,
   });
 
   try {
@@ -81,14 +86,16 @@ export async function resumeLoop(
   },
 ): Promise<LoopResult> {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  const pluginContributions = deps.pluginContributions ?? loadPluginContributions(deps.projectPath);
   const { deps: agentDeps, dispose } = buildTuiDeps({
     config: deps.config,
     workspace: deps.projectPath,
     model: deps.model,
     confirm: async () => false,
     extractMemory: true,
-    subagents: loadAgentDefinitions(deps.projectPath),
+    subagents: loadAgentDefinitions(deps.projectPath, pluginContributions),
     mcpToolSpecs: deps.mcpToolSpecs,
+    pluginContributions,
   });
 
   try {

@@ -133,7 +133,12 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/mcp/prompts | `{prompts: [{server, name, description?, arguments?}]}` — prompts/list of every explicitly trusted MCP server (spawned on demand, then disposed). An untrusted, failed, or unsupported server contributes zero entries. Mirrors GET /api/mcp/resources |
 | POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
+| GET /api/skills/diagnostics | `{diagnostics: SkillDiagnostic[]}` for malformed, mismatched, linked, or otherwise unsafe skill installations |
 | GET /api/skills/:id | full `Skill` |
+| POST /api/skills | body `{id}` → scaffold a project skill under the repository/workspace mutation guard |
+| POST /api/skills/import | body `{path, global?}` → atomically import an external skill; project imports are workspace-coordinated |
+| PUT /api/skills/:id | body `{enabled, scope?: "project"\|"global"}` → atomically toggle a non-builtin skill |
+| DELETE /api/skills/:id[?scope=project\|global] | remove a physical non-builtin skill directory; returns 409 while the workspace is active |
 | GET /api/plugins | installed and project-discovered `PluginRecord[]`; project records are always review-only |
 | POST /api/plugins | body `{id}` → scaffold a project plugin; workspace-coordinated |
 | POST /api/plugins/install | body `{path, force?}` → atomically install a bounded local plugin into the user store, disabled |

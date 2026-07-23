@@ -90,6 +90,7 @@ import type { AgentCore, RunAgentTaskInput } from "./index.js";
 import { acquireSessionLease } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
+import type { PluginContributions } from "../plugins/index.js";
 
 /**
  * Run-local handoff between providers and agent event streams. One bus is
@@ -190,6 +191,8 @@ export type AgentCoreDeps = {
   permissionRules?: PermissionRule[];
   /** Exact run-scoped tool allow-list. Unlisted built-in, MCP, and dispatch tools are hidden and rejected. */
   allowedTools?: string[];
+  /** One run-local plugin contribution snapshot shared by this Agent assembly. */
+  pluginContributions?: PluginContributions;
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
@@ -360,11 +363,33 @@ const MAX_STREAMED_CHUNKS_PER_CALL = 200;
 
 function toolResultForModel(result: ToolResult, maxChars: number): string {
   const payload = result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
-  let text = JSON.stringify(payload);
-  if (text.length > maxChars) {
-    text = `${text.slice(0, maxChars)}…[truncated]`;
+  const text = JSON.stringify(payload);
+  if (text.length <= maxChars) return text;
+  const fit = (render: (preview: string) => string): string => {
+    let low = 0;
+    let high = text.length;
+    let best = render("");
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = render(truncateHeadTail(text, middle).text);
+      if (candidate.length <= maxChars) {
+        best = candidate;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return best;
+  };
+  if (result.ok) {
+    return fit((preview) => JSON.stringify({ ok: true, data: { truncated: true, preview } }));
   }
-  return text;
+  return fit((message) =>
+    JSON.stringify({
+      ok: false,
+      error: { code: (result.error?.code ?? "tool_error").slice(0, 40), message, truncated: true },
+    }),
+  );
 }
 
 /** Appends a user-supplied system-prompt suffix (CLI --append-system-prompt). */
@@ -400,8 +425,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
   if (!Number.isFinite(limits.contextBudgetRatio) || limits.contextBudgetRatio <= 0 || limits.contextBudgetRatio > 1) {
     throw new RangeError("contextBudgetRatio must be a finite number greater than 0 and at most 1");
   }
-  if (!Number.isSafeInteger(limits.toolOutputMaxChars) || limits.toolOutputMaxChars <= 0) {
-    throw new RangeError("toolOutputMaxChars must be a positive safe integer");
+  if (!Number.isSafeInteger(limits.toolOutputMaxChars) || limits.toolOutputMaxChars < 128) {
+    throw new RangeError("toolOutputMaxChars must be a safe integer of at least 128");
   }
   const windowTokens = deps.contextWindowTokens ?? 131_072;
   if (!Number.isSafeInteger(windowTokens) || windowTokens <= 0) {
@@ -610,6 +635,19 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         // truncateSessionAtUserTurn / rewindSessionToTurn indexing.
         let runTurnIndex = 0;
         let messages: ChatMessage[];
+        const skillSelections =
+          input.systemPromptOverride !== undefined || (input.mode === "ask" && !input.plan)
+            ? []
+            : selectSkills(input.task, loadSkills(input.projectPath, deps.pluginContributions), {
+                workspace: input.projectPath,
+              });
+        if (skillSelections.length > 0) {
+          logSkillUsage(input.projectPath, sessionId, skillSelections);
+          yield emit({
+            type: "step.started",
+            title: `skills: ${skillSelections.map((selection) => selection.skill.id).join(", ")}`,
+          });
+        }
         if (resuming) {
           messages = loadSessionMessages(input.projectPath, sessionId);
           runTurnIndex = messages.filter((m) => m.role === "user").length;
@@ -628,6 +666,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                     plan: input.plan,
                     projectRules: collectProjectRules(input.projectPath, undefined, input.task),
                     memoryBrief: memoryFor(input.task),
+                    skillBrief: buildSkillBrief(skillSelections),
                     subagentRoster: roster.length > 0 ? buildSubagentRoster(roster) : undefined,
                     commandRoster:
                       depth === 0 ? buildCommandRoster(loadUserCommands(input.projectPath)) || undefined : undefined,
@@ -653,22 +692,6 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           for (const m of messages) trace.message(m);
         } else {
           const memoryBrief = memoryFor(input.task);
-          // Skills are task-execution procedures (e.g. test-failure-fix); they have
-          // no place in read-only Q&A, where they're just noise. Plan runs still get
-          // them (a plan benefits from the procedure).
-          const skillSelections =
-            input.mode === "ask" && !input.plan
-              ? []
-              : selectSkills(input.task, loadSkills(input.projectPath), {
-                  workspace: input.projectPath,
-                });
-          if (skillSelections.length > 0) {
-            logSkillUsage(input.projectPath, sessionId, skillSelections);
-            yield emit({
-              type: "step.started",
-              title: `skills: ${skillSelections.map((s) => s.skill.id).join(", ")}`,
-            });
-          }
           const systemPrompt = appendUserPrompt(
             buildSystemPrompt({
               workspace: input.projectPath,
@@ -803,6 +826,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
         let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
         let toolCallCount = 0;
         const changedFiles = new Set<string>();
+        let workspaceMutationCount = 0;
         const commandsRun: string[] = [];
         let finalContent: string | undefined;
 
@@ -1038,6 +1062,13 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               messages,
               Math.max(1, Math.floor(budgetTokens * 0.3)),
             );
+            if (estimateRequestTokens(messages, requestTools) > budgetTokens) {
+              throw new AgentLimitError(
+                "context_budget_exceeded",
+                "system prompt and retained conversation exceed the configured context budget",
+              );
+            }
+            const requestToolNames = new Set(requestTools.map((tool) => tool.name));
 
             const requestProvider = () =>
               deps.onModelDelta
@@ -1096,6 +1127,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 toolCalls: toolCallCount,
                 planItems: lastPlanItems,
                 changedFiles: changedFiles.size,
+                workspaceMutations: workspaceMutationCount,
                 verifyCommand: deps.verifyCommand,
                 verifyRanSinceEdit,
                 lintCommand: deps.lintCommand,
@@ -1233,6 +1265,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                   },
                 };
               }
+              if (!requestToolNames.has(tc.name)) {
+                return {
+                  args: {},
+                  parseError: {
+                    ok: false,
+                    error: {
+                      code: "tool_not_advertised",
+                      message: `Tool ${tc.name} was not advertised for this provider turn`,
+                    },
+                  },
+                };
+              }
               try {
                 return { args: tc.argumentsJson ? JSON.parse(tc.argumentsJson) : {} };
               } catch {
@@ -1331,12 +1375,27 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               }
               yield emit({ type: "tool.completed", toolName: tc.name, result });
 
+              const permission = result.meta?.permission;
+              const mayMutateWorkspace =
+                result.ok &&
+                (permission === "write" ||
+                  permission === "dangerous" ||
+                  (tc.name === "run_command" && permission !== "readonly") ||
+                  (tc.name.startsWith("mcp__") && permission !== undefined && permission !== "readonly"));
+              if (mayMutateWorkspace) {
+                workspaceMutationCount++;
+                verifyRanSinceEdit = false;
+                lintRanSinceEdit = false;
+              }
               if (result.ok && result.meta?.path && (tc.name === "apply_patch" || tc.name === "write_file")) {
                 changedFiles.add(result.meta.path);
                 yield emit({ type: "file.changed", path: result.meta.path });
                 // New edits invalidate any earlier verify/lint run (finalize gate).
-                verifyRanSinceEdit = false;
-                lintRanSinceEdit = false;
+                if (!mayMutateWorkspace) {
+                  workspaceMutationCount++;
+                  verifyRanSinceEdit = false;
+                  lintRanSinceEdit = false;
+                }
               }
               if (tc.name === "run_command" && result.meta?.command) {
                 commandsRun.push(result.meta.command);
@@ -1375,6 +1434,26 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               for (const ev of queue.drainNow()) yield ev;
             }
             for (const ev of queue.drainNow()) yield ev;
+
+            // Dispatches bypass the normal dispatcher metadata path. Fold their
+            // final report back into the same mutation gate so a nested edit or
+            // shell command cannot leave a parent verify/lint result looking fresh.
+            for (let i = 0; i < turnCalls.length; i++) {
+              if (!isDispatchFamily(turnCalls[i]!.name)) continue;
+              const result = callResults[i];
+              const data = result?.data as
+                | { agentId?: unknown; changedFiles?: unknown; commandsRun?: unknown }
+                | undefined;
+              const agent =
+                typeof data?.agentId === "string" ? roster.find((entry) => entry.id === data.agentId) : undefined;
+              const nestedChanged = Array.isArray(data?.changedFiles) && data.changedFiles.length > 0;
+              const nestedCommands = Array.isArray(data?.commandsRun) && data.commandsRun.length > 0;
+              if (result?.ok && (nestedChanged || (agent?.mode === "edit" && nestedCommands))) {
+                workspaceMutationCount++;
+                verifyRanSinceEdit = false;
+                lintRanSinceEdit = false;
+              }
+            }
 
             // Tool results are appended in the ORIGINAL call order regardless
             // of dispatch completion order (the model matches by toolCallId).

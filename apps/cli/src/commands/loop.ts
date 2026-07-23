@@ -349,11 +349,12 @@ async function runPreparedLoop(
   const { deps, dispose } = createCliAgentDeps({
     config,
     workspace: projectPath,
+    pluginContributions: mcp.pluginContributions,
     model,
     mcpToolSpecs: mcp.specs,
     confirm: async () => false,
     extractMemory: true,
-    subagents: loadAgentDefinitions(projectPath),
+    subagents: loadAgentDefinitions(projectPath, mcp.pluginContributions),
   });
 
   // Ctrl-C: cooperative stop — abort the signal so the loop returns "cancelled"

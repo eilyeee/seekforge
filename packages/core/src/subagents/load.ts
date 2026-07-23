@@ -40,8 +40,11 @@ export function withBuiltinAgents(defs: AgentDefinition[]): AgentDefinition[] {
  * Loads builtin + global (~/.seekforge/agents) + project (.seekforge/agents)
  * agent definitions; later scopes override earlier ones by id.
  */
-export function loadAgentDefinitions(workspace: string): AgentDefinition[] {
-  const pluginRoots = loadPluginContributions(workspace).agentRoots;
+export function loadAgentDefinitions(
+  workspace: string,
+  contributions = loadPluginContributions(workspace),
+): AgentDefinition[] {
+  const pluginRoots = contributions.agentRoots;
   return withBuiltinAgents(
     loadAgentDefinitionsFromDirs([
       ...pluginRoots.map((path) => ({ scope: "global" as const, path })),

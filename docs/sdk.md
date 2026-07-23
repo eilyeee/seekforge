@@ -97,7 +97,9 @@ for await (const event of agent.runTask({
 `AgentEvent` union in `packages/shared/src/index.ts`).
 
 Skills and project memory are discovered automatically from the workspace's
-`.seekforge/` during the run — you do not pass them into `deps`.
+`.seekforge/` during the run. Surfaces that assemble plugin MCP/hooks/agents
+should load one `PluginContributions` snapshot and pass it as
+`deps.pluginContributions`; core then uses the same snapshot for skills.
 
 ## The autonomous loop
 

@@ -1,16 +1,27 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { createSkillScaffold, importExternalSkill, loadSkills, removeSkill, setSkillEnabled } from "@seekforge/core";
+import {
+  createSkillScaffold,
+  importExternalSkill,
+  loadSkills,
+  loadSkillsDetailed,
+  removeSkill,
+  resolveSkillsStoreRoot,
+  seekforgeHome,
+  setSkillEnabled,
+} from "@seekforge/core";
 import { t } from "../i18n.js";
 
 export function skillListCommand(): void {
-  const skills = loadSkills(process.cwd());
+  const loaded = loadSkillsDetailed(process.cwd());
+  const skills = loaded.skills;
   if (skills.length === 0) {
     console.log(t("cmd.skill.none"));
     return;
   }
   for (const s of skills) {
     console.log(t("cmd.skill.listLine", { id: s.id, scope: s.scope, description: s.description }));
+  }
+  for (const diagnostic of loaded.diagnostics) {
+    console.error(`warning: skipped skill ${diagnostic.id ?? diagnostic.path}: ${diagnostic.message}`);
   }
 }
 
@@ -28,11 +39,15 @@ export function skillShowCommand(id: string): void {
 }
 
 export function skillImportCommand(sourcePath: string, opts: { global?: boolean; force?: boolean }): void {
-  const targetRoot = opts.global
-    ? join(homedir(), ".seekforge", "skills")
-    : join(process.cwd(), ".seekforge", "skills");
   try {
-    const { dir, skill } = importExternalSkill(sourcePath, { targetRoot, force: opts.force });
+    const workspace = process.cwd();
+    const targetRoot = resolveSkillsStoreRoot(opts.global ? seekforgeHome() : workspace, true)!;
+    const { dir, skill } = importExternalSkill(sourcePath, {
+      targetRoot,
+      force: opts.force,
+      guardWorkspace: workspace,
+      global: opts.global,
+    });
     console.log(t("cmd.skill.imported", { id: skill.id, dir }));
     if (skill.triggers.length > 0) {
       const triggers = skill.triggers.slice(0, 8).join(", ") + (skill.triggers.length > 8 ? ", …" : "");

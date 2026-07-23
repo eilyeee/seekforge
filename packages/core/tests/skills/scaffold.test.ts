@@ -54,4 +54,18 @@ describe("createSkillScaffold", () => {
     expect(() => createSkillScaffold(ws, id)).toThrow(/invalid skill id/);
     expect(fs.existsSync(path.join(ws, ".seekforge"))).toBe(false);
   });
+
+  it("rejects ids beyond the storage-safe length limit", () => {
+    const ws = makeTempDir();
+    expect(() => createSkillScaffold(ws, "a".repeat(129))).toThrow(/invalid skill id/);
+  });
+
+  it("refuses a linked skills store instead of writing through it", () => {
+    const ws = makeTempDir();
+    const outside = makeTempDir();
+    fs.mkdirSync(path.join(ws, ".seekforge"));
+    fs.symlinkSync(outside, path.join(ws, ".seekforge", "skills"));
+    expect(() => createSkillScaffold(ws, "linked")).toThrow(/physical directory/);
+    expect(fs.existsSync(path.join(outside, "linked"))).toBe(false);
+  });
 });

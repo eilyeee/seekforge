@@ -14,6 +14,7 @@ import {
   createRuntimeClient,
   loadAgentDefinitions,
   loadMcpToolSpecs,
+  loadPluginContributions,
   mergePluginHooks,
   mergePluginMcpServers,
   readMcpResource,
@@ -27,6 +28,7 @@ import {
   type DispatchManager,
   type ToolSpec,
   type McpClientEntry,
+  type PluginContributions,
 } from "@seekforge/core";
 import type { ConfirmResult, PermissionRequest, RunOverrides } from "@seekforge/shared";
 import { loadConfig } from "./config.js";
@@ -85,9 +87,11 @@ export type ResumeLoopFn = (
 export function buildAgentDeps(
   opts: CreateAgentOptions,
   mcpToolSpecs: ToolSpec[] = [],
+  pluginSnapshot?: PluginContributions,
 ): AgentCoreDeps & { runtime?: RuntimeClient } {
   const config = loadConfig(opts.workspace);
-  const hooks = mergePluginHooks(opts.workspace, config.hooks);
+  const pluginContributions = pluginSnapshot ?? loadPluginContributions(opts.workspace);
+  const hooks = mergePluginHooks(opts.workspace, config.hooks, pluginContributions);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin && existsSync(config.runtimeBin)) {
@@ -132,7 +136,8 @@ export function buildAgentDeps(
     ...(opts.onReasoningDelta ? { onReasoningDelta: opts.onReasoningDelta } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
     extractMemory: opts.extractMemory,
-    subagents: loadAgentDefinitions(opts.workspace),
+    subagents: loadAgentDefinitions(opts.workspace, pluginContributions),
+    pluginContributions,
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     runtime,
     ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
@@ -148,10 +153,15 @@ async function prepareAgentDeps(
   entries: McpClientEntry[];
   disposeMcp: () => void;
 }> {
-  const servers = mergePluginMcpServers(opts.workspace, loadConfig(opts.workspace).mcpServers);
+  const pluginContributions = loadPluginContributions(opts.workspace);
+  const servers = mergePluginMcpServers(opts.workspace, loadConfig(opts.workspace).mcpServers, pluginContributions);
   const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal);
   try {
-    return { deps: buildAgentDeps(opts, mcp.specs), entries: mcp.entries, disposeMcp: mcp.dispose };
+    return {
+      deps: buildAgentDeps(opts, mcp.specs, pluginContributions),
+      entries: mcp.entries,
+      disposeMcp: mcp.dispose,
+    };
   } catch (err) {
     mcp.dispose();
     throw err;
