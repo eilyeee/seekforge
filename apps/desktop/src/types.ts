@@ -75,6 +75,31 @@ export type AgentImportResult = {
 };
 
 export type McpScope = "global" | "project";
+export type McpPermission = "readonly" | "write" | "execute" | "env" | "dangerous";
+
+export type PluginStatus = "enabled" | "disabled" | "changed" | "review_required" | "invalid";
+export type PluginRecord = {
+  id: string;
+  scope: "global" | "project";
+  path: string;
+  status: PluginStatus;
+  digest?: string;
+  manifest?: {
+    apiVersion: 1;
+    id: string;
+    name: string;
+    version: string;
+    description?: string;
+    seekforge?: string;
+    contributes?: {
+      skillRoots?: string[];
+      agentRoots?: string[];
+      mcpServers?: Record<string, unknown>;
+      hooks?: Record<string, unknown>;
+    };
+  };
+  error?: string;
+};
 
 export type McpServer = {
   name: string;
@@ -93,6 +118,8 @@ export type McpServer = {
     scope?: string;
   };
   trusted: boolean;
+  permission?: McpPermission;
+  toolPermissions?: Record<string, McpPermission>;
   source: McpScope;
   shadowedGlobal: boolean;
 };

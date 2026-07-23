@@ -83,7 +83,7 @@ CLI).
 `/remember <fact>` `/memory [edit]` `/config [edit]`
 `/todo [add|done|rm]` `/add-dir [path]`
 `/tasks [kill <id>]` `/agents` `/agent-steer <dispatch-id> <message>`
-`/agent-cancel <dispatch-id>` `/skills` `/mcp` (incl. resources) `/init`
+`/agent-cancel <dispatch-id>` `/skills` `/plugins` `/mcp` (incl. resources) `/init`
 `/doctor` `/vim` `/terminal-setup` `/context` `/compact` `/usage`
 `/export [path]` `/copy` `/editor` `/quit` — plus custom commands from
 `.seekforge/commands/`.

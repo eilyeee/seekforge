@@ -14,6 +14,8 @@ import {
   createRuntimeClient,
   loadAgentDefinitions,
   loadMcpToolSpecs,
+  mergePluginHooks,
+  mergePluginMcpServers,
   readMcpResource,
   runAutoLoop,
   resumeAutoLoop,
@@ -85,6 +87,7 @@ export function buildAgentDeps(
   mcpToolSpecs: ToolSpec[] = [],
 ): AgentCoreDeps & { runtime?: RuntimeClient } {
   const config = loadConfig(opts.workspace);
+  const hooks = mergePluginHooks(opts.workspace, config.hooks);
 
   let runtime: RuntimeClient | undefined;
   if (config.runtimeBin && existsSync(config.runtimeBin)) {
@@ -133,7 +136,7 @@ export function buildAgentDeps(
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
     runtime,
     ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
-    ...(config.hooks ? { hooks: config.hooks } : {}),
+    ...(hooks ? { hooks } : {}),
   };
 }
 
@@ -145,7 +148,7 @@ async function prepareAgentDeps(
   entries: McpClientEntry[];
   disposeMcp: () => void;
 }> {
-  const servers = loadConfig(opts.workspace).mcpServers ?? {};
+  const servers = mergePluginMcpServers(opts.workspace, loadConfig(opts.workspace).mcpServers);
   const mcp = await loadMcpToolSpecs(servers, [opts.workspace], signal);
   try {
     return { deps: buildAgentDeps(opts, mcp.specs), entries: mcp.entries, disposeMcp: mcp.dispose };

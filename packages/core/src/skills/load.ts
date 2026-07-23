@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import { seekforgeHome } from "../memory/store.js";
 import { readUtf8FileBoundedSync } from "../util/fs.js";
+import { loadPluginContributions } from "../plugins/index.js";
 import { BUILTIN_SKILLS } from "./builtins.js";
 import type { Skill, SkillScope } from "./types.js";
 
@@ -138,7 +139,9 @@ function readSkillDir(scope: SkillScope, dir: string, allowedRootReal: string): 
  * Disabled skills are excluded. Malformed skill dirs are skipped, never thrown.
  */
 export function loadSkills(workspace: string): Skill[] {
+  const pluginRoots = loadPluginContributions(workspace).skillRoots;
   return loadSkillsFromDirs([
+    ...pluginRoots.map((path) => ({ scope: "global" as const, path })),
     { scope: "global", path: path.join(seekforgeHome(), ".seekforge", "skills") },
     { scope: "project", path: path.join(workspace, ".seekforge", "skills") },
   ]);

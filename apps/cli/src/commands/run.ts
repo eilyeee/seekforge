@@ -22,7 +22,7 @@ import { authorizeDir, isAuthorizedDir } from "../authorized-dirs.js";
 import { isCostBudgetExceeded } from "../cost-budget.js";
 import { resolveOutputStyle } from "../output-style.js";
 import { readStreamJsonInput } from "../stream-input.js";
-import { buildToolGatingRules } from "../tool-gating.js";
+import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { expandExtraFileRefs, normalizeExtraDir } from "@seekforge/shared/workspace-dirs";
 
 export type RunOptions = {
@@ -337,12 +337,14 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
     disallowedTools: opts.disallowedTools,
     base: config.permissionRules,
   });
+  const allowedTools = parseToolList(opts.allowedTools);
 
   const mcp = await prepareMcp(mcpConfigForRun, projectPath);
   let created: ReturnType<typeof createCliAgent>;
   try {
     created = createCliAgent({
       config,
+      workspace: projectPath,
       model,
       mcpToolSpecs: mcp.specs,
       // stream-json input consumes process.stdin as an async generator; a live
@@ -355,6 +357,7 @@ export async function runTaskCommand(task: string, opts: RunOptions): Promise<bo
       subagents: loadAgentDefinitions(projectPath),
       ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
       ...(permissionRules ? { permissionRules } : {}),
+      ...(allowedTools.length > 0 ? { allowedTools } : {}),
       ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
     });
   } catch (error) {

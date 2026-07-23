@@ -40,7 +40,8 @@ import {
 } from "../config.js";
 import { readFileBounded } from "@seekforge/shared/bounded-file-read";
 import { MAX_CONFIG_FILE_BYTES } from "@seekforge/shared/config-layers";
-import { readJsonBody, sendApiError, sendJson } from "../http.js";
+import { PERMISSION_LEVEL, type PermissionName } from "@seekforge/shared";
+import { readJsonBody, requestAbortSignal, sendApiError, sendJson } from "../http.js";
 import { runShellCommand } from "../shell-command.js";
 import { addTodo, loadTodos, removeTodo, toggleTodo } from "@seekforge/shared/todos";
 import type { RouteCtx } from "./context.js";
@@ -58,6 +59,10 @@ class ConfigMutationError extends Error {}
 
 function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPermissionName(value: unknown): value is PermissionName {
+  return typeof value === "string" && Object.hasOwn(PERMISSION_LEVEL, value);
 }
 
 function parseConfigDoc(raw: string): ConfigDoc {
@@ -206,6 +211,8 @@ function sanitizedMcpServer(name: string, cfg: McpServerConfig, source: McpScope
     ...(cfg.oauth ? { oauth: sanitizedOauth(cfg.oauth) } : {}),
     // A repository cannot grant its own server automatic startup authority.
     trusted: source === "global" && cfg.trusted === true,
+    ...(cfg.permission ? { permission: cfg.permission } : {}),
+    ...(cfg.toolPermissions ? { toolPermissions: cfg.toolPermissions } : {}),
     source,
     shadowedGlobal,
   };
@@ -391,9 +398,11 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
       trusted: config.trusted === true,
     }));
+    const operation = requestAbortSignal(req, res);
     try {
-      return sendJson(res, 200, { resources: await listMcpResources(entries) });
+      return sendJson(res, 200, { resources: await listMcpResources(entries, operation.signal) });
     } finally {
+      operation.cleanup();
       for (const e of entries) e.client.dispose();
     }
   }
@@ -410,9 +419,11 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       client: createMcpClient({ name: serverName, config, workspaceRoots: [workspace] }),
       trusted: config.trusted === true,
     }));
+    const operation = requestAbortSignal(req, res);
     try {
-      return sendJson(res, 200, { prompts: await listMcpPrompts(entries) });
+      return sendJson(res, 200, { prompts: await listMcpPrompts(entries, operation.signal) });
     } finally {
+      operation.cleanup();
       for (const e of entries) e.client.dispose();
     }
   }
@@ -443,12 +454,20 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     }
     const client = createMcpClient({ name: serverName, config, workspaceRoots: [workspace] });
     const entries: McpClientEntry[] = [{ serverName, client, trusted: config.trusted === true }];
+    const operation = requestAbortSignal(req, res);
     try {
-      const text = await getMcpPrompt(serverName, promptName, rawArgs as Record<string, unknown> | undefined, entries);
+      const text = await getMcpPrompt(
+        serverName,
+        promptName,
+        rawArgs as Record<string, unknown> | undefined,
+        entries,
+        operation.signal,
+      );
       return sendJson(res, 200, { text });
     } catch (err) {
       return sendApiError(res, 502, "mcp_error", err instanceof Error ? err.message : String(err));
     } finally {
+      operation.cleanup();
       client.dispose();
     }
   }
@@ -485,6 +504,8 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       headers,
       oauth,
       trusted,
+      permission,
+      toolPermissions,
     } = (body ?? {}) as {
       name?: unknown;
       scope?: unknown;
@@ -495,6 +516,8 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       headers?: unknown;
       oauth?: unknown;
       trusted?: unknown;
+      permission?: unknown;
+      toolPermissions?: unknown;
     };
     if (typeof name !== "string" || name.trim() === "") {
       return sendApiError(res, 400, "bad_request", "body must include a non-empty name");
@@ -515,6 +538,25 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     }
     if (trusted !== undefined && typeof trusted !== "boolean") {
       return sendApiError(res, 400, "bad_request", "trusted must be a boolean");
+    }
+    if (permission !== undefined && permission !== null && !isPermissionName(permission)) {
+      return sendApiError(
+        res,
+        400,
+        "bad_request",
+        "permission must be null, readonly, write, execute, env, or dangerous",
+      );
+    }
+    if (
+      toolPermissions !== undefined &&
+      (typeof toolPermissions !== "object" ||
+        toolPermissions === null ||
+        Array.isArray(toolPermissions) ||
+        !Object.entries(toolPermissions as Record<string, unknown>).every(
+          ([toolName, value]) => toolName.length > 0 && toolName.length <= 256 && isPermissionName(value),
+        ))
+    ) {
+      return sendApiError(res, 400, "bad_request", "toolPermissions must map tool names to valid permissions");
     }
     if (scope === "project" && trusted === true) {
       return sendApiError(res, 400, "bad_request", "project MCP servers cannot be trusted; use global scope");
@@ -615,6 +657,20 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
             ...(nextHeaders !== undefined && Object.keys(nextHeaders).length > 0 ? { headers: nextHeaders } : {}),
             ...(nextOauth ? { oauth: nextOauth } : {}),
             ...(trusted !== undefined ? { trusted } : {}),
+            ...(permission !== undefined
+              ? permission === null
+                ? {}
+                : { permission: permission as PermissionName }
+              : previous?.permission
+                ? { permission: previous.permission }
+                : {}),
+            ...(toolPermissions !== undefined
+              ? Object.keys(toolPermissions as Record<string, PermissionName>).length > 0
+                ? { toolPermissions: toolPermissions as Record<string, PermissionName> }
+                : {}
+              : previous?.toolPermissions
+                ? { toolPermissions: previous.toolPermissions }
+                : {}),
           };
           servers[normalizedName] = entry;
           return entry;
@@ -659,12 +715,14 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
     const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
     const started = Date.now();
+    const operation = requestAbortSignal(req, res);
     try {
-      const tools = await client.listTools();
+      const tools = await client.listTools(operation.signal);
       return sendJson(res, 200, { ok: true, latencyMs: Date.now() - started, toolCount: tools.length });
     } catch (err) {
       return sendApiError(res, 502, "mcp_error", err instanceof Error ? err.message : String(err));
     } finally {
+      operation.cleanup();
       client.dispose();
     }
   }
@@ -674,8 +732,9 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
     const config = loadConfig(workspace).mcpServers?.[name];
     if (!isMcpServerConfig(config)) return sendApiError(res, 404, "not_found", `MCP server not configured: ${name}`);
     const client = createMcpClient({ name, config, workspaceRoots: [workspace] });
+    const operation = requestAbortSignal(req, res);
     try {
-      const tools = await client.listTools();
+      const tools = await client.listTools(operation.signal);
       return sendJson(res, 200, {
         tools: tools.map((t) => ({ name: t.name, description: t.description ?? "" })),
       });
@@ -683,6 +742,7 @@ async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx
       const message = err instanceof Error ? err.message : String(err);
       return sendApiError(res, 502, "mcp_error", message);
     } finally {
+      operation.cleanup();
       client.dispose();
     }
   }

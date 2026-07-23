@@ -7,6 +7,8 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  mergePluginHooks,
+  mergePluginMcpServers,
   wrapProviderWithCache,
   type AgentCore,
   type AgentCoreDeps,
@@ -22,6 +24,8 @@ import type { TuiConfig } from "../config.js";
 
 export type TuiAgentOptions = {
   config: TuiConfig;
+  /** Workspace used to resolve first-class plugin contributions. Defaults to cwd. */
+  workspace?: string;
   model?: string;
   confirm: (req: PermissionRequest) => Promise<ConfirmResult>;
   onModelDelta?: (chunk: string) => void;
@@ -105,7 +109,7 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
     permissionRules: config.permissionRules,
     subagents: opts.subagents,
     ...(opts.dispatchManager ? { dispatchManager: opts.dispatchManager } : {}),
-    hooks: config.hooks,
+    hooks: mergePluginHooks(opts.workspace ?? process.cwd(), config.hooks),
     ...(opts.background ? { background: opts.background } : {}),
     ...(opts.askUser ? { askUser: opts.askUser } : {}),
   };
@@ -132,8 +136,10 @@ export async function prepareMcp(
   config: TuiConfig,
   workspacePath?: string,
 ): Promise<{ specs: ToolSpec[]; entries: McpClientEntry[]; dispose: () => void }> {
-  if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
+  const workspace = workspacePath ?? process.cwd();
+  const servers = mergePluginMcpServers(workspace, config.mcpServers);
+  if (Object.keys(servers).length === 0) {
     return { specs: [], entries: [], dispose: () => {} };
   }
-  return loadMcpToolSpecs(config.mcpServers, workspacePath ? [workspacePath] : undefined);
+  return loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
 }

@@ -8,15 +8,21 @@ import { join } from "node:path";
 import {
   applyProposal,
   BUILTIN_SKILLS,
+  createPluginScaffold,
   createSkillScaffold,
   importExternalAgent,
   importExternalSkill,
+  installPlugin,
   listEvolutionProposals,
   loadAgentDefinitions,
   loadSkills,
+  listPlugins,
+  removePlugin,
   removeSkill,
   setEvolutionProposalStatus,
   setSkillEnabled,
+  setPluginEnabled,
+  SessionBusyError,
 } from "@seekforge/core";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
@@ -31,8 +37,75 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
   return ctx.res.headersSent;
 }
 
-async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Promise<void> {
+async function routes({ req, res, url, method, segs, workspace, rest }: RouteCtx): Promise<void> {
   const path = url.pathname;
+
+  if (method === "GET" && path === "/api/plugins") {
+    return sendJson(res, 200, listPlugins(workspace));
+  }
+
+  if (method === "POST" && path === "/api/plugins") {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const id = (body as { id?: unknown } | null)?.id;
+    if (typeof id !== "string" || id.trim() === "") {
+      return sendApiError(res, 400, "bad_request", "body must be {id: string}");
+    }
+    try {
+      const result = await rest.coordinator.withRepository(workspace, async () => {
+        return createPluginScaffold(workspace, id.trim());
+      });
+      return sendJson(res, 201, result);
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "cannot create a plugin while the workspace is active");
+      }
+      return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && path === "/api/plugins/install") {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const { path: source, force } = (body ?? {}) as { path?: unknown; force?: unknown };
+    if (typeof source !== "string" || source.trim() === "" || (force !== undefined && typeof force !== "boolean")) {
+      return sendApiError(res, 400, "bad_request", "body must be {path: string, force?: boolean}");
+    }
+    try {
+      return sendJson(res, 200, installPlugin(source, { force: force === true }));
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "another plugin mutation is active");
+      }
+      return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "PUT" && segs.length === 3 && segs[1] === "plugins") {
+    const body = await readJsonBody(req, res);
+    if (body === undefined) return;
+    const enabled = (body as { enabled?: unknown } | null)?.enabled;
+    if (typeof enabled !== "boolean") return sendApiError(res, 400, "bad_request", "body must be {enabled: boolean}");
+    try {
+      return sendJson(res, 200, setPluginEnabled(segs[2]!, enabled));
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "another plugin mutation is active");
+      }
+      return sendApiError(res, 400, "bad_request", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "DELETE" && segs.length === 3 && segs[1] === "plugins") {
+    try {
+      return sendJson(res, 200, removePlugin(segs[2]!));
+    } catch (error) {
+      if (error instanceof SessionBusyError) {
+        return sendApiError(res, 409, "session_busy", "another plugin mutation is active");
+      }
+      return sendApiError(res, 404, "not_found", error instanceof Error ? error.message : String(error));
+    }
+  }
 
   if (method === "GET" && path === "/api/skills") {
     return sendJson(

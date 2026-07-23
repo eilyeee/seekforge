@@ -147,6 +147,14 @@ export async function enforcePermission(
   cls: ClassifiedCall,
   ctx: ToolContext,
 ): Promise<PermissionOutcome> {
+  if (ctx.policy.allowedTools && !ctx.policy.allowedTools.includes(toolName)) {
+    return {
+      allowed: false,
+      decision: "deny_rule",
+      errorCode: "tool_not_allowed",
+      errorMessage: `Tool ${toolName} is outside the run's allowedTools list`,
+    };
+  }
   const rules = ctx.policy.rules ?? [];
 
   // Deny rules first: a matching deny blocks at EVERY level (incl. readonly),

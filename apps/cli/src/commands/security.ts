@@ -44,6 +44,7 @@ async function withSecurityAgent<T>(
   if (!config.apiKey) throw new Error("no provider API key configured; run `seekforge doctor` for setup help");
   const { deps, dispose } = createCliAgentDeps({
     config,
+    workspace: process.cwd(),
     ...(model ? { model } : {}),
     confirm: async () => false,
     extractMemory: false,

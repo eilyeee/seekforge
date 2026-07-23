@@ -13,6 +13,8 @@
   hook（含 JSON 输出协议）、输出风格、MCP 服务器、沙箱，以及 TUI 状态栏。
 - [MCP](mcp.zh-CN.md) — Model Context Protocol 服务器（stdio + Streamable HTTP）、
   资源、提示词，以及 `${ENV}` 请求头展开。
+- [插件](plugins.zh-CN.md) — 一等 skill/agent/MCP/hook 扩展包、绑定摘要的审批、
+  生命周期命令与安全边界。
 - [浏览器 / 可视化验证](browser.zh-CN.md) — 可选的、基于 Playwright 的
   `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
   `browser_console` 工具，以及前端验证循环。

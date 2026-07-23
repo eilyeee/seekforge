@@ -22,6 +22,27 @@ class BodyAbortedError extends Error {
 
 const drainingRequests = new WeakSet<IncomingMessage>();
 
+/** Links an in-flight operation to client disconnect without retaining listeners after settle. */
+export function requestAbortSignal(
+  req: IncomingMessage,
+  res: ServerResponse,
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new Error("HTTP client disconnected"));
+  req.once("aborted", abort);
+  res.once("close", abort);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      req.off("aborted", abort);
+      res.off("close", abort);
+    },
+  };
+}
+
 /** Discards an unread request body while owning transport errors until close. */
 export function discardRequestBody(req: IncomingMessage): void {
   if (req.readableEnded || req.closed || drainingRequests.has(req)) return;

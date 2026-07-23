@@ -123,6 +123,25 @@ Beyond the run/ask flags above, these subcommands operate on stored sessions
 | `seekforge resume <id>` | Continue a session (also `run/ask -c` for the latest) |
 | `seekforge replay <session>` | Deterministically re-render a stored session's events to stdout — no model calls, no cost. `--verbose` for full tool args/results |
 
+## Plugin commands
+
+`seekforge plugin` (alias `plugins`) manages first-class extension bundles.
+Project plugins are discovery-only; installation copies a reviewed directory to
+the user store and leaves it disabled until its exact digest is approved.
+
+| Command | What it does |
+| --- | --- |
+| `plugin list [--json]` | List installed and project-discovered plugins with approval status. |
+| `plugin inspect <id> [--json]` | Show the manifest or complete plugin record. |
+| `plugin validate <path>` | Validate a local plugin without installing it. |
+| `plugin create <id>` | Scaffold `.seekforge/plugins/<id>/plugin.json`. |
+| `plugin install <path>` | Atomically install a local plugin, disabled by default. |
+| `plugin update <path>` | Replace an installation and require approval again. |
+| `plugin enable\|disable <id>` | Approve the current digest or remove its contributions. |
+| `plugin remove <id>` | Uninstall and remove approval state. |
+
+See [Plugins](plugins.md) for the manifest and security model.
+
 ## GitHub issue and review workflows
 
 These commands require an authenticated `gh`, an `origin` remote, and an

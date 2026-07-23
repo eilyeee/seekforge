@@ -18,6 +18,8 @@ and quick start; this folder holds the reference docs.
   MCP servers, sandbox, and the TUI status line.
 - [MCP](mcp.md) — Model Context Protocol servers (stdio + Streamable HTTP),
   resources, prompts, and `${ENV}` header expansion.
+- [Plugins](plugins.md) — first-class skill/agent/MCP/hook bundles, digest-bound
+  approval, lifecycle commands, and security boundaries.
 - [Browser / visual verification](browser.md) — the optional Playwright-backed
   `browser_navigate` / `browser_screenshot` / `browser_snapshot` /
   `browser_console` tools and the frontend verify loop.

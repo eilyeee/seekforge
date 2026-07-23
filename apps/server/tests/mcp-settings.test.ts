@@ -132,6 +132,50 @@ describe("MCP settings scopes and secret preservation", () => {
     expect(((await project.json()) as { error: { message: string } }).error.message).toMatch(/global scope/);
   });
 
+  it("validates, exposes, preserves, and explicitly clears MCP permission overrides", async () => {
+    let response = await save({
+      name: "permissioned",
+      scope: "global",
+      command: "node",
+      trusted: true,
+      permission: "readonly",
+      toolPermissions: { mutate: "dangerous" },
+    });
+    expect(response.status).toBe(200);
+
+    response = await save({ name: "permissioned", scope: "global", command: "node", trusted: true });
+    expect(response.status).toBe(200);
+    let listed = (await (await request("/api/mcp")).json()) as Array<Record<string, unknown>>;
+    expect(listed.find((server) => server.name === "permissioned")).toMatchObject({
+      permission: "readonly",
+      toolPermissions: { mutate: "dangerous" },
+    });
+
+    response = await save({
+      name: "permissioned",
+      scope: "global",
+      command: "node",
+      trusted: true,
+      permission: null,
+      toolPermissions: {},
+    });
+    expect(response.status).toBe(200);
+    listed = (await (await request("/api/mcp")).json()) as Array<Record<string, unknown>>;
+    expect(listed.find((server) => server.name === "permissioned")).not.toHaveProperty("permission");
+    expect(listed.find((server) => server.name === "permissioned")).not.toHaveProperty("toolPermissions");
+
+    expect(
+      (
+        await save({
+          name: "bad-permission",
+          scope: "global",
+          command: "node",
+          permission: "root",
+        })
+      ).status,
+    ).toBe(400);
+  });
+
   it("retains masked header, env, and OAuth values without echoing plaintext", async () => {
     expect(
       (

@@ -201,6 +201,7 @@ describe("parseInput v3 additions", () => {
   it("parses the new management commands", () => {
     expect(parseInput("/backtrack")).toEqual({ kind: "slash", command: { name: "backtrack" } });
     expect(parseInput("/skills")).toEqual({ kind: "slash", command: { name: "skills" } });
+    expect(parseInput("/plugins")).toEqual({ kind: "slash", command: { name: "plugins" } });
     expect(parseInput("/init")).toEqual({ kind: "slash", command: { name: "init" } });
     expect(parseInput("/doctor")).toEqual({ kind: "slash", command: { name: "doctor" } });
     expect(parseInput("/vim")).toEqual({ kind: "slash", command: { name: "vim" } });

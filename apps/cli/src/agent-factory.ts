@@ -5,6 +5,8 @@ import {
   createDefaultDispatcher,
   createRuntimeClient,
   loadMcpToolSpecs,
+  mergePluginHooks,
+  mergePluginMcpServers,
   type AgentCore,
   type AgentCoreDeps,
   type AgentDefinition,
@@ -16,6 +18,8 @@ import type { CliConfig } from "./config.js";
 
 export type CliAgentOptions = {
   config: CliConfig;
+  /** Workspace used to resolve first-class plugin contributions. Defaults to cwd. */
+  workspace?: string;
   model?: string;
   /** Model to retry the request with if the primary is overloaded (CLI --fallback-model). */
   fallbackModel?: string;
@@ -38,6 +42,8 @@ export type CliAgentOptions = {
    * (the caller is expected to have already merged the base in).
    */
   permissionRules?: PermissionRule[];
+  /** Exact per-run allow-list; unlike permission rules this also covers future/MCP/dispatch tools. */
+  allowedTools?: string[];
 };
 
 export type CliAgent = {
@@ -113,8 +119,9 @@ export function createCliAgentDeps(opts: CliAgentOptions): CliAgentDeps {
     extractMemory: opts.extractMemory,
     runtime,
     permissionRules: opts.permissionRules ?? config.permissionRules,
+    ...(opts.allowedTools ? { allowedTools: opts.allowedTools } : {}),
     subagents: opts.subagents,
-    hooks: config.hooks,
+    hooks: mergePluginHooks(opts.workspace ?? process.cwd(), config.hooks),
     // CLI-only self-verification / finalize knobs (not part of the shared core).
     ...(typeof config.verifyCommand === "string" && config.verifyCommand.trim()
       ? { verifyCommand: config.verifyCommand }
@@ -144,8 +151,10 @@ export async function prepareMcp(
   config: CliConfig,
   workspacePath?: string,
 ): Promise<{ specs: ToolSpec[]; dispose: () => void }> {
-  if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
+  const workspace = workspacePath ?? process.cwd();
+  const servers = mergePluginMcpServers(workspace, config.mcpServers);
+  if (Object.keys(servers).length === 0) {
     return { specs: [], dispose: () => {} };
   }
-  return loadMcpToolSpecs(config.mcpServers, workspacePath ? [workspacePath] : undefined);
+  return loadMcpToolSpecs(servers, workspacePath ? [workspacePath] : undefined);
 }

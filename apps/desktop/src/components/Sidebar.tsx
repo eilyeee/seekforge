@@ -10,6 +10,7 @@ import {
   IconFiles,
   IconGit,
   IconMemory,
+  IconPlugins,
   IconSessions,
   IconSettings,
   IconShield,
@@ -58,6 +59,7 @@ const NAV_GROUPS: { titleKey?: string; items: NavItem[] }[] = [
     titleKey: "nav.group.agent",
     items: [
       { view: "skills", key: "nav.skills", Icon: IconSkills },
+      { view: "plugins", key: "nav.plugins", Icon: IconPlugins },
       { view: "agents", key: "nav.agents", Icon: IconAgents },
       { view: "memory", key: "nav.memory", Icon: IconMemory },
       { view: "evolution", key: "nav.evolution", Icon: IconEvolution },

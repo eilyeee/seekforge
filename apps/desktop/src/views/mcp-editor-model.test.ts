@@ -36,6 +36,8 @@ describe("MCP editor model", () => {
         refreshToken: "********",
         oauthScope: " offline_access ",
         trusted: true,
+        permission: "readonly",
+        toolPermissions: { mutate: "dangerous" },
       }),
     ).toEqual({
       name: "remote",
@@ -50,6 +52,32 @@ describe("MCP editor model", () => {
         scope: "offline_access",
       },
       trusted: true,
+      permission: "readonly",
+      toolPermissions: { mutate: "dangerous" },
     });
+  });
+
+  it("preserves explicit clear values for permission overrides", () => {
+    expect(
+      buildMcpServerDraft({
+        name: "local",
+        scope: "global",
+        transport: "stdio",
+        command: "node",
+        args: [],
+        env: {},
+        url: "",
+        headers: {},
+        oauthEnabled: false,
+        tokenEndpoint: "",
+        clientId: "",
+        clientSecret: "",
+        refreshToken: "",
+        oauthScope: "",
+        trusted: true,
+        permission: null,
+        toolPermissions: {},
+      }),
+    ).toMatchObject({ permission: null, toolPermissions: {} });
   });
 });

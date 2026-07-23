@@ -108,6 +108,7 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
   },
   { name: "agent-cancel", args: "<dispatch-id>", summary: "cancel one running subagent", group: "tools" },
   { name: "skills", summary: "list installed skills and their status", group: "tools" },
+  { name: "plugins", summary: "list first-class plugins and approval status", group: "tools" },
   { name: "mcp", summary: "list configured MCP servers and their tools", group: "tools" },
   { name: "prompts", summary: "list MCP prompts (invoke as /mcp:<server>:<prompt>)", group: "tools" },
   { name: "init", summary: "analyze the codebase and write/refresh AGENTS.md", group: "tools" },
@@ -194,6 +195,7 @@ export type SlashCommand =
   | { name: "agent-steer"; arg?: string }
   | { name: "agent-cancel"; arg?: string }
   | { name: "skills" }
+  | { name: "plugins" }
   | { name: "mcp" }
   | { name: "prompts" }
   | { name: "init" }
@@ -349,6 +351,7 @@ const NO_ARG = new Set([
   "terminal-setup",
   "agents",
   "skills",
+  "plugins",
   "mcp",
   "prompts",
   "init",

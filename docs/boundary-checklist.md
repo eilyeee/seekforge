@@ -1837,6 +1837,41 @@ server or UI that owns their workspace/config identity.
   the memory lease, so its own memory transaction waited 30 seconds and failed;
   Server/TUI/REPL timers also needed explicit disposal and current-target lookup.
 
+## 142. An allowlist must gate the final runtime namespace
+
+A static list of known built-ins is not an allowlist when tools can also arrive
+from MCP, dispatch synthesis, plugins, or future registrations. Filtering only
+the familiar names advertises and executes everything outside that list.
+
+- **Do:** carry the exact allowed-name set to the final assembled tool catalog,
+  filter definitions before the model sees them, and fail closed again at call
+  execution to cover stale or fabricated calls.
+- **Caught:** CLI `--allowedTools` generated deny rules from a hard-coded builtin
+  roster, leaving MCP and synthesized dispatch tools available.
+
+## 143. Names used as registry keys need validation and collision rejection
+
+Map assignment is not safe registration: a duplicate silently replaces an
+earlier handler while catalogs, permissions, or traces may still describe both.
+Normalization can create the same defect from two distinct external names.
+
+- **Do:** validate names at the registry boundary, reject duplicates before
+  construction, and use one deterministic collision-resistant external-name
+  mapping for advertisement and invocation.
+- **Caught:** the tool registry silently overwrote duplicate names, and MCP names
+  needed a bounded hashed fallback for ambiguous or invalid server/tool pairs.
+
+## 144. Extension approval must bind content, provenance, and activation
+
+Discovering repository extension files is not consent to execute them. A boolean
+approval also goes stale when installed content changes underneath it.
+
+- **Do:** separate discovery from installation, install into a user-owned store
+  disabled, bind approval to a digest of every bounded regular file, reject links,
+  and contribute nothing after any digest change until explicit re-approval.
+- **Caught:** the first-class plugin lifecycle in `packages/core/src/plugins`
+  needed project discovery without repository-granted hook/MCP authority.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

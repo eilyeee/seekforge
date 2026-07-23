@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { PermissionPolicy } from "@seekforge/shared";
 import type { ToolContext } from "../../src/tools/index.js";
 
 export function makeWorkspace(): string {
@@ -10,7 +9,7 @@ export function makeWorkspace(): string {
 
 export function makeCtx(
   workspace: string,
-  overrides: Partial<Omit<ToolContext, "policy">> & { policy?: Partial<PermissionPolicy> } = {},
+  overrides: Partial<Omit<ToolContext, "policy">> & { policy?: Partial<ToolContext["policy"]> } = {},
 ): ToolContext {
   const { policy, ...rest } = overrides;
   return {

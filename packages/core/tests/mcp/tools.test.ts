@@ -7,6 +7,7 @@ import {
   listMcpPrompts,
   listMcpResources,
   loadMcpToolSpecs,
+  mcpToolPublicName,
   readMcpResource,
 } from "../../src/mcp/tools.js";
 import { createDefaultDispatcher, createDispatcher } from "../../src/tools/index.js";
@@ -41,6 +42,14 @@ function makeEntry(serverName: string, trusted: boolean) {
 }
 
 describe("buildMcpToolSpecs", () => {
+  it("keeps simple names stable and hashes ambiguous or provider-invalid names", () => {
+    expect(mcpToolPublicName("fake", "echo")).toBe("mcp__fake__echo");
+    const ambiguous = mcpToolPublicName("a__b", "c / d");
+    expect(ambiguous).toMatch(/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+__[a-f0-9]{10}$/);
+    expect(ambiguous.length).toBeLessThanOrEqual(64);
+    expect(mcpToolPublicName("a", "b__c")).not.toBe(mcpToolPublicName("a__b", "c"));
+  });
+
   it("maps tools to namespaced specs with permission by trust level", async () => {
     const specs = await buildMcpToolSpecs([makeEntry("fake", false)]);
     expect(specs.map((s) => s.name)).toEqual(["mcp__fake__echo", "mcp__fake__boom"]);
@@ -57,6 +66,42 @@ describe("buildMcpToolSpecs", () => {
     const trusted = await buildMcpToolSpecs([makeEntry("fake2", true)]);
     expect(trusted[0]!.classify({}, makeCtx(workspace)).permission).toBe("write");
   }, 20_000); // spawns MCP child processes — slow under parallel load
+
+  it("applies per-tool, server, and conservative annotation-derived permissions", async () => {
+    const client = {
+      listTools: async () => [
+        { name: "read", annotations: { readOnlyHint: true } },
+        { name: "mutate" },
+        { name: "network", annotations: { openWorldHint: true } },
+      ],
+    } as unknown as McpClient;
+    const specs = await buildMcpToolSpecs([
+      {
+        serverName: "policy",
+        client,
+        trusted: true,
+        permission: "write",
+        toolPermissions: { mutate: "dangerous" },
+      },
+    ]);
+    const permissions = Object.fromEntries(
+      specs.map((spec) => [spec.name, spec.classify({}, makeCtx(workspace)).permission]),
+    );
+    expect(permissions).toEqual({
+      mcp__policy__read: "write",
+      mcp__policy__mutate: "dangerous",
+      mcp__policy__network: "write",
+    });
+
+    const inferred = await buildMcpToolSpecs([{ serverName: "inferred", client, trusted: true }]);
+    expect(
+      Object.fromEntries(inferred.map((spec) => [spec.name, spec.classify({}, makeCtx(workspace)).permission])),
+    ).toEqual({
+      mcp__inferred__read: "readonly",
+      mcp__inferred__mutate: "write",
+      mcp__inferred__network: "env",
+    });
+  });
 
   it("exposes the server's raw inputSchema via dispatcher list()", async () => {
     const specs = await buildMcpToolSpecs([makeEntry("fake", false)]);
@@ -154,7 +199,11 @@ describe("dispatch through createDefaultDispatcher", () => {
 
     const res = await dispatcher.execute(call("mcp__fake__echo", { text: "hi" }), ctx);
     expect(res.ok).toBe(true);
-    expect(res.data).toEqual({ content: 'echo:{"text":"hi"}\n[image content]' });
+    expect(res.data).toEqual({
+      content: 'echo:{"text":"hi"}\n[image content]',
+      structuredContent: { echoed: { text: "hi" } },
+      attachments: [{ type: "image", mimeType: "image/png", encodedBytes: 8 }],
+    });
     // approvalMode "auto": "env" still confirms — exactly one prompt.
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({

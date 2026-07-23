@@ -24,6 +24,7 @@ import {
   getMcpPrompt,
   listMcpPrompts,
   listMcpResources,
+  listPlugins,
   readMcpResource,
   readSessionMeta,
   rewindSession,
@@ -157,6 +158,7 @@ import {
   type TabPathCompletion,
 } from "./path-complete.js";
 import { formatSkillLines, loadSkillsWithStatus } from "./skills-surface.js";
+import { formatPluginLines } from "./plugins-surface.js";
 import { attachSkillContent, expandSkillCommand, findSkillByCommand, skillCommandSpecs } from "./skill-commands.js";
 import { applyVimKey, initialVim, type VimState } from "./vim.js";
 import { formatAgentLines, formatBgTaskLines, formatMcpLines, formatSessionLines } from "./surfaces.js";
@@ -1499,6 +1501,9 @@ export function App({
         }
         case "skills":
           for (const line of formatSkillLines(loadSkillsWithStatus(projectPath))) notice(line);
+          break;
+        case "plugins":
+          for (const line of formatPluginLines(listPlugins(projectPath))) notice(line);
           break;
         case "init":
           if (controllerRef.current) {

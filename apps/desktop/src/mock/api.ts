@@ -22,6 +22,7 @@ import type {
   MemoryCandidate,
   MemoryCandidateType,
   MemoryFact,
+  PluginRecord,
   ServerConfig,
   SecurityEvidencePackage,
   SessionMeta,
@@ -37,6 +38,7 @@ const proposals: EvolutionProposal[] = mockEvolutionProposals.map((p) => ({ ...p
 // Mutable so skill toggle/create/import/delete, session delete/prune and MCP
 // add/remove stick for the page lifetime (mock mode + tests).
 const skills: Skill[] = mockSkills.map((s) => ({ ...s }));
+const plugins: PluginRecord[] = [];
 const sessions: SessionMeta[] = mockSessions.map((s) => ({ ...s }));
 // Monotonic counter so each fork yields a fresh, distinct session id.
 let forkSeq = 0;
@@ -288,6 +290,62 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   if (method === "GET" && path === "/api/skills") return skills.map((s) => ({ ...s }));
+
+  if (method === "GET" && path === "/api/plugins") return plugins.map((plugin) => ({ ...plugin }));
+  if (method === "POST" && path === "/api/plugins") {
+    const { id } = (body ?? {}) as { id?: string };
+    if (!id) throw mockError(400, "bad_request", "body must be {id: string}");
+    if (plugins.some((plugin) => plugin.id === id && plugin.scope === "project")) {
+      throw mockError(409, "already_exists", `plugin ${id} already exists`);
+    }
+    const plugin: PluginRecord = {
+      id,
+      scope: "project",
+      path: `/mock/workspace/.seekforge/plugins/${id}`,
+      status: "review_required",
+      digest: `mock-${id}`,
+      manifest: { apiVersion: 1, id, name: id, version: "0.1.0", description: "SeekForge plugin" },
+    };
+    plugins.push(plugin);
+    return plugin;
+  }
+  if (method === "POST" && path === "/api/plugins/install") {
+    const { path: source } = (body ?? {}) as { path?: string };
+    if (!source) throw mockError(400, "bad_request", "body must be {path: string}");
+    const project = plugins.find((plugin) => plugin.path === source);
+    const id = project?.id ?? source.split("/").filter(Boolean).pop() ?? "plugin";
+    const existing = plugins.findIndex((plugin) => plugin.id === id && plugin.scope === "global");
+    const plugin: PluginRecord = {
+      id,
+      scope: "global",
+      path: `/mock/home/.seekforge/plugins/${id}`,
+      status: "disabled",
+      digest: project?.digest ?? `mock-${id}`,
+      manifest: project?.manifest ?? { apiVersion: 1, id, name: id, version: "0.1.0" },
+    };
+    if (existing >= 0) plugins[existing] = plugin;
+    else plugins.push(plugin);
+    return { manifest: plugin.manifest, path: plugin.path, digest: plugin.digest, updated: existing >= 0 };
+  }
+  {
+    const pluginMatch = /^\/api\/plugins\/([^/]+)$/.exec(path);
+    if (method === "PUT" && pluginMatch) {
+      const plugin = plugins.find((item) => item.id === decodeURIComponent(pluginMatch[1]!) && item.scope === "global");
+      if (!plugin) throw mockError(404, "not_found", `unknown plugin: ${pluginMatch[1]}`);
+      const { enabled } = (body ?? {}) as { enabled?: boolean };
+      if (typeof enabled !== "boolean") throw mockError(400, "bad_request", "body must be {enabled: boolean}");
+      plugin.status = enabled ? "enabled" : "disabled";
+      return { id: plugin.id, enabled, digest: plugin.digest ?? "" };
+    }
+    if (method === "DELETE" && pluginMatch) {
+      const index = plugins.findIndex(
+        (item) => item.id === decodeURIComponent(pluginMatch[1]!) && item.scope === "global",
+      );
+      if (index < 0) throw mockError(404, "not_found", `unknown plugin: ${pluginMatch[1]}`);
+      const [removed] = plugins.splice(index, 1);
+      return { id: removed!.id, removed: removed!.path };
+    }
+  }
   // Create a new (empty) project skill from an id.
   if (method === "POST" && path === "/api/skills") {
     const { id } = (body ?? {}) as { id?: string };

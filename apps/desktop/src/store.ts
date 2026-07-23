@@ -37,6 +37,7 @@ export type View =
   | "files"
   | "git"
   | "skills"
+  | "plugins"
   | "agents"
   | "memory"
   | "evolution"

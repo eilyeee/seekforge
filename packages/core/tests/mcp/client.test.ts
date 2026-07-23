@@ -102,6 +102,18 @@ describe("mcp client", () => {
     }
   });
 
+  it("preserves structured content and rich content parts on detailed calls", async () => {
+    const client = makeClient();
+    try {
+      const result = await client.callToolDetailed("echo", { text: "rich" });
+      expect(result.text).toBe('echo:{"text":"rich"}\n[image content]');
+      expect(result.structuredContent).toEqual({ echoed: { text: "rich" } });
+      expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png", data: "deadbeef" });
+    } finally {
+      client.dispose();
+    }
+  });
+
   it("cancels a pending tool call without poisoning the connection", async () => {
     const client = makeClient();
     const controller = new AbortController();

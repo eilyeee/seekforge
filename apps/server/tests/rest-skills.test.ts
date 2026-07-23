@@ -9,6 +9,8 @@ const TOKEN = "test-token-skills";
 let workspace: string;
 let server: RunningServer;
 let base: string;
+let home: string;
+let savedHome: string | undefined;
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${base}${path}`, {
@@ -24,6 +26,9 @@ async function jsonOf(r: Response | Promise<Response>): Promise<any> {
 }
 
 beforeAll(async () => {
+  savedHome = process.env.SEEKFORGE_HOME;
+  home = makeWorkspace();
+  process.env.SEEKFORGE_HOME = home;
   delete process.env["DEEPSEEK_API_KEY"];
   delete process.env["SEEKFORGE_RUNTIME_BIN"];
   workspace = makeWorkspace();
@@ -49,6 +54,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
+  if (savedHome === undefined) delete process.env.SEEKFORGE_HOME;
+  else process.env.SEEKFORGE_HOME = savedHome;
 });
 
 describe("skill management", () => {
@@ -111,5 +118,32 @@ describe("skill management", () => {
 
     const builtin = await authed("/api/skills/bugfix", { method: "DELETE" });
     expect(builtin.status).toBe(400);
+  });
+});
+
+describe("plugin management", () => {
+  it("scaffolds, installs disabled, enables by digest, and removes a plugin", async () => {
+    let res = await authed("/api/plugins", { method: "POST", body: JSON.stringify({ id: "rest-plugin" }) });
+    expect(res.status).toBe(201);
+    const created = await jsonOf(res);
+
+    res = await authed("/api/plugins/install", {
+      method: "POST",
+      body: JSON.stringify({ path: created.path }),
+    });
+    expect(res.status).toBe(200);
+    expect((await jsonOf(res)).manifest.id).toBe("rest-plugin");
+
+    let plugins = await jsonOf(authed("/api/plugins"));
+    expect(plugins.find((plugin: { scope: string }) => plugin.scope === "global").status).toBe("disabled");
+
+    res = await authed("/api/plugins/rest-plugin", { method: "PUT", body: JSON.stringify({ enabled: true }) });
+    expect(res.status).toBe(200);
+    plugins = await jsonOf(authed("/api/plugins"));
+    expect(plugins.find((plugin: { scope: string }) => plugin.scope === "global").status).toBe("enabled");
+
+    res = await authed("/api/plugins/rest-plugin", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(home, ".seekforge/plugins/rest-plugin"))).toBe(false);
   });
 });

@@ -39,7 +39,10 @@ The config format is Claude Code–compatible:
       // Optional: extra environment variables merged over process.env (stdio only)
       "env": { "MY_VAR": "value" },
       // SeekForge-specific: controls permission level (default false)
-      "trusted": false
+      "trusted": false,
+      // Optional conservative server default + raw-tool-name overrides
+      "permission": "write",
+      "toolPermissions": { "read_file": "readonly", "delete_file": "dangerous" }
     },
     "web-search": {
       // Streamable HTTP transport — selected by the presence of "url"
@@ -181,17 +184,25 @@ Each user-owned server entry has an optional `trusted` boolean (default `false`)
 Automatic agent discovery connects only global or explicitly supplied settings
 entries marked `trusted: true`; repository trust flags are stripped because the
 connection itself can start a local process or contact a remote endpoint.
-The trusted server's tools are then classified at the `write` permission level:
+Trusted tools use a configured raw-tool-name override first, then the server
+default, then MCP annotations (`destructive`/`openWorld` escalate to `env`,
+`readOnly` maps to `readonly`), and otherwise `write`. Untrusted entries remain
+`env` when explicitly inspected and can never lower their permission through
+annotations.
 
 | `trusted` | Automatic connection | Tool permission | With `-y` | Without `-y` |
 |---|---|---|---|---|
 | `false`   | Disabled | N/A | N/A | N/A |
-| `true`    | Enabled | `"write"` | Auto-approved | Confirmed |
+| `true`    | Enabled | override/default/annotation, else `"write"` | Policy-dependent | Policy-dependent |
 
 Explicit management commands such as `seekforge mcp list` and Desktop's server
 test/tool inspection can connect the selected untrusted entry because that exact
 connection was initiated by the user. Mark a server trusted only after reviewing
 its command or URL and configuration.
+
+Tool results keep text under `content`, preserve bounded/redacted
+`structuredContent`, and expose image/audio/resource metadata as attachment
+descriptors without placing base64 payloads into the model context.
 
 ### 1.8 Resources
 

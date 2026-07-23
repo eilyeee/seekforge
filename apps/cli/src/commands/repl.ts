@@ -14,7 +14,7 @@ import {
 } from "@seekforge/core";
 import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
 import { createCliAgent, prepareMcp } from "../agent-factory.js";
-import { buildToolGatingRules } from "../tool-gating.js";
+import { buildToolGatingRules, parseToolList } from "../tool-gating.js";
 import { dim, fail, yellow } from "../colors.js";
 import { loadConfig } from "../config.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
@@ -112,7 +112,13 @@ export async function replCommand(opts: {
 
   const runOnce = async (
     task: string,
-    runOpts?: { mode?: "ask" | "edit"; plan?: boolean; model?: string; permissionRules?: PermissionRule[] },
+    runOpts?: {
+      mode?: "ask" | "edit";
+      plan?: boolean;
+      model?: string;
+      permissionRules?: PermissionRule[];
+      allowedTools?: string[];
+    },
   ): Promise<void> => {
     // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
     // for this turn only, without mutating the persistent /think setting.
@@ -123,8 +129,10 @@ export async function replCommand(opts: {
     const runConfig = { ...baseRunConfig, memoryMaintenance: undefined };
     const { agent, dispose } = createCliAgent({
       config: runConfig,
+      workspace: projectPath,
       model: runOpts?.model ?? model,
       ...(runOpts?.permissionRules ? { permissionRules: runOpts.permissionRules } : {}),
+      ...(runOpts?.allowedTools ? { allowedTools: runOpts.allowedTools } : {}),
       confirm: makeConfirm(rl),
       onModelDelta: renderer.modelDelta,
       onReasoningDelta: renderer.reasoningDelta,
@@ -213,6 +221,7 @@ export async function replCommand(opts: {
             await runOnce(task, {
               ...(custom.model ? { model: custom.model } : {}),
               ...(permissionRules ? { permissionRules } : {}),
+              ...(custom.allowedTools ? { allowedTools: parseToolList(custom.allowedTools) } : {}),
             });
           } catch (err) {
             console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));

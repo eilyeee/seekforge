@@ -1,5 +1,7 @@
 /** MCP (Model Context Protocol) client types — stdio and Streamable HTTP transports. */
 
+import type { PermissionName } from "@seekforge/shared";
+
 /**
  * One entry under `mcpServers` in .seekforge/config.json (Claude Code-compatible).
  * Exactly one transport applies per server: `url` present → Streamable HTTP,
@@ -41,6 +43,10 @@ export type McpServerConfig = {
    * connect an untrusted entry because the user initiated that exact action.
    */
   trusted?: boolean;
+  /** Default permission for this trusted server's tools. Defaults to annotation-derived/write. */
+  permission?: PermissionName;
+  /** Per-raw-tool-name permission overrides. */
+  toolPermissions?: Record<string, PermissionName>;
 };
 
 /** A tool as advertised by an MCP server via tools/list. */
@@ -49,6 +55,13 @@ export type McpTool = {
   description?: string;
   /** Raw JSON Schema for the tool's arguments, passed through to the model. */
   inputSchema?: Record<string, unknown>;
+  /** Standard MCP behavioral hints; treated conservatively because servers may lie. */
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
 };
 
 /** A resource as advertised by an MCP server via resources/list. */

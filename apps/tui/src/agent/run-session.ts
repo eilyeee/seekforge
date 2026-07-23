@@ -54,6 +54,7 @@ export async function runSession(task: string, signal: AbortSignal, deps: RunSes
 
   const { agent, dispose } = createTuiAgent({
     config: deps.config,
+    workspace: deps.projectPath,
     model: deps.model,
     confirm: deps.confirm,
     onModelDelta: (chunk) => buffered.dispatch({ type: "model-delta", chunk }),

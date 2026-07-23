@@ -25,6 +25,7 @@ import type {
   MemoryStats,
   ModelInfo,
   PruneResult,
+  PluginRecord,
   RewindResult,
   SearchResult,
   SecurityEvidencePackage,
@@ -186,6 +187,7 @@ export const api = {
     ),
   skills: (ws?: string) => request<Skill[]>("GET", withWorkspace("/api/skills", ws)),
   skill: (id: string, ws?: string) => request<Skill>("GET", withWorkspace(`/api/skills/${encodeURIComponent(id)}`, ws)),
+  plugins: (ws?: string) => request<PluginRecord[]>("GET", withWorkspace("/api/plugins", ws)),
   memory: (ws?: string) => request<MemoryResponse>("GET", withWorkspace("/api/memory", ws)),
   memoryAction: (id: string, action: "approve" | "reject", scope?: "project" | "user", ws?: string) =>
     request<MemoryCandidate>(
@@ -317,6 +319,23 @@ export const api = {
       withWorkspace(`/api/skills/${encodeURIComponent(id)}${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, ws),
     ),
 
+  pluginCreate: (id: string, ws?: string) =>
+    request<{ manifest: PluginRecord["manifest"]; path: string }>("POST", withWorkspace("/api/plugins", ws), { id }),
+  pluginInstall: (path: string, force = false, ws?: string) =>
+    request<{ manifest: PluginRecord["manifest"]; path: string; digest: string }>(
+      "POST",
+      withWorkspace("/api/plugins/install", ws),
+      { path, force },
+    ),
+  pluginSetEnabled: (id: string, enabled: boolean, ws?: string) =>
+    request<{ id: string; enabled: boolean; digest: string }>(
+      "PUT",
+      withWorkspace(`/api/plugins/${encodeURIComponent(id)}`, ws),
+      { enabled },
+    ),
+  pluginDelete: (id: string, ws?: string) =>
+    request<{ id: string; removed: string }>("DELETE", withWorkspace(`/api/plugins/${encodeURIComponent(id)}`, ws)),
+
   // Sessions lifecycle (workspace-scoped).
   sessionDelete: (id: string, ws?: string) =>
     request<{ deleted: boolean }>("DELETE", withWorkspace(`/api/sessions/${encodeURIComponent(id)}`, ws)),
@@ -347,6 +366,8 @@ export const api = {
         scope?: string;
       };
       trusted?: boolean;
+      permission?: McpServer["permission"] | null;
+      toolPermissions?: McpServer["toolPermissions"];
       scope?: McpScope;
     },
     ws?: string,

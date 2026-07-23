@@ -56,8 +56,17 @@ export function defineTool<S extends z.ZodTypeAny>(spec: ToolSpec<S>): ToolSpec 
   return spec as unknown as ToolSpec;
 }
 
+export const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function createDispatcher(tools: ToolSpec[]): ToolDispatcher {
-  const byName = new Map(tools.map((t) => [t.name, t]));
+  const byName = new Map<string, ToolSpec>();
+  for (const tool of tools) {
+    if (!TOOL_NAME_PATTERN.test(tool.name)) {
+      throw new RangeError(`Invalid tool name ${JSON.stringify(tool.name)}; expected 1-64 letters, digits, _ or -`);
+    }
+    if (byName.has(tool.name)) throw new RangeError(`Duplicate tool name: ${tool.name}`);
+    byName.set(tool.name, tool);
+  }
 
   return {
     list(): ToolDefinitionForModel[] {

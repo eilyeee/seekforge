@@ -134,6 +134,11 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | POST /api/mcp/prompts/:server/:name | body `{arguments?: object}` → `{text}` — resolves one prompt from an explicitly trusted MCP server in the selected workspace; 403 untrusted server, 404 unconfigured server, 502 MCP failure |
 | GET /api/skills | `Skill[]` (without `content`) |
 | GET /api/skills/:id | full `Skill` |
+| GET /api/plugins | installed and project-discovered `PluginRecord[]`; project records are always review-only |
+| POST /api/plugins | body `{id}` → scaffold a project plugin; workspace-coordinated |
+| POST /api/plugins/install | body `{path, force?}` → atomically install a bounded local plugin into the user store, disabled |
+| PUT /api/plugins/:id | body `{enabled}` → approve the current installed digest or disable contributions |
+| DELETE /api/plugins/:id | uninstall a user plugin and remove its approval state |
 | GET /api/memory | `{projectMd: string \| null, candidates: MemoryCandidate[], facts: MemoryFact[], maintenance: MemoryMaintenanceState \| null}`; maintenance is the last successful automatic-compaction summary, never a live mutation |
 | POST /api/memory/:id/approve | updated `MemoryCandidate` |
 | POST /api/memory/:id/reject | updated `MemoryCandidate` |
@@ -147,7 +152,7 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | GET /api/evolution | `EvolutionProposal[]` (pending first, newest first within each group) |
 | POST /api/evolution/:id/accept\|reject\|apply | updated proposal (apply returns `{proposal, changedPath}`); 404 unknown id, 409 on wrong-state transitions and apply failures (e.g. skill_exists) |
 | GET /api/mcp | effective global/project servers with transport, scope, shadowing, and masked env/header/OAuth values; project entries shadow same-name global entries but are always reported untrusted |
-| POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, and optional refresh-token `oauth`; masked sentinels preserve existing secrets. `trusted:true` requires global scope. The complete read/merge/write is serialized per selected layer; 409 `session_busy` when that layer is owned |
+| POST /api/mcp | add/update one scoped stdio or HTTP server; accepts structured `args`, `env`, `headers`, default `permission` (`null` clears it), per-tool `toolPermissions` (empty object clears overrides), and optional refresh-token `oauth`; masked sentinels preserve existing secrets. `trusted:true` requires global scope. The complete read/merge/write is serialized per selected layer; 409 `session_busy` when that layer is owned |
 | DELETE /api/mcp/:name?scope=project\|global | remove one server from the selected config layer; 409 `session_busy` when that layer is owned |
 | POST /api/mcp/:name/test | connect, list tools, dispose, and return `{ok, latencyMs, toolCount}` |
 | POST /api/mcp/:name/tools | spawns the server, lists tools `{tools: {name, description}[]}`, disposes; 404 unconfigured, 502 `{error:{code:"mcp_error"}}` on launch/handshake failure |

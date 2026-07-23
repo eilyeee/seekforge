@@ -45,6 +45,7 @@ export async function runLoop(
 ): Promise<LoopResult> {
   const { deps: agentDeps, dispose } = buildTuiDeps({
     config: deps.config,
+    workspace: deps.projectPath,
     model: deps.model,
     confirm: async () => false,
     extractMemory: true,
@@ -82,6 +83,7 @@ export async function resumeLoop(
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
   const { deps: agentDeps, dispose } = buildTuiDeps({
     config: deps.config,
+    workspace: deps.projectPath,
     model: deps.model,
     confirm: async () => false,
     extractMemory: true,

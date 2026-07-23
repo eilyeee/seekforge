@@ -356,30 +356,15 @@ test("buildToolGatingRules: --disallowedTools → one deny per tool", () => {
     { action: "deny", tool: "write_file" },
   ]);
 });
-test("buildToolGatingRules: --allowedTools denies every other known tool", () => {
-  const rules = buildToolGatingRules({
-    allowedTools: "read_file,search_text",
-    knownTools: ["read_file", "search_text", "run_command", "write_file"],
-  });
-  assert.ok(rules);
-  // listed tools get NO rule; the rest are denied
-  assert.deepEqual(rules, [
-    { action: "deny", tool: "run_command" },
-    { action: "deny", tool: "write_file" },
-  ]);
+test("buildToolGatingRules: --allowedTools is handled by the exact core gate", () => {
+  assert.deepEqual(buildToolGatingRules({ allowedTools: "read_file,search_text" }), []);
 });
-test("buildToolGatingRules: allow + disallow do not duplicate a denied tool", () => {
+test("buildToolGatingRules: allow + disallow keeps explicit denies", () => {
   const rules = buildToolGatingRules({
     allowedTools: "read_file",
     disallowedTools: "run_command",
-    knownTools: ["read_file", "run_command", "write_file"],
   });
-  // run_command denied once (explicit), write_file denied (not in allow-list),
-  // read_file allowed (no rule).
-  assert.deepEqual(rules, [
-    { action: "deny", tool: "run_command" },
-    { action: "deny", tool: "write_file" },
-  ]);
+  assert.deepEqual(rules, [{ action: "deny", tool: "run_command" }]);
 });
 test("buildToolGatingRules: base rules are appended after synthesized", () => {
   const base = [{ action: "allow" as const, tool: "web_fetch", match: "https://docs" }];

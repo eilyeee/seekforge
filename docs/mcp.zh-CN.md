@@ -37,7 +37,10 @@ MCP 服务器在 `.seekforge/config.json`（项目级）或 `~/.seekforge/config
       // Optional: extra environment variables merged over process.env (stdio only)
       "env": { "MY_VAR": "value" },
       // SeekForge-specific: controls permission level (default false)
-      "trusted": false
+      "trusted": false,
+      // 可选的保守服务器默认值，以及按原始工具名设置的覆盖
+      "permission": "write",
+      "toolPermissions": { "read_file": "readonly", "delete_file": "dangerous" }
     },
     "web-search": {
       // Streamable HTTP transport — selected by the presence of "url"
@@ -165,17 +168,22 @@ stdio 客户端在其 initialize capabilities 中声明 `roots.listChanged: true
 
 每个用户级服务器条目有一个可选的 `trusted` 布尔值（默认 `false`）。Agent 自动
 发现只连接全局配置或显式 settings 中设置为 `trusted: true` 的条目；仓库信任标志
-会被剥离，因为连接本身就可能启动本地进程或访问远程端点。已信任服务器的工具随后
-按 `write` 权限级别分类：
+会被剥离，因为连接本身就可能启动本地进程或访问远程端点。已信任工具依次使用按原始
+工具名设置的覆盖、服务器默认值、MCP 注解（`destructive`/`openWorld` 升到 `env`，
+`readOnly` 映射为 `readonly`），最后回退到 `write`。显式检查未信任条目时始终使用
+`env`，不能通过注解降低权限。
 
 | `trusted` | 自动连接 | 工具权限 | 使用 `-y` 时 | 未使用 `-y` 时 |
 |---|---|---|---|---|
 | `false` | 禁用 | 不适用 | 不适用 | 不适用 |
-| `true` | 启用 | `"write"` | 自动批准 | 需确认 |
+| `true` | 启用 | 覆盖/默认/注解，否则 `"write"` | 取决于策略 | 取决于策略 |
 
 `seekforge mcp list`、Desktop 的服务器测试/工具查看等显式管理操作仍可连接用户
 主动选择的未信任条目，因为用户已经发起了这一次准确的连接。只有审查过命令或
 URL 及其配置后，才应把服务器标记为已信任。
+
+工具结果把文本保留在 `content` 中，同时保留有界且脱敏的 `structuredContent`；
+图片、音频和资源只以附件描述信息暴露，不会把 base64 载荷塞进模型上下文。
 
 ### 1.8 Resources
 

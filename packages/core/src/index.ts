@@ -10,4 +10,5 @@ export * from "./evolution/index.js";
 export * from "./hooks/index.js";
 export * from "./worktree.js";
 export * from "./security/index.js";
+export * from "./plugins/index.js";
 export { writeFileAtomic, readFileIfExists } from "./util/fs.js";

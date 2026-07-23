@@ -24,7 +24,10 @@ export type ToolContext = {
   sessionId: string;
   /** Absolute path of the project workspace; all file access must stay inside. */
   workspace: string;
-  policy: PermissionPolicy;
+  policy: PermissionPolicy & {
+    /** Exact run-scoped tool allow-list. Names outside it fail closed. */
+    allowedTools?: readonly string[];
+  };
   /**
    * Ask the user. Must be given raw args to display. May resolve a plain
    * boolean (allow-once / deny — the original contract) OR a ConfirmResult
@@ -90,7 +93,7 @@ export function createDefaultDispatcher(extraTools: ToolSpec[] = []): ToolDispat
 
 // Additional exports for tests / other modules.
 export { ToolError } from "./errors.js";
-export { createDispatcher, defineTool } from "./registry.js";
+export { createDispatcher, defineTool, TOOL_NAME_PATTERN } from "./registry.js";
 export type { ClassifiedCall, ToolRunOutput, ToolSpec } from "./registry.js";
 export { enforcePermission } from "./permissions.js";
 export type { PermissionDecision, PermissionOutcome } from "./permissions.js";

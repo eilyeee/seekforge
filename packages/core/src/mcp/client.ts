@@ -33,6 +33,8 @@ export type McpClient = {
    * A result with isError:true rejects with code "mcp_tool_error".
    */
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  /** tools/call with structured content and attachment descriptors preserved. */
+  callToolDetailed(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolCallResult>;
   /** resources/list — missing result.resources is treated as an empty list. */
   listResources(signal?: AbortSignal): Promise<McpResource[]>;
   /**
@@ -88,8 +90,16 @@ export const RESOURCE_READ_MAX_CHARS = 50_000;
 const capText = (text: string): string =>
   text.length > RESOURCE_READ_MAX_CHARS ? `${text.slice(0, RESOURCE_READ_MAX_CHARS)}…[truncated]` : text;
 
-type ContentPart = { type: string; text?: string };
-type CallToolResult = { content?: ContentPart[]; isError?: boolean };
+export type McpContentPart = {
+  type: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  resource?: { uri?: string; mimeType?: string; text?: string; blob?: string };
+};
+export type McpToolCallResult = { text: string; content: McpContentPart[]; structuredContent?: unknown };
+type ContentPart = McpContentPart;
+type CallToolResult = { content?: ContentPart[]; structuredContent?: unknown; isError?: boolean };
 type ResourceContent = { uri?: string; mimeType?: string; text?: string; blob?: string };
 type ReadResourceResult = { contents?: ResourceContent[] };
 type PromptMessage = { role?: string; content?: ContentPart | ContentPart[] };
@@ -418,6 +428,23 @@ function createStdioTransport(options: McpClientOptions): McpTransport {
  */
 export function createMcpClient(options: McpClientOptions): McpClient {
   const transport: McpTransport = options.config.url ? createMcpHttpTransport(options) : createStdioTransport(options);
+  const callToolDetailed = async (
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<McpToolCallResult> => {
+    const res = await transport.request<CallToolResult>("tools/call", { name, arguments: args }, signal);
+    const content = Array.isArray(res?.content) ? res.content : [];
+    const text = flattenContent(content);
+    if (res?.isError) {
+      throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
+    }
+    return {
+      text,
+      content,
+      ...(res && Object.hasOwn(res, "structuredContent") ? { structuredContent: res.structuredContent } : {}),
+    };
+  };
 
   return {
     async listTools(signal?: AbortSignal): Promise<McpTool[]> {
@@ -425,13 +452,10 @@ export function createMcpClient(options: McpClientOptions): McpClient {
     },
 
     async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
-      const res = await transport.request<CallToolResult>("tools/call", { name, arguments: args }, signal);
-      const text = flattenContent(res?.content ?? []);
-      if (res?.isError) {
-        throw new McpError("mcp_tool_error", text || `MCP tool ${name} reported an error`);
-      }
-      return text;
+      return (await callToolDetailed(name, args, signal)).text;
     },
+
+    callToolDetailed,
 
     async listResources(signal?: AbortSignal): Promise<McpResource[]> {
       return listAll<McpResource>(transport, "resources/list", "resources", signal);

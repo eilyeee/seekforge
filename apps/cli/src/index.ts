@@ -40,6 +40,7 @@ import { registerEvolutionCommands } from "./commands/register-evolution.js";
 import { registerMcpCommands } from "./commands/register-mcp.js";
 import { registerMemoryCommands } from "./commands/register-memory.js";
 import { registerSkillCommands } from "./commands/register-skill.js";
+import { registerPluginCommands } from "./commands/register-plugin.js";
 import { registerSecurityCommands } from "./commands/register-security.js";
 import { serveCommand } from "./commands/serve.js";
 import { updateCommand } from "./commands/update.js";
@@ -767,6 +768,7 @@ program
   });
 
 registerSkillCommands(program);
+registerPluginCommands(program);
 registerAgentCommands(program);
 registerMcpCommands(program);
 registerMemoryCommands(program);

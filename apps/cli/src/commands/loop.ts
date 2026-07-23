@@ -348,6 +348,7 @@ async function runPreparedLoop(
   // loop never prompts, so confirm denies anything not already permitted.
   const { deps, dispose } = createCliAgentDeps({
     config,
+    workspace: projectPath,
     model,
     mcpToolSpecs: mcp.specs,
     confirm: async () => false,

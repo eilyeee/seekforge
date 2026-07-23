@@ -22,6 +22,17 @@ function scriptedConfirm(answer: ConfirmResult): {
 }
 
 describe("permission flow", () => {
+  it("enforces an exact tool allow-list before normal permission rules", async () => {
+    const ws = makeWorkspace();
+    fs.writeFileSync(path.join(ws, "a.txt"), "hi");
+    const ctx = makeCtx(ws, {
+      policy: { mode: "edit", approvalMode: "auto", allowedTools: ["read_file"] },
+    });
+    expect((await dispatcher.execute(call("read_file", { path: "a.txt" }), ctx)).ok).toBe(true);
+    const denied = await dispatcher.execute(call("glob", { pattern: "**/*" }), ctx);
+    expect(denied.error?.code).toBe("tool_not_allowed");
+  });
+
   it("readonly tools run without confirmation, even in ask mode", async () => {
     const ws = makeWorkspace();
     fs.writeFileSync(path.join(ws, "a.txt"), "hi");

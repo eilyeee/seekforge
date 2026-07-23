@@ -67,6 +67,18 @@ export function IconSkills(props: IconProps) {
   );
 }
 
+/** Interlocking blocks — Plugins. */
+export function IconPlugins(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="2" width="5" height="5" rx="1" />
+      <rect x="9" y="2" width="5" height="5" rx="1" />
+      <rect x="2" y="9" width="5" height="5" rx="1" />
+      <path d="M9 11.5h5M11.5 9v5" />
+    </Svg>
+  );
+}
+
 /** Branching arrows — Agents. */
 export function IconAgents(props: IconProps) {
   return (

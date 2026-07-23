@@ -134,6 +134,41 @@ describe("agent loop", () => {
     expect(events.some((e) => e.type === "tool.completed")).toBe(true);
   });
 
+  it("hides and rejects every tool outside the exact runtime allow-list", async () => {
+    const provider = fakeProvider([
+      response({
+        toolCalls: [{ id: "c1", name: "mcp__fake__write", argumentsJson: "{}" }],
+        finishReason: "tool_calls",
+      }),
+      response({ content: "blocked" }),
+    ]);
+    const calls: ToolCall[] = [];
+    const dispatcher: ToolDispatcher = {
+      list: () => [
+        { name: "read_file", description: "read", parameters: {} },
+        { name: "mcp__fake__write", description: "external", parameters: {} },
+      ],
+      execute: async (call) => {
+        calls.push(call);
+        return { ok: true };
+      },
+    };
+    const agent = createAgentCore({
+      provider,
+      dispatcher,
+      confirm: async () => true,
+      allowedTools: ["read_file"],
+    });
+
+    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    expect(provider.requests[0]!.tools?.map((tool) => tool.name)).toEqual(["read_file"]);
+    expect(calls).toEqual([]);
+    const completed = events.find((event) => event.type === "tool.completed");
+    expect(completed && completed.type === "tool.completed" ? completed.result.error?.code : undefined).toBe(
+      "tool_not_allowed",
+    );
+  });
+
   it("returns an invalid_json tool result for malformed argumentsJson", async () => {
     const provider = fakeProvider([
       response({

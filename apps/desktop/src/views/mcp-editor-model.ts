@@ -1,4 +1,4 @@
-import type { McpScope } from "../types";
+import type { McpPermission, McpScope } from "../types";
 
 export type KeyValueRow = { key: string; value: string };
 
@@ -6,6 +6,8 @@ export type McpServerDraft = {
   name: string;
   scope: McpScope;
   trusted: boolean;
+  permission?: McpPermission | null;
+  toolPermissions?: Record<string, McpPermission>;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
@@ -51,6 +53,8 @@ export function buildMcpServerDraft(input: {
   refreshToken: string;
   oauthScope: string;
   trusted: boolean;
+  permission?: McpPermission | null;
+  toolPermissions: Record<string, McpPermission>;
 }): McpServerDraft {
   if (input.transport === "stdio") {
     return {
@@ -60,6 +64,8 @@ export function buildMcpServerDraft(input: {
       args: input.args,
       env: input.env,
       trusted: input.trusted,
+      ...(input.permission !== undefined ? { permission: input.permission } : {}),
+      toolPermissions: input.toolPermissions,
     };
   }
   return {
@@ -79,5 +85,7 @@ export function buildMcpServerDraft(input: {
         }
       : {}),
     trusted: input.trusted,
+    ...(input.permission !== undefined ? { permission: input.permission } : {}),
+    toolPermissions: input.toolPermissions,
   };
 }

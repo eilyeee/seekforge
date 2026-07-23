@@ -188,6 +188,8 @@ export type AgentCoreDeps = {
   commandAllowlist?: string[];
   /** Fine-grained allow/deny rules, project rules first (first match wins). */
   permissionRules?: PermissionRule[];
+  /** Exact run-scoped tool allow-list. Unlisted built-in, MCP, and dispatch tools are hidden and rejected. */
+  allowedTools?: string[];
   /** Specialist agents dispatchable via the synthetic dispatch_agent tool. */
   subagents?: AgentDefinition[];
   /**
@@ -761,6 +763,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
             commandAllowlist: deps.commandAllowlist ?? [],
             sessionAllowlist,
             ...(deps.permissionRules ? { rules: deps.permissionRules } : {}),
+            ...(deps.allowedTools ? { allowedTools: deps.allowedTools } : {}),
           },
           confirm: confirmWithNotify,
           log: (entry) => trace.toolCall(entry),
@@ -784,7 +787,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
           ...(depth === 0 && askUserWithNotify ? { askUser: askUserWithNotify } : {}),
         };
 
-        const toolDefs =
+        const allToolDefs =
           roster.length > 0
             ? [
                 ...deps.dispatcher.list(),
@@ -794,6 +797,8 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
                 buildAgentSendToolDefinition(),
               ]
             : deps.dispatcher.list();
+        const allowedToolSet = deps.allowedTools ? new Set(deps.allowedTools) : undefined;
+        const toolDefs = allowedToolSet ? allToolDefs.filter((tool) => allowedToolSet.has(tool.name)) : allToolDefs;
         let usage = ZERO_USAGE;
         let sessionEndStatus: "completed" | "failed" | "cancelled" | undefined;
         let toolCallCount = 0;
@@ -1215,6 +1220,18 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
               toolCallCount++;
               if (toolCallCount > limits.maxToolCalls) {
                 throw new AgentLimitError("max_tool_calls_exceeded", `exceeded ${limits.maxToolCalls} tool calls`);
+              }
+              if (allowedToolSet && !allowedToolSet.has(tc.name)) {
+                return {
+                  args: {},
+                  parseError: {
+                    ok: false,
+                    error: {
+                      code: "tool_not_allowed",
+                      message: `Tool ${tc.name} is outside the run's allowedTools list`,
+                    },
+                  },
+                };
               }
               try {
                 return { args: tc.argumentsJson ? JSON.parse(tc.argumentsJson) : {} };

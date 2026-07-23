@@ -4,6 +4,22 @@ import { createDispatcher, defineTool } from "../../src/tools/index.js";
 import { call, makeCtx, makeWorkspace } from "./helpers.js";
 
 describe("tool dispatcher call isolation", () => {
+  it("rejects duplicate and provider-invalid tool names", () => {
+    const tool = (name: string) =>
+      defineTool({
+        name,
+        description: "test",
+        schema: z.object({}),
+        classify: () => ({ permission: "readonly", description: "test" }),
+        async run() {
+          return { data: null };
+        },
+      });
+    expect(() => createDispatcher([tool("same"), tool("same")])).toThrow(/Duplicate tool name/);
+    expect(() => createDispatcher([tool("bad name")])).toThrow(/Invalid tool name/);
+    expect(() => createDispatcher([tool("x".repeat(65))])).toThrow(/Invalid tool name/);
+  });
+
   it("does not leak per-hunk selections across concurrent executions sharing a context", async () => {
     let entered = 0;
     let release!: () => void;

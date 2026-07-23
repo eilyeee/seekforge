@@ -93,6 +93,7 @@ session resume, permission prompts, questions, diff viewing, and active-file con
 | `seekforge mcp-serve [--allow-write]` | run SeekForge as an MCP server on stdio (read-only tool set by default); `--allow-write` exposes write tools (TRUSTED callers only) |
 | `seekforge skill list\|show\|create\|enable\|disable <id>` | procedure skills (project > global > builtin); enable/disable toggles a skill |
 | `seekforge skill import <path> [-g] [-f]` | import a Claude-style SKILL.md (YAML frontmatter) as a project or global skill |
+| `seekforge plugin list\|create\|install\|update\|enable\|disable\|remove` | manage first-class extension bundles; installs stay disabled until their exact digest is approved — see [docs/plugins.md](docs/plugins.md) |
 | `seekforge agent list\|show <id>\|import <path>` | manage subagents; the main agent delegates bounded sub-tasks via `dispatch_agent` |
 | `seekforge memory list\|approve <id>\|reject <id>` | review extracted facts into long-term project memory |
 | `seekforge memory compact [--dry-run] [--prune-unused <days>]` | collapse duplicate and near-duplicate facts in project.md (deterministic); `--prune-unused` requires a non-negative integer and archives never-used facts older than `<days>` to `project-archive.md` |

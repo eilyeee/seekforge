@@ -6,7 +6,7 @@ import { notificationsEnabled, setNotificationsEnabled } from "../lib/notify";
 import { activeTab, useStore } from "../store";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Badge, Button, Card, IconSettings, Input, Select, TextArea } from "../components/ui";
-import type { ConfigKey, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
+import type { ConfigKey, McpPermission, McpPrompt, McpResource, McpServer, McpTool, ServerConfig } from "../types";
 import type { WorkspaceAsyncCoordinator } from "./async-coordination";
 import { useWorkspaceAsyncCoordinator } from "./use-workspace-async";
 import { buildMcpServerDraft, recordOf, rowsOf, type KeyValueRow } from "./mcp-editor-model";
@@ -218,6 +218,12 @@ function McpSection() {
                   <Badge tone={srv.trusted ? "ok" : "neutral"}>
                     {t(srv.trusted ? "settings.mcpTrusted" : "settings.mcpUntrusted")}
                   </Badge>
+                  <Badge tone="neutral">{srv.permission ?? t("settings.mcpPermissionAutoShort")}</Badge>
+                  {Object.keys(srv.toolPermissions ?? {}).length > 0 && (
+                    <Badge tone="accent">
+                      {t("settings.mcpPermissionOverrides", { count: Object.keys(srv.toolPermissions ?? {}).length })}
+                    </Badge>
+                  )}
                   {Object.keys(srv.env).length > 0 && (
                     <Badge tone="neutral">{t("settings.mcpEnv", { count: Object.keys(srv.env).length })}</Badge>
                   )}
@@ -403,6 +409,8 @@ export function McpEditorDialog({
   const [refreshToken, setRefreshToken] = useState(initial?.oauth?.refreshToken ?? "");
   const [oauthScope, setOauthScope] = useState(initial?.oauth?.scope ?? "");
   const [trusted, setTrusted] = useState(initial?.trusted ?? false);
+  const [permission, setPermission] = useState<McpPermission | "auto">(initial?.permission ?? "auto");
+  const [toolPermissions, setToolPermissions] = useState<KeyValueRow[]>(rowsOf(initial?.toolPermissions ?? {}));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const coordinator = useWorkspaceAsyncCoordinator(ws, () => useStore.getState().activeWorkspaceId);
@@ -422,7 +430,8 @@ export function McpEditorDialog({
     setError(null);
     const envValues = recordOf(env);
     const headerValues = recordOf(headers);
-    if (envValues === null || headerValues === null) {
+    const toolPermissionValues = recordOf(toolPermissions);
+    if (envValues === null || headerValues === null || toolPermissionValues === null) {
       setError(t("settings.mcpDuplicateKey"));
       setBusy(false);
       return;
@@ -443,6 +452,8 @@ export function McpEditorDialog({
       refreshToken,
       oauthScope,
       trusted,
+      permission: permission === "auto" ? null : permission,
+      toolPermissions: toolPermissionValues as Record<string, McpPermission>,
     });
     api
       .mcpAdd(cfg, operation.workspaceId)
@@ -484,7 +495,11 @@ export function McpEditorDialog({
           <Select
             ariaLabel={t("settings.mcpScope")}
             value={scope}
-            onChange={(value) => setScope(value as "global" | "project")}
+            onChange={(value) => {
+              const next = value as "global" | "project";
+              setScope(next);
+              if (next === "project") setTrusted(false);
+            }}
             disabled={busy || initial !== undefined}
             className="mt-1 w-full"
             options={[
@@ -655,10 +670,87 @@ export function McpEditorDialog({
             checked={trusted}
             onChange={(e) => setTrusted(e.target.checked)}
             className="accent-accent"
-            disabled={busy}
+            disabled={busy || scope === "project"}
           />
           {t("settings.mcpAddTrusted")}
         </label>
+        <div className="border-t border-subtle pt-3">
+          <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpPermission")}</span>
+          <Select
+            ariaLabel={t("settings.mcpPermission")}
+            value={permission}
+            onChange={(value) => setPermission(value as McpPermission | "auto")}
+            disabled={busy}
+            className="mt-1 w-full"
+            options={[
+              { value: "auto", label: t("settings.mcpPermissionAuto") },
+              { value: "readonly", label: "readonly" },
+              { value: "write", label: "write" },
+              { value: "execute", label: "execute" },
+              { value: "env", label: "env" },
+              { value: "dangerous", label: "dangerous" },
+            ]}
+          />
+          <p className="mt-1 text-tertiary">{t("settings.mcpPermissionHint")}</p>
+        </div>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-2xs uppercase tracking-wider text-tertiary">{t("settings.mcpToolPermissions")}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setToolPermissions([...toolPermissions, { key: "", value: "write" }])}
+            >
+              <span aria-hidden>+</span>
+              {t("settings.mcpFieldAdd")}
+            </Button>
+          </div>
+          <div className="mt-1 space-y-1.5">
+            {toolPermissions.map((row, index) => (
+              <div key={index} className="grid grid-cols-[minmax(0,1fr)_8rem_auto] gap-1.5">
+                <Input
+                  value={row.key}
+                  aria-label={`${t("settings.mcpToolName")} ${index + 1}`}
+                  placeholder={t("settings.mcpToolName")}
+                  className="font-mono"
+                  disabled={busy}
+                  onChange={(event) =>
+                    setToolPermissions(
+                      toolPermissions.map((value, at) =>
+                        at === index ? { ...value, key: event.target.value } : value,
+                      ),
+                    )
+                  }
+                />
+                <Select
+                  ariaLabel={`${t("settings.mcpPermission")} ${index + 1}`}
+                  value={row.value}
+                  onChange={(value) =>
+                    setToolPermissions(toolPermissions.map((entry, at) => (at === index ? { ...entry, value } : entry)))
+                  }
+                  disabled={busy}
+                  options={[
+                    { value: "readonly", label: "readonly" },
+                    { value: "write", label: "write" },
+                    { value: "execute", label: "execute" },
+                    { value: "env", label: "env" },
+                    { value: "dangerous", label: "dangerous" },
+                  ]}
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t("settings.mcpFieldRemove")}
+                  disabled={busy}
+                  onClick={() => setToolPermissions(toolPermissions.filter((_, at) => at !== index))}
+                >
+                  <span aria-hidden>×</span>
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
         {error && <p className="text-danger">{error}</p>}
       </div>
     </ConfirmDialog>

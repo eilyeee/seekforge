@@ -172,10 +172,13 @@ rl.on("line", (line) => {
       send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "kaboom" }], isError: true } });
       return;
     }
-    send({ jsonrpc: "2.0", id: msg.id, result: { content: [
-      { type: "text", text: "echo:" + JSON.stringify(msg.params.arguments) },
-      { type: "image", data: "deadbeef", mimeType: "image/png" },
-    ] } });
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      content: [
+        { type: "text", text: "echo:" + JSON.stringify(msg.params.arguments) },
+        { type: "image", data: "deadbeef", mimeType: "image/png" },
+      ],
+      structuredContent: { echoed: msg.params.arguments },
+    } });
     return;
   }
   send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found: " + msg.method } });

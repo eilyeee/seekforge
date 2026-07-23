@@ -38,6 +38,7 @@ seekforge run "修复登录按钮点击无响应的问题"
 | `seekforge update` (alias `upgrade`) | check npm for a newer release and print the install command |
 | `seekforge init` | scaffold `.seekforge/` and `AGENTS.md` |
 | `seekforge skill list\|show\|create` | manage procedure skills |
+| `seekforge plugin list\|create\|install\|update\|enable\|disable\|remove` | manage digest-approved plugin bundles |
 | `seekforge mcp list\|add\|remove` | list/add/remove MCP servers in config |
 | `seekforge memory list\|approve\|reject` | curate long-term project memory |
 | `seekforge config show\|set` | configuration (`apiKey`, `model`, `baseUrl`, `runtimeBin`) |

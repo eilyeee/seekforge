@@ -112,6 +112,24 @@
 | `seekforge resume <id>` | 继续某个会话（最近一次也可用 `run/ask -c`） |
 | `seekforge replay <session>` | 把存储会话的事件确定性地重新渲染到 stdout——不调用模型、零成本。`--verbose` 显示完整工具参数 / 结果 |
 
+## 插件命令
+
+`seekforge plugin`（别名 `plugins`）管理一等扩展包。项目插件只能被发现；安装会把
+审核过的目录复制到用户级存储，并保持禁用，直到其精确内容摘要被批准。
+
+| 命令 | 作用 |
+| --- | --- |
+| `plugin list [--json]` | 列出已安装和项目中发现的插件及审批状态。 |
+| `plugin inspect <id> [--json]` | 显示清单或完整插件记录。 |
+| `plugin validate <path>` | 不安装，仅校验本地插件。 |
+| `plugin create <id>` | 创建 `.seekforge/plugins/<id>/plugin.json` 脚手架。 |
+| `plugin install <path>` | 原子安装本地插件，默认禁用。 |
+| `plugin update <path>` | 替换已安装插件，并要求重新批准。 |
+| `plugin enable\|disable <id>` | 批准当前摘要，或移除其全部贡献。 |
+| `plugin remove <id>` | 卸载并删除审批状态。 |
+
+清单与安全模型见[插件](plugins.zh-CN.md)。
+
 ## GitHub issue 与 review 工作流
 
 这些命令需要已认证的 `gh`、一个 `origin` 远程仓库，以及显式的正数成本预算。agent 负责编辑与验证；由用户主动调用的命令执行 commit、push、创建 PR 以及查看 CI。

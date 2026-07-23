@@ -18,6 +18,7 @@ const DiffView = lazy(() => import("./views/DiffView").then((m) => ({ default: m
 const FilesView = lazy(() => import("./views/FilesView").then((m) => ({ default: m.FilesView })));
 const GitView = lazy(() => import("./views/GitView").then((m) => ({ default: m.GitView })));
 const SkillsView = lazy(() => import("./views/SkillsView").then((m) => ({ default: m.SkillsView })));
+const PluginsView = lazy(() => import("./views/PluginsView").then((m) => ({ default: m.PluginsView })));
 const AgentsView = lazy(() => import("./views/AgentsView").then((m) => ({ default: m.AgentsView })));
 const MemoryView = lazy(() => import("./views/MemoryView").then((m) => ({ default: m.MemoryView })));
 const EvolutionView = lazy(() => import("./views/EvolutionView").then((m) => ({ default: m.EvolutionView })));
@@ -101,6 +102,7 @@ export function App() {
             {view === "files" && <FilesView key={activeWorkspaceId} />}
             {view === "git" && <GitView key={activeWorkspaceId} />}
             {view === "skills" && <SkillsView key={activeWorkspaceId} />}
+            {view === "plugins" && <PluginsView key={activeWorkspaceId} />}
             {view === "agents" && <AgentsView key={activeWorkspaceId} />}
             {view === "memory" && <MemoryView key={activeWorkspaceId} />}
             {view === "evolution" && <EvolutionView key={activeWorkspaceId} />}
