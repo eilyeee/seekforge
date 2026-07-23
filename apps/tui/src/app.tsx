@@ -12,10 +12,10 @@ import {
   renderSessionAuditMarkdown,
   compactSessionNow,
   createBackgroundTasks,
+  createMemoryMaintenanceScheduler,
   listMemoryCandidates,
   listProjectFacts,
   listSessions,
-  maybeMaintainProjectMemory,
   rejectMemoryCandidate,
   loadAgentDefinitions,
   projectMemoryPath,
@@ -378,6 +378,29 @@ export function App({
   // the currently running task too.
   const allowlistRef = useRef<string[]>([...(config.commandAllowlist ?? [])]);
   const runConfigRef = useRef<TuiConfig>({ ...config, commandAllowlist: allowlistRef.current });
+
+  // Long-lived TUI sessions use otherwise-idle time for memory maintenance.
+  // The scheduler also takes the cross-process workspace guard, so another
+  // SeekForge process with an active Agent/Loop makes this tick a no-op.
+  useEffect(() => {
+    if (config.memoryMaintenance?.enabled !== true) return;
+    const scheduler = createMemoryMaintenanceScheduler({
+      targets: () => [
+        {
+          workspace: projectPath,
+          getConfig: () => runConfigRef.current.memoryMaintenance,
+          isIdle: () =>
+            runsByTabRef.current.size === 0 &&
+            pendingPermissionByTabRef.current.size === 0 &&
+            pendingQuestionByTabRef.current.size === 0 &&
+            !tabsStateRef.current.tabs.some(
+              (tab) => tab.chat.running || tab.chat.planPending || tab.chat.queue.length > 0,
+            ),
+        },
+      ],
+    });
+    return () => scheduler.dispose();
+  }, [config.memoryMaintenance?.enabled, projectPath]);
 
   // One background-task manager for the whole TUI process: tasks started by
   // any turn (dev servers, watchers) survive across runs; killed on exit.
@@ -1112,7 +1135,6 @@ export function App({
           }
           try {
             const c = addMemoryFact(projectPath, { content: command.arg, type: "convention" });
-            maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
             notice(`remembered → project.md: ${c.content}`);
           } catch (err) {
             notice(`error: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -2326,7 +2348,6 @@ export function App({
           try {
             if (key === "a") {
               approveMemoryCandidate(projectPath, candidate.id, overlay.scope);
-              if (overlay.scope === "project") maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
             } else rejectMemoryCandidate(projectPath, candidate.id);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

@@ -119,7 +119,6 @@ export function buildAgentDeps(
       planModel: config.planModel,
       escalateOnFailure: config.escalateOnFailure,
       memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
-      memoryMaintenance: config.memoryMaintenance,
       lintCommand: config.lintCommand,
       autoLint: config.autoLint,
       editFormat: config.editFormat,

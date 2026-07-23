@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireSessionLease,
   acquireWorkspaceSessionGuard,
+  acquireWorkspaceSessionGuardForLease,
   hasActiveSessionRuns,
   isSessionRunActive,
   sessionLeasesRoot,
@@ -150,6 +151,19 @@ describe("session leases", () => {
     const workspace = makeWorkspace();
     const running = acquireSessionLease(workspace, "running");
     expect(() => acquireWorkspaceSessionGuard(workspace)).toThrow(SessionBusyError);
+    expect(() =>
+      acquireWorkspaceSessionGuardForLease(workspace, {
+        ...running,
+        token: "forged-token",
+      }),
+    ).toThrow(/Invalid session lease/);
+
+    const ownedGuard = acquireWorkspaceSessionGuardForLease(workspace, running);
+    try {
+      expect(() => acquireSessionLease(workspace, "blocked-by-owned-guard")).toThrow(SessionBusyError);
+    } finally {
+      ownedGuard.release();
+    }
     running.release();
 
     const guard = acquireWorkspaceSessionGuard(workspace);

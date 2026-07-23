@@ -11,7 +11,6 @@ import {
   listProjectFacts,
   MEMORY_CANDIDATE_TYPES,
   memoryStats,
-  maybeMaintainProjectMemory,
   readMemoryMaintenanceState,
   readFactMeta,
   readProjectMemory,
@@ -19,7 +18,6 @@ import {
   removeProjectFact,
   type MemoryCandidateType,
 } from "@seekforge/core";
-import { loadConfig } from "../config.js";
 import { readJsonBody, sendApiError, sendJson } from "../http.js";
 import type { RouteCtx } from "./context.js";
 
@@ -103,9 +101,6 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
         approve: pending !== true,
         ...(scope === "user" ? { scope: "user" as const } : {}),
       });
-      if (scope !== "user" && pending !== true) {
-        maybeMaintainProjectMemory(workspace, loadConfig(workspace).memoryMaintenance);
-      }
       return sendJson(res, 201, created);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -185,9 +180,6 @@ async function routes({ req, res, url, method, segs, workspace }: RouteCtx): Pro
         segs[3] === "approve"
           ? approveMemoryCandidate(workspace, id, approveScope)
           : rejectMemoryCandidate(workspace, id);
-      if (segs[3] === "approve" && approveScope === "project") {
-        maybeMaintainProjectMemory(workspace, loadConfig(workspace).memoryMaintenance);
-      }
       return sendJson(res, 200, candidate);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

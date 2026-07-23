@@ -458,10 +458,13 @@ toward this run). Edit the file directly; not settable via `config set`.
 
 ### `memoryMaintenance`
 
-**Default off.** Enables deterministic maintenance of approved project memory
-after a successful approved-memory write. It uses the same cross-process memory
-lease as manual compaction, never calls a model, and never fails the foreground
-Agent, CLI, TUI, or REST operation if housekeeping fails.
+**Default off.** Enables deterministic maintenance of approved project memory.
+Long-lived Server/Desktop, TUI, and interactive REPL processes schedule the
+work while idle: the first check is 30 seconds after startup, then every 5
+minutes. A tick is skipped while any process has an active Agent/Loop or memory
+writer. One-shot CLI commands retain a post-write check because they have no
+idle lifetime. Maintenance uses the same cross-process memory lease as manual
+compaction, never calls a model, and never fails a foreground operation.
 
 ```json
 {
@@ -478,6 +481,11 @@ Agent, CLI, TUI, or REST operation if housekeeping fails.
 Maintenance becomes due when either `minFacts` or `minBytes` is reached and the
 minimum interval has elapsed. The defaults are 100 facts, 65,536 UTF-8 bytes,
 and 24 hours. Duplicate and near-duplicate facts are compacted deterministically.
+The five-minute idle check cadence is distinct from `minIntervalHours`: the
+former decides when to look, while the latter prevents successful maintenance
+from running too often. Server checks re-read user configuration and the current
+workspace registry each time. Timers are cancelled on shutdown; when no
+long-lived SeekForge process is open, no background daemon remains.
 `minFacts` is a positive integer up to 1,000,000; `minBytes` is a positive
 integer up to 4 MiB; `minIntervalHours` is `0..8760`; and `pruneUnusedDays`,
 when present, is `0..36500`. Unknown nested keys and non-finite values are

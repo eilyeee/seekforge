@@ -69,7 +69,11 @@ It shares the cross-process memory transaction lease, checks count/byte and
 persisted interval gates, and stores only the last successful summary in
 `.seekforge/memory/maintenance.json`; housekeeping failures never change the
 foreground operation's result, and stale-fact archival requires explicit
-user-owned configuration.
+user-owned configuration. Long-lived Server/Desktop, TUI, and REPL processes
+own cancellable idle schedulers. Each tick non-blockingly claims the memory
+lease, then acquires a workspace guard that excludes only that proven lease;
+active sessions or memory writers skip the tick instead of being queued behind
+housekeeping. One-shot CLI processes retain the write-triggered fallback.
 Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through

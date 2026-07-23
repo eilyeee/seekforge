@@ -10,6 +10,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
+import { createMemoryMaintenanceScheduler } from "@seekforge/core";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   createDefaultAgent,
@@ -74,6 +75,10 @@ export type StartServerOptions = {
   staticDir?: string;
   /** Structured JSON logger override. Defaults to stderr. */
   logger?: StructuredLogger;
+  /** Embedding/test override for the first idle-memory check delay. */
+  memoryMaintenanceInitialDelayMs?: number;
+  /** Embedding/test override for the recurring idle-memory check interval. */
+  memoryMaintenanceIntervalMs?: number;
 };
 
 export type RunningServer = {
@@ -196,15 +201,49 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     );
   });
 
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(opts.port ?? 7373, "127.0.0.1", () => {
-      server.removeListener("error", rejectListen);
-      resolveListen();
-    });
+  const memoryMaintenanceScheduler = createMemoryMaintenanceScheduler({
+    targets: () =>
+      registry.list.map((workspace) => ({
+        workspace: workspace.path,
+        getConfig: () => loadConfig(workspace.path).memoryMaintenance,
+      })),
+    onResults: (results) => {
+      for (const result of results) {
+        if (result.outcome.status === "completed") {
+          logger.log("info", "memory.maintenance.completed", {
+            workspace: result.workspace,
+            ...result.outcome.state.lastResult,
+          });
+        } else if (result.outcome.status === "failed") {
+          logger.log("error", "memory.maintenance.failed", {
+            workspace: result.workspace,
+            error: result.outcome.error,
+          });
+        }
+      }
+    },
+    ...(opts.memoryMaintenanceInitialDelayMs !== undefined
+      ? { initialDelayMs: opts.memoryMaintenanceInitialDelayMs }
+      : {}),
+    ...(opts.memoryMaintenanceIntervalMs !== undefined ? { intervalMs: opts.memoryMaintenanceIntervalMs } : {}),
   });
+
+  try {
+    await new Promise<void>((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(opts.port ?? 7373, "127.0.0.1", () => {
+        server.removeListener("error", rejectListen);
+        resolveListen();
+      });
+    });
+  } catch (error) {
+    memoryMaintenanceScheduler.dispose();
+    throw error;
+  }
   const address = server.address();
   if (address === null || typeof address === "string") {
+    memoryMaintenanceScheduler.dispose();
+    server.close();
     throw new Error("could not determine the listen port");
   }
   port = address.port;
@@ -213,6 +252,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
     closePromise ??= (async () => {
+      memoryMaintenanceScheduler.dispose();
       for (const run of triggerRuns) run.abort();
       const closing = new Promise<void>((resolveClose, rejectClose) => {
         // Terminating sockets triggers their close handlers, which abort active

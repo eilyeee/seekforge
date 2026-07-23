@@ -85,7 +85,6 @@ export function buildTuiDeps(opts: TuiAgentOptions): { deps: AgentCoreDeps; disp
         planModel: config.planModel ?? config.routing?.planModel,
         escalateOnFailure: config.escalateOnFailure,
         memoryAutoApproveConfidence: config.memoryAutoApproveConfidence,
-        memoryMaintenance: config.memoryMaintenance,
         lintCommand: config.lintCommand,
         autoLint: config.autoLint,
         editFormat: config.editFormat,

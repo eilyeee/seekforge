@@ -39,12 +39,23 @@ export {
 export {
   acquireSessionLease,
   acquireWorkspaceSessionGuard,
+  acquireWorkspaceSessionGuardForLease,
   assertSessionLease,
   hasActiveSessionRuns,
   isSessionRunActive,
   SessionBusyError,
   type SessionLease,
 } from "./session-lease.js";
+export {
+  createMemoryMaintenanceScheduler,
+  DEFAULT_MEMORY_IDLE_CHECK_INTERVAL_MS,
+  DEFAULT_MEMORY_IDLE_INITIAL_DELAY_MS,
+  type IdleMemoryMaintenanceOutcome,
+  type IdleMemoryMaintenanceResult,
+  type IdleMemoryMaintenanceTarget,
+  type MemoryMaintenanceScheduler,
+  type MemoryMaintenanceSchedulerOptions,
+} from "./memory-idle.js";
 export {
   buildAgentCoreDeps,
   buildProvider,

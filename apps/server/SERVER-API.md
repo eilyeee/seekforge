@@ -66,6 +66,12 @@ branches still exist but are no longer listed; clean them up with plain git
 (`git worktree remove`, `git branch -D`). Errors: 404 `not_found` for unknown
 worktree ids; all git failures are structured `{error: {code: "git_error"}}`.
 
+When user-owned `memoryMaintenance` is enabled, the long-lived Server (and thus
+Desktop) checks every registered workspace after an initial 30-second delay and
+then every five minutes. It runs only after non-blockingly proving that no
+Agent/Loop or memory writer is active, and cancels the timer during `close()`.
+Threshold and minimum-success-interval gates still apply.
+
 ## Security
 
 - Binds **127.0.0.1 only**. Never 0.0.0.0.

@@ -60,7 +60,14 @@ beforeAll(async () => {
       .map((c) => `${JSON.stringify(c)}\n`)
       .join(""),
   );
-  server = await startServer({ workspace, port: 0, token: TOKEN, createAgent: unusedAgentFactory });
+  server = await startServer({
+    workspace,
+    port: 0,
+    token: TOKEN,
+    createAgent: unusedAgentFactory,
+    memoryMaintenanceInitialDelayMs: 20,
+    memoryMaintenanceIntervalMs: 50,
+  });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -153,7 +160,7 @@ describe("config set new keys", () => {
     expect((await jsonOf(res)).error.code).toBe("bad_request");
   });
 
-  it("validates trusted automatic memory maintenance and exposes its last run", async () => {
+  it("validates trusted automatic memory maintenance and runs it while idle", async () => {
     let res = await authed("/api/config", {
       method: "PUT",
       body: JSON.stringify({
@@ -170,7 +177,13 @@ describe("config set new keys", () => {
       body: JSON.stringify({ content: "automatic maintenance trigger", type: "tech" }),
     });
     expect(res.status).toBe(201);
-    const memory = await jsonOf(authed("/api/memory"));
+    let memory: Awaited<ReturnType<typeof jsonOf>> | undefined;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      memory = await jsonOf(authed("/api/memory"));
+      if (memory.maintenance) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     expect(memory.maintenance).toMatchObject({ version: 1, lastResult: { before: expect.any(Number) } });
 
     res = await authed("/api/config", {
@@ -178,6 +191,12 @@ describe("config set new keys", () => {
       body: JSON.stringify({ key: "memoryMaintenance", global: true, value: { enabled: true, minFacts: 0 } }),
     });
     expect(res.status).toBe(400);
+
+    res = await authed("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({ key: "memoryMaintenance", global: true, value: { enabled: false } }),
+    });
+    expect(res.status).toBe(200);
   });
 
   it("PUT /api/config sets planModel and clears it when empty", async () => {

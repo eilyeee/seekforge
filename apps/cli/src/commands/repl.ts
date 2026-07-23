@@ -3,13 +3,13 @@ import {
   addMemoryFact,
   commandHasShellInjection,
   compactSessionNow,
+  createMemoryMaintenanceScheduler,
   detectThinkingKeyword,
   expandShellInjections,
   expandUserCommand,
   listSessions,
   loadAgentDefinitions,
   loadUserCommands,
-  maybeMaintainProjectMemory,
   readSessionMeta,
 } from "@seekforge/core";
 import type { PermissionRequest, PermissionRule, TokenUsage } from "@seekforge/shared";
@@ -100,6 +100,12 @@ export async function replCommand(opts: {
   let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, costUsd: 0 };
   let lastContext: { usedTokens: number; budgetTokens: number; percent: number } | undefined;
   const renderer = createRenderer({ streaming: true });
+  const memoryMaintenanceScheduler =
+    config.memoryMaintenance?.enabled === true
+      ? createMemoryMaintenanceScheduler({
+          targets: () => [{ workspace: projectPath, getConfig: () => config.memoryMaintenance }],
+        })
+      : undefined;
 
   console.log(`${t("repl.welcome", { model, path: projectPath })}`);
   console.log(`${dim(t("repl.welcomeHint"))}\n`);
@@ -111,7 +117,10 @@ export async function replCommand(opts: {
     // Inline thinking triggers ("think hard" / "ultrathink") raise the effort
     // for this turn only, without mutating the persistent /think setting.
     const effort = detectThinkingKeyword(task);
-    const runConfig = effort ? { ...config, thinking: true, reasoningEffort: effort } : config;
+    const baseRunConfig = effort ? { ...config, thinking: true, reasoningEffort: effort } : config;
+    // The REPL owns an idle scheduler, so its Agent must not compact in the
+    // foreground at session completion.
+    const runConfig = { ...baseRunConfig, memoryMaintenance: undefined };
     const { agent, dispose } = createCliAgent({
       config: runConfig,
       model: runOpts?.model ?? model,
@@ -176,7 +185,6 @@ export async function replCommand(opts: {
         }
         try {
           const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
-          maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
           console.log(t("repl.remembered", { content: c.content }));
         } catch (err) {
           console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
@@ -343,7 +351,6 @@ export async function replCommand(opts: {
             }
             try {
               const c = addMemoryFact(projectPath, { content: fact, type: "convention" });
-              maybeMaintainProjectMemory(projectPath, config.memoryMaintenance);
               console.log(t("repl.remembered", { content: c.content }));
             } catch (err) {
               console.error(t("repl.error", { message: err instanceof Error ? err.message : String(err) }));
@@ -377,6 +384,7 @@ export async function replCommand(opts: {
       }
     }
   } finally {
+    memoryMaintenanceScheduler?.dispose();
     rl.close();
     mcp.dispose();
   }

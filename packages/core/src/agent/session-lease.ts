@@ -356,12 +356,14 @@ export function isSessionRunActive(workspace: string, sessionId: string): boolea
 
 /** True while any live process owns a persisted session in this workspace. */
 export function hasActiveSessionRuns(workspace: string): boolean {
-  return hasActiveSessionRunsExcept(workspace);
+  return hasActiveSessionRunsExcept(workspace, new Set());
 }
 
-function hasActiveSessionRunsExcept(workspace: string, excludedSessionId?: string): boolean {
+function hasActiveSessionRunsExcept(workspace: string, excludedSessionIds: ReadonlySet<string>): boolean {
   const prefix = `${workspaceRoot(workspace)}\0`;
-  if ([...localLeases.keys()].some((key) => key.startsWith(prefix) && key.slice(prefix.length) !== excludedSessionId))
+  if (
+    [...localLeases.keys()].some((key) => key.startsWith(prefix) && !excludedSessionIds.has(key.slice(prefix.length)))
+  )
     return true;
   let names: string[];
   try {
@@ -376,7 +378,7 @@ function hasActiveSessionRunsExcept(workspace: string, excludedSessionId?: strin
     const match = /^(.+)\.lock(?:\.recovery)?$/.exec(name);
     if (!match?.[1] || (match[1] !== WORKSPACE_GUARD_ID && (!SESSION_ID_RE.test(match[1]) || match[1].includes(".."))))
       return true;
-    if (match[1] === excludedSessionId) continue;
+    if (excludedSessionIds.has(match[1])) continue;
     if (isSessionRunActive(workspace, match[1])) return true;
   }
   return false;
@@ -388,7 +390,22 @@ function hasActiveSessionRunsExcept(workspace: string, excludedSessionId?: strin
  */
 export function acquireWorkspaceSessionGuard(workspace: string): SessionLease {
   const guard = acquireLease(workspace, WORKSPACE_GUARD_ID);
-  if (hasActiveSessionRunsExcept(workspace, WORKSPACE_GUARD_ID)) {
+  if (hasActiveSessionRunsExcept(workspace, new Set([WORKSPACE_GUARD_ID]))) {
+    guard.release();
+    throw new SessionBusyError(WORKSPACE_GUARD_ID);
+  }
+  return guard;
+}
+
+/**
+ * Acquires the workspace guard while excluding one lease the caller proves it
+ * currently owns. This supports lock ordering such as memory-lease → idle guard
+ * without allowing a caller to ignore another process's active session.
+ */
+export function acquireWorkspaceSessionGuardForLease(workspace: string, heldLease: SessionLease): SessionLease {
+  assertSessionLease(heldLease, workspace, heldLease.sessionId);
+  const guard = acquireLease(workspace, WORKSPACE_GUARD_ID);
+  if (hasActiveSessionRunsExcept(workspace, new Set([WORKSPACE_GUARD_ID, heldLease.sessionId]))) {
     guard.release();
     throw new SessionBusyError(WORKSPACE_GUARD_ID);
   }

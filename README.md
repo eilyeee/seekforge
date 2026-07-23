@@ -209,7 +209,8 @@ baseline; see [Evals and the regression gate](docs/EVALS.md).
   `seekforge memory stats`; set `memoryAutoApproveConfidence` to auto-approve
   high-confidence facts. Optional user-owned `memoryMaintenance` automatically
   compacts approved facts after count/size thresholds and can archive never-used
-  stale facts; it is deterministic, interval-limited, and disabled by default.
+  stale facts; long-lived Server/Desktop, TUI, and REPL processes schedule it
+  only while idle. It is deterministic, interval-limited, and disabled by default.
 - **Sessions** are JSONL traces under `.seekforge/sessions/<id>/` —
   messages, tool calls, and events are fully auditable.
 

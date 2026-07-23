@@ -1822,6 +1822,21 @@ malformed housekeeping state can also destroy the only diagnostic evidence.
   Agent callers needed automatic compaction without making an approved memory
   write fail or allowing repository config to opt into stale-fact archival.
 
+## 141. Idle work needs non-blocking lock order and lifecycle ownership
+
+Background work is not idle if it waits behind a foreground lock, and a broad
+workspace guard can deadlock when the housekeeping operation later acquires a
+domain lease that the guard itself blocks. Recurring timers can also outlive the
+server or UI that owns their workspace/config identity.
+
+- **Do:** claim the narrow domain lease without waiting, use proof of that held
+  lease when acquiring the broader idle guard, re-check process-local idleness,
+  skip on any conflict, and cancel the next timer during owner shutdown. Re-read
+  dynamic targets/config on every tick and prevent overlapping ticks.
+- **Caught:** the first idle memory scheduler acquired the workspace guard before
+  the memory lease, so its own memory transaction waited 30 seconds and failed;
+  Server/TUI/REPL timers also needed explicit disposal and current-target lookup.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

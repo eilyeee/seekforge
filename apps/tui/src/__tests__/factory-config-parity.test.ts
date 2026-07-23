@@ -51,21 +51,13 @@ describe("createTuiAgent config parity", () => {
     expect(createAgentCore).toHaveBeenCalledWith(expect.objectContaining({ memoryAutoApproveConfidence: 0.9 }));
   });
 
-  it("forwards resolved automatic memory maintenance when set", () => {
+  it("leaves automatic memory maintenance to the TUI idle scheduler", () => {
     createTuiAgent({
       ...baseOpts,
       config: { memoryMaintenance: { enabled: true, minFacts: 20, minIntervalHours: 6 } },
     } as never);
-    expect(createAgentCore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        memoryMaintenance: {
-          enabled: true,
-          minFacts: 20,
-          minBytes: 64 * 1024,
-          minIntervalHours: 6,
-        },
-      }),
-    );
+    const deps = (createAgentCore.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(deps).not.toHaveProperty("memoryMaintenance");
   });
 
   it("omits planModel and memory settings when unset", () => {

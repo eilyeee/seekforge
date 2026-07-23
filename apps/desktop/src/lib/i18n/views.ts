@@ -415,7 +415,7 @@ export const views = {
     "settings.memoryAutoApprovePlaceholder": "e.g. 0.9 (blank = off)",
     "settings.memoryMaintenanceLabel": "automatic memory maintenance (user setting)",
     "settings.memoryMaintenanceHint":
-      "Deterministically deduplicate and merge approved project memory after a threshold and interval. Archival is optional; maintenance never calls a model.",
+      "While the workspace is idle, deterministically deduplicate and merge approved project memory after a threshold and interval. Archival is optional; maintenance never calls a model.",
     "settings.memoryMaintenanceEnabled": "enable automatic maintenance",
     "settings.memoryMaintenanceMinFacts": "minimum facts (default 100)",
     "settings.memoryMaintenanceMinBytes": "minimum bytes (default 65536)",
@@ -1011,7 +1011,7 @@ export const views = {
     "settings.memoryAutoApprovePlaceholder": "例如 0.9（留空 = 关闭）",
     "settings.memoryMaintenanceLabel": "自动记忆整理（用户级设置）",
     "settings.memoryMaintenanceHint":
-      "达到阈值和间隔后，确定性地去重并合并已批准的项目记忆。归档为可选项；整理过程不会调用模型。",
+      "工作区空闲且达到阈值和间隔后，确定性地去重并合并已批准的项目记忆。归档为可选项；整理过程不会调用模型。",
     "settings.memoryMaintenanceEnabled": "启用自动整理",
     "settings.memoryMaintenanceMinFacts": "最少事实数（默认 100）",
     "settings.memoryMaintenanceMinBytes": "最少字节数（默认 65536）",
