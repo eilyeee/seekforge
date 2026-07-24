@@ -196,6 +196,14 @@ describe("idle Loop recovery", () => {
     expect(loadLoopState(workspace, "idle-orphan")?.status).toBe("running");
 
     foreground.release();
+    await vi.waitFor(() => expect(resumeLoop).toHaveBeenCalledTimes(1));
+    const backedOff = loadLoopState(workspace, "idle-orphan");
+    expect(backedOff?.recovery).toMatchObject({ attempts: 1, lastError: "temporary provider outage" });
+    if (!backedOff?.recovery) throw new Error("missing recovery backoff");
+    saveLoopState(workspace, {
+      ...backedOff,
+      recovery: { ...backedOff.recovery, nextAttemptAt: new Date(Date.now() - 1).toISOString() },
+    });
     await vi.waitFor(() => expect(resumeLoop).toHaveBeenCalledTimes(2));
     expect(loadLoopState(workspace, "idle-orphan")?.status).toBe("passed");
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -210,6 +218,33 @@ describe("idle Loop recovery", () => {
       "loop.recovery.completed",
       expect.objectContaining({ workspace, count: 1 }),
     );
+  });
+
+  it("prunes old terminal records only during opted-in idle maintenance", async () => {
+    const workspace = makeWorkspace();
+    const state = createLoopState({
+      loopId: "idle-prune",
+      task: "old terminal loop",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...state,
+      status: "exhausted",
+      updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString(),
+    });
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      loopAutoPrune: true,
+      loopRetentionMaxAgeDays: 1,
+      loopRecoveryInitialDelayMs: 5,
+      loopRecoveryIntervalMs: 10,
+    });
+    await vi.waitFor(() => expect(loadLoopState(workspace, state.loopId)).toBeNull());
   });
 });
 
@@ -243,12 +278,13 @@ describe("loop -> loop.event -> idle", () => {
       maxAgentRetries: 0,
       verificationPlan: [
         { id: "types", command: "pnpm typecheck" },
-        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000, paths: ["apps/server/**"] },
       ],
       stablePasses: 2,
       flakyRetries: 1,
       maxNoProgressRecoveries: 2,
       rollbackOnRegression: false,
+      priority: 3,
       requirementMode: "analyze",
     });
 
@@ -280,12 +316,13 @@ describe("loop -> loop.event -> idle", () => {
       maxAgentRetries: 0,
       verificationPlan: [
         { id: "types", command: "pnpm typecheck" },
-        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+        { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000, paths: ["apps/server/**"] },
       ],
       stablePasses: 2,
       flakyRetries: 1,
       maxNoProgressRecoveries: 2,
       rollbackOnRegression: false,
+      priority: 3,
       requirementMode: "analyze",
       approvalMode: "acceptEdits",
     });

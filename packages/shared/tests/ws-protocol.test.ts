@@ -20,12 +20,13 @@ const validFrames = [
     maxAgentRetries: 0,
     verificationPlan: [
       { id: "types", command: "pnpm typecheck" },
-      { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000 },
+      { id: "lint", command: "pnpm lint", required: false, timeoutMs: 20_000, paths: ["apps/cli/**"] },
     ],
     stablePasses: 2,
     flakyRetries: 1,
     maxNoProgressRecoveries: 1,
     rollbackOnRegression: false,
+    priority: 4,
   },
   {
     type: "loop.resume",
@@ -59,6 +60,13 @@ const invalidFrames = [
   { type: "loop", task: "fix", verifyCommand: "test", stablePasses: 6 },
   { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "../bad", command: "test" }] },
   { type: "loop", task: "fix", verifyCommand: "test", verificationPlan: [{ id: "test", command: "" }] },
+  { type: "loop", task: "fix", verifyCommand: "test", priority: 11 },
+  {
+    type: "loop",
+    task: "fix",
+    verifyCommand: "test",
+    verificationPlan: [{ id: "test", command: "test", paths: ["../escape"] }],
+  },
   { type: "loop.resume", loopId: "../escape" },
   { type: "loop.resume", loopId: "loop-1", addedDurationMs: 0 },
   { type: "permission.response", requestId: "p1", approved: "yes" },

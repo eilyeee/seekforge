@@ -514,11 +514,12 @@ describe("store: loop mode", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
-      verificationPlan: [{ id: "types", command: "pnpm typecheck" }],
+      verificationPlan: [{ id: "types", command: "pnpm typecheck", paths: ["packages/core"] }],
       stablePasses: 2,
       flakyRetries: 1,
       maxNoProgressRecoveries: 2,
       rollbackOnRegression: true,
+      priority: 5,
       requirementMode: "confirm",
     });
     const loop = sent.find((f) => f.type === "loop");
@@ -534,11 +535,12 @@ describe("store: loop mode", () => {
       verifyTimeoutMs: 10_000,
       agentTimeoutMs: 30_000,
       maxAgentRetries: 0,
-      verificationPlan: [{ id: "types", command: "pnpm typecheck" }],
+      verificationPlan: [{ id: "types", command: "pnpm typecheck", paths: ["packages/core"] }],
       stablePasses: 2,
       flakyRetries: 1,
       maxNoProgressRecoveries: 2,
       rollbackOnRegression: true,
+      priority: 5,
       requirementMode: "confirm",
     });
     const tab = activeTab(useStore.getState().tabs);

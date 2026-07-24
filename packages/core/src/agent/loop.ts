@@ -93,7 +93,7 @@ import {
   writeSessionMeta,
 } from "./trace.js";
 import type { AgentCore, RunAgentTaskInput } from "./index.js";
-import { acquireSessionLease } from "./session-lease.js";
+import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { createDispatchTools } from "./dispatch-tools.js";
 import { abortablePromise, onAbortOnce } from "../util/abort.js";
 import type { PluginContributions } from "../plugins/index.js";
@@ -477,10 +477,14 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
     async *runTask(input: RunAgentTaskInput): AsyncIterable<AgentEvent> {
       const resuming = input.resumeSessionId !== undefined;
       const sessionId = input.resumeSessionId ?? newSessionId();
-      let sessionLease: ReturnType<typeof acquireSessionLease>;
+      let sessionLease: Awaited<ReturnType<typeof acquireSessionLeaseWithPreemption>>;
       try {
-        sessionLease = acquireSessionLease(input.projectPath, sessionId, input.workspaceGuard);
+        sessionLease = await acquireSessionLeaseWithPreemption(input.projectPath, sessionId, {
+          ...(input.signal && !input.signal.aborted ? { signal: input.signal } : {}),
+          ...(input.workspaceGuard ? { workspaceGuard: input.workspaceGuard } : {}),
+        });
       } catch (error) {
+        if (input.signal?.aborted) throw new AgentLimitError("cancelled", "cancelled by user");
         if (error instanceof Error && "code" in error && error.code === "session_busy") {
           throw new AgentLimitError("session_busy", `session ${sessionId} is already running`);
         }

@@ -817,7 +817,14 @@ export type LoopStatus =
   | "interrupted"
   | "requirements_pending";
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
-export type LoopVerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number };
+export type LoopVerificationStage = {
+  id: string;
+  command: string;
+  required?: boolean;
+  timeoutMs?: number;
+  /** Relative file/directory prefixes used for incremental selection. */
+  paths?: string[];
+};
 export type LoopStageResult = {
   id: string;
   command: string;
@@ -1017,6 +1024,8 @@ export type ClientFrame =
       flakyRetries?: number;
       maxNoProgressRecoveries?: number;
       rollbackOnRegression?: boolean;
+      /** Automatic recovery priority from -10 to 10. */
+      priority?: number;
       /** Hard cap on run→verify cycles (server default when omitted). */
       maxIterations?: number;
       /** Optional total USD budget; the loop stops once exceeded. */

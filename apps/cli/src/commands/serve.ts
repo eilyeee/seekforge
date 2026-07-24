@@ -9,6 +9,8 @@ export type ServeOptions = {
   workspaces: string[];
   /** Resume interrupted durable Loops only when a workspace is idle. */
   loopAutoResume?: boolean;
+  /** Prune old terminal Loop records while a workspace is idle. */
+  loopAutoPrune?: boolean;
 };
 
 /**
@@ -46,6 +48,7 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
     port: opts.port,
     staticDir,
     loopAutoResume: opts.loopAutoResume,
+    loopAutoPrune: opts.loopAutoPrune,
   });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));

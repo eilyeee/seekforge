@@ -205,11 +205,12 @@ type AppStore = {
     verifyTimeoutMs?: number;
     agentTimeoutMs?: number;
     maxAgentRetries?: number;
-    verificationPlan?: Array<{ id: string; command: string }>;
+    verificationPlan?: Array<{ id: string; command: string; paths?: string[] }>;
     stablePasses?: number;
     flakyRetries?: number;
     maxNoProgressRecoveries?: number;
     rollbackOnRegression?: boolean;
+    priority?: number;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
   pauseLoop: () => void;
@@ -622,6 +623,7 @@ export const useStore = create<AppStore>()((set, get) => {
       flakyRetries,
       maxNoProgressRecoveries,
       rollbackOnRegression,
+      priority,
       requirementMode,
     }) => {
       const tab = activeTab(get().tabs);
@@ -645,6 +647,7 @@ export const useStore = create<AppStore>()((set, get) => {
         ...(flakyRetries !== undefined ? { flakyRetries } : {}),
         ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
         ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
+        ...(priority !== undefined ? { priority } : {}),
         ...(requirementMode !== undefined ? { requirementMode } : {}),
         ...(tab.ws ? { ws: tab.ws } : {}),
         // Per-loop model/thinking overrides from the run-toolbar, same as a run.

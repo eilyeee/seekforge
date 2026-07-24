@@ -22,6 +22,8 @@ import {
   loopListCommand,
   loopHistoryCommand,
   loopRecoverCommand,
+  loopPriorityCommand,
+  loopPruneCommand,
   loopResumeCommand,
   loopShowCommand,
 } from "./commands/loop.js";
@@ -141,6 +143,15 @@ function parseNonNegativeInt(val: string): number {
   const n = Number(val);
   if (!Number.isSafeInteger(n)) throw new InvalidArgumentError("must be a non-negative integer");
   return n;
+}
+
+function parseLoopPriority(val: string): number {
+  if (!/^-?[0-9]+$/.test(val)) throw new InvalidArgumentError("must be an integer from -10 to 10");
+  const priority = Number(val);
+  if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
+    throw new InvalidArgumentError("must be an integer from -10 to 10");
+  }
+  return priority;
 }
 
 function parseRequirementMode(val: string): "quick" | "analyze" | "confirm" {
@@ -444,11 +455,17 @@ program
   .command("loop")
   .argument("<task>", "task to drive to green (the verify command's exit 0)")
   .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
-  .option("--verify-stage <id=command>", "append an ordered verification stage", collect, [])
+  .option(
+    "--verify-stage <id[@path,...]=command>",
+    "append a stage, optionally selected by changed path prefixes",
+    collect,
+    [],
+  )
   .option("--stable-passes <n>", "required consecutive full-pipeline passes (1-5)", parsePositiveInt)
   .option("--flaky-retries <n>", "reruns of a failed verifier stage before editing (0-5)", parseNonNegativeInt)
   .option("--stuck-recoveries <n>", "strategy resets before no_progress (0-5)", parseNonNegativeInt)
   .option("--rollback-regressions", "rollback iterations that increase failures (isolated worktree only)")
+  .option("--priority <n>", "automatic recovery priority from -10 to 10", parseLoopPriority)
   .option("--deliver <mode>", "after passing: checkpoint, merge, patch, or draft PR (worktree only)", parseLoopDelivery)
   .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
@@ -482,6 +499,7 @@ program
         flakyRetries?: number;
         stuckRecoveries?: number;
         rollbackRegressions?: boolean;
+        priority?: number;
         deliver?: "checkpoint" | "merge" | "patch" | "pr";
         yes?: boolean;
         model?: string;
@@ -505,6 +523,7 @@ program
         flakyRetries: opts.flakyRetries,
         noProgressRecoveries: opts.stuckRecoveries,
         rollbackOnRegression: opts.rollbackRegressions,
+        priority: opts.priority,
         deliver: opts.deliver,
         yes: opts.yes,
         model: opts.model,
@@ -521,6 +540,9 @@ program
   .option("--budget <usd>", "shared cumulative cost cap in USD", parsePositiveFloat)
   .option("--token-budget <n>", "shared prompt + completion token cap", parsePositiveInt)
   .option("--max-duration <seconds>", "shared wall-clock budget in seconds", parsePositiveFloat)
+  .option("--dag-id <id>", "stable checkpoint id (defaults to a graph fingerprint)")
+  .option("--resume", "resume completed nodes from the durable DAG checkpoint")
+  .option("--max-concurrency <n>", "parallel nodes (2-8 require distinct node workspace fields)", parsePositiveInt, 1)
   .option("-y, --yes", "authorize the workspace without prompting")
   .option("-m, --model <model>", "override model")
   .option("--profile <name>", "use a named config profile")
@@ -535,6 +557,9 @@ program
         yes?: boolean;
         model?: string;
         profile?: string;
+        dagId?: string;
+        resume?: boolean;
+        maxConcurrency?: number;
       },
     ) => {
       await loopDagCommand(file, {
@@ -544,6 +569,9 @@ program
         yes: opts.yes,
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
+        dagId: opts.dagId,
+        resume: opts.resume,
+        maxConcurrency: opts.maxConcurrency,
       });
     },
   );
@@ -606,6 +634,26 @@ program
   .command("loop-recover")
   .description("mark orphaned running or paused loops as interrupted and resumable")
   .action(loopRecoverCommand);
+program
+  .command("loop-priority")
+  .argument("<loop-id>")
+  .argument("<priority>", "integer from -10 to 10", parseLoopPriority)
+  .description("set automatic recovery priority for a persisted Loop")
+  .action(loopPriorityCommand);
+program
+  .command("loop-prune")
+  .option("--older-than-days <days>", "remove terminal records at least this old (default 30)", parseNonNegativeInt)
+  .option(
+    "--keep-last <n>",
+    "retain at least the newest N eligible terminal records (default 100)",
+    parseNonNegativeInt,
+  )
+  .option("--worktrees", "also remove clean, finalized merge worktrees when all their records are pruned")
+  .option("--dry-run", "show eligible records without removing them")
+  .description("prune old terminal Loop records and their bounded histories")
+  .action((opts: { olderThanDays?: number; keepLast?: number; worktrees?: boolean; dryRun?: boolean }) =>
+    loopPruneCommand(opts),
+  );
 program
   .command("loop-pause")
   .argument("<loop-id>")
@@ -888,15 +936,26 @@ program
     [] as string[],
   )
   .option("--loop-auto-resume", "resume interrupted durable Loops while their workspace is idle")
+  .option("--loop-auto-prune", "prune old terminal Loop records while their workspace is idle")
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
-  .action(async (paths: string[], opts: { port: string; workspace: string[]; loopAutoResume?: boolean }) => {
-    const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
-    if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
-      fail(`invalid --port "${opts.port}" (expected 0-65535)`);
-      return;
-    }
-    await serveCommand({ port, workspaces: [...paths, ...opts.workspace], loopAutoResume: opts.loopAutoResume });
-  });
+  .action(
+    async (
+      paths: string[],
+      opts: { port: string; workspace: string[]; loopAutoResume?: boolean; loopAutoPrune?: boolean },
+    ) => {
+      const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
+      if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
+        fail(`invalid --port "${opts.port}" (expected 0-65535)`);
+        return;
+      }
+      await serveCommand({
+        port,
+        workspaces: [...paths, ...opts.workspace],
+        loopAutoResume: opts.loopAutoResume,
+        loopAutoPrune: opts.loopAutoPrune,
+      });
+    },
+  );
 
 registerSkillCommands(program);
 registerPluginCommands(program);

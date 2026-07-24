@@ -1,5 +1,5 @@
 import {
-  acquireLoopDeliveryLease,
+  acquireLoopLifecycleLeaseWithPreemption,
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
   checkpointWorktree,
@@ -14,6 +14,7 @@ import {
   loadLoopState,
   readLoopHistory,
   recoverInterruptedLoops,
+  pruneLoopStates,
   readFileIfExists,
   loadAgentDefinitions,
   removeLoopState,
@@ -21,14 +22,16 @@ import {
   runAutoLoop,
   runLoopDag,
   saveLoopState,
+  setLoopPriority,
   type LoopDagNode,
   type LoopEvent,
   type LoopDeliveryMode,
+  type LoopDeliveryEvidence,
   type LoopResult,
   type LoopRequirementMode,
 } from "@seekforge/core";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { formatCostUsd } from "@seekforge/shared/format";
@@ -73,6 +76,7 @@ export type LoopOptions = {
   /** Run in a retained isolated worktree, optionally with a user-facing name. */
   worktree?: boolean | string;
   requirements?: LoopRequirementMode;
+  priority?: number;
 };
 
 export type LoopResumeOptions = Omit<
@@ -211,14 +215,34 @@ export function verificationPlanFromOptions(opts: Pick<LoopOptions, "verify" | "
       if (separator <= 0 || separator === value.length - 1) {
         throw new Error(`Invalid --verify-stage ${JSON.stringify(value)}; expected id=command`);
       }
-      const id = value.slice(0, separator);
+      const selector = value.slice(0, separator);
       const command = value.slice(separator + 1);
+      const pathSeparator = selector.indexOf("@");
+      const id = pathSeparator === -1 ? selector : selector.slice(0, pathSeparator);
+      const paths = pathSeparator === -1 ? undefined : selector.slice(pathSeparator + 1).split(",");
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id) || ids.has(id)) {
         throw new Error(`Invalid or duplicate --verify-stage id: ${id}`);
       }
       if (command.trim() === "" || command.length > 8_192) throw new Error(`Invalid --verify-stage command: ${id}`);
+      if (
+        paths !== undefined &&
+        (paths.length === 0 ||
+          paths.length > 64 ||
+          paths.some(
+            (path) =>
+              path.length === 0 ||
+              path.length > 512 ||
+              path.startsWith("/") ||
+              /^[A-Za-z]:[\\/]/.test(path) ||
+              path
+                .replaceAll("\\", "/")
+                .split("/")
+                .some((part) => part === "" || part === "." || part === ".."),
+          ))
+      )
+        throw new Error(`Invalid --verify-stage paths: ${id}`);
       ids.add(id);
-      return { id, command };
+      return { id, command, ...(paths ? { paths } : {}) };
     }),
   ];
 }
@@ -323,6 +347,7 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
   return [
     `loop: ${state.loopId}`,
     `status: ${state.status}`,
+    `priority: ${state.priority ?? 0}`,
     `task: ${state.task}`,
     `iterations: ${state.iterations}/${state.maxIterations}`,
     `cost: ${formatCostUsd(state.costUsd)}${state.costBudgetUsd === null ? "" : ` / ${formatCostUsd(state.costBudgetUsd)}`}`,
@@ -333,7 +358,8 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
     `workspace: ${state.workspace}`,
     `verify: ${state.verifyCommand}`,
     `requirements: ${state.requirementMode ?? "quick"}${state.requirements ? ` (${state.requirements.requirements.length} requirements, ${state.acceptanceReview?.complete ? "accepted" : "pending acceptance"})` : ""}`,
-    `delivery: ${state.delivery ? `${state.delivery.mode}/${state.delivery.status} (attempts ${state.delivery.attempts})${state.delivery.artifact ? ` · ${state.delivery.artifact}` : ""}${state.delivery.error ? ` · ${state.delivery.error}` : ""}` : "none"}`,
+    `recovery: ${state.recovery ? `${state.recovery.attempts} attempt(s)${state.recovery.nextAttemptAt ? ` · next ${state.recovery.nextAttemptAt}` : ""}${state.recovery.lastError ? ` · ${state.recovery.lastError}` : ""}` : "none"}`,
+    `delivery: ${state.delivery ? `${state.delivery.mode}/${state.delivery.status}/${state.delivery.phase ?? "prepared"} (attempts ${state.delivery.attempts})${state.delivery.artifact ? ` · ${state.delivery.artifact}` : ""}${state.delivery.evidence?.revision ? ` · revision ${state.delivery.evidence.revision}` : ""}${state.delivery.evidence?.sha256 ? ` · sha256 ${state.delivery.evidence.sha256}` : ""}${state.delivery.error ? ` · ${state.delivery.error}` : ""}` : "none"}`,
   ].join("\n");
 }
 
@@ -393,6 +419,80 @@ export async function loopRecoverCommand(): Promise<void> {
     console.log(recovered.map((state) => `${state.loopId}\tinterrupted\t${state.workspace}`).join("\n"));
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopPriorityCommand(loopId: string, priority: number): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    if (!workspace) throw new Error(`Persisted loop not found: ${loopId}`);
+    const state = setLoopPriority(workspace, loopId, priority);
+    console.log(`Updated Loop priority: ${state.loopId}\t${state.priority}`);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopPruneCommand(opts: {
+  olderThanDays?: number;
+  keepLast?: number;
+  dryRun?: boolean;
+  worktrees?: boolean;
+}): Promise<void> {
+  try {
+    const workspaces = await loopWorkspaces();
+    const worktreeCandidates = new Set<string>();
+    const summaries: string[] = [];
+    for (const workspace of workspaces) {
+      const preview = pruneLoopStates(workspace, {
+        maxAgeDays: opts.olderThanDays ?? 30,
+        maxTerminalCount: opts.keepLast ?? 100,
+        dryRun: true,
+      });
+      const candidateIds = new Set(preview.candidates);
+      const states = listLoopStates(workspace);
+      if (
+        opts.worktrees &&
+        workspace !== workspaces[0] &&
+        states.length > 0 &&
+        states.every(
+          (state) =>
+            candidateIds.has(state.loopId) &&
+            state.status === "passed" &&
+            state.delivery?.mode === "merge" &&
+            state.delivery.phase === "finalized",
+        )
+      )
+        worktreeCandidates.add(workspace);
+      const result = opts.dryRun
+        ? preview
+        : pruneLoopStates(workspace, {
+            maxAgeDays: opts.olderThanDays ?? 30,
+            maxTerminalCount: opts.keepLast ?? 100,
+          });
+      for (const id of opts.dryRun ? result.candidates : result.removed) {
+        summaries.push(`${opts.dryRun ? "would-remove" : "removed"}\t${id}\t${workspace}`);
+      }
+      for (const id of result.skipped) summaries.push(`skipped\t${id}\t${workspace}`);
+    }
+    if (opts.worktrees) {
+      for (const workspace of worktreeCandidates) {
+        if (opts.dryRun) summaries.push(`would-remove-worktree\t${workspace}`);
+        else {
+          try {
+            const removed = await cleanupLoopWorktree(process.cwd(), workspace, false);
+            summaries.push(`removed-worktree\t${removed.path}`);
+          } catch (error) {
+            summaries.push(`skipped-worktree\t${workspace}\t${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+    }
+    console.log(summaries.length > 0 ? summaries.join("\n") : "No eligible Loop records found.");
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }
@@ -457,6 +557,9 @@ export async function loopDagCommand(
     yes?: boolean;
     model?: string;
     profile?: string;
+    dagId?: string;
+    resume?: boolean;
+    maxConcurrency?: number;
   },
 ): Promise<void> {
   const workspace = process.cwd();
@@ -486,26 +589,68 @@ export async function loopDagCommand(
     process.exitCode = 1;
     return;
   }
-  const nodes = (value as { nodes: unknown[] }).nodes.map((node): LoopDagNode => {
-    if (typeof node !== "object" || node === null || Array.isArray(node))
-      throw new Error("Loop DAG nodes must be objects");
-    const item = node as Record<string, unknown>;
-    if (typeof item.id !== "string" || typeof item.task !== "string" || typeof item.verifyCommand !== "string") {
-      throw new Error("Each Loop DAG node requires string id, task, and verifyCommand fields");
-    }
-    if (
-      item.dependsOn !== undefined &&
-      (!Array.isArray(item.dependsOn) || !item.dependsOn.every((id) => typeof id === "string"))
-    ) {
-      throw new Error(`Loop DAG node ${item.id} dependsOn must be a string array`);
-    }
-    return {
-      id: item.id,
-      task: item.task,
-      verifyCommand: item.verifyCommand,
-      ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
-    };
-  });
+  const nodeWorkspaces = new Map<string, string>();
+  let nodes: LoopDagNode[];
+  try {
+    nodes = (value as { nodes: unknown[] }).nodes.map((node): LoopDagNode => {
+      if (typeof node !== "object" || node === null || Array.isArray(node))
+        throw new Error("Loop DAG nodes must be objects");
+      const item = node as Record<string, unknown>;
+      if (typeof item.id !== "string" || typeof item.task !== "string" || typeof item.verifyCommand !== "string") {
+        throw new Error("Each Loop DAG node requires string id, task, and verifyCommand fields");
+      }
+      if (
+        item.dependsOn !== undefined &&
+        (!Array.isArray(item.dependsOn) || !item.dependsOn.every((id) => typeof id === "string"))
+      ) {
+        throw new Error(`Loop DAG node ${item.id} dependsOn must be a string array`);
+      }
+      if (item.workspace !== undefined) {
+        if (typeof item.workspace !== "string" || item.workspace.trim() === "") {
+          throw new Error(`Loop DAG node ${item.id} workspace must be a non-empty path`);
+        }
+        nodeWorkspaces.set(item.id, resolve(workspace, item.workspace));
+      }
+      for (const [name, candidate] of [
+        ["priority", item.priority],
+        ["maxRetries", item.maxRetries],
+      ] as const) {
+        if (candidate !== undefined && !Number.isSafeInteger(candidate)) {
+          throw new Error(`Loop DAG node ${item.id} ${name} must be an integer`);
+        }
+      }
+      if (
+        item.budgetWeight !== undefined &&
+        (typeof item.budgetWeight !== "number" || !Number.isFinite(item.budgetWeight))
+      ) {
+        throw new Error(`Loop DAG node ${item.id} budgetWeight must be a number`);
+      }
+      if (
+        item.failurePolicy !== undefined &&
+        item.failurePolicy !== "skip_dependents" &&
+        item.failurePolicy !== "continue" &&
+        item.failurePolicy !== "stop"
+      ) {
+        throw new Error(`Loop DAG node ${item.id} failurePolicy is invalid`);
+      }
+      return {
+        id: item.id,
+        task: item.task,
+        verifyCommand: item.verifyCommand,
+        ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn as string[] } : {}),
+        ...(typeof item.priority === "number" ? { priority: item.priority } : {}),
+        ...(typeof item.budgetWeight === "number" ? { budgetWeight: item.budgetWeight } : {}),
+        ...(typeof item.maxRetries === "number" ? { maxRetries: item.maxRetries } : {}),
+        ...(typeof item.failurePolicy === "string"
+          ? { failurePolicy: item.failurePolicy as "skip_dependents" | "continue" | "stop" }
+          : {}),
+      };
+    });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
   const { config, model } = preflight;
   const mcp = await prepareMcp(config, workspace);
   const { deps, dispose } = createCliAgentDeps({
@@ -525,7 +670,16 @@ export async function loopDagCommand(
     const results = await runLoopDag(deps, {
       workspace,
       nodes,
-      maxConcurrency: 1,
+      maxConcurrency: opts.maxConcurrency ?? 1,
+      ...(opts.dagId ? { dagId: opts.dagId } : {}),
+      ...(opts.resume ? { resume: true } : {}),
+      ...(nodeWorkspaces.size > 0
+        ? {
+            workspaceForNode: (node) => {
+              return nodeWorkspaces.get(node.id) ?? workspace;
+            },
+          }
+        : {}),
       ...(opts.budget !== undefined ? { costBudgetUsd: opts.budget } : {}),
       ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
       ...(opts.maxDurationSeconds !== undefined ? { maxDurationMs: Math.round(opts.maxDurationSeconds * 1_000) } : {}),
@@ -692,6 +846,7 @@ async function runPreparedLoop(
             ? { maxNoProgressRecoveries: (opts as LoopOptions).noProgressRecoveries }
             : {}),
           ...((opts as LoopOptions).rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+          ...((opts as LoopOptions).priority !== undefined ? { priority: (opts as LoopOptions).priority } : {}),
           maxIterations: (opts as LoopOptions).maxIters ?? 8,
           ...((opts as LoopOptions).budget !== undefined ? { costBudgetUsd: (opts as LoopOptions).budget } : {}),
           ...((opts as LoopOptions).tokenBudget !== undefined
@@ -735,16 +890,21 @@ async function runPreparedLoop(
   }
 }
 
-type LoopDeliveryResult = { artifact: string; message: string; branch?: string };
+type LoopDeliveryResult = {
+  artifact: string;
+  message: string;
+  branch?: string;
+  evidence?: LoopDeliveryEvidence;
+};
 
 export async function runLoopDelivery(
   projectPath: string,
   loopId: string,
   mode: LoopDeliveryMode,
 ): Promise<LoopDeliveryResult> {
-  let lease: ReturnType<typeof acquireLoopDeliveryLease>;
+  let lease: Awaited<ReturnType<typeof acquireLoopLifecycleLeaseWithPreemption>>;
   try {
-    lease = acquireLoopDeliveryLease(projectPath, loopId);
+    lease = await acquireLoopLifecycleLeaseWithPreemption(projectPath, loopId);
   } catch (error) {
     if (isLoopDeliveryActive(projectPath, loopId)) {
       throw new Error(`Loop is still running or delivery is already active: ${loopId}`, { cause: error });
@@ -763,7 +923,23 @@ export async function runLoopDelivery(
     }
     if (state.delivery?.status === "delivered" && state.delivery.artifact) {
       try {
-        const finalized = await finalizeLoopDelivery(projectPath, loopId, mode, state.delivery.artifact);
+        if (!hasCompleteDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)) {
+          throw new Error("Legacy Loop delivery lacks verifiable evidence");
+        }
+        const recorded = {
+          artifact: state.delivery.artifact,
+          branch: state.delivery.evidence?.branch,
+          evidence: state.delivery.evidence,
+          message: `Loop delivery already complete: ${state.delivery.artifact}`,
+        };
+        const finalized = await finalizeLoopDelivery(
+          projectPath,
+          loopId,
+          mode,
+          state.delivery.artifact,
+          () => {},
+          recorded,
+        );
         return { ...finalized, message: `Loop delivery already complete: ${state.delivery.artifact}` };
       } catch {
         // Older versions could persist `delivered` before the side effect. Fall
@@ -772,19 +948,45 @@ export async function runLoopDelivery(
     }
     const attempts = (state.delivery?.attempts ?? 0) + 1;
     const startedAt = new Date().toISOString();
+    const completedAttempt =
+      state.delivery?.phase === "action_completed" && state.delivery.artifact
+        ? {
+            artifact: state.delivery.artifact,
+            evidence: state.delivery.evidence,
+            branch: state.delivery.evidence?.branch,
+            message: `Finalizing prior Loop delivery: ${state.delivery.artifact}`,
+          }
+        : undefined;
     saveLoopState(projectPath, {
       ...state,
-      delivery: { mode, status: "running", attempts, updatedAt: startedAt },
+      delivery: completedAttempt
+        ? {
+            mode,
+            status: "running",
+            phase: "action_completed",
+            attempts,
+            updatedAt: startedAt,
+            artifact: completedAttempt.artifact,
+            ...(completedAttempt.evidence ? { evidence: completedAttempt.evidence } : {}),
+          }
+        : { mode, status: "running", phase: "prepared", attempts, updatedAt: startedAt },
       updatedAt: startedAt,
     });
     const persistFailure = (error: unknown): Error => {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, 8_192) || "delivery failed";
       const failedAt = new Date().toISOString();
       const current = loadLoopState(projectPath, loopId) ?? state;
+      const completed = current.delivery?.artifact
+        ? {
+            phase: "action_completed" as const,
+            artifact: current.delivery.artifact,
+            ...(current.delivery.evidence ? { evidence: current.delivery.evidence } : {}),
+          }
+        : { phase: "prepared" as const };
       try {
         saveLoopState(projectPath, {
           ...current,
-          delivery: { mode, status: "failed", attempts, updatedAt: failedAt, error: message },
+          delivery: { mode, status: "failed", attempts, updatedAt: failedAt, error: message, ...completed },
           updatedAt: failedAt,
         });
       } catch (persistenceError) {
@@ -794,26 +996,52 @@ export async function runLoopDelivery(
       }
       return error instanceof Error ? error : new Error(message);
     };
-    const persistDelivered = (artifact: string): void => {
+    const persistActionCompleted = (delivered: LoopDeliveryResult): void => {
       const completedAt = new Date().toISOString();
       const current = loadLoopState(projectPath, loopId) ?? state;
       saveLoopState(projectPath, {
         ...current,
         delivery: {
           mode,
-          status: "delivered",
+          status: "running",
+          phase: "action_completed",
           attempts,
           updatedAt: completedAt,
-          artifact: artifact.slice(0, 8_192),
+          artifact: delivered.artifact.slice(0, 8_192),
+          ...(delivered.evidence ? { evidence: delivered.evidence } : {}),
         },
         updatedAt: completedAt,
       });
     };
+    const persistFinalized = (delivered: LoopDeliveryResult): void => {
+      const finalizedAt = new Date().toISOString();
+      const current = loadLoopState(projectPath, loopId) ?? state;
+      saveLoopState(projectPath, {
+        ...current,
+        delivery: {
+          mode,
+          status: "delivered",
+          phase: "finalized",
+          attempts,
+          updatedAt: finalizedAt,
+          artifact: delivered.artifact.slice(0, 8_192),
+          ...(delivered.evidence ? { evidence: delivered.evidence } : {}),
+        },
+        updatedAt: finalizedAt,
+      });
+    };
     let delivered: LoopDeliveryResult;
     try {
-      delivered = await deliverLoop(projectPath, loopId, mode);
-      persistDelivered(delivered.artifact);
-      delivered = await finalizeLoopDelivery(projectPath, loopId, mode, delivered.artifact, delivered);
+      delivered = completedAttempt ?? (await deliverLoop(projectPath, loopId, mode));
+      if (!completedAttempt) persistActionCompleted(delivered);
+      delivered = await finalizeLoopDelivery(
+        projectPath,
+        loopId,
+        mode,
+        delivered.artifact,
+        () => persistFinalized(delivered),
+        delivered,
+      );
     } catch (error) {
       throw persistFailure(error);
     }
@@ -837,13 +1065,19 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
     const committed = await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
     return {
       artifact: entry.branch,
+      branch: entry.branch,
+      evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch) },
       message: committed ? `Committed Loop worktree: ${entry.branch}` : `Loop worktree already clean: ${entry.branch}`,
     };
   }
   if (mode === "merge") {
-    const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
-    if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
-    return { artifact: entry.branch, message: `Merged Loop worktree branch: ${entry.branch}` };
+    await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
+    return {
+      artifact: entry.branch,
+      branch: entry.branch,
+      evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch) },
+      message: `Prepared Loop worktree branch for merge: ${entry.branch}`,
+    };
   }
   if (mode === "pr") {
     await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
@@ -867,6 +1101,7 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
       return {
         artifact: existingUrl,
         branch: entry.branch,
+        evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch), url: existingUrl },
         message: `Using existing pull request: ${existingUrl}`,
       };
     }
@@ -892,7 +1127,12 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
     if (pr.status !== 0) throw new Error(pr.stderr.trim() || "Could not create draft pull request");
     const url = pr.stdout.trim();
     if (!url) throw new Error("GitHub CLI did not return a pull request URL");
-    return { artifact: url, branch: entry.branch, message: `Created draft pull request: ${url}` };
+    return {
+      artifact: url,
+      branch: entry.branch,
+      evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch), url },
+      message: `Created draft pull request: ${url}`,
+    };
   }
   const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
   try {
@@ -906,7 +1146,11 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
   if (!patch) throw new Error("Loop worktree has no changes to deliver");
   mkdirSync(dirname(target), { recursive: true });
   writeLoopPatch(target, patch);
-  return { artifact: target, message: `Wrote Loop patch: ${target}` };
+  return {
+    artifact: target,
+    evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch), sha256: sha256(patch) },
+    message: `Wrote Loop patch: ${target}`,
+  };
 }
 
 async function finalizeLoopDelivery(
@@ -914,6 +1158,7 @@ async function finalizeLoopDelivery(
   loopId: string,
   mode: LoopDeliveryMode,
   artifact: string,
+  persistFinalized: () => void,
   result?: LoopDeliveryResult,
 ): Promise<LoopDeliveryResult> {
   const repository = await resolveLoopRepository(projectPath);
@@ -926,9 +1171,28 @@ async function finalizeLoopDelivery(
   if ((mode === "checkpoint" || mode === "merge") && artifact !== entry.branch) {
     throw new Error(`Loop delivery artifact does not match retained branch: ${artifact}`);
   }
+  if (result?.evidence?.branch && result.evidence.branch !== entry.branch) {
+    throw new Error(`Loop delivery evidence does not match retained branch: ${result.evidence.branch}`);
+  }
+  if (result?.evidence?.revision && !gitRevisionIsAncestor(workspace, result.evidence.revision, entry.branch)) {
+    throw new Error(`Loop delivery revision no longer matches retained branch: ${result.evidence.revision}`);
+  }
+  if (mode === "patch" && result?.evidence?.sha256) {
+    const patch = readFileIfExists(artifact, 16 * 1024 * 1024);
+    if (patch === undefined || sha256(patch) !== result.evidence.sha256) {
+      throw new Error(`Loop patch evidence does not match artifact: ${artifact}`);
+    }
+  }
+  if (mode === "pr" && result?.evidence?.url && result.evidence.url !== artifact) {
+    throw new Error(`Loop pull request evidence does not match artifact: ${artifact}`);
+  }
+  persistFinalized();
 
+  if (mode === "checkpoint" || mode === "merge") {
+    await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
+  }
   if (mode === "checkpoint") {
-    await checkpointWorktree(workspace, `chore: record ${loopId} delivery`);
+    // The finalized state commit is the last checkpoint side effect.
   } else if (mode === "merge") {
     const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
     if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
@@ -945,6 +1209,35 @@ async function finalizeLoopDelivery(
   }
   return result ?? { artifact, branch: entry.branch, message: `Loop delivery complete: ${artifact}` };
 }
+
+function gitRevision(workspace: string, ref: string): string {
+  const result = spawnSync("git", ["rev-parse", "--verify", ref], { cwd: workspace, encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout.trim()) throw new Error(result.stderr.trim() || `Could not resolve ${ref}`);
+  return result.stdout.trim();
+}
+
+function gitRevisionIsAncestor(workspace: string, revision: string, ref: string): boolean {
+  if (!/^[0-9a-fA-F]{40,64}$/.test(revision)) return false;
+  const result = spawnSync("git", ["merge-base", "--is-ancestor", revision, ref], {
+    cwd: workspace,
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  return result.status === 0;
+}
+
+function hasCompleteDeliveryEvidence(
+  mode: LoopDeliveryMode,
+  artifact: string,
+  evidence: LoopDeliveryEvidence | undefined,
+): evidence is LoopDeliveryEvidence {
+  if (!evidence?.branch || !evidence.revision) return false;
+  if (mode === "checkpoint" || mode === "merge") return artifact === evidence.branch;
+  if (mode === "patch") return Boolean(evidence.sha256);
+  return Boolean(evidence.url && evidence.url === artifact);
+}
+
+const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 function writeLoopPatch(target: string, patch: string): void {
   const temp = `${target}.tmp-${process.pid}-${randomUUID()}`;

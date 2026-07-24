@@ -85,5 +85,88 @@ describe("runLoopDag", () => {
         ],
       }),
     ).rejects.toThrow(/cycle/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        maxConcurrency: 9,
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/1 to 8/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        costBudgetUsd: Number.NaN,
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/positive and finite/);
+  });
+
+  it("persists completed nodes and resumes without rerunning them", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    let verifies = 0;
+    const nodes = [
+      {
+        id: "persisted",
+        task: "done",
+        verifyCommand: "pass",
+        options: {
+          verify: async () => {
+            verifies++;
+            return { code: 0, output: "ok" };
+          },
+        },
+      },
+    ];
+    const first = await runLoopDag(deps, { workspace, dagId: "resume-test", nodes });
+    expect(first[0]).toMatchObject({ status: "passed", attempts: 1 });
+    const resumed = await runLoopDag(deps, { workspace, dagId: "resume-test", nodes, resume: true });
+    expect(resumed[0]).toMatchObject({ status: "passed", attempts: 1 });
+    expect(verifies).toBe(1);
+  });
+
+  it("retries failed nodes and lets continue-policy dependents run", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    let checks = 0;
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      nodes: [
+        {
+          id: "retry",
+          task: "retry",
+          verifyCommand: "test",
+          maxRetries: 1,
+          options: {
+            maxIterations: 1,
+            maxNoProgressRecoveries: 0,
+            verify: async () => {
+              checks++;
+              return checks < 3 ? { code: 1, output: "bad" } : { code: 0, output: "ok" };
+            },
+          },
+        },
+        {
+          id: "soft-fail",
+          task: "soft",
+          verifyCommand: "fail",
+          failurePolicy: "continue",
+          options: { maxIterations: 1, maxNoProgressRecoveries: 0, verify: async () => ({ code: 1, output: "bad" }) },
+        },
+        {
+          id: "after-soft-fail",
+          task: "after",
+          verifyCommand: "pass",
+          dependsOn: ["soft-fail"],
+          options: { verify: async () => ({ code: 0, output: "ok" }) },
+        },
+      ],
+    });
+    expect(results.map(({ id, status, attempts }) => [id, status, attempts])).toEqual([
+      ["retry", "passed", 2],
+      ["soft-fail", "failed", 1],
+      ["after-soft-fail", "passed", 1],
+    ]);
   });
 });

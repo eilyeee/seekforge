@@ -126,6 +126,7 @@ agent/API，采用浅色 Codex 风格 UI（深色可选；语言跟随 en / zh-C
 ```bash
 seekforge serve                                     # 在浏览器打开打印出的 URL
 seekforge serve --loop-auto-resume                  # 空闲时恢复中断的 Loop（显式开启）
+seekforge serve --loop-auto-prune                   # 空闲时清理旧的终态 Loop（显式开启）
 pnpm --filter @seekforge/desktop build && pnpm tauri dev   # 或原生应用（开发）
 ```
 

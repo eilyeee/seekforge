@@ -7,6 +7,7 @@ import {
   acquireSessionLease,
   acquireWorkspaceSessionGuardForLease,
   hasActiveLoopLease,
+  isWorkspaceSessionGuardPreemptRequested,
   SessionBusyError,
   type SessionLease,
 } from "@seekforge/core";
@@ -97,7 +98,7 @@ export class ServerCoordinator {
   tryWithIdleAgentMutation<T>(
     workspace: string,
     signal: AbortSignal | undefined,
-    operation: (idleGuard: SessionLease) => Promise<T>,
+    operation: (idleGuard: SessionLease, operationSignal: AbortSignal) => Promise<T>,
   ): Promise<IdleMutationAttempt<T>> {
     return this.track(
       (async () => {
@@ -124,15 +125,26 @@ export class ServerCoordinator {
 
           let idleGuard: SessionLease;
           try {
-            idleGuard = acquireWorkspaceSessionGuardForLease(workspace, lease);
+            idleGuard = acquireWorkspaceSessionGuardForLease(workspace, lease, { preemptible: true });
           } catch (error) {
             if (error instanceof SessionBusyError) return { acquired: false } as const;
             throw error;
           }
+          const preemptController = new AbortController();
+          const operationSignal = signal
+            ? AbortSignal.any([signal, preemptController.signal])
+            : preemptController.signal;
+          const preemptionPoll = setInterval(() => {
+            if (isWorkspaceSessionGuardPreemptRequested(idleGuard)) {
+              preemptController.abort(new Error("foreground session preempted idle recovery"));
+            }
+          }, 25);
+          preemptionPoll.unref();
           try {
             signal?.throwIfAborted();
-            return { acquired: true, value: await operation(idleGuard) } as const;
+            return { acquired: true, value: await operation(idleGuard, operationSignal) } as const;
           } finally {
+            clearInterval(preemptionPoll);
             idleGuard.release();
           }
         } finally {

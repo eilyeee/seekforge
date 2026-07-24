@@ -17,10 +17,12 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireSessionLease,
+  acquireSessionLeaseWithPreemption,
   acquireWorkspaceSessionGuard,
   acquireWorkspaceSessionGuardForLease,
   hasActiveSessionRuns,
   isSessionRunActive,
+  isWorkspaceSessionGuardPreemptRequested,
   sessionLeasesRoot,
   SessionBusyError,
 } from "../../src/agent/session-lease.js";
@@ -179,6 +181,19 @@ describe("session leases", () => {
     }
     const late = acquireSessionLease(workspace, "late-run");
     late.release();
+  });
+
+  it("lets foreground acquisition preempt an idle-owned workspace guard", async () => {
+    const workspace = makeWorkspace();
+    const coordinator = acquireSessionLease(workspace, "idle-coordinator");
+    const guard = acquireWorkspaceSessionGuardForLease(workspace, coordinator, { preemptible: true });
+    const pending = acquireSessionLeaseWithPreemption(workspace, "foreground", { timeoutMs: 2_000 });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(isWorkspaceSessionGuardPreemptRequested(guard)).toBe(true);
+    guard.release();
+    const foreground = await pending;
+    foreground.release();
+    coordinator.release();
   });
 
   it("Core session mutators honor the same lease", () => {

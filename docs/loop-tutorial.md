@@ -363,11 +363,11 @@ usage. Resume can add iteration, cost, token, duration, and verifier capacity.
 
 ```bash
 seekforge loop "finish the parser" --verify "pnpm typecheck" \
-  --verify-stage tests="pnpm test" --flaky-retries 1 --stable-passes 2 \
+  --verify-stage tests@packages/core="pnpm test" --flaky-retries 1 --stable-passes 2 \
   --stuck-recoveries 1 --worktree --deliver checkpoint
 seekforge loop-history <loop-id> --after 0 --limit 100
 seekforge loop-recover
-seekforge loop-dag ./loop-dag.json --budget 2
+seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
 ```
 
 The Desktop panel exposes the verification pipeline, stability/flaky/stuck

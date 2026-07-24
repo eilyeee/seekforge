@@ -122,6 +122,7 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
       flakyRetries,
       maxNoProgressRecoveries,
       rollbackOnRegression,
+      priority,
       requirementMode,
     } = frame;
     if (typeof task !== "string" || task.trim().length === 0) return bad("loop.task must be a non-empty string");
@@ -166,6 +167,12 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
     if (rollbackOnRegression !== undefined && typeof rollbackOnRegression !== "boolean") {
       return bad("loop.rollbackOnRegression must be a boolean when present");
     }
+    if (
+      priority !== undefined &&
+      (!Number.isSafeInteger(priority) || (priority as number) < -10 || (priority as number) > 10)
+    ) {
+      return bad("loop.priority must be an integer from -10 to 10");
+    }
     if (verificationPlan !== undefined) {
       if (!Array.isArray(verificationPlan) || verificationPlan.length === 0 || verificationPlan.length > 16) {
         return bad("loop.verificationPlan must contain 1-16 stages");
@@ -192,6 +199,27 @@ function parseRecord(frame: RecordValue, limits: ClientFrameLimits): ClientFrame
           (!Number.isSafeInteger(stage.timeoutMs) || (stage.timeoutMs as number) <= 0)
         ) {
           return bad(`loop.verificationPlan.${stage.id}.timeoutMs must be a positive safe integer`);
+        }
+        if (
+          stage.paths !== undefined &&
+          (!Array.isArray(stage.paths) ||
+            stage.paths.length === 0 ||
+            stage.paths.length > 64 ||
+            !stage.paths.every(
+              (path) =>
+                typeof path === "string" &&
+                path.length > 0 &&
+                path.length <= 512 &&
+                !path.includes("\0") &&
+                !path.startsWith("/") &&
+                !/^[A-Za-z]:[\\/]/.test(path) &&
+                !path
+                  .replaceAll("\\", "/")
+                  .split("/")
+                  .some((part) => part === "" || part === "." || part === ".."),
+            ))
+        ) {
+          return bad(`loop.verificationPlan.${stage.id}.paths must contain safe relative prefixes`);
         }
       }
     }

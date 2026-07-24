@@ -43,20 +43,51 @@ import {
   type LoopRequirementMode,
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
-import { acquireSessionLease, isSessionRunActive, type SessionLease } from "./session-lease.js";
+import {
+  acquireSessionLease,
+  acquireSessionLeaseWithPreemption,
+  isSessionRunActive,
+  type SessionLease,
+} from "./session-lease.js";
 
 export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
 export type LoopDeliveryMode = "checkpoint" | "merge" | "patch" | "pr";
 export type LoopDeliveryStatus = "running" | "delivered" | "failed";
+export type LoopDeliveryPhase = "prepared" | "action_completed" | "finalized";
+export type LoopDeliveryEvidence = {
+  branch?: string;
+  revision?: string;
+  sha256?: string;
+  url?: string;
+};
 export type LoopDeliveryState = {
   mode: LoopDeliveryMode;
   status: LoopDeliveryStatus;
+  phase?: LoopDeliveryPhase;
   attempts: number;
   updatedAt: string;
   artifact?: string;
+  evidence?: LoopDeliveryEvidence;
   error?: string;
 };
+export type LoopRecoveryMetadata = {
+  attempts: number;
+  lastAttemptAt: string;
+  nextAttemptAt?: string;
+  lastError?: string;
+};
+export type LoopPruneOptions = {
+  /** Remove eligible terminal records older than this many days. */
+  maxAgeDays?: number;
+  /** Keep at most this many eligible terminal records, newest first. */
+  maxTerminalCount?: number;
+  dryRun?: boolean;
+  now?: Date;
+  /** Internal capability for cleanup running under the idle workspace guard. */
+  workspaceGuard?: SessionLease;
+};
+export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
 export type LoopState = {
   schemaVersion?: 2;
   loopId: string;
@@ -73,6 +104,8 @@ export type LoopState = {
   controlSeq?: number;
   controlRunId?: string;
   delivery?: LoopDeliveryState;
+  priority?: number;
+  recovery?: LoopRecoveryMetadata;
   stageResults?: LoopStageResult[];
   snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
@@ -119,11 +152,13 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
   controlRunId?: string;
+  priority?: number;
 };
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LOOP_DELIVERY_MODES = new Set<LoopDeliveryMode>(["checkpoint", "merge", "patch", "pr"]);
 const LOOP_DELIVERY_STATUSES = new Set<LoopDeliveryStatus>(["running", "delivered", "failed"]);
+const LOOP_DELIVERY_PHASES = new Set<LoopDeliveryPhase>(["prepared", "action_completed", "finalized"]);
 const MAX_LOOP_DELIVERY_DETAIL_LENGTH = 8_192;
 const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "running",
@@ -157,7 +192,24 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       item.command.trim() === "" ||
       item.command.length > 8_192 ||
       (item.required !== undefined && typeof item.required !== "boolean") ||
-      (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0))
+      (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0)) ||
+      (item.paths !== undefined &&
+        (!Array.isArray(item.paths) ||
+          item.paths.length === 0 ||
+          item.paths.length > 64 ||
+          !item.paths.every(
+            (path) =>
+              typeof path === "string" &&
+              path.length > 0 &&
+              path.length <= 512 &&
+              !path.includes("\0") &&
+              !path.startsWith("/") &&
+              !/^[A-Za-z]:[\\/]/.test(path) &&
+              !path
+                .replaceAll("\\", "/")
+                .split("/")
+                .some((part) => part === "" || part === "." || part === ".."),
+          )))
     )
       return null;
     ids.add(item.id);
@@ -166,6 +218,7 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       command: item.command,
       ...(typeof item.required === "boolean" ? { required: item.required } : {}),
       ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
+      ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
     });
   }
   return result;
@@ -224,12 +277,20 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
 }
 
 function parseDelivery(value: unknown): LoopDeliveryState | null {
+  const phase =
+    typeof (value as { phase?: unknown })?.phase === "string"
+      ? ((value as { phase: string }).phase as LoopDeliveryPhase)
+      : isRecord(value) && value.status === "delivered"
+        ? "finalized"
+        : "prepared";
+  const evidenceValue = isRecord(value) ? value.evidence : undefined;
   if (
     !isRecord(value) ||
     typeof value.mode !== "string" ||
     !LOOP_DELIVERY_MODES.has(value.mode as LoopDeliveryMode) ||
     typeof value.status !== "string" ||
     !LOOP_DELIVERY_STATUSES.has(value.status as LoopDeliveryStatus) ||
+    !LOOP_DELIVERY_PHASES.has(phase) ||
     !isSafeInteger(value.attempts) ||
     value.attempts <= 0 ||
     !isIsoDate(value.updatedAt) ||
@@ -241,17 +302,36 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
       (typeof value.error !== "string" ||
         value.error.trim() === "" ||
         value.error.length > MAX_LOOP_DELIVERY_DETAIL_LENGTH)) ||
-    (value.status === "running" && (value.artifact !== undefined || value.error !== undefined)) ||
+    (evidenceValue !== undefined &&
+      (!isRecord(evidenceValue) ||
+        ![evidenceValue.branch, evidenceValue.revision, evidenceValue.sha256, evidenceValue.url].every(
+          (item) => item === undefined || (typeof item === "string" && item.length > 0 && item.length <= 8_192),
+        ))) ||
+    (phase === "prepared" && (value.artifact !== undefined || evidenceValue !== undefined)) ||
+    (phase !== "prepared" && value.artifact === undefined) ||
+    (value.status === "running" && value.error !== undefined) ||
     (value.status === "delivered" && (value.artifact === undefined || value.error !== undefined)) ||
-    (value.status === "failed" && (value.error === undefined || value.artifact !== undefined))
+    (value.status === "failed" && value.error === undefined) ||
+    (phase === "finalized" && value.status !== "delivered")
   )
     return null;
   return {
     mode: value.mode as LoopDeliveryMode,
     status: value.status as LoopDeliveryStatus,
+    phase,
     attempts: value.attempts,
     updatedAt: value.updatedAt,
     ...(typeof value.artifact === "string" ? { artifact: value.artifact } : {}),
+    ...(isRecord(evidenceValue)
+      ? {
+          evidence: {
+            ...(typeof evidenceValue.branch === "string" ? { branch: evidenceValue.branch } : {}),
+            ...(typeof evidenceValue.revision === "string" ? { revision: evidenceValue.revision } : {}),
+            ...(typeof evidenceValue.sha256 === "string" ? { sha256: evidenceValue.sha256 } : {}),
+            ...(typeof evidenceValue.url === "string" ? { url: evidenceValue.url } : {}),
+          },
+        }
+      : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
 }
@@ -469,6 +549,15 @@ function deliveryLeaseId(loopId: string): string {
 /** Cross-process lease for run, delivery, and deletion lifecycle changes. */
 export function acquireLoopLifecycleLease(workspace: string, loopId: string, workspaceGuard?: SessionLease): LoopLease {
   return acquireSessionLease(workspace, deliveryLeaseId(loopId), workspaceGuard);
+}
+
+/** Foreground lifecycle acquisition that preempts idle recovery and waits for it to yield. */
+export function acquireLoopLifecycleLeaseWithPreemption(
+  workspace: string,
+  loopId: string,
+  options: { signal?: AbortSignal; workspaceGuard?: SessionLease } = {},
+): Promise<LoopLease> {
+  return acquireSessionLeaseWithPreemption(workspace, deliveryLeaseId(loopId), options);
 }
 
 /** Returns whether a run, delivery, or deletion currently owns this Loop lifecycle. */
@@ -752,6 +841,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const controlSeq = value.controlSeq === undefined ? 0 : value.controlSeq;
   const controlRunId = value.controlRunId === undefined ? "" : value.controlRunId;
   const delivery = value.delivery === undefined ? undefined : parseDelivery(value.delivery);
+  const priority = value.priority === undefined ? 0 : value.priority;
+  const recovery = value.recovery;
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
@@ -785,6 +876,19 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     (controlRunId !== "" && !isValidLoopId(controlRunId)) ||
     (value.delivery !== undefined && delivery === null) ||
     (delivery !== undefined && value.status !== "passed") ||
+    !isSafeInteger(priority) ||
+    priority < -10 ||
+    priority > 10 ||
+    (recovery !== undefined &&
+      (!isRecord(recovery) ||
+        !isSafeInteger(recovery.attempts) ||
+        recovery.attempts <= 0 ||
+        !isIsoDate(recovery.lastAttemptAt) ||
+        (recovery.nextAttemptAt !== undefined && !isIsoDate(recovery.nextAttemptAt)) ||
+        (recovery.lastError !== undefined &&
+          (typeof recovery.lastError !== "string" ||
+            recovery.lastError.length === 0 ||
+            recovery.lastError.length > 8_192)))) ||
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
@@ -866,6 +970,17 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     controlSeq: controlSeq as number,
     controlRunId,
     ...(delivery ? { delivery } : {}),
+    priority: priority as number,
+    ...(isRecord(recovery)
+      ? {
+          recovery: {
+            attempts: recovery.attempts as number,
+            lastAttemptAt: recovery.lastAttemptAt as string,
+            ...(typeof recovery.nextAttemptAt === "string" ? { nextAttemptAt: recovery.nextAttemptAt } : {}),
+            ...(typeof recovery.lastError === "string" ? { lastError: recovery.lastError } : {}),
+          },
+        }
+      : {}),
     stageResults: stageResults as LoopStageResult[],
     snapshots: snapshots as LoopIterationSnapshot[],
     rollbackOnRegression,
@@ -912,6 +1027,12 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
   if (input.controlRunId !== undefined && input.controlRunId !== "" && !isValidLoopId(input.controlRunId)) {
     throw new Error(`Invalid loop control run id: ${input.controlRunId}`);
   }
+  if (
+    input.priority !== undefined &&
+    (!Number.isSafeInteger(input.priority) || input.priority < -10 || input.priority > 10)
+  ) {
+    throw new RangeError("Loop priority must be an integer from -10 to 10");
+  }
   const now = new Date().toISOString();
   const id = input.loopId ?? `loop-${randomUUID()}`;
   if (existsSync(loopFile(input.workspace, id))) {
@@ -931,6 +1052,7 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     recoveryAttempts: 0,
     controlSeq: 0,
     controlRunId: input.controlRunId ?? "",
+    priority: input.priority ?? 0,
     stageResults: [],
     snapshots: [],
     rollbackOnRegression: input.rollbackOnRegression ?? false,
@@ -1006,12 +1128,18 @@ export function listLoopStates(workspace: string): LoopState[] {
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
-/** Returns resumable interruptions, marking orphaned running or paused records first. */
-export function recoverInterruptedLoops(workspace: string): LoopState[] {
+/** Returns prioritized, retry-eligible interruptions, marking orphaned records first. */
+export function recoverInterruptedLoops(workspace: string, options: { now?: Date; limit?: number } = {}): LoopState[] {
+  const nowMs = (options.now ?? new Date()).getTime();
+  if (!Number.isFinite(nowMs)) throw new RangeError("Loop recovery time must be valid");
+  const limit = options.limit ?? Number.MAX_SAFE_INTEGER;
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError("Loop recovery limit must be positive");
   const recovered: LoopState[] = [];
   for (const state of listLoopStates(workspace)) {
     const owned = isLoopLifecycleActive(workspace, state.loopId) || isLoopLeaseActive(workspace, state.loopId);
-    if (state.status === "interrupted" && !owned) {
+    const retryEligible =
+      state.recovery?.nextAttemptAt === undefined || Date.parse(state.recovery.nextAttemptAt) <= nowMs;
+    if (state.status === "interrupted" && !owned && retryEligible) {
       recovered.push(state);
       continue;
     }
@@ -1019,15 +1147,57 @@ export function recoverInterruptedLoops(workspace: string): LoopState[] {
     if ((state.status !== "running" && state.status !== "paused") || owned) continue;
     const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };
     saveLoopState(workspace, next);
-    recovered.push(next);
+    if (retryEligible) recovered.push(next);
   }
-  return recovered;
+  return recovered
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
+    .slice(0, limit);
 }
 
-export function removeLoopState(workspace: string, loopId: string): boolean {
+/** Persists bounded exponential backoff after an automatic resume failure. */
+export function recordLoopRecoveryFailure(
+  workspace: string,
+  loopId: string,
+  error: unknown,
+  now = new Date(),
+): LoopState {
+  const state = loadLoopState(workspace, loopId);
+  if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) throw new RangeError("Loop recovery time must be valid");
+  const attempts = (state.recovery?.attempts ?? 0) + 1;
+  const delayMs = Math.min(60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 7));
+  const message = (error instanceof Error ? error.message : String(error)).trim().slice(0, 8_192) || "recovery failed";
+  const next: LoopState = {
+    ...state,
+    status: "interrupted",
+    recovery: {
+      attempts,
+      lastAttemptAt: now.toISOString(),
+      nextAttemptAt: new Date(nowMs + delayMs).toISOString(),
+      lastError: message,
+    },
+    updatedAt: now.toISOString(),
+  };
+  saveLoopState(workspace, next);
+  return next;
+}
+
+export function setLoopPriority(workspace: string, loopId: string, priority: number): LoopState {
+  if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
+    throw new RangeError("Loop priority must be an integer from -10 to 10");
+  }
+  const state = loadLoopState(workspace, loopId);
+  if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+  const next = { ...state, priority, updatedAt: new Date().toISOString() };
+  saveLoopState(workspace, next);
+  return next;
+}
+
+export function removeLoopState(workspace: string, loopId: string, workspaceGuard?: SessionLease): boolean {
   let deliveryLease: LoopLease;
   try {
-    deliveryLease = acquireLoopDeliveryLease(workspace, loopId);
+    deliveryLease = acquireLoopLifecycleLease(workspace, loopId, workspaceGuard);
   } catch (error) {
     if (isLoopDeliveryActive(workspace, loopId)) throw new Error(`Cannot remove active delivery: ${loopId}`);
     throw error;
@@ -1061,4 +1231,60 @@ export function removeLoopState(workspace: string, loopId: string): boolean {
   } finally {
     deliveryLease.release();
   }
+}
+
+function isLoopPruneEligible(state: LoopState): boolean {
+  if (
+    state.status === "running" ||
+    state.status === "paused" ||
+    state.status === "interrupted" ||
+    state.status === "requirements_pending"
+  )
+    return false;
+  if (state.delivery && state.delivery.phase !== "finalized") return false;
+  return true;
+}
+
+/** Prunes only terminal, non-resumable Loop records after rechecking lifecycle ownership. */
+export function pruneLoopStates(workspace: string, options: LoopPruneOptions): LoopPruneResult {
+  if (options.maxAgeDays === undefined && options.maxTerminalCount === undefined) {
+    throw new Error("Loop pruning requires maxAgeDays or maxTerminalCount");
+  }
+  if (options.maxAgeDays !== undefined && (!Number.isFinite(options.maxAgeDays) || options.maxAgeDays < 0))
+    throw new RangeError("Loop maxAgeDays must be a non-negative finite number");
+  if (
+    options.maxTerminalCount !== undefined &&
+    (!Number.isSafeInteger(options.maxTerminalCount) || options.maxTerminalCount < 0)
+  )
+    throw new RangeError("Loop maxTerminalCount must be a non-negative safe integer");
+  const nowMs = (options.now ?? new Date()).getTime();
+  if (!Number.isFinite(nowMs)) throw new RangeError("Loop prune time must be valid");
+  const terminal = listLoopStates(workspace).filter(isLoopPruneEligible);
+  const candidates = terminal.filter((state, index) => {
+    const tooOld =
+      options.maxAgeDays !== undefined && Date.parse(state.updatedAt) <= nowMs - options.maxAgeDays * 24 * 60 * 60_000;
+    const overCount = options.maxTerminalCount !== undefined && index >= options.maxTerminalCount;
+    return tooOld || overCount;
+  });
+  const result: LoopPruneResult = { candidates: candidates.map((state) => state.loopId), removed: [], skipped: [] };
+  if (options.dryRun) return result;
+  for (const candidate of candidates) {
+    const current = loadLoopState(workspace, candidate.loopId);
+    if (
+      current === null ||
+      !isLoopPruneEligible(current) ||
+      isLoopLifecycleActive(workspace, candidate.loopId) ||
+      isLoopLeaseActive(workspace, candidate.loopId)
+    ) {
+      result.skipped.push(candidate.loopId);
+      continue;
+    }
+    try {
+      if (removeLoopState(workspace, candidate.loopId, options.workspaceGuard)) result.removed.push(candidate.loopId);
+      else result.skipped.push(candidate.loopId);
+    } catch {
+      result.skipped.push(candidate.loopId);
+    }
+  }
+  return result;
 }

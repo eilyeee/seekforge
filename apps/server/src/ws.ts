@@ -473,11 +473,18 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
       verifyTimeoutMs?: number;
       agentTimeoutMs?: number;
       maxAgentRetries?: number;
-      verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
+      verificationPlan?: Array<{
+        id: string;
+        command: string;
+        required?: boolean;
+        timeoutMs?: number;
+        paths?: string[];
+      }>;
       stablePasses?: number;
       flakyRetries?: number;
       maxNoProgressRecoveries?: number;
       rollbackOnRegression?: boolean;
+      priority?: number;
       requirementMode?: "quick" | "analyze" | "confirm";
       overrides?: RunOverrides;
       control: LoopControl;
@@ -521,6 +528,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
             ? { maxNoProgressRecoveries: input.maxNoProgressRecoveries }
             : {}),
           ...(input.rollbackOnRegression !== undefined ? { rollbackOnRegression: input.rollbackOnRegression } : {}),
+          ...(input.priority !== undefined ? { priority: input.priority } : {}),
           ...(input.requirementMode !== undefined ? { requirementMode: input.requirementMode } : {}),
           approvalMode: "acceptEdits",
           signal: runController.signal,
@@ -745,6 +753,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
           flakyRetries,
           maxNoProgressRecoveries,
           rollbackOnRegression,
+          priority,
           requirementMode,
           ws: wsId,
         } = frame;
@@ -776,6 +785,7 @@ export function handleConnection(ws: WebSocket, deps: ConnectionDeps): void {
                 ...(flakyRetries !== undefined ? { flakyRetries } : {}),
                 ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
                 ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
+                ...(priority !== undefined ? { priority } : {}),
                 ...(requirementMode !== undefined ? { requirementMode } : {}),
                 ...(parsedOverrides.overrides ? { overrides: parsedOverrides.overrides } : {}),
                 control: createLoopControl(),

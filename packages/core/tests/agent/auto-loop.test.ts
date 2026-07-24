@@ -311,6 +311,46 @@ describe("runAutoLoop", () => {
     ]);
   });
 
+  it("selects path-scoped stages incrementally but requires a full pipeline before success", async () => {
+    const commands: string[] = [];
+    let verifies = 0;
+    const provider = alwaysDone("flash");
+    provider.chat = async (): Promise<ChatResponse> => {
+      provider.chats++;
+      if (provider.chats === 1) {
+        return {
+          content: "editing cli",
+          toolCalls: [{ id: "edit-1", name: "apply_patch", argumentsJson: '{"path":"apps/cli/src/a.ts"}' }],
+          usage: USAGE,
+          finishReason: "tool_calls",
+        };
+      }
+      return text("done");
+    };
+    const dispatcher: ToolDispatcher = {
+      list: () => [{ name: "apply_patch", description: "edit", parameters: {} }],
+      execute: async () => ({ ok: true, meta: { path: "apps/cli/src/a.ts" } }),
+    };
+    const result = await runAutoLoop(
+      { provider, dispatcher, confirm: async () => true },
+      {
+        ...baseOpts(workspace, async (_workspace, command) => {
+          commands.push(command);
+          verifies++;
+          return verifies === 1 ? { code: 1, output: "initial failure" } : { code: 0, output: "ok" };
+        }),
+        verificationPlan: [
+          { id: "cli", command: "test-cli", paths: ["apps/cli"] },
+          { id: "server", command: "test-server", paths: ["apps/server/**"] },
+          { id: "all", command: "test-all" },
+        ],
+        maxIterations: 1,
+      },
+    );
+    expect(result.status).toBe("passed");
+    expect(commands).toEqual(["test-cli", "test-cli", "test-all", "test-cli", "test-server", "test-all"]);
+  });
+
   it("detects flaky verification and requires consecutive stable passes", async () => {
     let checks = 0;
     const events: LoopEvent[] = [];

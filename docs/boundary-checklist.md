@@ -2201,6 +2201,53 @@ continuing. Returning it solely by status can launch a second recovery.
 - **Caught:** Loop recovery filtered live leases for `running` and `paused` but
   returned every persisted `interrupted` record unconditionally.
 
+## 177. Idle ownership needs an explicit preemption handshake
+
+A foreground operation that merely waits on an idle-maintenance guard can be
+starved by long background work, while deleting the guard would violate its
+owner's mutual-exclusion guarantee.
+
+- **Do:** mark only idle guards as preemptible, create an owner-scoped request,
+  let the owner abort at a cooperative boundary, and use a bounded abortable wait
+  before reacquiring normally.
+- **Caught:** foreground Loop/session starts could not displace an automatic
+  recovery that had correctly retained its guard for the whole edit.
+
+## 178. Incremental verification cannot establish global success
+
+Selecting verifiers by changed paths is an optimization based on incomplete
+dependency knowledge. Treating a selected subset's pass as final can miss an
+unmapped cross-package regression.
+
+- **Do:** use path selection only while a subset is failing; whenever it passes
+  with any stage skipped, run the complete pipeline before incrementing the
+  stable-pass counter or returning success.
+- **Caught:** the first incremental Loop design could have accepted a local pass
+  without proving that unselected stages remained green.
+
+## 179. Retention must revalidate resumability and side-effect state
+
+Age and count alone do not make an orchestration record disposable. Interrupted
+work or a passed run with an unfinished delivery still owns future work, and its
+status can change between listing and deletion.
+
+- **Do:** exclude active/resumable states and non-final delivery phases, then
+  re-read the record and acquire its lifecycle locks immediately before removal.
+- **Caught:** automatic Loop pruning needed a terminal-state predicate that
+  would not erase recovery or delivery work.
+
+## 180. Explicit artifact publication must account for ignore rules
+
+Writing durable state inside an ignored directory and then running an ordinary
+`git add` does not publish it. The surrounding delivery may succeed while the
+audit record remains only in a disposable worktree.
+
+- **Do:** validate an exact repository-relative path and force-add only that
+  caller-selected artifact before merging or pushing; keep unrelated ignored
+  files excluded.
+- **Caught:** finalized Loop delivery state under ignored `.seekforge/` was not
+  included in checkpoint, merge, patch-state, or pull-request commits.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -31,6 +31,12 @@ describe("formatLoopEvent warnings", () => {
       { text: "  ! loop requirement warning: invalid review", tone: "error" },
     ]);
   });
+
+  it("labels incremental verification notices as observer warnings", () => {
+    expect(formatLoopEvent({ type: "loop.warning", warning: "observer", message: "running full pipeline" })).toEqual([
+      { text: "  ! loop observer warning: running full pipeline", tone: "error" },
+    ]);
+  });
 });
 
 describe("detached Loop events", () => {

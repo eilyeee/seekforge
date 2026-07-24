@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { FileTooLargeError, readUtf8FileBoundedSync } from "../util/fs.js";
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -28,7 +29,10 @@ const localLeases = new Map<string, string>();
 export class SessionBusyError extends Error {
   readonly code = "session_busy";
 
-  constructor(public readonly sessionId: string) {
+  constructor(
+    public readonly sessionId: string,
+    public readonly preemptionRequested = false,
+  ) {
     super(`session ${sessionId} is already running or being modified`);
     this.name = "SessionBusyError";
   }
@@ -133,21 +137,22 @@ function processIdentity(pid: number): string | undefined {
 
 const selfProcessIdentity = processIdentity(process.pid);
 
-function ownerPayload(token: string): string {
+function ownerPayload(token: string, preemptible = false): string {
   return JSON.stringify({
     version: 1,
     pid: process.pid,
     token,
     processIdentity: selfProcessIdentity,
     createdAt: new Date().toISOString(),
+    ...(preemptible ? { preemptible: true } : {}),
   });
 }
 
-function writeOwner(dir: string, token: string): void {
+function writeOwner(dir: string, token: string, preemptible = false): void {
   const target = join(dir, "owner.json");
   const fd = openSync(target, "wx", 0o600);
   try {
-    writeFileSync(fd, ownerPayload(token), "utf8");
+    writeFileSync(fd, ownerPayload(token, preemptible), "utf8");
   } finally {
     closeSync(fd);
   }
@@ -254,7 +259,36 @@ function removeStaleLease(workspace: string, sessionId: string, expected: LeaseS
   }
 }
 
-function acquireLease(workspace: string, sessionId: string, workspaceGuard?: SessionLease): SessionLease {
+function requestGuardPreemption(workspace: string): boolean {
+  const target = leaseDir(workspace, WORKSPACE_GUARD_ID);
+  try {
+    validatePrivateDirectory(target);
+    const owner = JSON.parse(readUtf8FileBoundedSync(join(target, "owner.json"), MAX_LEASE_OWNER_BYTES)) as {
+      preemptible?: unknown;
+    };
+    if (owner.preemptible !== true) return false;
+    try {
+      const fd = openSync(join(target, "preempt.request"), "wx", 0o600);
+      try {
+        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, requestedAt: new Date().toISOString() })}\n`, "utf8");
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLease(
+  workspace: string,
+  sessionId: string,
+  workspaceGuard?: SessionLease,
+  preemptible = false,
+): SessionLease {
   requireSessionId(sessionId);
   const root = workspaceRoot(workspace);
   if (workspaceGuard !== undefined) assertSessionLease(workspaceGuard, root, WORKSPACE_GUARD_ID);
@@ -265,7 +299,7 @@ function acquireLease(workspace: string, sessionId: string, workspaceGuard?: Ses
     workspaceGuard === undefined &&
     isSessionRunActive(root, WORKSPACE_GUARD_ID)
   ) {
-    throw new SessionBusyError(sessionId);
+    throw new SessionBusyError(sessionId, requestGuardPreemption(root));
   }
   validateLeasesRoot(root, true);
 
@@ -276,7 +310,7 @@ function acquireLease(workspace: string, sessionId: string, workspaceGuard?: Ses
     try {
       mkdirSync(target, { mode: 0o700 });
       try {
-        writeOwner(target, token);
+        writeOwner(target, token, preemptible);
       } catch (error) {
         rmSync(target, { recursive: true, force: true });
         throw error;
@@ -317,7 +351,7 @@ function acquireLease(workspace: string, sessionId: string, workspaceGuard?: Ses
         isSessionRunActive(root, WORKSPACE_GUARD_ID)
       ) {
         lease.release();
-        throw new SessionBusyError(sessionId);
+        throw new SessionBusyError(sessionId, requestGuardPreemption(root));
       }
       return lease;
     } catch (error) {
@@ -334,6 +368,26 @@ function acquireLease(workspace: string, sessionId: string, workspaceGuard?: Ses
 export function acquireSessionLease(workspace: string, sessionId: string, workspaceGuard?: SessionLease): SessionLease {
   if (sessionId === WORKSPACE_GUARD_ID) throw new Error(`Invalid session id: ${sessionId}`);
   return acquireLease(workspace, sessionId, workspaceGuard);
+}
+
+/** Foreground acquisition that asks preemptible idle work to yield, then waits boundedly for release. */
+export async function acquireSessionLeaseWithPreemption(
+  workspace: string,
+  sessionId: string,
+  options: { signal?: AbortSignal; timeoutMs?: number; workspaceGuard?: SessionLease } = {},
+): Promise<SessionLease> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new RangeError("timeoutMs must be a positive integer");
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    options.signal?.throwIfAborted();
+    try {
+      return acquireSessionLease(workspace, sessionId, options.workspaceGuard);
+    } catch (error) {
+      if (!(error instanceof SessionBusyError) || !error.preemptionRequested || Date.now() >= deadline) throw error;
+      await delay(25, undefined, options.signal ? { signal: options.signal } : undefined);
+    }
+  }
 }
 
 export function assertSessionLease(lease: SessionLease, workspace: string, sessionId: string): void {
@@ -411,12 +465,27 @@ export function acquireWorkspaceSessionGuard(workspace: string): SessionLease {
  * currently owns. This supports lock ordering such as memory-lease → idle guard
  * without allowing a caller to ignore another process's active session.
  */
-export function acquireWorkspaceSessionGuardForLease(workspace: string, heldLease: SessionLease): SessionLease {
+export function acquireWorkspaceSessionGuardForLease(
+  workspace: string,
+  heldLease: SessionLease,
+  options: { preemptible?: boolean } = {},
+): SessionLease {
   assertSessionLease(heldLease, workspace, heldLease.sessionId);
-  const guard = acquireLease(workspace, WORKSPACE_GUARD_ID);
+  const guard = acquireLease(workspace, WORKSPACE_GUARD_ID, undefined, options.preemptible === true);
   if (hasActiveSessionRunsExcept(workspace, new Set([WORKSPACE_GUARD_ID, heldLease.sessionId]))) {
     guard.release();
     throw new SessionBusyError(WORKSPACE_GUARD_ID);
   }
   return guard;
+}
+
+/** True after a foreground session asks this owned preemptible guard to yield. */
+export function isWorkspaceSessionGuardPreemptRequested(guard: SessionLease): boolean {
+  assertSessionLease(guard, guard.workspace, WORKSPACE_GUARD_ID);
+  try {
+    return lstatSync(join(leaseDir(guard.workspace, WORKSPACE_GUARD_ID), "preempt.request")).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true;
+  }
 }

@@ -9,7 +9,7 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type VerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number };
+type VerificationStage = { id: string; command: string; required?: boolean; timeoutMs?: number; paths?: string[] };
 
 function verificationStages(value: unknown): VerificationStage[] | null {
   if (!Array.isArray(value) || value.length === 0 || value.length > 16) return null;
@@ -25,7 +25,24 @@ function verificationStages(value: unknown): VerificationStage[] | null {
       item.command.trim() === "" ||
       item.command.length > 8_192 ||
       (item.required !== undefined && typeof item.required !== "boolean") ||
-      (item.timeoutMs !== undefined && (!Number.isSafeInteger(item.timeoutMs) || (item.timeoutMs as number) <= 0))
+      (item.timeoutMs !== undefined && (!Number.isSafeInteger(item.timeoutMs) || (item.timeoutMs as number) <= 0)) ||
+      (item.paths !== undefined &&
+        (!Array.isArray(item.paths) ||
+          item.paths.length === 0 ||
+          item.paths.length > 64 ||
+          !item.paths.every(
+            (path) =>
+              typeof path === "string" &&
+              path.length > 0 &&
+              path.length <= 512 &&
+              !path.includes("\0") &&
+              !path.startsWith("/") &&
+              !/^[A-Za-z]:[\\/]/.test(path) &&
+              !path
+                .replaceAll("\\", "/")
+                .split("/")
+                .some((part) => part === "" || part === "." || part === ".."),
+          )))
     ) {
       return null;
     }
@@ -35,6 +52,7 @@ function verificationStages(value: unknown): VerificationStage[] | null {
       command: item.command,
       ...(typeof item.required === "boolean" ? { required: item.required } : {}),
       ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
+      ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
     });
   }
   return stages;
@@ -83,6 +101,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       flakyRetries,
       maxNoProgressRecoveries,
       rollbackOnRegression,
+      priority,
       requirementMode,
       isolation = "auto",
     } = body;
@@ -155,6 +174,13 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
     }
     if (rollbackOnRegression !== undefined && typeof rollbackOnRegression !== "boolean") {
       sendApiError(res, 400, "bad_request", "rollbackOnRegression must be boolean");
+      return true;
+    }
+    if (
+      priority !== undefined &&
+      (!Number.isSafeInteger(priority) || (priority as number) < -10 || (priority as number) > 10)
+    ) {
+      sendApiError(res, 400, "bad_request", "priority must be an integer from -10 to 10");
       return true;
     }
     const parsedVerificationPlan = verificationPlan === undefined ? undefined : verificationStages(verificationPlan);
@@ -241,6 +267,7 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
                 ? { maxNoProgressRecoveries: maxNoProgressRecoveries as number }
                 : {}),
               ...(rollbackOnRegression !== undefined ? { rollbackOnRegression } : {}),
+              ...(priority !== undefined ? { priority: priority as number } : {}),
               ...(requirementMode !== undefined ? { requirementMode } : {}),
               costBudgetUsd: maxCostUsd,
               approvalMode: "acceptEdits",

@@ -10,16 +10,18 @@
  */
 import type { AgentError, ApprovalMode } from "@seekforge/shared";
 import { randomUUID } from "node:crypto";
-import { resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
   acquireLoopLifecycleLease,
+  acquireLoopLifecycleLeaseWithPreemption,
   acquireLoopLease,
   createLoopLogWriter,
   createLoopState,
   loadLoopState,
   recoverInterruptedLoops,
+  recordLoopRecoveryFailure,
   saveLoopState,
   type LoopState,
 } from "./loop-state.js";
@@ -76,6 +78,8 @@ export type LoopVerificationStage = {
   command: string;
   required?: boolean;
   timeoutMs?: number;
+  /** Relative file or directory prefixes that select this stage after an edit. */
+  paths?: string[];
 };
 
 export type LoopStageResult = {
@@ -114,6 +118,8 @@ export type LoopOptions = {
   maxNoProgressRecoveries?: number;
   /** Revert an iteration that increases parsed failures. Allowed only in a retained Loop worktree. */
   rollbackOnRegression?: boolean;
+  /** Automatic recovery priority, from -10 (lowest) to 10 (highest). */
+  priority?: number;
   /** Max run iterations before giving up. Default 8. */
   maxIterations?: number;
   /** Hard cap on cumulative cost (USD) across iterations. */
@@ -219,6 +225,40 @@ const tail = (s: string): string => (s.length <= TAIL_CAP ? s : s.slice(s.length
 /** Historical snapshots keep outcomes, not repeated commands/output; the latest full result remains on LoopState. */
 const compactSnapshotStages = (stages: readonly LoopStageResult[]): LoopStageResult[] =>
   stages.map((stage) => ({ ...stage, command: "", output: "" }));
+
+function normalizeVerificationPath(value: string): string | null {
+  if (value.length === 0 || value.length > 512 || value.includes("\0")) return null;
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (
+    normalized === "" ||
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").some((part) => part === "" || part === "." || part === "..")
+  )
+    return null;
+  return normalized.endsWith("/**") ? normalized.slice(0, -3) : normalized;
+}
+
+function isVerificationPathPrefix(value: unknown): value is string {
+  return typeof value === "string" && normalizeVerificationPath(value) !== null;
+}
+
+function verificationStageMatches(
+  workspace: string,
+  stage: LoopVerificationStage,
+  changedPaths: ReadonlySet<string>,
+): boolean {
+  if (!stage.paths?.length) return true;
+  const prefixes = stage.paths.map(normalizeVerificationPath).filter((value): value is string => value !== null);
+  for (const changedPath of changedPaths) {
+    const candidate = normalizeVerificationPath(
+      isAbsolute(changedPath) ? relative(workspace, changedPath) : changedPath,
+    );
+    if (candidate === null) return true;
+    if (prefixes.some((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`))) return true;
+  }
+  return false;
+}
 
 function diagnosticAggregate(value: string): string {
   if (value.length <= MAX_VERIFY_DIAGNOSTIC_INPUT) return value;
@@ -403,6 +443,10 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if ((opts.maxNoProgressRecoveries ?? opts.resumeState?.maxNoProgressRecoveries ?? 1) > 5) {
     throw new RangeError("Loop maxNoProgressRecoveries must be 0-5");
   }
+  const priority = opts.priority ?? opts.resumeState?.priority ?? 0;
+  if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
+    throw new RangeError("Loop priority must be an integer from -10 to 10");
+  }
   const configuredPlan = opts.verificationPlan ?? opts.resumeState?.verificationPlan;
   if (configuredPlan !== undefined) {
     if (!Array.isArray(configuredPlan) || configuredPlan.length === 0 || configuredPlan.length > 16) {
@@ -418,6 +462,16 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
         throw new Error(`Loop verification stage command is invalid: ${stage.id}`);
       }
       positiveSafeInteger(`verificationPlan.${stage.id}.timeoutMs`, stage.timeoutMs);
+      if (stage.paths !== undefined) {
+        if (!Array.isArray(stage.paths) || stage.paths.length === 0 || stage.paths.length > 64) {
+          throw new Error(`Loop verification stage paths are invalid: ${stage.id}`);
+        }
+        for (const path of stage.paths) {
+          if (!isVerificationPathPrefix(path)) {
+            throw new Error(`Loop verification stage path is invalid: ${stage.id}/${String(path)}`);
+          }
+        }
+      }
     }
   }
   const persistenceEnabled = opts.persist !== false;
@@ -454,7 +508,11 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     }
   };
   const lifecycleLease = persistenceEnabled
-    ? acquireLoopLifecycleLease(opts.workspace, loopId, opts.workspaceGuard)
+    ? opts.workspaceGuard
+      ? acquireLoopLifecycleLease(opts.workspace, loopId, opts.workspaceGuard)
+      : await acquireLoopLifecycleLeaseWithPreemption(opts.workspace, loopId, {
+          ...(opts.signal && !opts.signal.aborted ? { signal: opts.signal } : {}),
+        })
     : undefined;
   let lease: ReturnType<typeof acquireLoopLease> | undefined;
   try {
@@ -488,6 +546,7 @@ async function runAutoLoopWithLease(
   const verifyTimeoutMs = opts.verifyTimeoutMs ?? opts.resumeState?.verifyTimeoutMs ?? DEFAULT_LOOP_VERIFY_TIMEOUT_MS;
   const agentTimeoutMs = opts.agentTimeoutMs ?? opts.resumeState?.agentTimeoutMs ?? DEFAULT_LOOP_AGENT_TIMEOUT_MS;
   const maxAgentRetries = opts.maxAgentRetries ?? opts.resumeState?.maxAgentRetries ?? DEFAULT_LOOP_AGENT_RETRIES;
+  const priority = opts.priority ?? opts.resumeState?.priority ?? 0;
   const verificationPlan: LoopVerificationStage[] = opts.verificationPlan ??
     opts.resumeState?.verificationPlan ?? [{ id: "verify", command: opts.verifyCommand }];
   const stablePasses = Math.min(opts.stablePasses ?? opts.resumeState?.stablePasses ?? 1, 5);
@@ -576,6 +635,7 @@ async function runAutoLoopWithLease(
         flakyRetries,
         maxNoProgressRecoveries,
         rollbackOnRegression,
+        priority,
         controlRunId,
       });
     } catch (error) {
@@ -831,14 +891,26 @@ async function runAutoLoopWithLease(
 
   const executeVerify = async (
     iteration: number,
+    changedPaths?: ReadonlySet<string>,
   ): Promise<
-    | { kind: "result"; result: { code: number; output: string }; diagnostics: string; stages: LoopStageResult[] }
+    | {
+        kind: "result";
+        result: { code: number; output: string };
+        diagnostics: string;
+        stages: LoopStageResult[];
+        skippedStageIds: string[];
+      }
     | { kind: "budget"; reason: LoopBudgetReason }
   > => {
     const stages: LoopStageResult[] = [];
+    const skippedStageIds: string[] = [];
     let failedDiagnostics = "";
     let failedCode = 0;
     for (const stage of verificationPlan) {
+      if (changedPaths !== undefined && !verificationStageMatches(opts.workspace, stage, changedPaths)) {
+        skippedStageIds.push(stage.id);
+        continue;
+      }
       let completed: LoopStageResult | undefined;
       let diagnostics = "";
       for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
@@ -869,12 +941,25 @@ async function runAutoLoopWithLease(
       result: { code: failedCode, output },
       diagnostics: failedDiagnostics || stages.map((stage) => stage.output).join("\n"),
       stages,
+      skippedStageIds,
     };
   };
 
-  const executeStableVerify = async (iteration: number): ReturnType<typeof executeVerify> => {
-    let captured = await executeVerify(iteration);
+  const executeStableVerify = async (
+    iteration: number,
+    changedPaths?: ReadonlySet<string>,
+  ): ReturnType<typeof executeVerify> => {
+    let captured = await executeVerify(iteration, changedPaths);
     if (captured.kind === "budget") return captured;
+    if (captured.result.code === 0 && captured.skippedStageIds.length > 0) {
+      emit({
+        type: "loop.warning",
+        warning: "observer",
+        message: `Incremental verification skipped ${captured.skippedStageIds.join(", ")}; running the full pipeline before accepting success.`,
+      });
+      captured = await executeVerify(iteration);
+      if (captured.kind === "budget") return captured;
+    }
     passStreak = captured.result.code === 0 ? Math.min(stablePasses, passStreak + 1) : 0;
     persist({ passStreak, stageResults: lastStageResults });
     while (captured.result.code === 0 && passStreak < stablePasses) {
@@ -1237,7 +1322,7 @@ async function runAutoLoopWithLease(
     let v: { code: number; output: string };
     let verifyDiagnostics = "";
     try {
-      const captured = await executeStableVerify(i);
+      const captured = await executeStableVerify(i, changedPaths);
       if (captured.kind === "budget") return finishBudget(captured.reason, lastVerify);
       v = captured.result;
       verifyDiagnostics = captured.diagnostics;
@@ -1492,19 +1577,30 @@ export async function resumeAutoLoop(
 export async function autoResumeInterruptedLoops(
   deps: AgentCoreDeps,
   workspace: string,
-  options: { signal?: AbortSignal; onEvent?: (loopId: string, event: LoopEvent) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    limit?: number;
+    onEvent?: (loopId: string, event: LoopEvent) => void;
+    onError?: (loopId: string, error: unknown) => void;
+  } = {},
 ): Promise<LoopResult[]> {
-  const recovered = recoverInterruptedLoops(workspace);
+  const recovered = recoverInterruptedLoops(workspace, options.limit !== undefined ? { limit: options.limit } : {});
   const results: LoopResult[] = [];
   for (const state of recovered) {
     options.signal?.throwIfAborted();
-    results.push(
-      await resumeAutoLoop(deps, state.loopId, {
-        workspace,
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.onEvent ? { onEvent: (event) => options.onEvent?.(state.loopId, event) } : {}),
-      }),
-    );
+    try {
+      results.push(
+        await resumeAutoLoop(deps, state.loopId, {
+          workspace,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.onEvent ? { onEvent: (event) => options.onEvent?.(state.loopId, event) } : {}),
+        }),
+      );
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      recordLoopRecoveryFailure(workspace, state.loopId, error);
+      options.onError?.(state.loopId, error);
+    }
   }
   return results;
 }

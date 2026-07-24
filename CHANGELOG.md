@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### round 63: durable adaptive Loop orchestration
+- Added foreground preemption of idle recovery, prioritized bounded recovery,
+  per-Loop exponential backoff, failure isolation, and idle terminal-state pruning.
+- Added path-scoped incremental verification with an unconditional full-pipeline
+  success gate across CLI, Server, TUI, and Desktop surfaces.
+- Added durable DAG checkpoints/resume, weighted remaining-budget allocation,
+  node priorities/retries, and configurable dependency failure policies.
+- Upgraded delivery to evidence-backed `prepared`, `action_completed`, and
+  `finalized` phases so partial Git/patch/PR publication can be retried safely.
+- Added CLI management commands, protocol validation, observability, bilingual
+  documentation, and cross-surface regression coverage.
+
 ### round 62: Loop lifecycle and delivery recovery hardening
 - Unified Loop run, delivery, and deletion under one cross-process lifecycle
   lease so resume cannot race post-pass Git or PR side effects.

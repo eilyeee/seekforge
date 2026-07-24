@@ -93,7 +93,7 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
     case "loop.warning":
       return [
         {
-          text: `  ! loop ${event.warning === "persistence" ? "persistence" : "requirement"} warning: ${event.message}`,
+          text: `  ! loop ${event.warning === "persistence" ? "persistence" : event.warning === "requirements" ? "requirement" : "observer"} warning: ${event.message}`,
           tone: "error",
         },
       ];

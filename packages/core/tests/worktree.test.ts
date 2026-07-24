@@ -162,6 +162,18 @@ describe("worktree delivery", () => {
     await expect(checkpointWorktreePaths(path, ["../outside"], "unsafe")).rejects.toThrow(/unsafe worktree pathspec/);
   });
 
+  it("force-adds an explicitly selected ignored state artifact", async () => {
+    const { path } = await createWorktree(repo, "ignored-checkpoint");
+    writeFileSync(join(path, ".gitignore"), ".ignored/\n");
+    git(path, "add", ".gitignore");
+    git(path, "commit", "-q", "-m", "ignore state");
+    mkdirSync(join(path, ".ignored"));
+    writeFileSync(join(path, ".ignored", "state.json"), "{}\n");
+
+    expect(await checkpointWorktreePaths(path, [".ignored/state.json"], "chore: record state")).toBe(true);
+    expect(git(path, "show", "HEAD:.ignored/state.json")).toBe("{}");
+  });
+
   it("rejects patch generation for an unrelated branch namespace", async () => {
     await expect(createWorktreePatch(repo, "main")).rejects.toThrow(/unsafe worktree branch/);
   });

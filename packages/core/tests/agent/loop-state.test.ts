@@ -28,6 +28,9 @@ import {
   createLoopLogWriter,
   readLoopHistory,
   recoverInterruptedLoops,
+  pruneLoopStates,
+  recordLoopRecoveryFailure,
+  setLoopPriority,
 } from "../../src/agent/loop-state.js";
 
 describe("loop state persistence", () => {
@@ -157,6 +160,7 @@ describe("loop state persistence", () => {
       delivery: {
         mode: "patch" as const,
         status: "failed" as const,
+        phase: "prepared" as const,
         attempts: 2,
         updatedAt: now,
         error: "network unavailable",
@@ -178,6 +182,90 @@ describe("loop state persistence", () => {
       }),
     );
     expect(loadLoopState(workspace, state.loopId)).toBeNull();
+  });
+
+  it("prioritizes eligible recovery and applies bounded backoff after failure", () => {
+    const low = createLoopState({
+      loopId: "priority-low",
+      task: "low",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+      priority: -5,
+    });
+    const high = createLoopState({
+      loopId: "priority-high",
+      task: "high",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+      priority: 5,
+    });
+    saveLoopState(workspace, { ...low, status: "interrupted" });
+    saveLoopState(workspace, { ...high, status: "interrupted" });
+    expect(recoverInterruptedLoops(workspace, { limit: 1 }).map((state) => state.loopId)).toEqual(["priority-high"]);
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const backedOff = recordLoopRecoveryFailure(workspace, high.loopId, new Error("network"), now);
+    expect(backedOff.recovery).toMatchObject({ attempts: 1, lastError: "network" });
+    expect(backedOff.recovery?.nextAttemptAt).toBe("2026-01-01T00:00:30.000Z");
+    expect(recoverInterruptedLoops(workspace, { now, limit: 2 }).map((state) => state.loopId)).toEqual([
+      "priority-low",
+    ]);
+    expect(setLoopPriority(workspace, low.loopId, 10).priority).toBe(10);
+  });
+
+  it("prunes only eligible terminal records and preserves resumable or unfinished deliveries", () => {
+    const old = new Date("2026-01-01T00:00:00.000Z").toISOString();
+    const terminal = createLoopState({
+      loopId: "prune-terminal",
+      task: "done",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...terminal, status: "exhausted", updatedAt: old });
+    const resumable = createLoopState({
+      loopId: "prune-resumable",
+      task: "resume",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...resumable, status: "interrupted", updatedAt: old });
+    const delivery = createLoopState({
+      loopId: "prune-delivery",
+      task: "ship",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...delivery,
+      status: "passed",
+      updatedAt: old,
+      delivery: {
+        mode: "patch",
+        status: "failed",
+        phase: "action_completed",
+        attempts: 1,
+        artifact: "artifact.patch",
+        updatedAt: old,
+        error: "retry me",
+      },
+    });
+    const preview = pruneLoopStates(workspace, {
+      maxAgeDays: 1,
+      now: new Date("2026-02-01T00:00:00.000Z"),
+      dryRun: true,
+    });
+    expect(preview.candidates).toEqual(["prune-terminal"]);
+    const pruned = pruneLoopStates(workspace, {
+      maxAgeDays: 1,
+      now: new Date("2026-02-01T00:00:00.000Z"),
+    });
+    expect(pruned.removed).toEqual(["prune-terminal"]);
+    expect(loadLoopState(workspace, resumable.loopId)).not.toBeNull();
+    expect(loadLoopState(workspace, delivery.loopId)).not.toBeNull();
   });
 
   it("sorts offset timestamps by instant instead of source text", () => {

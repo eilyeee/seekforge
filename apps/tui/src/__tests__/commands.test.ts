@@ -133,6 +133,16 @@ describe("parseInput /loop", () => {
     });
   });
 
+  it("parses and bounds automatic recovery priority", () => {
+    expect(parseInput("/loop --priority -7 pnpm test\nFix tests")).toEqual({
+      kind: "slash",
+      command: { name: "loop", verify: "pnpm test", task: "Fix tests", priority: -7 },
+    });
+    expect(parseInput("/loop --priority 11 pnpm test\nFix tests")).toMatchObject({
+      command: { name: "loop", error: "--priority must be an integer from -10 to 10" },
+    });
+  });
+
   it("parses requirement analysis and confirmation options", () => {
     expect(parseInput("/loop --requirements=confirm pnpm test\nBuild the whole feature")).toEqual({
       kind: "slash",

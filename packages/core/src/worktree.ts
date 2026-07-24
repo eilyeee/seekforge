@@ -177,7 +177,10 @@ export async function checkpointWorktree(
   return true;
 }
 
-/** Commits only the named repository-relative paths, leaving unrelated changes untouched. */
+/**
+ * Commits only the explicitly named repository-relative paths, including
+ * ignored state artifacts, while leaving unrelated changes untouched.
+ */
 export async function checkpointWorktreePaths(
   worktreePath: string,
   paths: readonly string[],
@@ -191,7 +194,7 @@ export async function checkpointWorktreePaths(
     }
   }
   const bounded = message.trim().slice(0, 200) || "seekforge loop checkpoint";
-  await git(worktreePath, ["--literal-pathspecs", "add", "--", ...paths]);
+  await git(worktreePath, ["--literal-pathspecs", "add", "--force", "--", ...paths]);
   if (!(await git(worktreePath, ["--literal-pathspecs", "diff", "--cached", "--name-only", "--", ...paths])))
     return false;
   await git(worktreePath, ["--literal-pathspecs", "commit", "-m", bounded, "--", ...paths]);

@@ -13,7 +13,9 @@ import { WebSocketServer } from "ws";
 import {
   createLoopRecoveryScheduler,
   createMemoryMaintenanceScheduler,
+  recordLoopRecoveryFailure,
   recoverInterruptedLoops,
+  pruneLoopStates,
   type LoopRecoveryScheduler,
   type LoopResult,
 } from "@seekforge/core";
@@ -91,6 +93,14 @@ export type StartServerOptions = {
   loopRecoveryInitialDelayMs?: number;
   /** Embedding/test override for the recurring idle-Loop recovery interval. */
   loopRecoveryIntervalMs?: number;
+  /** Maximum interrupted Loops resumed per workspace and idle tick. Default 3. */
+  loopRecoveryMaxPerTick?: number;
+  /** Prune terminal Loop records during idle maintenance. */
+  loopAutoPrune?: boolean;
+  /** Maximum age of terminal Loop records. Default 30 days. */
+  loopRetentionMaxAgeDays?: number;
+  /** Maximum retained eligible terminal Loop records. Default 100. */
+  loopRetentionMaxCount?: number;
 };
 
 export type RunningServer = {
@@ -103,6 +113,22 @@ export type RunningServer = {
 export { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 
 export async function startServer(opts: StartServerOptions): Promise<RunningServer> {
+  if (
+    opts.loopRecoveryMaxPerTick !== undefined &&
+    (!Number.isSafeInteger(opts.loopRecoveryMaxPerTick) || opts.loopRecoveryMaxPerTick <= 0)
+  ) {
+    throw new RangeError("loopRecoveryMaxPerTick must be a positive integer");
+  }
+  if (
+    opts.loopRetentionMaxAgeDays !== undefined &&
+    (!Number.isFinite(opts.loopRetentionMaxAgeDays) || opts.loopRetentionMaxAgeDays < 0)
+  )
+    throw new RangeError("loopRetentionMaxAgeDays must be a non-negative finite number");
+  if (
+    opts.loopRetentionMaxCount !== undefined &&
+    (!Number.isSafeInteger(opts.loopRetentionMaxCount) || opts.loopRetentionMaxCount < 0)
+  )
+    throw new RangeError("loopRetentionMaxCount must be a non-negative integer");
   const paths = opts.workspaces ?? (opts.workspace !== undefined ? [opts.workspace] : []);
   if (paths.length === 0) {
     throw new Error("startServer requires `workspaces` or `workspace`");
@@ -242,73 +268,96 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
 
   let loopRecoveryScheduler: LoopRecoveryScheduler | undefined;
   try {
-    loopRecoveryScheduler = opts.loopAutoResume
-      ? createLoopRecoveryScheduler({
-          targets: () =>
-            registry.list.map((workspace) => ({
-              workspace: workspace.path,
-              recover: async (signal): Promise<LoopResult[] | undefined> => {
-                const attempt = await coordinator.tryWithIdleAgentMutation(
-                  workspace.path,
-                  signal,
-                  async (idleGuard) => {
-                    const results: LoopResult[] = [];
-                    for (const state of recoverInterruptedLoops(workspace.path)) {
-                      signal.throwIfAborted();
-                      try {
-                        results.push(
-                          await resumeLoop(
-                            {
-                              workspace: workspace.path,
-                              confirm: async () => false,
-                              extractMemory: true,
-                              signal,
-                            },
-                            state.loopId,
-                            {
-                              workspace: workspace.path,
-                              approvalMode: "acceptEdits",
-                              abortStatus: "interrupted",
-                              signal,
-                              workspaceGuard: idleGuard,
-                            },
-                          ),
-                        );
-                      } catch (error) {
-                        if (signal.aborted) throw error;
-                        logger.log("error", "loop.recovery.failed", {
-                          workspace: workspace.path,
-                          loopId: state.loopId,
-                          error: error instanceof Error ? error.message : String(error),
-                        });
+    loopRecoveryScheduler =
+      opts.loopAutoResume || opts.loopAutoPrune
+        ? createLoopRecoveryScheduler({
+            targets: () =>
+              registry.list.map((workspace) => ({
+                workspace: workspace.path,
+                recover: async (signal): Promise<LoopResult[] | undefined> => {
+                  const attempt = await coordinator.tryWithIdleAgentMutation(
+                    workspace.path,
+                    signal,
+                    async (idleGuard, recoverySignal) => {
+                      const results: LoopResult[] = [];
+                      for (const state of opts.loopAutoResume
+                        ? recoverInterruptedLoops(workspace.path, { limit: opts.loopRecoveryMaxPerTick ?? 3 })
+                        : []) {
+                        recoverySignal.throwIfAborted();
+                        try {
+                          results.push(
+                            await resumeLoop(
+                              {
+                                workspace: workspace.path,
+                                confirm: async () => false,
+                                extractMemory: true,
+                                signal: recoverySignal,
+                              },
+                              state.loopId,
+                              {
+                                workspace: workspace.path,
+                                approvalMode: "acceptEdits",
+                                abortStatus: "interrupted",
+                                signal: recoverySignal,
+                                workspaceGuard: idleGuard,
+                              },
+                            ),
+                          );
+                        } catch (error) {
+                          if (recoverySignal.aborted) {
+                            if (signal.aborted) throw error;
+                            break;
+                          }
+                          recordLoopRecoveryFailure(workspace.path, state.loopId, error);
+                          logger.log("error", "loop.recovery.failed", {
+                            workspace: workspace.path,
+                            loopId: state.loopId,
+                            error: error instanceof Error ? error.message : String(error),
+                          });
+                        }
                       }
-                    }
-                    return results;
-                  },
-                );
-                return attempt.acquired ? attempt.value : undefined;
-              },
-            })),
-          onResults: (results) => {
-            for (const result of results) {
-              if (result.outcome.status === "completed" && result.outcome.results.length > 0) {
-                logger.log("info", "loop.recovery.completed", {
-                  workspace: result.workspace,
-                  count: result.outcome.results.length,
-                  loops: result.outcome.results.map((loop) => ({ loopId: loop.loopId, status: loop.status })),
-                });
-              } else if (result.outcome.status === "failed") {
-                logger.log("error", "loop.recovery.failed", {
-                  workspace: result.workspace,
-                  error: result.outcome.error,
-                });
+                      if (opts.loopAutoPrune) {
+                        const pruned = pruneLoopStates(workspace.path, {
+                          maxAgeDays: opts.loopRetentionMaxAgeDays ?? 30,
+                          maxTerminalCount: opts.loopRetentionMaxCount ?? 100,
+                          workspaceGuard: idleGuard,
+                        });
+                        if (pruned.removed.length > 0 || pruned.skipped.length > 0) {
+                          logger.log("info", "loop.prune.completed", {
+                            workspace: workspace.path,
+                            removed: pruned.removed,
+                            skipped: pruned.skipped,
+                          });
+                        }
+                      }
+                      return results;
+                    },
+                  );
+                  return attempt.acquired ? attempt.value : undefined;
+                },
+              })),
+            onResults: (results) => {
+              for (const result of results) {
+                if (result.outcome.status === "completed" && result.outcome.results.length > 0) {
+                  logger.log("info", "loop.recovery.completed", {
+                    workspace: result.workspace,
+                    count: result.outcome.results.length,
+                    loops: result.outcome.results.map((loop) => ({ loopId: loop.loopId, status: loop.status })),
+                  });
+                } else if (result.outcome.status === "failed") {
+                  logger.log("error", "loop.recovery.failed", {
+                    workspace: result.workspace,
+                    error: result.outcome.error,
+                  });
+                }
               }
-            }
-          },
-          ...(opts.loopRecoveryInitialDelayMs !== undefined ? { initialDelayMs: opts.loopRecoveryInitialDelayMs } : {}),
-          ...(opts.loopRecoveryIntervalMs !== undefined ? { intervalMs: opts.loopRecoveryIntervalMs } : {}),
-        })
-      : undefined;
+            },
+            ...(opts.loopRecoveryInitialDelayMs !== undefined
+              ? { initialDelayMs: opts.loopRecoveryInitialDelayMs }
+              : {}),
+            ...(opts.loopRecoveryIntervalMs !== undefined ? { intervalMs: opts.loopRecoveryIntervalMs } : {}),
+          })
+        : undefined;
   } catch (error) {
     memoryMaintenanceScheduler.dispose();
     throw error;

@@ -193,15 +193,18 @@ seekforge loop-show <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<引导>"
+seekforge loop-priority <loop-id> <-10..10>
 seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
+seekforge loop-prune [--older-than-days N] [--keep-last N] [--worktrees] [--dry-run]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
 ### Loop v2 控制
 
-- 重复传入 `--verify-stage <id=command>` 可组成有序验证流水线。必需阶段失败会停止流水线；
-  Core API 阶段可设置 `required: false`。
+- 重复传入 `--verify-stage <id[@路径,...]=命令>` 可组成有序验证流水线。编辑轮次会按
+  变更的相对路径前缀选择阶段；增量结果通过后仍会执行完整流水线，因而只能降低中间成本，
+  不会削弱最终门禁。必需阶段失败会停止流水线；Core API 阶段可设置 `required: false`。
 - `--flaky-retries 0..5` 会在编辑前重跑失败阶段，之后通过时记录 `verify.flaky`；
   `--stable-passes 1..5` 要求完整流水线连续通过。
 - `--stuck-recoveries 0..5` 会在返回 `no_progress` 前做有界的重新诊断并改用不同策略；
@@ -211,19 +214,25 @@ seekforge loop-cleanup <worktree-name> [--force]
   `loop-recover` 把失去 owner 的 `running` 或 `paused` 记录标为 `interrupted`，嵌入方可调用
   `autoResumeInterruptedLoops` 自动继续。已有的 `interrupted` 记录仍可恢复，因此瞬时恢复失败
   能在之后重试；但只要 Loop 租约仍存活，该记录就绝不会进入恢复候选。
+- 自动恢复通过 `--priority -10..10` / `loop-priority` 排序，每个工作区每次最多处理三个候选；
+  单个失败会隔离，并按 30 秒到 1 小时的指数退避重试。前台运行会请求抢占空闲恢复并等待 guard 让出。
 - `seekforge serve --loop-auto-resume` 显式开启由服务生命周期托管的后台恢复。它先占用物理仓库
   队列，再取得跨进程空闲 guard；有工作时直接跳过而非等待，并在整个恢复期间持有 guard，
   仅显式放行该恢复自身的 Agent 会话。多个工作区顺序处理，定时检查不会重叠，关闭服务会
   中止当前恢复。生命周期中止会持久化为 `interrupted`，而不是用户 `cancelled`，所以下次
-  启动仍可继续。该调度器默认关闭。
-- `loop-dag <file>` 以共享预算顺序执行 JSON 依赖图。Core `runLoopDag` 还支持有界并行，
-  但每个节点必须解析到不同的物理工作区。
+  启动仍可继续。`--loop-auto-prune` 在同一空闲 guard 下只删除旧的终态记录；可恢复状态和未完成
+  的交付事务会保留。两种调度器都默认关闭。`loop-prune` 暴露同样的保留规则，并可选择删除干净、
+  已完成 merge 交付的 Loop worktree。
+- `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
+  就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
+  `skip_dependents` / `continue` / `stop` 失败策略。并行批次要求不同的物理工作区。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
   Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
   除首次尝试外会复用原模式。运行、交付和删除共用一把生命周期租约，因此交付执行时恢复
-  无法进入。主要副作用成功后才会持久化 `delivered`；最终状态发布可幂等重试，旧版本过早
-  写入的成功记录也会先补做副作用再返回成功。
+  无法进入。交付会持久化 `prepared → action_completed → finalized`，并记录分支、revision、
+  patch hash 或 PR URL 证据。主要副作用和最终状态发布可分别重试；重试会核验证据，并修复旧版本
+  过早写入的成功记录。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

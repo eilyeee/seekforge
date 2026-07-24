@@ -35,6 +35,7 @@ export type RunLoopDeps = {
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  priority?: number;
   requirementMode?: LoopRequirementMode;
   control?: LoopControl;
   /** Forwards each LoopEvent to the caller for transcript rendering. */
@@ -88,6 +89,7 @@ export async function runLoop(
       ...(deps.flakyRetries !== undefined ? { flakyRetries: deps.flakyRetries } : {}),
       ...(deps.maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries: deps.maxNoProgressRecoveries } : {}),
       ...(deps.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+      ...(deps.priority !== undefined ? { priority: deps.priority } : {}),
       ...(deps.requirementMode !== undefined ? { requirementMode: deps.requirementMode } : {}),
       ...(deps.control ? { control: deps.control } : {}),
       approvalMode: "acceptEdits",

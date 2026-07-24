@@ -120,6 +120,7 @@
 | Flag | 说明 |
 | --- | --- |
 | `--loop-auto-resume` | 显式开启：工作区空闲时恢复持久化的 `running`、`paused` 或已有的 `interrupted` Loop。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区及仍有存活 Loop owner 的记录会被跳过；取得的空闲 guard 会覆盖完整恢复，并只放行其自身 Agent 会话。多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会把其拥有的恢复任务保留为 `interrupted`，供下次启动继续。 |
+| `--loop-auto-prune` | 显式开启空闲期终态 Loop 清理。默认清理超过 30 天或排在最新 100 条之外的合格记录；可恢复状态和未完成交付永不参与清理。 |
 
 自动 Loop 恢复默认关闭，因为恢复后可能调用模型并编辑工作区。恢复沿用 Loop
 持久化的额度和 `acceptEdits`；没有用户连接时，超出该模式的权限请求会被拒绝。
@@ -174,11 +175,12 @@
 | `--verify-timeout <seconds>` | 单次校验超时。 |
 | `--agent-timeout <seconds>` | 单次 Agent 尝试超时。 |
 | `--agent-retries <n>` | 网络、超时和限流瞬时错误的重试次数；默认 1。 |
-| `--verify-stage <id=command>` | 追加一个有序验证阶段；重复使用可组成流水线。 |
+| `--verify-stage <id[@路径,...]=命令>` | 追加有序阶段，并可按变更的相对路径前缀选择。增量通过后一定执行完整流水线才会成功。 |
 | `--stable-passes <n>` | 要求完整流水线连续通过 1-5 次。 |
 | `--flaky-retries <n>` | 对失败阶段重试 0-5 次，并记录抖动通过。 |
 | `--stuck-recoveries <n>` | 在 `no_progress` 前用新策略重新诊断 0-5 次。 |
 | `--rollback-regressions` | 回退增加解析失败数的迭代；仅限保留的 Loop worktree。 |
+| `--priority <n>` | 设置 -10 到 10 的自动恢复优先级。 |
 | `--deliver <mode>` | 通过后执行 `checkpoint`、`merge`、写 `patch` 或创建草稿 `pr`；仅限保留 worktree。 |
 | `--requirements quick\|analyze\|confirm` | `quick` 仅依据验证命令；`analyze` 冻结需求并执行验收审查；`confirm` 在分析后暂停，等待显式批准。 |
 | `--worktree [name]` | 在新建并保留的 git worktree 中运行；可选择其分支后缀。 |
@@ -194,8 +196,10 @@
 `seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；
 `seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]` 可从保留 worktree
 重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
-回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-dag <file>`
-以共享预算执行 JSON 依赖图。TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续和引导。
+回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
+调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 持久化执行带共享加权预算、
+重试和失败策略的 JSON 依赖图，并支持 `--resume` / `--dag-id` 检查点。TUI 与
+Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
 worktree 因其改动会被丢弃，需要显式加 `--force`。
 

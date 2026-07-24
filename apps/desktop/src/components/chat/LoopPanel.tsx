@@ -28,11 +28,12 @@ type Props = {
     verifyTimeoutMs?: number;
     agentTimeoutMs?: number;
     maxAgentRetries?: number;
-    verificationPlan?: Array<{ id: string; command: string }>;
+    verificationPlan?: Array<{ id: string; command: string; paths?: string[] }>;
     stablePasses?: number;
     flakyRetries?: number;
     maxNoProgressRecoveries?: number;
     rollbackOnRegression?: boolean;
+    priority?: number;
     requirementMode?: "quick" | "analyze" | "confirm";
   }) => void;
   onResume: (opts: {
@@ -86,6 +87,7 @@ export function LoopPanel({
   const [flakyRetries, setFlakyRetries] = useState("0");
   const [stuckRecoveries, setStuckRecoveries] = useState("1");
   const [rollbackRegressions, setRollbackRegressions] = useState(false);
+  const [priority, setPriority] = useState("0");
   const [steering, setSteering] = useState("");
   const [requirementMode, setRequirementMode] = useState<"quick" | "analyze" | "confirm">("quick");
   const [addedIterations, setAddedIterations] = useState("");
@@ -117,15 +119,38 @@ export function LoopPanel({
     ...recoveriesParsed,
     ...(recoveriesParsed.value !== undefined && recoveriesParsed.value > 5 ? { error: "range" } : {}),
   };
+  const parsedPriority = Number(priority);
+  const priorityError =
+    !/^-?[0-9]+$/.test(priority) ||
+    !Number.isSafeInteger(parsedPriority) ||
+    parsedPriority < -10 ||
+    parsedPriority > 10;
   const parsedStages = verificationStages
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
       const separator = line.indexOf("=");
-      return separator > 0 && separator < line.length - 1
-        ? { id: line.slice(0, separator).trim(), command: line.slice(separator + 1).trim() }
-        : null;
+      if (separator <= 0 || separator >= line.length - 1) return null;
+      const selector = line.slice(0, separator).trim();
+      const pathSeparator = selector.indexOf("@");
+      const id = pathSeparator === -1 ? selector : selector.slice(0, pathSeparator);
+      const paths = pathSeparator === -1 ? undefined : selector.slice(pathSeparator + 1).split(",");
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id) ||
+        paths?.some(
+          (path) =>
+            path.length === 0 ||
+            path.startsWith("/") ||
+            /^[A-Za-z]:[\\/]/.test(path) ||
+            path
+              .replaceAll("\\", "/")
+              .split("/")
+              .some((part) => part === "" || part === "." || part === ".."),
+        )
+      )
+        return null;
+      return { id, command: line.slice(separator + 1).trim(), ...(paths ? { paths } : {}) };
     });
   const stageError = parsedStages.some((stage) => stage === null);
   const addedIters = parseIterationInput(addedIterations, true);
@@ -146,7 +171,7 @@ export function LoopPanel({
     !verifyLimit.error &&
     !agentLimit.error &&
     !retries.error;
-  const canRunV2 = canRun && !stable.error && !flaky.error && !recoveries.error && !stageError;
+  const canRunV2 = canRun && !stable.error && !flaky.error && !recoveries.error && !priorityError && !stageError;
 
   const run = () => {
     if (!canRunV2) return;
@@ -165,7 +190,7 @@ export function LoopPanel({
         ? {
             verificationPlan: [
               { id: "verify", command: verify.trim() },
-              ...(parsedStages.filter(Boolean) as Array<{ id: string; command: string }>),
+              ...(parsedStages.filter(Boolean) as Array<{ id: string; command: string; paths?: string[] }>),
             ],
           }
         : {}),
@@ -173,6 +198,7 @@ export function LoopPanel({
       ...(flaky.value !== undefined ? { flakyRetries: flaky.value } : {}),
       ...(recoveries.value !== undefined ? { maxNoProgressRecoveries: recoveries.value } : {}),
       ...(rollbackRegressions ? { rollbackOnRegression: true } : {}),
+      priority: parsedPriority,
       requirementMode,
     });
   };
@@ -337,6 +363,7 @@ export function LoopPanel({
                     setStuckRecoveries,
                     recoveries.error,
                   ],
+                  ["loop-priority", "chat.loop.priority", priority, setPriority, priorityError ? "range" : undefined],
                 ].map(([id, label, value, setter, error]) => (
                   <label key={String(id)} htmlFor={String(id)} className="flex w-32 flex-col gap-1">
                     <span className="text-2xs font-medium uppercase tracking-wide text-tertiary">
@@ -345,13 +372,21 @@ export function LoopPanel({
                     <Input
                       id={String(id)}
                       type="number"
-                      min={String(id).includes("retries") || String(id).includes("recoveries") ? 0 : 1}
+                      min={
+                        String(id).includes("priority")
+                          ? -10
+                          : String(id).includes("retries") || String(id).includes("recoveries")
+                            ? 0
+                            : 1
+                      }
                       max={
                         String(id).includes("passes") ||
                         String(id).includes("retries") ||
                         String(id).includes("recoveries")
                           ? 5
-                          : undefined
+                          : String(id).includes("priority")
+                            ? 10
+                            : undefined
                       }
                       value={String(value)}
                       onChange={(event) => (setter as (next: string) => void)(event.target.value)}
@@ -371,7 +406,7 @@ export function LoopPanel({
                     value={verificationStages}
                     onChange={(event) => setVerificationStages(event.target.value)}
                     disabled={running}
-                    placeholder="lint=pnpm lint"
+                    placeholder="lint@apps/cli=pnpm lint"
                   />
                   {stageError && <span className="text-2xs text-danger">{t("chat.loop.invalidStages")}</span>}
                 </label>

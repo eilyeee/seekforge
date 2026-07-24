@@ -284,11 +284,11 @@ const result = await runAutoLoop(deps, {
 
 ```bash
 seekforge loop "finish the parser" --verify "pnpm typecheck" \
-  --verify-stage tests="pnpm test" --flaky-retries 1 --stable-passes 2 \
+  --verify-stage tests@packages/core="pnpm test" --flaky-retries 1 --stable-passes 2 \
   --stuck-recoveries 1 --worktree --deliver checkpoint
 seekforge loop-history <loop-id> --after 0 --limit 100
 seekforge loop-recover
-seekforge loop-dag ./loop-dag.json --budget 2
+seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
 ```
 
 Desktop 面板提供验证流水线、稳定/抖动/卡住控制，以及只在安全边界生效的暂停、继续和引导。

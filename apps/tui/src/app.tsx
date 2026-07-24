@@ -780,6 +780,7 @@ export function App({
         flakyRetries?: number;
         maxNoProgressRecoveries?: number;
         rollbackOnRegression?: boolean;
+        priority?: number;
         requirementMode?: "quick" | "analyze" | "confirm";
       } = {},
     ) => {
@@ -817,6 +818,7 @@ export function App({
             ? { maxNoProgressRecoveries: options.maxNoProgressRecoveries }
             : {}),
           ...(options.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+          ...(options.priority !== undefined ? { priority: options.priority } : {}),
           ...(options.requirementMode !== undefined ? { requirementMode: options.requirementMode } : {}),
           control: loopControl,
           onEvent: (event) => {
@@ -1102,6 +1104,7 @@ export function App({
               ? { maxNoProgressRecoveries: command.maxNoProgressRecoveries }
               : {}),
             ...(command.rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+            ...(command.priority !== undefined ? { priority: command.priority } : {}),
             ...(command.requirementMode !== undefined ? { requirementMode: command.requirementMode } : {}),
           });
           break;

@@ -58,6 +58,13 @@ test("verificationPlanFromOptions validates and orders repeated stages", () => {
     { id: "verify", command: "pnpm typecheck" },
     { id: "tests", command: "pnpm test" },
   ]);
+  assert.deepEqual(
+    verificationPlanFromOptions({ verify: "test", verifyStages: ["cli@apps/cli,packages/core=pnpm test"] }),
+    [
+      { id: "verify", command: "test" },
+      { id: "cli", command: "pnpm test", paths: ["apps/cli", "packages/core"] },
+    ],
+  );
   assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["verify=again"] }), /duplicate/);
   assert.throws(() => verificationPlanFromOptions({ verify: "test", verifyStages: ["bad/id=test"] }), /Invalid/);
 });
@@ -232,7 +239,7 @@ test("formatLoopState includes management-relevant fields", () => {
   assert.match(text, /\$0\.2500 \/ \$2\.0000/);
   assert.match(text, /pnpm test/);
   assert.match(text, /requirements: quick/);
-  assert.match(text, /delivery: patch\/failed \(attempts 2\).*network unavailable/);
+  assert.match(text, /delivery: patch\/failed\/prepared \(attempts 2\).*network unavailable/);
 });
 
 test("requirement events expose analysis and acceptance progress", () => {
@@ -470,6 +477,7 @@ test("CLI persists failed delivery attempts and retries the prior mode", { timeo
     assert.deepEqual(loadLoopState(workspace, loopId)?.delivery, {
       mode: "checkpoint",
       status: "failed",
+      phase: "prepared",
       attempts: 1,
       updatedAt: loadLoopState(workspace, loopId)?.delivery?.updatedAt,
       error: "Loop delivery requires an isolated retained worktree",
@@ -558,9 +566,14 @@ test("CLI checkpoints a passed retained Loop and records the artifact", { timeou
     assert.deepEqual(loadLoopState(worktree.path, state.loopId)?.delivery, {
       mode: "checkpoint",
       status: "delivered",
+      phase: "finalized",
       attempts: 1,
       updatedAt: loadLoopState(worktree.path, state.loopId)?.delivery?.updatedAt,
       artifact: worktree.branch,
+      evidence: {
+        branch: worktree.branch,
+        revision: loadLoopState(worktree.path, state.loopId)?.delivery?.evidence?.revision,
+      },
     });
     assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: worktree.path, encoding: "utf8" }), "");
     const repeated = spawnSync(
@@ -577,6 +590,55 @@ test("CLI checkpoints a passed retained Loop and records the artifact", { timeou
     assert.equal(repeated.status, 0, `${repeated.stdout}${repeated.stderr}`);
     assert.match(repeated.stdout, /already complete/);
     assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.attempts, 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop merge delivery commits finalized state before merging once", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-merge-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const worktree = await createLoopWorktree(repo, "delivery-merge");
+    writeFileSync(resolve(worktree.path, "merged.txt"), "merged\n");
+    const state = createLoopState({
+      loopId: "merged-loop",
+      task: "merge delivery task",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, { ...state, status: "passed" });
+
+    await runLoopDelivery(worktree.path, state.loopId, "merge");
+
+    assert.equal(execFileSync("git", ["show", "HEAD:merged.txt"], { cwd: repo, encoding: "utf8" }), "merged\n");
+    const mergedState = JSON.parse(
+      execFileSync("git", ["show", `HEAD:.seekforge/loops/${state.loopId}.json`], { cwd: repo, encoding: "utf8" }),
+    ) as { delivery?: unknown };
+    assert.deepEqual(mergedState.delivery, {
+      mode: "merge",
+      status: "delivered",
+      phase: "finalized",
+      attempts: 1,
+      updatedAt: (mergedState.delivery as { updatedAt?: unknown }).updatedAt,
+      artifact: worktree.branch,
+      evidence: {
+        branch: worktree.branch,
+        revision: (mergedState.delivery as { evidence?: { revision?: unknown } }).evidence?.revision,
+      },
+    });
+    assert.equal(execFileSync("git", ["rev-list", "--count", "HEAD^1..HEAD"], { cwd: repo, encoding: "utf8" }), "3\n");
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
@@ -618,9 +680,10 @@ test("Loop delivery repairs a legacy delivered checkpoint before returning succe
     });
 
     const delivered = await runLoopDelivery(worktree.path, state.loopId, "checkpoint");
-    assert.match(delivered.message, /already complete/);
+    assert.match(delivered.message, /Committed Loop worktree/);
     assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: worktree.path, encoding: "utf8" }), "");
     assert.equal(execFileSync("git", ["show", "HEAD:result.txt"], { cwd: worktree.path, encoding: "utf8" }), "done\n");
+    assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.attempts, 2);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

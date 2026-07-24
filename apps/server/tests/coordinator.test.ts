@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { realpathSync } from "node:fs";
-import { acquireLoopLease, acquireSessionLease } from "@seekforge/core";
+import { acquireLoopLease, acquireSessionLease, acquireSessionLeaseWithPreemption } from "@seekforge/core";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalRepositoryKey, ServerCoordinator } from "../src/coordinator.js";
 import { makeWorkspace } from "./helpers.js";
@@ -18,6 +18,26 @@ describe("canonicalRepositoryKey", () => {
 });
 
 describe("ServerCoordinator idle mutation", () => {
+  it("aborts idle work and yields its guard to a foreground session", async () => {
+    const workspace = makeWorkspace();
+    const coordinator = new ServerCoordinator();
+    let markStarted = (): void => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const background = coordinator.tryWithIdleAgentMutation(workspace, undefined, async (_guard, signal) => {
+      markStarted();
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return "preempted";
+    });
+    await started;
+
+    const foreground = await acquireSessionLeaseWithPreemption(workspace, "foreground", { timeoutMs: 2_000 });
+    expect(await background).toEqual({ acquired: true, value: "preempted" });
+    foreground.release();
+    await coordinator.drain();
+  });
+
   it("skips queued repository work without waiting and succeeds after it drains", async () => {
     const workspace = makeWorkspace();
     const coordinator = new ServerCoordinator();

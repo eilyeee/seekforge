@@ -182,6 +182,7 @@ export type SlashCommand =
       flakyRetries?: number;
       maxNoProgressRecoveries?: number;
       rollbackOnRegression?: boolean;
+      priority?: number;
       requirementMode?: "quick" | "analyze" | "confirm";
       error?: string;
     }
@@ -282,6 +283,7 @@ function parseLoopFirstLine(
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  priority?: number;
   addedTokenBudget?: number;
   addedDurationMs?: number;
   addedVerifyRuns?: number;
@@ -302,6 +304,7 @@ function parseLoopFirstLine(
   let flakyRetries: number | undefined;
   let maxNoProgressRecoveries: number | undefined;
   let rollbackOnRegression = false;
+  let priority: number | undefined;
   let addedTokenBudget: number | undefined;
   let addedDurationMs: number | undefined;
   let addedVerifyRuns: number | undefined;
@@ -312,10 +315,10 @@ function parseLoopFirstLine(
   const budgetFlag = resume ? "--add-budget" : "--budget";
   const optionPattern = resume
     ? /^--(?:add-iterations|add-budget|add-tokens|add-duration|add-verifies|approve-requirements)(?:=|\s|$)/
-    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|stable-passes|flaky-retries|stuck-recoveries|rollback-regressions|requirements)(?:=|\s|$)/;
+    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|stable-passes|flaky-retries|stuck-recoveries|rollback-regressions|priority|requirements)(?:=|\s|$)/;
   const valuePattern = resume
     ? /^(--add-iterations|--add-budget|--add-tokens|--add-duration|--add-verifies)(?:=|\s+)(\S+)(?:\s+|$)/
-    : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--stable-passes|--flaky-retries|--stuck-recoveries|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
+    : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--stable-passes|--flaky-retries|--stuck-recoveries|--priority|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
   while (optionPattern.test(rest)) {
     if (!resume && /^--rollback-regressions(?:\s+|$)/.test(rest)) {
       if (rollbackOnRegression) return { error: "--rollback-regressions may only be specified once" };
@@ -371,6 +374,14 @@ function parseLoopFirstLine(
         return { error: '--requirements must be "quick", "analyze", or "confirm"' };
       }
       requirementMode = raw;
+    } else if (option === "--priority") {
+      if (priority !== undefined) return { error: "--priority may only be specified once" };
+      if (!/^-?[0-9]+$/.test(raw)) return { error: "--priority must be an integer from -10 to 10" };
+      const value = Number(raw);
+      if (!Number.isSafeInteger(value) || value < -10 || value > 10) {
+        return { error: "--priority must be an integer from -10 to 10" };
+      }
+      priority = value;
     } else {
       const secondsOption =
         option === "--max-duration" ||
@@ -428,6 +439,7 @@ function parseLoopFirstLine(
     ...(flakyRetries !== undefined ? { flakyRetries } : {}),
     ...(maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries } : {}),
     ...(rollbackOnRegression ? { rollbackOnRegression: true } : {}),
+    ...(priority !== undefined ? { priority } : {}),
     ...(addedTokenBudget !== undefined ? { addedTokenBudget } : {}),
     ...(addedDurationMs !== undefined ? { addedDurationMs } : {}),
     ...(addedVerifyRuns !== undefined ? { addedVerifyRuns } : {}),

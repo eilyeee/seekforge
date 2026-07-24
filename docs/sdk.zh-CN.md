@@ -108,12 +108,13 @@ const running = runAutoLoop(deps, {
   workspace,
   verifyCommand: "pnpm test",
   verificationPlan: [
-    { id: "types", command: "pnpm typecheck" },
+    { id: "types", command: "pnpm typecheck", paths: ["packages", "apps"] },
     { id: "tests", command: "pnpm test" },
   ],
   stablePasses: 2,
   flakyRetries: 1,
   maxNoProgressRecoveries: 1,
+  priority: 5,
   maxIterations: 8,
   costBudgetUsd: 1,
   tokenBudget: 100_000,
@@ -142,9 +143,11 @@ const result = await running;
 
 const graph = await runLoopDag(deps, {
   workspace: process.cwd(),
+  dagId: "release-graph",
+  resume: true,
   nodes: [
-    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test" },
-    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"] },
+    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
+    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"], maxRetries: 1 },
   ],
 });
 // result includes a persisted loopId.

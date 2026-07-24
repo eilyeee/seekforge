@@ -214,14 +214,19 @@ seekforge loop-show <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<guidance>"
+seekforge loop-priority <loop-id> <-10..10>
 seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
+seekforge loop-prune [--older-than-days N] [--keep-last N] [--worktrees] [--dry-run]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
 
 ### Loop v2 controls
 
-- Repeat `--verify-stage <id=command>` for an ordered verification pipeline.
+- Repeat `--verify-stage <id[@path,...]=command>` for an ordered verification
+  pipeline. Path-scoped stages are selected by changed relative path prefixes
+  during edit iterations. Any incremental pass is followed by a full pipeline
+  before success, so selection can reduce work but cannot weaken the final gate.
   Required stages stop the pipeline; Core API stages may set `required: false`.
 - `--flaky-retries 0..5` reruns a failed stage before editing and records a
   `verify.flaky` event when it later passes. `--stable-passes 1..5` requires
@@ -235,6 +240,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   embedders can call `autoResumeInterruptedLoops` to continue them. Existing
   `interrupted` records remain resumable so a transient recovery failure can be
   retried; a record whose Loop lease is still live is never offered for recovery.
+- Automatic recovery uses `--priority -10..10`/`loop-priority`, processes at
+  most three candidates per workspace tick, and isolates each failure with
+  exponential retry backoff (30 seconds to one hour). A foreground run requests
+  preemption of idle recovery and waits for its guard to yield.
 - `seekforge serve --loop-auto-resume` opts into lifecycle-owned background
   recovery. It reserves the physical repository queue, takes a cross-process
   idle guard, skips rather than waits when work is active, and keeps that guard
@@ -242,10 +251,16 @@ seekforge loop-cleanup <worktree-name> [--force]
   own Agent sessions. Workspaces are processed sequentially, ticks cannot
   overlap, and shutdown aborts the current recovery. A lifecycle abort is
   persisted as `interrupted`, not user `cancelled`, so the next server can
-  resume it. The scheduler is disabled by default.
-- `loop-dag <file>` runs a JSON dependency graph sequentially with shared
-  budgets. Core `runLoopDag` also supports bounded parallel batches when every
-  node resolves to a distinct physical workspace.
+  resume it. `--loop-auto-prune` uses the same idle guard to remove only old
+  terminal records; resumable states and unfinished delivery transactions are
+  retained. Both schedulers are disabled by default. `loop-prune` exposes the
+  same retention rules and can optionally remove clean, finalized-merge Loop
+  worktrees.
+- `loop-dag <file>` durably checkpoints a JSON dependency graph. `--resume` and
+  `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
+  remaining cost/token budgets and support priorities, bounded retries, and
+  `skip_dependents`/`continue`/`stop` failure policies. Parallel batches require
+  distinct physical workspaces.
 - `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
   from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
   pull request through `gh`. Delivery records its mode, status, attempt count,
@@ -253,9 +268,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   passed, retry it without rerunning the agent via `loop-deliver <id>`; the prior
   mode is reused unless this is the first attempt. Run, delivery, and deletion
   share one lifecycle lease, so resume cannot enter while delivery is acting.
-  `delivered` is persisted only after the primary side effect succeeds; final
-  state publication is idempotent, and retries repair legacy premature-success
-  records before returning success.
+  Delivery persists `prepared → action_completed → finalized` with branch,
+  revision, patch hash, or PR URL evidence. The primary side effect and final
+  publication are independently retryable; retries validate evidence and repair
+  legacy premature-success records before returning success.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can
