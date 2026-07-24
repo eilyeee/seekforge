@@ -165,6 +165,8 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
 错误详情的 `agent_error`。
 `autoResumeInterruptedLoops` 会恢复租约 owner 已消失的持久化 `running` 或 `paused` 记录。最终成功时
 只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
+通过后的交付入口会持久化严格的 `LoopState.delivery` 记录，包括 `mode`、`status`、
+`attempts`、`updatedAt`，并在交付终态中只保存 `artifact` 或 `error` 之一。
 
 ## 扩展点
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### round 59: retryable Loop delivery
+- Added a strict persisted delivery lifecycle for passed Loops, including mode,
+  status, attempt count, bounded errors, and final branch/path/PR artifacts.
+- Added `loop-deliver` to retry a failed retained-worktree delivery without
+  rerunning the agent or verifier, while preserving the original delivery mode.
+- Serialized delivery with the Loop lifecycle lease so deletion and duplicate
+  delivery cannot race external Git/PR side effects, and kept successful
+  checkpoint worktrees clean after recording final delivery state.
+
 ### round 58: cross-process Loop controls
 - Added `loop-pause`, `loop-continue`, and `loop-steer` CLI commands for safely
   controlling a Loop owned by another live SeekForge process.

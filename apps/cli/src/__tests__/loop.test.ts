@@ -10,7 +10,15 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLoopState, readLoopControlEntries, type LoopEvent, type LoopResult } from "@seekforge/core";
+import {
+  acquireLoopDeliveryLease,
+  createLoopState,
+  loadLoopState,
+  readLoopControlEntries,
+  saveLoopState,
+  type LoopEvent,
+  type LoopResult,
+} from "@seekforge/core";
 import {
   coreResumeAutoLoop,
   formatLoopEvent,
@@ -18,6 +26,7 @@ import {
   formatSummary,
   loopExitCode,
   outputTail,
+  runLoopDelivery,
   resumeExtensionOptions,
   verificationPlanFromOptions,
 } from "../commands/loop.js";
@@ -207,7 +216,14 @@ test("formatLoopState includes management-relevant fields", () => {
     costUsd: 0.25,
     sessionId: "session-1",
     lastVerify: null,
-    status: "exhausted",
+    status: "passed",
+    delivery: {
+      mode: "patch",
+      status: "failed",
+      attempts: 2,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      error: "network unavailable",
+    },
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-02T00:00:00.000Z",
   });
@@ -216,6 +232,7 @@ test("formatLoopState includes management-relevant fields", () => {
   assert.match(text, /\$0\.2500 \/ \$2\.0000/);
   assert.match(text, /pnpm test/);
   assert.match(text, /requirements: quick/);
+  assert.match(text, /delivery: patch\/failed \(attempts 2\).*network unavailable/);
 });
 
 test("requirement events expose analysis and acceptance progress", () => {
@@ -411,6 +428,157 @@ test("CLI queues a control for a Loop owned by another live process", { timeout:
     });
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI persists failed delivery attempts and retries the prior mode", { timeout: 120_000 }, () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-cli-"));
+  const loopId = "delivery-loop";
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const state = createLoopState({
+      loopId,
+      task: "deliver task",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...state, status: "passed" });
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const cli = resolve(cliDir, "src/index.ts");
+    const loader = resolve(cliDir, "node_modules/tsx/dist/loader.mjs");
+    const first = spawnSync(
+      process.execPath,
+      ["--import", loader, cli, "loop-deliver", loopId, "--mode", "checkpoint"],
+      {
+        cwd: workspace,
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(first.status, 0);
+    assert.match(`${first.stdout}${first.stderr}`, /isolated retained worktree/);
+    assert.deepEqual(loadLoopState(workspace, loopId)?.delivery, {
+      mode: "checkpoint",
+      status: "failed",
+      attempts: 1,
+      updatedAt: loadLoopState(workspace, loopId)?.delivery?.updatedAt,
+      error: "Loop delivery requires an isolated retained worktree",
+    });
+
+    const changedMode = spawnSync(
+      process.execPath,
+      ["--import", loader, cli, "loop-deliver", loopId, "--mode", "patch"],
+      { cwd: workspace, encoding: "utf8" },
+    );
+    assert.notEqual(changedMode.status, 0);
+    assert.match(`${changedMode.stdout}${changedMode.stderr}`, /mode is already checkpoint/);
+    assert.equal(loadLoopState(workspace, loopId)?.delivery?.attempts, 1);
+
+    const retry = spawnSync(process.execPath, ["--import", loader, cli, "loop-deliver", loopId], {
+      cwd: workspace,
+      encoding: "utf8",
+    });
+    assert.notEqual(retry.status, 0);
+    assert.equal(loadLoopState(workspace, loopId)?.delivery?.attempts, 2);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Loop delivery rejects a concurrent delivery lease", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-lock-"));
+  const loopId = "delivery-lock";
+  const lease = acquireLoopDeliveryLease(workspace, loopId);
+  try {
+    const state = createLoopState({
+      loopId,
+      task: "deliver task",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...state, status: "passed" });
+    await assert.rejects(runLoopDelivery(workspace, loopId, "checkpoint"), /delivery is already active/);
+  } finally {
+    lease.release();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI checkpoints a passed retained Loop and records the artifact", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-success-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const worktree = await createLoopWorktree(repo, "delivery-success");
+    writeFileSync(resolve(worktree.path, "result.txt"), "done\n");
+    const state = createLoopState({
+      loopId: "delivered-loop",
+      task: "deliver task",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, { ...state, status: "passed" });
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-deliver",
+        state.loopId,
+        "--mode",
+        "checkpoint",
+      ],
+      { cwd: repo, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Committed Loop worktree/);
+    assert.deepEqual(loadLoopState(worktree.path, state.loopId)?.delivery, {
+      mode: "checkpoint",
+      status: "delivered",
+      attempts: 1,
+      updatedAt: loadLoopState(worktree.path, state.loopId)?.delivery?.updatedAt,
+      artifact: worktree.branch,
+    });
+    assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: worktree.path, encoding: "utf8" }), "");
+    const repeated = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-deliver",
+        state.loopId,
+      ],
+      { cwd: repo, encoding: "utf8" },
+    );
+    assert.equal(repeated.status, 0, `${repeated.stdout}${repeated.stderr}`);
+    assert.match(repeated.stdout, /already complete/);
+    assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.attempts, 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
   }
 });
 

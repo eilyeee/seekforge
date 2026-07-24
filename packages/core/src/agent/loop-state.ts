@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentError } from "@seekforge/shared";
 import {
   appendFileSync,
@@ -43,9 +43,20 @@ import {
   type LoopRequirementMode,
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
+import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
 
 export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
+export type LoopDeliveryMode = "checkpoint" | "merge" | "patch" | "pr";
+export type LoopDeliveryStatus = "running" | "delivered" | "failed";
+export type LoopDeliveryState = {
+  mode: LoopDeliveryMode;
+  status: LoopDeliveryStatus;
+  attempts: number;
+  updatedAt: string;
+  artifact?: string;
+  error?: string;
+};
 export type LoopState = {
   schemaVersion?: 2;
   loopId: string;
@@ -61,6 +72,7 @@ export type LoopState = {
   recoveryAttempts?: number;
   controlSeq?: number;
   controlRunId?: string;
+  delivery?: LoopDeliveryState;
   stageResults?: LoopStageResult[];
   snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
@@ -110,6 +122,9 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
 };
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const LOOP_DELIVERY_MODES = new Set<LoopDeliveryMode>(["checkpoint", "merge", "patch", "pr"]);
+const LOOP_DELIVERY_STATUSES = new Set<LoopDeliveryStatus>(["running", "delivered", "failed"]);
+const MAX_LOOP_DELIVERY_DETAIL_LENGTH = 8_192;
 const LOOP_STATUSES = new Set<PersistedLoopStatus>([
   "running",
   "paused",
@@ -206,6 +221,39 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
     });
   }
   return result;
+}
+
+function parseDelivery(value: unknown): LoopDeliveryState | null {
+  if (
+    !isRecord(value) ||
+    typeof value.mode !== "string" ||
+    !LOOP_DELIVERY_MODES.has(value.mode as LoopDeliveryMode) ||
+    typeof value.status !== "string" ||
+    !LOOP_DELIVERY_STATUSES.has(value.status as LoopDeliveryStatus) ||
+    !isSafeInteger(value.attempts) ||
+    value.attempts <= 0 ||
+    !isIsoDate(value.updatedAt) ||
+    (value.artifact !== undefined &&
+      (typeof value.artifact !== "string" ||
+        value.artifact.trim() === "" ||
+        value.artifact.length > MAX_LOOP_DELIVERY_DETAIL_LENGTH)) ||
+    (value.error !== undefined &&
+      (typeof value.error !== "string" ||
+        value.error.trim() === "" ||
+        value.error.length > MAX_LOOP_DELIVERY_DETAIL_LENGTH)) ||
+    (value.status === "running" && (value.artifact !== undefined || value.error !== undefined)) ||
+    (value.status === "delivered" && (value.artifact === undefined || value.error !== undefined)) ||
+    (value.status === "failed" && (value.error === undefined || value.artifact !== undefined))
+  )
+    return null;
+  return {
+    mode: value.mode as LoopDeliveryMode,
+    status: value.status as LoopDeliveryStatus,
+    attempts: value.attempts,
+    updatedAt: value.updatedAt,
+    ...(typeof value.artifact === "string" ? { artifact: value.artifact } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
 }
 
 export function isValidLoopId(loopId: string): boolean {
@@ -412,6 +460,21 @@ const activeLeases = new Set<string>();
 export type LoopLease = { release: () => void };
 
 const leaseKey = (workspace: string, loopId: string): string => `${requireWorkspace(workspace)}\0${loopId}`;
+
+function deliveryLeaseId(loopId: string): string {
+  if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
+  return `loop-delivery-${createHash("sha256").update(loopId).digest("hex").slice(0, 32)}`;
+}
+
+/** Cross-process lease for post-pass delivery; stored outside the Git worktree. */
+export function acquireLoopDeliveryLease(workspace: string, loopId: string): LoopLease {
+  return acquireSessionLease(workspace, deliveryLeaseId(loopId));
+}
+
+/** Returns whether post-pass delivery currently owns this Loop. */
+export function isLoopDeliveryActive(workspace: string, loopId: string): boolean {
+  return isSessionRunActive(workspace, deliveryLeaseId(loopId));
+}
 
 function leaseFile(workspace: string, loopId: string): string {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
@@ -682,6 +745,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const recoveryAttempts = value.recoveryAttempts === undefined ? 0 : value.recoveryAttempts;
   const controlSeq = value.controlSeq === undefined ? 0 : value.controlSeq;
   const controlRunId = value.controlRunId === undefined ? "" : value.controlRunId;
+  const delivery = value.delivery === undefined ? undefined : parseDelivery(value.delivery);
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
@@ -713,6 +777,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     controlSeq < 0 ||
     typeof controlRunId !== "string" ||
     (controlRunId !== "" && !isValidLoopId(controlRunId)) ||
+    (value.delivery !== undefined && delivery === null) ||
+    (delivery !== undefined && value.status !== "passed") ||
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
@@ -793,6 +859,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     recoveryAttempts: recoveryAttempts as number,
     controlSeq: controlSeq as number,
     controlRunId,
+    ...(delivery ? { delivery } : {}),
     stageResults: stageResults as LoopStageResult[],
     snapshots: snapshots as LoopIterationSnapshot[],
     rollbackOnRegression,
@@ -927,7 +994,7 @@ export function listLoopStates(workspace: string): LoopState[] {
     return [];
   }
   return names
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => name.endsWith(".json") && isValidLoopId(name.slice(0, -5)))
     .map((name) => loadLoopState(workspace, name.slice(0, -5)))
     .filter((state): state is LoopState => state !== null)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -947,21 +1014,40 @@ export function recoverInterruptedLoops(workspace: string): LoopState[] {
 }
 
 export function removeLoopState(workspace: string, loopId: string): boolean {
-  if (isLoopLeaseActive(workspace, loopId)) {
-    throw new Error(`Cannot remove running loop: ${loopId}`);
-  }
+  let deliveryLease: LoopLease;
   try {
-    rmSync(loopFile(workspace, loopId));
+    deliveryLease = acquireLoopDeliveryLease(workspace, loopId);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (isLoopDeliveryActive(workspace, loopId)) throw new Error(`Cannot remove active delivery: ${loopId}`);
     throw error;
   }
-  rmSync(loopLogFile(workspace, loopId), { force: true });
-  rmSync(resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.control.json`)), {
-    force: true,
-  });
-  for (let segment = 1; segment < MAX_LOOP_LOG_SEGMENTS; segment++) {
-    rmSync(`${loopLogFile(workspace, loopId)}.${segment}`, { force: true });
+  try {
+    let loopLease: LoopLease;
+    try {
+      loopLease = acquireLoopLease(workspace, loopId, true);
+    } catch (error) {
+      if (isLoopLeaseActive(workspace, loopId)) throw new Error(`Cannot remove running loop: ${loopId}`);
+      throw error;
+    }
+    try {
+      try {
+        rmSync(loopFile(workspace, loopId));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      }
+      rmSync(loopLogFile(workspace, loopId), { force: true });
+      rmSync(resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.control.json`)), {
+        force: true,
+      });
+      for (let segment = 1; segment < MAX_LOOP_LOG_SEGMENTS; segment++) {
+        rmSync(`${loopLogFile(workspace, loopId)}.${segment}`, { force: true });
+      }
+      return true;
+    } finally {
+      loopLease.release();
+    }
+  } finally {
+    deliveryLease.release();
   }
-  return true;
 }

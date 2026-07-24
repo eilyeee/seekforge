@@ -243,6 +243,7 @@ Management commands:
 seekforge loop-list                    # list all persisted loops
 seekforge loop-show <loop-id>          # inspect one loop's state
 seekforge loop-delete <loop-id>        # delete persisted state
+seekforge loop-deliver <loop-id>       # retry its persisted delivery mode
 seekforge loop-cleanup <name> [--force] # remove a worktree
 ```
 
@@ -373,6 +374,9 @@ The Desktop panel exposes the verification pipeline, stability/flaky/stuck
 controls, and safe-boundary Pause/Continue/Steer actions. Rollback and delivery
 require a retained Loop worktree. For draft-PR delivery, use `--deliver pr` with
 an authenticated `gh` installation.
+If verification passes but delivery fails, the Loop remains `passed` and records
+the failed attempt. Fix the external problem, then run `loop-deliver <loop-id>`;
+use `--mode` only for the first delivery request.
 
 ## 12. Practical advice and FAQ
 

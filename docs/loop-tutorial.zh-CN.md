@@ -186,6 +186,7 @@ seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--ad
 seekforge loop-list                    # 列出所有持久化的循环
 seekforge loop-show <loop-id>          # 看单个循环的状态
 seekforge loop-delete <loop-id>        # 删除持久化状态
+seekforge loop-deliver <loop-id>       # 按已持久化的模式重试交付
 seekforge loop-cleanup <name> [--force] # 清理 worktree
 ```
 
@@ -293,6 +294,8 @@ seekforge loop-dag ./loop-dag.json --budget 2
 Desktop 面板提供验证流水线、稳定/抖动/卡住控制，以及只在安全边界生效的暂停、继续和引导。
 回滚与交付要求保留的 Loop worktree。要交付草稿 PR，请使用 `--deliver pr`，并确保 `gh`
 已完成认证。
+如果验证已经通过但交付失败，Loop 会保持 `passed` 并记录失败尝试。修复外部问题后运行
+`loop-deliver <loop-id>` 即可；只有第一次发起交付时才需要 `--mode`。
 
 ## 12. 实践建议与 FAQ
 

@@ -17,6 +17,7 @@ import {
   loopControlCommand,
   loopCommand,
   loopDeleteCommand,
+  loopDeliverCommand,
   loopDagCommand,
   loopListCommand,
   loopHistoryCommand,
@@ -621,6 +622,12 @@ program
   .argument("<message>")
   .description("queue guidance for an active Loop at its next safe boundary")
   .action((loopId: string, message: string) => loopControlCommand(loopId, { operation: "steer", message }));
+program
+  .command("loop-deliver")
+  .argument("<loop-id>")
+  .option("--mode <mode>", "checkpoint | merge | patch | pr", parseLoopDelivery)
+  .description("deliver or retry delivery for a passed Loop")
+  .action((loopId: string, opts: { mode?: ReturnType<typeof parseLoopDelivery> }) => loopDeliverCommand(loopId, opts));
 program
   .command("loop-delete")
   .argument("<loop-id>")

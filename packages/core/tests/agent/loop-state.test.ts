@@ -14,10 +14,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  acquireLoopDeliveryLease,
   acquireLoopLease,
   createLoopState,
   hasActiveLoopLease,
   isLoopLeaseActive,
+  isLoopDeliveryActive,
   listLoopStates,
   loadLoopState,
   removeLoopState,
@@ -116,9 +118,49 @@ describe("loop state persistence", () => {
       updatedAt: new Date(Date.now() + 1_000).toISOString(),
     };
     saveLoopState(workspace, updated);
+    writeFileSync(join(workspace, ".seekforge", "loops", `${created.loopId}.control.json`), '{"version":1}\n');
+    writeFileSync(join(workspace, ".seekforge", "loops", "invalid.id.json"), "{}\n");
     expect(listLoopStates(workspace)).toEqual([updated]);
     expect(removeLoopState(workspace, created.loopId)).toBe(true);
     expect(removeLoopState(workspace, created.loopId)).toBe(false);
+  });
+
+  it("persists a strict delivery lifecycle only for passed loops", () => {
+    const state = createLoopState({
+      loopId: "delivery-state",
+      task: "ship it",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    const now = new Date().toISOString();
+    const passed = {
+      ...state,
+      status: "passed" as const,
+      delivery: {
+        mode: "patch" as const,
+        status: "failed" as const,
+        attempts: 2,
+        updatedAt: now,
+        error: "network unavailable",
+      },
+    };
+    saveLoopState(workspace, passed);
+    expect(loadLoopState(workspace, state.loopId)?.delivery).toEqual(passed.delivery);
+    expect(() =>
+      saveLoopState(workspace, {
+        ...state,
+        delivery: { mode: "patch", status: "running", attempts: 1, updatedAt: now },
+      }),
+    ).toThrow(/Invalid loop state/);
+    writeFileSync(
+      join(workspace, ".seekforge", "loops", `${state.loopId}.json`),
+      JSON.stringify({
+        ...passed,
+        delivery: { mode: "patch", status: "delivered", attempts: 2, updatedAt: now, error: "forged" },
+      }),
+    );
+    expect(loadLoopState(workspace, state.loopId)).toBeNull();
   });
 
   it("sorts offset timestamps by instant instead of source text", () => {
@@ -224,6 +266,26 @@ describe("loop state persistence", () => {
     lease.release();
     expect(isLoopLeaseActive(workspace, state.loopId)).toBe(false);
     expect(hasActiveLoopLease(workspace)).toBe(false);
+    expect(removeLoopState(workspace, state.loopId)).toBe(true);
+  });
+
+  it("keeps delivery leases outside Git state and blocks deletion", () => {
+    const state = createLoopState({
+      loopId: "active-delivery",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    const lease = acquireLoopDeliveryLease(workspace, state.loopId);
+    try {
+      expect(isLoopDeliveryActive(workspace, state.loopId)).toBe(true);
+      expect(readdirSync(join(workspace, ".seekforge", "loops"))).toEqual([`${state.loopId}.json`]);
+      expect(() => removeLoopState(workspace, state.loopId)).toThrow(/delivery/);
+    } finally {
+      lease.release();
+    }
+    expect(isLoopDeliveryActive(workspace, state.loopId)).toBe(false);
     expect(removeLoopState(workspace, state.loopId)).toBe(true);
   });
 

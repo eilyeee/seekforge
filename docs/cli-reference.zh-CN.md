@@ -179,7 +179,9 @@
 `--add-verifies` 追加额度，并恢复 worker/reviewer 会话、冻结需求与累计资源用量。
 对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流，并可用 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 在安全边界控制运行。
 
-`seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；`loop-history`
+`seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；
+`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]` 可从保留 worktree
+重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
 回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-dag <file>`
 以共享预算执行 JSON 依赖图。TUI 与 Desktop/WebSocket Loop 还支持在安全边界暂停、继续和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的

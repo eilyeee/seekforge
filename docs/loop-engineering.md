@@ -214,6 +214,7 @@ seekforge loop-show <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<guidance>"
+seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
@@ -237,7 +238,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   node resolves to a distinct physical workspace.
 - `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
   from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
-  pull request through `gh`.
+  pull request through `gh`. Delivery records its mode, status, attempt count,
+  error, and final artifact in Loop state. If delivery fails after verification
+  passed, retry it without rerunning the agent via `loop-deliver <id>`; the prior
+  mode is reused unless this is the first attempt. Delivery holds the Loop lease,
+  so deletion and duplicate delivery cannot race it.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

@@ -108,10 +108,13 @@ export {
 } from "./loop-requirements.js";
 export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 export {
+  acquireLoopDeliveryLease,
+  acquireLoopLease,
   appendLoopLog,
   createLoopState,
   hasActiveLoopLease,
   isLoopLeaseActive,
+  isLoopDeliveryActive,
   isValidLoopId,
   listLoopStates,
   loadLoopState,
@@ -121,7 +124,11 @@ export {
   saveLoopState,
   type CreateLoopStateInput,
   type LoopState,
+  type LoopDeliveryMode,
+  type LoopDeliveryState,
+  type LoopDeliveryStatus,
   type LoopHistoryEntry,
+  type LoopLease,
   type LoopVerifyResult,
   type PersistedLoopStatus,
 } from "./loop-state.js";

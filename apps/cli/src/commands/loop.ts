@@ -1,10 +1,12 @@
 import {
+  acquireLoopDeliveryLease,
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
   checkpointWorktree,
   createWorktreePatch,
   enqueueLoopControl,
   isLoopLeaseActive,
+  isLoopDeliveryActive,
   listGitWorktrees,
   mergeWorktree,
   listLoopStates,
@@ -17,8 +19,10 @@ import {
   resumeAutoLoop,
   runAutoLoop,
   runLoopDag,
+  saveLoopState,
   type LoopDagNode,
   type LoopEvent,
+  type LoopDeliveryMode,
   type LoopResult,
   type LoopRequirementMode,
 } from "@seekforge/core";
@@ -57,7 +61,7 @@ export type LoopOptions = {
   flakyRetries?: number;
   noProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
-  deliver?: "checkpoint" | "merge" | "patch" | "pr";
+  deliver?: LoopDeliveryMode;
   /** Run autonomously (acceptEdits). The loop is autonomous regardless. */
   yes?: boolean;
   /** Override model. */
@@ -327,6 +331,7 @@ export function formatLoopState(state: ReturnType<typeof listLoopStates>[number]
     `workspace: ${state.workspace}`,
     `verify: ${state.verifyCommand}`,
     `requirements: ${state.requirementMode ?? "quick"}${state.requirements ? ` (${state.requirements.requirements.length} requirements, ${state.acceptanceReview?.complete ? "accepted" : "pending acceptance"})` : ""}`,
+    `delivery: ${state.delivery ? `${state.delivery.mode}/${state.delivery.status} (attempts ${state.delivery.attempts})${state.delivery.artifact ? ` · ${state.delivery.artifact}` : ""}${state.delivery.error ? ` · ${state.delivery.error}` : ""}` : "none"}`,
   ].join("\n");
 }
 
@@ -420,6 +425,21 @@ export async function loopControlCommand(
         ? `Queued guidance for Loop: ${loopId}`
         : `Queued ${command.operation} for Loop: ${loopId}`,
     );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopDeliverCommand(loopId: string, opts: { mode?: LoopDeliveryMode }): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : null;
+    if (!workspace || !state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    const mode = opts.mode ?? state.delivery?.mode;
+    if (!mode) throw new Error("--mode is required when the Loop has no prior delivery attempt");
+    const delivered = await runLoopDelivery(workspace, loopId, mode);
+    console.log(delivered.message);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -699,7 +719,8 @@ async function runPreparedLoop(
     // rather than treating it like an exhausted/failed loop.
     const exitCode = loopExitCode(result.status);
     if (result.status === "passed" && (opts as LoopOptions).deliver) {
-      await deliverLoop(projectPath, result.loopId ?? "loop", (opts as LoopOptions).deliver!);
+      const delivered = await runLoopDelivery(projectPath, result.loopId ?? "loop", (opts as LoopOptions).deliver!);
+      console.log(delivered.message);
     }
     if (exitCode !== undefined) process.exitCode = exitCode;
   } catch (err) {
@@ -712,11 +733,110 @@ async function runPreparedLoop(
   }
 }
 
+type LoopDeliveryResult = { artifact: string; message: string; branch?: string };
+
+export async function runLoopDelivery(
+  projectPath: string,
+  loopId: string,
+  mode: LoopDeliveryMode,
+): Promise<LoopDeliveryResult> {
+  let lease: ReturnType<typeof acquireLoopDeliveryLease>;
+  try {
+    lease = acquireLoopDeliveryLease(projectPath, loopId);
+  } catch (error) {
+    if (isLoopDeliveryActive(projectPath, loopId)) {
+      throw new Error(`Loop is still running or delivery is already active: ${loopId}`, { cause: error });
+    }
+    throw error;
+  }
+  try {
+    if (isLoopLeaseActive(projectPath, loopId)) {
+      throw new Error(`Loop is still finalizing and cannot be delivered yet: ${loopId}`);
+    }
+    const state = loadLoopState(projectPath, loopId);
+    if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    if (state.status !== "passed") throw new Error(`Loop delivery requires passed status, found: ${state.status}`);
+    if (state.delivery?.mode !== undefined && state.delivery.mode !== mode) {
+      throw new Error(`Loop delivery mode is already ${state.delivery.mode}; retry with that mode`);
+    }
+    if (state.delivery?.status === "delivered" && state.delivery.artifact) {
+      return {
+        artifact: state.delivery.artifact,
+        message: `Loop delivery already complete: ${state.delivery.artifact}`,
+      };
+    }
+    const attempts = (state.delivery?.attempts ?? 0) + 1;
+    const startedAt = new Date().toISOString();
+    saveLoopState(projectPath, {
+      ...state,
+      delivery: { mode, status: "running", attempts, updatedAt: startedAt },
+      updatedAt: startedAt,
+    });
+    const persistFailure = (error: unknown): Error => {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 8_192) || "delivery failed";
+      const failedAt = new Date().toISOString();
+      const current = loadLoopState(projectPath, loopId) ?? state;
+      try {
+        saveLoopState(projectPath, {
+          ...current,
+          delivery: { mode, status: "failed", attempts, updatedAt: failedAt, error: message },
+          updatedAt: failedAt,
+        });
+      } catch (persistenceError) {
+        return new Error(
+          `${message}; could not persist delivery failure: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`,
+        );
+      }
+      return error instanceof Error ? error : new Error(message);
+    };
+    let deliveryPersisted = false;
+    const persistDelivered = (artifact: string): void => {
+      const completedAt = new Date().toISOString();
+      const current = loadLoopState(projectPath, loopId) ?? state;
+      saveLoopState(projectPath, {
+        ...current,
+        delivery: {
+          mode,
+          status: "delivered",
+          attempts,
+          updatedAt: completedAt,
+          artifact: artifact.slice(0, 8_192),
+        },
+        updatedAt: completedAt,
+      });
+      deliveryPersisted = true;
+    };
+    let delivered: LoopDeliveryResult;
+    try {
+      delivered = await deliverLoop(projectPath, loopId, mode, persistDelivered);
+    } catch (error) {
+      throw persistFailure(error);
+    }
+    if (!deliveryPersisted) persistDelivered(delivered.artifact);
+    if (mode === "pr" && delivered.branch) {
+      try {
+        await checkpointWorktree(projectPath, `chore: record ${loopId} delivery`);
+        const pushed = spawnSync("git", ["push", "origin", delivered.branch], {
+          cwd: projectPath,
+          encoding: "utf8",
+        });
+        if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish final delivery state");
+      } catch (error) {
+        throw persistFailure(error);
+      }
+    }
+    return delivered;
+  } finally {
+    lease.release();
+  }
+}
+
 async function deliverLoop(
   projectPath: string,
   loopId: string,
-  mode: "checkpoint" | "merge" | "patch" | "pr",
-): Promise<void> {
+  mode: LoopDeliveryMode,
+  beforeAction: (artifact: string) => void,
+): Promise<LoopDeliveryResult> {
   const repository = await resolveLoopRepository(projectPath);
   const workspace = resolve(projectPath);
   if (workspace === resolve(repository.basePath))
@@ -727,17 +847,18 @@ async function deliverLoop(
   if (!entry?.branch.startsWith("seekforge/loop-"))
     throw new Error("Current workspace is not a retained Loop worktree");
   if (mode === "checkpoint") {
+    beforeAction(entry.branch);
     const committed = await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
-    console.log(
-      committed ? `Committed Loop worktree: ${entry.branch}` : `Loop worktree already clean: ${entry.branch}`,
-    );
-    return;
+    return {
+      artifact: entry.branch,
+      message: committed ? `Committed Loop worktree: ${entry.branch}` : `Loop worktree already clean: ${entry.branch}`,
+    };
   }
   if (mode === "merge") {
+    beforeAction(entry.branch);
     const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
     if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
-    console.log(`Merged Loop worktree branch: ${entry.branch}`);
-    return;
+    return { artifact: entry.branch, message: `Merged Loop worktree branch: ${entry.branch}` };
   }
   if (mode === "pr") {
     await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
@@ -749,6 +870,21 @@ async function deliverLoop(
       throw new Error(base.stderr.trim() || "Could not resolve base branch");
     const pushed = spawnSync("git", ["push", "-u", "origin", entry.branch], { cwd: workspace, encoding: "utf8" });
     if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not push Loop worktree branch");
+    const existing = spawnSync("gh", ["pr", "view", entry.branch, "--json", "url", "--jq", ".url"], {
+      cwd: workspace,
+      encoding: "utf8",
+    });
+    if (existing.error && (existing.error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("GitHub CLI (gh) is required");
+    }
+    const existingUrl = existing.status === 0 ? existing.stdout.trim() : "";
+    if (existingUrl) {
+      return {
+        artifact: existingUrl,
+        branch: entry.branch,
+        message: `Using existing pull request: ${existingUrl}`,
+      };
+    }
     const pr = spawnSync(
       "gh",
       [
@@ -769,16 +905,18 @@ async function deliverLoop(
     if (pr.error && (pr.error as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error("GitHub CLI (gh) is required");
     if (pr.status !== 0) throw new Error(pr.stderr.trim() || "Could not create draft pull request");
-    console.log(`Created draft pull request: ${pr.stdout.trim()}`);
-    return;
+    const url = pr.stdout.trim();
+    if (!url) throw new Error("GitHub CLI did not return a pull request URL");
+    return { artifact: url, branch: entry.branch, message: `Created draft pull request: ${url}` };
   }
+  const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
+  beforeAction(target);
   await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
   const patch = await createWorktreePatch(repository.basePath, entry.branch);
   if (!patch) throw new Error("Loop worktree has no changes to deliver");
-  const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, patch, { encoding: "utf8", mode: 0o600 });
-  console.log(`Wrote Loop patch: ${target}`);
+  return { artifact: target, message: `Wrote Loop patch: ${target}` };
 }
 
 async function loopWorkspaces(): Promise<string[]> {

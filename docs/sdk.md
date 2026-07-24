@@ -186,6 +186,9 @@ reported through bounded `loop.warning` events without masking verification.
 `autoResumeInterruptedLoops` recovers durable `running` or `paused` records whose lease owner
 disappeared. Final success extracts memory once and settles selected-skill
 effectiveness once for the whole Loop.
+Post-pass delivery surfaces persist a strict `LoopState.delivery` record with
+`mode`, `status`, `attempts`, `updatedAt`, and exactly one of `artifact` or
+`error` for terminal delivery states.
 
 ## Extension points
 

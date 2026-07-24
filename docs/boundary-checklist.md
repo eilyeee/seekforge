@@ -2111,6 +2111,28 @@ by a later resume and affect a different run.
   for accurate caller feedback.
 - **Caught:** cross-process Loop controls could otherwise leak across a completion/resume race.
 
+## 169. Terminal side effects still belong to the entity lifecycle
+
+A job reaching `passed` does not make its post-pass delivery atomic. A concurrent
+delete or second delivery can remove its state or duplicate irreversible Git/PR
+operations while the first delivery is still active.
+
+- **Do:** hold the same entity lease across state transitions and the complete
+  external side effect, and persist failed attempts for explicit retry.
+- **Caught:** Loop delivery originally ran after releasing the Loop lease and had
+  no durable failure state.
+
+## 170. Directory suffixes do not identify one record kind
+
+A directory can contain state snapshots, mailboxes, logs, and temporary files
+whose names share a broad suffix. Passing every `*.json` basename into a strict id
+parser lets an adjacent record type break listing and recovery.
+
+- **Do:** filter directory entries by the exact id/filename grammar for the record
+  being enumerated before calling its reader.
+- **Caught:** Loop state listing treated `<id>.control.json` as a state id containing
+  a dot and threw instead of listing Loops.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -193,6 +193,7 @@ seekforge loop-show <loop-id>
 seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<引导>"
+seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
@@ -212,7 +213,9 @@ seekforge loop-cleanup <worktree-name> [--force]
 - `loop-dag <file>` 以共享预算顺序执行 JSON 依赖图。Core `runLoopDag` 还支持有界并行，
   但每个节点必须解析到不同的物理工作区。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
-  Loop 分支，并通过 `gh` 创建草稿 PR。
+  Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
+  Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
+  除首次尝试外会复用原模式。交付全程持有 Loop 租约，因此删除和重复交付不会与它竞态。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

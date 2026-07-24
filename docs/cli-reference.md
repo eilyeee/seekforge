@@ -204,6 +204,9 @@ the interactive TUI exposes the same workflow through `/loop`, with
 runtime control.
 
 `seekforge loop-list`, `loop-show`, and `loop-delete` manage persisted records.
+`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]` retries a
+failed post-pass delivery from the retained worktree without rerunning the Loop;
+`loop-show` exposes its durable status, attempt count, error, and artifact.
 `loop-history` replays durable events, `loop-recover` marks orphaned owners as
 `interrupted`, and `loop-dag <file>` executes a JSON dependency graph with shared
 budgets. The TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
