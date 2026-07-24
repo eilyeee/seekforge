@@ -2100,6 +2100,17 @@ an acceptance criterion lets an evaluator cite any unrelated file.
   range inside a bounded, non-symlink regular file.
 - **Caught:** Loop acceptance accepted an unanchored existing path as sufficient evidence.
 
+## 168. Durable controls must target a lifecycle generation
+
+A command can pass an "active" check just as its owner finishes. If the durable
+mailbox identifies only the logical job, that late pause or guidance can be replayed
+by a later resume and affect a different run.
+
+- **Do:** assign each live ownership period a persisted generation id, bind commands
+  to it, and ignore entries for every other generation. Recheck liveness after enqueue
+  for accurate caller feedback.
+- **Caught:** cross-process Loop controls could otherwise leak across a completion/resume race.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

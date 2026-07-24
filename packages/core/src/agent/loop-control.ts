@@ -7,6 +7,7 @@ export type LoopControl = {
   resume: () => void;
   steer: (message: string) => void;
   state: () => LoopControlState;
+  drain: () => { state: LoopControlState; guidance: string[] };
   waitAtBoundary: (signal?: AbortSignal) => Promise<{ resumed: boolean; guidance: string[] }>;
 };
 
@@ -17,17 +18,21 @@ export function createLoopControl(
   const maxQueued = Math.max(1, Math.min(options.maxQueuedGuidance ?? 16, 64));
   const maxLength = Math.max(1, Math.min(options.maxGuidanceLength ?? 4_000, 16_000));
   let paused = false;
-  let wake: (() => void) | undefined;
+  const waiters = new Set<() => void>();
   const guidance: string[] = [];
 
+  const drain = (): { state: LoopControlState; guidance: string[] } => ({
+    state: paused ? "paused" : "running",
+    guidance: guidance.splice(0, guidance.length),
+  });
   return {
     pause: () => {
       paused = true;
     },
     resume: () => {
       paused = false;
-      wake?.();
-      wake = undefined;
+      for (const wake of waiters) wake();
+      waiters.clear();
     },
     steer: (message) => {
       const normalized = message.trim().slice(0, maxLength);
@@ -36,18 +41,25 @@ export function createLoopControl(
       if (guidance.length > maxQueued) guidance.splice(0, guidance.length - maxQueued);
     },
     state: () => (paused ? "paused" : "running"),
+    drain,
     waitAtBoundary: async (signal) => {
       const wasPaused = paused;
       if (paused) {
-        await abortablePromise(
-          new Promise<void>((resolve) => {
-            wake = resolve;
-          }),
-          signal,
-          () => new Error("loop control wait cancelled"),
-        );
+        let wake: (() => void) | undefined;
+        try {
+          await abortablePromise(
+            new Promise<void>((resolve) => {
+              wake = resolve;
+              waiters.add(resolve);
+            }),
+            signal,
+            () => new Error("loop control wait cancelled"),
+          );
+        } finally {
+          if (wake) waiters.delete(wake);
+        }
       }
-      return { resumed: wasPaused, guidance: guidance.splice(0, guidance.length) };
+      return { resumed: wasPaused, guidance: drain().guidance };
     },
   };
 }

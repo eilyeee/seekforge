@@ -14,6 +14,8 @@ import {
   type LoopOptions,
 } from "../../src/agent/auto-loop.js";
 import { createLoopState, loadLoopState } from "../../src/agent/loop-state.js";
+import { createLoopControl } from "../../src/agent/loop-control.js";
+import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -520,6 +522,37 @@ describe("runAutoLoop", () => {
         loopId,
       }),
     ).resolves.toMatchObject({ status: "passed" });
+  });
+
+  it("accepts durable pause, steering, and resume controls from another process boundary", async () => {
+    const loopId = "durable-control";
+    const { deps, provider } = mkDeps();
+    const control = createLoopControl();
+    control.pause();
+    const events: LoopEvent[] = [];
+    const running = runAutoLoop(deps, {
+      ...baseOpts(workspace, failNTimes(1)),
+      loopId,
+      control,
+      onEvent: (event) => events.push(event),
+    });
+    let state = loadLoopState(workspace, loopId);
+    for (let attempt = 0; attempt < 50 && !state?.controlRunId; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      state = loadLoopState(workspace, loopId);
+    }
+    expect(state?.controlRunId).toMatch(/^run-/);
+    await enqueueLoopControl(workspace, loopId, state!.controlRunId!, {
+      operation: "steer",
+      message: "prioritize the regression test",
+    });
+    await enqueueLoopControl(workspace, loopId, state!.controlRunId!, { operation: "resume" });
+    await expect(running).resolves.toMatchObject({ status: "passed" });
+    expect(events.some((event) => event.type === "loop.paused")).toBe(true);
+    expect(events.some((event) => event.type === "loop.resumed")).toBe(true);
+    expect(events.some((event) => event.type === "loop.steered")).toBe(true);
+    expect(JSON.stringify(provider.seen)).toContain("prioritize the regression test");
+    expect(loadLoopState(workspace, loopId)?.controlSeq).toBe(2);
   });
 
   it("recovers a lease whose owning process is dead", async () => {

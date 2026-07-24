@@ -59,6 +59,8 @@ export type LoopState = {
   rollbackOnRegression?: boolean;
   passStreak?: number;
   recoveryAttempts?: number;
+  controlSeq?: number;
+  controlRunId?: string;
   stageResults?: LoopStageResult[];
   snapshots?: LoopIterationSnapshot[];
   maxIterations: number;
@@ -104,6 +106,7 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  controlRunId?: string;
 };
 
 const LOOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -677,6 +680,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const maxNoProgressRecoveries = value.maxNoProgressRecoveries === undefined ? 1 : value.maxNoProgressRecoveries;
   const passStreak = value.passStreak === undefined ? 0 : value.passStreak;
   const recoveryAttempts = value.recoveryAttempts === undefined ? 0 : value.recoveryAttempts;
+  const controlSeq = value.controlSeq === undefined ? 0 : value.controlSeq;
+  const controlRunId = value.controlRunId === undefined ? "" : value.controlRunId;
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
@@ -704,6 +709,10 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     !isSafeInteger(recoveryAttempts) ||
     recoveryAttempts < 0 ||
     recoveryAttempts > maxNoProgressRecoveries ||
+    !isSafeInteger(controlSeq) ||
+    controlSeq < 0 ||
+    typeof controlRunId !== "string" ||
+    (controlRunId !== "" && !isValidLoopId(controlRunId)) ||
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
@@ -782,6 +791,8 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     maxNoProgressRecoveries: maxNoProgressRecoveries as number,
     passStreak: passStreak as number,
     recoveryAttempts: recoveryAttempts as number,
+    controlSeq: controlSeq as number,
+    controlRunId,
     stageResults: stageResults as LoopStageResult[],
     snapshots: snapshots as LoopIterationSnapshot[],
     rollbackOnRegression,
@@ -825,6 +836,9 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
   if (input.loopId !== undefined && !isValidLoopId(input.loopId)) {
     throw new Error(`Invalid loop id: ${input.loopId}`);
   }
+  if (input.controlRunId !== undefined && input.controlRunId !== "" && !isValidLoopId(input.controlRunId)) {
+    throw new Error(`Invalid loop control run id: ${input.controlRunId}`);
+  }
   const now = new Date().toISOString();
   const id = input.loopId ?? `loop-${randomUUID()}`;
   if (existsSync(loopFile(input.workspace, id))) {
@@ -842,6 +856,8 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     maxNoProgressRecoveries: input.maxNoProgressRecoveries ?? 1,
     passStreak: 0,
     recoveryAttempts: 0,
+    controlSeq: 0,
+    controlRunId: input.controlRunId ?? "",
     stageResults: [],
     snapshots: [],
     rollbackOnRegression: input.rollbackOnRegression ?? false,
@@ -941,6 +957,9 @@ export function removeLoopState(workspace: string, loopId: string): boolean {
     throw error;
   }
   rmSync(loopLogFile(workspace, loopId), { force: true });
+  rmSync(resolveForWrite(requireWorkspace(workspace), join(".seekforge", "loops", `${loopId}.control.json`)), {
+    force: true,
+  });
   for (let segment = 1; segment < MAX_LOOP_LOG_SEGMENTS; segment++) {
     rmSync(`${loopLogFile(workspace, loopId)}.${segment}`, { force: true });
   }

@@ -89,13 +89,23 @@ MCP/hook/agent，应只加载一份 `PluginContributions` 快照并通过
 不做单次 `runTask`，而是驱动到某个验证命令退出码为 0：
 
 ```ts
-import { createLoopControl, resumeAutoLoop, runAutoLoop, runLoopDag } from "@seekforge/core";
+import {
+  createLoopControl,
+  enqueueLoopControl,
+  loadLoopState,
+  resumeAutoLoop,
+  runAutoLoop,
+  runLoopDag,
+} from "@seekforge/core";
 
 const control = createLoopControl();
+const workspace = process.cwd();
+const loopId = "sdk-loop";
 
 const running = runAutoLoop(deps, {
+  loopId,
   task: "make the suite pass",
-  workspace: process.cwd(),
+  workspace,
   verifyCommand: "pnpm test",
   verificationPlan: [
     { id: "types", command: "pnpm typecheck" },
@@ -115,6 +125,14 @@ const running = runAutoLoop(deps, {
   approvalMode: "acceptEdits",
   control,
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
+});
+
+// 另一个进程可读取状态，并精确控制这一次仍存活的运行。
+const state = loadLoopState(workspace, loopId);
+if (!state?.controlRunId) throw new Error("Loop 当前不接受控制命令");
+await enqueueLoopControl(workspace, loopId, state.controlRunId, {
+  operation: "steer",
+  message: "优先处理失败的回归测试",
 });
 
 control.pause();                 // 在下一个安全边界生效

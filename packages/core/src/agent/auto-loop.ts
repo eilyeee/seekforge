@@ -35,7 +35,8 @@ import { recordProgressFingerprint } from "./loop-logic.js";
 import { createWorkspaceFingerprinter } from "./workspace-fingerprint.js";
 import { classifyAgentError } from "./errors.js";
 import { abortablePromise } from "../util/abort.js";
-import type { LoopControl } from "./loop-control.js";
+import { createLoopControl, type LoopControl } from "./loop-control.js";
+import { readLoopControlEntries } from "./loop-control-store.js";
 import { extractMemoryFromSession } from "../memory/extract.js";
 import { loadSessionMessages, truncateSessionAtUserTurn } from "./trace.js";
 import { rewindSessionToTurn } from "./session-rewind.js";
@@ -532,6 +533,7 @@ async function runAutoLoopWithLease(
         });
 
   let state: LoopState | undefined = persistenceEnabled ? opts.resumeState : undefined;
+  const controlRunId = `run-${randomUUID()}`;
   let warnedPersistence = false;
   const persistenceWarning = (error: unknown): void => {
     if (warnedPersistence) return;
@@ -560,12 +562,13 @@ async function runAutoLoopWithLease(
         flakyRetries,
         maxNoProgressRecoveries,
         rollbackOnRegression,
+        controlRunId,
       });
     } catch (error) {
       persistenceWarning(error);
     }
   } else if (state !== undefined) {
-    state = { ...state, status: "running", updatedAt: new Date().toISOString() };
+    state = { ...state, status: "running", controlRunId, updatedAt: new Date().toISOString() };
     try {
       saveLoopState(opts.workspace, state);
     } catch (error) {
@@ -601,11 +604,13 @@ async function runAutoLoopWithLease(
   let requirementsApprovedAt = opts.resumeState?.requirementsApprovedAt ?? null;
   let passStreak = opts.resumeState?.passStreak ?? 0;
   let recoveryAttempts = opts.resumeState?.recoveryAttempts ?? 0;
+  let controlSeq = opts.resumeState?.controlSeq ?? 0;
   let lastStageResults = opts.resumeState?.stageResults ?? [];
   let flakyObserved = lastStageResults.some((result) => result.flaky);
   const snapshots = [...(opts.resumeState?.snapshots ?? [])];
   const allChangedPaths = new Set<string>();
   let steeringGuidance: string[] = [];
+  const control = opts.control ?? createLoopControl();
   let skillOutcomeRecorded = false;
 
   const done = (result: LoopResult): LoopResult => {
@@ -636,6 +641,8 @@ async function runAutoLoopWithLease(
         lastAgentError: withId.agentError ?? null,
         passStreak,
         recoveryAttempts,
+        controlSeq,
+        controlRunId,
         stageResults: lastStageResults,
         snapshots,
       },
@@ -675,20 +682,51 @@ async function runAutoLoopWithLease(
     return null;
   };
   const applyControl = async (iteration: number): Promise<void> => {
-    if (!opts.control) return;
-    const paused = opts.control.state() === "paused";
-    if (paused) {
-      persist({ status: "paused" }, true);
-      emit({ type: "loop.paused", iteration });
+    let pausedEventSent = false;
+    for (;;) {
+      let durable: ReturnType<typeof readLoopControlEntries> = [];
+      if (persistenceEnabled) {
+        try {
+          durable = readLoopControlEntries(opts.workspace, loopId, controlRunId, controlSeq);
+        } catch (error) {
+          persistenceWarning(error);
+        }
+      }
+      for (const entry of durable) {
+        controlSeq = entry.seq;
+        if (entry.operation === "pause") control.pause();
+        else if (entry.operation === "resume") control.resume();
+        else control.steer(entry.message);
+      }
+      if (durable.length > 0) persist({ controlSeq }, true);
+      const snapshot = control.drain();
+      if (snapshot.guidance.length > 0) {
+        steeringGuidance.push(...snapshot.guidance);
+        emit({ type: "loop.steered", iteration, count: snapshot.guidance.length });
+      }
+      if (snapshot.state === "running") break;
+      if (!pausedEventSent) {
+        pausedEventSent = true;
+        persist({ status: "paused", controlSeq }, true);
+        emit({ type: "loop.paused", iteration });
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await abortablePromise(
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 200);
+            timer.unref?.();
+          }),
+          opts.signal,
+          () => new Error("loop control wait cancelled"),
+        );
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
     }
-    const control = await opts.control.waitAtBoundary(opts.signal);
-    if (paused && control.resumed) {
-      persist({ status: "running" }, true);
+    if (pausedEventSent) {
+      persist({ status: "running", controlSeq }, true);
       emit({ type: "loop.resumed", iteration });
-    }
-    if (control.guidance.length > 0) {
-      steeringGuidance.push(...control.guidance);
-      emit({ type: "loop.steered", iteration, count: control.guidance.length });
     }
   };
 

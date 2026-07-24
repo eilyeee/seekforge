@@ -190,6 +190,9 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 seekforge loop-list
 seekforge loop-show <loop-id>
+seekforge loop-pause <loop-id>
+seekforge loop-continue <loop-id>
+seekforge loop-steer <loop-id> "<引导>"
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
@@ -212,6 +215,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   Loop 分支，并通过 `gh` 创建草稿 PR。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
+- 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的
+  SeekForge 进程所拥有的 Loop。命令通过 `.seekforge/loops/` 下有界且串行化的邮箱传递，
+  并绑定当前运行实例，因此与完成动作竞态的命令不会泄漏到之后的恢复运行。
 - TUI 提供等价的 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 命令，且只控制
   当前标签页中的 Loop。
 

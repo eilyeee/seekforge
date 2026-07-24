@@ -70,6 +70,12 @@ export {
   type LoopControlState,
 } from "./loop-control.js";
 export {
+  enqueueLoopControl,
+  readLoopControlEntries,
+  type DurableLoopControlCommand,
+  type DurableLoopControlEntry,
+} from "./loop-control-store.js";
+export {
   runLoopDag,
   type LoopDagNode,
   type LoopDagNodeResult,

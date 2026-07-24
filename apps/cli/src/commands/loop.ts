@@ -3,6 +3,8 @@ import {
   WorktreeGitError,
   checkpointWorktree,
   createWorktreePatch,
+  enqueueLoopControl,
+  isLoopLeaseActive,
   listGitWorktrees,
   mergeWorktree,
   listLoopStates,
@@ -384,6 +386,42 @@ export async function loopRecoverCommand(): Promise<void> {
     console.log(recovered.map((state) => `${state.loopId}\tinterrupted\t${state.workspace}`).join("\n"));
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
+
+export async function loopControlCommand(
+  loopId: string,
+  command: { operation: "pause" | "resume" } | { operation: "steer"; message: string },
+): Promise<void> {
+  try {
+    const workspace = await findLoopWorkspace(loopId, false);
+    const state = workspace ? loadLoopState(workspace, loopId) : null;
+    if (
+      !workspace ||
+      !state ||
+      (state.status !== "running" && state.status !== "paused") ||
+      !state.controlRunId ||
+      !isLoopLeaseActive(workspace, loopId)
+    ) {
+      fail(`No active Loop can accept controls: ${loopId}`);
+      process.exitCode = 1;
+      return;
+    }
+    await enqueueLoopControl(workspace, loopId, state.controlRunId, command);
+    const current = loadLoopState(workspace, loopId);
+    if (!current || current.controlRunId !== state.controlRunId || !isLoopLeaseActive(workspace, loopId)) {
+      fail(`Loop stopped before the control was accepted: ${loopId}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(
+      command.operation === "steer"
+        ? `Queued guidance for Loop: ${loopId}`
+        : `Queued ${command.operation} for Loop: ${loopId}`,
+    );
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

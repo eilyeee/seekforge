@@ -211,6 +211,9 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
 seekforge loop-list
 seekforge loop-show <loop-id>
+seekforge loop-pause <loop-id>
+seekforge loop-continue <loop-id>
+seekforge loop-steer <loop-id> "<guidance>"
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
 ```
@@ -237,6 +240,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   pull request through `gh`.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
+- The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can
+  control a Loop owned by another live SeekForge process. Commands use a bounded,
+  serialized mailbox under `.seekforge/loops/` and are scoped to the current run,
+  so a command racing with completion cannot leak into a later resume.
 - TUI users have the equivalent `/loop-pause`, `/loop-continue`, and
   `/loop-steer <guidance>` commands scoped to the active tab's Loop.
 

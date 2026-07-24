@@ -106,13 +106,23 @@ should load one `PluginContributions` snapshot and pass it as
 Instead of a single `runTask`, drive to a verify command's exit 0:
 
 ```ts
-import { createLoopControl, resumeAutoLoop, runAutoLoop, runLoopDag } from "@seekforge/core";
+import {
+  createLoopControl,
+  enqueueLoopControl,
+  loadLoopState,
+  resumeAutoLoop,
+  runAutoLoop,
+  runLoopDag,
+} from "@seekforge/core";
 
 const control = createLoopControl();
+const workspace = process.cwd();
+const loopId = "sdk-loop";
 
 const running = runAutoLoop(deps, {
+  loopId,
   task: "make the suite pass",
-  workspace: process.cwd(),
+  workspace,
   verifyCommand: "pnpm test",
   verificationPlan: [
     { id: "types", command: "pnpm typecheck" },
@@ -132,6 +142,14 @@ const running = runAutoLoop(deps, {
   approvalMode: "acceptEdits",
   control,
   onEvent: (e) => console.log(e.type), // includes live `verify.output` chunks
+});
+
+// A different process can load the state and address this exact live run.
+const state = loadLoopState(workspace, loopId);
+if (!state?.controlRunId) throw new Error("Loop is not accepting controls");
+await enqueueLoopControl(workspace, loopId, state.controlRunId, {
+  operation: "steer",
+  message: "prioritize the failing regression test",
 });
 
 control.pause();                 // observed at the next safe boundary

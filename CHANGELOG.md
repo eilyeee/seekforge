@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 58: cross-process Loop controls
+- Added `loop-pause`, `loop-continue`, and `loop-steer` CLI commands for safely
+  controlling a Loop owned by another live SeekForge process.
+- Added a bounded, atomically written, cross-process-serialized control mailbox
+  with per-run generation ids so late commands cannot leak into a resumed run.
+- Hardened mailbox corruption, capacity, byte-budget, waiter cleanup, and
+  concurrent-writer behavior with Core and end-to-end CLI regression coverage.
+
 ### round 57: requirement-aware Loop deep audit
 - Hardened persisted requirement lifecycle validation so forged approval,
   acceptance, and pending-status combinations fail closed instead of bypassing

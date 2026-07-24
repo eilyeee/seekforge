@@ -14,6 +14,7 @@ import { replCommand } from "./commands/repl.js";
 import { rewindCommand } from "./commands/rewind.js";
 import {
   loopCleanupCommand,
+  loopControlCommand,
   loopCommand,
   loopDeleteCommand,
   loopDagCommand,
@@ -604,6 +605,22 @@ program
   .command("loop-recover")
   .description("mark orphaned running or paused loops as interrupted and resumable")
   .action(loopRecoverCommand);
+program
+  .command("loop-pause")
+  .argument("<loop-id>")
+  .description("pause an active Loop at its next safe boundary")
+  .action((loopId: string) => loopControlCommand(loopId, { operation: "pause" }));
+program
+  .command("loop-continue")
+  .argument("<loop-id>")
+  .description("continue a paused active Loop")
+  .action((loopId: string) => loopControlCommand(loopId, { operation: "resume" }));
+program
+  .command("loop-steer")
+  .argument("<loop-id>")
+  .argument("<message>")
+  .description("queue guidance for an active Loop at its next safe boundary")
+  .action((loopId: string, message: string) => loopControlCommand(loopId, { operation: "steer", message }));
 program
   .command("loop-delete")
   .argument("<loop-id>")

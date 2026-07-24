@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLoopState, type LoopEvent, type LoopResult } from "@seekforge/core";
+import { createLoopState, readLoopControlEntries, type LoopEvent, type LoopResult } from "@seekforge/core";
 import {
   coreResumeAutoLoop,
   formatLoopEvent,
@@ -363,6 +363,52 @@ test("loop state management still works outside a git repository", { timeout: 12
     );
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /loop: nongit-loop/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI queues a control for a Loop owned by another live process", { timeout: 120_000 }, () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "seekforge-loop-control-cli-"));
+  const loopId = "controlled-loop";
+  const runId = "run-cli";
+  try {
+    createLoopState({
+      loopId,
+      controlRunId: runId,
+      task: "local task",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    writeFileSync(
+      resolve(workspace, ".seekforge", "loops", `.${loopId}.lock`),
+      JSON.stringify({ pid: process.pid, token: "cli-control-test" }),
+    );
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-steer",
+        loopId,
+        "focus on the parser",
+      ],
+      { cwd: workspace, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Queued guidance/);
+    const entries = readLoopControlEntries(workspace, loopId, runId);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0], {
+      operation: "steer",
+      message: "focus on the parser",
+      seq: 1,
+      runId,
+      ts: entries[0]?.ts,
+    });
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
