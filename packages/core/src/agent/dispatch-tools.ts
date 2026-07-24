@@ -168,6 +168,7 @@ export function createDispatchTools(rt: DispatchRuntime): DispatchTools {
         signal,
         systemPromptOverride: buildSubagentPrompt(def, input.projectPath),
         parentAgentId: def.id,
+        ...(input.workspaceGuard ? { workspaceGuard: input.workspaceGuard } : {}),
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
       })
       [Symbol.asyncIterator]();

@@ -97,7 +97,7 @@ export class ServerCoordinator {
   tryWithIdleAgentMutation<T>(
     workspace: string,
     signal: AbortSignal | undefined,
-    operation: () => Promise<T>,
+    operation: (idleGuard: SessionLease) => Promise<T>,
   ): Promise<IdleMutationAttempt<T>> {
     return this.track(
       (async () => {
@@ -129,12 +129,12 @@ export class ServerCoordinator {
             if (error instanceof SessionBusyError) return { acquired: false } as const;
             throw error;
           }
-          // The coordinator lease continues to exclude other server mutations;
-          // release the guard so the resumed Loop can create its own sessions.
-          idleGuard.release();
-
-          signal?.throwIfAborted();
-          return { acquired: true, value: await operation() } as const;
+          try {
+            signal?.throwIfAborted();
+            return { acquired: true, value: await operation(idleGuard) } as const;
+          } finally {
+            idleGuard.release();
+          }
         } finally {
           lease?.release();
           releaseReservation();

@@ -234,14 +234,15 @@ seekforge loop-cleanup <worktree-name> [--force]
   history. `loop-recover` marks orphaned `running` or `paused` records as `interrupted`;
   embedders can call `autoResumeInterruptedLoops` to continue them. Existing
   `interrupted` records remain resumable so a transient recovery failure can be
-  retried.
+  retried; a record whose Loop lease is still live is never offered for recovery.
 - `seekforge serve --loop-auto-resume` opts into lifecycle-owned background
   recovery. It reserves the physical repository queue, takes a cross-process
-  idle snapshot, skips rather than waits when work is active, processes
-  workspaces sequentially, prevents overlapping ticks, and aborts its current
-  recovery during shutdown. A lifecycle abort is persisted as `interrupted`,
-  not user `cancelled`, so the next server can resume it. The scheduler is
-  disabled by default.
+  idle guard, skips rather than waits when work is active, and keeps that guard
+  for the complete recovery while explicitly authorizing only the recovery's
+  own Agent sessions. Workspaces are processed sequentially, ticks cannot
+  overlap, and shutdown aborts the current recovery. A lifecycle abort is
+  persisted as `interrupted`, not user `cancelled`, so the next server can
+  resume it. The scheduler is disabled by default.
 - `loop-dag <file>` runs a JSON dependency graph sequentially with shared
   budgets. Core `runLoopDag` also supports bounded parallel batches when every
   node resolves to a distinct physical workspace.
@@ -250,8 +251,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   pull request through `gh`. Delivery records its mode, status, attempt count,
   error, and final artifact in Loop state. If delivery fails after verification
   passed, retry it without rerunning the agent via `loop-deliver <id>`; the prior
-  mode is reused unless this is the first attempt. Delivery holds the Loop lease,
-  so deletion and duplicate delivery cannot race it.
+  mode is reused unless this is the first attempt. Run, delivery, and deletion
+  share one lifecycle lease, so resume cannot enter while delivery is acting.
+  `delivered` is persisted only after the primary side effect succeeds; final
+  state publication is idempotent, and retries repair legacy premature-success
+  records before returning success.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

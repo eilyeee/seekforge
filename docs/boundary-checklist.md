@@ -2159,6 +2159,48 @@ terminal cancellation makes lifecycle-managed work impossible to resume.
 - **Caught:** shutting down idle Loop recovery changed its durable state to
   `cancelled` and recorded a failed skill outcome, so the next server skipped it.
 
+## 173. Persist success after the irreversible effect, then finalize idempotently
+
+A durable `delivered` marker written before a Git, file, or remote side effect
+can survive a crash even though the advertised artifact was never produced.
+
+- **Do:** persist an in-progress attempt, perform the primary side effect, then
+  write success and idempotently publish that final metadata. On retry, verify
+  or repair an existing success marker before returning it.
+- **Caught:** checkpoint, merge, and patch Loop delivery persisted `delivered`
+  immediately before their action, creating a crash window with false success.
+
+## 174. Every competing transition must acquire the same lifecycle lock
+
+Checking another lock once does not prevent its owner from starting immediately
+after the check. Separate run and delivery locks therefore still permit overlap.
+
+- **Do:** define one outer lifecycle lease and require run, resume, delivery,
+  and deletion to acquire it in a consistent order before narrower locks.
+- **Caught:** Loop delivery sampled the run lease once, while a resume could
+  acquire only that run lease after the sample and race Git/state mutations.
+
+## 175. An idle guard must cover the work and grant only owned child sessions
+
+Releasing an idle guard before awaiting the background operation turns an atomic
+idle-start check into a stale snapshot. Holding it naively can also block the
+background operation's own Agent and nested-Agent session leases.
+
+- **Do:** retain the guard through completion and pass an authenticated,
+  in-process guard capability only to child sessions owned by that operation.
+- **Caught:** Server Loop recovery released its workspace guard before resume,
+  allowing an external CLI session to overlap the background edit.
+
+## 176. Resumable status does not prove ownership is gone
+
+A record may already say `interrupted` while its owner is still unwinding or
+continuing. Returning it solely by status can launch a second recovery.
+
+- **Do:** apply the live-owner filter to every resumable status, including
+  already-interrupted records, immediately before adding a recovery candidate.
+- **Caught:** Loop recovery filtered live leases for `running` and `paused` but
+  returned every persisted `interrupted` record unconditionally.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

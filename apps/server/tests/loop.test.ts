@@ -167,6 +167,10 @@ describe("idle Loop recovery", () => {
       expect(agentOpts.signal).toBe(loopOpts.signal);
       expect(loopOpts.approvalMode).toBe("acceptEdits");
       expect(loopOpts.abortStatus).toBe("interrupted");
+      expect(loopOpts.workspaceGuard).toBeDefined();
+      expect(() => acquireSessionLease(workspace, "foreground-during-recovery")).toThrow(/being modified/);
+      const backgroundSession = acquireSessionLease(workspace, `background-${attempts}`, loopOpts.workspaceGuard);
+      backgroundSession.release();
       attempts++;
       if (attempts === 1) throw new Error("temporary provider outage");
       const state = loadLoopState(workspace, loopId);

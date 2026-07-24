@@ -254,12 +254,17 @@ function removeStaleLease(workspace: string, sessionId: string, expected: LeaseS
   }
 }
 
-function acquireLease(workspace: string, sessionId: string): SessionLease {
+function acquireLease(workspace: string, sessionId: string, workspaceGuard?: SessionLease): SessionLease {
   requireSessionId(sessionId);
   const root = workspaceRoot(workspace);
+  if (workspaceGuard !== undefined) assertSessionLease(workspaceGuard, root, WORKSPACE_GUARD_ID);
   const key = leaseKey(root, sessionId);
   if (localLeases.has(key)) throw new SessionBusyError(sessionId);
-  if (sessionId !== WORKSPACE_GUARD_ID && isSessionRunActive(root, WORKSPACE_GUARD_ID)) {
+  if (
+    sessionId !== WORKSPACE_GUARD_ID &&
+    workspaceGuard === undefined &&
+    isSessionRunActive(root, WORKSPACE_GUARD_ID)
+  ) {
     throw new SessionBusyError(sessionId);
   }
   validateLeasesRoot(root, true);
@@ -306,7 +311,11 @@ function acquireLease(workspace: string, sessionId: string): SessionLease {
           }
         },
       };
-      if (sessionId !== WORKSPACE_GUARD_ID && isSessionRunActive(root, WORKSPACE_GUARD_ID)) {
+      if (
+        sessionId !== WORKSPACE_GUARD_ID &&
+        workspaceGuard === undefined &&
+        isSessionRunActive(root, WORKSPACE_GUARD_ID)
+      ) {
         lease.release();
         throw new SessionBusyError(sessionId);
       }
@@ -322,9 +331,9 @@ function acquireLease(workspace: string, sessionId: string): SessionLease {
 }
 
 /** Acquire an exclusive, cross-process lease for one persisted session. */
-export function acquireSessionLease(workspace: string, sessionId: string): SessionLease {
+export function acquireSessionLease(workspace: string, sessionId: string, workspaceGuard?: SessionLease): SessionLease {
   if (sessionId === WORKSPACE_GUARD_ID) throw new Error(`Invalid session id: ${sessionId}`);
-  return acquireLease(workspace, sessionId);
+  return acquireLease(workspace, sessionId, workspaceGuard);
 }
 
 export function assertSessionLease(lease: SessionLease, workspace: string, sessionId: string): void {

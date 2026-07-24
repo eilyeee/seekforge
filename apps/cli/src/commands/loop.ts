@@ -3,6 +3,7 @@ import {
   MAX_LOOP_ITERATIONS,
   WorktreeGitError,
   checkpointWorktree,
+  checkpointWorktreePaths,
   createWorktreePatch,
   enqueueLoopControl,
   isLoopLeaseActive,
@@ -27,7 +28,8 @@ import {
   type LoopRequirementMode,
 } from "@seekforge/core";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { formatCostUsd } from "@seekforge/shared/format";
 import { createCliAgentDeps, prepareMcp } from "../agent-factory.js";
@@ -760,10 +762,13 @@ export async function runLoopDelivery(
       throw new Error(`Loop delivery mode is already ${state.delivery.mode}; retry with that mode`);
     }
     if (state.delivery?.status === "delivered" && state.delivery.artifact) {
-      return {
-        artifact: state.delivery.artifact,
-        message: `Loop delivery already complete: ${state.delivery.artifact}`,
-      };
+      try {
+        const finalized = await finalizeLoopDelivery(projectPath, loopId, mode, state.delivery.artifact);
+        return { ...finalized, message: `Loop delivery already complete: ${state.delivery.artifact}` };
+      } catch {
+        // Older versions could persist `delivered` before the side effect. Fall
+        // through to a new attempt, which safely repairs or repeats the action.
+      }
     }
     const attempts = (state.delivery?.attempts ?? 0) + 1;
     const startedAt = new Date().toISOString();
@@ -789,7 +794,6 @@ export async function runLoopDelivery(
       }
       return error instanceof Error ? error : new Error(message);
     };
-    let deliveryPersisted = false;
     const persistDelivered = (artifact: string): void => {
       const completedAt = new Date().toISOString();
       const current = loadLoopState(projectPath, loopId) ?? state;
@@ -804,26 +808,14 @@ export async function runLoopDelivery(
         },
         updatedAt: completedAt,
       });
-      deliveryPersisted = true;
     };
     let delivered: LoopDeliveryResult;
     try {
-      delivered = await deliverLoop(projectPath, loopId, mode, persistDelivered);
+      delivered = await deliverLoop(projectPath, loopId, mode);
+      persistDelivered(delivered.artifact);
+      delivered = await finalizeLoopDelivery(projectPath, loopId, mode, delivered.artifact, delivered);
     } catch (error) {
       throw persistFailure(error);
-    }
-    if (!deliveryPersisted) persistDelivered(delivered.artifact);
-    if (mode === "pr" && delivered.branch) {
-      try {
-        await checkpointWorktree(projectPath, `chore: record ${loopId} delivery`);
-        const pushed = spawnSync("git", ["push", "origin", delivered.branch], {
-          cwd: projectPath,
-          encoding: "utf8",
-        });
-        if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish final delivery state");
-      } catch (error) {
-        throw persistFailure(error);
-      }
     }
     return delivered;
   } finally {
@@ -831,12 +823,7 @@ export async function runLoopDelivery(
   }
 }
 
-async function deliverLoop(
-  projectPath: string,
-  loopId: string,
-  mode: LoopDeliveryMode,
-  beforeAction: (artifact: string) => void,
-): Promise<LoopDeliveryResult> {
+async function deliverLoop(projectPath: string, loopId: string, mode: LoopDeliveryMode): Promise<LoopDeliveryResult> {
   const repository = await resolveLoopRepository(projectPath);
   const workspace = resolve(projectPath);
   if (workspace === resolve(repository.basePath))
@@ -847,7 +834,6 @@ async function deliverLoop(
   if (!entry?.branch.startsWith("seekforge/loop-"))
     throw new Error("Current workspace is not a retained Loop worktree");
   if (mode === "checkpoint") {
-    beforeAction(entry.branch);
     const committed = await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
     return {
       artifact: entry.branch,
@@ -855,7 +841,6 @@ async function deliverLoop(
     };
   }
   if (mode === "merge") {
-    beforeAction(entry.branch);
     const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
     if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
     return { artifact: entry.branch, message: `Merged Loop worktree branch: ${entry.branch}` };
@@ -910,13 +895,73 @@ async function deliverLoop(
     return { artifact: url, branch: entry.branch, message: `Created draft pull request: ${url}` };
   }
   const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
-  beforeAction(target);
+  try {
+    if (!lstatSync(target).isFile()) throw new Error(`Unsafe Loop patch path: ${target}`);
+    rmSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
   const patch = await createWorktreePatch(repository.basePath, entry.branch);
   if (!patch) throw new Error("Loop worktree has no changes to deliver");
   mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, patch, { encoding: "utf8", mode: 0o600 });
+  writeLoopPatch(target, patch);
   return { artifact: target, message: `Wrote Loop patch: ${target}` };
+}
+
+async function finalizeLoopDelivery(
+  projectPath: string,
+  loopId: string,
+  mode: LoopDeliveryMode,
+  artifact: string,
+  result?: LoopDeliveryResult,
+): Promise<LoopDeliveryResult> {
+  const repository = await resolveLoopRepository(projectPath);
+  const workspace = resolve(projectPath);
+  const entry = (await listGitWorktrees(repository.basePath)).find(
+    (candidate) => resolve(candidate.path) === workspace,
+  );
+  if (!entry?.branch.startsWith("seekforge/loop-"))
+    throw new Error("Current workspace is not a retained Loop worktree");
+  if ((mode === "checkpoint" || mode === "merge") && artifact !== entry.branch) {
+    throw new Error(`Loop delivery artifact does not match retained branch: ${artifact}`);
+  }
+
+  if (mode === "checkpoint") {
+    await checkpointWorktree(workspace, `chore: record ${loopId} delivery`);
+  } else if (mode === "merge") {
+    const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
+    if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
+  } else if (mode === "pr") {
+    await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
+    const pushed = spawnSync("git", ["push", "origin", entry.branch], { cwd: workspace, encoding: "utf8" });
+    if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish final delivery state");
+  } else {
+    const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
+    if (artifact !== target || !existsSync(target) || !lstatSync(target).isFile()) {
+      throw new Error(`Loop patch artifact is missing or invalid: ${target}`);
+    }
+    await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
+  }
+  return result ?? { artifact, branch: entry.branch, message: `Loop delivery complete: ${artifact}` };
+}
+
+function writeLoopPatch(target: string, patch: string): void {
+  const temp = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(temp, "wx", 0o600);
+  try {
+    writeFileSync(fd, patch, "utf8");
+    closeSync(fd);
+    renameSync(temp, target);
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {
+      // The write path already closed the descriptor.
+    }
+    rmSync(temp, { force: true });
+    throw error;
+  }
 }
 
 async function loopWorkspaces(): Promise<string[]> {

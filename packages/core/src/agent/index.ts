@@ -3,6 +3,7 @@
  */
 
 import type { AgentEvent, ApprovalMode } from "@seekforge/shared";
+import type { SessionLease } from "./session-lease.js";
 
 export type RunAgentTaskInput = {
   projectPath: string;
@@ -24,6 +25,8 @@ export type RunAgentTaskInput = {
   appendSystemPrompt?: string;
   /** Internal: marks this session as spawned by dispatch_agent (the agent id). */
   parentAgentId?: string;
+  /** Internal: permits this run while its owner holds the workspace idle guard. */
+  workspaceGuard?: SessionLease;
 };
 
 export interface AgentCore {
@@ -119,12 +122,14 @@ export {
 export { MAX_LOOP_ITERATIONS } from "./loop-constants.js";
 export {
   acquireLoopDeliveryLease,
+  acquireLoopLifecycleLease,
   acquireLoopLease,
   appendLoopLog,
   createLoopState,
   hasActiveLoopLease,
   isLoopLeaseActive,
   isLoopDeliveryActive,
+  isLoopLifecycleActive,
   isValidLoopId,
   listLoopStates,
   loadLoopState,

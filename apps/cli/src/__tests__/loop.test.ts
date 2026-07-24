@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -577,6 +577,97 @@ test("CLI checkpoints a passed retained Loop and records the artifact", { timeou
     assert.equal(repeated.status, 0, `${repeated.stdout}${repeated.stderr}`);
     assert.match(repeated.stdout, /already complete/);
     assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.attempts, 1);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop delivery repairs a legacy delivered checkpoint before returning success", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-repair-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const worktree = await createLoopWorktree(repo, "delivery-repair");
+    writeFileSync(resolve(worktree.path, "result.txt"), "done\n");
+    const state = createLoopState({
+      loopId: "legacy-delivered",
+      task: "deliver task",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, {
+      ...state,
+      status: "passed",
+      delivery: {
+        mode: "checkpoint",
+        status: "delivered",
+        attempts: 1,
+        updatedAt: new Date().toISOString(),
+        artifact: worktree.branch,
+      },
+    });
+
+    const delivered = await runLoopDelivery(worktree.path, state.loopId, "checkpoint");
+    assert.match(delivered.message, /already complete/);
+    assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: worktree.path, encoding: "utf8" }), "");
+    assert.equal(execFileSync("git", ["show", "HEAD:result.txt"], { cwd: worktree.path, encoding: "utf8" }), "done\n");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop patch retry replaces a stale artifact without embedding it", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-patch-retry-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "SeekForge Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "SeekForge Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    const worktree = await createLoopWorktree(repo, "patch-retry");
+    writeFileSync(resolve(worktree.path, "result.txt"), "done\n");
+    const state = createLoopState({
+      loopId: "patch-retry-loop",
+      task: "deliver patch",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    const artifact = resolve(worktree.path, ".seekforge", "loops", `${state.loopId}.patch`);
+    saveLoopState(worktree.path, {
+      ...state,
+      status: "passed",
+      delivery: {
+        mode: "patch",
+        status: "failed",
+        attempts: 1,
+        updatedAt: new Date().toISOString(),
+        error: "interrupted after writing an older artifact",
+      },
+    });
+    writeFileSync(artifact, "STALE_PATCH_PAYLOAD\n");
+
+    const delivered = await runLoopDelivery(worktree.path, state.loopId, "patch");
+    assert.equal(delivered.artifact, artifact);
+    assert.match(readFileSync(artifact, "utf8"), /result\.txt/);
+    assert.doesNotMatch(readFileSync(artifact, "utf8"), /STALE_PATCH_PAYLOAD/);
+    assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.status, "delivered");
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

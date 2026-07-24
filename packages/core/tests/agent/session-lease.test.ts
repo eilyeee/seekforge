@@ -161,6 +161,11 @@ describe("session leases", () => {
     const ownedGuard = acquireWorkspaceSessionGuardForLease(workspace, running);
     try {
       expect(() => acquireSessionLease(workspace, "blocked-by-owned-guard")).toThrow(SessionBusyError);
+      const permitted = acquireSessionLease(workspace, "owned-background-run", ownedGuard);
+      permitted.release();
+      expect(() =>
+        acquireSessionLease(workspace, "forged-background-run", { ...ownedGuard, token: "forged-token" }),
+      ).toThrow(/Invalid session lease/);
     } finally {
       ownedGuard.release();
     }

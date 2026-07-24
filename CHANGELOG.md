@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### round 62: Loop lifecycle and delivery recovery hardening
+- Unified Loop run, delivery, and deletion under one cross-process lifecycle
+  lease so resume cannot race post-pass Git or PR side effects.
+- Moved successful delivery persistence after the primary side effect, added
+  idempotent final-state publication and legacy premature-success repair, and
+  made patch retries replace stale artifacts safely.
+- Kept the workspace idle guard for the complete automatic recovery while
+  authorizing only its owned Agent sessions, including nested agents, and
+  excluded actively owned `interrupted` records from recovery candidates.
+- Added Core, CLI, and Server regression coverage plus bilingual lifecycle docs.
+
 ### round 61: resumable Loop recovery shutdown
 - Distinguished explicit user cancellation from background-owner teardown so
   closing a server leaves its active automatic Loop recovery `interrupted` and

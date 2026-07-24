@@ -248,39 +248,44 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
             registry.list.map((workspace) => ({
               workspace: workspace.path,
               recover: async (signal): Promise<LoopResult[] | undefined> => {
-                const attempt = await coordinator.tryWithIdleAgentMutation(workspace.path, signal, async () => {
-                  const results: LoopResult[] = [];
-                  for (const state of recoverInterruptedLoops(workspace.path)) {
-                    signal.throwIfAborted();
-                    try {
-                      results.push(
-                        await resumeLoop(
-                          {
-                            workspace: workspace.path,
-                            confirm: async () => false,
-                            extractMemory: true,
-                            signal,
-                          },
-                          state.loopId,
-                          {
-                            workspace: workspace.path,
-                            approvalMode: "acceptEdits",
-                            abortStatus: "interrupted",
-                            signal,
-                          },
-                        ),
-                      );
-                    } catch (error) {
-                      if (signal.aborted) throw error;
-                      logger.log("error", "loop.recovery.failed", {
-                        workspace: workspace.path,
-                        loopId: state.loopId,
-                        error: error instanceof Error ? error.message : String(error),
-                      });
+                const attempt = await coordinator.tryWithIdleAgentMutation(
+                  workspace.path,
+                  signal,
+                  async (idleGuard) => {
+                    const results: LoopResult[] = [];
+                    for (const state of recoverInterruptedLoops(workspace.path)) {
+                      signal.throwIfAborted();
+                      try {
+                        results.push(
+                          await resumeLoop(
+                            {
+                              workspace: workspace.path,
+                              confirm: async () => false,
+                              extractMemory: true,
+                              signal,
+                            },
+                            state.loopId,
+                            {
+                              workspace: workspace.path,
+                              approvalMode: "acceptEdits",
+                              abortStatus: "interrupted",
+                              signal,
+                              workspaceGuard: idleGuard,
+                            },
+                          ),
+                        );
+                      } catch (error) {
+                        if (signal.aborted) throw error;
+                        logger.log("error", "loop.recovery.failed", {
+                          workspace: workspace.path,
+                          loopId: state.loopId,
+                          error: error instanceof Error ? error.message : String(error),
+                        });
+                      }
                     }
-                  }
-                  return results;
-                });
+                    return results;
+                  },
+                );
                 return attempt.acquired ? attempt.value : undefined;
               },
             })),

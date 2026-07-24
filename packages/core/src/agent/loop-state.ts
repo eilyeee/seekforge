@@ -43,7 +43,7 @@ import {
   type LoopRequirementMode,
   type LoopRequirementSpec,
 } from "./loop-requirements.js";
-import { acquireSessionLease, isSessionRunActive } from "./session-lease.js";
+import { acquireSessionLease, isSessionRunActive, type SessionLease } from "./session-lease.js";
 
 export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
 export type LoopVerifyResult = { code: number; output: string };
@@ -466,15 +466,21 @@ function deliveryLeaseId(loopId: string): string {
   return `loop-delivery-${createHash("sha256").update(loopId).digest("hex").slice(0, 32)}`;
 }
 
-/** Cross-process lease for post-pass delivery; stored outside the Git worktree. */
-export function acquireLoopDeliveryLease(workspace: string, loopId: string): LoopLease {
-  return acquireSessionLease(workspace, deliveryLeaseId(loopId));
+/** Cross-process lease for run, delivery, and deletion lifecycle changes. */
+export function acquireLoopLifecycleLease(workspace: string, loopId: string, workspaceGuard?: SessionLease): LoopLease {
+  return acquireSessionLease(workspace, deliveryLeaseId(loopId), workspaceGuard);
 }
 
-/** Returns whether post-pass delivery currently owns this Loop. */
-export function isLoopDeliveryActive(workspace: string, loopId: string): boolean {
+/** Returns whether a run, delivery, or deletion currently owns this Loop lifecycle. */
+export function isLoopLifecycleActive(workspace: string, loopId: string): boolean {
   return isSessionRunActive(workspace, deliveryLeaseId(loopId));
 }
+
+/** @deprecated Use acquireLoopLifecycleLease. */
+export const acquireLoopDeliveryLease = acquireLoopLifecycleLease;
+
+/** @deprecated Use isLoopLifecycleActive. */
+export const isLoopDeliveryActive = isLoopLifecycleActive;
 
 function leaseFile(workspace: string, loopId: string): string {
   if (!isValidLoopId(loopId)) throw new Error(`Invalid loop id: ${loopId}`);
@@ -1004,12 +1010,13 @@ export function listLoopStates(workspace: string): LoopState[] {
 export function recoverInterruptedLoops(workspace: string): LoopState[] {
   const recovered: LoopState[] = [];
   for (const state of listLoopStates(workspace)) {
-    if (state.status === "interrupted") {
+    const owned = isLoopLifecycleActive(workspace, state.loopId) || isLoopLeaseActive(workspace, state.loopId);
+    if (state.status === "interrupted" && !owned) {
       recovered.push(state);
       continue;
     }
-    if ((state.status !== "running" && state.status !== "paused") || isLoopLeaseActive(workspace, state.loopId))
-      continue;
+    if (state.status === "interrupted") continue;
+    if ((state.status !== "running" && state.status !== "paused") || owned) continue;
     const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };
     saveLoopState(workspace, next);
     recovered.push(next);

@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acquireLoopDeliveryLease,
+  acquireLoopLifecycleLease,
   acquireLoopLease,
   createLoopState,
   hasActiveLoopLease,
@@ -84,7 +85,16 @@ describe("loop state persistence", () => {
     });
     saveLoopState(workspace, { ...paused, status: "paused" });
     const live = createLoopState({ loopId: "live", task: "x", workspace, verifyCommand: "test", maxIterations: 1 });
+    const lifecycleOwned = createLoopState({
+      loopId: "lifecycle-owned",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, { ...lifecycleOwned, status: "interrupted" });
     const lease = acquireLoopLease(workspace, live.loopId, true);
+    const lifecycleLease = acquireLoopLifecycleLease(workspace, lifecycleOwned.loopId);
     try {
       expect(
         recoverInterruptedLoops(workspace)
@@ -94,12 +104,14 @@ describe("loop state persistence", () => {
       expect(loadLoopState(workspace, orphan.loopId)?.status).toBe("interrupted");
       expect(loadLoopState(workspace, paused.loopId)?.status).toBe("interrupted");
       expect(loadLoopState(workspace, live.loopId)?.status).toBe("running");
+      saveLoopState(workspace, { ...live, status: "interrupted" });
       expect(
         recoverInterruptedLoops(workspace)
           .map((state) => state.loopId)
           .sort(),
       ).toEqual([orphan.loopId, paused.loopId].sort());
     } finally {
+      lifecycleLease.release();
       lease.release();
     }
   });

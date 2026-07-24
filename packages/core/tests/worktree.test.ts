@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createWorktree,
   checkpointWorktree,
+  checkpointWorktreePaths,
   createWorktreePatch,
   isWorktreeDirty,
   listGitWorktrees,
@@ -148,6 +149,17 @@ describe("worktree delivery", () => {
     expect(patch).toContain("new.txt");
     expect(patch).toContain("delivered");
     expect(await checkpointWorktree(path)).toBe(false);
+  });
+
+  it("checkpoints literal selected paths without committing unrelated changes", async () => {
+    const { path } = await createWorktree(repo, "selected-checkpoint");
+    writeFileSync(join(path, ":(glob)*"), "selected\n");
+    writeFileSync(join(path, "unrelated.txt"), "leave dirty\n");
+
+    expect(await checkpointWorktreePaths(path, [":(glob)*"], "chore: selected state")).toBe(true);
+    expect(git(path, "show", "HEAD::(glob)*")).toBe("selected");
+    expect(git(path, "status", "--porcelain")).toContain("unrelated.txt");
+    await expect(checkpointWorktreePaths(path, ["../outside"], "unsafe")).rejects.toThrow(/unsafe worktree pathspec/);
   });
 
   it("rejects patch generation for an unrelated branch namespace", async () => {

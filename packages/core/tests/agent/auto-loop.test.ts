@@ -13,9 +13,15 @@ import {
   type LoopEvent,
   type LoopOptions,
 } from "../../src/agent/auto-loop.js";
-import { createLoopState, loadLoopState, recoverInterruptedLoops } from "../../src/agent/loop-state.js";
+import {
+  acquireLoopLifecycleLease,
+  createLoopState,
+  loadLoopState,
+  recoverInterruptedLoops,
+} from "../../src/agent/loop-state.js";
 import { createLoopControl } from "../../src/agent/loop-control.js";
 import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
+import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -125,6 +131,35 @@ describe("runAutoLoop", () => {
   afterEach(() => {
     setSandboxAvailabilityCheckForTests(null);
     rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("shares one lifecycle lease with delivery and deletion", async () => {
+    const lease = acquireLoopLifecycleLease(workspace, "owned-loop");
+    try {
+      await expect(
+        runAutoLoop(mkDeps().deps, {
+          ...baseOpts(workspace, failNTimes(0)),
+          loopId: "owned-loop",
+        }),
+      ).rejects.toThrow(/already running or being modified/);
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("runs under an owned workspace idle guard", async () => {
+    const guard = acquireWorkspaceSessionGuard(workspace);
+    try {
+      await expect(
+        runAutoLoop(mkDeps().deps, {
+          ...baseOpts(workspace, failNTimes(1)),
+          loopId: "idle-owned-loop",
+          workspaceGuard: guard,
+        }),
+      ).resolves.toMatchObject({ status: "passed", loopId: "idle-owned-loop" });
+    } finally {
+      guard.release();
+    }
   });
 
   it.each([

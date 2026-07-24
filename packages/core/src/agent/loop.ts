@@ -479,7 +479,7 @@ export function createAgentCore(deps: AgentCoreDeps): AgentCore {
       const sessionId = input.resumeSessionId ?? newSessionId();
       let sessionLease: ReturnType<typeof acquireSessionLease>;
       try {
-        sessionLease = acquireSessionLease(input.projectPath, sessionId);
+        sessionLease = acquireSessionLease(input.projectPath, sessionId, input.workspaceGuard);
       } catch (error) {
         if (error instanceof Error && "code" in error && error.code === "session_busy") {
           throw new AgentLimitError("session_busy", `session ${sessionId} is already running`);

@@ -14,6 +14,7 @@ import { resolve, sep } from "node:path";
 import { ToolError } from "../tools/errors.js";
 import { runShellCommand } from "../tools/run-command.js";
 import {
+  acquireLoopLifecycleLease,
   acquireLoopLease,
   createLoopLogWriter,
   createLoopState,
@@ -22,6 +23,7 @@ import {
   saveLoopState,
   type LoopState,
 } from "./loop-state.js";
+import type { SessionLease } from "./session-lease.js";
 import { createAgentCore, type AgentCoreDeps } from "./loop.js";
 import { parseVerifyDiagnostics, type VerifyDiagnostics } from "./verify-diagnostics.js";
 import { MAX_LOOP_ITERATIONS, MAX_LOOP_WARNING_LENGTH, MAX_VERIFY_DIAGNOSTIC_INPUT } from "./loop-constants.js";
@@ -138,6 +140,8 @@ export type LoopOptions = {
   signal?: AbortSignal;
   /** Internal owner-lifecycle aborts remain resumable instead of becoming a user cancellation. */
   abortStatus?: "cancelled" | "interrupted";
+  /** Internal: workspace idle guard held by a lifecycle owner. */
+  workspaceGuard?: SessionLease;
   /** Per-iteration progress callback. */
   onEvent?: (event: LoopEvent) => void;
   /** Optional safe-boundary pause/resume/steering channel. */
@@ -449,8 +453,12 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
       }
     }
   };
-  const lease = acquireLoopLease(opts.workspace, loopId, persistenceEnabled);
+  const lifecycleLease = persistenceEnabled
+    ? acquireLoopLifecycleLease(opts.workspace, loopId, opts.workspaceGuard)
+    : undefined;
+  let lease: ReturnType<typeof acquireLoopLease> | undefined;
   try {
+    lease = acquireLoopLease(opts.workspace, loopId, persistenceEnabled);
     return await runAutoLoopWithLease(deps, opts, emit, persistenceEnabled, loopId);
   } finally {
     try {
@@ -458,7 +466,8 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
     } catch {
       /* observability only */
     }
-    lease.release();
+    lease?.release();
+    lifecycleLease?.release();
   }
 }
 
@@ -902,6 +911,7 @@ async function runAutoLoopWithLease(
       plan,
       approvalMode: "auto",
       signal: runSignal,
+      ...(opts.workspaceGuard ? { workspaceGuard: opts.workspaceGuard } : {}),
       ...(reviewerSessionId ? { resumeSessionId: reviewerSessionId } : {}),
     });
     try {
@@ -1155,6 +1165,7 @@ async function runAutoLoopWithLease(
         mode: "edit",
         approvalMode,
         signal: runSignal,
+        ...(opts.workspaceGuard ? { workspaceGuard: opts.workspaceGuard } : {}),
         ...(sessionId ? { resumeSessionId: sessionId } : {}),
       });
       try {

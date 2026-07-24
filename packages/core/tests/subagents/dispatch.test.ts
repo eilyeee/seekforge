@@ -6,6 +6,7 @@ import type { AgentEvent, ChatResponse, PermissionRequest, ToolCall, ToolResult 
 import type { ChatProvider, ChatRequest } from "../../src/provider/index.js";
 import type { ToolContext, ToolDispatcher } from "../../src/tools/index.js";
 import { createAgentCore } from "../../src/agent/loop.js";
+import { acquireWorkspaceSessionGuard } from "../../src/agent/session-lease.js";
 import type { AgentDefinition } from "../../src/subagents/index.js";
 
 const USAGE = { promptTokens: 10, completionTokens: 5, cacheHitTokens: 0, costUsd: 0.001 };
@@ -167,7 +168,13 @@ describe("dispatch_agent (loop-level)", () => {
       },
       subagents: [reviewer],
     });
-    const events = await collect(agent.runTask({ ...baseInput, projectPath: workspace }));
+    const guard = acquireWorkspaceSessionGuard(workspace);
+    let events: AgentEvent[];
+    try {
+      events = await collect(agent.runTask({ ...baseInput, projectPath: workspace, workspaceGuard: guard }));
+    } finally {
+      guard.release();
+    }
 
     expect(confirmCalls).toBe(0); // ask-mode dispatch is auto-allowed
     // depth-1 run must not advertise dispatch_agent

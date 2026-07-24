@@ -78,7 +78,10 @@ Autonomous Loop state is a separate orchestration checkpoint that points to a
 session and owns the frozen requirement specification, acceptance evidence, and
 optional approval gate. Requirement analysis and acceptance review run through
 read-only Agent phases; only edit iterations mutate the workspace. See
-[Loop engineering](loop-engineering.md).
+[Loop engineering](loop-engineering.md). A persisted Loop's run, delivery, and
+deletion paths share one lifecycle lease. Idle recovery retains its workspace
+guard for the whole operation and passes an unforgeable in-process capability
+to its own Agent and nested-agent session leases, preventing foreground overlap.
 
 Server-managed execution has a second append-only control plane:
 `.seekforge/runs.jsonl` stores run state and `.seekforge/run-events/<id>.jsonl`

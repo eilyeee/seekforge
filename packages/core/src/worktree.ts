@@ -177,6 +177,27 @@ export async function checkpointWorktree(
   return true;
 }
 
+/** Commits only the named repository-relative paths, leaving unrelated changes untouched. */
+export async function checkpointWorktreePaths(
+  worktreePath: string,
+  paths: readonly string[],
+  message = "seekforge loop checkpoint",
+): Promise<boolean> {
+  if (paths.length === 0) return false;
+  for (const path of paths) {
+    const segments = path.split(/[\\/]/);
+    if (!path || path.includes("\0") || isAbsolute(path) || segments.includes("..")) {
+      throw new WorktreeGitError("git_error", `unsafe worktree pathspec: ${path}`);
+    }
+  }
+  const bounded = message.trim().slice(0, 200) || "seekforge loop checkpoint";
+  await git(worktreePath, ["--literal-pathspecs", "add", "--", ...paths]);
+  if (!(await git(worktreePath, ["--literal-pathspecs", "diff", "--cached", "--name-only", "--", ...paths])))
+    return false;
+  await git(worktreePath, ["--literal-pathspecs", "commit", "-m", bounded, "--", ...paths]);
+  return true;
+}
+
 /** Produces a binary-safe patch for a retained SeekForge branch relative to the base checkout. */
 export async function createWorktreePatch(basePath: string, branch: string): Promise<string> {
   if (!branch.startsWith("seekforge/")) throw new WorktreeGitError("git_error", `unsafe worktree branch: ${branch}`);
