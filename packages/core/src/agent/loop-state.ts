@@ -419,6 +419,17 @@ type LockSnapshot = { content: string; alive: boolean };
 const MALFORMED_LOCK_GRACE_MS = 30_000;
 const MAX_LOOP_LOCK_BYTES = 16 * 1024;
 const MAX_LOOP_STATE_BYTES = 1024 * 1024;
+
+function compactLoopSnapshots(state: LoopState): LoopState {
+  if (!state.snapshots?.length) return state;
+  return {
+    ...state,
+    snapshots: state.snapshots.map((snapshot) => ({
+      ...snapshot,
+      stageResults: snapshot.stageResults.map((stage) => ({ ...stage, command: "", output: "" })),
+    })),
+  };
+}
 const MAX_PROC_STAT_BYTES = 64 * 1024;
 
 function processIdentity(pid: number): string | undefined {
@@ -866,10 +877,15 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
 export function saveLoopState(workspace: string, state: LoopState): void {
   const normalized = parseLoopState(state, workspace);
   if (!normalized) throw new Error("Invalid loop state");
+  const compacted = compactLoopSnapshots(normalized);
+  const serialized = `${JSON.stringify(compacted, null, 2)}\n`;
+  if (Buffer.byteLength(serialized) > MAX_LOOP_STATE_BYTES) {
+    throw new FileTooLargeError(loopFile(workspace, compacted.loopId), MAX_LOOP_STATE_BYTES);
+  }
   writeWorkspaceStateFileAtomic(
     requireWorkspace(workspace),
-    join(".seekforge", "loops", `${normalized.loopId}.json`),
-    `${JSON.stringify(normalized, null, 2)}\n`,
+    join(".seekforge", "loops", `${compacted.loopId}.json`),
+    serialized,
   );
 }
 

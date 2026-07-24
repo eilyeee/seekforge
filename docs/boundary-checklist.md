@@ -2059,6 +2059,47 @@ Recovering only `running` records strands a process that crashed after persistin
 - **Do:** enumerate every lease-owned nonterminal state when detecting orphaned work.
 - **Caught:** Loop recovery initially omitted durable `paused` records.
 
+## 164. A local timeout and a global duration budget are different stop causes
+
+Using the per-operation timeout as a stand-in for an absent global deadline makes
+an ordinary timeout look like budget exhaustion.
+
+- **Do:** track whether a global duration limit actually exists before mapping an
+  abort to `budget`; otherwise preserve the operation's timeout/error taxonomy.
+- **Caught:** Auto-Loop classified a verifier's normal timeout as `budget: duration`
+  when no `maxDurationMs` was configured.
+
+## 165. Rollback must restore derived orchestration state, not only files
+
+Diagnostics, pass streaks, snapshots, and continuation prompts describe a specific
+workspace version. Rewinding files while retaining the rejected version's derived
+state makes the next decision operate on a workspace that no longer exists.
+
+- **Do:** re-run authoritative verification after rollback, replace the convergence
+  baseline, and persist that restored result before another iteration.
+- **Caught:** Loop regression rollback retained the regressed diagnostic/snapshot
+  baseline after restoring the prior worktree contents.
+
+## 166. Writers must stay within the reader's durable byte limit
+
+Bounding each nested item and the number of items does not bound their product.
+A writer can emit a valid multi-megabyte snapshot that its own bounded reader later
+rejects.
+
+- **Do:** remove repeated payloads from historical snapshots, enforce a total byte
+  budget before atomic replacement, and keep the last readable file on overflow.
+- **Caught:** 100 Loop snapshots could repeat 16 verifier commands and output tails,
+  exceeding the 1 MiB state-reader limit.
+
+## 167. Evidence existence is not evidence relevance
+
+An existing repository path proves only that a path exists. Treating it as proof of
+an acceptance criterion lets an evaluator cite any unrelated file.
+
+- **Do:** require content-anchored evidence and verify the cited symbol/text or line
+  range inside a bounded, non-symlink regular file.
+- **Caught:** Loop acceptance accepted an unanchored existing path as sufficient evidence.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

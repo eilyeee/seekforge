@@ -183,7 +183,8 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
 - `Ctrl-C` 协作式停止（状态为 `cancelled`）。Loop 编排状态保存在
   `.seekforge/loops/<loop-id>.json`；用 `seekforge loop-resume <loop-id>`
   继续。会话级的 `resume` 和 `rewind` 仍然可用于人工干预。
-- 只有验证命令通过，且分析模式下全部必需验收标准都有证据满足时，退出码才为 0。
+- 只有验证命令通过，且分析模式下全部必需验收标准都有证据满足时，退出码才为 0。文件证据必须
+  带有 `path:src/feature.ts#symbol` 或 `#L10-L20` 这样的已核验内容锚点；仅路径存在不算证据。
 
 ```bash
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
@@ -200,7 +201,8 @@ seekforge loop-cleanup <worktree-name> [--force]
 - `--flaky-retries 0..5` 会在编辑前重跑失败阶段，之后通过时记录 `verify.flaky`；
   `--stable-passes 1..5` 要求完整流水线连续通过。
 - `--stuck-recoveries 0..5` 会在返回 `no_progress` 前做有界的重新诊断并改用不同策略；
-  `--rollback-regressions` 只允许在保留的 Loop worktree 中回滚退化迭代。
+  `--rollback-regressions` 只允许在保留的 Loop worktree 中回滚退化迭代；回滚后会重新验证，
+  并用恢复后的结果替换收敛基线。
 - `loop-history <id> [--after N] [--limit N]` 回放轮转后的 JSONL 事件历史；
   `loop-recover` 把失去 owner 的 `running` 或 `paused` 记录标为 `interrupted`，嵌入方可调用
   `autoResumeInterruptedLoops` 自动继续。
@@ -213,8 +215,9 @@ seekforge loop-cleanup <worktree-name> [--force]
 - TUI 提供等价的 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 命令，且只控制
   当前标签页中的 Loop。
 
-每轮快照会持久化阶段结果、标准化后的诊断/工作区指纹、解析出的失败数、恢复次数和连续
-通过次数。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
+每轮快照会持久化精简阶段结果、标准化后的诊断/工作区指纹、解析出的失败数、恢复次数和连续
+通过次数。重复的命令和输出只保留在最新结果/历史日志中，使状态保持在 reader 的 1 MiB 上限内；
+超限替换会在触碰最后一份可读状态前失败。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
 Agent 迭代重复记账。
 
 编辑迭代复用**一个 worker 会话**；需求分析和验收复用状态中记录的独立 reviewer
@@ -280,7 +283,8 @@ type LoopResult = {
    `no_progress`（卡住）
 4. 达到 `maxIterations` → `exhausted`
 
-当验证命令无法启动、超时或在执行器边界以其他方式失败时，返回 `verify_error`。
+当验证命令无法启动、达到阶段超时或在执行器边界以其他方式失败时，返回 `verify_error`；只有
+单独配置的总时长截止线才会产生 `budget: duration`。
 可用时，其最终输出包含有界的 stdout/stderr 诊断信息。
 
 编辑 Agent 失败后不会再盲目运行校验。网络、超时和限流错误最多按

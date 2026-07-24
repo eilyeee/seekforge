@@ -145,7 +145,7 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含
 `budgetReason`）、验证器错误、取消、无进展/迭代耗尽，以及带结构化 provider/session
 错误详情的 `agent_error`。
-`autoResumeInterruptedLoops` 会恢复租约 owner 已消失的持久化 `running` 记录。最终成功时
+`autoResumeInterruptedLoops` 会恢复租约 owner 已消失的持久化 `running` 或 `paused` 记录。最终成功时
 只抽取一次记忆，并对整个 Loop 只结算一次已选技能效果。
 
 ## 扩展点

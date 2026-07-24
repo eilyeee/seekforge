@@ -98,7 +98,7 @@ describe("loop requirement parsing", () => {
     });
   });
 
-  it("downgrades unverifiable claims and retains checked path or command evidence", () => {
+  it("requires content-anchored path evidence and retains verified anchors or commands", () => {
     const workspace = mkdtempSync(join(tmpdir(), "seekforge-acceptance-"));
     try {
       writeFileSync(join(workspace, "feature.ts"), "export const feature = true;\n");
@@ -106,7 +106,13 @@ describe("loop requirement parsing", () => {
       const unverifiable = validateLoopAcceptanceEvidence(
         workspace,
         spec,
-        { complete: true, criteria: [{ id: "AC-1", status: "met", evidence: ["missing.ts"] }], gaps: [] },
+        {
+          complete: true,
+          criteria: [
+            { id: "AC-1", status: "met", evidence: ["missing.ts#feature", "feature.ts", "feature.ts#missing"] },
+          ],
+          gaps: [],
+        },
         { commands: ["pnpm test"], verifierOutput: "all green" },
       );
       expect(unverifiable).toMatchObject({ complete: false, criteria: [{ status: "unknown", evidence: [] }] });
@@ -115,13 +121,23 @@ describe("loop requirement parsing", () => {
         spec,
         {
           complete: true,
-          criteria: [{ id: "AC-1", status: "met", evidence: ["path:feature.ts", "command:pnpm test"] }],
+          criteria: [
+            {
+              id: "AC-1",
+              status: "met",
+              evidence: ["path:feature.ts#feature", "path:feature.ts#L1", "command:pnpm test"],
+            },
+          ],
           gaps: [],
         },
         { commands: ["pnpm test"], verifierOutput: "all green" },
       );
       expect(verified.complete).toBe(true);
-      expect(verified.criteria[0]?.evidence).toEqual(["path:feature.ts", "command:pnpm test"]);
+      expect(verified.criteria[0]?.evidence).toEqual([
+        "path:feature.ts#feature",
+        "path:feature.ts#L1",
+        "command:pnpm test",
+      ]);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

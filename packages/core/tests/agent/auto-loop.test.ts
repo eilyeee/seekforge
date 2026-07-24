@@ -307,6 +307,7 @@ describe("runAutoLoop", () => {
             output: "Vitest\n× tests/a.test.ts > a\n× tests/b.test.ts > b\nTest Files 2 failed",
           };
         }
+        if (checks === 3) return { code: 1, output: "Vitest\n× tests/a.test.ts > a\nTest Files 1 failed" };
         return { code: 0, output: "ok" };
       }),
       rollbackOnRegression: true,
@@ -315,6 +316,32 @@ describe("runAutoLoop", () => {
     });
     expect(result.status).toBe("passed");
     expect(events.some((event) => event.type === "loop.rollback" && event.iteration === 1)).toBe(true);
+    const snapshots = loadLoopState(isolated, result.loopId!)?.snapshots ?? [];
+    expect(snapshots.find((snapshot) => snapshot.iteration === 1)?.failedTests).toBe(1);
+    expect(events.filter((event) => event.type === "verify" && event.iteration === 1)).toHaveLength(2);
+  });
+
+  it("rolls back a regression from a zero-failure acceptance baseline", async () => {
+    const isolated = join(workspace, ".seekforge", "worktrees", "loop-zero-baseline");
+    mkdirSync(isolated, { recursive: true });
+    const provider = scripted("flash", [REQUIREMENT_SPEC, acceptance("unmet"), "done", acceptance("met")]);
+    const deps: AgentCoreDeps = { provider, dispatcher: noopDispatcher, confirm: async () => true };
+    let checks = 0;
+    const events: LoopEvent[] = [];
+    const result = await runAutoLoop(deps, {
+      ...baseOpts(isolated, async () => {
+        checks++;
+        if (checks === 1) return { code: 0, output: "ok" };
+        if (checks === 2) return { code: 1, output: "Vitest\n× tests/new.test.ts > new\nTest Files 1 failed" };
+        return { code: 0, output: "ok" };
+      }),
+      requirementMode: "analyze",
+      rollbackOnRegression: true,
+      maxIterations: 1,
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.status).toBe("passed");
+    expect(events.some((event) => event.type === "loop.rollback")).toBe(true);
   });
 
   it("analyzes requirements before a green pre-check and requires acceptance evidence", async () => {
@@ -962,6 +989,21 @@ describe("runAutoLoop", () => {
     });
     expect(result.finalVerify.output).toContain("partial verifier output");
     expect(result.finalVerify.output).toContain("timed out");
+  });
+
+  it("does not misclassify a stage timeout as a duration budget without a duration limit", async () => {
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(
+        workspace,
+        async (_workspace, _command, signal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("aborted verifier")), { once: true });
+          }),
+      ),
+      verifyTimeoutMs: 5,
+    });
+    expect(result).toMatchObject({ status: "verify_error", iterations: 0 });
+    expect(result.budgetReason).toBeUndefined();
   });
 
   it("fails closed when a configured verification sandbox is unavailable", async () => {

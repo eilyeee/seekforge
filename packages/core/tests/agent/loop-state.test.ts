@@ -308,6 +308,55 @@ describe("loop state persistence", () => {
     expect(loadLoopState(workspace, "oversized")).toBeNull();
   });
 
+  it("compacts repeated stage evidence so every written state remains readable", () => {
+    const state = createLoopState({
+      loopId: "compact-snapshots",
+      task: "x",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 100,
+    });
+    const stageResults = Array.from({ length: 16 }, (_, index) => ({
+      id: `stage-${index}`,
+      command: "c".repeat(8_000),
+      code: 1,
+      output: "o".repeat(4_096),
+      attempts: 1,
+      flaky: false,
+      durationMs: 1,
+    }));
+    saveLoopState(workspace, {
+      ...state,
+      snapshots: Array.from({ length: 100 }, (_, iteration) => ({
+        iteration,
+        ts: new Date().toISOString(),
+        diagnosticsFingerprint: `diagnostics-${iteration}`,
+        workspaceFingerprint: `workspace-${iteration}`,
+        failedTests: 1,
+        stageResults,
+      })),
+    });
+    const file = join(workspace, ".seekforge", "loops", "compact-snapshots.json");
+    expect(readFileSync(file).byteLength).toBeLessThanOrEqual(1024 * 1024);
+    expect(loadLoopState(workspace, state.loopId)?.snapshots?.at(-1)?.stageResults[0]).toMatchObject({
+      command: "",
+      output: "",
+      code: 1,
+    });
+  });
+
+  it("rejects an oversized write without replacing the last readable state", () => {
+    const state = createLoopState({
+      loopId: "write-too-large",
+      task: "small",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    expect(() => saveLoopState(workspace, { ...state, task: "x".repeat(1024 * 1024) })).toThrow(/exceeds/);
+    expect(loadLoopState(workspace, state.loopId)?.task).toBe("small");
+  });
+
   it("recovers an old oversized lock without reading it into memory", () => {
     const root = join(workspace, ".seekforge", "loops");
     mkdirSync(root, { recursive: true });

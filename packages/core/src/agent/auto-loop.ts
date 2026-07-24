@@ -209,6 +209,10 @@ export type LoopResult = {
 const TAIL_CAP = 4096;
 const tail = (s: string): string => (s.length <= TAIL_CAP ? s : s.slice(s.length - TAIL_CAP));
 
+/** Historical snapshots keep outcomes, not repeated commands/output; the latest full result remains on LoopState. */
+const compactSnapshotStages = (stages: readonly LoopStageResult[]): LoopStageResult[] =>
+  stages.map((stage) => ({ ...stage, command: "", output: "" }));
+
 function diagnosticAggregate(value: string): string {
   if (value.length <= MAX_VERIFY_DIAGNOSTIC_INPUT) return value;
   const head = Math.floor(MAX_VERIFY_DIAGNOSTIC_INPUT / 2);
@@ -729,9 +733,10 @@ async function runAutoLoopWithLease(
     verifyRuns++;
     persist({ verifyRuns, elapsedMs: elapsedMs() }, true);
     const configuredTimeout = stage.timeoutMs ?? verifyTimeoutMs;
-    const remainingDuration = maxDurationMs === undefined ? configuredTimeout : maxDurationMs - elapsedMs();
+    const durationBudgetApplies = maxDurationMs !== undefined;
+    const remainingDuration = durationBudgetApplies ? maxDurationMs - elapsedMs() : configuredTimeout;
     if (remainingDuration <= 0) return { kind: "budget", reason: "duration" };
-    const durationLimited = remainingDuration <= configuredTimeout;
+    const durationLimited = durationBudgetApplies && remainingDuration <= configuredTimeout;
     const timeoutMs = Math.max(1, Math.min(configuredTimeout, remainingDuration));
     const timeoutController = new AbortController();
     const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
@@ -1026,7 +1031,7 @@ async function runAutoLoopWithLease(
       diagnosticsFingerprint: previousDiagnostics.fingerprint,
       workspaceFingerprint: previousWorkspace,
       failedTests: previousDiagnostics.failedTests.length,
-      stageResults: lastStageResults,
+      stageResults: compactSnapshotStages(lastStageResults),
     };
     snapshots.push(initialSnapshot);
     persist({ snapshots, stageResults: lastStageResults, passStreak });
@@ -1186,7 +1191,7 @@ async function runAutoLoopWithLease(
       return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
     }
     lastVerify = v;
-    const diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
+    let diagnostics = parseVerifyDiagnostics(verifyDiagnostics);
     let currentWorkspace = await fingerprinter.fingerprint({
       forcePaths: changedPaths,
       forceAll: forceFullFingerprint,
@@ -1200,19 +1205,9 @@ async function runAutoLoopWithLease(
       diagnosticsFingerprint: diagnostics.fingerprint,
       workspaceFingerprint: currentWorkspace,
       failedTests: diagnostics.failedTests.length,
-      stageResults: lastStageResults,
+      stageResults: compactSnapshotStages(lastStageResults),
     };
-    snapshots.push(snapshot);
-    if (snapshots.length > MAX_LOOP_ITERATIONS) snapshots.splice(0, snapshots.length - MAX_LOOP_ITERATIONS);
-    persist({ snapshots, stageResults: lastStageResults, passStreak });
-    emit({ type: "loop.snapshot", snapshot });
-    if (
-      rollbackOnRegression &&
-      sessionId &&
-      previousSnapshot &&
-      previousSnapshot.failedTests > 0 &&
-      snapshot.failedTests > previousSnapshot.failedTests
-    ) {
+    if (rollbackOnRegression && sessionId && previousSnapshot && snapshot.failedTests > previousSnapshot.failedTests) {
       const rewind = rewindSessionToTurn(opts.workspace, sessionId, rollbackTurnIndex);
       if (rollbackTurnIndex === 0) {
         sessionId = "";
@@ -1224,12 +1219,57 @@ async function runAutoLoopWithLease(
       steeringGuidance.push(
         `Iteration ${i} increased the parsed failure count and was rolled back. Use a different, narrower fix.`,
       );
+      try {
+        const restored = await executeStableVerify(i);
+        if (restored.kind === "budget") return finishBudget(restored.reason, lastVerify);
+        lastVerify = restored.result;
+        diagnostics = parseVerifyDiagnostics(restored.diagnostics);
+      } catch (error) {
+        if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+        return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
+      }
       currentWorkspace = await fingerprinter.fingerprint({ forceAll: true });
+      const restoredSnapshot: LoopIterationSnapshot = {
+        iteration: i,
+        ts: new Date().toISOString(),
+        diagnosticsFingerprint: diagnostics.fingerprint,
+        workspaceFingerprint: currentWorkspace,
+        failedTests: diagnostics.failedTests.length,
+        stageResults: compactSnapshotStages(lastStageResults),
+      };
+      snapshots.push(restoredSnapshot);
+      if (snapshots.length > MAX_LOOP_ITERATIONS) snapshots.splice(0, snapshots.length - MAX_LOOP_ITERATIONS);
+      persist({ snapshots, stageResults: lastStageResults, passStreak, lastVerify }, true);
+      emit({
+        type: "verify",
+        iteration: i,
+        code: lastVerify.code,
+        passed: lastVerify.code === 0,
+        output: lastVerify.output,
+      });
+      emit({ type: "loop.snapshot", snapshot: restoredSnapshot });
+      if (lastVerify.code === 0) {
+        if (requirements === null) {
+          await settleLoopMemory(lastVerify);
+          return finish("passed", lastVerify);
+        }
+        const review = await reviewRequirements(lastVerify);
+        if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+        if (review.complete) {
+          await settleLoopMemory(lastVerify);
+          return finish("passed", lastVerify);
+        }
+      }
       previousDiagnostics = diagnostics;
       previousAcceptance = acceptanceFingerprint(acceptanceReview);
       previousWorkspace = currentWorkspace;
       continue;
     }
+
+    snapshots.push(snapshot);
+    if (snapshots.length > MAX_LOOP_ITERATIONS) snapshots.splice(0, snapshots.length - MAX_LOOP_ITERATIONS);
+    persist({ snapshots, stageResults: lastStageResults, passStreak });
+    emit({ type: "loop.snapshot", snapshot });
 
     if (v.code === 0) {
       if (requirements === null) {

@@ -165,7 +165,7 @@ reported through bounded `loop.warning` events without masking verification.
 `LoopResult.status` distinguishes `passed`, guardrail `budget` exits (with
 `budgetReason`), verifier failures, cancellation, no-progress/exhaustion, and
 `agent_error` (with structured provider/session error details).
-`autoResumeInterruptedLoops` recovers durable `running` records whose lease owner
+`autoResumeInterruptedLoops` recovers durable `running` or `paused` records whose lease owner
 disappeared. Final success extracts memory once and settles selected-skill
 effectiveness once for the whole Loop.
 

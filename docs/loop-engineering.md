@@ -203,7 +203,9 @@ seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] 
   `seekforge loop-resume <loop-id>`. Session-level `resume` and `rewind` remain
   available for manual intervention.
 - Exit code 0 only when the verifier passed and, in analyzed modes, every
-  required acceptance criterion was evidenced as met.
+  required acceptance criterion was evidenced as met. File evidence must include
+  a verified content anchor such as `path:src/feature.ts#symbol` or `#L10-L20`;
+  path existence alone is not accepted.
 
 ```bash
 seekforge loop-resume <loop-id> [--approve-requirements] [--add-iters <n>] [--add-budget <usd>]
@@ -222,7 +224,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   consecutive full-pipeline passes.
 - `--stuck-recoveries 0..5` performs bounded re-diagnosis with a different
   strategy before returning `no_progress`. `--rollback-regressions` rewinds a
-  regression only inside a retained Loop worktree.
+  regression only inside a retained Loop worktree, then reruns verification and
+  replaces the convergence baseline with the restored result.
 - `loop-history <id> [--after N] [--limit N]` replays the rotated JSONL event
   history. `loop-recover` marks orphaned `running` or `paused` records as `interrupted`;
   embedders can call `autoResumeInterruptedLoops` to continue them.
@@ -237,8 +240,11 @@ seekforge loop-cleanup <worktree-name> [--force]
 - TUI users have the equivalent `/loop-pause`, `/loop-continue`, and
   `/loop-steer <guidance>` commands scoped to the active tab's Loop.
 
-Iteration snapshots persist stage results, normalized diagnostic/workspace
-fingerprints, parsed failure counts, recovery attempts, and pass streaks. Loop
+Iteration snapshots persist compact stage outcomes, normalized diagnostic/workspace
+fingerprints, parsed failure counts, recovery attempts, and pass streaks. Repeated
+commands and output remain only in the latest result/history log so the state stays
+inside its reader's 1 MiB limit; oversized replacements fail before the last readable
+state is touched. Loop
 success performs memory extraction once and records selected-skill effectiveness
 once for the whole Loop rather than once per internal agent iteration.
 
@@ -306,8 +312,9 @@ Checked before spending another iteration, in order:
    fingerprint unchanged → `no_progress` (stuck)
 4. reached `maxIterations` → `exhausted`
 
-A `verify_error` is returned when the verify command cannot start, times out, or
-otherwise fails at the executor boundary. Its final output includes bounded
+A `verify_error` is returned when the verify command cannot start, reaches its
+per-stage timeout, or otherwise fails at the executor boundary. Only an independently
+configured total duration deadline produces `budget: duration`. Final output includes bounded
 stdout/stderr diagnostics when available.
 
 An edit-agent failure is never sent blindly into the verifier. Network, timeout,
