@@ -2147,6 +2147,18 @@ active session.
 - **Caught:** background Loop recovery originally had no atomic idle-start gate
   spanning the server repository queue and process-visible sessions.
 
+## 172. Owner shutdown and user cancellation are different durable outcomes
+
+The same AbortSignal mechanism may represent either an explicit user decision
+or teardown of the process that owns background work. Persisting both as a
+terminal cancellation makes lifecycle-managed work impossible to resume.
+
+- **Do:** carry the abort intent into the operation, persist owner teardown as a
+  resumable interruption, and avoid recording infrastructure interruption as a
+  negative quality outcome.
+- **Caught:** shutting down idle Loop recovery changed its durable state to
+  `cancelled` and recorded a failed skill outcome, so the next server skipped it.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

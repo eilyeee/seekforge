@@ -166,6 +166,7 @@ describe("idle Loop recovery", () => {
       expect(agentOpts.confirm).toBeTypeOf("function");
       expect(agentOpts.signal).toBe(loopOpts.signal);
       expect(loopOpts.approvalMode).toBe("acceptEdits");
+      expect(loopOpts.abortStatus).toBe("interrupted");
       attempts++;
       if (attempts === 1) throw new Error("temporary provider outage");
       const state = loadLoopState(workspace, loopId);

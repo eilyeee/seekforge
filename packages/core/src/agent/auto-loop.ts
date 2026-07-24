@@ -136,6 +136,8 @@ export type LoopOptions = {
   escalateOnFailure?: boolean;
   /** Cooperative stop (Ctrl-C / a Stop button). */
   signal?: AbortSignal;
+  /** Internal owner-lifecycle aborts remain resumable instead of becoming a user cancellation. */
+  abortStatus?: "cancelled" | "interrupted";
   /** Per-iteration progress callback. */
   onEvent?: (event: LoopEvent) => void;
   /** Optional safe-boundary pause/resume/steering channel. */
@@ -355,6 +357,9 @@ function liveVerifyOutput(
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
   if (opts.task.trim() === "") throw new Error("Loop task must be non-empty");
   if (opts.verifyCommand.trim() === "") throw new Error("Loop verify command must be non-empty");
+  if (opts.abortStatus !== undefined && opts.abortStatus !== "cancelled" && opts.abortStatus !== "interrupted") {
+    throw new Error(`Invalid Loop abort status: ${String(opts.abortStatus)}`);
+  }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
   if (
     configuredIterations !== undefined &&
@@ -649,7 +654,7 @@ async function runAutoLoopWithLease(
       true,
     );
     const outcomeSessionId = sessionId || reviewerSessionId;
-    if (!skillOutcomeRecorded && outcomeSessionId) {
+    if (!skillOutcomeRecorded && outcomeSessionId && withId.status !== "interrupted") {
       skillOutcomeRecorded = true;
       const skillIds = [
         ...new Set([
@@ -672,7 +677,10 @@ async function runAutoLoopWithLease(
     done({ status: "budget", budgetReason, iterations, costUsd, sessionId, finalVerify });
   const finishAgentError = (agentError: AgentError, finalVerify: { code: number; output: string }): LoopResult =>
     done({ status: "agent_error", agentError, iterations, costUsd, sessionId, finalVerify });
-  const cancelledVerify = { code: -1, output: "cancelled" };
+  const abortStatus = opts.abortStatus ?? "cancelled";
+  const abortedVerify: { code: number; output: string } = { code: -1, output: abortStatus };
+  const finishAbort = (finalVerify: { code: number; output: string } = abortedVerify): LoopResult =>
+    finish(abortStatus, finalVerify);
   const elapsedMs = (): number => priorElapsedMs + (Date.now() - runStartedAt);
   const currentBudgetReason = (pendingCost = 0, pendingTokens = 0): LoopBudgetReason | null => {
     if (costBudgetUsd !== undefined && costUsd + pendingCost >= costBudgetUsd) return "cost";
@@ -964,11 +972,11 @@ async function runAutoLoopWithLease(
   // Analyze before the verifier so a green pre-check cannot erase unmet scope.
   const canApprovePersistedRequirements = opts.resumeState !== undefined && requirements !== null;
   if (requirementMode !== "quick" && requirements === null) {
-    if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+    if (opts.signal?.aborted) return finishAbort();
     emit({ type: "requirements.started", phase: "analysis" });
     const phase = await runReadOnlyPhase(buildRequirementAnalysisPrompt(opts.task, opts.verifyCommand), true);
     if (!phase.completed) {
-      if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+      if (opts.signal?.aborted) return finishAbort();
       const budget = currentBudgetReason();
       if (budget !== null) return finishBudget(budget, { code: -1, output: `${budget} budget reached` });
       emit({
@@ -1003,7 +1011,7 @@ async function runAutoLoopWithLease(
       approvalRequired: requirementMode === "confirm" && requirementsApprovedAt === null && !opts.approveRequirements,
     });
   }
-  if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+  if (opts.signal?.aborted) return finishAbort();
   const requirementBudget = currentBudgetReason();
   if (requirementBudget !== null) {
     return finishBudget(requirementBudget, { code: -1, output: `${requirementBudget} budget reached` });
@@ -1020,7 +1028,7 @@ async function runAutoLoopWithLease(
   let preVerify: { code: number; output: string };
   let preVerifyDiagnostics = "";
   if (opts.signal?.aborted) {
-    return finish("cancelled", cancelledVerify);
+    return finishAbort();
   }
   try {
     await applyControl(0);
@@ -1035,7 +1043,7 @@ async function runAutoLoopWithLease(
     preVerifyDiagnostics = captured.diagnostics;
   } catch (error) {
     if (opts.signal?.aborted) {
-      return finish("cancelled", cancelledVerify);
+      return finishAbort();
     }
     // The command could not be run at all.
     return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
@@ -1046,7 +1054,7 @@ async function runAutoLoopWithLease(
       return finish("passed", preVerify);
     }
     const review = await reviewRequirements(preVerify);
-    if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+    if (opts.signal?.aborted) return finishAbort();
     if (review.complete) {
       await settleLoopMemory(preVerify);
       return finish("passed", preVerify);
@@ -1085,14 +1093,14 @@ async function runAutoLoopWithLease(
 
   for (let i = iterations + 1; i <= maxIterations; i++) {
     if (opts.signal?.aborted) {
-      return finish("cancelled", lastVerify);
+      return finishAbort(lastVerify);
     }
     const beforeIterationBudget = currentBudgetReason();
     if (beforeIterationBudget !== null) return finishBudget(beforeIterationBudget, lastVerify);
     try {
       await applyControl(i);
     } catch {
-      if (opts.signal?.aborted) return finish("cancelled", lastVerify);
+      if (opts.signal?.aborted) return finishAbort(lastVerify);
       throw new Error("Loop control failed while paused");
     }
     emit({ type: "iteration.start", iteration: i });
@@ -1186,7 +1194,7 @@ async function runAutoLoopWithLease(
       costUsd += runCost;
       tokensUsed += runTokens;
       persist({ costUsd, tokensUsed, sessionId, elapsedMs: elapsedMs() }, true);
-      if (opts.signal?.aborted) return finish("cancelled", lastVerify);
+      if (opts.signal?.aborted) return finishAbort(lastVerify);
       const budget = currentBudgetReason();
       if (budget !== null) {
         iterations = i;
@@ -1224,7 +1232,7 @@ async function runAutoLoopWithLease(
       verifyDiagnostics = captured.diagnostics;
     } catch (error) {
       if (opts.signal?.aborted) {
-        return finish("cancelled", cancelledVerify);
+        return finishAbort();
       }
       return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
     }
@@ -1263,7 +1271,7 @@ async function runAutoLoopWithLease(
         lastVerify = restored.result;
         diagnostics = parseVerifyDiagnostics(restored.diagnostics);
       } catch (error) {
-        if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+        if (opts.signal?.aborted) return finishAbort();
         return finish("verify_error", { code: -1, output: verifyErrorOutput(error) });
       }
       currentWorkspace = await fingerprinter.fingerprint({ forceAll: true });
@@ -1292,7 +1300,7 @@ async function runAutoLoopWithLease(
           return finish("passed", lastVerify);
         }
         const review = await reviewRequirements(lastVerify);
-        if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+        if (opts.signal?.aborted) return finishAbort();
         if (review.complete) {
           await settleLoopMemory(lastVerify);
           return finish("passed", lastVerify);
@@ -1315,7 +1323,7 @@ async function runAutoLoopWithLease(
         return finish("passed", v);
       }
       const review = await reviewRequirements(v);
-      if (opts.signal?.aborted) return finish("cancelled", cancelledVerify);
+      if (opts.signal?.aborted) return finishAbort();
       if (review.complete) {
         await settleLoopMemory(v);
         return finish("passed", v);
@@ -1324,7 +1332,7 @@ async function runAutoLoopWithLease(
 
     // --- Guardrails (checked before spending another iteration). -----------
     if (opts.signal?.aborted) {
-      return finish("cancelled", v);
+      return finishAbort(v);
     }
     const afterIterationBudget = currentBudgetReason();
     if (afterIterationBudget !== null) return finishBudget(afterIterationBudget, v);

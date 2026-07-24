@@ -13,7 +13,7 @@ import {
   type LoopEvent,
   type LoopOptions,
 } from "../../src/agent/auto-loop.js";
-import { createLoopState, loadLoopState } from "../../src/agent/loop-state.js";
+import { createLoopState, loadLoopState, recoverInterruptedLoops } from "../../src/agent/loop-state.js";
 import { createLoopControl } from "../../src/agent/loop-control.js";
 import { enqueueLoopControl } from "../../src/agent/loop-control-store.js";
 import { setSandboxAvailabilityCheckForTests } from "../../src/tools/os-sandbox.js";
@@ -186,6 +186,7 @@ describe("runAutoLoop", () => {
     { patch: { maxIterations: Number.NaN }, message: /maxIterations/ },
     { patch: { costBudgetUsd: 0 }, message: /costBudgetUsd/ },
     { patch: { costBudgetUsd: Number.POSITIVE_INFINITY }, message: /costBudgetUsd/ },
+    { patch: { abortStatus: "passed" as never }, message: /abort status/ },
   ])("rejects invalid loop guardrails before creating state: $patch", async ({ patch, message }) => {
     await expect(runAutoLoop(mkDeps().deps, { ...baseOpts(workspace, failNTimes(0)), ...patch })).rejects.toThrow(
       message,
@@ -1079,6 +1080,40 @@ describe("runAutoLoop", () => {
     expect(resumed.iterations).toBe(1);
     expect(resumed.costUsd).toBe(stopped.costUsd);
     expect(loadLoopState(workspace, stopped.loopId!)?.status).toBe("passed");
+  });
+
+  it("keeps an owner-lifecycle abort resumable", async () => {
+    const controller = new AbortController();
+    let markVerificationStarted = (): void => {};
+    const verificationStarted = new Promise<void>((resolve) => {
+      markVerificationStarted = resolve;
+    });
+    const running = runAutoLoop(mkDeps().deps, {
+      ...baseOpts(
+        workspace,
+        async (_workspace, _command, signal) =>
+          new Promise((_resolve, reject) => {
+            markVerificationStarted();
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      ),
+      signal: controller.signal,
+      abortStatus: "interrupted",
+    });
+    await verificationStarted;
+    controller.abort();
+
+    const interrupted = await running;
+    expect(interrupted).toMatchObject({ status: "interrupted", iterations: 0 });
+    expect(interrupted.finalVerify.output).toBe("interrupted");
+    expect(loadLoopState(workspace, interrupted.loopId!)?.status).toBe("interrupted");
+    expect(recoverInterruptedLoops(workspace).map((state) => state.loopId)).toContain(interrupted.loopId);
+
+    const resumed = await resumeAutoLoop(mkDeps().deps, interrupted.loopId!, {
+      workspace,
+      verify: async () => ({ code: 0, output: "green" }),
+    });
+    expect(resumed.status).toBe("passed");
   });
 
   it("resumes an exhausted loop with added iterations and persists the cap", async () => {

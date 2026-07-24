@@ -239,7 +239,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   recovery. It reserves the physical repository queue, takes a cross-process
   idle snapshot, skips rather than waits when work is active, processes
   workspaces sequentially, prevents overlapping ticks, and aborts its current
-  recovery during shutdown. The scheduler is disabled by default.
+  recovery during shutdown. A lifecycle abort is persisted as `interrupted`,
+  not user `cancelled`, so the next server can resume it. The scheduler is
+  disabled by default.
 - `loop-dag <file>` runs a JSON dependency graph sequentially with shared
   budgets. Core `runLoopDag` also supports bounded parallel batches when every
   node resolves to a distinct physical workspace.

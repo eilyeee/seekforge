@@ -262,7 +262,12 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                             signal,
                           },
                           state.loopId,
-                          { workspace: workspace.path, approvalMode: "acceptEdits", signal },
+                          {
+                            workspace: workspace.path,
+                            approvalMode: "acceptEdits",
+                            abortStatus: "interrupted",
+                            signal,
+                          },
                         ),
                       );
                     } catch (error) {

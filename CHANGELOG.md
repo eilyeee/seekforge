@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### round 61: resumable Loop recovery shutdown
+- Distinguished explicit user cancellation from background-owner teardown so
+  closing a server leaves its active automatic Loop recovery `interrupted` and
+  resumable on the next start.
+- Prevented lifecycle interruptions from being recorded as failed skill
+  outcomes, while preserving existing `cancelled` behavior for CLI, TUI,
+  Desktop, REST, and WebSocket user stops.
+- Added Core cancellation-path and Server integration regression coverage.
+
 ### round 60: idle Loop recovery
 - Added opt-in `seekforge serve --loop-auto-resume` recovery for orphaned and
   interrupted durable Loops, with delayed recurring checks, sequential
