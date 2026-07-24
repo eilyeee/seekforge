@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### round 60: idle Loop recovery
+- Added opt-in `seekforge serve --loop-auto-resume` recovery for orphaned and
+  interrupted durable Loops, with delayed recurring checks, sequential
+  workspace processing, retryable failures, non-overlap, cancellation, and
+  structured completion/failure logs.
+- Added a non-blocking Server coordinator path that reserves the physical
+  repository queue and checks process-visible session activity before starting
+  background work.
+- Kept automatic model calls and edits disabled by default, and added Core,
+  Server, and CLI lifecycle regression coverage.
+
 ### round 59: retryable Loop delivery
 - Added a strict persisted delivery lifecycle for passed Loops, including mode,
   status, attempt count, bounded errors, and final branch/path/PR artifacts.

@@ -209,7 +209,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   并用恢复后的结果替换收敛基线。
 - `loop-history <id> [--after N] [--limit N]` 回放轮转后的 JSONL 事件历史；
   `loop-recover` 把失去 owner 的 `running` 或 `paused` 记录标为 `interrupted`，嵌入方可调用
-  `autoResumeInterruptedLoops` 自动继续。
+  `autoResumeInterruptedLoops` 自动继续。已有的 `interrupted` 记录仍可恢复，因此瞬时恢复失败
+  能在之后重试。
+- `seekforge serve --loop-auto-resume` 显式开启由服务生命周期托管的后台恢复。它先占用物理仓库
+  队列，再取得跨进程空闲快照；有工作时直接跳过而非等待，多个工作区顺序处理，定时检查不会
+  重叠，关闭服务会中止当前恢复。该调度器默认关闭。
 - `loop-dag <file>` 以共享预算顺序执行 JSON 依赖图。Core `runLoopDag` 还支持有界并行，
   但每个节点必须解析到不同的物理工作区。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送

@@ -3,10 +3,18 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { acquireSessionLease, SessionBusyError, type SessionLease } from "@seekforge/core";
+import {
+  acquireSessionLease,
+  acquireWorkspaceSessionGuardForLease,
+  hasActiveLoopLease,
+  SessionBusyError,
+  type SessionLease,
+} from "@seekforge/core";
 
 const execFileAsync = promisify(execFile);
 const AGENT_MUTATION_LOCK_ID = "coord-server-agent-edit";
+
+export type IdleMutationAttempt<T> = { acquired: true; value: T } | { acquired: false };
 
 /** Physical identity shared by a repository and all of its linked worktrees. */
 export async function canonicalRepositoryKey(workspace: string): Promise<string> {
@@ -79,6 +87,61 @@ export class ServerCoordinator {
         lease.release();
       }
     });
+  }
+
+  /**
+   * Starts an operation only when no repository-local work or cross-process
+   * session is active. The local reservation is installed synchronously after
+   * resolving repository identity, before any further asynchronous boundary.
+   */
+  tryWithIdleAgentMutation<T>(
+    workspace: string,
+    signal: AbortSignal | undefined,
+    operation: () => Promise<T>,
+  ): Promise<IdleMutationAttempt<T>> {
+    return this.track(
+      (async () => {
+        const key = await canonicalRepositoryKey(workspace);
+        if (this.repositoryLocks.has(key)) return { acquired: false } as const;
+
+        let releaseReservation = (): void => {};
+        const reservation = new Promise<void>((resolveReservation) => {
+          releaseReservation = resolveReservation;
+        });
+        this.repositoryLocks.set(key, reservation);
+
+        let lease: SessionLease | undefined;
+        try {
+          signal?.throwIfAborted();
+          try {
+            lease = acquireSessionLease(workspace, AGENT_MUTATION_LOCK_ID);
+          } catch (error) {
+            if (error instanceof SessionBusyError) return { acquired: false } as const;
+            throw error;
+          }
+
+          if (hasActiveLoopLease(workspace)) return { acquired: false } as const;
+
+          let idleGuard: SessionLease;
+          try {
+            idleGuard = acquireWorkspaceSessionGuardForLease(workspace, lease);
+          } catch (error) {
+            if (error instanceof SessionBusyError) return { acquired: false } as const;
+            throw error;
+          }
+          // The coordinator lease continues to exclude other server mutations;
+          // release the guard so the resumed Loop can create its own sessions.
+          idleGuard.release();
+
+          signal?.throwIfAborted();
+          return { acquired: true, value: await operation() } as const;
+        } finally {
+          lease?.release();
+          releaseReservation();
+          if (this.repositoryLocks.get(key) === reservation) this.repositoryLocks.delete(key);
+        }
+      })(),
+    );
   }
 
   async drain(): Promise<void> {

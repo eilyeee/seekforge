@@ -10,7 +10,13 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
-import { createMemoryMaintenanceScheduler } from "@seekforge/core";
+import {
+  createLoopRecoveryScheduler,
+  createMemoryMaintenanceScheduler,
+  recoverInterruptedLoops,
+  type LoopRecoveryScheduler,
+  type LoopResult,
+} from "@seekforge/core";
 import { MAX_WS_PAYLOAD_BYTES } from "@seekforge/shared/protocol-limits";
 import {
   createDefaultAgent,
@@ -79,6 +85,12 @@ export type StartServerOptions = {
   memoryMaintenanceInitialDelayMs?: number;
   /** Embedding/test override for the recurring idle-memory check interval. */
   memoryMaintenanceIntervalMs?: number;
+  /** Opt in to resuming interrupted durable Loops while their workspace is idle. */
+  loopAutoResume?: boolean;
+  /** Embedding/test override for the first idle-Loop recovery delay. */
+  loopRecoveryInitialDelayMs?: number;
+  /** Embedding/test override for the recurring idle-Loop recovery interval. */
+  loopRecoveryIntervalMs?: number;
 };
 
 export type RunningServer = {
@@ -228,6 +240,70 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     ...(opts.memoryMaintenanceIntervalMs !== undefined ? { intervalMs: opts.memoryMaintenanceIntervalMs } : {}),
   });
 
+  let loopRecoveryScheduler: LoopRecoveryScheduler | undefined;
+  try {
+    loopRecoveryScheduler = opts.loopAutoResume
+      ? createLoopRecoveryScheduler({
+          targets: () =>
+            registry.list.map((workspace) => ({
+              workspace: workspace.path,
+              recover: async (signal): Promise<LoopResult[] | undefined> => {
+                const attempt = await coordinator.tryWithIdleAgentMutation(workspace.path, signal, async () => {
+                  const results: LoopResult[] = [];
+                  for (const state of recoverInterruptedLoops(workspace.path)) {
+                    signal.throwIfAborted();
+                    try {
+                      results.push(
+                        await resumeLoop(
+                          {
+                            workspace: workspace.path,
+                            confirm: async () => false,
+                            extractMemory: true,
+                            signal,
+                          },
+                          state.loopId,
+                          { workspace: workspace.path, approvalMode: "acceptEdits", signal },
+                        ),
+                      );
+                    } catch (error) {
+                      if (signal.aborted) throw error;
+                      logger.log("error", "loop.recovery.failed", {
+                        workspace: workspace.path,
+                        loopId: state.loopId,
+                        error: error instanceof Error ? error.message : String(error),
+                      });
+                    }
+                  }
+                  return results;
+                });
+                return attempt.acquired ? attempt.value : undefined;
+              },
+            })),
+          onResults: (results) => {
+            for (const result of results) {
+              if (result.outcome.status === "completed" && result.outcome.results.length > 0) {
+                logger.log("info", "loop.recovery.completed", {
+                  workspace: result.workspace,
+                  count: result.outcome.results.length,
+                  loops: result.outcome.results.map((loop) => ({ loopId: loop.loopId, status: loop.status })),
+                });
+              } else if (result.outcome.status === "failed") {
+                logger.log("error", "loop.recovery.failed", {
+                  workspace: result.workspace,
+                  error: result.outcome.error,
+                });
+              }
+            }
+          },
+          ...(opts.loopRecoveryInitialDelayMs !== undefined ? { initialDelayMs: opts.loopRecoveryInitialDelayMs } : {}),
+          ...(opts.loopRecoveryIntervalMs !== undefined ? { intervalMs: opts.loopRecoveryIntervalMs } : {}),
+        })
+      : undefined;
+  } catch (error) {
+    memoryMaintenanceScheduler.dispose();
+    throw error;
+  }
+
   try {
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen);
@@ -238,11 +314,13 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
     });
   } catch (error) {
     memoryMaintenanceScheduler.dispose();
+    loopRecoveryScheduler?.dispose();
     throw error;
   }
   const address = server.address();
   if (address === null || typeof address === "string") {
     memoryMaintenanceScheduler.dispose();
+    loopRecoveryScheduler?.dispose();
     server.close();
     throw new Error("could not determine the listen port");
   }
@@ -253,6 +331,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
   const close = (): Promise<void> => {
     closePromise ??= (async () => {
       memoryMaintenanceScheduler.dispose();
+      loopRecoveryScheduler?.dispose();
       for (const run of triggerRuns) run.abort();
       const closing = new Promise<void>((resolveClose, rejectClose) => {
         // Terminating sockets triggers their close handlers, which abort active

@@ -3,9 +3,16 @@
  * progress as `loop.event` frames, ending with `idle`. Mirrors ws.test.ts:
  * the loop runner is faked so no real model/verify calls happen.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
-import type { LoopOptions, LoopResult } from "@seekforge/core";
+import {
+  acquireSessionLease,
+  createLoopState,
+  loadLoopState,
+  saveLoopState,
+  type LoopOptions,
+  type LoopResult,
+} from "@seekforge/core";
 import {
   startServer,
   type CreateAgentFn,
@@ -140,6 +147,64 @@ describe("loop.resume", () => {
     const error = await rx.waitFor((frame) => frame.type === "error");
     expect(error).toMatchObject({ code: "loop_error", message: "resume unavailable" });
     await rx.waitFor((frame) => frame.type === "idle");
+  });
+});
+
+describe("idle Loop recovery", () => {
+  it("is opt-in, skips active sessions, and retries an interrupted recovery", async () => {
+    const workspace = makeWorkspace();
+    createLoopState({
+      loopId: "idle-orphan",
+      task: "finish in the background",
+      workspace,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    const foreground = acquireSessionLease(workspace, "foreground-session");
+    let attempts = 0;
+    const resumeLoop = vi.fn<ResumeLoopFn>(async (agentOpts, loopId, loopOpts) => {
+      expect(agentOpts.confirm).toBeTypeOf("function");
+      expect(agentOpts.signal).toBe(loopOpts.signal);
+      expect(loopOpts.approvalMode).toBe("acceptEdits");
+      attempts++;
+      if (attempts === 1) throw new Error("temporary provider outage");
+      const state = loadLoopState(workspace, loopId);
+      if (!state) throw new Error("missing recovered state");
+      saveLoopState(workspace, { ...state, status: "passed", updatedAt: new Date().toISOString() });
+      return loopResult({ loopId, iterations: 0 });
+    });
+    const log = vi.fn();
+    server = await startServer({
+      workspace,
+      port: 0,
+      token: TOKEN,
+      createAgent: unusedAgentFactory,
+      resumeLoop,
+      loopAutoResume: true,
+      loopRecoveryInitialDelayMs: 5,
+      loopRecoveryIntervalMs: 10,
+      logger: { log },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    expect(resumeLoop).not.toHaveBeenCalled();
+    expect(loadLoopState(workspace, "idle-orphan")?.status).toBe("running");
+
+    foreground.release();
+    await vi.waitFor(() => expect(resumeLoop).toHaveBeenCalledTimes(2));
+    expect(loadLoopState(workspace, "idle-orphan")?.status).toBe("passed");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(resumeLoop).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith(
+      "error",
+      "loop.recovery.failed",
+      expect.objectContaining({ workspace, loopId: "idle-orphan", error: "temporary provider outage" }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      "info",
+      "loop.recovery.completed",
+      expect.objectContaining({ workspace, count: 1 }),
+    );
   });
 });
 

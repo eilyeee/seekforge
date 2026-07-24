@@ -887,14 +887,15 @@ program
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
+  .option("--loop-auto-resume", "resume interrupted durable Loops while their workspace is idle")
   .description("serve the web UI and agent API for one or more workspaces (127.0.0.1 only)")
-  .action(async (paths: string[], opts: { port: string; workspace: string[] }) => {
+  .action(async (paths: string[], opts: { port: string; workspace: string[]; loopAutoResume?: boolean }) => {
     const port = /^\d+$/.test(opts.port) ? Number(opts.port) : Number.NaN;
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535) {
       fail(`invalid --port "${opts.port}" (expected 0-65535)`);
       return;
     }
-    await serveCommand({ port, workspaces: [...paths, ...opts.workspace] });
+    await serveCommand({ port, workspaces: [...paths, ...opts.workspace], loopAutoResume: opts.loopAutoResume });
   });
 
 registerSkillCommands(program);

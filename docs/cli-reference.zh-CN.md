@@ -112,6 +112,18 @@
 | `seekforge resume <id>` | 继续某个会话（最近一次也可用 `run/ask -c`） |
 | `seekforge replay <session>` | 把存储会话的事件确定性地重新渲染到 stdout——不调用模型、零成本。`--verbose` 显示完整工具参数 / 结果 |
 
+## Server flag
+
+`seekforge serve [paths...]` 托管本地 Web/API 服务。它接受可重复的
+`--workspace <path>`、`--port <n>`，以及以下后台 Loop 控制项：
+
+| Flag | 说明 |
+| --- | --- |
+| `--loop-auto-resume` | 显式开启：工作区空闲时恢复持久化的 `running`、`paused` 或已有的 `interrupted` Loop。首次检查在 30 秒后执行，之后每 5 分钟检查一次。繁忙工作区直接跳过，多个工作区顺序处理；瞬时恢复失败会在之后的检查中重试，服务关闭会中止其拥有的恢复任务。 |
+
+自动 Loop 恢复默认关闭，因为恢复后可能调用模型并编辑工作区。恢复沿用 Loop
+持久化的额度和 `acceptEdits`；没有用户连接时，超出该模式的权限请求会被拒绝。
+
 ## 插件命令
 
 `seekforge plugin`（别名 `plugins`）管理一等扩展包。项目插件只能被发现；安装会把

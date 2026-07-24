@@ -131,6 +131,7 @@ language follows en / zh-CN), with every surface in one window:
 
 ```bash
 seekforge serve                                     # open the printed URL in a browser
+seekforge serve --loop-auto-resume                  # also resume interrupted Loops while idle (opt-in)
 pnpm --filter @seekforge/desktop build && pnpm tauri dev   # or the native app (dev)
 ```
 

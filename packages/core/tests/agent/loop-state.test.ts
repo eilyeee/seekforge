@@ -94,6 +94,11 @@ describe("loop state persistence", () => {
       expect(loadLoopState(workspace, orphan.loopId)?.status).toBe("interrupted");
       expect(loadLoopState(workspace, paused.loopId)?.status).toBe("interrupted");
       expect(loadLoopState(workspace, live.loopId)?.status).toBe("running");
+      expect(
+        recoverInterruptedLoops(workspace)
+          .map((state) => state.loopId)
+          .sort(),
+      ).toEqual([orphan.loopId, paused.loopId].sort());
     } finally {
       lease.release();
     }

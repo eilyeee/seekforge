@@ -123,6 +123,21 @@ Beyond the run/ask flags above, these subcommands operate on stored sessions
 | `seekforge resume <id>` | Continue a session (also `run/ask -c` for the latest) |
 | `seekforge replay <session>` | Deterministically re-render a stored session's events to stdout — no model calls, no cost. `--verbose` for full tool args/results |
 
+## Server flags
+
+`seekforge serve [paths...]` hosts the local Web/API server. It accepts a
+repeatable `--workspace <path>`, `--port <n>`, and the following background
+Loop control:
+
+| Flag | Description |
+| --- | --- |
+| `--loop-auto-resume` | Opt in to recovering durable `running`, `paused`, or already-`interrupted` Loops while their workspace is idle. The first check runs after 30 seconds, then every 5 minutes. Busy workspaces are skipped, workspaces are handled sequentially, transient resume failures are retried on a later check, and server shutdown aborts an owned recovery. |
+
+Automatic Loop recovery is disabled by default because a resumed Loop can make
+model calls and edit its workspace. Recovery uses the Loop's persisted limits
+and `acceptEdits`; permission requests beyond that mode are denied when no user
+is connected.
+
 ## Plugin commands
 
 `seekforge plugin` (alias `plugins`) manages first-class extension bundles.

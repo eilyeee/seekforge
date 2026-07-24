@@ -57,6 +57,16 @@ export {
   type MemoryMaintenanceSchedulerOptions,
 } from "./memory-idle.js";
 export {
+  createLoopRecoveryScheduler,
+  DEFAULT_LOOP_IDLE_CHECK_INTERVAL_MS,
+  DEFAULT_LOOP_IDLE_INITIAL_DELAY_MS,
+  type IdleLoopRecoveryOutcome,
+  type IdleLoopRecoveryResult,
+  type IdleLoopRecoveryTarget,
+  type LoopRecoveryScheduler,
+  type LoopRecoverySchedulerOptions,
+} from "./loop-idle.js";
+export {
   buildAgentCoreDeps,
   buildProvider,
   type AgentCoreDepsCommon,

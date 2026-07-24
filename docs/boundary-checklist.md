@@ -2133,6 +2133,20 @@ parser lets an adjacent record type break listing and recovery.
 - **Caught:** Loop state listing treated `<id>.control.json` as a state id containing
   a dot and threw instead of listing Loops.
 
+## 171. Idle checks need a reservation before the first asynchronous gap
+
+Checking an in-process queue and only reserving it after another `await` lets a
+foreground operation enter between the observation and the background start.
+Likewise, a process-local check alone cannot prove that another process has no
+active session.
+
+- **Do:** resolve the physical repository identity, synchronously install a local
+  reservation, then acquire the cross-process coordination lease and workspace
+  guard before declaring background work idle. If any layer is busy, skip rather
+  than queue the idle task.
+- **Caught:** background Loop recovery originally had no atomic idle-start gate
+  spanning the server repository queue and process-visible sessions.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -1000,10 +1000,14 @@ export function listLoopStates(workspace: string): LoopState[] {
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
-/** Marks durable running or paused records whose process/lease disappeared as resumable interruptions. */
+/** Returns resumable interruptions, marking orphaned running or paused records first. */
 export function recoverInterruptedLoops(workspace: string): LoopState[] {
   const recovered: LoopState[] = [];
   for (const state of listLoopStates(workspace)) {
+    if (state.status === "interrupted") {
+      recovered.push(state);
+      continue;
+    }
     if ((state.status !== "running" && state.status !== "paused") || isLoopLeaseActive(workspace, state.loopId))
       continue;
     const next = { ...state, status: "interrupted" as const, updatedAt: new Date().toISOString() };

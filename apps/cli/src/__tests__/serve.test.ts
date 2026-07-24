@@ -32,11 +32,12 @@ describe("serveCommand lifecycle", () => {
     const close = vi.fn().mockResolvedValue(undefined);
     startServer.mockResolvedValue({ port: 7373, token: "token", close });
 
-    const running = serveCommand({ port: 7373, workspaces: [] });
+    const running = serveCommand({ port: 7373, workspaces: [], loopAutoResume: true });
     await vi.waitFor(() => expect(process.listeners("SIGTERM").length).toBe(beforeTerm.size + 1));
     addedSignalListener("SIGTERM", beforeTerm)("SIGTERM");
     await running;
 
+    expect(startServer).toHaveBeenCalledWith(expect.objectContaining({ loopAutoResume: true }));
     expect(close).toHaveBeenCalledOnce();
     expect(new Set(process.listeners("SIGINT"))).toEqual(beforeInt);
     expect(new Set(process.listeners("SIGTERM"))).toEqual(beforeTerm);

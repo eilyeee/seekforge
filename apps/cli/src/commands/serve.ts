@@ -7,6 +7,8 @@ export type ServeOptions = {
   port: number;
   /** Workspace paths to host (deduped, resolved, missing skipped). Empty = cwd. */
   workspaces: string[];
+  /** Resume interrupted durable Loops only when a workspace is idle. */
+  loopAutoResume?: boolean;
 };
 
 /**
@@ -39,7 +41,12 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
   // a real on-disk dist from inside a compiled binary's virtual FS.
   const envStatic = process.env.SEEKFORGE_STATIC_DIR;
   const staticDir = envStatic && envStatic.length > 0 ? resolve(envStatic) : undefined;
-  const { port, token, close } = await startServer({ workspaces, port: opts.port, staticDir });
+  const { port, token, close } = await startServer({
+    workspaces,
+    port: opts.port,
+    staticDir,
+    loopAutoResume: opts.loopAutoResume,
+  });
 
   console.log(t("cmd.serve.url", { port: String(port), token }));
   console.log(t("cmd.serve.workspaces", { count: workspaces.length }));
