@@ -179,6 +179,11 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
 });
 ```
 
+Durable DAG identity includes each node's resolved physical workspace. Keep
+`workspaceForNode` stable when resuming; remapping a node rejects the checkpoint
+instead of reusing a result produced in another checkout. `maxDurationMs` must
+be a positive safe integer so per-attempt budget derivation cannot round it to zero.
+
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are
 hard-capped at 100. Persisted Loops hold an exclusive lease; write failures are

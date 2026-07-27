@@ -232,6 +232,10 @@ checkpoints. TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;
 dirty worktrees require explicit `--force` because their changes are discarded.
+Cleanup refuses active Loop lifecycle operations. `loop-prune --worktrees`
+revalidates the complete finalized-merge worktree under the same guard and
+removes it atomically. Delivery retries reject committed or local worktree
+changes outside the exact persisted Loop state path after the evidenced revision.
 
 ## Repository security
 

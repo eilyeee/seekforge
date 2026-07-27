@@ -23,6 +23,7 @@ import {
   runLoopDag,
   saveLoopState,
   setLoopPriority,
+  worktreeChangedPathsSince,
   type LoopDagNode,
   type LoopEvent,
   type LoopDeliveryMode,
@@ -443,7 +444,6 @@ export async function loopPruneCommand(opts: {
 }): Promise<void> {
   try {
     const workspaces = await loopWorkspaces();
-    const worktreeCandidates = new Set<string>();
     const summaries: string[] = [];
     for (const workspace of workspaces) {
       const preview = pruneLoopStates(workspace, {
@@ -453,7 +453,7 @@ export async function loopPruneCommand(opts: {
       });
       const candidateIds = new Set(preview.candidates);
       const states = listLoopStates(workspace);
-      if (
+      const removeWholeWorktree =
         opts.worktrees &&
         workspace !== workspaces[0] &&
         states.length > 0 &&
@@ -463,9 +463,45 @@ export async function loopPruneCommand(opts: {
             state.status === "passed" &&
             state.delivery?.mode === "merge" &&
             state.delivery.phase === "finalized",
-        )
-      )
-        worktreeCandidates.add(workspace);
+        );
+      if (removeWholeWorktree) {
+        if (opts.dryRun) {
+          for (const id of preview.candidates) summaries.push(`would-remove\t${id}\t${workspace}`);
+          summaries.push(`would-remove-worktree\t${workspace}`);
+        } else {
+          try {
+            const removed = await cleanupLoopWorktree(process.cwd(), workspace, false, {
+              beforeRemove: () => {
+                const currentPreview = pruneLoopStates(workspace, {
+                  maxAgeDays: opts.olderThanDays ?? 30,
+                  maxTerminalCount: opts.keepLast ?? 100,
+                  dryRun: true,
+                });
+                const currentCandidates = new Set(currentPreview.candidates);
+                const currentStates = listLoopStates(workspace);
+                if (
+                  currentStates.length === 0 ||
+                  !currentStates.every(
+                    (state) =>
+                      currentCandidates.has(state.loopId) &&
+                      state.status === "passed" &&
+                      state.delivery?.mode === "merge" &&
+                      state.delivery.phase === "finalized",
+                  )
+                ) {
+                  throw new Error(`Loop worktree retention state changed before cleanup: ${workspace}`);
+                }
+              },
+            });
+            for (const id of preview.candidates) summaries.push(`removed\t${id}\t${workspace}`);
+            summaries.push(`removed-worktree\t${removed.path}`);
+          } catch (error) {
+            for (const id of preview.candidates) summaries.push(`skipped\t${id}\t${workspace}`);
+            summaries.push(`skipped-worktree\t${workspace}\t${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        continue;
+      }
       const result = opts.dryRun
         ? preview
         : pruneLoopStates(workspace, {
@@ -476,19 +512,6 @@ export async function loopPruneCommand(opts: {
         summaries.push(`${opts.dryRun ? "would-remove" : "removed"}\t${id}\t${workspace}`);
       }
       for (const id of result.skipped) summaries.push(`skipped\t${id}\t${workspace}`);
-    }
-    if (opts.worktrees) {
-      for (const workspace of worktreeCandidates) {
-        if (opts.dryRun) summaries.push(`would-remove-worktree\t${workspace}`);
-        else {
-          try {
-            const removed = await cleanupLoopWorktree(process.cwd(), workspace, false);
-            summaries.push(`removed-worktree\t${removed.path}`);
-          } catch (error) {
-            summaries.push(`skipped-worktree\t${workspace}\t${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-      }
     }
     console.log(summaries.length > 0 ? summaries.join("\n") : "No eligible Loop records found.");
   } catch (error) {
@@ -897,6 +920,8 @@ type LoopDeliveryResult = {
   evidence?: LoopDeliveryEvidence;
 };
 
+class LoopDeliveryEvidenceError extends Error {}
+
 export async function runLoopDelivery(
   projectPath: string,
   loopId: string,
@@ -941,7 +966,8 @@ export async function runLoopDelivery(
           recorded,
         );
         return { ...finalized, message: `Loop delivery already complete: ${state.delivery.artifact}` };
-      } catch {
+      } catch (error) {
+        if (error instanceof LoopDeliveryEvidenceError) throw error;
         // Older versions could persist `delivered` before the side effect. Fall
         // through to a new attempt, which safely repairs or repeats the action.
       }
@@ -949,7 +975,9 @@ export async function runLoopDelivery(
     const attempts = (state.delivery?.attempts ?? 0) + 1;
     const startedAt = new Date().toISOString();
     const completedAttempt =
-      state.delivery?.phase === "action_completed" && state.delivery.artifact
+      state.delivery?.phase === "action_completed" &&
+      state.delivery.artifact &&
+      hasCompleteDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)
         ? {
             artifact: state.delivery.artifact,
             evidence: state.delivery.evidence,
@@ -1169,13 +1197,27 @@ async function finalizeLoopDelivery(
   if (!entry?.branch.startsWith("seekforge/loop-"))
     throw new Error("Current workspace is not a retained Loop worktree");
   if ((mode === "checkpoint" || mode === "merge") && artifact !== entry.branch) {
-    throw new Error(`Loop delivery artifact does not match retained branch: ${artifact}`);
+    throw new LoopDeliveryEvidenceError(`Loop delivery artifact does not match retained branch: ${artifact}`);
   }
   if (result?.evidence?.branch && result.evidence.branch !== entry.branch) {
-    throw new Error(`Loop delivery evidence does not match retained branch: ${result.evidence.branch}`);
+    throw new LoopDeliveryEvidenceError(
+      `Loop delivery evidence does not match retained branch: ${result.evidence.branch}`,
+    );
   }
   if (result?.evidence?.revision && !gitRevisionIsAncestor(workspace, result.evidence.revision, entry.branch)) {
-    throw new Error(`Loop delivery revision no longer matches retained branch: ${result.evidence.revision}`);
+    throw new LoopDeliveryEvidenceError(
+      `Loop delivery revision no longer matches retained branch: ${result.evidence.revision}`,
+    );
+  }
+  if (result?.evidence?.revision) {
+    const statePath = `.seekforge/loops/${loopId}.json`;
+    const allowedPaths = new Set([statePath, ...(mode === "patch" ? [`.seekforge/loops/${loopId}.patch`] : [])]);
+    const unexpected = (await worktreeChangedPathsSince(workspace, result.evidence.revision, entry.branch)).filter(
+      (path) => !allowedPaths.has(path),
+    );
+    if (unexpected.length > 0) {
+      throw new LoopDeliveryEvidenceError(`Loop delivery branch contains unverified changes: ${unexpected.join(", ")}`);
+    }
   }
   if (mode === "patch" && result?.evidence?.sha256) {
     const patch = readFileIfExists(artifact, 16 * 1024 * 1024);

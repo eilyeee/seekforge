@@ -1,8 +1,10 @@
 import {
+  acquireWorkspaceSessionGuard,
   createWorktree,
   hasActiveLoopLease,
   isWorktreeDirty,
   listGitWorktrees,
+  SessionBusyError,
   WorktreeGitError,
   worktreeBranchExists,
   worktreeSlug,
@@ -86,7 +88,12 @@ export function isRetainedLoopWorktree(basePath: string, worktree: LoopWorktree)
   );
 }
 
-export async function cleanupLoopWorktree(basePath: string, name: string, force = false): Promise<LoopWorktree> {
+export async function cleanupLoopWorktree(
+  basePath: string,
+  name: string,
+  force = false,
+  options: { beforeRemove?: () => void } = {},
+): Promise<LoopWorktree> {
   basePath = (await resolveLoopRepository(basePath)).basePath;
   const resolvedName = resolve(basePath, name);
   const entries = await listGitWorktrees(basePath);
@@ -101,22 +108,36 @@ export async function cleanupLoopWorktree(basePath: string, name: string, force 
   if (!entry || !isRetainedLoopWorktree(basePath, entry)) {
     throw new Error(`Retained loop worktree not found: ${name}`);
   }
-  if (hasActiveLoopLease(entry.path)) {
-    throw new Error(`Loop worktree has an active loop and cannot be removed: ${entry.path}`);
+  let guard: ReturnType<typeof acquireWorkspaceSessionGuard>;
+  try {
+    guard = acquireWorkspaceSessionGuard(entry.path);
+  } catch (error) {
+    if (error instanceof SessionBusyError) {
+      throw new Error(`Loop worktree has an active operation and cannot be removed: ${entry.path}`);
+    }
+    throw error;
   }
-  if (!force && (await isWorktreeDirty(entry.path))) {
-    throw new Error(`Loop worktree has uncommitted changes: ${entry.path}\nRe-run with --force to discard them.`);
+  try {
+    if (hasActiveLoopLease(entry.path)) {
+      throw new Error(`Loop worktree has an active loop and cannot be removed: ${entry.path}`);
+    }
+    options.beforeRemove?.();
+    if (!force && (await isWorktreeDirty(entry.path))) {
+      throw new Error(`Loop worktree has uncommitted changes: ${entry.path}\nRe-run with --force to discard them.`);
+    }
+    await execFileAsync("git", ["worktree", "remove", ...(force ? ["--force"] : []), entry.path], {
+      cwd: basePath,
+      timeout: 60_000,
+    });
+    const branchRemoved = await execFileAsync("git", ["branch", "-D", entry.branch], {
+      cwd: basePath,
+      timeout: 60_000,
+    }).then(
+      () => true,
+      () => false,
+    );
+    return { path: entry.path, branch: entry.branch, branchRemoved };
+  } finally {
+    guard.release();
   }
-  await execFileAsync("git", ["worktree", "remove", ...(force ? ["--force"] : []), entry.path], {
-    cwd: basePath,
-    timeout: 60_000,
-  });
-  const branchRemoved = await execFileAsync("git", ["branch", "-D", entry.branch], {
-    cwd: basePath,
-    timeout: 60_000,
-  }).then(
-    () => true,
-    () => false,
-  );
-  return { path: entry.path, branch: entry.branch, branchRemoved };
 }

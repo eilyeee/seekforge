@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### round 64: Loop delivery and cleanup integrity
+- Bound delivery retries to the evidenced branch tree and working tree so later
+  unverified commits or local changes cannot enter checkpoint, merge, or
+  pull-request publication.
+- Made retained-worktree cleanup acquire the workspace guard, and made
+  whole-worktree pruning revalidate and remove atomically without first
+  dirtying tracked Loop state.
+- Bound durable DAG fingerprints to each node's resolved physical workspace,
+  protected legacy evidence-free deliveries from pruning, and serialized
+  recovery-priority updates with the Loop lifecycle.
+
 ### round 63: durable adaptive Loop orchestration
 - Added foreground preemption of idle recovery, prioritized bounded recovery,
   per-Loop exponential backoff, failure isolation, and idle terminal-state pruning.

@@ -255,12 +255,15 @@ seekforge loop-cleanup <worktree-name> [--force]
   terminal records; resumable states and unfinished delivery transactions are
   retained. Both schedulers are disabled by default. `loop-prune` exposes the
   same retention rules and can optionally remove clean, finalized-merge Loop
-  worktrees.
+  worktrees. Whole-worktree cleanup is revalidated while holding the workspace
+  guard and removes the checkout before its tracked state, so cleanup is atomic.
 - `loop-dag <file>` durably checkpoints a JSON dependency graph. `--resume` and
   `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
   remaining cost/token budgets and support priorities, bounded retries, and
   `skip_dependents`/`continue`/`stop` failure policies. Parallel batches require
-  distinct physical workspaces.
+  distinct physical workspaces. Those resolved workspace identities are part of
+  the durable graph fingerprint, so `--resume` rejects a remapped node instead
+  of reusing work completed in another checkout.
 - `--deliver checkpoint|merge|patch|pr` performs an explicit post-pass delivery
   from a retained Loop worktree. `pr` pushes the Loop branch and creates a draft
   pull request through `gh`. Delivery records its mode, status, attempt count,
@@ -271,7 +274,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   Delivery persists `prepared → action_completed → finalized` with branch,
   revision, patch hash, or PR URL evidence. The primary side effect and final
   publication are independently retryable; retries validate evidence and repair
-  legacy premature-success records before returning success.
+  legacy premature-success records before returning success. A branch or its
+  working tree may advance past the evidenced revision only through the exact
+  Loop state file; any other committed, staged, modified, or untracked path is
+  treated as unverified and blocks delivery. Worktree cleanup takes the same
+  workspace guard, so it cannot remove an active delivery.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

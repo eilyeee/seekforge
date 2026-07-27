@@ -65,6 +65,22 @@ async function git(cwd: string, args: string[]): Promise<string> {
   }
 }
 
+async function gitRaw(cwd: string, args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: 10_000_000,
+      timeout: 60_000,
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    return stdout;
+  } catch (err) {
+    const e = err as { stderr?: string; stdout?: string; message?: string };
+    const detail = (e.stderr || e.stdout || e.message || "").trim().slice(0, 500);
+    throw new WorktreeGitError("git_error", `git ${args[0]} failed: ${detail}`);
+  }
+}
+
 /** `name` -> a url/branch-safe slug; empty input falls back to a timestamp. */
 export function worktreeSlug(name?: string, now: Date = new Date()): string {
   const fromName = (name ?? "")
@@ -210,6 +226,26 @@ export async function createWorktreePatch(basePath: string, branch: string): Pro
 /** Commits on `branch` that are not on the base repo's current HEAD. */
 export async function worktreeAhead(basePath: string, branch: string): Promise<number> {
   return Number((await git(basePath, ["rev-list", "--count", `HEAD..${branch}`])) || "0");
+}
+
+/** Net repository and working-tree paths changed after an evidence revision. */
+export async function worktreeChangedPathsSince(
+  worktreePath: string,
+  revision: string,
+  branch: string,
+): Promise<string[]> {
+  if (!/^[0-9a-fA-F]{40,64}$/.test(revision)) {
+    throw new WorktreeGitError("git_error", `unsafe worktree revision: ${revision}`);
+  }
+  if (!branch.startsWith("seekforge/")) {
+    throw new WorktreeGitError("git_error", `unsafe worktree branch: ${branch}`);
+  }
+  const outputs = await Promise.all([
+    gitRaw(worktreePath, ["diff", "--name-only", "-z", `${revision}..${branch}`, "--"]),
+    gitRaw(worktreePath, ["diff", "--name-only", "-z", branch, "--"]),
+    gitRaw(worktreePath, ["ls-files", "--others", "--exclude-standard", "-z", "--"]),
+  ]);
+  return [...new Set(outputs.flatMap((output) => output.split("\0")).filter((path) => path !== ""))];
 }
 
 /**

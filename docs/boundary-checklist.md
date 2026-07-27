@@ -2248,6 +2248,68 @@ audit record remains only in a disposable worktree.
 - **Caught:** finalized Loop delivery state under ignored `.seekforge/` was not
   included in checkpoint, merge, patch-state, or pull-request commits.
 
+## 181. Ancestor evidence does not authorize a moving branch or worktree
+
+A verified revision remaining in a branch's history says nothing about later
+commits or uncommitted worktree changes. Publishing either can include content
+the verifier never saw.
+
+- **Do:** compare the evidenced tree with the publication tip, index, tracked
+  worktree, and untracked paths; allow only exact, explicitly expected metadata
+  paths after the evidence revision.
+- **Caught:** Loop merge and PR retries accepted any descendant of the recorded
+  revision and could publish later unverified commits or local changes.
+
+## 182. Container cleanup must join every contained lifecycle
+
+Checking only the worker lock does not cover delivery or another lifecycle
+phase that temporarily runs without that narrower lock.
+
+- **Do:** acquire the workspace guard before rechecking contained owners and
+  keep it through destructive checkout removal.
+- **Caught:** retained Loop worktrees could be removed while their delivery
+  lifecycle lease was active.
+
+## 183. Durable graph identity includes execution placement
+
+The same node definition run in another physical workspace is not the same
+completed operation, even if its task and verifier strings are unchanged.
+
+- **Do:** resolve node workspaces once and include their physical identities in
+  the checkpoint fingerprint used by resume.
+- **Caught:** Loop DAG resume reused a completed node after `workspaceForNode`
+  remapped it to another checkout.
+
+## 184. Whole-container cleanup must not invalidate its own precondition
+
+Deleting tracked child records before checking whether their containing
+worktree is clean manufactures a dirty checkout and makes cleanup fail.
+
+- **Do:** revalidate the complete container under its guard and remove it as one
+  operation; prune individual records only when retaining the container.
+- **Caught:** `loop-prune --worktrees` deleted tracked Loop state first and then
+  refused the resulting dirty worktree.
+
+## 185. Legacy success without evidence remains unfinished
+
+A migrated success label cannot establish that an older irreversible action
+actually happened when the old format contains no supporting evidence.
+
+- **Do:** normalize evidence-free legacy success to a protected intermediate
+  phase, repair it explicitly, and serialize metadata edits with the lifecycle.
+- **Caught:** old Loop `delivered` records were considered finalized for pruning,
+  while concurrent priority writes could also be overwritten by the owner.
+
+## 186. Validate before deriving a narrower integer budget
+
+A positive finite fractional duration can become zero when a downstream
+per-attempt budget is rounded, violating the callee's contract after validation.
+
+- **Do:** require a positive safe integer at the outer boundary before
+  subtracting elapsed time and flooring a derived budget.
+- **Caught:** Loop DAG accepted fractional `maxDurationMs` values that could
+  produce an invalid zero-millisecond node budget.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

@@ -46,6 +46,7 @@ import {
 import {
   acquireSessionLease,
   acquireSessionLeaseWithPreemption,
+  acquireWorkspaceSessionGuard,
   isSessionRunActive,
   type SessionLease,
 } from "./session-lease.js";
@@ -281,7 +282,7 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
     typeof (value as { phase?: unknown })?.phase === "string"
       ? ((value as { phase: string }).phase as LoopDeliveryPhase)
       : isRecord(value) && value.status === "delivered"
-        ? "finalized"
+        ? "action_completed"
         : "prepared";
   const evidenceValue = isRecord(value) ? value.evidence : undefined;
   if (
@@ -1187,11 +1188,16 @@ export function setLoopPriority(workspace: string, loopId: string, priority: num
   if (!Number.isSafeInteger(priority) || priority < -10 || priority > 10) {
     throw new RangeError("Loop priority must be an integer from -10 to 10");
   }
-  const state = loadLoopState(workspace, loopId);
-  if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
-  const next = { ...state, priority, updatedAt: new Date().toISOString() };
-  saveLoopState(workspace, next);
-  return next;
+  const lifecycleLease = acquireLoopLifecycleLease(workspace, loopId);
+  try {
+    const state = loadLoopState(workspace, loopId);
+    if (!state) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+    const next = { ...state, priority, updatedAt: new Date().toISOString() };
+    saveLoopState(workspace, next);
+    return next;
+  } finally {
+    lifecycleLease.release();
+  }
 }
 
 export function removeLoopState(workspace: string, loopId: string, workspaceGuard?: SessionLease): boolean {
@@ -1259,32 +1265,39 @@ export function pruneLoopStates(workspace: string, options: LoopPruneOptions): L
     throw new RangeError("Loop maxTerminalCount must be a non-negative safe integer");
   const nowMs = (options.now ?? new Date()).getTime();
   if (!Number.isFinite(nowMs)) throw new RangeError("Loop prune time must be valid");
-  const terminal = listLoopStates(workspace).filter(isLoopPruneEligible);
-  const candidates = terminal.filter((state, index) => {
-    const tooOld =
-      options.maxAgeDays !== undefined && Date.parse(state.updatedAt) <= nowMs - options.maxAgeDays * 24 * 60 * 60_000;
-    const overCount = options.maxTerminalCount !== undefined && index >= options.maxTerminalCount;
-    return tooOld || overCount;
-  });
-  const result: LoopPruneResult = { candidates: candidates.map((state) => state.loopId), removed: [], skipped: [] };
-  if (options.dryRun) return result;
-  for (const candidate of candidates) {
-    const current = loadLoopState(workspace, candidate.loopId);
-    if (
-      current === null ||
-      !isLoopPruneEligible(current) ||
-      isLoopLifecycleActive(workspace, candidate.loopId) ||
-      isLoopLeaseActive(workspace, candidate.loopId)
-    ) {
-      result.skipped.push(candidate.loopId);
-      continue;
+  const ownedGuard = options.dryRun || options.workspaceGuard ? undefined : acquireWorkspaceSessionGuard(workspace);
+  const workspaceGuard = options.workspaceGuard ?? ownedGuard;
+  try {
+    const terminal = listLoopStates(workspace).filter(isLoopPruneEligible);
+    const candidates = terminal.filter((state, index) => {
+      const tooOld =
+        options.maxAgeDays !== undefined &&
+        Date.parse(state.updatedAt) <= nowMs - options.maxAgeDays * 24 * 60 * 60_000;
+      const overCount = options.maxTerminalCount !== undefined && index >= options.maxTerminalCount;
+      return tooOld || overCount;
+    });
+    const result: LoopPruneResult = { candidates: candidates.map((state) => state.loopId), removed: [], skipped: [] };
+    if (options.dryRun) return result;
+    for (const candidate of candidates) {
+      const current = loadLoopState(workspace, candidate.loopId);
+      if (
+        current === null ||
+        !isLoopPruneEligible(current) ||
+        isLoopLifecycleActive(workspace, candidate.loopId) ||
+        isLoopLeaseActive(workspace, candidate.loopId)
+      ) {
+        result.skipped.push(candidate.loopId);
+        continue;
+      }
+      try {
+        if (removeLoopState(workspace, candidate.loopId, workspaceGuard)) result.removed.push(candidate.loopId);
+        else result.skipped.push(candidate.loopId);
+      } catch {
+        result.skipped.push(candidate.loopId);
+      }
     }
-    try {
-      if (removeLoopState(workspace, candidate.loopId, options.workspaceGuard)) result.removed.push(candidate.loopId);
-      else result.skipped.push(candidate.loopId);
-    } catch {
-      result.skipped.push(candidate.loopId);
-    }
+    return result;
+  } finally {
+    ownedGuard?.release();
   }
-  return result;
 }

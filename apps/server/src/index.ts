@@ -317,6 +317,7 @@ export async function startServer(opts: StartServerOptions): Promise<RunningServ
                         }
                       }
                       if (opts.loopAutoPrune) {
+                        if (recoverySignal.aborted) return results;
                         const pruned = pruneLoopStates(workspace.path, {
                           maxAgeDays: opts.loopRetentionMaxAgeDays ?? 30,
                           maxTerminalCount: opts.loopRetentionMaxCount ?? 100,

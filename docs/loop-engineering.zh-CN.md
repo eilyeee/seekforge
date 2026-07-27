@@ -222,17 +222,21 @@ seekforge loop-cleanup <worktree-name> [--force]
   中止当前恢复。生命周期中止会持久化为 `interrupted`，而不是用户 `cancelled`，所以下次
   启动仍可继续。`--loop-auto-prune` 在同一空闲 guard 下只删除旧的终态记录；可恢复状态和未完成
   的交付事务会保留。两种调度器都默认关闭。`loop-prune` 暴露同样的保留规则，并可选择删除干净、
-  已完成 merge 交付的 Loop worktree。
+  已完成 merge 交付的 Loop worktree。整棵 worktree 的清理会在持有工作区 guard 时重新核验，
+  并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
 - `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
   就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
-  `skip_dependents` / `continue` / `stop` 失败策略。并行批次要求不同的物理工作区。
+  `skip_dependents` / `continue` / `stop` 失败策略。并行批次要求不同的物理工作区；解析后的工作区
+  身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
   Loop 状态。若验证通过后交付失败，可用 `loop-deliver <id>` 直接重试而无需重新运行 Agent；
   除首次尝试外会复用原模式。运行、交付和删除共用一把生命周期租约，因此交付执行时恢复
   无法进入。交付会持久化 `prepared → action_completed → finalized`，并记录分支、revision、
   patch hash 或 PR URL 证据。主要副作用和最终状态发布可分别重试；重试会核验证据，并修复旧版本
-  过早写入的成功记录。
+  过早写入的成功记录。分支及其工作区在证据 revision 之后只能变更该 Loop 的精确状态文件；
+  任何其他已提交、已暂存、已修改或未跟踪路径都视为未经验证并阻止交付。worktree 清理会取得
+  同一工作区 guard，因此不能删除正在交付的任务。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

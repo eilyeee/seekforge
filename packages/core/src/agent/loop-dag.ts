@@ -78,7 +78,7 @@ const LOOP_STATUSES = new Set<LoopStatus>([
   "requirements_pending",
 ]);
 
-function dagFingerprint(nodes: readonly LoopDagNode[]): string {
+function dagFingerprint(nodes: readonly LoopDagNode[], workspaces: ReadonlyMap<string, string>): string {
   return createHash("sha256")
     .update(
       JSON.stringify(
@@ -91,6 +91,7 @@ function dagFingerprint(nodes: readonly LoopDagNode[]): string {
           budgetWeight: node.budgetWeight ?? 1,
           maxRetries: node.maxRetries ?? 0,
           failurePolicy: node.failurePolicy ?? "skip_dependents",
+          workspace: workspaces.get(node.id),
           options: node.options,
         })),
       ),
@@ -239,13 +240,19 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   if (options.tokenBudget !== undefined && (!Number.isSafeInteger(options.tokenBudget) || options.tokenBudget <= 0)) {
     throw new RangeError("Loop DAG tokenBudget must be a positive integer");
   }
-  if (options.maxDurationMs !== undefined && (!Number.isFinite(options.maxDurationMs) || options.maxDurationMs <= 0)) {
-    throw new RangeError("Loop DAG maxDurationMs must be positive and finite");
+  if (
+    options.maxDurationMs !== undefined &&
+    (!Number.isSafeInteger(options.maxDurationMs) || options.maxDurationMs <= 0)
+  ) {
+    throw new RangeError("Loop DAG maxDurationMs must be a positive safe integer");
   }
   if (concurrency > 1 && !options.workspaceForNode) {
     throw new Error("Concurrent Loop DAG nodes require workspaceForNode isolation");
   }
-  const fingerprint = dagFingerprint(options.nodes);
+  const nodeWorkspaces = new Map(
+    options.nodes.map((node) => [node.id, realpathSync.native(options.workspaceForNode?.(node) ?? options.workspace)]),
+  );
+  const fingerprint = dagFingerprint(options.nodes, nodeWorkspaces);
   const dagId = options.dagId ?? `dag-${fingerprint.slice(0, 16)}`;
   if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
   const persistenceEnabled = options.persist !== false;
@@ -327,13 +334,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         if (pending.size > 0) throw new Error("Loop DAG contains a dependency cycle");
         break;
       }
-      const batchWorkspaces = new Map(
-        ready.map((id) => {
-          const node = byId.get(id)!;
-          const workspace = options.workspaceForNode?.(node) ?? options.workspace;
-          return [id, realpathSync.native(workspace)] as const;
-        }),
-      );
+      const batchWorkspaces = new Map(ready.map((id) => [id, nodeWorkspaces.get(id)!] as const));
       if (new Set(batchWorkspaces.values()).size !== batchWorkspaces.size) {
         throw new Error("Concurrent Loop DAG nodes resolved to the same workspace");
       }

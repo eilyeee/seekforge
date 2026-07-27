@@ -211,6 +211,13 @@ describe("loop state persistence", () => {
     expect(recoverInterruptedLoops(workspace, { now, limit: 2 }).map((state) => state.loopId)).toEqual([
       "priority-low",
     ]);
+    const active = acquireLoopLifecycleLease(workspace, low.loopId);
+    try {
+      expect(() => setLoopPriority(workspace, low.loopId, 10)).toThrow(/already running or being modified/);
+      expect(loadLoopState(workspace, low.loopId)?.priority).toBe(-5);
+    } finally {
+      active.release();
+    }
     expect(setLoopPriority(workspace, low.loopId, 10).priority).toBe(10);
   });
 
@@ -253,6 +260,25 @@ describe("loop state persistence", () => {
         error: "retry me",
       },
     });
+    const legacyDelivery = createLoopState({
+      loopId: "prune-legacy-delivery",
+      task: "repair old delivery",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...legacyDelivery,
+      status: "passed",
+      updatedAt: old,
+      delivery: {
+        mode: "merge",
+        status: "delivered",
+        attempts: 1,
+        artifact: "seekforge/loop-legacy",
+        updatedAt: old,
+      },
+    });
     const preview = pruneLoopStates(workspace, {
       maxAgeDays: 1,
       now: new Date("2026-02-01T00:00:00.000Z"),
@@ -266,6 +292,7 @@ describe("loop state persistence", () => {
     expect(pruned.removed).toEqual(["prune-terminal"]);
     expect(loadLoopState(workspace, resumable.loopId)).not.toBeNull();
     expect(loadLoopState(workspace, delivery.loopId)).not.toBeNull();
+    expect(loadLoopState(workspace, legacyDelivery.loopId)?.delivery?.phase).toBe("action_completed");
   });
 
   it("sorts offset timestamps by instant instead of source text", () => {

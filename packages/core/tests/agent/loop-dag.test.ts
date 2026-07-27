@@ -99,6 +99,13 @@ describe("runLoopDag", () => {
         nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
       }),
     ).rejects.toThrow(/positive and finite/);
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        maxDurationMs: 0.5,
+        nodes: [{ id: "a", task: "a", verifyCommand: "test" }],
+      }),
+    ).rejects.toThrow(/positive safe integer/);
   });
 
   it("persists completed nodes and resumes without rerunning them", async () => {
@@ -123,6 +130,38 @@ describe("runLoopDag", () => {
     const resumed = await runLoopDag(deps, { workspace, dagId: "resume-test", nodes, resume: true });
     expect(resumed[0]).toMatchObject({ status: "passed", attempts: 1 });
     expect(verifies).toBe(1);
+  });
+
+  it("rejects a resume when a node resolves to a different physical workspace", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    const firstNodeWorkspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    const secondNodeWorkspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    workspaces.push(workspace, firstNodeWorkspace, secondNodeWorkspace);
+    const nodes = [
+      {
+        id: "mapped",
+        task: "mapped",
+        verifyCommand: "pass",
+        options: { verify: async () => ({ code: 0, output: "ok" }) },
+      },
+    ];
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "workspace-bound",
+      maxConcurrency: 2,
+      workspaceForNode: () => firstNodeWorkspace,
+      nodes,
+    });
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        dagId: "workspace-bound",
+        maxConcurrency: 2,
+        workspaceForNode: () => secondNodeWorkspace,
+        nodes,
+        resume: true,
+      }),
+    ).rejects.toThrow(/does not match/);
   });
 
   it("retries failed nodes and lets continue-policy dependents run", async () => {

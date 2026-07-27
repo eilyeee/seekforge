@@ -29,6 +29,7 @@ import {
   removeWorktree,
   worktreeAhead,
   worktreeBranchExists,
+  worktreeChangedPathsSince,
   WorktreeGitError,
   worktreeSlug,
 } from "../src/worktree.js";
@@ -172,6 +173,19 @@ describe("worktree delivery", () => {
 
     expect(await checkpointWorktreePaths(path, [".ignored/state.json"], "chore: record state")).toBe(true);
     expect(git(path, "show", "HEAD:.ignored/state.json")).toBe("{}");
+  });
+
+  it("reports committed and uncommitted post-evidence paths without corrupting names", async () => {
+    const { path, branch } = await createWorktree(repo, "evidence-paths");
+    const revision = git(path, "rev-parse", "HEAD");
+    const filename = "later\nchange.txt";
+    const untracked = "working-tree-only.txt";
+    writeFileSync(join(path, filename), "later\n");
+    git(path, "add", filename);
+    git(path, "commit", "-q", "-m", "later change");
+    writeFileSync(join(path, untracked), "not committed\n");
+
+    expect(await worktreeChangedPathsSince(path, revision, branch)).toEqual([filename, untracked]);
   });
 
   it("rejects patch generation for an unrelated branch namespace", async () => {

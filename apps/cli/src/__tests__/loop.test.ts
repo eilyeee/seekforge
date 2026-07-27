@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -311,6 +311,13 @@ test("worktree operations resolve the base checkout from a subdirectory", { time
     writeFileSync(leaseFile, JSON.stringify({ pid: process.pid, token: "test" }));
     await assert.rejects(cleanupLoopWorktree(subdir, "loop-subdir", true), /active loop/);
     rmSync(leaseFile);
+
+    const lifecycleLease = acquireLoopDeliveryLease(created.path, "active-delivery");
+    try {
+      await assert.rejects(cleanupLoopWorktree(subdir, "loop-subdir", true), /active operation/);
+    } finally {
+      lifecycleLease.release();
+    }
 
     const stateInput = { loopId: "duplicate-loop", task: "x", verifyCommand: "true", maxIterations: 1 };
     createLoopState({ ...stateInput, workspace: canonicalRepo });
@@ -639,6 +646,92 @@ test("Loop merge delivery commits finalized state before merging once", { timeou
       },
     });
     assert.equal(execFileSync("git", ["rev-list", "--count", "HEAD^1..HEAD"], { cwd: repo, encoding: "utf8" }), "3\n");
+
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const pruned = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-prune",
+        "--older-than-days",
+        "0",
+        "--keep-last",
+        "0",
+        "--worktrees",
+      ],
+      { cwd: repo, encoding: "utf8" },
+    );
+    assert.equal(pruned.status, 0, `${pruned.stdout}${pruned.stderr}`);
+    assert.match(pruned.stdout, /removed-worktree/);
+    assert.equal(existsSync(worktree.path), false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop delivery rejects branch content added after its evidence revision", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-scope-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const worktree = await createLoopWorktree(repo, "delivery-scope");
+    writeFileSync(resolve(worktree.path, "verified.txt"), "verified\n");
+    execFileSync("git", ["add", "verified.txt"], { cwd: worktree.path });
+    execFileSync("git", ["commit", "-qm", "verified"], { cwd: worktree.path });
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree.path, encoding: "utf8" }).trim();
+    const state = createLoopState({
+      loopId: "delivery-scope-loop",
+      task: "deliver only verified content",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, {
+      ...state,
+      status: "passed",
+      delivery: {
+        mode: "merge",
+        status: "failed",
+        phase: "action_completed",
+        attempts: 1,
+        updatedAt: new Date().toISOString(),
+        artifact: worktree.branch,
+        evidence: { branch: worktree.branch, revision },
+        error: "simulated interruption",
+      },
+    });
+    writeFileSync(resolve(worktree.path, "unverified.txt"), "unverified\n");
+    execFileSync("git", ["add", "unverified.txt"], { cwd: worktree.path });
+    execFileSync("git", ["commit", "-qm", "unverified later commit"], { cwd: worktree.path });
+    writeFileSync(resolve(worktree.path, "working-tree-only.txt"), "unverified and uncommitted\n");
+
+    await assert.rejects(
+      runLoopDelivery(worktree.path, state.loopId, "merge"),
+      /unverified changes.*unverified\.txt.*working-tree-only\.txt/,
+    );
+    const failed = loadLoopState(worktree.path, state.loopId);
+    assert.ok(failed);
+    saveLoopState(worktree.path, {
+      ...failed,
+      delivery: {
+        mode: "merge",
+        status: "delivered",
+        phase: "finalized",
+        attempts: 2,
+        updatedAt: new Date().toISOString(),
+        artifact: worktree.branch,
+        evidence: { branch: worktree.branch, revision },
+      },
+    });
+    await assert.rejects(
+      runLoopDelivery(worktree.path, state.loopId, "merge"),
+      /unverified changes.*unverified\.txt.*working-tree-only\.txt/,
+    );
+    assert.throws(() => execFileSync("git", ["show", "HEAD:unverified.txt"], { cwd: repo }), /Command failed/);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
