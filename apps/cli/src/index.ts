@@ -454,7 +454,8 @@ program
 program
   .command("loop")
   .argument("<task>", "task to drive to green (the verify command's exit 0)")
-  .requiredOption("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
+  .option("--verify <cmd>", "success criterion: shell command whose exit 0 means done")
+  .option("--auto-verify", "discover and freeze a verification pipeline from project manifests")
   .option(
     "--verify-stage <id[@path,...]=command>",
     "append a stage, optionally selected by changed path prefixes",
@@ -467,6 +468,9 @@ program
   .option("--rollback-regressions", "rollback iterations that increase failures (isolated worktree only)")
   .option("--priority <n>", "automatic recovery priority from -10 to 10", parseLoopPriority)
   .option("--deliver <mode>", "after passing: checkpoint, merge, patch, or draft PR (worktree only)", parseLoopDelivery)
+  .option("--wait-ci", "for PR delivery, wait for required checks")
+  .option("--ci-repairs <n>", "bounded CI-log repair attempts after PR delivery (0-3)", parseNonNegativeInt, 0)
+  .option("--ci-repair-budget <usd>", "cost cap for each CI repair attempt", parsePositiveFloat, 1)
   .option("--max-iters <n>", "max run iterations before giving up (default 8)", parsePositiveInt)
   .option("--budget <usd>", "cumulative cost cap in USD across iterations", parsePositiveFloat)
   .option("--token-budget <n>", "cumulative prompt + completion token cap", parsePositiveInt)
@@ -485,7 +489,8 @@ program
     async (
       task: string,
       opts: {
-        verify: string;
+        verify?: string;
+        autoVerify?: boolean;
         maxIters?: number;
         budget?: number;
         tokenBudget?: number;
@@ -501,6 +506,9 @@ program
         rollbackRegressions?: boolean;
         priority?: number;
         deliver?: "checkpoint" | "merge" | "patch" | "pr";
+        waitCi?: boolean;
+        ciRepairs?: number;
+        ciRepairBudget?: number;
         yes?: boolean;
         model?: string;
         profile?: string;
@@ -510,6 +518,7 @@ program
     ) => {
       await loopCommand(task, {
         verify: opts.verify,
+        autoVerify: opts.autoVerify,
         maxIters: opts.maxIters,
         budget: opts.budget,
         tokenBudget: opts.tokenBudget,
@@ -525,6 +534,9 @@ program
         rollbackOnRegression: opts.rollbackRegressions,
         priority: opts.priority,
         deliver: opts.deliver,
+        waitCi: opts.waitCi,
+        ciRepairs: opts.ciRepairs,
+        ciRepairBudget: opts.ciRepairBudget,
         yes: opts.yes,
         model: opts.model,
         profile: opts.profile ?? rootProfile(),
@@ -542,6 +554,8 @@ program
   .option("--max-duration <seconds>", "shared wall-clock budget in seconds", parsePositiveFloat)
   .option("--dag-id <id>", "stable checkpoint id (defaults to a graph fingerprint)")
   .option("--resume", "resume completed nodes from the durable DAG checkpoint")
+  .option("--rerun <node-id>", "on resume, invalidate this node and all downstream nodes", collect, [])
+  .option("--approve <node-id>", "approve a requiresApproval node for this run", collect, [])
   .option("--max-concurrency <n>", "parallel nodes (2-8 require distinct node workspace fields)", parsePositiveInt, 1)
   .option("-y, --yes", "authorize the workspace without prompting")
   .option("-m, --model <model>", "override model")
@@ -560,6 +574,8 @@ program
         dagId?: string;
         resume?: boolean;
         maxConcurrency?: number;
+        rerun?: string[];
+        approve?: string[];
       },
     ) => {
       await loopDagCommand(file, {
@@ -572,6 +588,8 @@ program
         dagId: opts.dagId,
         resume: opts.resume,
         maxConcurrency: opts.maxConcurrency,
+        rerun: opts.rerun,
+        approve: opts.approve,
       });
     },
   );

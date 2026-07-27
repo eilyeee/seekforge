@@ -78,13 +78,28 @@ describe("loopRows", () => {
       costUsd: 0.004,
       verify: { code: 1, passed: false, tail: "FAIL line b" },
       liveTail: "",
+      tokens: null,
+      durationMs: null,
+      changedPaths: 0,
+      failureCategory: null,
     });
     expect(rows[1]!.verify?.passed).toBe(true);
   });
 
   it("creates a row even when only iteration.start arrived", () => {
     const rows = loopRows([{ type: "iteration.start", iteration: 3 }]);
-    expect(rows).toEqual([{ iteration: 3, costUsd: null, verify: null, liveTail: "" }]);
+    expect(rows).toEqual([
+      {
+        iteration: 3,
+        costUsd: null,
+        verify: null,
+        liveTail: "",
+        tokens: null,
+        durationMs: null,
+        changedPaths: 0,
+        failureCategory: null,
+      },
+    ]);
   });
 
   it("shows live verify output before the final result", () => {

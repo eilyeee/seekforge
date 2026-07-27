@@ -108,6 +108,7 @@ Instead of a single `runTask`, drive to a verify command's exit 0:
 ```ts
 import {
   createLoopControl,
+  discoverLoopVerificationPlan,
   enqueueLoopControl,
   loadLoopState,
   resumeAutoLoop,
@@ -118,16 +119,14 @@ import {
 const control = createLoopControl();
 const workspace = process.cwd();
 const loopId = "sdk-loop";
+const discovered = discoverLoopVerificationPlan(workspace);
 
 const running = runAutoLoop(deps, {
   loopId,
   task: "make the suite pass",
   workspace,
-  verifyCommand: "pnpm test",
-  verificationPlan: [
-    { id: "types", command: "pnpm typecheck", paths: ["packages", "apps"] },
-    { id: "tests", command: "pnpm test" },
-  ],
+  verifyCommand: discovered.stages[0]!.command,
+  verificationPlan: discovered.stages,
   stablePasses: 2,
   flakyRetries: 1,
   maxNoProgressRecoveries: 1,
@@ -164,8 +163,19 @@ const graph = await runLoopDag(deps, {
   resume: true,
   nodes: [
     { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
-    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"], maxRetries: 1 },
+    {
+      id: "apps",
+      task: "fix apps",
+      verifyCommand: "pnpm test",
+      dependsOn: ["core"],
+      condition: { nodeId: "core", status: "passed" },
+      resources: ["release"],
+      consumeDependencyOutputs: true,
+      requiresApproval: true,
+      maxRetries: 1,
+    },
   ],
+  approveNode: (node) => node.id === "apps",
 });
 // result includes a persisted loopId.
 
@@ -187,6 +197,9 @@ Persisted nodes that supply `options.verify` must also supply a stable
 `verifierId`; change that id whenever the custom verifier implementation or its
 captured configuration changes, so resume cannot reuse results from another
 verification contract.
+Use `rerunFrom` only together with `resume`; the selected nodes and every
+downstream result are invalidated, prior completed metadata is cleared, and
+retained-node usage is recomputed before scheduling.
 
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are

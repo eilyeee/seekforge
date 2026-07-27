@@ -18,6 +18,7 @@ import {
 } from "./fixtures";
 import type {
   EvolutionProposal,
+  LoopStateSummary,
   McpServer,
   MemoryCandidate,
   MemoryCandidateType,
@@ -173,6 +174,18 @@ let mockHooks: Record<string, unknown> = {};
 type MockWorktree = { id: string; branch: string; path: string; dirty: boolean; ahead: number };
 const mockWorktrees: MockWorktree[] = [];
 let mockWorktreeSeq = 0;
+const mockLoops: LoopStateSummary[] = [
+  {
+    loopId: "loop-demo",
+    status: "passed",
+    task: "Keep the demo workspace green",
+    workspace: "/mock/workspace",
+    iterations: 2,
+    maxIterations: 8,
+    costUsd: 0.12,
+    updatedAt: new Date().toISOString(),
+  },
+];
 
 export async function mockRequest(method: string, fullPath: string, body?: unknown): Promise<unknown> {
   await delay();
@@ -212,6 +225,26 @@ export async function mockRequest(method: string, fullPath: string, body?: unkno
   }
 
   if (method === "GET" && path === "/api/worktrees") return mockWorktrees.map((w) => ({ ...w }));
+  if (method === "GET" && path === "/api/loops") return mockLoops.map((loop) => ({ ...loop }));
+  if (method === "GET" && path === "/api/loops/verification-plan") {
+    return { stages: [{ id: "test", command: "pnpm test" }], sources: ["package.json"] };
+  }
+  if (method === "POST" && path === "/api/loops/recover") return [];
+  if (method === "POST" && path === "/api/loops/prune") return { candidates: [], removed: [], skipped: [] };
+  const loopHistory = /^\/api\/loops\/([^/]+)\/history$/.exec(path);
+  if (method === "GET" && loopHistory) return [];
+  const loopItem = /^\/api\/loops\/([^/]+)$/.exec(path);
+  if (method === "GET" && loopItem) {
+    const loop = mockLoops.find((item) => item.loopId === loopItem[1]);
+    if (!loop) throw mockError(404, "not_found", "unknown loop");
+    return { ...loop };
+  }
+  if (method === "DELETE" && loopItem) {
+    const index = mockLoops.findIndex((item) => item.loopId === loopItem[1]);
+    if (index < 0) throw mockError(404, "not_found", "unknown loop");
+    const [removed] = mockLoops.splice(index, 1);
+    return { removed: true, loopId: removed!.loopId };
+  }
   if (method === "POST" && path === "/api/worktrees") {
     const { name } = (body ?? {}) as { name?: string };
     const slug =

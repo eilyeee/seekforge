@@ -11,6 +11,8 @@ import {
   MAX_LOOP_ITERATIONS,
   MEMORY_CANDIDATE_TYPES,
   type LoopStatus,
+  type LoopVerificationStage,
+  type LoopRequirementMode,
   type MemoryCandidateType,
   type MemoryStats,
 } from "@seekforge/core";
@@ -39,6 +41,9 @@ export type LoopResumeConfig = {
   expectedInitialStatus: LoopStatus;
   additionalIterations?: number;
   additionalCostBudgetUsd?: number;
+  additionalTokenBudget?: number;
+  additionalDurationMs?: number;
+  additionalVerifyRuns?: number;
 };
 
 export type LoopTaskConfig = {
@@ -46,6 +51,18 @@ export type LoopTaskConfig = {
   maxIterations: number;
   expectedStatus: LoopStatus;
   costBudgetUsd?: number;
+  tokenBudget?: number;
+  maxDurationMs?: number;
+  maxVerifyRuns?: number;
+  verifyTimeoutMs?: number;
+  agentTimeoutMs?: number;
+  maxAgentRetries?: number;
+  verificationPlan?: LoopVerificationStage[];
+  stablePasses?: number;
+  flakyRetries?: number;
+  maxNoProgressRecoveries?: number;
+  rollbackOnRegression?: boolean;
+  requirementMode?: LoopRequirementMode;
   resume?: LoopResumeConfig;
 };
 
@@ -273,6 +290,77 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
   };
   if (value.costBudgetUsd !== undefined)
     loop.costBudgetUsd = positiveNumber(value.costBudgetUsd, `${where}.costBudgetUsd`);
+  for (const [name, maximum] of [
+    ["tokenBudget", Number.MAX_SAFE_INTEGER],
+    ["maxDurationMs", Number.MAX_SAFE_INTEGER],
+    ["maxVerifyRuns", Number.MAX_SAFE_INTEGER],
+    ["verifyTimeoutMs", Number.MAX_SAFE_INTEGER],
+    ["agentTimeoutMs", Number.MAX_SAFE_INTEGER],
+    ["maxAgentRetries", 5],
+    ["stablePasses", 5],
+    ["flakyRetries", 5],
+    ["maxNoProgressRecoveries", 5],
+  ] as const) {
+    const candidate = value[name];
+    if (candidate === undefined) continue;
+    const allowZero = name === "maxAgentRetries" || name === "flakyRetries" || name === "maxNoProgressRecoveries";
+    if (
+      !Number.isSafeInteger(candidate) ||
+      (candidate as number) < (allowZero ? 0 : 1) ||
+      (candidate as number) > maximum
+    ) {
+      throw new Error(`${where}.${name} must be ${allowZero ? "a non-negative" : "a positive"} bounded integer`);
+    }
+    (loop as Record<string, unknown>)[name] = candidate;
+  }
+  if (value.rollbackOnRegression !== undefined) {
+    if (typeof value.rollbackOnRegression !== "boolean")
+      throw new Error(`${where}.rollbackOnRegression must be boolean`);
+    loop.rollbackOnRegression = value.rollbackOnRegression;
+  }
+  if (value.requirementMode !== undefined) {
+    if (
+      value.requirementMode !== "quick" &&
+      value.requirementMode !== "analyze" &&
+      value.requirementMode !== "confirm"
+    ) {
+      throw new Error(`${where}.requirementMode must be quick, analyze, or confirm`);
+    }
+    loop.requirementMode = value.requirementMode;
+  }
+  if (value.verificationPlan !== undefined) {
+    if (
+      !Array.isArray(value.verificationPlan) ||
+      value.verificationPlan.length === 0 ||
+      value.verificationPlan.length > 16
+    ) {
+      throw new Error(`${where}.verificationPlan must contain 1 to 16 stages`);
+    }
+    const ids = new Set<string>();
+    loop.verificationPlan = value.verificationPlan.map((raw, index) => {
+      const stageWhere = `${where}.verificationPlan[${index}]`;
+      if (
+        !isRecord(raw) ||
+        typeof raw.id !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(raw.id) ||
+        ids.has(raw.id) ||
+        typeof raw.command !== "string" ||
+        raw.command.trim() === "" ||
+        raw.command.length > 8_192 ||
+        (raw.required !== undefined && typeof raw.required !== "boolean") ||
+        (raw.timeoutMs !== undefined && (!Number.isSafeInteger(raw.timeoutMs) || (raw.timeoutMs as number) <= 0))
+      ) {
+        throw new Error(`${stageWhere} is invalid`);
+      }
+      ids.add(raw.id);
+      return {
+        id: raw.id,
+        command: raw.command,
+        ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
+        ...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
+      };
+    });
+  }
   if (value.resume !== undefined) {
     if (!isRecord(value.resume)) throw new Error(`${where}.resume must be an object`);
     const resume: LoopResumeConfig = {
@@ -291,8 +379,19 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
         `${where}.resume.additionalCostBudgetUsd`,
       );
     }
-    if (resume.additionalIterations === undefined && resume.additionalCostBudgetUsd === undefined) {
-      throw new Error(`${where}.resume must add iterations or cost budget`);
+    for (const name of ["additionalTokenBudget", "additionalDurationMs", "additionalVerifyRuns"] as const) {
+      if (value.resume[name] !== undefined) {
+        resume[name] = positiveInteger(value.resume[name], `${where}.resume.${name}`);
+      }
+    }
+    if (
+      resume.additionalIterations === undefined &&
+      resume.additionalCostBudgetUsd === undefined &&
+      resume.additionalTokenBudget === undefined &&
+      resume.additionalDurationMs === undefined &&
+      resume.additionalVerifyRuns === undefined
+    ) {
+      throw new Error(`${where}.resume must add iterations or a budget dimension`);
     }
     loop.resume = resume;
   }

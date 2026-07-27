@@ -14,6 +14,9 @@ import type {
   FileContent,
   GitStatus,
   HooksConfig,
+  LoopHistoryEntry,
+  LoopPruneResult,
+  LoopStateSummary,
   McpPrompt,
   McpResource,
   McpScope,
@@ -209,6 +212,32 @@ export const api = {
     }),
   memoryDeleteFact: (selector: { index: number } | { match: string }, ws?: string) =>
     request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact", ws), selector),
+  loops: (ws?: string) => request<LoopStateSummary[]>("GET", withWorkspace("/api/loops", ws)),
+  loopVerificationPlan: (ws?: string) =>
+    request<{
+      stages: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number; paths?: string[] }>;
+      sources: string[];
+    }>("GET", withWorkspace("/api/loops/verification-plan", ws)),
+  loop: (id: string, ws?: string) =>
+    request<LoopStateSummary>("GET", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
+  loopHistory: (id: string, after = 0, limit = 100, ws?: string) =>
+    request<LoopHistoryEntry[]>(
+      "GET",
+      withWorkspace(
+        `/api/loops/${encodeURIComponent(id)}/history?after=${encodeURIComponent(after)}&limit=${encodeURIComponent(limit)}`,
+        ws,
+      ),
+    ),
+  loopRecover: (limit = 3, ws?: string) =>
+    request<LoopStateSummary[]>("POST", withWorkspace("/api/loops/recover", ws), { limit }),
+  loopPrune: (input: { maxAgeDays?: number; maxTerminalCount?: number; dryRun?: boolean }, ws?: string) =>
+    request<LoopPruneResult>("POST", withWorkspace("/api/loops/prune", ws), input),
+  loopPriority: (id: string, priority: number, ws?: string) =>
+    request<LoopStateSummary>("POST", withWorkspace(`/api/loops/${encodeURIComponent(id)}/priority`, ws), {
+      priority,
+    }),
+  loopDelete: (id: string, ws?: string) =>
+    request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>
     request<{ diff: string; truncated: boolean; notGit?: boolean }>(
       "GET",

@@ -91,6 +91,7 @@ MCP/hook/agent，应只加载一份 `PluginContributions` 快照并通过
 ```ts
 import {
   createLoopControl,
+  discoverLoopVerificationPlan,
   enqueueLoopControl,
   loadLoopState,
   resumeAutoLoop,
@@ -101,16 +102,14 @@ import {
 const control = createLoopControl();
 const workspace = process.cwd();
 const loopId = "sdk-loop";
+const discovered = discoverLoopVerificationPlan(workspace);
 
 const running = runAutoLoop(deps, {
   loopId,
   task: "make the suite pass",
   workspace,
-  verifyCommand: "pnpm test",
-  verificationPlan: [
-    { id: "types", command: "pnpm typecheck", paths: ["packages", "apps"] },
-    { id: "tests", command: "pnpm test" },
-  ],
+  verifyCommand: discovered.stages[0]!.command,
+  verificationPlan: discovered.stages,
   stablePasses: 2,
   flakyRetries: 1,
   maxNoProgressRecoveries: 1,
@@ -147,8 +146,19 @@ const graph = await runLoopDag(deps, {
   resume: true,
   nodes: [
     { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
-    { id: "apps", task: "fix apps", verifyCommand: "pnpm test", dependsOn: ["core"], maxRetries: 1 },
+    {
+      id: "apps",
+      task: "fix apps",
+      verifyCommand: "pnpm test",
+      dependsOn: ["core"],
+      condition: { nodeId: "core", status: "passed" },
+      resources: ["release"],
+      consumeDependencyOutputs: true,
+      requiresApproval: true,
+      maxRetries: 1,
+    },
   ],
+  approveNode: (node) => node.id === "apps",
 });
 // result includes a persisted loopId.
 
@@ -167,6 +177,8 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 避免派生单次尝试预算时被舍入为零。
 持久节点若提供 `options.verify`，还必须提供稳定的 `verifierId`；自定义 verifier 实现或其捕获配置
 变化时必须同步修改该 id，避免恢复过程复用另一份验证契约产生的结果。
+`rerunFrom` 只能与 `resume` 一起使用；选中节点及全部下游结果会失效，旧完成元数据会清除，
+调度前会按保留节点重新计算已用资源。
 
 循环状态以原子方式存储在 `.seekforge/loops/` 下；只有当嵌入方自己拥有等效的持久化编排时，才应设置 `persist: false`。迭代次数硬性上限为 100。持久化的 Loop 持有独占租约；写入失败会通过有界的 `loop.warning` 事件上报，不会掩盖验证结果。
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含

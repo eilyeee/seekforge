@@ -5,6 +5,7 @@ import {
   checkpointWorktree,
   checkpointWorktreePaths,
   createWorktreePatch,
+  discoverLoopVerificationPlan,
   enqueueLoopControl,
   hasCompleteLoopDeliveryEvidence,
   isWorktreeDirty,
@@ -46,6 +47,15 @@ import { loadConfig } from "../config.js";
 import { t } from "../i18n.js";
 import { ensureWorkspaceAuthorized } from "./run.js";
 import {
+  buildCiRepairPrompt,
+  buildFailedRunListArgs,
+  buildFailedRunLogArgs,
+  buildPrChecksArgs,
+  CI_LOG_FEEDBACK_LIMIT,
+  isNoChecksReported,
+  PR_CHECKS_TIMEOUT_MS,
+} from "../resolve.js";
+import {
   cleanupLoopWorktree,
   createLoopWorktree,
   formatLoopWorktree,
@@ -54,8 +64,9 @@ import {
 } from "../loop-worktree.js";
 
 export type LoopOptions = {
-  /** Verify command; exit 0 == success. Required. */
-  verify: string;
+  /** Verify command; exit 0 == success. Required unless autoVerify is enabled. */
+  verify?: string;
+  autoVerify?: boolean;
   /** Max run iterations (default 8). */
   maxIters?: number;
   /** Cumulative cost cap in USD. */
@@ -72,6 +83,9 @@ export type LoopOptions = {
   noProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
   deliver?: LoopDeliveryMode;
+  waitCi?: boolean;
+  ciRepairs?: number;
+  ciRepairBudget?: number;
   /** Run autonomously (acceptEdits). The loop is autonomous regardless. */
   yes?: boolean;
   /** Override model. */
@@ -87,6 +101,7 @@ export type LoopOptions = {
 export type LoopResumeOptions = Omit<
   LoopOptions,
   | "verify"
+  | "autoVerify"
   | "worktree"
   | "maxIters"
   | "budget"
@@ -103,6 +118,9 @@ export type LoopResumeOptions = Omit<
   | "noProgressRecoveries"
   | "rollbackOnRegression"
   | "deliver"
+  | "waitCi"
+  | "ciRepairs"
+  | "ciRepairBudget"
 > & {
   addIters?: number;
   addBudget?: number;
@@ -130,7 +148,11 @@ export function formatLoopEvent(event: LoopEvent): string {
     case "iteration.start":
       return t("cmd.loop.iterationStart", { n: event.iteration });
     case "run.completed":
-      return t("cmd.loop.runCompleted", { n: event.iteration, cost: event.costUsd.toFixed(4) });
+      return `${t("cmd.loop.runCompleted", { n: event.iteration, cost: event.costUsd.toFixed(4) })}${
+        event.iterationTokens !== undefined
+          ? ` · +${event.iterationTokens} tokens · ${event.durationMs ?? 0}ms · ${event.changedPaths?.length ?? 0} path(s)`
+          : ""
+      }`;
     case "verify.output":
       return event.chunk;
     case "verify": {
@@ -153,7 +175,7 @@ export function formatLoopEvent(event: LoopEvent): string {
     case "loop.steered":
       return `Loop accepted ${event.count} guidance message(s)`;
     case "loop.recovery":
-      return `Loop recovery ${event.attempt} after ${event.reason}`;
+      return `Loop recovery ${event.attempt} after ${event.reason}${event.strategy ? ` · ${event.category}/${event.strategy}` : ""}`;
     case "loop.snapshot":
       return `  snapshot ${event.snapshot.iteration} · ${event.snapshot.failedTests} parsed failure(s)`;
     case "loop.rollback":
@@ -212,6 +234,7 @@ export function loopExitCode(status: LoopResult["status"]): 1 | 2 | undefined {
 
 export function verificationPlanFromOptions(opts: Pick<LoopOptions, "verify" | "verifyStages">) {
   if (!opts.verifyStages?.length) return undefined;
+  if (!opts.verify) throw new Error("--verify-stage requires --verify");
   const ids = new Set(["verify"]);
   return [
     { id: "verify", command: opts.verify },
@@ -258,13 +281,38 @@ export async function loopCommand(task: string, opts: LoopOptions): Promise<void
     process.exitCode = 1;
     return;
   }
-  if (opts.verify.trim() === "") {
-    fail("Loop verify command must be non-empty");
+  if (opts.autoVerify === true && opts.verify !== undefined) {
+    fail("--auto-verify cannot be combined with --verify");
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.autoVerify !== true && !opts.verify?.trim()) {
+    fail("Loop requires --verify or --auto-verify");
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.autoVerify === true && opts.verifyStages?.length) {
+    fail("--auto-verify cannot be combined with --verify-stage");
     process.exitCode = 1;
     return;
   }
   if (opts.maxIters !== undefined && opts.maxIters > MAX_LOOP_ITERATIONS) {
     fail(`--max-iters must be between 1 and ${MAX_LOOP_ITERATIONS}`);
+    process.exitCode = 1;
+    return;
+  }
+  if ((opts.ciRepairs ?? 0) > 3) {
+    fail("--ci-repairs must be between 0 and 3");
+    process.exitCode = 1;
+    return;
+  }
+  if ((opts.waitCi || (opts.ciRepairs ?? 0) > 0) && opts.deliver !== "pr") {
+    fail("--wait-ci and --ci-repairs require --deliver pr");
+    process.exitCode = 1;
+    return;
+  }
+  if ((opts.ciRepairs ?? 0) > 0 && !opts.waitCi) {
+    fail("--ci-repairs requires --wait-ci");
     process.exitCode = 1;
     return;
   }
@@ -587,6 +635,8 @@ export async function loopDagCommand(
     dagId?: string;
     resume?: boolean;
     maxConcurrency?: number;
+    approve?: string[];
+    rerun?: string[];
   },
 ): Promise<void> {
   const workspace = process.cwd();
@@ -660,6 +710,29 @@ export async function loopDagCommand(
       ) {
         throw new Error(`Loop DAG node ${item.id} failurePolicy is invalid`);
       }
+      if (
+        item.resources !== undefined &&
+        (!Array.isArray(item.resources) || !item.resources.every((resource) => typeof resource === "string"))
+      ) {
+        throw new Error(`Loop DAG node ${item.id} resources must be a string array`);
+      }
+      if (
+        item.condition !== undefined &&
+        (typeof item.condition !== "object" ||
+          item.condition === null ||
+          Array.isArray(item.condition) ||
+          typeof (item.condition as Record<string, unknown>).nodeId !== "string" ||
+          ((item.condition as Record<string, unknown>).status !== "passed" &&
+            (item.condition as Record<string, unknown>).status !== "failed"))
+      ) {
+        throw new Error(`Loop DAG node ${item.id} condition is invalid`);
+      }
+      if (item.requiresApproval !== undefined && typeof item.requiresApproval !== "boolean") {
+        throw new Error(`Loop DAG node ${item.id} requiresApproval must be boolean`);
+      }
+      if (item.consumeDependencyOutputs !== undefined && typeof item.consumeDependencyOutputs !== "boolean") {
+        throw new Error(`Loop DAG node ${item.id} consumeDependencyOutputs must be boolean`);
+      }
       return {
         id: item.id,
         task: item.task,
@@ -670,6 +743,16 @@ export async function loopDagCommand(
         ...(typeof item.maxRetries === "number" ? { maxRetries: item.maxRetries } : {}),
         ...(typeof item.failurePolicy === "string"
           ? { failurePolicy: item.failurePolicy as "skip_dependents" | "continue" | "stop" }
+          : {}),
+        ...(Array.isArray(item.resources) ? { resources: item.resources as string[] } : {}),
+        ...(item.condition
+          ? {
+              condition: item.condition as { nodeId: string; status: "passed" | "failed" },
+            }
+          : {}),
+        ...(typeof item.requiresApproval === "boolean" ? { requiresApproval: item.requiresApproval } : {}),
+        ...(typeof item.consumeDependencyOutputs === "boolean"
+          ? { consumeDependencyOutputs: item.consumeDependencyOutputs }
           : {}),
       };
     });
@@ -694,12 +777,15 @@ export async function loopDagCommand(
   const onSigint = () => controller.abort();
   process.on("SIGINT", onSigint);
   try {
+    const approvedNodes = new Set(opts.approve ?? []);
     const results = await runLoopDag(deps, {
       workspace,
       nodes,
       maxConcurrency: opts.maxConcurrency ?? 1,
       ...(opts.dagId ? { dagId: opts.dagId } : {}),
       ...(opts.resume ? { resume: true } : {}),
+      ...(opts.rerun?.length ? { rerunFrom: opts.rerun } : {}),
+      approveNode: (node) => approvedNodes.has(node.id),
       ...(nodeWorkspaces.size > 0
         ? {
             workspaceForNode: (node) => {
@@ -844,7 +930,20 @@ async function runPreparedLoop(
   process.on("SIGINT", onSigint);
 
   try {
-    const verificationPlan = resume ? undefined : verificationPlanFromOptions(opts as LoopOptions);
+    let verificationPlan = resume ? undefined : verificationPlanFromOptions(opts as LoopOptions);
+    let verifyCommand = resume ? undefined : (opts as LoopOptions).verify;
+    if (!resume && (opts as LoopOptions).autoVerify) {
+      const discovered = discoverLoopVerificationPlan(projectPath);
+      verificationPlan = discovered.stages;
+      verifyCommand = discovered.stages[0]!.command;
+      console.error(
+        dim(
+          `Discovered verification plan from ${discovered.sources.join(", ")}: ${discovered.stages
+            .map((stage) => stage.id)
+            .join(" → ")}`,
+        ),
+      );
+    }
     const common = {
       ...(model ? { model } : {}),
       ...(config.planModel ? { planModel: config.planModel } : {}),
@@ -861,7 +960,7 @@ async function runPreparedLoop(
       : await runAutoLoop(deps, {
           task: taskOrLoopId,
           workspace: projectPath,
-          verifyCommand: (opts as LoopOptions).verify,
+          verifyCommand: verifyCommand ?? "",
           ...(verificationPlan ? { verificationPlan } : {}),
           ...((opts as LoopOptions).stablePasses !== undefined
             ? { stablePasses: (opts as LoopOptions).stablePasses }
@@ -903,7 +1002,22 @@ async function runPreparedLoop(
     // rather than treating it like an exhausted/failed loop.
     const exitCode = loopExitCode(result.status);
     if (result.status === "passed" && (opts as LoopOptions).deliver) {
-      const delivered = await runLoopDelivery(projectPath, result.loopId ?? "loop", (opts as LoopOptions).deliver!);
+      const loopOpts = opts as LoopOptions;
+      const deliveryOptions: LoopDeliveryOptions = {};
+      if (loopOpts.deliver === "pr" && loopOpts.waitCi) {
+        deliveryOptions.beforeFinalize = async (delivered, state) =>
+          closeLoopPrCi({
+            workspace: projectPath,
+            delivered,
+            state,
+            deps: { ...deps, extractMemory: false },
+            sandbox: config.sandbox,
+            maxRepairs: loopOpts.ciRepairs ?? 0,
+            repairBudgetUsd: loopOpts.ciRepairBudget ?? 1,
+            signal: controller.signal,
+          });
+      }
+      const delivered = await runLoopDelivery(projectPath, result.loopId ?? "loop", loopOpts.deliver!, deliveryOptions);
       console.log(delivered.message);
     }
     if (exitCode !== undefined) process.exitCode = exitCode;
@@ -923,6 +1037,115 @@ type LoopDeliveryResult = {
   branch?: string;
   evidence?: LoopDeliveryEvidence;
 };
+
+type LoopDeliveryOptions = {
+  beforeFinalize?: (result: LoopDeliveryResult, state: LoopState) => Promise<LoopDeliveryResult>;
+};
+
+type LoopCiClosureOptions = {
+  workspace: string;
+  delivered: LoopDeliveryResult;
+  state: LoopState;
+  deps: Parameters<typeof runAutoLoop>[0];
+  sandbox: ReturnType<typeof loadConfig>["sandbox"];
+  maxRepairs: number;
+  repairBudgetUsd: number;
+  signal: AbortSignal;
+};
+
+function runGh(workspace: string, args: string[], timeout: number, maxBuffer = 1024 * 1024) {
+  const result = spawnSync("gh", args, { cwd: workspace, encoding: "utf8", timeout, maxBuffer });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+    throw new Error("GitHub CLI (gh) is required");
+  }
+  return result;
+}
+
+function failedCiLog(workspace: string, branch: string): string | undefined {
+  const listed = runGh(workspace, buildFailedRunListArgs(branch), 30_000);
+  if (listed.status !== 0) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(listed.stdout) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length === 0 || typeof value[0] !== "object" || value[0] === null) {
+    return undefined;
+  }
+  const runId = (value[0] as Record<string, unknown>).databaseId;
+  if (!Number.isSafeInteger(runId) || (runId as number) <= 0) return undefined;
+  const logs = runGh(workspace, buildFailedRunLogArgs(runId as number), 60_000, CI_LOG_FEEDBACK_LIMIT * 4);
+  if (logs.status !== 0 || logs.stdout.trim() === "") return undefined;
+  return logs.stdout.slice(0, CI_LOG_FEEDBACK_LIMIT);
+}
+
+async function closeLoopPrCi(options: LoopCiClosureOptions): Promise<LoopDeliveryResult> {
+  const url = options.delivered.evidence?.url;
+  const branch = options.delivered.evidence?.branch;
+  if (!url || !branch) throw new Error("Loop PR delivery lacks CI-check evidence");
+  let delivered = options.delivered;
+  for (let repair = 0; ; repair++) {
+    options.signal.throwIfAborted();
+    const checks = runGh(options.workspace, buildPrChecksArgs(url), PR_CHECKS_TIMEOUT_MS + 5_000);
+    if (checks.status === 0 || isNoChecksReported(`${checks.stdout}\n${checks.stderr}`)) return delivered;
+    if (checks.error && (checks.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw new Error(`Timed out waiting for pull request checks after ${PR_CHECKS_TIMEOUT_MS / 60_000} minutes`);
+    }
+    if (repair >= options.maxRepairs) {
+      throw new Error(`Pull request checks failed after ${repair} repair attempt(s)`);
+    }
+    const log = failedCiLog(options.workspace, branch);
+    if (!log) throw new Error("Pull request checks failed and no bounded failed-step log was available");
+    let injectedCiFailure = false;
+    const repaired = await runAutoLoop(options.deps, {
+      task: buildCiRepairPrompt(log),
+      workspace: options.workspace,
+      verifyCommand: options.state.verifyCommand,
+      ...(options.state.verificationPlan ? { verificationPlan: options.state.verificationPlan } : {}),
+      stablePasses: options.state.stablePasses ?? 1,
+      flakyRetries: options.state.flakyRetries ?? 0,
+      maxNoProgressRecoveries: 0,
+      maxIterations: 2,
+      costBudgetUsd: options.repairBudgetUsd,
+      approvalMode: "acceptEdits",
+      persist: false,
+      signal: options.signal,
+      verify: async (workspace, command, signal, onOutput) => {
+        if (!injectedCiFailure) {
+          injectedCiFailure = true;
+          onOutput?.("stderr", log);
+          return { code: 1, output: log };
+        }
+        const result = await runShellCommand(command, workspace, options.state.verifyTimeoutMs ?? 120_000, {
+          sandbox: options.sandbox,
+          workspace,
+          signal,
+          onOutput,
+        });
+        return { code: result.exitCode, output: `${result.stdout}${result.stderr}` };
+      },
+    });
+    if (repaired.status !== "passed") {
+      throw new Error(`CI repair did not pass local verification: ${repaired.status}`);
+    }
+    if (!(await isWorktreeDirty(options.workspace))) {
+      throw new Error("CI repair produced no repository changes");
+    }
+    await checkpointWorktree(options.workspace, `fix: repair CI for ${branch}`);
+    const revision = gitRevision(options.workspace, branch);
+    const pushed = spawnSync("git", ["push", "origin", `${revision}:refs/heads/${branch}`], {
+      cwd: options.workspace,
+      encoding: "utf8",
+    });
+    if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish CI repair");
+    delivered = {
+      ...delivered,
+      evidence: { ...delivered.evidence, branch, revision, url },
+      message: `Pull request checks passed after ${repair + 1} repair attempt(s): ${url}`,
+    };
+  }
+}
 
 class LoopDeliveryEvidenceError extends Error {}
 class LoopDeliveryVerificationError extends Error {}
@@ -967,6 +1190,7 @@ export async function runLoopDelivery(
   projectPath: string,
   loopId: string,
   mode: LoopDeliveryMode,
+  options: LoopDeliveryOptions = {},
 ): Promise<LoopDeliveryResult> {
   let lease: Awaited<ReturnType<typeof acquireLoopLifecycleLeaseWithPreemption>>;
   try {
@@ -1103,6 +1327,10 @@ export async function runLoopDelivery(
     try {
       delivered = completedAttempt ?? (await deliverLoop(projectPath, loopId, mode, state));
       if (!completedAttempt) persistActionCompleted(delivered);
+      if (options.beforeFinalize) {
+        delivered = await options.beforeFinalize(delivered, state);
+        persistActionCompleted(delivered);
+      }
       delivered = await finalizeLoopDelivery(
         projectPath,
         loopId,

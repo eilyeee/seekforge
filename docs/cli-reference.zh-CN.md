@@ -162,11 +162,12 @@
 
 ## 自主验证循环
 
-`seekforge loop <task> --verify <command>` 反复运行 agent 与验证命令，直到完成或某道护栏叫停循环。可选的需求分析可避免验证命令为绿但需求仍未完成的假通过。验证使用共享的 shell 执行器，套用已配置的操作系统级沙箱，并响应协作式取消。
+`seekforge loop <task> (--verify <command> | --auto-verify)` 反复运行 agent 与冻结后的验证流水线，直到完成或某道护栏叫停循环。可选的需求分析可避免验证命令为绿但需求仍未完成的假通过。验证使用共享的 shell 执行器，套用已配置的操作系统级沙箱，并响应协作式取消。
 
 | Flag | 说明 |
 | --- | --- |
-| `--verify <command>` | 必填的成功标准；退出码 0 视为通过。 |
+| `--verify <command>` | 显式成功标准；退出码 0 视为通过。不能与 `--auto-verify` 同时使用。 |
+| `--auto-verify` | 从根目录 package scripts、Cargo、Go 或 pytest 清单发现并冻结已识别的验证阶段。 |
 | `--max-iters <n>` | agent 迭代上限；默认 8，不能超过 100。 |
 | `--budget <usd>` | 观测到的累计用量达到该值时停止后续工作。在途的 provider 请求可能使最终账单略微超出。 |
 | `--token-budget <n>` | 累计 prompt + completion Token 达到上限时停止。 |
@@ -182,6 +183,9 @@
 | `--rollback-regressions` | 回退增加解析失败数的迭代；仅限保留的 Loop worktree。 |
 | `--priority <n>` | 设置 -10 到 10 的自动恢复优先级。 |
 | `--deliver <mode>` | 通过后执行 `checkpoint`、`merge`、写 `patch` 或创建草稿 `pr`；仅限保留 worktree。 |
+| `--wait-ci` | 与 `--deliver pr` 配合，最长等待 PR checks 15 分钟后再最终完成交付。 |
+| `--ci-repairs <n>` | 根据失败 CI 日志执行 0-3 次有界修复；要求 `--wait-ci`。 |
+| `--ci-repair-budget <usd>` | 每次 CI 修复的模型成本上限；默认 1。 |
 | `--requirements quick\|analyze\|confirm` | `quick` 仅依据验证命令；`analyze` 冻结需求并执行验收审查；`confirm` 在分析后暂停，等待显式批准。 |
 | `--worktree [name]` | 在新建并保留的 git worktree 中运行；可选择其分支后缀。 |
 | `-y, --yes` | 省去自主编辑提示；循环运行本就使用 `acceptEdits`。 |
@@ -198,7 +202,9 @@
 重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
 回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
 调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 持久化执行带共享加权预算、
-重试和失败策略的 JSON 依赖图，并支持 `--resume` / `--dag-id` 检查点。TUI 与
+重试、失败策略、条件分支、审批门、独占资源和结构化依赖输出的 JSON 依赖图，并支持
+`--resume` / `--dag-id` 检查点。`--approve <node-id>` 可通过节点审批门，
+`--rerun <node-id>` 会让该节点及其下游结果失效。TUI 与
 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
 worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作，并保留

@@ -97,6 +97,12 @@ State is written atomically after observable progress. Live output is bounded
 per verification; the final verification event still carries the normal output
 tail used for diagnostics and continuation prompts.
 
+Each completed iteration also records bounded observability fields: elapsed
+milliseconds, cost and token deltas, changed relative paths, rollback state, and
+a normalized failure category. Stuck/cycle recovery maps that category to a
+deterministic strategy (test isolation, compiler/lint repair, environment
+validation, scope reduction, or replanning) instead of repeating one generic prompt.
+
 The session id and cumulative provider usage are checkpointed as their events
 arrive. The iteration counter advances only after the agent run completes, so a
 crash resumes an interrupted iteration without consuming an iteration slot while
@@ -178,10 +184,14 @@ state.
 ## CLI
 
 ```
-seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
+seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
-- `--verify <cmd>` (required): success = the command exits 0.
+- `--verify <cmd>`: success = the command exits 0.
+- `--auto-verify`: discovers recognized root stages from `package.json`,
+  `Cargo.toml`, `go.mod`, or pytest configuration. It freezes fixed commands or
+  named scripts in Loop state and never interpolates manifest script bodies
+  into a generated shell command.
 - `--requirements quick|analyze|confirm`: `quick` keeps verifier-only behavior;
   `analyze` performs read-only repository analysis and acceptance review;
   `confirm` persists the specification and stops with `requirements_pending`
@@ -260,7 +270,11 @@ seekforge loop-cleanup <worktree-name> [--force]
 - `loop-dag <file>` durably checkpoints a JSON dependency graph. `--resume` and
   `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
   remaining cost/token budgets and support priorities, bounded retries, and
-  `skip_dependents`/`continue`/`stop` failure policies. Parallel batches require
+  `skip_dependents`/`continue`/`stop` failure policies. Nodes may branch on a
+  dependency outcome, require explicit approval, lock named exclusive resources,
+  and consume bounded structured dependency outputs. `--rerun` invalidates a
+  selected node and all descendants; `--approve` crosses a declared gate.
+  Parallel graphs require
   distinct physical workspaces. Those resolved workspace identities are part of
   the durable graph fingerprint, so `--resume` rejects a remapped node instead
   of reusing work completed in another checkout.
@@ -283,6 +297,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   treated as unverified and blocks delivery. Worktree cleanup takes the same
   workspace guard, so it cannot remove an active delivery, and non-force cleanup
   preserves branches with commits not reachable from the base checkout.
+- `--deliver pr --wait-ci` keeps delivery in `action_completed` while required
+  PR checks run. `--ci-repairs 1..3` may feed one bounded failed-step log to a
+  non-persisted, two-iteration repair Loop with its own cost cap, rerun the frozen
+  local pipeline, checkpoint and push the immutable revision, and wait again.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can
@@ -293,7 +311,8 @@ seekforge loop-cleanup <worktree-name> [--force]
   `/loop-steer <guidance>` commands scoped to the active tab's Loop.
 
 Iteration snapshots persist compact stage outcomes, normalized diagnostic/workspace
-fingerprints, parsed failure counts, recovery attempts, and pass streaks. Repeated
+fingerprints, parsed failure counts, per-iteration time/cost/tokens/changed paths,
+failure categories, rollback flags, recovery attempts, and pass streaks. Repeated
 commands and output remain only in the latest result/history log so the state stays
 inside its reader's 1 MiB limit; oversized replacements fail before the last readable
 state is touched. Loop
@@ -316,6 +335,7 @@ type LoopOptions = {
   task: string;
   workspace: string;
   verifyCommand: string;        // fixed verifier; analyzed modes also require acceptance
+  autoVerificationPlan?: boolean; // discover and freeze a root plan on a new Loop
   verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
   stablePasses?: number; flakyRetries?: number;
   maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
@@ -346,6 +366,7 @@ type LoopResult = {
   agentError?: AgentError;
   stageResults?: LoopStageResult[]; flaky?: boolean; passStreak?: number;
   recoveryAttempts?: number;
+  failureCategory?: LoopFailureCategory;
 };
 ```
 

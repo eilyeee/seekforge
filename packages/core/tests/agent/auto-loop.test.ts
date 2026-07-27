@@ -188,6 +188,14 @@ describe("runAutoLoop", () => {
     expect(result.costUsd).toBeCloseTo(0.002, 6);
     expect(events.some((e) => e.type === "loop.done")).toBe(true);
     expect(events.filter((e) => e.type === "iteration.start")).toHaveLength(2);
+    expect(events.filter((e) => e.type === "run.completed")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ iterationCostUsd: 0.001, iterationTokens: 15, changedPaths: [] }),
+      ]),
+    );
+    expect(events.filter((e) => e.type === "loop.snapshot").at(-1)).toMatchObject({
+      snapshot: { failureCategory: "none", costUsd: 0.001, tokensUsed: 15 },
+    });
   });
 
   it("writes an append-only JSONL log of the event stream", async () => {
@@ -941,7 +949,16 @@ describe("runAutoLoop", () => {
     expect(result.status).toBe("no_progress");
     expect(result.iterations).toBe(2);
     expect(result.recoveryAttempts).toBe(1);
-    expect(events).toContainEqual({ type: "loop.recovery", iteration: 1, attempt: 1, reason: "cycle" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "loop.recovery",
+        iteration: 1,
+        attempt: 1,
+        reason: "cycle",
+        category: "unknown",
+        strategy: "replan",
+      }),
+    );
   });
 
   it("parses early diagnostics while exposing only the 4KB output tail", async () => {

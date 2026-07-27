@@ -12,3 +12,4 @@ export * from "./worktree.js";
 export * from "./security/index.js";
 export * from "./plugins/index.js";
 export { writeFileAtomic, readFileIfExists } from "./util/fs.js";
+export { isRecord } from "./util/guards.js";

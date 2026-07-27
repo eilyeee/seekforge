@@ -107,6 +107,10 @@ export type LoopRow = {
   verify: { code: number; passed: boolean; tail: string } | null;
   /** Live verification output before the final verify event arrives. */
   liveTail: string;
+  tokens: number | null;
+  durationMs: number | null;
+  changedPaths: number;
+  failureCategory: string | null;
 };
 
 export function loopRows(events: LoopEvent[]): LoopRow[] {
@@ -115,7 +119,16 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
   const ensure = (iteration: number): LoopRow => {
     let row = byIter.get(iteration);
     if (!row) {
-      row = { iteration, costUsd: null, verify: null, liveTail: "" };
+      row = {
+        iteration,
+        costUsd: null,
+        verify: null,
+        liveTail: "",
+        tokens: null,
+        durationMs: null,
+        changedPaths: 0,
+        failureCategory: null,
+      };
       byIter.set(iteration, row);
       order.push(iteration);
     }
@@ -127,7 +140,18 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
         ensure(event.iteration);
         break;
       case "run.completed":
-        ensure(event.iteration).costUsd = event.costUsd;
+        {
+          const observed = event as typeof event & {
+            iterationTokens?: number;
+            durationMs?: number;
+            changedPaths?: string[];
+          };
+          const row = ensure(event.iteration);
+          row.costUsd = event.costUsd;
+          row.tokens = observed.iterationTokens ?? null;
+          row.durationMs = observed.durationMs ?? null;
+          row.changedPaths = observed.changedPaths?.length ?? 0;
+        }
         break;
       case "verify":
         ensure(event.iteration).verify = {
@@ -155,7 +179,13 @@ export function loopRows(events: LoopEvent[]): LoopRow[] {
       case "loop.resumed":
       case "loop.steered":
       case "loop.recovery":
+        break;
       case "loop.snapshot":
+        {
+          const observed = event.snapshot as typeof event.snapshot & { failureCategory?: string };
+          ensure(event.snapshot.iteration).failureCategory = observed.failureCategory ?? null;
+        }
+        break;
       case "loop.rollback":
         // Requirement progress is rendered separately from iteration rows.
         break;

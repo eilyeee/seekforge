@@ -67,6 +67,25 @@ export type {
 
 import type { AgentInfo } from "@seekforge/shared";
 
+export type LoopStateSummary = {
+  loopId: string;
+  status: string;
+  task: string;
+  workspace: string;
+  iterations: number;
+  maxIterations: number;
+  costUsd: number;
+  tokensUsed?: number;
+  elapsedMs?: number;
+  verifyRuns?: number;
+  priority?: number;
+  updatedAt: string;
+  delivery?: { mode: string; status: string; phase?: string; artifact?: string; error?: string };
+};
+
+export type LoopHistoryEntry = { seq: number; ts: string; event: { type: string; [key: string]: unknown } };
+export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
+
 export type AgentImportResult = {
   ok: true;
   dir: string;

@@ -180,15 +180,16 @@ security details.
 
 ## Autonomous verification loop
 
-`seekforge loop <task> --verify <command>` repeatedly runs the agent and the
-verification command until completion or a guardrail stops the loop. Optional
+`seekforge loop <task> (--verify <command> | --auto-verify)` repeatedly runs the
+agent and the frozen verification pipeline until completion or a guardrail stops the loop. Optional
 requirement analysis prevents a green verifier from masking unfinished scope. Verification
 uses the shared shell executor with the configured OS sandbox and responds to
 cooperative cancellation.
 
 | Flag | Description |
 | --- | --- |
-| `--verify <command>` | Required success criterion; exit code 0 passes. |
+| `--verify <command>` | Explicit success criterion; exit code 0 passes. Mutually exclusive with `--auto-verify`. |
+| `--auto-verify` | Discover and freeze recognized root verification stages from package scripts, Cargo, Go, or pytest manifests. |
 | `--max-iters <n>` | Maximum agent iterations; defaults to 8 and cannot exceed 100. |
 | `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
 | `--token-budget <n>` | Stop at cumulative prompt + completion tokens. |
@@ -204,6 +205,9 @@ cooperative cancellation.
 | `--rollback-regressions` | Rewind iterations that increase parsed failures; retained Loop worktrees only. |
 | `--priority <n>` | Set automatic recovery priority from -10 to 10. |
 | `--deliver <mode>` | After passing, `checkpoint`, `merge`, write a `patch`, or create a draft `pr`; retained worktrees only. |
+| `--wait-ci` | With `--deliver pr`, wait up to 15 minutes for PR checks before finalizing delivery. |
+| `--ci-repairs <n>` | Make 0-3 bounded repairs from failed CI logs; requires `--wait-ci`. |
+| `--ci-repair-budget <usd>` | Per-attempt model cost cap for CI repair; defaults to 1. |
 | `--requirements quick\|analyze\|confirm` | `quick` uses verifier-only completion; `analyze` freezes requirements and performs acceptance reviews; `confirm` pauses for explicit approval after analysis. |
 | `--worktree [name]` | Run in a new retained git worktree; optionally choose its branch suffix. |
 | `-y, --yes` | Suppress the autonomous-edit notice; loop runs already use `acceptEdits`. |
@@ -227,7 +231,9 @@ failed post-pass delivery from the retained worktree without rerunning the Loop;
 `loop-history` replays durable events, `loop-recover` marks orphaned owners as
 `interrupted`, `loop-priority <id> <n>` changes recovery order, and `loop-prune`
 removes only eligible terminal records. `loop-dag <file>` persists a JSON graph
-with weighted budgets, retries, failure policies, and `--resume`/`--dag-id`
+with weighted budgets, retries, failure policies, conditions, approvals, exclusive resources,
+structured dependency outputs, and `--resume`/`--dag-id` checkpoints. Use `--approve <node-id>`
+to cross a node gate and `--rerun <node-id>` to invalidate that node and its descendants.
 checkpoints. TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.
 `seekforge loop-cleanup <name>` removes a retained `seekforge/loop-*` worktree;

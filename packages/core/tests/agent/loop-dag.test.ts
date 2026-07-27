@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
@@ -82,7 +82,7 @@ describe("runLoopDag", () => {
           { id: "b", task: "b", verifyCommand: "test" },
         ],
       }),
-    ).rejects.toThrow(/same workspace/);
+    ).rejects.toThrow(/distinct workspaces/);
     await expect(
       runLoopDag(deps, {
         workspace,
@@ -243,5 +243,138 @@ describe("runLoopDag", () => {
       ["soft-fail", "failed", 1],
       ["after-soft-fail", "passed", 1],
     ]);
+  });
+
+  it("supports failure conditions and publishes bounded dependency outputs", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      nodes: [
+        {
+          id: "probe",
+          task: "probe",
+          verifyCommand: "fail",
+          options: { maxIterations: 1, maxNoProgressRecoveries: 0, verify: async () => ({ code: 1, output: "bad" }) },
+        },
+        {
+          id: "repair",
+          task: "repair",
+          verifyCommand: "pass",
+          dependsOn: ["probe"],
+          condition: { nodeId: "probe", status: "failed" },
+          consumeDependencyOutputs: true,
+          options: { verify: async () => ({ code: 0, output: "ok" }) },
+        },
+      ],
+    });
+    expect(results[0]?.status).toBe("failed");
+    expect(results[1]).toMatchObject({ status: "passed", output: { status: "passed", iterations: 0 } });
+  });
+
+  it("pauses for approval and resumes approved nodes", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    const node = {
+      id: "release",
+      task: "release",
+      verifyCommand: "pass",
+      verifierId: "release-v1",
+      requiresApproval: true,
+      options: { verify: async () => ({ code: 0, output: "ok" }) },
+    };
+    const waiting = await runLoopDag(deps, { workspace, dagId: "approval", nodes: [node] });
+    expect(waiting[0]?.status).toBe("waiting_approval");
+    const resumed = await runLoopDag(deps, {
+      workspace,
+      dagId: "approval",
+      nodes: [node],
+      resume: true,
+      approveNode: () => true,
+    });
+    expect(resumed[0]?.status).toBe("passed");
+  });
+
+  it("invalidates a resumed node and all downstream results", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    let verifies = 0;
+    const verify = async () => {
+      verifies++;
+      return { code: 0, output: "ok" };
+    };
+    const nodes = [
+      { id: "a", task: "a", verifyCommand: "pass", verifierId: "a-v1", options: { verify } },
+      {
+        id: "b",
+        task: "b",
+        verifyCommand: "pass",
+        verifierId: "b-v1",
+        dependsOn: ["a"],
+        options: { verify },
+      },
+    ];
+    await runLoopDag(deps, { workspace, dagId: "rerun", nodes });
+    expect(verifies).toBe(2);
+    await runLoopDag(deps, { workspace, dagId: "rerun", nodes, resume: true, rerunFrom: ["a"] });
+    expect(verifies).toBe(4);
+  });
+
+  it("serializes nodes that share an exclusive resource", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    const first = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    const second = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    workspaces.push(workspace, first, second);
+    let active = 0;
+    let maximumActive = 0;
+    const verify = async () => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return { code: 0, output: "ok" };
+    };
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      maxConcurrency: 2,
+      workspaceForNode: (node) => (node.id === "a" ? first : second),
+      nodes: [
+        { id: "a", task: "a", verifyCommand: "pass", resources: ["release"], options: { verify } },
+        { id: "b", task: "b", verifyCommand: "pass", resources: ["release"], options: { verify } },
+      ],
+    });
+    expect(results.map((result) => result.status)).toEqual(["passed", "passed"]);
+    expect(maximumActive).toBe(1);
+  });
+
+  it("clears stale completion when a resumed graph pauses for approval", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    const node = {
+      id: "release",
+      task: "release",
+      verifyCommand: "pass",
+      verifierId: "release-v1",
+      requiresApproval: true,
+      options: { verify: async () => ({ code: 0, output: "ok" }) },
+    };
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "approval-completion",
+      nodes: [node],
+      approveNode: () => true,
+    });
+    const completedPath = join(workspace, ".seekforge/loop-dags/approval-completion.json");
+    expect(JSON.parse(readFileSync(completedPath, "utf8")).completedAt).toEqual(expect.any(String));
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "approval-completion",
+      nodes: [node],
+      resume: true,
+      rerunFrom: ["release"],
+    });
+    expect(JSON.parse(readFileSync(completedPath, "utf8")).completedAt).toBeUndefined();
   });
 });

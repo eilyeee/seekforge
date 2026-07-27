@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 66: full Loop engineering surface
+- Added frozen automatic verification discovery, per-iteration cost/token/time/path
+  observability, failure classification, and category-specific recovery strategies.
+- Upgraded durable DAGs with conditional branches, exclusive resources, approval
+  gates, structured dependency outputs, and downstream invalidation/rerun.
+- Added bounded PR-check waiting and CI-log repair for Loop delivery, REST/Desktop/TUI
+  lifecycle management, richer eval scenarios, and bilingual operational docs.
+
 ### round 65: verified immutable Loop publication
 - Re-run the full persisted verification pipeline against the checkpointed
   delivery tree, reject verifier/hook mutations, and publish merge/PR delivery

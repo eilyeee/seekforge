@@ -93,7 +93,9 @@ export {
 export {
   runLoopDag,
   type LoopDagNode,
+  type LoopDagCondition,
   type LoopDagNodeResult,
+  type LoopDagNodeOutput,
   type LoopDagOptions,
 } from "./loop-dag.js";
 export {
@@ -105,10 +107,16 @@ export {
   type LoopEvent,
   type LoopStatus,
   type LoopBudgetReason,
+  type LoopFailureCategory,
+  type LoopRecoveryStrategy,
   type LoopVerificationStage,
   type LoopStageResult,
   type LoopIterationSnapshot,
 } from "./auto-loop.js";
+export {
+  discoverLoopVerificationPlan,
+  type DiscoveredLoopVerificationPlan,
+} from "./loop-verification-plan.js";
 export {
   isLoopRequirementMode,
   parseLoopAcceptanceReview,

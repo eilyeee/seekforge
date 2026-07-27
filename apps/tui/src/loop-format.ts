@@ -49,7 +49,11 @@ export function formatLoopEvent(event: LoopEvent): LoopNotice[] {
     case "run.completed":
       return [
         {
-          text: `  loop · iteration ${event.iteration} run complete · ${formatCostUsd(event.costUsd)}`,
+          text: `  loop · iteration ${event.iteration} run complete · ${formatCostUsd(event.costUsd)}${
+            event.iterationTokens !== undefined
+              ? ` · +${event.iterationTokens} tokens · ${event.durationMs ?? 0}ms · ${event.changedPaths?.length ?? 0} paths`
+              : ""
+          }`,
           tone: "dim",
         },
       ];

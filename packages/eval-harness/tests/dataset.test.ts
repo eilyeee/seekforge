@@ -149,6 +149,30 @@ describe("task validation", () => {
       validateTask(
         {
           ...valid,
+          runner: "loop",
+          loop: {
+            verifyCommand: "npm test",
+            maxIterations: 2,
+            expectedStatus: "passed",
+            tokenBudget: 2_000,
+            maxDurationMs: 60_000,
+            stablePasses: 2,
+            flakyRetries: 1,
+            maxNoProgressRecoveries: 2,
+            verificationPlan: [
+              { id: "types", command: "npm run typecheck" },
+              { id: "test", command: "npm test" },
+            ],
+            resume: { expectedInitialStatus: "budget", additionalTokenBudget: 500 },
+          },
+        },
+        "loop-v2",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
           runner: "session_scenario",
           scenario: { steps: [{ type: "agent" }, { type: "agent", resume: true }] },
         },
@@ -222,6 +246,24 @@ describe("task validation", () => {
         "t",
       ),
     ).toThrow(/maxIterations/);
+    expect(() =>
+      validateTask(
+        {
+          ...valid,
+          runner: "loop",
+          loop: {
+            verifyCommand: "npm test",
+            maxIterations: 2,
+            expectedStatus: "passed",
+            verificationPlan: [
+              { id: "test", command: "npm test" },
+              { id: "test", command: "npm test again" },
+            ],
+          },
+        },
+        "loop-v2",
+      ),
+    ).toThrow(/verificationPlan/);
     expect(() =>
       validateTask(
         {

@@ -2358,6 +2358,27 @@ the label alone cannot prove an irreversible side effect completed.
   protected intermediate phase before retention decisions.
 - **Caught:** evidence-free explicit `finalized` Loop records remained pruneable.
 
+## 192. Reopened durable work must clear stale completion markers
+
+A completed checkpoint can become active again through rerun or invalidation. If
+an optional completion timestamp survives the transition, readers may treat a
+paused or partially rerun graph as finished.
+
+- **Do:** explicitly clear terminal metadata whenever a durable operation is
+  reopened, and write it again only after every new terminal condition holds.
+- **Caught:** Loop DAG `rerunFrom` retained the old `completedAt` when the graph
+  subsequently paused at a new approval gate.
+
+## 193. Discovery markers must be physical files inside the selected root
+
+Existence checks follow symbolic links. A linked manifest or lockfile can make
+an automatic discovery path select commands based on state outside the workspace.
+
+- **Do:** inspect the root entry itself, accept only regular non-symlink files,
+  and keep any manifest reads bounded and no-follow.
+- **Caught:** automatic Loop verification treated symlinked Cargo and package
+  manager markers as project-owned discovery evidence.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

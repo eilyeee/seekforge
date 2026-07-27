@@ -107,6 +107,14 @@ workspace). `GET /api/health` and `GET /api/workspaces` are global.
 | DELETE /api/runs/:id | alias of the cancel endpoint |
 | POST /api/runs | start a disconnect-independent headless run. Body `{kind:"agent"|"loop"?, task, mode:"ask"|"edit"?, maxCostUsd, verifyCommand?, maxIterations?, verificationPlan?:[{id,command,required?,timeoutMs?}], stablePasses?, flakyRetries?, maxNoProgressRecoveries?, rollbackOnRegression?, requirementMode?:"quick"|"analyze"|"confirm", isolation?:"auto"|"workspace"|"worktree"}`; writable runs default to worktree isolation in git repositories, loops require `verifyCommand`, default to `mode:"edit"`, and reject `mode:"ask"`; returns `202 RunRecord` immediately |
 | POST /api/runs/prune | compact run history immediately. Optional body `{maxTerminalRuns?, maxAgeDays?}` overrides the workspace retention policy for this prune; active runs are always retained; returns `{removed, kept}` |
+| GET /api/loops | all persisted Loop states in the selected workspace |
+| GET /api/loops/verification-plan | discover a conservative root verification plan without executing it |
+| GET /api/loops/:id | one persisted Loop state; 404 when absent |
+| GET /api/loops/:id/history?after=N&limit=N | up to 1000 retained lifecycle log entries after the sequence cursor; 404 when the Loop is absent |
+| POST /api/loops/recover | body `{limit?:1..100}`; mark orphaned active records `interrupted` and return them |
+| POST /api/loops/prune | body `{maxAgeDays?,maxTerminalCount?,dryRun?}`; prune only retention-eligible terminal records |
+| POST /api/loops/:id/priority | body `{priority:-10..10}`; update recovery order under the Loop lifecycle guard |
+| DELETE /api/loops/:id | delete one inactive persisted Loop and its retained history |
 | GET /api/workspaces | `[{id, name, path}]` (global; ordered, first is the default; includes registered worktrees `wt-<slug>`) |
 | POST /api/worktrees | body `{name?}` → `{id, path, branch}` — create a worktree session (see "Worktrees"); 400 `not_a_git_repo` |
 | GET /api/worktrees | `[{id, branch, path, dirty, ahead}]` — worktrees of the `?ws=` base workspace |

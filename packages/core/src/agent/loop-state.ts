@@ -272,7 +272,37 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
       typeof item.diagnosticsFingerprint !== "string" ||
       (item.workspaceFingerprint !== null && typeof item.workspaceFingerprint !== "string") ||
       !isSafeInteger(item.failedTests) ||
-      item.failedTests < 0
+      item.failedTests < 0 ||
+      (item.durationMs !== undefined && (!isSafeInteger(item.durationMs) || item.durationMs < 0)) ||
+      (item.costUsd !== undefined && (!isFiniteNumber(item.costUsd) || item.costUsd < 0)) ||
+      (item.tokensUsed !== undefined && (!isSafeInteger(item.tokensUsed) || item.tokensUsed < 0)) ||
+      (item.changedPaths !== undefined &&
+        (!Array.isArray(item.changedPaths) ||
+          item.changedPaths.length > 128 ||
+          item.changedPaths.some(
+            (path) =>
+              typeof path !== "string" ||
+              path.length === 0 ||
+              path.length > 1_024 ||
+              path.includes("\0") ||
+              path.startsWith("/") ||
+              /^[A-Za-z]:[\\/]/.test(path) ||
+              path
+                .replaceAll("\\", "/")
+                .split("/")
+                .some((part) => part === "" || part === "." || part === ".."),
+          ))) ||
+      (item.failureCategory !== undefined &&
+        item.failureCategory !== "none" &&
+        item.failureCategory !== "test" &&
+        item.failureCategory !== "compile" &&
+        item.failureCategory !== "lint" &&
+        item.failureCategory !== "environment" &&
+        item.failureCategory !== "timeout" &&
+        item.failureCategory !== "permission" &&
+        item.failureCategory !== "network" &&
+        item.failureCategory !== "unknown") ||
+      (item.rolledBack !== undefined && typeof item.rolledBack !== "boolean")
     )
       return null;
     const stageResults = parseStageResults(item.stageResults);
@@ -284,6 +314,14 @@ function parseSnapshots(value: unknown): LoopIterationSnapshot[] | null {
       workspaceFingerprint: item.workspaceFingerprint,
       failedTests: item.failedTests,
       stageResults,
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...(typeof item.costUsd === "number" ? { costUsd: item.costUsd } : {}),
+      ...(typeof item.tokensUsed === "number" ? { tokensUsed: item.tokensUsed } : {}),
+      ...(Array.isArray(item.changedPaths) ? { changedPaths: item.changedPaths as string[] } : {}),
+      ...(typeof item.failureCategory === "string"
+        ? { failureCategory: item.failureCategory as LoopIterationSnapshot["failureCategory"] }
+        : {}),
+      ...(typeof item.rolledBack === "boolean" ? { rolledBack: item.rolledBack } : {}),
     });
   }
   return result;

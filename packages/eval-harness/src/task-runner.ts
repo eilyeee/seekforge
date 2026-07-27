@@ -562,6 +562,20 @@ async function runLoopTaskMode(
     maxIterations: config.maxIterations,
     approvalMode: "auto",
     ...(config.costBudgetUsd !== undefined ? { costBudgetUsd: config.costBudgetUsd } : {}),
+    ...(config.tokenBudget !== undefined ? { tokenBudget: config.tokenBudget } : {}),
+    ...(config.maxDurationMs !== undefined ? { maxDurationMs: config.maxDurationMs } : {}),
+    ...(config.maxVerifyRuns !== undefined ? { maxVerifyRuns: config.maxVerifyRuns } : {}),
+    ...(config.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: config.verifyTimeoutMs } : {}),
+    ...(config.agentTimeoutMs !== undefined ? { agentTimeoutMs: config.agentTimeoutMs } : {}),
+    ...(config.maxAgentRetries !== undefined ? { maxAgentRetries: config.maxAgentRetries } : {}),
+    ...(config.verificationPlan ? { verificationPlan: config.verificationPlan } : {}),
+    ...(config.stablePasses !== undefined ? { stablePasses: config.stablePasses } : {}),
+    ...(config.flakyRetries !== undefined ? { flakyRetries: config.flakyRetries } : {}),
+    ...(config.maxNoProgressRecoveries !== undefined
+      ? { maxNoProgressRecoveries: config.maxNoProgressRecoveries }
+      : {}),
+    ...(config.rollbackOnRegression !== undefined ? { rollbackOnRegression: config.rollbackOnRegression } : {}),
+    ...(config.requirementMode ? { requirementMode: config.requirementMode } : {}),
   });
   let final: LoopResult = initial;
   let statePassed = config.resume === undefined || initial.status === config.resume.expectedInitialStatus;
@@ -575,6 +589,15 @@ async function runLoopTaskMode(
         : {}),
       ...(config.resume.additionalCostBudgetUsd !== undefined
         ? { additionalCostBudgetUsd: config.resume.additionalCostBudgetUsd }
+        : {}),
+      ...(config.resume.additionalTokenBudget !== undefined
+        ? { additionalTokenBudget: config.resume.additionalTokenBudget }
+        : {}),
+      ...(config.resume.additionalDurationMs !== undefined
+        ? { additionalDurationMs: config.resume.additionalDurationMs }
+        : {}),
+      ...(config.resume.additionalVerifyRuns !== undefined
+        ? { additionalVerifyRuns: config.resume.additionalVerifyRuns }
         : {}),
     });
   }

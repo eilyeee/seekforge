@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api } from "../../lib/api";
 import { useT } from "../../lib/i18n";
 import { loopRows, loopStatusTone, loopWarnings, formatCost, type LoopProgress } from "../../lib/loop";
 import {
@@ -8,6 +9,7 @@ import {
   parsePositiveIntegerInput,
 } from "../../lib/loop-input";
 import { Badge, Button, Card, IconChevron, Input, Select, TextArea } from "../ui";
+import { LoopManager } from "./LoopManager";
 
 type Props = {
   /** The active tab's live loop feed + final result. */
@@ -74,6 +76,9 @@ export function LoopPanel({
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState("");
   const [verify, setVerify] = useState("");
+  const [autoVerify, setAutoVerify] = useState(false);
+  const [autoVerifyError, setAutoVerifyError] = useState("");
+  const [discoveringVerification, setDiscoveringVerification] = useState(false);
   const [maxIterations, setMaxIterations] = useState(String(DEFAULT_MAX_ITERATIONS));
   const [budget, setBudget] = useState("");
   const [tokenBudget, setTokenBudget] = useState("");
@@ -161,8 +166,9 @@ export function LoopPanel({
 
   const canRun =
     !running &&
+    !discoveringVerification &&
     task.trim() !== "" &&
-    verify.trim() !== "" &&
+    (autoVerify || verify.trim() !== "") &&
     !max.error &&
     !bud.error &&
     !tokenBud.error &&
@@ -171,13 +177,42 @@ export function LoopPanel({
     !verifyLimit.error &&
     !agentLimit.error &&
     !retries.error;
-  const canRunV2 = canRun && !stable.error && !flaky.error && !recoveries.error && !priorityError && !stageError;
+  const canRunV2 =
+    canRun &&
+    !stable.error &&
+    !flaky.error &&
+    !recoveries.error &&
+    !priorityError &&
+    !stageError &&
+    !(autoVerify && parsedStages.length > 0);
 
-  const run = () => {
+  const run = async () => {
     if (!canRunV2) return;
+    let verifyCommand = verify.trim();
+    let plan =
+      parsedStages.length > 0
+        ? [
+            { id: "verify", command: verifyCommand },
+            ...(parsedStages.filter(Boolean) as Array<{ id: string; command: string; paths?: string[] }>),
+          ]
+        : undefined;
+    if (autoVerify) {
+      setDiscoveringVerification(true);
+      try {
+        const discovered = await api.loopVerificationPlan();
+        plan = discovered.stages;
+        verifyCommand = discovered.stages[0]!.command;
+        setAutoVerifyError("");
+      } catch (caught) {
+        setAutoVerifyError(caught instanceof Error ? caught.message : String(caught));
+        return;
+      } finally {
+        setDiscoveringVerification(false);
+      }
+    }
     onRun({
       task: task.trim(),
-      verifyCommand: verify.trim(),
+      verifyCommand,
       ...(max.value !== undefined ? { maxIterations: max.value } : {}),
       ...(bud.value !== undefined ? { budget: bud.value } : {}),
       ...(tokenBud.value !== undefined ? { tokenBudget: tokenBud.value } : {}),
@@ -186,14 +221,7 @@ export function LoopPanel({
       ...(verifyLimit.value !== undefined ? { verifyTimeoutMs: Math.round(verifyLimit.value * 1_000) } : {}),
       ...(agentLimit.value !== undefined ? { agentTimeoutMs: Math.round(agentLimit.value * 1_000) } : {}),
       ...(retries.value !== undefined ? { maxAgentRetries: retries.value } : {}),
-      ...(parsedStages.length > 0
-        ? {
-            verificationPlan: [
-              { id: "verify", command: verify.trim() },
-              ...(parsedStages.filter(Boolean) as Array<{ id: string; command: string; paths?: string[] }>),
-            ],
-          }
-        : {}),
+      ...(plan ? { verificationPlan: plan } : {}),
       ...(stable.value !== undefined ? { stablePasses: stable.value } : {}),
       ...(flaky.value !== undefined ? { flakyRetries: flaky.value } : {}),
       ...(recoveries.value !== undefined ? { maxNoProgressRecoveries: recoveries.value } : {}),
@@ -282,6 +310,16 @@ export function LoopPanel({
                   disabled={running}
                   className="font-mono"
                 />
+                <span className="flex items-center gap-1 text-2xs text-tertiary">
+                  <input
+                    type="checkbox"
+                    checked={autoVerify}
+                    onChange={(event) => setAutoVerify(event.target.checked)}
+                    disabled={running}
+                  />
+                  {t("chat.loop.autoVerify")}
+                </span>
+                {autoVerifyError && <span className="text-2xs text-danger">{autoVerifyError}</span>}
               </label>
 
               <label htmlFor="loop-max-iterations" className="flex w-28 flex-col gap-1">
@@ -333,7 +371,7 @@ export function LoopPanel({
                   </Button>
                 </div>
               ) : (
-                <Button variant="primary" onClick={run} disabled={!canRunV2}>
+                <Button variant="primary" onClick={() => void run()} disabled={!canRunV2}>
                   {t("chat.loop.run")}
                 </Button>
               )}
@@ -421,6 +459,7 @@ export function LoopPanel({
                 </label>
               </div>
             </details>
+            <LoopManager running={running} onResume={onResume} />
             {loopRunning && (
               <div className="flex gap-2">
                 <Input
@@ -473,6 +512,14 @@ export function LoopPanel({
                     <span className="font-mono text-2xs text-secondary">
                       {t("chat.loop.runCost", { cost: formatCost(row.costUsd) })}
                     </span>
+                  )}
+                  {row.tokens !== null && (
+                    <span className="font-mono text-2xs text-tertiary">
+                      +{row.tokens} tokens · {row.durationMs ?? 0}ms · {row.changedPaths} paths
+                    </span>
+                  )}
+                  {row.failureCategory && row.failureCategory !== "none" && (
+                    <Badge tone="warn">{row.failureCategory}</Badge>
                   )}
                   {row.verify && (
                     <>

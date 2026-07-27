@@ -56,6 +56,15 @@ run → verify → 还没绿？带着失败信息再 run → verify → …  直
 seekforge loop "修好 parser 的失败测试，不要削弱断言" --verify "pnpm test"
 ```
 
+也可以让 SeekForge 发现并冻结一组保守的根目录流水线：
+
+```bash
+seekforge loop "让仓库恢复全绿" --auto-verify
+```
+
+发现逻辑识别 `typecheck` / `lint` / `test` / `build` package scripts 以及固定的 Cargo、Go、pytest
+命令。依赖它之前请查看打印出的计划；项目专用检查仍可通过 `--verify` 与 `--verify-stage` 显式提供。
+
 发生的事：
 
 1. 默认 `quick` 模式先做**预检**：运行一次 `pnpm test`，已经是绿的就直接结束，
@@ -223,8 +232,9 @@ CLI 每次循环结束的汇总里也会打印这条日志的路径。
 
 ## 10. 桌面端 / TUI 用法
 
-**桌面端**：聊天窗口顶部有个可折叠的 **Loop 面板**——任务 + verify 命令输入框、最大迭代 + 预算、
-一个 Run/Stop 按钮。进度实时流式显示：每轮一行（本轮花费 + 实时验证输出 + 通过/失败），结束时给
+**桌面端**：聊天窗口顶部有个可折叠的 **Loop 面板**——任务、显式/自动验证、护栏和 Run/Stop
+按钮。持久 Loop 管理器支持列表、历史、优先级、恢复、孤儿恢复、保留清理和删除。进度实时流式
+显示：每轮一行（成本、Token、耗时、变更路径数、失败类别、实时验证输出与通过/失败），结束时给
 一段状态汇总和 loop id。工具栏里的模型/思考档位会一起带上，和普通 run 一样。断线时运行会被标记为
 中断，挂起的确认框清空，排给失败连接的请求丢弃而不是重连后重放。
 
@@ -238,6 +248,8 @@ CLI 每次循环结束的汇总里也会打印这条日志的路径。
 `--requirements` 接受 `quick|analyze|confirm`；`--max-iterations` 接受 1–100；
 `--budget` 必须是有限正数 USD，会覆盖配置里的值。不给预算就继承配置默认。默认迭代上限 8。
 TUI 恢复：`/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD] <loop-id>`。
+不带验证命令使用 `/loop --auto-verify` 可自动发现计划；`/loop-list`、`/loop-show <id>`、
+`/loop-history <id>` 和 `/loop-recover` 可在 TUI 内完成持久生命周期管理。
 
 ## 11. Core API（二次开发）
 
@@ -289,11 +301,14 @@ seekforge loop "finish the parser" --verify "pnpm typecheck" \
 seekforge loop-history <loop-id> --after 0 --limit 100
 seekforge loop-recover
 seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
+seekforge loop-dag ./loop-dag.json --dag-id release --resume --rerun test --approve publish
 ```
 
 Desktop 面板提供验证流水线、稳定/抖动/卡住控制，以及只在安全边界生效的暂停、继续和引导。
 回滚与交付要求保留的 Loop worktree。要交付草稿 PR，请使用 `--deliver pr`，并确保 `gh`
 已完成认证。
+加上 `--wait-ci --ci-repairs 1 --ci-repair-budget 1`，可等待 checks，并允许基于失败步骤日志做一次
+有界修复后再最终完成交付。
 如果验证已经通过但交付失败，Loop 会保持 `passed` 并记录失败尝试。修复外部问题后运行
 `loop-deliver <loop-id>` 即可；只有第一次发起交付时才需要 `--mode`。交付会针对 checkpoint 后的
 发布树重新运行持久验证流水线。两次尝试之间不要向保留分支加入无关提交或本地工作区变更：交付会

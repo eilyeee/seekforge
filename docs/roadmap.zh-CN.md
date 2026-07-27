@@ -17,12 +17,13 @@ SeekForge 已经具备了较为完整的本地优先编码智能体能力面。�
 | 能力 | 状态 | 当前边界 / 下一步 |
 | --- | --- | --- |
 | 核心智能体循环、CLI、TUI、会话 trace、权限 | 生产就绪的基础 | 持续进行边界回归测试与真实项目实战验证（dogfooding）。 |
+| 自主 Loop 工程 | 已实现，走向成熟 | 自动冻结验证计划、自适应失败恢复、单轮可观测、DAG 条件/资源/审批/重跑、CI 闭环和跨端管理已交付；继续扩大真实 provider 与托管 CI fixture。 |
 | 桌面端与本地网页工作台 | 已实现，走向成熟 | macOS、Linux 与 Windows 原生安装包构建已交付；updater/平台签名及干净安装冒烟仍需发布凭据。 |
 | DeepSeek provider 与成本统计 | 生产就绪的基础 | 主调用、压缩调用与记忆提取调用共享统计；保留 provider 特有的 token/缓存语义。 |
 | Provider 预设 / OpenAI 兼容端点 | 已实现，走向成熟 | 为各 provider 增加兼容性 fixture；不宣称工具/思考行为完全一致。 |
 | 记忆、技能、hook、MCP、子智能体 | 已实现，走向成熟 | 曝光/检索指标、OAuth token 刷新与长连接 HTTP 通知/请求流已交付；首次交互式 OAuth 授权仍由前端负责。 |
 | Worktree 与隔离执行 | 已实现 | Git 仓库中的可写后台与 webhook 作业默认使用 worktree 隔离，并支持显式原工作区/强制 worktree 模式。 |
-| `seekforge resolve` issue 到 draft PR | 已实现，走向成熟 | 已有分支续用与单次受限的 CI 日志修复已交付；扩大 provider/托管平台兼容性 fixture。 |
+| `seekforge resolve` issue 到 draft PR | 已实现，走向成熟 | 已有分支续用与有界 CI 日志修复已交付；Loop PR 交付现已提供相同的有界检查与修复闭环。继续扩大 provider/托管平台兼容性 fixture。 |
 | 定时任务、webhook 与后台运行 | 已实现，安全敏感 | 持久化运行台账、取消、重放游标与按数量/天数保留已交付；继续强化外部投递操作。 |
 | 浏览器 / 可视化验证 | 已实现，可选 | 真实 Chromium 集成 CI 已交付；在保持私有网络限制的前提下扩大浏览器/平台覆盖。 |
 | Rust runtime 与 Docker runner | 已实现，可选 | 每周真实二进制/容器门禁已交付；扩大平台矩阵与发布冒烟覆盖。 |

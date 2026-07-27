@@ -71,6 +71,16 @@ The minimal form — one task plus one success-criterion command:
 seekforge loop "Fix the failing parser tests without weakening assertions" --verify "pnpm test"
 ```
 
+Or let SeekForge discover and freeze a conservative root pipeline:
+
+```bash
+seekforge loop "Bring the repository back to green" --auto-verify
+```
+
+Discovery recognizes `typecheck`/`lint`/`test`/`build` package scripts and
+fixed Cargo, Go, and pytest commands. Inspect the printed plan before relying on
+it; project-specific checks can still use explicit `--verify` and `--verify-stage`.
+
 What happens:
 
 1. In default `quick` mode, **pre-check** runs `pnpm test` once and an already
@@ -294,9 +304,11 @@ The CLI also prints this log's path in every end-of-loop summary.
 ## 10. Desktop / TUI usage
 
 **Desktop**: a collapsible **Loop panel** at the top of the chat window —
-task + verify-command inputs, max-iterations + budget, and a Run/Stop
-button. Progress streams live (one row per iteration: run cost + live
-verify output + pass/fail; a status summary and loop id at the end). The
+task + explicit/automatic verification, guardrails, and a Run/Stop button.
+Its persisted-loop manager lists state, history, priority, resume, recovery,
+retention cleanup, and deletion. Progress streams live (one row per iteration:
+cost, tokens, duration, changed paths, failure category, verify output, and
+pass/fail). The
 toolbar's model/thinking overrides ride along, same as a normal run. If the
 connection drops, the run is marked interrupted, pending prompts are
 cleared, and requests queued for the failed connection are discarded rather
@@ -316,6 +328,9 @@ value and overrides the configured default. Without an explicit budget the
 TUI inherits the configured value. The default iteration cap is 8. Resume
 from the TUI with `/loop-resume [--approve-requirements] [--add-iterations N] [--add-budget USD]
 <loop-id>`.
+Use `/loop --auto-verify` without a command to discover a plan. `/loop-list`,
+`/loop-show <id>`, `/loop-history <id>`, and `/loop-recover` expose durable
+management without leaving the TUI.
 
 ## 11. Core API (integrators)
 
@@ -368,12 +383,15 @@ seekforge loop "finish the parser" --verify "pnpm typecheck" \
 seekforge loop-history <loop-id> --after 0 --limit 100
 seekforge loop-recover
 seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
+seekforge loop-dag ./loop-dag.json --dag-id release --resume --rerun test --approve publish
 ```
 
 The Desktop panel exposes the verification pipeline, stability/flaky/stuck
 controls, and safe-boundary Pause/Continue/Steer actions. Rollback and delivery
 require a retained Loop worktree. For draft-PR delivery, use `--deliver pr` with
 an authenticated `gh` installation.
+Add `--wait-ci --ci-repairs 1 --ci-repair-budget 1` to wait for checks and allow
+one bounded repair from failed-step logs before delivery is finalized.
 If verification passes but delivery fails, the Loop remains `passed` and records
 the failed attempt. Fix the external problem, then run `loop-deliver <loop-id>`;
 use `--mode` only for the first delivery request. Delivery reruns the persisted

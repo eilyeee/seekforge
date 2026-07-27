@@ -7,6 +7,7 @@ import {
   type LoopControl,
   type LoopEvent,
   type LoopResult,
+  type LoopVerificationStage,
   type LoopRequirementMode,
   type PluginContributions,
   type ToolSpec,
@@ -31,6 +32,7 @@ export type RunLoopDeps = {
   verifyTimeoutMs?: number;
   agentTimeoutMs?: number;
   maxAgentRetries?: number;
+  verificationPlan?: LoopVerificationStage[];
   stablePasses?: number;
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
@@ -85,6 +87,7 @@ export async function runLoop(
       ...(deps.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: deps.verifyTimeoutMs } : {}),
       ...(deps.agentTimeoutMs !== undefined ? { agentTimeoutMs: deps.agentTimeoutMs } : {}),
       ...(deps.maxAgentRetries !== undefined ? { maxAgentRetries: deps.maxAgentRetries } : {}),
+      ...(deps.verificationPlan ? { verificationPlan: deps.verificationPlan } : {}),
       ...(deps.stablePasses !== undefined ? { stablePasses: deps.stablePasses } : {}),
       ...(deps.flakyRetries !== undefined ? { flakyRetries: deps.flakyRetries } : {}),
       ...(deps.maxNoProgressRecoveries !== undefined ? { maxNoProgressRecoveries: deps.maxNoProgressRecoveries } : {}),

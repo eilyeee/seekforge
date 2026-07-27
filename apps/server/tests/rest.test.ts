@@ -6,6 +6,7 @@ import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
 import { MAX_STATIC_FILE_BYTES } from "../src/static.js";
+import { appendLoopLog, createLoopState } from "@seekforge/core";
 
 const TOKEN = "test-token-rest";
 
@@ -239,6 +240,59 @@ afterAll(async () => {
   mcpFixture.cleanup();
   if (savedHome === undefined) delete process.env["SEEKFORGE_HOME"];
   else process.env["SEEKFORGE_HOME"] = savedHome;
+});
+
+describe("loop management API", () => {
+  it("discovers verification, lists state, and pages history", async () => {
+    createLoopState({
+      loopId: "rest-loop",
+      task: "manage me",
+      workspace,
+      verifyCommand: "npm run build",
+      maxIterations: 4,
+      costBudgetUsd: null,
+    });
+    appendLoopLog(workspace, "rest-loop", { type: "iteration.start", iteration: 1 });
+    const plan = await authed("/api/loops/verification-plan");
+    expect(plan.status).toBe(200);
+    expect((await jsonOf(plan)).stages).toEqual([{ id: "build", command: "npm run build" }]);
+    const listed = await authed("/api/loops");
+    expect((await jsonOf(listed)).some((loop: { loopId: string }) => loop.loopId === "rest-loop")).toBe(true);
+    const history = await authed("/api/loops/rest-loop/history?after=0&limit=10");
+    expect(await jsonOf(history)).toEqual([
+      expect.objectContaining({ seq: 1, event: { type: "iteration.start", iteration: 1 } }),
+    ]);
+  });
+
+  it("updates priority and safely deletes one loop", async () => {
+    createLoopState({
+      loopId: "rest-delete",
+      task: "delete me",
+      workspace,
+      verifyCommand: "npm run build",
+      maxIterations: 2,
+      costBudgetUsd: null,
+    });
+    const priority = await authed("/api/loops/rest-delete/priority", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ priority: 5 }),
+    });
+    expect(await jsonOf(priority)).toMatchObject({ priority: 5 });
+    const removed = await authed("/api/loops/rest-delete", { method: "DELETE" });
+    expect(await jsonOf(removed)).toEqual({ removed: true, loopId: "rest-delete" });
+  });
+
+  it("rejects malformed management bodies and unknown history", async () => {
+    const malformed = await authed("/api/loops/recover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([]),
+    });
+    expect(malformed.status).toBe(400);
+    const history = await authed("/api/loops/not-found/history");
+    expect(history.status).toBe(404);
+  });
 });
 
 describe("auth", () => {

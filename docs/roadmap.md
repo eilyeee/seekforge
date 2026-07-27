@@ -20,12 +20,13 @@ not a promise of API stability.
 | Capability | Status | Current boundary / next step |
 | --- | --- | --- |
 | Core agent loop, CLI, TUI, session traces, permissions | Production-ready foundation | Continue boundary regression testing and real-project dogfooding. |
+| Autonomous Loop engineering | Implemented, maturing | Automatic frozen verification plans, adaptive failure recovery, per-iteration observability, DAG conditions/resources/approval/rerun, CI closure, and cross-surface management ship; expand real-provider and hosted-CI fixtures. |
 | Desktop and local web workbench | Implemented, maturing | Native macOS, Linux, and Windows package builds ship; updater/platform signing and clean-install smoke tests still require release credentials. |
 | DeepSeek provider and cost accounting | Production-ready foundation | Main, compaction, and memory-extraction calls share accounting; preserve provider-specific token/cache semantics. |
 | Provider presets / OpenAI-compatible endpoints | Implemented, maturing | Add compatibility fixtures per provider; do not claim identical tool/thinking behavior. |
 | Memory, skills, hooks, MCP, subagents | Implemented, maturing | Exposure/retrieval metrics, OAuth token refresh, and long-lived HTTP notification/request streams ship; interactive initial OAuth authorization remains frontend-owned. |
 | Worktrees and isolated execution | Implemented | Writable background and webhook jobs default to worktree isolation in git repositories, with explicit workspace/required-worktree modes. |
-| `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and one bounded CI-log repair ship; expand provider/host compatibility fixtures. |
+| `seekforge resolve` issue-to-draft-PR | Implemented, maturing | Existing-branch resume and bounded CI-log repair ship; Loop PR delivery now offers the same bounded check-and-repair closure. Expand provider/host compatibility fixtures. |
 | Scheduled jobs, webhooks, and background runs | Implemented, security-sensitive | Persistent run ledger, cancellation, replay cursors, and configurable count/age retention ship; keep hardening external delivery operations. |
 | Browser / visual verification | Implemented, optional | Real Chromium integration CI ships; expand browser/platform coverage while preserving private-network restrictions. |
 | Rust runtime and Docker runner | Implemented, optional | Weekly real-binary/container gates ship; expand the platform matrix and release smoke coverage. |

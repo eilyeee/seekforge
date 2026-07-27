@@ -94,6 +94,10 @@ sequenceDiagram
 状态在可观测的进展之后原子写入。每次验证的实时输出有上限；最终的验证事件
 仍携带用于诊断和续跑提示的常规输出尾部。
 
+每次完成的迭代还会记录有界可观测字段：耗时、成本与 Token 增量、变更的相对路径、回滚状态和
+标准化失败类别。卡住/循环恢复会把该类别映射为确定策略（隔离测试、修复编译或 lint、验证环境、
+缩小范围或重新规划），而不是重复同一条泛化提示。
+
 会话 id 和累计的 provider 用量在其事件到达时即做检查点。迭代计数器只在
 agent 运行完成后才前进，因此崩溃后可以恢复被中断的迭代而不消耗迭代额度，
 同时复用会话并把已观测到的开销计入账目。
@@ -164,10 +168,13 @@ Loop 管理在 Git 仓库之外同样可用。已存在的工作区路径（包�
 ## CLI
 
 ```
-seekforge loop "<task>" --verify "<cmd>" [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
+seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick|analyze|confirm] [--max-iters <n>] [--budget <usd>] [--worktree [name]] [-y] [-m <model>]
 ```
 
-- `--verify <cmd>`（必需）：成功 = 该命令以 0 退出。
+- `--verify <cmd>`：成功 = 该命令以 0 退出。
+- `--auto-verify`：从根目录 `package.json`、`Cargo.toml`、`go.mod` 或 pytest 配置发现
+  已识别阶段。它只选择固定命令或具名脚本，把结果冻结进 Loop 状态，不把清单脚本文本插值成
+  生成的 shell 命令。
 - `--requirements quick|analyze|confirm`：`quick` 保留仅验证命令的行为；
   `analyze` 先只读分析仓库并做验收；`confirm` 会持久化规格并以
   `requirements_pending` 暂停，等待显式批准。批准只作用于从持久化状态加载的
@@ -226,7 +233,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
 - `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
   就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
-  `skip_dependents` / `continue` / `stop` 失败策略。并行批次要求不同的物理工作区；解析后的工作区
+  `skip_dependents` / `continue` / `stop` 失败策略。节点可以按依赖结果分支、要求显式审批、
+  锁定具名独占资源，并消费有界结构化依赖输出。`--rerun` 会让选中节点及全部下游失效，
+  `--approve` 可通过声明的审批门。并行图要求不同的物理工作区；解析后的工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
   Loop 分支，并通过 `gh` 创建草稿 PR。交付模式、状态、尝试次数、错误和最终产物都会写入
@@ -239,6 +248,9 @@ seekforge loop-cleanup <worktree-name> [--force]
   证据 revision 之后只能变更该 Loop 的精确状态文件；任何其他已提交、已暂存、已修改或未跟踪路径
   都视为未经验证并阻止交付。worktree 清理会取得同一工作区 guard，因此不能删除正在交付的任务；
   非 force 清理还会保留包含基线不可达提交的分支。
+- `--deliver pr --wait-ci` 会让交付停留在 `action_completed`，直到必需的 PR checks 完成。
+  `--ci-repairs 1..3` 可把一份有界失败步骤日志交给独立成本上限、最多两轮且不持久化的修复 Loop，
+  重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的
@@ -247,7 +259,8 @@ seekforge loop-cleanup <worktree-name> [--force]
 - TUI 提供等价的 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 命令，且只控制
   当前标签页中的 Loop。
 
-每轮快照会持久化精简阶段结果、标准化后的诊断/工作区指纹、解析出的失败数、恢复次数和连续
+每轮快照会持久化精简阶段结果、标准化后的诊断/工作区指纹、解析出的失败数、单轮耗时/成本/
+Token/变更路径、失败类别、回滚标记、恢复次数和连续
 通过次数。重复的命令和输出只保留在最新结果/历史日志中，使状态保持在 reader 的 1 MiB 上限内；
 超限替换会在触碰最后一份可读状态前失败。Loop 成功后只抽取一次记忆，并对整个 Loop 只记录一次已选技能效果，而不会按内部
 Agent 迭代重复记账。
@@ -267,6 +280,7 @@ type LoopOptions = {
   task: string;
   workspace: string;
   verifyCommand: string;        // 固定验证器；分析模式还要求验收通过
+  autoVerificationPlan?: boolean; // 新 Loop 自动发现并冻结根目录验证计划
   verificationPlan?: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number }>;
   stablePasses?: number; flakyRetries?: number;
   maxNoProgressRecoveries?: number; rollbackOnRegression?: boolean;
@@ -297,6 +311,7 @@ type LoopResult = {
   agentError?: AgentError;
   stageResults?: LoopStageResult[]; flaky?: boolean; passStreak?: number;
   recoveryAttempts?: number;
+  failureCategory?: LoopFailureCategory;
 };
 ```
 

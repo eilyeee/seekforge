@@ -12,6 +12,7 @@ import {
   renderSessionAuditMarkdown,
   compactSessionNow,
   createLoopControl,
+  discoverLoopVerificationPlan,
   createBackgroundTasks,
   createMemoryMaintenanceScheduler,
   listMemoryCandidates,
@@ -36,6 +37,10 @@ import {
   llmCompactSessionNow,
   createDeepSeekProvider,
   listGitWorktrees,
+  listLoopStates,
+  loadLoopState,
+  readLoopHistory,
+  recoverInterruptedLoops,
   isWorktreeDirty,
   isValidLoopId,
   createWorktree,
@@ -776,6 +781,13 @@ export function App({
         verifyTimeoutMs?: number;
         agentTimeoutMs?: number;
         maxAgentRetries?: number;
+        verificationPlan?: Array<{
+          id: string;
+          command: string;
+          required?: boolean;
+          timeoutMs?: number;
+          paths?: string[];
+        }>;
         stablePasses?: number;
         flakyRetries?: number;
         maxNoProgressRecoveries?: number;
@@ -812,6 +824,7 @@ export function App({
           ...(options.verifyTimeoutMs !== undefined ? { verifyTimeoutMs: options.verifyTimeoutMs } : {}),
           ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
           ...(options.maxAgentRetries !== undefined ? { maxAgentRetries: options.maxAgentRetries } : {}),
+          ...(options.verificationPlan ? { verificationPlan: options.verificationPlan } : {}),
           ...(options.stablePasses !== undefined ? { stablePasses: options.stablePasses } : {}),
           ...(options.flakyRetries !== undefined ? { flakyRetries: options.flakyRetries } : {}),
           ...(options.maxNoProgressRecoveries !== undefined
@@ -1076,8 +1089,26 @@ export function App({
             notice(`invalid /loop options: ${command.error}`, "error");
             break;
           }
-          const verifyCommand = command.verify?.trim();
+          let verifyCommand = command.verify?.trim();
           const task = command.task?.trim();
+          let verificationPlan:
+            | Array<{ id: string; command: string; required?: boolean; timeoutMs?: number; paths?: string[] }>
+            | undefined;
+          if (command.autoVerify) {
+            if (verifyCommand) {
+              notice("--auto-verify cannot be combined with a verify command", "error");
+              break;
+            }
+            try {
+              const discovered = discoverLoopVerificationPlan(projectPath);
+              verificationPlan = discovered.stages;
+              verifyCommand = discovered.stages[0]!.command;
+              notice(`discovered verification plan: ${discovered.stages.map((stage) => stage.id).join(" → ")}`);
+            } catch (error) {
+              notice(error instanceof Error ? error.message : String(error), "error");
+              break;
+            }
+          }
           if (!verifyCommand) {
             notice(
               "usage: /loop <verify command> — put the task on the line(s) below (Shift+Enter for a newline)",
@@ -1090,6 +1121,7 @@ export function App({
             break;
           }
           void runLoopTask(task, verifyCommand, {
+            ...(verificationPlan ? { verificationPlan } : {}),
             ...(command.maxIterations !== undefined ? { maxIterations: command.maxIterations } : {}),
             ...(command.costBudgetUsd !== undefined ? { costBudgetUsd: command.costBudgetUsd } : {}),
             ...(command.tokenBudget !== undefined ? { tokenBudget: command.tokenBudget } : {}),
@@ -1133,6 +1165,59 @@ export function App({
             ...(command.addedVerifyRuns !== undefined ? { addedVerifyRuns: command.addedVerifyRuns } : {}),
             ...(command.approveRequirements ? { approveRequirements: true } : {}),
           });
+          break;
+        }
+        case "loop-list": {
+          const loops = listLoopStates(projectPath);
+          notice(
+            loops.length === 0
+              ? "no persisted loops"
+              : loops
+                  .map(
+                    (loop) =>
+                      `${loop.loopId} · ${loop.status} · ${loop.iterations}/${loop.maxIterations} · ${loop.task}`,
+                  )
+                  .join("\n"),
+          );
+          break;
+        }
+        case "loop-show": {
+          if (!command.arg || !isValidLoopId(command.arg)) {
+            notice("usage: /loop-show <loop-id>", "error");
+            break;
+          }
+          const loop = loadLoopState(projectPath, command.arg);
+          if (!loop) notice(`persisted loop not found: ${command.arg}`, "error");
+          else
+            notice(
+              `${loop.loopId} · ${loop.status}\n${loop.task}\niterations ${loop.iterations}/${loop.maxIterations} · cost $${loop.costUsd.toFixed(4)} · priority ${loop.priority ?? 0}`,
+            );
+          break;
+        }
+        case "loop-history": {
+          if (!command.arg || !isValidLoopId(command.arg)) {
+            notice("usage: /loop-history <loop-id>", "error");
+            break;
+          }
+          const entries = readLoopHistory(projectPath, command.arg, { limit: 50 });
+          notice(
+            entries.length === 0
+              ? "no retained loop history"
+              : entries.map((entry) => `${entry.seq} · ${entry.ts} · ${entry.event.type}`).join("\n"),
+          );
+          break;
+        }
+        case "loop-recover": {
+          if (controllerRef.current) {
+            notice("a task is already running", "error");
+            break;
+          }
+          const recovered = recoverInterruptedLoops(projectPath, { limit: 10 });
+          notice(
+            recovered.length === 0
+              ? "no orphaned loops found"
+              : `recovered: ${recovered.map((loop) => loop.loopId).join(", ")}`,
+          );
           break;
         }
         case "loop-pause": {

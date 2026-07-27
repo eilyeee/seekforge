@@ -45,6 +45,7 @@ import { extractMemoryFromSession } from "../memory/extract.js";
 import { loadSessionMessages, truncateSessionAtUserTurn } from "./trace.js";
 import { rewindSessionToTurn } from "./session-rewind.js";
 import { logSkillOutcome, selectedSkillIdsForSession } from "../skills/index.js";
+import { discoverLoopVerificationPlan } from "./loop-verification-plan.js";
 import {
   buildAcceptanceReviewPrompt,
   buildRequirementAnalysisPrompt,
@@ -73,6 +74,25 @@ export type LoopStatus =
 
 export type LoopBudgetReason = "cost" | "tokens" | "duration" | "verify_runs";
 
+export type LoopFailureCategory =
+  | "none"
+  | "test"
+  | "compile"
+  | "lint"
+  | "environment"
+  | "timeout"
+  | "permission"
+  | "network"
+  | "unknown";
+
+export type LoopRecoveryStrategy =
+  | "isolate_test"
+  | "repair_compile"
+  | "repair_lint"
+  | "validate_environment"
+  | "reduce_scope"
+  | "replan";
+
 export type LoopVerificationStage = {
   id: string;
   command: string;
@@ -99,6 +119,13 @@ export type LoopIterationSnapshot = {
   workspaceFingerprint: string | null;
   failedTests: number;
   stageResults: LoopStageResult[];
+  /** Per-iteration observability; paths are bounded and repository-relative. */
+  durationMs?: number;
+  costUsd?: number;
+  tokensUsed?: number;
+  changedPaths?: string[];
+  failureCategory?: LoopFailureCategory;
+  rolledBack?: boolean;
 };
 
 export type LoopOptions = {
@@ -110,6 +137,8 @@ export type LoopOptions = {
   verifyCommand: string;
   /** Optional ordered verification pipeline. The legacy verifyCommand becomes one stage when omitted. */
   verificationPlan?: LoopVerificationStage[];
+  /** Discover and freeze a conservative pipeline from root project manifests. */
+  autoVerificationPlan?: boolean;
   /** Require this many consecutive full-pipeline passes. Default 1, maximum 5. */
   stablePasses?: number;
   /** Rerun a failed stage this many times before editing, to identify flaky verification. Default 0. */
@@ -177,7 +206,15 @@ export type LoopOptions = {
 
 export type LoopEvent =
   | { type: "iteration.start"; iteration: number }
-  | { type: "run.completed"; iteration: number; costUsd: number }
+  | {
+      type: "run.completed";
+      iteration: number;
+      costUsd: number;
+      iterationCostUsd?: number;
+      iterationTokens?: number;
+      durationMs?: number;
+      changedPaths?: string[];
+    }
   | { type: "verify.output"; iteration: number; stream: "stdout" | "stderr"; chunk: string }
   | { type: "verify"; iteration: number; code: number; passed: boolean; output: string }
   | { type: "verify.stage.started"; iteration: number; stageId: string; attempt: number }
@@ -186,7 +223,14 @@ export type LoopEvent =
   | { type: "loop.paused"; iteration: number }
   | { type: "loop.resumed"; iteration: number }
   | { type: "loop.steered"; iteration: number; count: number }
-  | { type: "loop.recovery"; iteration: number; attempt: number; reason: "stuck" | "cycle" }
+  | {
+      type: "loop.recovery";
+      iteration: number;
+      attempt: number;
+      reason: "stuck" | "cycle";
+      category?: LoopFailureCategory;
+      strategy?: LoopRecoveryStrategy;
+    }
   | { type: "loop.snapshot"; snapshot: LoopIterationSnapshot }
   | { type: "loop.rollback"; iteration: number; restored: string[]; deleted: string[] }
   | { type: "requirements.started"; phase: "analysis" | "review" }
@@ -216,6 +260,7 @@ export type LoopResult = {
   flaky?: boolean;
   passStreak?: number;
   recoveryAttempts?: number;
+  failureCategory?: LoopFailureCategory;
 };
 
 /** Tail-cap captured output to ~4 KB so continuations/results stay bounded. */
@@ -225,6 +270,49 @@ const tail = (s: string): string => (s.length <= TAIL_CAP ? s : s.slice(s.length
 /** Historical snapshots keep outcomes, not repeated commands/output; the latest full result remains on LoopState. */
 const compactSnapshotStages = (stages: readonly LoopStageResult[]): LoopStageResult[] =>
   stages.map((stage) => ({ ...stage, command: "", output: "" }));
+
+const MAX_OBSERVED_CHANGED_PATHS = 128;
+
+function verificationFailureCategory(diagnostics: VerifyDiagnostics, output: string): LoopFailureCategory {
+  if (diagnostics.framework === "typescript") return "compile";
+  if (diagnostics.framework === "eslint" || diagnostics.framework === "sarif") return "lint";
+  if (diagnostics.framework !== "unknown") return "test";
+  if (/\b(?:timed? out|timeout|deadline exceeded)\b/i.test(output)) return "timeout";
+  if (/\b(?:permission denied|operation not permitted|EACCES|EPERM)\b/i.test(output)) return "permission";
+  if (/\b(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|network|socket hang up|temporary failure)\b/i.test(output))
+    return "network";
+  if (/\b(?:command not found|ENOENT|not installed|cannot find module|missing dependency)\b/i.test(output))
+    return "environment";
+  return "unknown";
+}
+
+function recoveryStrategy(category: LoopFailureCategory): LoopRecoveryStrategy {
+  if (category === "test") return "isolate_test";
+  if (category === "compile") return "repair_compile";
+  if (category === "lint") return "repair_lint";
+  if (category === "environment" || category === "permission" || category === "network") {
+    return "validate_environment";
+  }
+  if (category === "timeout") return "reduce_scope";
+  return "replan";
+}
+
+function recoveryInstruction(strategy: LoopRecoveryStrategy): string {
+  switch (strategy) {
+    case "isolate_test":
+      return "Run or inspect the smallest failing test first, trace its exact assertion path, then make one focused fix.";
+    case "repair_compile":
+      return "Start from the earliest compiler diagnostic, repair the type or interface boundary, then re-check dependents.";
+    case "repair_lint":
+      return "Separate mechanical formatting from semantic lint findings and fix the smallest authoritative source.";
+    case "validate_environment":
+      return "Confirm the command, dependency, permission, and runtime preconditions before changing product code.";
+    case "reduce_scope":
+      return "Reduce the reproducer and verification scope long enough to locate the bottleneck, without weakening the final gate.";
+    case "replan":
+      return "Re-read the failing area, challenge the current diagnosis, and choose a materially different approach before editing.";
+  }
+}
 
 function normalizeVerificationPath(value: string): string | null {
   if (value.length === 0 || value.length > 512 || value.includes("\0")) return null;
@@ -399,6 +487,18 @@ function liveVerifyOutput(
 }
 
 export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promise<LoopResult> {
+  let discoveredPlan: ReturnType<typeof discoverLoopVerificationPlan> | undefined;
+  if (opts.autoVerificationPlan && opts.resumeState === undefined) {
+    if (opts.verificationPlan !== undefined) {
+      throw new Error("Loop autoVerificationPlan cannot be combined with verificationPlan");
+    }
+    discoveredPlan = discoverLoopVerificationPlan(opts.workspace);
+    opts = {
+      ...opts,
+      verifyCommand: discoveredPlan.stages[0]!.command,
+      verificationPlan: discoveredPlan.stages,
+    };
+  }
   if (opts.task.trim() === "") throw new Error("Loop task must be non-empty");
   if (opts.verifyCommand.trim() === "") throw new Error("Loop verify command must be non-empty");
   if (opts.abortStatus !== undefined && opts.abortStatus !== "cancelled" && opts.abortStatus !== "interrupted") {
@@ -697,6 +797,7 @@ async function runAutoLoopWithLease(
       flaky: flakyObserved,
       passStreak,
       recoveryAttempts,
+      failureCategory: snapshots.at(-1)?.failureCategory,
       ...(requirements ? { requirements } : {}),
       ...(acceptanceReview ? { acceptanceReview } : {}),
     };
@@ -1199,6 +1300,9 @@ async function runAutoLoopWithLease(
       throw new Error("Loop control failed while paused");
     }
     emit({ type: "iteration.start", iteration: i });
+    const iterationStartedAt = Date.now();
+    const iterationStartingCost = costUsd;
+    const iterationStartingTokens = tokensUsed;
     const rollbackTurnIndex = sessionId
       ? loadSessionMessages(opts.workspace, sessionId).filter((message) => message.role === "user").length
       : 0;
@@ -1316,7 +1420,16 @@ async function runAutoLoopWithLease(
     }
     iterations = i;
     persist({ iterations: i, costUsd, tokensUsed, sessionId, lastAgentError: null }, true);
-    emit({ type: "run.completed", iteration: i, costUsd });
+    const observedChangedPaths = [...changedPaths].sort().slice(0, MAX_OBSERVED_CHANGED_PATHS);
+    emit({
+      type: "run.completed",
+      iteration: i,
+      costUsd,
+      iterationCostUsd: costUsd - iterationStartingCost,
+      iterationTokens: tokensUsed - iterationStartingTokens,
+      durationMs: Date.now() - iterationStartedAt,
+      changedPaths: observedChangedPaths,
+    });
 
     // Verify the run's effect.
     let v: { code: number; output: string };
@@ -1348,6 +1461,11 @@ async function runAutoLoopWithLease(
       workspaceFingerprint: currentWorkspace,
       failedTests: diagnostics.failedTests.length,
       stageResults: compactSnapshotStages(lastStageResults),
+      durationMs: Date.now() - iterationStartedAt,
+      costUsd: costUsd - iterationStartingCost,
+      tokensUsed: tokensUsed - iterationStartingTokens,
+      changedPaths: observedChangedPaths,
+      failureCategory: v.code === 0 ? "none" : verificationFailureCategory(diagnostics, verifyDiagnostics),
     };
     if (rollbackOnRegression && sessionId && previousSnapshot && snapshot.failedTests > previousSnapshot.failedTests) {
       const rewind = rewindSessionToTurn(opts.workspace, sessionId, rollbackTurnIndex);
@@ -1378,6 +1496,12 @@ async function runAutoLoopWithLease(
         workspaceFingerprint: currentWorkspace,
         failedTests: diagnostics.failedTests.length,
         stageResults: compactSnapshotStages(lastStageResults),
+        durationMs: Date.now() - iterationStartedAt,
+        costUsd: costUsd - iterationStartingCost,
+        tokensUsed: tokensUsed - iterationStartingTokens,
+        changedPaths: observedChangedPaths,
+        failureCategory: lastVerify.code === 0 ? "none" : verificationFailureCategory(diagnostics, lastVerify.output),
+        rolledBack: true,
       };
       snapshots.push(restoredSnapshot);
       if (snapshots.length > MAX_LOOP_ITERATIONS) snapshots.splice(0, snapshots.length - MAX_LOOP_ITERATIONS);
@@ -1449,10 +1573,12 @@ async function runAutoLoopWithLease(
       if (recoveryAttempts < maxNoProgressRecoveries) {
         recoveryAttempts++;
         const reason = cyclePeriod !== null ? "cycle" : "stuck";
-        emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason });
+        const category = snapshot.failureCategory ?? "unknown";
+        const strategy = recoveryStrategy(category);
+        emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason, category, strategy });
         persist({ recoveryAttempts }, true);
         steeringGuidance.push(
-          `Recovery attempt ${recoveryAttempts}: the previous strategy ${reason === "cycle" ? "cycled" : "made no observable progress"}. Re-read the failing area, challenge the current diagnosis, and use a materially different approach before editing.`,
+          `Recovery attempt ${recoveryAttempts}: the previous strategy ${reason === "cycle" ? "cycled" : "made no observable progress"}. Failure category: ${category}. ${recoveryInstruction(strategy)}`,
         );
         previousDiagnostics = diagnostics;
         previousAcceptance = currentAcceptance;
@@ -1485,6 +1611,7 @@ export async function resumeAutoLoop(
     | "agentTimeoutMs"
     | "maxAgentRetries"
     | "verificationPlan"
+    | "autoVerificationPlan"
     | "stablePasses"
     | "flakyRetries"
     | "maxNoProgressRecoveries"

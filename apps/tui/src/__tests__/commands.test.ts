@@ -74,6 +74,12 @@ describe("parseInput v2.1 additions", () => {
 });
 
 describe("parseInput /loop", () => {
+  it("parses automatic verification discovery without a command", () => {
+    expect(parseInput("/loop --auto-verify\nFix the project")).toEqual({
+      kind: "slash",
+      command: { name: "loop", autoVerify: true, task: "Fix the project" },
+    });
+  });
   it("splits the verify command (first line) from the task (lines below)", () => {
     expect(parseInput("/loop npm test\nFix the failing auth tests")).toEqual({
       kind: "slash",
@@ -196,6 +202,17 @@ describe("parseInput /loop", () => {
       kind: "slash",
       command: { name: "loop", task: "Fix tests", error: "--budget may only be specified once" },
     });
+  });
+});
+
+describe("parseInput loop management", () => {
+  it.each([
+    ["/loop-list", { name: "loop-list" }],
+    ["/loop-recover", { name: "loop-recover" }],
+    ["/loop-show loop-1", { name: "loop-show", arg: "loop-1" }],
+    ["/loop-history loop-1", { name: "loop-history", arg: "loop-1" }],
+  ])("parses %s", (input, command) => {
+    expect(parseInput(input)).toEqual({ kind: "slash", command });
   });
 });
 

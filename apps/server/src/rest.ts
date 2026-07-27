@@ -20,6 +20,7 @@ import type { GlobalRouteCtx, RestContext, RouteCtx } from "./routes/context.js"
 import * as filesRoutes from "./routes/files.js";
 import * as gitRoutes from "./routes/git.js";
 import * as memoryRoutes from "./routes/memory.js";
+import * as loopRoutes from "./routes/loops.js";
 import * as runRoutes from "./routes/runs.js";
 import * as sessionRoutes from "./routes/sessions.js";
 import * as securityRoutes from "./routes/security.js";
@@ -51,6 +52,7 @@ const ROUTE_GROUPS: ReadonlyArray<(ctx: RouteCtx) => Promise<boolean>> = [
   gitRoutes.handle,
   skillsAgentsRoutes.handle,
   memoryRoutes.handle,
+  loopRoutes.handle,
   securityRoutes.handle,
   settingsRoutes.handle,
 ];

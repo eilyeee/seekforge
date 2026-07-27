@@ -49,6 +49,10 @@ export const COMMANDS: ReadonlyArray<CommandSpec> = [
     summary: "resume a persisted loop with optional added limits",
     group: "run",
   },
+  { name: "loop-list", summary: "list persisted loops in this workspace", group: "review" },
+  { name: "loop-show", args: "<loop-id>", summary: "show one persisted loop", group: "review" },
+  { name: "loop-history", args: "<loop-id>", summary: "show recent loop lifecycle events", group: "review" },
+  { name: "loop-recover", summary: "mark orphaned loops resumable", group: "run" },
   { name: "loop-pause", summary: "pause the active loop at its next safe boundary", group: "run" },
   { name: "loop-continue", summary: "continue the paused loop in this tab", group: "run" },
   {
@@ -169,6 +173,7 @@ export type SlashCommand =
   | {
       name: "loop";
       verify?: string;
+      autoVerify?: boolean;
       task?: string;
       maxIterations?: number;
       costBudgetUsd?: number;
@@ -200,6 +205,10 @@ export type SlashCommand =
   | { name: "loop-pause" }
   | { name: "loop-continue" }
   | { name: "loop-steer"; arg?: string }
+  | { name: "loop-list" }
+  | { name: "loop-show"; arg?: string }
+  | { name: "loop-history"; arg?: string }
+  | { name: "loop-recover" }
   | { name: "approve"; arg?: string }
   | { name: "rewind"; arg?: string }
   | { name: "backtrack" }
@@ -271,6 +280,7 @@ function parseLoopFirstLine(
   resume = false,
 ): {
   verify?: string;
+  autoVerify?: boolean;
   maxIterations?: number;
   costBudgetUsd?: number;
   tokenBudget?: number;
@@ -292,6 +302,7 @@ function parseLoopFirstLine(
   error?: string;
 } {
   let rest = input.trim();
+  let autoVerify = false;
   let maxIterations: number | undefined;
   let costBudgetUsd: number | undefined;
   let tokenBudget: number | undefined;
@@ -315,11 +326,20 @@ function parseLoopFirstLine(
   const budgetFlag = resume ? "--add-budget" : "--budget";
   const optionPattern = resume
     ? /^--(?:add-iterations|add-budget|add-tokens|add-duration|add-verifies|approve-requirements)(?:=|\s|$)/
-    : /^--(?:max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|stable-passes|flaky-retries|stuck-recoveries|rollback-regressions|priority|requirements)(?:=|\s|$)/;
+    : /^--(?:auto-verify|max-iterations|budget|token-budget|max-duration|max-verifies|verify-timeout|agent-timeout|agent-retries|stable-passes|flaky-retries|stuck-recoveries|rollback-regressions|priority|requirements)(?:=|\s|$)/;
   const valuePattern = resume
     ? /^(--add-iterations|--add-budget|--add-tokens|--add-duration|--add-verifies)(?:=|\s+)(\S+)(?:\s+|$)/
     : /^(--max-iterations|--budget|--token-budget|--max-duration|--max-verifies|--verify-timeout|--agent-timeout|--agent-retries|--stable-passes|--flaky-retries|--stuck-recoveries|--priority|--requirements)(?:=|\s+)(\S+)(?:\s+|$)/;
   while (optionPattern.test(rest)) {
+    if (!resume && /^--auto-verify(?:\s+|$)/.test(rest)) {
+      if (autoVerify) return { error: "--auto-verify may only be specified once" };
+      autoVerify = true;
+      rest = rest.replace(/^--auto-verify(?:\s+|$)/, "").trimStart();
+      continue;
+    }
+    if (!resume && /^--auto-verify=/.test(rest)) {
+      return { error: "--auto-verify is a boolean flag and takes no value" };
+    }
     if (!resume && /^--rollback-regressions(?:\s+|$)/.test(rest)) {
       if (rollbackOnRegression) return { error: "--rollback-regressions may only be specified once" };
       rollbackOnRegression = true;
@@ -427,6 +447,7 @@ function parseLoopFirstLine(
 
   return {
     ...(rest ? { verify: rest } : {}),
+    ...(autoVerify ? { autoVerify: true } : {}),
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     ...(costBudgetUsd !== undefined ? { costBudgetUsd } : {}),
     ...(tokenBudget !== undefined ? { tokenBudget } : {}),
@@ -469,6 +490,8 @@ const NO_ARG = new Set([
   "backtrack",
   "loop-pause",
   "loop-continue",
+  "loop-list",
+  "loop-recover",
   "fork",
   "diff",
   "review",
@@ -523,6 +546,8 @@ const WORD_ARG = new Set([
   "theme",
   "handoff",
   "stash",
+  "loop-show",
+  "loop-history",
 ]);
 
 export function parseInput(line: string): ParsedInput {
