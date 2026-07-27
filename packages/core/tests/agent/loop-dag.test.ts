@@ -33,11 +33,18 @@ describe("runLoopDag", () => {
     const results = await runLoopDag(deps, {
       workspace,
       nodes: [
-        { id: "a", task: "a", verifyCommand: "pass", options: { verify: async () => ({ code: 0, output: "ok" }) } },
+        {
+          id: "a",
+          task: "a",
+          verifyCommand: "pass",
+          verifierId: "pass-v1",
+          options: { verify: async () => ({ code: 0, output: "ok" }) },
+        },
         {
           id: "b",
           task: "b",
           verifyCommand: "fail",
+          verifierId: "fail-v1",
           dependsOn: ["a"],
           options: {
             maxIterations: 1,
@@ -117,6 +124,7 @@ describe("runLoopDag", () => {
         id: "persisted",
         task: "done",
         verifyCommand: "pass",
+        verifierId: "persisted-v1",
         options: {
           verify: async () => {
             verifies++;
@@ -142,6 +150,7 @@ describe("runLoopDag", () => {
         id: "mapped",
         task: "mapped",
         verifyCommand: "pass",
+        verifierId: "mapped-v1",
         options: { verify: async () => ({ code: 0, output: "ok" }) },
       },
     ];
@@ -159,6 +168,33 @@ describe("runLoopDag", () => {
         maxConcurrency: 2,
         workspaceForNode: () => secondNodeWorkspace,
         nodes,
+        resume: true,
+      }),
+    ).rejects.toThrow(/does not match/);
+  });
+
+  it("requires and fingerprints a stable identity for persisted custom verifiers", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    const node = {
+      id: "custom",
+      task: "custom",
+      verifyCommand: "custom",
+      options: { verify: async () => ({ code: 0, output: "ok" }) },
+    };
+    await expect(runLoopDag(deps, { workspace, dagId: "custom-verifier", nodes: [node] })).rejects.toThrow(
+      /requires verifierId/,
+    );
+    await runLoopDag(deps, {
+      workspace,
+      dagId: "custom-verifier",
+      nodes: [{ ...node, verifierId: "custom-v1" }],
+    });
+    await expect(
+      runLoopDag(deps, {
+        workspace,
+        dagId: "custom-verifier",
+        nodes: [{ ...node, verifierId: "custom-v2" }],
         resume: true,
       }),
     ).rejects.toThrow(/does not match/);

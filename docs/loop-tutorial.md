@@ -376,9 +376,11 @@ require a retained Loop worktree. For draft-PR delivery, use `--deliver pr` with
 an authenticated `gh` installation.
 If verification passes but delivery fails, the Loop remains `passed` and records
 the failed attempt. Fix the external problem, then run `loop-deliver <loop-id>`;
-use `--mode` only for the first delivery request. Do not add unrelated commits
-or local worktree changes between attempts: delivery rejects paths that are not
-covered by its evidence.
+use `--mode` only for the first delivery request. Delivery reruns the persisted
+verification pipeline against the checkpointed publication tree. Do not add
+unrelated commits or local worktree changes between attempts: delivery rejects
+paths that are not covered by its evidence. Automatic pruning preserves a
+retained branch when it contains later commits not merged into the base checkout.
 
 ## 12. Practical advice and FAQ
 

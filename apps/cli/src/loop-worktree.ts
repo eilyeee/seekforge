@@ -6,6 +6,7 @@ import {
   listGitWorktrees,
   SessionBusyError,
   WorktreeGitError,
+  worktreeAhead,
   worktreeBranchExists,
   worktreeSlug,
 } from "@seekforge/core";
@@ -125,17 +126,28 @@ export async function cleanupLoopWorktree(
     if (!force && (await isWorktreeDirty(entry.path))) {
       throw new Error(`Loop worktree has uncommitted changes: ${entry.path}\nRe-run with --force to discard them.`);
     }
+    if (!force && (await worktreeAhead(basePath, entry.branch)) > 0) {
+      throw new Error(`Loop worktree has unmerged commits: ${entry.branch}\nRe-run with --force to discard them.`);
+    }
     await execFileAsync("git", ["worktree", "remove", ...(force ? ["--force"] : []), entry.path], {
       cwd: basePath,
       timeout: 60_000,
     });
-    const branchRemoved = await execFileAsync("git", ["branch", "-D", entry.branch], {
-      cwd: basePath,
-      timeout: 60_000,
-    }).then(
-      () => true,
-      () => false,
-    );
+    const branchStillSafeToDelete =
+      force ||
+      (await worktreeAhead(basePath, entry.branch).then(
+        (ahead) => ahead === 0,
+        () => false,
+      ));
+    const branchRemoved =
+      branchStillSafeToDelete &&
+      (await execFileAsync("git", ["branch", "-D", entry.branch], {
+        cwd: basePath,
+        timeout: 60_000,
+      }).then(
+        () => true,
+        () => false,
+      ));
     return { path: entry.path, branch: entry.branch, branchRemoved };
   } finally {
     guard.release();

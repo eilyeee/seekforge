@@ -21,6 +21,8 @@ export type LoopDagNode = {
   maxRetries?: number;
   /** Handling when this node ultimately fails. Default skip_dependents. */
   failurePolicy?: LoopDagFailurePolicy;
+  /** Stable identity for a custom options.verify implementation across durable resumes. */
+  verifierId?: string;
   options?: Partial<
     Omit<LoopOptions, "task" | "workspace" | "verifyCommand" | "signal" | "onEvent" | "resumeState" | "loopId">
   >;
@@ -91,6 +93,7 @@ function dagFingerprint(nodes: readonly LoopDagNode[], workspaces: ReadonlyMap<s
           budgetWeight: node.budgetWeight ?? 1,
           maxRetries: node.maxRetries ?? 0,
           failurePolicy: node.failurePolicy ?? "skip_dependents",
+          verifierId: node.verifierId,
           workspace: workspaces.get(node.id),
           options: node.options,
         })),
@@ -208,6 +211,9 @@ function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>)
     node.failurePolicy !== "stop"
   )
     throw new Error(`Loop DAG node failurePolicy is invalid: ${node.id}`);
+  if (node.verifierId !== undefined && !DAG_ID_RE.test(node.verifierId)) {
+    throw new Error(`Loop DAG node verifierId must be safe: ${node.id}`);
+  }
   for (const dependency of node.dependsOn ?? []) {
     if (!byId.has(dependency) || dependency === node.id) {
       throw new Error(`Loop DAG node ${node.id} has invalid dependency: ${dependency}`);
@@ -249,13 +255,18 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
   if (concurrency > 1 && !options.workspaceForNode) {
     throw new Error("Concurrent Loop DAG nodes require workspaceForNode isolation");
   }
+  const persistenceEnabled = options.persist !== false;
+  for (const node of options.nodes) {
+    if (persistenceEnabled && node.options?.verify && node.verifierId === undefined) {
+      throw new Error(`Persisted Loop DAG node with a custom verifier requires verifierId: ${node.id}`);
+    }
+  }
   const nodeWorkspaces = new Map(
     options.nodes.map((node) => [node.id, realpathSync.native(options.workspaceForNode?.(node) ?? options.workspace)]),
   );
   const fingerprint = dagFingerprint(options.nodes, nodeWorkspaces);
   const dagId = options.dagId ?? `dag-${fingerprint.slice(0, 16)}`;
   if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
-  const persistenceEnabled = options.persist !== false;
   const lease = persistenceEnabled
     ? await acquireSessionLeaseWithPreemption(options.workspace, `loop-dag-${dagId}`, {
         ...(options.signal ? { signal: options.signal } : {}),

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### round 65: verified immutable Loop publication
+- Re-run the full persisted verification pipeline against the checkpointed
+  delivery tree, reject verifier/hook mutations, and publish merge/PR delivery
+  by an immutable checked revision.
+- Preserve retained branches with commits not reachable from the base checkout,
+  including automatic worktree pruning and non-force manual cleanup.
+- Require a stable `verifierId` for persisted DAG nodes that inject a custom
+  verifier, and repair explicit evidence-free finalized delivery records.
+
 ### round 64: Loop delivery and cleanup integrity
 - Bound delivery retries to the evidenced branch tree and working tree so later
   unverified commits or local changes cannot enter checkpoint, merge, or

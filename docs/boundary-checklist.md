@@ -2310,6 +2310,54 @@ per-attempt budget is rounded, violating the callee's contract after validation.
 - **Caught:** Loop DAG accepted fractional `maxDurationMs` values that could
   produce an invalid zero-millisecond node budget.
 
+## 187. Delivery evidence must descend from the verifier, not only Git
+
+Checkpointing the current tree after a prior pass can legitimize changes made
+between verification and delivery without testing them.
+
+- **Do:** rerun the complete persisted verification contract against the exact
+  checkpointed publication tree before creating or finalizing delivery evidence.
+- **Caught:** first-time Loop delivery committed post-pass files and treated the
+  resulting revision as verified.
+
+## 188. Validate again after metadata commits and publish an immutable object
+
+A pre-commit scope check does not cover files or commits created by commit hooks,
+nor a branch ref that moves before merge or push.
+
+- **Do:** check scope after the final metadata commit and merge/push the checked
+  object id rather than the mutable branch name; do not auto-commit dirt there.
+- **Caught:** a finalized-state post-commit hook could add a file that
+  `mergeWorktree` then checkpointed and merged.
+
+## 189. A clean checkout can still own unmerged commits
+
+Working-tree cleanliness says nothing about whether deleting its branch loses
+committed history.
+
+- **Do:** require the retained branch to be reachable from the base checkout
+  before non-force cleanup, and recheck conservatively before deleting the ref.
+- **Caught:** automatic Loop worktree pruning deleted the only ref to commits
+  created after finalized merge delivery.
+
+## 190. Durable identity must cover injected executable behavior
+
+JSON serialization omits functions, so hashing an options object cannot detect
+that an injected verifier implementation or captured configuration changed.
+
+- **Do:** require a stable caller-managed verifier identity for persisted nodes
+  with custom executable behavior and include it in the resume fingerprint.
+- **Caught:** Loop DAG resume reused a passed node after `options.verify` changed.
+
+## 191. A finalized label is not complete delivery evidence
+
+Explicit phase labels can survive partial writes, migrations, or malformed state;
+the label alone cannot prove an irreversible side effect completed.
+
+- **Do:** normalize finalized delivery without mode-complete evidence back to a
+  protected intermediate phase before retention decisions.
+- **Caught:** evidence-free explicit `finalized` Loop records remained pruneable.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

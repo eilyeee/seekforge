@@ -201,9 +201,11 @@
 重试和失败策略的 JSON 依赖图，并支持 `--resume` / `--dag-id` 检查点。TUI 与
 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。
 `seekforge loop-cleanup <name>` 删除一个保留的 `seekforge/loop-*` worktree；有未提交改动的
-worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作；
-`loop-prune --worktrees` 会在同一 guard 下重新核验完整的已完成 merge worktree，并原子删除。
-交付重试若发现证据 revision 之后存在精确 Loop 状态路径以外的已提交或本地工作区变更，会拒绝继续。
+worktree 因其改动会被丢弃，需要显式加 `--force`。清理会拒绝仍活跃的 Loop 生命周期操作，并保留
+包含基线不可达提交的分支；`loop-prune --worktrees` 会在同一 guard 下重新核验完整的已完成 merge
+worktree，并原子删除。交付会针对 checkpoint 后的树重新运行完整持久验证流水线，拒绝 verifier/hook
+修改，并通过固定的已检查 revision 发布 merge/PR。重试若发现证据 revision 之后存在精确 Loop 状态
+路径以外的已提交或本地工作区变更，会拒绝继续。
 
 ## 仓库安全
 

@@ -737,6 +737,135 @@ test("Loop delivery rejects branch content added after its evidence revision", {
   }
 });
 
+test("Loop delivery reruns verification after checkpointing the publication tree", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-reverify-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const worktree = await createLoopWorktree(repo, "delivery-reverify");
+    const state = createLoopState({
+      loopId: "delivery-reverify-loop",
+      task: "reject post-verification drift",
+      workspace: worktree.path,
+      verifyCommand: "test ! -e added-after-pass.txt",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, { ...state, status: "passed" });
+    writeFileSync(resolve(worktree.path, "added-after-pass.txt"), "not verified\n");
+
+    await assert.rejects(runLoopDelivery(worktree.path, state.loopId, "merge"), /delivery verification failed/);
+    assert.throws(() => execFileSync("git", ["show", "HEAD:added-after-pass.txt"], { cwd: repo }), /Command failed/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop delivery rejects files created by the finalized-state commit hook", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-hook-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const worktree = await createLoopWorktree(repo, "delivery-hook");
+    writeFileSync(resolve(worktree.path, "verified.txt"), "verified\n");
+    const state = createLoopState({
+      loopId: "delivery-hook-loop",
+      task: "reject hook drift",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, { ...state, status: "passed" });
+    const gitCommonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: worktree.path,
+      encoding: "utf8",
+    }).trim();
+    const hook = resolve(worktree.path, gitCommonDir, "hooks", "post-commit");
+    writeFileSync(
+      hook,
+      '#!/bin/sh\nsubject=$(git log -1 --pretty=%s)\nif [ "$subject" = "chore: record delivery-hook-loop delivery" ]; then\n  printf "hook\\n" > hook-generated.txt\nfi\n',
+      { mode: 0o755 },
+    );
+
+    await assert.rejects(runLoopDelivery(worktree.path, state.loopId, "merge"), /publication scope changed/);
+    assert.throws(() => execFileSync("git", ["show", "HEAD:hook-generated.txt"], { cwd: repo }), /Command failed/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("Loop cleanup and pruning preserve a branch with later unmerged commits", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-prune-ahead-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const worktree = await createLoopWorktree(repo, "prune-ahead");
+    const old = "2025-01-01T00:00:00.000Z";
+    const state = createLoopState({
+      loopId: "prune-ahead-loop",
+      task: "retain later commit",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktree.path,
+      encoding: "utf8",
+    }).trim();
+    saveLoopState(worktree.path, {
+      ...state,
+      status: "passed",
+      updatedAt: old,
+      delivery: {
+        mode: "merge",
+        status: "delivered",
+        phase: "finalized",
+        attempts: 1,
+        artifact: worktree.branch,
+        evidence: { branch: worktree.branch, revision },
+        updatedAt: old,
+      },
+    });
+    execFileSync("git", ["add", "-A"], { cwd: worktree.path });
+    execFileSync("git", ["commit", "-qm", "finalized state"], { cwd: worktree.path });
+    execFileSync("git", ["merge", "--no-ff", worktree.branch, "-m", "merge delivered"], { cwd: repo });
+    writeFileSync(resolve(worktree.path, "later.txt"), "not merged\n");
+    execFileSync("git", ["add", "later.txt"], { cwd: worktree.path });
+    execFileSync("git", ["commit", "-qm", "later unmerged work"], { cwd: worktree.path });
+
+    await assert.rejects(cleanupLoopWorktree(repo, worktree.branch), /unmerged commits/);
+    const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const pruned = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve(cliDir, "node_modules/tsx/dist/loader.mjs"),
+        resolve(cliDir, "src/index.ts"),
+        "loop-prune",
+        "--older-than-days",
+        "0",
+        "--keep-last",
+        "0",
+        "--worktrees",
+      ],
+      { cwd: repo, encoding: "utf8" },
+    );
+    assert.equal(pruned.status, 0, `${pruned.stdout}${pruned.stderr}`);
+    assert.match(pruned.stdout, /skipped-worktree.*unmerged commits/);
+    assert.equal(existsSync(worktree.path), true);
+    assert.doesNotThrow(() =>
+      execFileSync("git", ["show-ref", "--verify", `refs/heads/${worktree.branch}`], { cwd: repo }),
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("Loop delivery repairs a legacy delivered checkpoint before returning success", { timeout: 120_000 }, async () => {
   const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-repair-"));
   try {

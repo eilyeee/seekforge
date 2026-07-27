@@ -130,6 +130,7 @@ export {
   appendLoopLog,
   createLoopState,
   hasActiveLoopLease,
+  hasCompleteLoopDeliveryEvidence,
   isLoopLeaseActive,
   isLoopDeliveryActive,
   isLoopLifecycleActive,

@@ -165,6 +165,8 @@ const resumed = await resumeAutoLoop(deps, result.loopId!, {
 持久 DAG 身份包含每个节点解析后的物理工作区。恢复时应保持 `workspaceForNode` 稳定；节点改换
 checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的结果。`maxDurationMs` 必须是正安全整数，
 避免派生单次尝试预算时被舍入为零。
+持久节点若提供 `options.verify`，还必须提供稳定的 `verifierId`；自定义 verifier 实现或其捕获配置
+变化时必须同步修改该 id，避免恢复过程复用另一份验证契约产生的结果。
 
 循环状态以原子方式存储在 `.seekforge/loops/` 下；只有当嵌入方自己拥有等效的持久化编排时，才应设置 `persist: false`。迭代次数硬性上限为 100。持久化的 Loop 持有独占租约；写入失败会通过有界的 `loop.warning` 事件上报，不会掩盖验证结果。
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含

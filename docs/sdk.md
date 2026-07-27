@@ -183,6 +183,10 @@ Durable DAG identity includes each node's resolved physical workspace. Keep
 `workspaceForNode` stable when resuming; remapping a node rejects the checkpoint
 instead of reusing a result produced in another checkout. `maxDurationMs` must
 be a positive safe integer so per-attempt budget derivation cannot round it to zero.
+Persisted nodes that supply `options.verify` must also supply a stable
+`verifierId`; change that id whenever the custom verifier implementation or its
+captured configuration changes, so resume cannot reuse results from another
+verification contract.
 
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are

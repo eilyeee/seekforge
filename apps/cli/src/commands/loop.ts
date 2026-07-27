@@ -6,6 +6,8 @@ import {
   checkpointWorktreePaths,
   createWorktreePatch,
   enqueueLoopControl,
+  hasCompleteLoopDeliveryEvidence,
+  isWorktreeDirty,
   isLoopLeaseActive,
   isLoopDeliveryActive,
   listGitWorktrees,
@@ -21,6 +23,7 @@ import {
   resumeAutoLoop,
   runAutoLoop,
   runLoopDag,
+  runShellCommand,
   saveLoopState,
   setLoopPriority,
   worktreeChangedPathsSince,
@@ -29,6 +32,7 @@ import {
   type LoopDeliveryMode,
   type LoopDeliveryEvidence,
   type LoopResult,
+  type LoopState,
   type LoopRequirementMode,
 } from "@seekforge/core";
 import { spawnSync } from "node:child_process";
@@ -921,6 +925,43 @@ type LoopDeliveryResult = {
 };
 
 class LoopDeliveryEvidenceError extends Error {}
+class LoopDeliveryVerificationError extends Error {}
+
+async function verifyLoopForDelivery(workspace: string, state: LoopState): Promise<void> {
+  const plan = state.verificationPlan ?? [{ id: "verify", command: state.verifyCommand }];
+  const stablePasses = state.stablePasses ?? 1;
+  const flakyRetries = state.flakyRetries ?? 0;
+  const sandbox = loadConfig(workspace).sandbox;
+  for (let pass = 1; pass <= stablePasses; pass++) {
+    for (const stage of plan) {
+      let result: Awaited<ReturnType<typeof runShellCommand>> | undefined;
+      try {
+        for (let attempt = 0; attempt <= flakyRetries; attempt++) {
+          result = await runShellCommand(
+            stage.command,
+            workspace,
+            stage.timeoutMs ?? state.verifyTimeoutMs ?? 120_000,
+            {
+              sandbox,
+              workspace,
+            },
+          );
+          if (result.exitCode === 0) break;
+        }
+      } catch (error) {
+        throw new LoopDeliveryVerificationError(
+          `Loop delivery verification could not run stage ${stage.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (result?.exitCode !== 0 && stage.required !== false) {
+        const detail = `${result?.stdout ?? ""}${result?.stderr ?? ""}`.trim().slice(-4_096);
+        throw new LoopDeliveryVerificationError(
+          `Loop delivery verification failed at stage ${stage.id}${detail ? `: ${detail}` : ""}`,
+        );
+      }
+    }
+  }
+}
 
 export async function runLoopDelivery(
   projectPath: string,
@@ -948,7 +989,7 @@ export async function runLoopDelivery(
     }
     if (state.delivery?.status === "delivered" && state.delivery.artifact) {
       try {
-        if (!hasCompleteDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)) {
+        if (!hasCompleteLoopDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)) {
           throw new Error("Legacy Loop delivery lacks verifiable evidence");
         }
         const recorded = {
@@ -967,7 +1008,7 @@ export async function runLoopDelivery(
         );
         return { ...finalized, message: `Loop delivery already complete: ${state.delivery.artifact}` };
       } catch (error) {
-        if (error instanceof LoopDeliveryEvidenceError) throw error;
+        if (error instanceof LoopDeliveryEvidenceError || error instanceof LoopDeliveryVerificationError) throw error;
         // Older versions could persist `delivered` before the side effect. Fall
         // through to a new attempt, which safely repairs or repeats the action.
       }
@@ -977,7 +1018,7 @@ export async function runLoopDelivery(
     const completedAttempt =
       state.delivery?.phase === "action_completed" &&
       state.delivery.artifact &&
-      hasCompleteDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)
+      hasCompleteLoopDeliveryEvidence(mode, state.delivery.artifact, state.delivery.evidence)
         ? {
             artifact: state.delivery.artifact,
             evidence: state.delivery.evidence,
@@ -1060,7 +1101,7 @@ export async function runLoopDelivery(
     };
     let delivered: LoopDeliveryResult;
     try {
-      delivered = completedAttempt ?? (await deliverLoop(projectPath, loopId, mode));
+      delivered = completedAttempt ?? (await deliverLoop(projectPath, loopId, mode, state));
       if (!completedAttempt) persistActionCompleted(delivered);
       delivered = await finalizeLoopDelivery(
         projectPath,
@@ -1079,7 +1120,12 @@ export async function runLoopDelivery(
   }
 }
 
-async function deliverLoop(projectPath: string, loopId: string, mode: LoopDeliveryMode): Promise<LoopDeliveryResult> {
+async function deliverLoop(
+  projectPath: string,
+  loopId: string,
+  mode: LoopDeliveryMode,
+  state: LoopState,
+): Promise<LoopDeliveryResult> {
   const repository = await resolveLoopRepository(projectPath);
   const workspace = resolve(projectPath);
   if (workspace === resolve(repository.basePath))
@@ -1109,13 +1155,21 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
   }
   if (mode === "pr") {
     await checkpointWorktree(workspace, `feat: deliver ${loopId}`);
+    await verifyLoopForDelivery(workspace, state);
+    if (await isWorktreeDirty(workspace)) {
+      throw new LoopDeliveryVerificationError("Loop delivery verification modified the worktree");
+    }
+    const verifiedRevision = gitRevision(workspace, entry.branch);
     const base = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd: repository.basePath,
       encoding: "utf8",
     });
     if (base.status !== 0 || !base.stdout.trim())
       throw new Error(base.stderr.trim() || "Could not resolve base branch");
-    const pushed = spawnSync("git", ["push", "-u", "origin", entry.branch], { cwd: workspace, encoding: "utf8" });
+    const pushed = spawnSync("git", ["push", "origin", `${verifiedRevision}:refs/heads/${entry.branch}`], {
+      cwd: workspace,
+      encoding: "utf8",
+    });
     if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not push Loop worktree branch");
     const existing = spawnSync("gh", ["pr", "view", entry.branch, "--json", "url", "--jq", ".url"], {
       cwd: workspace,
@@ -1129,7 +1183,7 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
       return {
         artifact: existingUrl,
         branch: entry.branch,
-        evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch), url: existingUrl },
+        evidence: { branch: entry.branch, revision: verifiedRevision, url: existingUrl },
         message: `Using existing pull request: ${existingUrl}`,
       };
     }
@@ -1158,7 +1212,7 @@ async function deliverLoop(projectPath: string, loopId: string, mode: LoopDelive
     return {
       artifact: url,
       branch: entry.branch,
-      evidence: { branch: entry.branch, revision: gitRevision(workspace, entry.branch), url },
+      evidence: { branch: entry.branch, revision: verifiedRevision, url },
       message: `Created draft pull request: ${url}`,
     };
   }
@@ -1228,26 +1282,52 @@ async function finalizeLoopDelivery(
   if (mode === "pr" && result?.evidence?.url && result.evidence.url !== artifact) {
     throw new Error(`Loop pull request evidence does not match artifact: ${artifact}`);
   }
+  const verificationState = loadLoopState(workspace, loopId);
+  if (!verificationState) throw new Error(`Persisted loop not found or invalid: ${loopId}`);
+  await verifyLoopForDelivery(workspace, verificationState);
+  if (result?.evidence?.revision) {
+    const statePath = `.seekforge/loops/${loopId}.json`;
+    const allowedPaths = new Set([statePath, ...(mode === "patch" ? [`.seekforge/loops/${loopId}.patch`] : [])]);
+    const unexpected = (await worktreeChangedPathsSince(workspace, result.evidence.revision, entry.branch)).filter(
+      (path) => !allowedPaths.has(path),
+    );
+    if (unexpected.length > 0) {
+      throw new LoopDeliveryEvidenceError(
+        `Loop delivery verification left unpublishable changes: ${unexpected.join(", ")}`,
+      );
+    }
+  }
   persistFinalized();
 
-  if (mode === "checkpoint" || mode === "merge") {
+  if (mode === "checkpoint" || mode === "merge" || mode === "pr") {
     await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
-  }
-  if (mode === "checkpoint") {
-    // The finalized state commit is the last checkpoint side effect.
-  } else if (mode === "merge") {
-    const merged = await mergeWorktree(repository.basePath, workspace, entry.branch);
-    if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
-  } else if (mode === "pr") {
-    await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
-    const pushed = spawnSync("git", ["push", "origin", entry.branch], { cwd: workspace, encoding: "utf8" });
-    if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish final delivery state");
   } else {
     const target = join(workspace, ".seekforge", "loops", `${loopId}.patch`);
     if (artifact !== target || !existsSync(target) || !lstatSync(target).isFile()) {
       throw new Error(`Loop patch artifact is missing or invalid: ${target}`);
     }
     await checkpointWorktreePaths(workspace, [`.seekforge/loops/${loopId}.json`], `chore: record ${loopId} delivery`);
+  }
+  if (result?.evidence?.revision) {
+    const statePath = `.seekforge/loops/${loopId}.json`;
+    const allowedPaths = new Set([statePath, ...(mode === "patch" ? [`.seekforge/loops/${loopId}.patch`] : [])]);
+    const unexpected = (await worktreeChangedPathsSince(workspace, result.evidence.revision, entry.branch)).filter(
+      (path) => !allowedPaths.has(path),
+    );
+    if (unexpected.length > 0) {
+      throw new LoopDeliveryEvidenceError(`Loop delivery publication scope changed: ${unexpected.join(", ")}`);
+    }
+  }
+  const publishRevision = gitRevision(workspace, entry.branch);
+  if (mode === "merge") {
+    const merged = await mergeWorktree(repository.basePath, workspace, entry.branch, { revision: publishRevision });
+    if ("conflict" in merged) throw new Error(`Loop delivery merge conflicted: ${merged.files.join(", ")}`);
+  } else if (mode === "pr") {
+    const pushed = spawnSync("git", ["push", "origin", `${publishRevision}:refs/heads/${entry.branch}`], {
+      cwd: workspace,
+      encoding: "utf8",
+    });
+    if (pushed.status !== 0) throw new Error(pushed.stderr.trim() || "Could not publish final delivery state");
   }
   return result ?? { artifact, branch: entry.branch, message: `Loop delivery complete: ${artifact}` };
 }
@@ -1266,17 +1346,6 @@ function gitRevisionIsAncestor(workspace: string, revision: string, ref: string)
   });
   if (result.error) throw result.error;
   return result.status === 0;
-}
-
-function hasCompleteDeliveryEvidence(
-  mode: LoopDeliveryMode,
-  artifact: string,
-  evidence: LoopDeliveryEvidence | undefined,
-): evidence is LoopDeliveryEvidence {
-  if (!evidence?.branch || !evidence.revision) return false;
-  if (mode === "checkpoint" || mode === "merge") return artifact === evidence.branch;
-  if (mode === "patch") return Boolean(evidence.sha256);
-  return Boolean(evidence.url && evidence.url === artifact);
 }
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");

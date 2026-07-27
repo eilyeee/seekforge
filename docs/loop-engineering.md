@@ -274,11 +274,15 @@ seekforge loop-cleanup <worktree-name> [--force]
   Delivery persists `prepared → action_completed → finalized` with branch,
   revision, patch hash, or PR URL evidence. The primary side effect and final
   publication are independently retryable; retries validate evidence and repair
-  legacy premature-success records before returning success. A branch or its
+  legacy premature-success records before returning success. Delivery reruns
+  the complete persisted verification pipeline against the checkpointed tree,
+  rejects changes left by verification or finalization hooks, and publishes
+  merge/PR delivery through an immutable checked revision. A branch or its
   working tree may advance past the evidenced revision only through the exact
   Loop state file; any other committed, staged, modified, or untracked path is
   treated as unverified and blocks delivery. Worktree cleanup takes the same
-  workspace guard, so it cannot remove an active delivery.
+  workspace guard, so it cannot remove an active delivery, and non-force cleanup
+  preserves branches with commits not reachable from the base checkout.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

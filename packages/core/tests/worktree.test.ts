@@ -250,6 +250,20 @@ describe("mergeWorktree", () => {
     expect(readFileSync(join(repo, "clean.txt"), "utf8")).toBe("committed\n");
   });
 
+  it("merges a pinned revision without auto-committing later worktree changes", async () => {
+    const { path, branch } = await createWorktree(repo, "pinned");
+    writeFileSync(join(path, "verified.txt"), "verified\n");
+    git(path, "add", "verified.txt");
+    git(path, "commit", "-q", "-m", "verified commit");
+    const revision = git(path, "rev-parse", "HEAD");
+    writeFileSync(join(path, "later.txt"), "not published\n");
+
+    expect(await mergeWorktree(repo, path, branch, { revision })).toEqual({ merged: true });
+    expect(readFileSync(join(repo, "verified.txt"), "utf8")).toBe("verified\n");
+    expect(existsSync(join(repo, "later.txt"))).toBe(false);
+    expect(git(path, "status", "--porcelain")).toContain("later.txt");
+  });
+
   it("reports conflicts, aborts, and leaves the base clean", async () => {
     const { path, branch } = await createWorktree(repo, "conflict");
     writeFileSync(join(path, "base.txt"), "worktree version\n");

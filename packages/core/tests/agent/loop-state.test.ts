@@ -260,6 +260,26 @@ describe("loop state persistence", () => {
         error: "retry me",
       },
     });
+    const incompleteFinalized = createLoopState({
+      loopId: "prune-incomplete-finalized",
+      task: "repair incomplete evidence",
+      workspace,
+      verifyCommand: "test",
+      maxIterations: 1,
+    });
+    saveLoopState(workspace, {
+      ...incompleteFinalized,
+      status: "passed",
+      updatedAt: old,
+      delivery: {
+        mode: "merge",
+        status: "delivered",
+        phase: "finalized",
+        attempts: 1,
+        artifact: "seekforge/loop-incomplete",
+        updatedAt: old,
+      },
+    });
     const legacyDelivery = createLoopState({
       loopId: "prune-legacy-delivery",
       task: "repair old delivery",
@@ -293,6 +313,7 @@ describe("loop state persistence", () => {
     expect(loadLoopState(workspace, resumable.loopId)).not.toBeNull();
     expect(loadLoopState(workspace, delivery.loopId)).not.toBeNull();
     expect(loadLoopState(workspace, legacyDelivery.loopId)?.delivery?.phase).toBe("action_completed");
+    expect(loadLoopState(workspace, incompleteFinalized.loopId)?.delivery?.phase).toBe("action_completed");
   });
 
   it("sorts offset timestamps by instant instead of source text", () => {

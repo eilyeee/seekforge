@@ -259,14 +259,18 @@ export async function mergeWorktree(
   basePath: string,
   worktreePath: string,
   branch: string,
+  options: { revision?: string } = {},
 ): Promise<WorktreeMergeResult> {
-  if (await isWorktreeDirty(worktreePath)) {
+  if (options.revision !== undefined && !/^[0-9a-fA-F]{40,64}$/.test(options.revision)) {
+    throw new WorktreeGitError("git_error", `unsafe worktree revision: ${options.revision}`);
+  }
+  if (options.revision === undefined && (await isWorktreeDirty(worktreePath))) {
     await git(worktreePath, ["add", "-A"]);
     await git(worktreePath, ["commit", "-m", "seekforge worktree checkpoint"]);
   }
 
   try {
-    await git(basePath, ["merge", "--no-ff", branch, "-m", `merge ${branch} (seekforge worktree)`]);
+    await git(basePath, ["merge", "--no-ff", options.revision ?? branch, "-m", `merge ${branch} (seekforge worktree)`]);
     return { merged: true };
   } catch (err) {
     // Mid-merge (MERGE_HEAD exists) = a real conflict: collect the conflicting

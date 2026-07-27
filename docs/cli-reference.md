@@ -234,8 +234,12 @@ pause, resume, priority, and steering.
 dirty worktrees require explicit `--force` because their changes are discarded.
 Cleanup refuses active Loop lifecycle operations. `loop-prune --worktrees`
 revalidates the complete finalized-merge worktree under the same guard and
-removes it atomically. Delivery retries reject committed or local worktree
-changes outside the exact persisted Loop state path after the evidenced revision.
+removes it atomically, but preserves a branch containing commits not reachable
+from the base checkout. Delivery reruns the complete persisted verification
+pipeline against the checkpointed tree, rejects verifier/hook mutations, and
+publishes merge/PR by an immutable checked revision. Retries reject committed or
+local worktree changes outside the exact persisted Loop state path after the
+evidenced revision.
 
 ## Repository security
 

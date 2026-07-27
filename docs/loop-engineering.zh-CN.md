@@ -234,9 +234,11 @@ seekforge loop-cleanup <worktree-name> [--force]
   除首次尝试外会复用原模式。运行、交付和删除共用一把生命周期租约，因此交付执行时恢复
   无法进入。交付会持久化 `prepared → action_completed → finalized`，并记录分支、revision、
   patch hash 或 PR URL 证据。主要副作用和最终状态发布可分别重试；重试会核验证据，并修复旧版本
-  过早写入的成功记录。分支及其工作区在证据 revision 之后只能变更该 Loop 的精确状态文件；
-  任何其他已提交、已暂存、已修改或未跟踪路径都视为未经验证并阻止交付。worktree 清理会取得
-  同一工作区 guard，因此不能删除正在交付的任务。
+  过早写入的成功记录。交付会针对 checkpoint 后的树重新运行完整持久验证流水线，拒绝验证命令或
+  finalization hook 留下的修改，并通过固定且已检查的 revision 发布 merge/PR。分支及其工作区在
+  证据 revision 之后只能变更该 Loop 的精确状态文件；任何其他已提交、已暂存、已修改或未跟踪路径
+  都视为未经验证并阻止交付。worktree 清理会取得同一工作区 guard，因此不能删除正在交付的任务；
+  非 force 清理还会保留包含基线不可达提交的分支。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

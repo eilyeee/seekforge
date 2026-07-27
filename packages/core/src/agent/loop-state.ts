@@ -72,6 +72,18 @@ export type LoopDeliveryState = {
   evidence?: LoopDeliveryEvidence;
   error?: string;
 };
+
+/** True only when a delivery artifact has the evidence required by its mode. */
+export function hasCompleteLoopDeliveryEvidence(
+  mode: LoopDeliveryMode,
+  artifact: string,
+  evidence: LoopDeliveryEvidence | undefined,
+): evidence is LoopDeliveryEvidence {
+  if (!evidence?.branch || !evidence.revision || !/^[0-9a-fA-F]{40,64}$/.test(evidence.revision)) return false;
+  if (mode === "checkpoint" || mode === "merge") return artifact === evidence.branch;
+  if (mode === "patch") return typeof evidence.sha256 === "string" && /^[0-9a-fA-F]{64}$/.test(evidence.sha256);
+  return typeof evidence.url === "string" && evidence.url === artifact;
+}
 export type LoopRecoveryMetadata = {
   attempts: number;
   lastAttemptAt: string;
@@ -316,23 +328,28 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
     (phase === "finalized" && value.status !== "delivered")
   )
     return null;
+  const evidence = isRecord(evidenceValue)
+    ? {
+        ...(typeof evidenceValue.branch === "string" ? { branch: evidenceValue.branch } : {}),
+        ...(typeof evidenceValue.revision === "string" ? { revision: evidenceValue.revision } : {}),
+        ...(typeof evidenceValue.sha256 === "string" ? { sha256: evidenceValue.sha256 } : {}),
+        ...(typeof evidenceValue.url === "string" ? { url: evidenceValue.url } : {}),
+      }
+    : undefined;
+  const normalizedPhase =
+    phase === "finalized" &&
+    typeof value.artifact === "string" &&
+    !hasCompleteLoopDeliveryEvidence(value.mode as LoopDeliveryMode, value.artifact, evidence)
+      ? "action_completed"
+      : phase;
   return {
     mode: value.mode as LoopDeliveryMode,
     status: value.status as LoopDeliveryStatus,
-    phase,
+    phase: normalizedPhase,
     attempts: value.attempts,
     updatedAt: value.updatedAt,
     ...(typeof value.artifact === "string" ? { artifact: value.artifact } : {}),
-    ...(isRecord(evidenceValue)
-      ? {
-          evidence: {
-            ...(typeof evidenceValue.branch === "string" ? { branch: evidenceValue.branch } : {}),
-            ...(typeof evidenceValue.revision === "string" ? { revision: evidenceValue.revision } : {}),
-            ...(typeof evidenceValue.sha256 === "string" ? { sha256: evidenceValue.sha256 } : {}),
-            ...(typeof evidenceValue.url === "string" ? { url: evidenceValue.url } : {}),
-          },
-        }
-      : {}),
+    ...(evidence ? { evidence } : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
 }
