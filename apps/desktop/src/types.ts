@@ -80,11 +80,26 @@ export type LoopStateSummary = {
   verifyRuns?: number;
   priority?: number;
   updatedAt: string;
-  delivery?: { mode: string; status: string; phase?: string; artifact?: string; error?: string };
+  delivery?: {
+    mode: string;
+    status: string;
+    phase?: string;
+    artifact?: string;
+    error?: string;
+    ci?: { status: "pending" | "passed" | "failed"; repairAttempts: number; maxRepairs: number; error?: string };
+  };
 };
 
 export type LoopHistoryEntry = { seq: number; ts: string; event: { type: string; [key: string]: unknown } };
 export type LoopPruneResult = { candidates: string[]; removed: string[]; skipped: string[] };
+export type LoopDagSummary = {
+  dagId: string;
+  spentCost: number;
+  spentTokens: number;
+  updatedAt: string;
+  completedAt?: string;
+  results: Array<{ id: string; status: string; reason?: string }>;
+};
 
 export type AgentImportResult = {
   ok: true;

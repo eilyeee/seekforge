@@ -191,7 +191,9 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 - `--auto-verify`: discovers recognized root stages from `package.json`,
   `Cargo.toml`, `go.mod`, or pytest configuration. It freezes fixed commands or
   named scripts in Loop state and never interpolates manifest script bodies
-  into a generated shell command.
+  into a generated shell command. For `apps/*` and `packages/*` workspaces it
+  also adds bounded, path-scoped package test stages; successful incremental
+  stages may be reused once by the same iteration's mandatory full fallback.
 - `--requirements quick|analyze|confirm`: `quick` keeps verifier-only behavior;
   `analyze` performs read-only repository analysis and acceptance review;
   `confirm` persists the specification and stops with `requirements_pending`
@@ -205,6 +207,9 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   Usage is checked after each provider usage update and prevents further work,
   but an already in-flight request can make the final billed amount slightly
   exceed the configured value.
+- `--adaptive-budget`: uses the largest recent iteration sample to stop before
+  starting work that is predicted not to fit inside a configured cost, token,
+  or duration hard cap. It never raises a cap.
 - The loop is inherently autonomous — every run uses `approvalMode: "acceptEdits"`
   (file edits auto-approved; dangerous commands still refused by the denylist).
   `-y` just silences the "auto-approves edits" note.
@@ -225,7 +230,7 @@ seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<guidance>"
 seekforge loop-priority <loop-id> <-10..10>
-seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
+seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]
 seekforge loop-prune [--older-than-days N] [--keep-last N] [--worktrees] [--dry-run]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
@@ -271,8 +276,12 @@ seekforge loop-cleanup <worktree-name> [--force]
   `--dag-id` restore completed nodes; ready nodes receive weighted shares of the
   remaining cost/token budgets and support priorities, bounded retries, and
   `skip_dependents`/`continue`/`stop` failure policies. Nodes may branch on a
-  dependency outcome, require explicit approval, lock named exclusive resources,
-  and consume bounded structured dependency outputs. `--rerun` invalidates a
+  dependency outcome with nested `all`/`any`/`not` conditions, require explicit
+  approval with durable actor/reason audit, lock named exclusive resources, and
+  consume bounded structured dependency outputs. Declared `outputPaths` must be
+  regular files inside the node workspace and are published as artifact metadata.
+  Completion-driven scheduling immediately fills a free slot instead of waiting
+  for an unrelated slow batch peer. `--rerun` invalidates a
   selected node and all descendants; `--approve` crosses a declared gate.
   Parallel graphs require
   distinct physical workspaces. Those resolved workspace identities are part of
@@ -301,6 +310,14 @@ seekforge loop-cleanup <worktree-name> [--force]
   PR checks run. `--ci-repairs 1..3` may feed one bounded failed-step log to a
   non-persisted, two-iteration repair Loop with its own cost cap, rerun the frozen
   local pipeline, checkpoint and push the immutable revision, and wait again.
+  The CI policy, repair count, checked revision, and failure are durable; a later
+  `loop-deliver --wait-ci` resumes the same policy, while retrying without CI
+  closure is rejected. Check waits and repair pushes are cooperatively cancellable.
+- REST Loop listing supports `status`, `q`, `limit`, and `after`; active Loops
+  accept `POST /api/loops/:id/control`, and `/api/loop-dags` exposes durable graph
+  state. Prometheus output includes aggregate Loop count, activity, cost, tokens,
+  and verifier runs. Desktop adds filtering, polling, history paging, CI state,
+  safe-boundary controls, and DAG summaries.
 - WebSocket clients can send `loop.pause`, `loop.control.resume`, and
   `loop.steer`; controls take effect only at safe iteration boundaries.
 - The top-level `loop-pause`, `loop-continue`, and `loop-steer` CLI commands can

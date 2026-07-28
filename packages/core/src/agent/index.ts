@@ -91,12 +91,15 @@ export {
   type DurableLoopControlEntry,
 } from "./loop-control-store.js";
 export {
+  listLoopDagStates,
+  loadLoopDagState,
   runLoopDag,
   type LoopDagNode,
   type LoopDagCondition,
   type LoopDagNodeResult,
   type LoopDagNodeOutput,
   type LoopDagOptions,
+  type PersistedLoopDagState,
 } from "./loop-dag.js";
 export {
   resumeAutoLoop,
@@ -157,6 +160,7 @@ export {
   type LoopDeliveryMode,
   type LoopDeliveryPhase,
   type LoopDeliveryEvidence,
+  type LoopDeliveryCiState,
   type LoopPruneOptions,
   type LoopPruneResult,
   type LoopRecoveryMetadata,

@@ -100,6 +100,8 @@ export type LoopVerificationStage = {
   timeoutMs?: number;
   /** Relative file or directory prefixes that select this stage after an edit. */
   paths?: string[];
+  /** Reuse a successful path-scoped result within the same iteration's full fallback pass. */
+  cacheable?: boolean;
 };
 
 export type LoopStageResult = {
@@ -147,6 +149,8 @@ export type LoopOptions = {
   maxNoProgressRecoveries?: number;
   /** Revert an iteration that increases parsed failures. Allowed only in a retained Loop worktree. */
   rollbackOnRegression?: boolean;
+  /** Stop before a new iteration when recent usage predicts it cannot fit inside a hard budget. */
+  adaptiveBudget?: boolean;
   /** Automatic recovery priority, from -10 (lowest) to 10 (highest). */
   priority?: number;
   /** Max run iterations before giving up. Default 8. */
@@ -504,6 +508,9 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
   if (opts.abortStatus !== undefined && opts.abortStatus !== "cancelled" && opts.abortStatus !== "interrupted") {
     throw new Error(`Invalid Loop abort status: ${String(opts.abortStatus)}`);
   }
+  if (opts.adaptiveBudget !== undefined && typeof opts.adaptiveBudget !== "boolean") {
+    throw new Error("Loop adaptiveBudget must be boolean");
+  }
   const configuredIterations = opts.maxIterations ?? opts.resumeState?.maxIterations;
   if (
     configuredIterations !== undefined &&
@@ -571,6 +578,9 @@ export async function runAutoLoop(deps: AgentCoreDeps, opts: LoopOptions): Promi
             throw new Error(`Loop verification stage path is invalid: ${stage.id}/${String(path)}`);
           }
         }
+      }
+      if (stage.cacheable !== undefined && typeof stage.cacheable !== "boolean") {
+        throw new Error(`Loop verification stage cacheable flag is invalid: ${stage.id}`);
       }
     }
   }
@@ -656,6 +666,7 @@ async function runAutoLoopWithLease(
     5,
   );
   const rollbackOnRegression = opts.rollbackOnRegression ?? opts.resumeState?.rollbackOnRegression ?? false;
+  const adaptiveBudget = opts.adaptiveBudget ?? opts.resumeState?.adaptiveBudget ?? false;
   if (rollbackOnRegression) {
     const parts = resolve(opts.workspace).split(sep);
     const isolated = parts.some((part, index) => part === ".seekforge" && parts[index + 1] === "worktrees");
@@ -735,6 +746,7 @@ async function runAutoLoopWithLease(
         flakyRetries,
         maxNoProgressRecoveries,
         rollbackOnRegression,
+        adaptiveBudget,
         priority,
         controlRunId,
       });
@@ -857,6 +869,21 @@ async function runAutoLoopWithLease(
     if (tokenBudget !== undefined && tokensUsed + pendingTokens >= tokenBudget) return "tokens";
     if (maxDurationMs !== undefined && elapsedMs() >= maxDurationMs) return "duration";
     if (maxVerifyRuns !== undefined && verifyRuns >= maxVerifyRuns) return "verify_runs";
+    return null;
+  };
+  const forecastBudgetReason = (): LoopBudgetReason | null => {
+    if (!adaptiveBudget) return null;
+    const recent = snapshots.filter((snapshot) => snapshot.iteration > 0).slice(-3);
+    if (recent.length === 0) return null;
+    const conservative = (values: number[]): number => Math.max(...values.filter((value) => value > 0), 0);
+    const forecastCost = conservative(recent.map((snapshot) => snapshot.costUsd ?? 0));
+    const forecastTokens = conservative(recent.map((snapshot) => snapshot.tokensUsed ?? 0));
+    const forecastDuration = conservative(recent.map((snapshot) => snapshot.durationMs ?? 0));
+    if (costBudgetUsd !== undefined && forecastCost > 0 && costUsd + forecastCost >= costBudgetUsd) return "cost";
+    if (tokenBudget !== undefined && forecastTokens > 0 && tokensUsed + forecastTokens >= tokenBudget) return "tokens";
+    if (maxDurationMs !== undefined && forecastDuration > 0 && elapsedMs() + forecastDuration >= maxDurationMs) {
+      return "duration";
+    }
     return null;
   };
   const applyControl = async (iteration: number): Promise<void> => {
@@ -990,6 +1017,7 @@ async function runAutoLoopWithLease(
     }
   };
 
+  const verificationCache = new Map<string, LoopStageResult>();
   const executeVerify = async (
     iteration: number,
     changedPaths?: ReadonlySet<string>,
@@ -1014,6 +1042,16 @@ async function runAutoLoopWithLease(
       }
       let completed: LoopStageResult | undefined;
       let diagnostics = "";
+      const cacheKey = `${iteration}:${stage.id}`;
+      const cached =
+        changedPaths === undefined && stablePasses === 1 && stage.cacheable
+          ? verificationCache.get(cacheKey)
+          : undefined;
+      if (cached) {
+        stages.push(cached);
+        emit({ type: "verify.stage.completed", iteration, result: cached });
+        continue;
+      }
       for (let attempt = 1; attempt <= flakyRetries + 1; attempt++) {
         const captured = await executeStage(iteration, stage, attempt);
         if (captured.kind === "budget") return captured;
@@ -1028,6 +1066,9 @@ async function runAutoLoopWithLease(
         emit({ type: "verify.flaky", iteration, stageId: stage.id, attempts: completed.attempts });
       }
       stages.push(completed);
+      if (completed.code === 0 && changedPaths !== undefined && stage.cacheable) {
+        verificationCache.set(cacheKey, completed);
+      }
       emit({ type: "verify.stage.completed", iteration, result: completed });
       if (completed.code !== 0 && stage.required !== false) {
         failedCode = completed.code;
@@ -1293,6 +1334,15 @@ async function runAutoLoopWithLease(
     }
     const beforeIterationBudget = currentBudgetReason();
     if (beforeIterationBudget !== null) return finishBudget(beforeIterationBudget, lastVerify);
+    const forecastBudget = forecastBudgetReason();
+    if (forecastBudget !== null) {
+      emit({
+        type: "loop.warning",
+        warning: "observer",
+        message: `Adaptive budget forecast stopped before iteration ${i}: recent usage would exceed ${forecastBudget}`,
+      });
+      return finishBudget(forecastBudget, lastVerify);
+    }
     try {
       await applyControl(i);
     } catch {
@@ -1574,7 +1624,9 @@ async function runAutoLoopWithLease(
         recoveryAttempts++;
         const reason = cyclePeriod !== null ? "cycle" : "stuck";
         const category = snapshot.failureCategory ?? "unknown";
-        const strategy = recoveryStrategy(category);
+        const repeatedCategory = snapshots.slice(0, -1).some((item) => item.failureCategory === category);
+        const baseStrategy = recoveryStrategy(category);
+        const strategy = repeatedCategory && baseStrategy !== "replan" ? "replan" : baseStrategy;
         emit({ type: "loop.recovery", iteration: i, attempt: recoveryAttempts, reason, category, strategy });
         persist({ recoveryAttempts }, true);
         steeringGuidance.push(
@@ -1616,6 +1668,7 @@ export async function resumeAutoLoop(
     | "flakyRetries"
     | "maxNoProgressRecoveries"
     | "rollbackOnRegression"
+    | "adaptiveBudget"
     | "requirementMode"
     | "resumeState"
   > & {

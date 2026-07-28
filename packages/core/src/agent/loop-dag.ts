@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentCoreDeps } from "./loop.js";
 import { runAutoLoop, type LoopOptions, type LoopResult, type LoopStatus } from "./auto-loop.js";
 import { acquireSessionLeaseWithPreemption } from "./session-lease.js";
@@ -7,7 +8,11 @@ import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
 
 export type LoopDagFailurePolicy = "skip_dependents" | "continue" | "stop";
-export type LoopDagCondition = { nodeId: string; status: "passed" | "failed" };
+export type LoopDagCondition =
+  | { nodeId: string; status: "passed" | "failed" }
+  | { all: LoopDagCondition[] }
+  | { any: LoopDagCondition[] }
+  | { not: LoopDagCondition };
 export type LoopDagNodeOutput = {
   status: LoopResult["status"];
   loopId?: string;
@@ -15,6 +20,7 @@ export type LoopDagNodeOutput = {
   costUsd: number;
   tokensUsed: number;
   iterations: number;
+  artifacts?: string[];
 };
 
 export type LoopDagNode = {
@@ -38,6 +44,8 @@ export type LoopDagNode = {
   requiresApproval?: boolean;
   /** Include bounded structured dependency outputs in this node's task. */
   consumeDependencyOutputs?: boolean;
+  /** Relative regular files that a passing node promises to produce. */
+  outputPaths?: string[];
   /** Stable identity for a custom options.verify implementation across durable resumes. */
   verifierId?: string;
   options?: Partial<
@@ -52,6 +60,7 @@ export type LoopDagNodeResult = {
   output?: LoopDagNodeOutput;
   reason?: string;
   attempts?: number;
+  approval?: { approvedAt: string; actor?: string; reason?: string };
 };
 
 export type LoopDagOptions = {
@@ -71,11 +80,17 @@ export type LoopDagOptions = {
   workspaceForNode?: (node: LoopDagNode) => string;
   /** Nodes to invalidate together with every downstream dependent when resuming. */
   rerunFrom?: string[];
-  approveNode?: (node: LoopDagNode, completed: ReadonlyMap<string, LoopDagNodeResult>) => boolean | Promise<boolean>;
+  approveNode?: (
+    node: LoopDagNode,
+    completed: ReadonlyMap<string, LoopDagNodeResult>,
+  ) =>
+    | boolean
+    | { approved: boolean; actor?: string; reason?: string }
+    | Promise<boolean | { approved: boolean; actor?: string; reason?: string }>;
   onNodeEvent?: (nodeId: string, event: Parameters<NonNullable<LoopOptions["onEvent"]>>[0]) => void;
 };
 
-type PersistedLoopDagState = {
+export type PersistedLoopDagState = {
   schemaVersion: 1;
   dagId: string;
   fingerprint: string;
@@ -118,6 +133,7 @@ function dagFingerprint(nodes: readonly LoopDagNode[], workspaces: ReadonlyMap<s
           resources: [...(node.resources ?? [])].sort(),
           requiresApproval: node.requiresApproval ?? false,
           consumeDependencyOutputs: node.consumeDependencyOutputs ?? false,
+          outputPaths: [...(node.outputPaths ?? [])].sort(),
           verifierId: node.verifierId,
           workspace: workspaces.get(node.id),
           options: node.options,
@@ -152,7 +168,7 @@ function parseLoopResult(value: unknown): LoopResult | null {
   return value as LoopResult;
 }
 
-function parseDagState(raw: string, dagId: string, fingerprint: string): PersistedLoopDagState | null {
+function parseDagState(raw: string, dagId: string, fingerprint?: string): PersistedLoopDagState | null {
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
@@ -163,7 +179,9 @@ function parseDagState(raw: string, dagId: string, fingerprint: string): Persist
     !isRecord(value) ||
     value.schemaVersion !== 1 ||
     value.dagId !== dagId ||
-    value.fingerprint !== fingerprint ||
+    typeof value.fingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.fingerprint) ||
+    (fingerprint !== undefined && value.fingerprint !== fingerprint) ||
     typeof value.spentCost !== "number" ||
     !Number.isFinite(value.spentCost) ||
     value.spentCost < 0 ||
@@ -192,7 +210,15 @@ function parseDagState(raw: string, dagId: string, fingerprint: string): Persist
         item.status !== "skipped" &&
         item.status !== "waiting_approval") ||
       (item.reason !== undefined && (typeof item.reason !== "string" || item.reason.length > 8_192)) ||
-      (item.attempts !== undefined && (!Number.isSafeInteger(item.attempts) || (item.attempts as number) <= 0))
+      (item.attempts !== undefined && (!Number.isSafeInteger(item.attempts) || (item.attempts as number) <= 0)) ||
+      (item.approval !== undefined &&
+        (!isRecord(item.approval) ||
+          typeof item.approval.approvedAt !== "string" ||
+          !Number.isFinite(Date.parse(item.approval.approvedAt)) ||
+          (item.approval.actor !== undefined &&
+            (typeof item.approval.actor !== "string" || item.approval.actor.length > 256)) ||
+          (item.approval.reason !== undefined &&
+            (typeof item.approval.reason !== "string" || item.approval.reason.length > 2_048))))
     )
       return null;
     const result = item.result === undefined ? undefined : parseLoopResult(item.result);
@@ -210,7 +236,11 @@ function parseDagState(raw: string, dagId: string, fingerprint: string): Persist
       (outputValue.tokensUsed as number) >= 0 &&
       Number.isSafeInteger(outputValue.iterations) &&
       (outputValue.iterations as number) >= 0 &&
-      (outputValue.loopId === undefined || typeof outputValue.loopId === "string")
+      (outputValue.loopId === undefined || typeof outputValue.loopId === "string") &&
+      (outputValue.artifacts === undefined ||
+        (Array.isArray(outputValue.artifacts) &&
+          outputValue.artifacts.length <= 64 &&
+          outputValue.artifacts.every((item) => typeof item === "string" && isSafeRelativePath(item))))
         ? (outputValue as LoopDagNodeOutput)
         : undefined;
     if (item.output !== undefined && output === undefined) return null;
@@ -221,15 +251,110 @@ function parseDagState(raw: string, dagId: string, fingerprint: string): Persist
       ...(output ? { output } : {}),
       ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
       ...(typeof item.attempts === "number" ? { attempts: item.attempts } : {}),
+      ...(isRecord(item.approval)
+        ? {
+            approval: {
+              approvedAt: item.approval.approvedAt as string,
+              ...(typeof item.approval.actor === "string" ? { actor: item.approval.actor } : {}),
+              ...(typeof item.approval.reason === "string" ? { reason: item.approval.reason } : {}),
+            },
+          }
+        : {}),
     });
   }
   return { ...(value as PersistedLoopDagState), results };
+}
+
+export function loadLoopDagState(workspace: string, dagId: string): PersistedLoopDagState | null {
+  if (!DAG_ID_RE.test(dagId)) return null;
+  const raw = readWorkspaceStateFile(workspace, dagStatePath(dagId), DAG_STATE_LIMIT);
+  return raw === undefined ? null : parseDagState(raw, dagId);
+}
+
+export function listLoopDagStates(workspace: string): PersistedLoopDagState[] {
+  const root = realpathSync.native(workspace);
+  const directory = join(root, ".seekforge", "loop-dags");
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !realpathSync.native(directory).startsWith(`${root}${sep}`)) {
+      return [];
+    }
+    return readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".json"))
+      .slice(0, 256)
+      .flatMap((entry) => {
+        try {
+          const state = loadLoopDagState(workspace, entry.name.slice(0, -5));
+          return state ? [state] : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 function saveDagState(workspace: string, state: PersistedLoopDagState): void {
   const serialized = `${JSON.stringify(state, null, 2)}\n`;
   if (Buffer.byteLength(serialized) > DAG_STATE_LIMIT) throw new Error("Loop DAG checkpoint exceeds 1 MiB");
   writeWorkspaceStateFileAtomic(workspace, dagStatePath(state.dagId), serialized);
+}
+
+function isSafeRelativePath(path: unknown): path is string {
+  return (
+    typeof path === "string" &&
+    path.length > 0 &&
+    path.length <= 512 &&
+    !isAbsolute(path) &&
+    !/^[A-Za-z]:[\\/]/.test(path) &&
+    path
+      .replaceAll("\\", "/")
+      .split("/")
+      .every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+function conditionReferences(condition: LoopDagCondition, refs: string[] = [], depth = 0): string[] | undefined {
+  if (depth > 8 || refs.length > 64 || !isRecord(condition)) return undefined;
+  if ("nodeId" in condition) {
+    if (!DAG_ID_RE.test(condition.nodeId) || (condition.status !== "passed" && condition.status !== "failed")) {
+      return undefined;
+    }
+    refs.push(condition.nodeId);
+    return refs.length <= 64 ? refs : undefined;
+  }
+  if ("not" in condition) return conditionReferences(condition.not, refs, depth + 1);
+  const group = "all" in condition ? condition.all : "any" in condition ? condition.any : undefined;
+  if (!Array.isArray(group) || group.length === 0 || group.length > 32) return undefined;
+  for (const child of group) if (!conditionReferences(child, refs, depth + 1)) return undefined;
+  return refs;
+}
+
+function conditionMatches(condition: LoopDagCondition, results: ReadonlyMap<string, LoopDagNodeResult>): boolean {
+  if ("nodeId" in condition) return results.get(condition.nodeId)?.status === condition.status;
+  if ("not" in condition) return !conditionMatches(condition.not, results);
+  if ("all" in condition) return condition.all.every((child) => conditionMatches(child, results));
+  return condition.any.some((child) => conditionMatches(child, results));
+}
+
+function collectArtifacts(workspace: string, paths: readonly string[] | undefined): string[] | undefined {
+  if (!paths?.length) return undefined;
+  const root = realpathSync.native(workspace);
+  const artifacts: string[] = [];
+  for (const path of paths) {
+    const target = resolve(root, path);
+    if (target !== root && !target.startsWith(`${root}${sep}`))
+      throw new Error(`Unsafe Loop DAG artifact path: ${path}`);
+    const stat = lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Loop DAG artifact is not a regular file: ${path}`);
+    const actual = realpathSync.native(target);
+    if (!actual.startsWith(`${root}${sep}`)) throw new Error(`Loop DAG artifact escapes its workspace: ${path}`);
+    artifacts.push(relative(root, actual).replaceAll("\\", "/"));
+  }
+  return artifacts;
 }
 
 function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>): void {
@@ -259,12 +384,8 @@ function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>)
   if (node.verifierId !== undefined && !DAG_ID_RE.test(node.verifierId)) {
     throw new Error(`Loop DAG node verifierId must be safe: ${node.id}`);
   }
-  if (
-    node.condition !== undefined &&
-    (!DAG_ID_RE.test(node.condition.nodeId) ||
-      (node.condition.status !== "passed" && node.condition.status !== "failed") ||
-      !(node.dependsOn ?? []).includes(node.condition.nodeId))
-  ) {
+  const conditionRefs = node.condition ? conditionReferences(node.condition) : [];
+  if (conditionRefs === undefined || conditionRefs.some((id) => !(node.dependsOn ?? []).includes(id))) {
     throw new Error(`Loop DAG node condition must reference one of its dependencies: ${node.id}`);
   }
   if (
@@ -283,6 +404,16 @@ function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>)
   if (node.consumeDependencyOutputs !== undefined && typeof node.consumeDependencyOutputs !== "boolean") {
     throw new Error(`Loop DAG node consumeDependencyOutputs must be boolean: ${node.id}`);
   }
+  if (
+    node.outputPaths !== undefined &&
+    (!Array.isArray(node.outputPaths) ||
+      node.outputPaths.length === 0 ||
+      node.outputPaths.length > 64 ||
+      new Set(node.outputPaths).size !== node.outputPaths.length ||
+      node.outputPaths.some((path) => !isSafeRelativePath(path)))
+  ) {
+    throw new Error(`Loop DAG node outputPaths must be unique safe relative paths: ${node.id}`);
+  }
   for (const dependency of node.dependsOn ?? []) {
     if (!byId.has(dependency) || dependency === node.id) {
       throw new Error(`Loop DAG node ${node.id} has invalid dependency: ${dependency}`);
@@ -300,7 +431,9 @@ function dependencyAllowsNode(
   dependencyNode: LoopDagNode | undefined,
   result: LoopDagNodeResult | undefined,
 ): boolean {
-  if (node.condition?.nodeId === dependency) return result?.status === node.condition.status;
+  if (node.condition && conditionReferences(node.condition)?.includes(dependency)) {
+    return result !== undefined && result.status !== "waiting_approval";
+  }
   return dependencyAllowsContinuation(dependencyNode, result);
 }
 
@@ -426,48 +559,165 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     };
     persist(false);
 
-    let stopRequested = false;
-    let approvalPending = false;
-    while (pending.size > 0 && !stopRequested) {
-      options.signal?.throwIfAborted();
-      for (const id of [...pending]) {
-        const node = byId.get(id)!;
-        if (node.condition) {
-          const conditionResult = results.get(node.condition.nodeId);
+    const executeNode = async (
+      id: string,
+      remainingCost: number | undefined,
+      remainingTokens: number | undefined,
+      approval: LoopDagNodeResult["approval"],
+    ): Promise<LoopDagNodeResult> => {
+      const node = byId.get(id)!;
+      const workspace = nodeWorkspaces.get(id)!;
+      const remainingDuration =
+        options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
+      if (
+        (remainingCost !== undefined && remainingCost <= 0) ||
+        (remainingTokens !== undefined && remainingTokens <= 0) ||
+        (remainingDuration !== undefined && remainingDuration <= 0)
+      ) {
+        return {
+          id,
+          status: "skipped",
+          reason: "shared DAG budget exhausted",
+          attempts: 1,
+          ...(approval ? { approval } : {}),
+        };
+      }
+      let lastResult: LoopResult | undefined;
+      let lastError: unknown;
+      let nodeCost = 0;
+      let nodeTokens = 0;
+      let attemptsExecuted = 0;
+      const maxAttempts = (node.maxRetries ?? 0) + 1;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        options.signal?.throwIfAborted();
+        try {
+          const attemptCost = remainingCost === undefined ? undefined : remainingCost - nodeCost;
+          const attemptTokens = remainingTokens === undefined ? undefined : remainingTokens - nodeTokens;
+          const attemptDuration =
+            options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
           if (
-            conditionResult &&
-            conditionResult.status !== "waiting_approval" &&
-            conditionResult.status !== node.condition.status
-          ) {
-            results.set(id, { id, status: "skipped", reason: "condition not met" });
-            pending.delete(id);
-            continue;
+            (attemptCost !== undefined && attemptCost <= 0) ||
+            (attemptTokens !== undefined && attemptTokens <= 0) ||
+            (attemptDuration !== undefined && attemptDuration <= 0)
+          )
+            break;
+          attemptsExecuted = attempt;
+          lastResult = await runAutoLoop(deps, {
+            ...node.options,
+            task:
+              node.consumeDependencyOutputs && (node.dependsOn?.length ?? 0) > 0
+                ? `${node.task}\n\nStructured dependency outcomes (trusted orchestration metadata):\n${JSON.stringify(
+                    (node.dependsOn ?? []).map((dependency) => ({
+                      id: dependency,
+                      output: results.get(dependency)?.output,
+                    })),
+                  )}`
+                : node.task,
+            workspace,
+            verifyCommand: node.verifyCommand,
+            priority: node.priority ?? 0,
+            ...(attemptCost !== undefined ? { costBudgetUsd: attemptCost } : {}),
+            ...(attemptTokens !== undefined ? { tokenBudget: attemptTokens } : {}),
+            ...(attemptDuration !== undefined ? { maxDurationMs: Math.floor(attemptDuration) } : {}),
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.onNodeEvent ? { onEvent: (event) => options.onNodeEvent?.(id, event) } : {}),
+          });
+          nodeCost += lastResult.costUsd;
+          nodeTokens += lastResult.tokensUsed ?? 0;
+          const cumulativeResult = { ...lastResult, costUsd: nodeCost, tokensUsed: nodeTokens };
+          if (lastResult.status === "passed") {
+            const artifacts = collectArtifacts(workspace, node.outputPaths);
+            return {
+              id,
+              status: "passed",
+              result: cumulativeResult,
+              output: {
+                status: cumulativeResult.status,
+                ...(cumulativeResult.loopId ? { loopId: cumulativeResult.loopId } : {}),
+                sessionId: cumulativeResult.sessionId,
+                costUsd: cumulativeResult.costUsd,
+                tokensUsed: cumulativeResult.tokensUsed ?? 0,
+                iterations: cumulativeResult.iterations,
+                ...(artifacts ? { artifacts } : {}),
+              },
+              attempts: attempt,
+              ...(approval ? { approval } : {}),
+            };
           }
-        }
-        const dependencies = node.dependsOn ?? [];
-        const terminalFailure = dependencies.some((dependency) => {
-          const result = results.get(dependency);
-          return (
-            (result?.status === "failed" || result?.status === "skipped") &&
-            !dependencyAllowsNode(node, dependency, byId.get(dependency), result)
-          );
-        });
-        if (terminalFailure) {
-          results.set(id, { id, status: "skipped", reason: "dependency did not pass" });
-          pending.delete(id);
+          lastResult = cumulativeResult;
+          lastError = new Error(`Loop ended with status ${lastResult.status}`);
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+          lastError = error;
         }
       }
-      const candidates = [...pending]
-        .filter((id) =>
-          (byId.get(id)?.dependsOn ?? []).every((dependency) => {
-            const node = byId.get(id)!;
-            return dependencyAllowsNode(node, dependency, byId.get(dependency), results.get(dependency));
-          }),
-        )
-        .sort((left, right) => (byId.get(right)?.priority ?? 0) - (byId.get(left)?.priority ?? 0));
+      return {
+        id,
+        status: "failed",
+        ...(lastResult ? { result: lastResult } : {}),
+        reason:
+          attemptsExecuted === 0
+            ? "shared DAG budget exhausted"
+            : lastError instanceof Error
+              ? lastError.message.slice(0, 8_192)
+              : String(lastError).slice(0, 8_192),
+        attempts: Math.max(1, attemptsExecuted),
+        ...(approval ? { approval } : {}),
+      };
+    };
+
+    let stopRequested = false;
+    let approvalPending = false;
+    const running = new Map<
+      string,
+      {
+        promise: Promise<LoopDagNodeResult>;
+        workspace: string;
+        resources: string[];
+        reservedCost: number;
+        reservedTokens: number;
+      }
+    >();
+    while ((pending.size > 0 || running.size > 0) && (!stopRequested || running.size > 0)) {
+      options.signal?.throwIfAborted();
+      if (!stopRequested)
+        for (const id of [...pending]) {
+          const node = byId.get(id)!;
+          if (node.condition) {
+            const conditionRefs = conditionReferences(node.condition) ?? [];
+            const conditionResolved = conditionRefs.every((dependency) => results.has(dependency));
+            if (conditionResolved && !conditionMatches(node.condition, results)) {
+              results.set(id, { id, status: "skipped", reason: "condition not met" });
+              pending.delete(id);
+              continue;
+            }
+          }
+          const dependencies = node.dependsOn ?? [];
+          const terminalFailure = dependencies.some((dependency) => {
+            const result = results.get(dependency);
+            return (
+              (result?.status === "failed" || result?.status === "skipped") &&
+              !dependencyAllowsNode(node, dependency, byId.get(dependency), result)
+            );
+          });
+          if (terminalFailure) {
+            results.set(id, { id, status: "skipped", reason: "dependency did not pass" });
+            pending.delete(id);
+          }
+        }
+      const candidates = stopRequested
+        ? []
+        : [...pending]
+            .filter((id) =>
+              (byId.get(id)?.dependsOn ?? []).every((dependency) => {
+                const node = byId.get(id)!;
+                return dependencyAllowsNode(node, dependency, byId.get(dependency), results.get(dependency));
+              }),
+            )
+            .sort((left, right) => (byId.get(right)?.priority ?? 0) - (byId.get(left)?.priority ?? 0));
       const ready: string[] = [];
-      const reservedResources = new Set<string>();
-      const reservedWorkspaces = new Set<string>();
+      const reservedResources = new Set([...running.values()].flatMap((entry) => entry.resources));
+      const reservedWorkspaces = new Set([...running.values()].map((entry) => entry.workspace));
       for (const id of candidates) {
         const node = byId.get(id)!;
         const workspace = nodeWorkspaces.get(id)!;
@@ -480,9 +730,9 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         ready.push(id);
         reservedWorkspaces.add(workspace);
         for (const resource of node.resources ?? []) reservedResources.add(resource);
-        if (ready.length === concurrency) break;
+        if (ready.length + running.size === concurrency) break;
       }
-      if (ready.length === 0) {
+      if (ready.length === 0 && running.size === 0) {
         if ([...results.values()].some((result) => result.status === "waiting_approval")) {
           approvalPending = true;
           persist(false);
@@ -494,124 +744,70 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
       for (const id of [...ready]) {
         const node = byId.get(id)!;
         if (!node.requiresApproval) continue;
-        const approved = (await options.approveNode?.(node, results)) === true;
-        if (approved) continue;
+        const decision = await options.approveNode?.(node, results);
+        const approved = decision === true || (isRecord(decision) && decision.approved === true);
+        if (approved) {
+          const approvedAt = new Date().toISOString();
+          results.set(id, {
+            id,
+            status: "waiting_approval",
+            approval: {
+              approvedAt,
+              ...(isRecord(decision) && typeof decision.actor === "string"
+                ? { actor: decision.actor.slice(0, 256) }
+                : {}),
+              ...(isRecord(decision) && typeof decision.reason === "string"
+                ? { reason: decision.reason.slice(0, 2_048) }
+                : {}),
+            },
+          });
+          continue;
+        }
         results.set(id, { id, status: "waiting_approval", reason: "explicit approval required" });
         pending.delete(id);
         ready.splice(ready.indexOf(id), 1);
         approvalPending = true;
       }
       if (ready.length === 0 && approvalPending) {
-        persist(false);
-        break;
+        if (running.size === 0) {
+          persist(false);
+          continue;
+        }
       }
-      const batchWorkspaces = new Map(ready.map((id) => [id, nodeWorkspaces.get(id)!] as const));
       const totalWeight = ready.reduce((sum, id) => sum + (byId.get(id)?.budgetWeight ?? 1), 0);
-      const batch = await Promise.all(
-        ready.map(async (id): Promise<LoopDagNodeResult> => {
-          const node = byId.get(id)!;
-          const weightShare = (node.budgetWeight ?? 1) / totalWeight;
-          const elapsed = Date.now() - startedAt;
-          const remainingCost =
-            options.costBudgetUsd === undefined ? undefined : (options.costBudgetUsd - spentCost) * weightShare;
-          const remainingTokens =
-            options.tokenBudget === undefined
-              ? undefined
-              : Math.floor((options.tokenBudget - spentTokens) * weightShare);
-          const remainingDuration = options.maxDurationMs === undefined ? undefined : options.maxDurationMs - elapsed;
-          if (
-            (remainingCost !== undefined && remainingCost <= 0) ||
-            (remainingTokens !== undefined && remainingTokens <= 0) ||
-            (remainingDuration !== undefined && remainingDuration <= 0)
-          ) {
-            return { id, status: "skipped", reason: "shared DAG budget exhausted", attempts: 1 };
-          }
-          let lastResult: LoopResult | undefined;
-          let lastError: unknown;
-          let nodeCost = 0;
-          let nodeTokens = 0;
-          let attemptsExecuted = 0;
-          const maxAttempts = (node.maxRetries ?? 0) + 1;
-          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            options.signal?.throwIfAborted();
-            try {
-              const attemptCost = remainingCost === undefined ? undefined : remainingCost - nodeCost;
-              const attemptTokens = remainingTokens === undefined ? undefined : remainingTokens - nodeTokens;
-              const attemptDuration =
-                options.maxDurationMs === undefined ? undefined : options.maxDurationMs - (Date.now() - startedAt);
-              if (
-                (attemptCost !== undefined && attemptCost <= 0) ||
-                (attemptTokens !== undefined && attemptTokens <= 0) ||
-                (attemptDuration !== undefined && attemptDuration <= 0)
-              )
-                break;
-              attemptsExecuted = attempt;
-              lastResult = await runAutoLoop(deps, {
-                ...node.options,
-                task:
-                  node.consumeDependencyOutputs && (node.dependsOn?.length ?? 0) > 0
-                    ? `${node.task}\n\nStructured dependency outcomes (trusted orchestration metadata):\n${JSON.stringify(
-                        (node.dependsOn ?? []).map((dependency) => ({
-                          id: dependency,
-                          output: results.get(dependency)?.output,
-                        })),
-                      )}`
-                    : node.task,
-                workspace: batchWorkspaces.get(id)!,
-                verifyCommand: node.verifyCommand,
-                priority: node.priority ?? 0,
-                ...(attemptCost !== undefined ? { costBudgetUsd: attemptCost } : {}),
-                ...(attemptTokens !== undefined ? { tokenBudget: attemptTokens } : {}),
-                ...(attemptDuration !== undefined ? { maxDurationMs: Math.floor(attemptDuration) } : {}),
-                ...(options.signal ? { signal: options.signal } : {}),
-                ...(options.onNodeEvent ? { onEvent: (event) => options.onNodeEvent?.(id, event) } : {}),
-              });
-              nodeCost += lastResult.costUsd;
-              nodeTokens += lastResult.tokensUsed ?? 0;
-              const cumulativeResult = { ...lastResult, costUsd: nodeCost, tokensUsed: nodeTokens };
-              if (lastResult.status === "passed") {
-                return {
-                  id,
-                  status: "passed",
-                  result: cumulativeResult,
-                  output: {
-                    status: cumulativeResult.status,
-                    ...(cumulativeResult.loopId ? { loopId: cumulativeResult.loopId } : {}),
-                    sessionId: cumulativeResult.sessionId,
-                    costUsd: cumulativeResult.costUsd,
-                    tokensUsed: cumulativeResult.tokensUsed ?? 0,
-                    iterations: cumulativeResult.iterations,
-                  },
-                  attempts: attempt,
-                };
-              }
-              lastResult = cumulativeResult;
-              lastError = new Error(`Loop ended with status ${lastResult.status}`);
-            } catch (error) {
-              if (options.signal?.aborted) throw error;
-              lastError = error;
-            }
-          }
-          return {
-            id,
-            status: "failed",
-            ...(lastResult ? { result: lastResult } : {}),
-            reason:
-              attemptsExecuted === 0
-                ? "shared DAG budget exhausted"
-                : lastError instanceof Error
-                  ? lastError.message.slice(0, 8_192)
-                  : String(lastError).slice(0, 8_192),
-            attempts: Math.max(1, attemptsExecuted),
-          };
-        }),
+      const alreadyReservedCost = [...running.values()].reduce((sum, entry) => sum + entry.reservedCost, 0);
+      const alreadyReservedTokens = [...running.values()].reduce((sum, entry) => sum + entry.reservedTokens, 0);
+      for (const id of ready) {
+        const node = byId.get(id)!;
+        const approval = results.get(id)?.approval;
+        const weightShare = totalWeight > 0 ? (node.budgetWeight ?? 1) / totalWeight : 0;
+        const remainingCost =
+          options.costBudgetUsd === undefined
+            ? undefined
+            : Math.max(0, options.costBudgetUsd - spentCost - alreadyReservedCost) * weightShare;
+        const remainingTokens =
+          options.tokenBudget === undefined
+            ? undefined
+            : Math.floor(Math.max(0, options.tokenBudget - spentTokens - alreadyReservedTokens) * weightShare);
+        pending.delete(id);
+        running.set(id, {
+          promise: executeNode(id, remainingCost, remainingTokens, approval),
+          workspace: nodeWorkspaces.get(id)!,
+          resources: [...(node.resources ?? [])],
+          reservedCost: remainingCost ?? 0,
+          reservedTokens: remainingTokens ?? 0,
+        });
+      }
+      if (running.size === 0) continue;
+      const settled = await Promise.race(
+        [...running].map(([id, entry]) => entry.promise.then((result) => ({ id, result }))),
       );
-      for (const result of batch) {
-        pending.delete(result.id);
-        results.set(result.id, result);
-        spentCost += result.result?.costUsd ?? 0;
-        spentTokens += result.result?.tokensUsed ?? 0;
-        if (result.status === "failed" && byId.get(result.id)?.failurePolicy === "stop") stopRequested = true;
+      running.delete(settled.id);
+      results.set(settled.id, settled.result);
+      spentCost += settled.result.result?.costUsd ?? 0;
+      spentTokens += settled.result.result?.tokensUsed ?? 0;
+      if (settled.result.status === "failed" && byId.get(settled.id)?.failurePolicy === "stop") {
+        stopRequested = true;
       }
       persist(false);
     }

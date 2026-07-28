@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatResponse } from "@seekforge/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentCoreDeps } from "../../src/agent/loop.js";
-import { runLoopDag } from "../../src/agent/loop-dag.js";
+import { listLoopDagStates, loadLoopDagState, runLoopDag } from "../../src/agent/loop-dag.js";
 
 const usage = { promptTokens: 1, completionTokens: 1, cacheHitTokens: 0, costUsd: 0.001 };
 const deps: AgentCoreDeps = {
@@ -138,6 +138,8 @@ describe("runLoopDag", () => {
     const resumed = await runLoopDag(deps, { workspace, dagId: "resume-test", nodes, resume: true });
     expect(resumed[0]).toMatchObject({ status: "passed", attempts: 1 });
     expect(verifies).toBe(1);
+    expect(loadLoopDagState(workspace, "resume-test")?.completedAt).toEqual(expect.any(String));
+    expect(listLoopDagStates(workspace).map((state) => state.dagId)).toContain("resume-test");
   });
 
   it("rejects a resume when a node resolves to a different physical workspace", async () => {
@@ -271,6 +273,74 @@ describe("runLoopDag", () => {
     });
     expect(results[0]?.status).toBe("failed");
     expect(results[1]).toMatchObject({ status: "passed", output: { status: "passed", iterations: 0 } });
+  });
+
+  it("supports composite conditions, approval audit, and declared artifacts", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    workspaces.push(workspace);
+    writeFileSync(join(workspace, "report.json"), "{}\n");
+    const results = await runLoopDag(deps, {
+      workspace,
+      persist: false,
+      approveNode: () => ({ approved: true, actor: "release-bot", reason: "policy passed" }),
+      nodes: [
+        {
+          id: "probe",
+          task: "probe",
+          verifyCommand: "fail",
+          failurePolicy: "continue",
+          options: { maxIterations: 1, maxNoProgressRecoveries: 0, verify: async () => ({ code: 1, output: "bad" }) },
+        },
+        {
+          id: "release",
+          task: "release",
+          verifyCommand: "pass",
+          dependsOn: ["probe"],
+          condition: { all: [{ nodeId: "probe", status: "failed" }, { not: { nodeId: "probe", status: "passed" } }] },
+          requiresApproval: true,
+          outputPaths: ["report.json"],
+          options: { verify: async () => ({ code: 0, output: "ok" }) },
+        },
+      ],
+    });
+    expect(results[1]).toMatchObject({
+      status: "passed",
+      approval: { actor: "release-bot", reason: "policy passed" },
+      output: { artifacts: ["report.json"] },
+    });
+  });
+
+  it("reschedules a fast node's dependent without waiting for an unrelated slow node", async () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-"));
+    const fast = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    const slow = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    const dependent = mkdtempSync(join(tmpdir(), "seekforge-loop-dag-node-"));
+    workspaces.push(root, fast, slow, dependent);
+    const order: string[] = [];
+    const verify = (id: string, delay: number) => async () => {
+      order.push(`${id}:start`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      order.push(`${id}:end`);
+      return { code: 0, output: "ok" };
+    };
+    await runLoopDag(deps, {
+      workspace: root,
+      persist: false,
+      maxConcurrency: 2,
+      workspaceForNode: (node) => ({ fast, slow, dependent })[node.id]!,
+      nodes: [
+        { id: "fast", task: "fast", verifyCommand: "pass", options: { verify: verify("fast", 5) } },
+        { id: "slow", task: "slow", verifyCommand: "pass", options: { verify: verify("slow", 80) } },
+        {
+          id: "dependent",
+          task: "dependent",
+          verifyCommand: "pass",
+          dependsOn: ["fast"],
+          options: { verify: verify("dependent", 5) },
+        },
+      ],
+    });
+    expect(order.indexOf("dependent:start")).toBeLessThan(order.indexOf("slow:end"));
   });
 
   it("pauses for approval and resumes approved nodes", async () => {

@@ -2379,6 +2379,42 @@ an automatic discovery path select commands based on state outside the workspace
 - **Caught:** automatic Loop verification treated symlinked Cargo and package
   manager markers as project-owned discovery evidence.
 
+## 194. Post-side-effect policy must survive process and retry boundaries
+
+A required closure step held only in a callback or CLI flag disappears after an
+interruption, allowing a retry to finalize an already-published side effect.
+
+- **Do:** persist the frozen policy and progress with the side-effect evidence,
+  and refuse finalization until the durable closure state passes.
+- **Caught:** retrying PR delivery could bypass the original `--wait-ci` gate.
+
+## 195. Long external watches must be asynchronous and cancellation-owned
+
+A synchronous child-process wait blocks cooperative cancellation and lifecycle
+cleanup even when the surrounding orchestration accepts an AbortSignal.
+
+- **Do:** spawn asynchronously, bound output and time, subscribe with
+  `onAbortOnce`, and terminate the complete process tree on abort.
+- **Caught:** `gh pr checks --watch` could block Ctrl-C for its full timeout.
+
+## 196. Concurrent schedulers must react to individual completion
+
+Waiting for a whole launch batch creates an implicit barrier: fast work cannot
+unlock downstream work until an unrelated slow peer finishes.
+
+- **Do:** retain resource and budget reservations per running node, race individual
+  completions, release only that node's reservations, and immediately reschedule.
+- **Caught:** Loop DAG throughput was bounded by its slowest node in every batch.
+
+## 197. Declared artifacts require physical containment validation
+
+An apparently relative output path may be a symlink or resolve outside the node
+workspace after execution.
+
+- **Do:** validate portable relative syntax, reject symlinks and non-files, resolve
+  the physical target, and prove it remains beneath the physical workspace root.
+- **Caught:** Loop DAG dependency outputs had no validated file-artifact contract.
+
 ---
 
 *Add an entry whenever a boundary defect is fixed: the pattern, the fix, and the

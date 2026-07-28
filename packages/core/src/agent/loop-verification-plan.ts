@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { readFileIfExists } from "../util/fs.js";
 import { isRecord } from "../util/guards.js";
@@ -10,6 +10,7 @@ export type DiscoveredLoopVerificationPlan = {
 };
 
 const PACKAGE_JSON_LIMIT = 1024 * 1024;
+const MAX_WORKSPACE_STAGES = 12;
 
 function hasRegularRootFile(workspace: string, name: string): boolean {
   try {
@@ -54,6 +55,70 @@ function packageStages(workspace: string): DiscoveredLoopVerificationPlan | unde
   return stages.length > 0 ? { stages, sources: ["package.json"] } : undefined;
 }
 
+function workspacePackageStages(
+  workspace: string,
+  manager: "pnpm" | "yarn" | "bun" | "npm",
+): DiscoveredLoopVerificationPlan | undefined {
+  const stages: LoopVerificationStage[] = [];
+  const sources: string[] = [];
+  for (const parent of ["apps", "packages"]) {
+    let names: string[];
+    try {
+      const stat = lstatSync(join(workspace, parent));
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      names = readdirSync(join(workspace, parent)).sort().slice(0, 128);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (stages.length >= MAX_WORKSPACE_STAGES) break;
+      const relativePath = `${parent}/${name}`;
+      const directory = join(workspace, relativePath);
+      try {
+        const stat = lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      } catch {
+        continue;
+      }
+      const raw = readFileIfExists(join(directory, "package.json"), PACKAGE_JSON_LIMIT);
+      if (raw === undefined) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch {
+        continue;
+      }
+      if (
+        !isRecord(parsed) ||
+        !isRecord(parsed.scripts) ||
+        typeof parsed.scripts.test !== "string" ||
+        parsed.scripts.test.trim() === ""
+      )
+        continue;
+      const selector = `./${relativePath}`;
+      const command =
+        manager === "pnpm"
+          ? `pnpm --filter ${selector} test`
+          : manager === "npm"
+            ? `npm --workspace ${relativePath} test`
+            : manager === "bun"
+              ? `bun --filter ${selector} test`
+              : typeof parsed.name === "string" && parsed.name.trim()
+                ? `yarn workspace ${parsed.name} test`
+                : undefined;
+      if (!command) continue;
+      stages.push({
+        id: `test-${relativePath.replaceAll("/", "-")}`,
+        command,
+        paths: [relativePath],
+        cacheable: true,
+      });
+      sources.push(`${relativePath}/package.json`);
+    }
+  }
+  return stages.length > 0 ? { stages, sources } : undefined;
+}
+
 /**
  * Builds a conservative verification pipeline from well-known root manifests.
  * It never executes manifest-provided command text: only recognized script names
@@ -65,7 +130,12 @@ export function discoverLoopVerificationPlan(workspace: string): DiscoveredLoopV
   const sources: string[] = [];
   const packagePlan = packageStages(root);
   if (packagePlan) {
-    stages.push(...packagePlan.stages);
+    const workspacePlan = workspacePackageStages(root, packageManager(root));
+    if (workspacePlan) {
+      stages.push(...workspacePlan.stages);
+      sources.push(...workspacePlan.sources);
+    }
+    stages.push(...packagePlan.stages.slice(0, 16 - stages.length));
     sources.push(...packagePlan.sources);
   }
   if (hasRegularRootFile(root, "Cargo.toml")) {

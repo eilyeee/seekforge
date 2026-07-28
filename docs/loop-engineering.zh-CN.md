@@ -174,7 +174,8 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
 - `--verify <cmd>`：成功 = 该命令以 0 退出。
 - `--auto-verify`：从根目录 `package.json`、`Cargo.toml`、`go.mod` 或 pytest 配置发现
   已识别阶段。它只选择固定命令或具名脚本，把结果冻结进 Loop 状态，不把清单脚本文本插值成
-  生成的 shell 命令。
+  生成的 shell 命令。对于 `apps/*` 与 `packages/*` 工作区，还会加入有界、按路径选择的包测试阶段；
+  同一迭代中成功的增量阶段可在强制完整回退验证时复用一次。
 - `--requirements quick|analyze|confirm`：`quick` 保留仅验证命令的行为；
   `analyze` 先只读分析仓库并做验收；`confirm` 会持久化规格并以
   `requirements_pending` 暂停，等待显式批准。批准只作用于从持久化状态加载的
@@ -184,6 +185,8 @@ seekforge loop "<task>" (--verify "<cmd>" | --auto-verify) [--requirements quick
   可选的 name 用作分支后缀；不提供时使用一个唯一名称。
 - `--budget <usd>`：跨迭代的观测累计成本停止线。用量在每次 provider 用量
   更新后检查，可阻止后续工作，但已在途的请求可能使最终账单略微超出配置值。
+- `--adaptive-budget`：用最近迭代中的最大用量样本预测下一轮；若预计无法装入已配置的成本、
+  Token 或时长硬上限，则在开始前停止。它绝不会提高任何上限。
 - Loop 本质上是自主运行的 —— 每次运行都使用 `approvalMode: "acceptEdits"`
   （文件编辑自动批准；危险命令仍会被 denylist 拒绝）。
   `-y` 只是不再显示「自动批准编辑」的提示。
@@ -201,7 +204,7 @@ seekforge loop-pause <loop-id>
 seekforge loop-continue <loop-id>
 seekforge loop-steer <loop-id> "<引导>"
 seekforge loop-priority <loop-id> <-10..10>
-seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]
+seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]
 seekforge loop-prune [--older-than-days N] [--keep-last N] [--worktrees] [--dry-run]
 seekforge loop-delete <loop-id>
 seekforge loop-cleanup <worktree-name> [--force]
@@ -233,8 +236,10 @@ seekforge loop-cleanup <worktree-name> [--force]
   并先删除 checkout 而不是先删除已跟踪状态，从而保持原子性。
 - `loop-dag <file>` 会持久化 JSON 依赖图检查点；`--resume` 与 `--dag-id` 可恢复已完成节点。
   就绪节点按权重分配剩余成本/Token 预算，并支持优先级、有界重试及
-  `skip_dependents` / `continue` / `stop` 失败策略。节点可以按依赖结果分支、要求显式审批、
-  锁定具名独占资源，并消费有界结构化依赖输出。`--rerun` 会让选中节点及全部下游失效，
+  `skip_dependents` / `continue` / `stop` 失败策略。节点可通过嵌套 `all` / `any` / `not`
+  条件按依赖结果分支，要求带持久 actor/reason 审计的显式审批，锁定具名独占资源，并消费有界
+  结构化依赖输出。声明的 `outputPaths` 必须是节点工作区内的普通文件，并作为产物元数据发布。
+  完成驱动调度会在任一槽位空闲时立即补位，无需等待无关的慢节点。`--rerun` 会让选中节点及全部下游失效，
   `--approve` 可通过声明的审批门。并行图要求不同的物理工作区；解析后的工作区
   身份会进入持久 DAG 指纹，因此节点改换 checkout 后 `--resume` 会拒绝旧结果，而不会错误复用。
 - `--deliver checkpoint|merge|patch|pr` 在通过后从保留 worktree 显式交付；`pr` 会推送
@@ -251,6 +256,11 @@ seekforge loop-cleanup <worktree-name> [--force]
 - `--deliver pr --wait-ci` 会让交付停留在 `action_completed`，直到必需的 PR checks 完成。
   `--ci-repairs 1..3` 可把一份有界失败步骤日志交给独立成本上限、最多两轮且不持久化的修复 Loop，
   重新运行冻结的本地流水线，checkpoint 并推送不可变 revision，然后再次等待 CI。
+  CI 策略、修复次数、已检查 revision 与失败都会持久化；之后的 `loop-deliver --wait-ci` 会续接
+  同一策略，不带 CI 闭环的重试会被拒绝。检查等待与修复推送都支持协作式取消。
+- REST Loop 列表支持 `status`、`q`、`limit` 与 `after`；活跃 Loop 可接受
+  `POST /api/loops/:id/control`，`/api/loop-dags` 暴露持久图状态。Prometheus 输出增加 Loop 总数、
+  活跃数、成本、Token 与验证次数聚合。Desktop 增加筛选、轮询、历史分页、CI 状态、安全边界控制与 DAG 摘要。
 - WebSocket 客户端可发送 `loop.pause`、`loop.control.resume` 与 `loop.steer`；控制只在安全
   的迭代边界生效。
 - 顶层 CLI 的 `loop-pause`、`loop-continue` 与 `loop-steer` 可以控制另一个仍存活的

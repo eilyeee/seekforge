@@ -62,6 +62,7 @@ export type LoopTaskConfig = {
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  adaptiveBudget?: boolean;
   requirementMode?: LoopRequirementMode;
   resume?: LoopResumeConfig;
 };
@@ -318,6 +319,10 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
       throw new Error(`${where}.rollbackOnRegression must be boolean`);
     loop.rollbackOnRegression = value.rollbackOnRegression;
   }
+  if (value.adaptiveBudget !== undefined) {
+    if (typeof value.adaptiveBudget !== "boolean") throw new Error(`${where}.adaptiveBudget must be boolean`);
+    loop.adaptiveBudget = value.adaptiveBudget;
+  }
   if (value.requirementMode !== undefined) {
     if (
       value.requirementMode !== "quick" &&
@@ -348,6 +353,23 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
         raw.command.trim() === "" ||
         raw.command.length > 8_192 ||
         (raw.required !== undefined && typeof raw.required !== "boolean") ||
+        (raw.cacheable !== undefined && typeof raw.cacheable !== "boolean") ||
+        (raw.paths !== undefined &&
+          (!Array.isArray(raw.paths) ||
+            raw.paths.length === 0 ||
+            raw.paths.length > 64 ||
+            raw.paths.some(
+              (path) =>
+                typeof path !== "string" ||
+                path.length === 0 ||
+                path.length > 512 ||
+                path.startsWith("/") ||
+                /^[A-Za-z]:[\\/]/.test(path) ||
+                path
+                  .replaceAll("\\", "/")
+                  .split("/")
+                  .some((part) => part === "" || part === "." || part === ".."),
+            ))) ||
         (raw.timeoutMs !== undefined && (!Number.isSafeInteger(raw.timeoutMs) || (raw.timeoutMs as number) <= 0))
       ) {
         throw new Error(`${stageWhere} is invalid`);
@@ -358,6 +380,8 @@ function parseLoop(value: unknown, where: string): LoopTaskConfig {
         command: raw.command,
         ...(typeof raw.required === "boolean" ? { required: raw.required } : {}),
         ...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
+        ...(Array.isArray(raw.paths) ? { paths: raw.paths as string[] } : {}),
+        ...(typeof raw.cacheable === "boolean" ? { cacheable: raw.cacheable } : {}),
       };
     });
   }

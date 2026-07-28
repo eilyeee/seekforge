@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { useT } from "../../lib/i18n";
-import type { LoopHistoryEntry, LoopStateSummary } from "../../types";
+import type { LoopDagSummary, LoopHistoryEntry, LoopStateSummary } from "../../types";
 import { Badge, Button } from "../ui";
 
 type Props = { running: boolean; onResume: (opts: { loopId: string }) => void };
@@ -11,20 +11,33 @@ export function LoopManager({ running, onResume }: Props) {
   const [loops, setLoops] = useState<LoopStateSummary[]>([]);
   const [selected, setSelected] = useState<string>();
   const [history, setHistory] = useState<LoopHistoryEntry[]>([]);
+  const [dags, setDags] = useState<LoopDagSummary[]>([]);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => {
     setBusy(true);
     try {
-      setLoops(await api.loops());
+      const [nextLoops, nextDags] = await Promise.all([
+        api.loops({ q: query || undefined, status: status || undefined, limit: 100 }),
+        api.loopDags(),
+      ]);
+      setLoops(nextLoops);
+      setDags(nextDags);
       setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [query, status]);
   useEffect(() => void refresh(), [refresh]);
+  useEffect(() => {
+    if (!running && !selected) return;
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [refresh, running, selected]);
 
   const inspect = async (loopId: string) => {
     setSelected(loopId);
@@ -33,6 +46,23 @@ export function LoopManager({ running, onResume }: Props) {
       setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+  const loadMoreHistory = async () => {
+    if (!selected) return;
+    const next = await api.loopHistory(selected, history.at(-1)?.seq ?? 0, 100);
+    setHistory((current) => [...current, ...next]);
+  };
+  const control = async (loopId: string, operation: "pause" | "resume" | "steer") => {
+    const message = operation === "steer" ? window.prompt(t("chat.loop.manager.steerPrompt"))?.trim() : undefined;
+    if (operation === "steer" && !message) return;
+    setBusy(true);
+    try {
+      await api.loopControl(loopId, operation === "steer" ? { operation, message: message! } : { operation });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setBusy(false);
     }
   };
   const recover = async () => {
@@ -86,6 +116,24 @@ export function LoopManager({ running, onResume }: Props) {
     <details className="mt-2 rounded border border-subtle p-2">
       <summary className="cursor-pointer text-xs font-medium text-secondary">{t("chat.loop.manager.title")}</summary>
       <div className="mt-2 flex flex-wrap gap-2">
+        <input
+          className="min-w-40 rounded border border-subtle bg-surface px-2 text-xs"
+          value={query}
+          placeholder={t("chat.loop.manager.filter")}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <select
+          className="rounded border border-subtle bg-surface px-2 text-xs"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+        >
+          <option value="">{t("chat.loop.manager.allStatuses")}</option>
+          {["running", "paused", "passed", "failed", "interrupted", "budget", "no_progress"].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void refresh()}>
           {t("chat.loop.manager.refresh")}
         </Button>
@@ -111,6 +159,11 @@ export function LoopManager({ running, onResume }: Props) {
                 {loop.iterations}/{loop.maxIterations}
               </span>
               <span className="text-tertiary">{t("chat.loop.manager.priority", { value: loop.priority ?? 0 })}</span>
+              {loop.delivery?.ci && (
+                <Badge tone={loop.delivery.ci.status === "passed" ? "ok" : "neutral"}>
+                  CI {loop.delivery.ci.status} · {loop.delivery.ci.repairAttempts}/{loop.delivery.ci.maxRepairs}
+                </Badge>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
@@ -130,6 +183,21 @@ export function LoopManager({ running, onResume }: Props) {
               <Button size="sm" disabled={running || busy} onClick={() => onResume({ loopId: loop.loopId })}>
                 {t("chat.loop.resume")}
               </Button>
+              {(loop.status === "running" || loop.status === "paused") && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void control(loop.loopId, loop.status === "paused" ? "resume" : "pause")}
+                  >
+                    {loop.status === "paused" ? t("chat.loop.manager.continue") : t("chat.loop.manager.pause")}
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => void control(loop.loopId, "steer")}>
+                    {t("chat.loop.manager.steer")}
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="ghost" disabled={running || busy} onClick={() => void remove(loop.loopId)}>
                 {t("chat.loop.manager.delete")}
               </Button>
@@ -146,6 +214,21 @@ export function LoopManager({ running, onResume }: Props) {
                   {entry.seq} · {entry.ts} · {entry.event.type}
                 </div>
               ))}
+          {history.length > 0 && history.length % 100 === 0 && (
+            <Button size="sm" variant="ghost" onClick={() => void loadMoreHistory()}>
+              {t("chat.loop.manager.loadMore")}
+            </Button>
+          )}
+        </div>
+      )}
+      {dags.length > 0 && (
+        <div className="mt-2 text-xs text-secondary">
+          {dags.map((dag) => (
+            <div key={dag.dagId}>
+              {dag.dagId} · {dag.completedAt ? t("chat.loop.manager.completed") : t("chat.loop.manager.active")} ·{" "}
+              {dag.results.length} nodes · ${dag.spentCost.toFixed(4)}
+            </div>
+          ))}
         </div>
       )}
     </details>

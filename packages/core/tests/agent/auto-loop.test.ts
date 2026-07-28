@@ -740,6 +740,18 @@ describe("runAutoLoop", () => {
     expect(result.costUsd).toBeGreaterThanOrEqual(0.0015);
   });
 
+  it("uses recent iteration usage to stop before a predicted budget overrun", async () => {
+    const result = await runAutoLoop(mkDeps().deps, {
+      ...baseOpts(workspace, async () => ({ code: 1, output: "still failing" })),
+      maxIterations: 10,
+      costBudgetUsd: 0.0025,
+      adaptiveBudget: true,
+      maxNoProgressRecoveries: 5,
+    });
+    expect(result).toMatchObject({ status: "budget", budgetReason: "cost", iterations: 2 });
+    expect(result.costUsd).toBeCloseTo(0.002, 6);
+  });
+
   it("stops the active run on the first observed usage that reaches the budget", async () => {
     const { deps } = mkDeps();
     const result = await runAutoLoop(deps, {

@@ -62,6 +62,17 @@ export type LoopDeliveryEvidence = {
   sha256?: string;
   url?: string;
 };
+export type LoopDeliveryCiState = {
+  required: true;
+  maxRepairs: number;
+  repairAttempts: number;
+  repairBudgetUsd: number;
+  status: "pending" | "passed" | "failed";
+  updatedAt: string;
+  revision?: string;
+  url?: string;
+  error?: string;
+};
 export type LoopDeliveryState = {
   mode: LoopDeliveryMode;
   status: LoopDeliveryStatus;
@@ -70,6 +81,7 @@ export type LoopDeliveryState = {
   updatedAt: string;
   artifact?: string;
   evidence?: LoopDeliveryEvidence;
+  ci?: LoopDeliveryCiState;
   error?: string;
 };
 
@@ -112,6 +124,7 @@ export type LoopState = {
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  adaptiveBudget?: boolean;
   passStreak?: number;
   recoveryAttempts?: number;
   controlSeq?: number;
@@ -164,6 +177,7 @@ export type CreateLoopStateInput = Pick<LoopState, "task" | "workspace" | "verif
   flakyRetries?: number;
   maxNoProgressRecoveries?: number;
   rollbackOnRegression?: boolean;
+  adaptiveBudget?: boolean;
   controlRunId?: string;
   priority?: number;
 };
@@ -205,6 +219,7 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       item.command.trim() === "" ||
       item.command.length > 8_192 ||
       (item.required !== undefined && typeof item.required !== "boolean") ||
+      (item.cacheable !== undefined && typeof item.cacheable !== "boolean") ||
       (item.timeoutMs !== undefined && (!isSafeInteger(item.timeoutMs) || item.timeoutMs <= 0)) ||
       (item.paths !== undefined &&
         (!Array.isArray(item.paths) ||
@@ -232,6 +247,7 @@ function parseVerificationPlan(value: unknown): LoopVerificationStage[] | null {
       ...(typeof item.required === "boolean" ? { required: item.required } : {}),
       ...(typeof item.timeoutMs === "number" ? { timeoutMs: item.timeoutMs } : {}),
       ...(Array.isArray(item.paths) ? { paths: item.paths as string[] } : {}),
+      ...(typeof item.cacheable === "boolean" ? { cacheable: item.cacheable } : {}),
     });
   }
   return result;
@@ -335,6 +351,7 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
         ? "action_completed"
         : "prepared";
   const evidenceValue = isRecord(value) ? value.evidence : undefined;
+  const ciValue = isRecord(value) ? value.ci : undefined;
   if (
     !isRecord(value) ||
     typeof value.mode !== "string" ||
@@ -358,12 +375,32 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
         ![evidenceValue.branch, evidenceValue.revision, evidenceValue.sha256, evidenceValue.url].every(
           (item) => item === undefined || (typeof item === "string" && item.length > 0 && item.length <= 8_192),
         ))) ||
+    (ciValue !== undefined &&
+      (!isRecord(ciValue) ||
+        ciValue.required !== true ||
+        !isSafeInteger(ciValue.maxRepairs) ||
+        ciValue.maxRepairs < 0 ||
+        ciValue.maxRepairs > 3 ||
+        !isSafeInteger(ciValue.repairAttempts) ||
+        ciValue.repairAttempts < 0 ||
+        ciValue.repairAttempts > ciValue.maxRepairs ||
+        !isFiniteNumber(ciValue.repairBudgetUsd) ||
+        ciValue.repairBudgetUsd <= 0 ||
+        (ciValue.status !== "pending" && ciValue.status !== "passed" && ciValue.status !== "failed") ||
+        !isIsoDate(ciValue.updatedAt) ||
+        (ciValue.revision !== undefined &&
+          (typeof ciValue.revision !== "string" || !/^[0-9a-fA-F]{40,64}$/.test(ciValue.revision))) ||
+        (ciValue.url !== undefined &&
+          (typeof ciValue.url !== "string" || ciValue.url.length === 0 || ciValue.url.length > 8_192)) ||
+        (ciValue.error !== undefined &&
+          (typeof ciValue.error !== "string" || ciValue.error.length === 0 || ciValue.error.length > 8_192)))) ||
     (phase === "prepared" && (value.artifact !== undefined || evidenceValue !== undefined)) ||
     (phase !== "prepared" && value.artifact === undefined) ||
     (value.status === "running" && value.error !== undefined) ||
     (value.status === "delivered" && (value.artifact === undefined || value.error !== undefined)) ||
     (value.status === "failed" && value.error === undefined) ||
-    (phase === "finalized" && value.status !== "delivered")
+    (phase === "finalized" && value.status !== "delivered") ||
+    (value.status === "delivered" && isRecord(ciValue) && ciValue.status !== "passed")
   )
     return null;
   const evidence = isRecord(evidenceValue)
@@ -372,6 +409,19 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
         ...(typeof evidenceValue.revision === "string" ? { revision: evidenceValue.revision } : {}),
         ...(typeof evidenceValue.sha256 === "string" ? { sha256: evidenceValue.sha256 } : {}),
         ...(typeof evidenceValue.url === "string" ? { url: evidenceValue.url } : {}),
+      }
+    : undefined;
+  const ci = isRecord(ciValue)
+    ? {
+        required: true as const,
+        maxRepairs: ciValue.maxRepairs as number,
+        repairAttempts: ciValue.repairAttempts as number,
+        repairBudgetUsd: ciValue.repairBudgetUsd as number,
+        status: ciValue.status as LoopDeliveryCiState["status"],
+        updatedAt: ciValue.updatedAt as string,
+        ...(typeof ciValue.revision === "string" ? { revision: ciValue.revision } : {}),
+        ...(typeof ciValue.url === "string" ? { url: ciValue.url } : {}),
+        ...(typeof ciValue.error === "string" ? { error: ciValue.error } : {}),
       }
     : undefined;
   const normalizedPhase =
@@ -388,6 +438,7 @@ function parseDelivery(value: unknown): LoopDeliveryState | null {
     updatedAt: value.updatedAt,
     ...(typeof value.artifact === "string" ? { artifact: value.artifact } : {}),
     ...(evidence ? { evidence } : {}),
+    ...(ci ? { ci } : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   };
 }
@@ -902,6 +953,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
   const stageResults = value.stageResults === undefined ? [] : parseStageResults(value.stageResults);
   const snapshots = value.snapshots === undefined ? [] : parseSnapshots(value.snapshots);
   const rollbackOnRegression = value.rollbackOnRegression === undefined ? false : value.rollbackOnRegression;
+  const adaptiveBudget = value.adaptiveBudget === undefined ? false : value.adaptiveBudget;
   if (
     (value.schemaVersion !== undefined && value.schemaVersion !== 2) ||
     typeof value.loopId !== "string" ||
@@ -948,6 +1000,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     stageResults === null ||
     snapshots === null ||
     typeof rollbackOnRegression !== "boolean" ||
+    typeof adaptiveBudget !== "boolean" ||
     !Number.isInteger(value.maxIterations) ||
     !isFiniteNumber(value.maxIterations) ||
     value.maxIterations <= 0 ||
@@ -1021,6 +1074,7 @@ function parseLoopState(value: unknown, expectedWorkspace?: string): LoopState |
     stablePasses: stablePasses as number,
     flakyRetries: flakyRetries as number,
     maxNoProgressRecoveries: maxNoProgressRecoveries as number,
+    adaptiveBudget,
     passStreak: passStreak as number,
     recoveryAttempts: recoveryAttempts as number,
     controlSeq: controlSeq as number,
@@ -1112,6 +1166,7 @@ export function createLoopState(input: CreateLoopStateInput): LoopState {
     stageResults: [],
     snapshots: [],
     rollbackOnRegression: input.rollbackOnRegression ?? false,
+    adaptiveBudget: input.adaptiveBudget ?? false,
     maxIterations: input.maxIterations,
     costBudgetUsd: input.costBudgetUsd ?? null,
     tokenBudget: input.tokenBudget ?? null,

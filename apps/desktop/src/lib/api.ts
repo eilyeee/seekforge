@@ -212,7 +212,14 @@ export const api = {
     }),
   memoryDeleteFact: (selector: { index: number } | { match: string }, ws?: string) =>
     request<{ removed: string }>("DELETE", withWorkspace("/api/memory/fact", ws), selector),
-  loops: (ws?: string) => request<LoopStateSummary[]>("GET", withWorkspace("/api/loops", ws)),
+  loops: (filters?: { status?: string; q?: string; limit?: number; after?: string }, ws?: string) => {
+    const query = new URLSearchParams();
+    if (filters?.status) query.set("status", filters.status);
+    if (filters?.q) query.set("q", filters.q);
+    if (filters?.limit) query.set("limit", String(filters.limit));
+    if (filters?.after) query.set("after", filters.after);
+    return request<LoopStateSummary[]>("GET", withWorkspace(`/api/loops${query.size ? `?${query}` : ""}`, ws));
+  },
   loopVerificationPlan: (ws?: string) =>
     request<{
       stages: Array<{ id: string; command: string; required?: boolean; timeoutMs?: number; paths?: string[] }>;
@@ -236,6 +243,17 @@ export const api = {
     request<LoopStateSummary>("POST", withWorkspace(`/api/loops/${encodeURIComponent(id)}/priority`, ws), {
       priority,
     }),
+  loopControl: (
+    id: string,
+    command: { operation: "pause" | "resume" } | { operation: "steer"; message: string },
+    ws?: string,
+  ) =>
+    request<{ accepted: true; loopId: string; operation: string }>(
+      "POST",
+      withWorkspace(`/api/loops/${encodeURIComponent(id)}/control`, ws),
+      command,
+    ),
+  loopDags: (ws?: string) => request<import("../types").LoopDagSummary[]>("GET", withWorkspace("/api/loop-dags", ws)),
   loopDelete: (id: string, ws?: string) =>
     request<{ removed: true; loopId: string }>("DELETE", withWorkspace(`/api/loops/${encodeURIComponent(id)}`, ws)),
   diff: (staged?: boolean, ws?: string) =>

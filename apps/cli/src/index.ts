@@ -466,6 +466,7 @@ program
   .option("--flaky-retries <n>", "reruns of a failed verifier stage before editing (0-5)", parseNonNegativeInt)
   .option("--stuck-recoveries <n>", "strategy resets before no_progress (0-5)", parseNonNegativeInt)
   .option("--rollback-regressions", "rollback iterations that increase failures (isolated worktree only)")
+  .option("--adaptive-budget", "stop before an iteration predicted to exceed a hard budget")
   .option("--priority <n>", "automatic recovery priority from -10 to 10", parseLoopPriority)
   .option("--deliver <mode>", "after passing: checkpoint, merge, patch, or draft PR (worktree only)", parseLoopDelivery)
   .option("--wait-ci", "for PR delivery, wait for required checks")
@@ -692,8 +693,14 @@ program
   .command("loop-deliver")
   .argument("<loop-id>")
   .option("--mode <mode>", "checkpoint | merge | patch | pr", parseLoopDelivery)
+  .option("--wait-ci", "wait for required PR checks, including on a resumed delivery")
+  .option("--ci-repairs <n>", "bounded CI-log repair attempts (0-3)", parseNonNegativeInt)
+  .option("--ci-repair-budget <usd>", "cost cap for each CI repair attempt", parsePositiveFloat)
+  .option("-y, --yes", "authorize autonomous CI repair in this workspace")
+  .option("-m, --model <model>", "override model used for CI repair")
+  .option("--profile <name>", "use a named config profile for CI repair")
   .description("deliver or retry delivery for a passed Loop")
-  .action((loopId: string, opts: { mode?: ReturnType<typeof parseLoopDelivery> }) => loopDeliverCommand(loopId, opts));
+  .action(loopDeliverCommand);
 program
   .command("loop-delete")
   .argument("<loop-id>")

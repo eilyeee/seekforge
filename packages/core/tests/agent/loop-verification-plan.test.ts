@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,6 +40,30 @@ describe("discoverLoopVerificationPlan", () => {
     const empty = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
     roots.push(empty);
     expect(() => discoverLoopVerificationPlan(empty)).toThrow(/Could not discover/);
+  });
+
+  it("adds bounded path-scoped package tests for a monorepo", () => {
+    const root = mkdtempSync(join(tmpdir(), "seekforge-loop-plan-"));
+    roots.push(root);
+    mkdirSync(join(root, "packages", "core"), { recursive: true });
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "pnpm -r test" } }));
+    writeFileSync(
+      join(root, "packages", "core", "package.json"),
+      JSON.stringify({ name: "@demo/core", scripts: { test: "vitest", deploy: "never" } }),
+    );
+    expect(discoverLoopVerificationPlan(root)).toEqual({
+      stages: [
+        {
+          id: "test-packages-core",
+          command: "pnpm --filter ./packages/core test",
+          paths: ["packages/core"],
+          cacheable: true,
+        },
+        { id: "test", command: "pnpm test" },
+      ],
+      sources: ["packages/core/package.json", "package.json"],
+    });
   });
 
   it("does not let symlinked root markers select executable verification", () => {

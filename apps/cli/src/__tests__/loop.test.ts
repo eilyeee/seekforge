@@ -797,6 +797,64 @@ test("Loop delivery rejects files created by the finalized-state commit hook", {
   }
 });
 
+test("Loop delivery persists mandatory CI closure across retries", { timeout: 120_000 }, async () => {
+  const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-delivery-ci-state-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "SeekForge Test"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-qm", "initial"], { cwd: repo });
+    const remote = resolve(repo, "remote.git");
+    execFileSync("git", ["init", "--bare", "-q", remote], { cwd: repo });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: repo });
+    const worktree = await createLoopWorktree(repo, "delivery-ci-state");
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree.path, encoding: "utf8" }).trim();
+    const state = createLoopState({
+      loopId: "delivery-ci-state-loop",
+      task: "retain CI policy",
+      workspace: worktree.path,
+      verifyCommand: "true",
+      maxIterations: 1,
+    });
+    saveLoopState(worktree.path, {
+      ...state,
+      status: "passed",
+      delivery: {
+        mode: "pr",
+        status: "failed",
+        phase: "action_completed",
+        attempts: 1,
+        updatedAt: new Date().toISOString(),
+        artifact: "https://example.test/pr/1",
+        evidence: { branch: worktree.branch, revision, url: "https://example.test/pr/1" },
+        error: "interrupted",
+      },
+    });
+    await assert.rejects(
+      runLoopDelivery(worktree.path, state.loopId, "pr", {
+        ciPolicy: { maxRepairs: 1, repairBudgetUsd: 0.5 },
+        beforeFinalize: async (_delivered, _current, updateCi) => {
+          updateCi({ status: "failed", repairAttempts: 0, error: "checks failed" });
+          throw new Error("checks failed");
+        },
+      }),
+      /checks failed/,
+    );
+    assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.ci?.status, "failed");
+    await assert.rejects(runLoopDelivery(worktree.path, state.loopId, "pr"), /requires CI closure/);
+    await runLoopDelivery(worktree.path, state.loopId, "pr", {
+      ciPolicy: { maxRepairs: 1, repairBudgetUsd: 0.5 },
+      beforeFinalize: async (delivered, _current, updateCi) => {
+        updateCi({ status: "passed", repairAttempts: 0, error: undefined });
+        return delivered;
+      },
+    });
+    assert.equal(loadLoopState(worktree.path, state.loopId)?.delivery?.status, "delivered");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("Loop cleanup and pruning preserve a branch with later unmerged commits", { timeout: 120_000 }, async () => {
   const repo = mkdtempSync(resolve(tmpdir(), "seekforge-loop-prune-ahead-"));
   try {

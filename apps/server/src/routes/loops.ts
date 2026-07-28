@@ -1,8 +1,12 @@
 import {
   discoverLoopVerificationPlan,
+  enqueueLoopControl,
   isRecord,
+  isLoopLeaseActive,
   isValidLoopId,
+  listLoopDagStates,
   listLoopStates,
+  loadLoopDagState,
   loadLoopState,
   pruneLoopStates,
   readLoopHistory,
@@ -22,10 +26,49 @@ function boundedInteger(value: string | null, fallback: number, min: number, max
 
 export async function handle(ctx: RouteCtx): Promise<boolean> {
   const { method, segs, url, res, workspace } = ctx;
+  if (segs[1] === "loop-dags") {
+    if (method === "GET" && segs.length === 2) {
+      sendJson(res, 200, listLoopDagStates(workspace));
+      return true;
+    }
+    const dagId = segs[2];
+    if (method === "GET" && segs.length === 3 && dagId) {
+      const state = loadLoopDagState(workspace, dagId);
+      if (state) sendJson(res, 200, state);
+      else sendApiError(res, 404, "not_found", `unknown Loop DAG: ${dagId}`);
+      return true;
+    }
+    return false;
+  }
   if (segs[1] !== "loops") return false;
 
   if (method === "GET" && segs.length === 2) {
-    sendJson(res, 200, listLoopStates(workspace));
+    const limit = boundedInteger(url.searchParams.get("limit"), 100, 1, 500);
+    const after = url.searchParams.get("after");
+    const status = url.searchParams.get("status");
+    const query = url.searchParams.get("q")?.trim().toLowerCase();
+    if (limit === null || (after !== null && !isValidLoopId(after))) {
+      sendApiError(res, 400, "bad_request", "Loop list cursor or limit is invalid");
+      return true;
+    }
+    const states = listLoopStates(workspace);
+    const cursorIndex = after === null ? -1 : states.findIndex((state) => state.loopId === after);
+    if (after !== null && cursorIndex < 0) {
+      sendApiError(res, 400, "bad_request", "unknown Loop list cursor");
+      return true;
+    }
+    const start = cursorIndex + 1;
+    sendJson(
+      res,
+      200,
+      states
+        .slice(start)
+        .filter((state) => !status || state.status === status)
+        .filter(
+          (state) => !query || state.loopId.toLowerCase().includes(query) || state.task.toLowerCase().includes(query),
+        )
+        .slice(0, limit),
+    );
     return true;
   }
   if (method === "GET" && segs[2] === "verification-plan" && segs.length === 3) {
@@ -117,6 +160,37 @@ export async function handle(ctx: RouteCtx): Promise<boolean> {
       } catch (error) {
         sendApiError(res, 409, "busy", error instanceof Error ? error.message : String(error));
       }
+    }
+    return true;
+  }
+  if (method === "POST" && segs[3] === "control" && segs.length === 4) {
+    const body = await readJsonBody(ctx.req, res);
+    if (body === undefined) return true;
+    const state = loadLoopState(workspace, loopId);
+    if (
+      !isRecord(body) ||
+      (body.operation !== "pause" && body.operation !== "resume" && body.operation !== "steer") ||
+      (body.operation === "steer" &&
+        (typeof body.message !== "string" || body.message.trim() === "" || body.message.length > 8_192))
+    ) {
+      sendApiError(res, 400, "bad_request", "invalid Loop control command");
+    } else if (
+      !state ||
+      (state.status !== "running" && state.status !== "paused") ||
+      !state.controlRunId ||
+      !isLoopLeaseActive(workspace, loopId)
+    ) {
+      sendApiError(res, 409, "busy", `Loop cannot accept controls: ${loopId}`);
+    } else {
+      await enqueueLoopControl(
+        workspace,
+        loopId,
+        state.controlRunId,
+        body.operation === "steer"
+          ? { operation: "steer", message: (body.message as string).trim() }
+          : { operation: body.operation },
+      );
+      sendJson(res, 202, { accepted: true, loopId, operation: body.operation });
     }
     return true;
   }

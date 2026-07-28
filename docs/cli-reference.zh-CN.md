@@ -167,7 +167,7 @@
 | Flag | 说明 |
 | --- | --- |
 | `--verify <command>` | 显式成功标准；退出码 0 视为通过。不能与 `--auto-verify` 同时使用。 |
-| `--auto-verify` | 从根目录 package scripts、Cargo、Go 或 pytest 清单发现并冻结已识别的验证阶段。 |
+| `--auto-verify` | 发现并冻结根目录及有界、按路径选择的 monorepo 包验证阶段。 |
 | `--max-iters <n>` | agent 迭代上限；默认 8，不能超过 100。 |
 | `--budget <usd>` | 观测到的累计用量达到该值时停止后续工作。在途的 provider 请求可能使最终账单略微超出。 |
 | `--token-budget <n>` | 累计 prompt + completion Token 达到上限时停止。 |
@@ -181,6 +181,7 @@
 | `--flaky-retries <n>` | 对失败阶段重试 0-5 次，并记录抖动通过。 |
 | `--stuck-recoveries <n>` | 在 `no_progress` 前用新策略重新诊断 0-5 次。 |
 | `--rollback-regressions` | 回退增加解析失败数的迭代；仅限保留的 Loop worktree。 |
+| `--adaptive-budget` | 最近用量预测无法装入硬预算时，在下一迭代开始前停止。 |
 | `--priority <n>` | 设置 -10 到 10 的自动恢复优先级。 |
 | `--deliver <mode>` | 通过后执行 `checkpoint`、`merge`、写 `patch` 或创建草稿 `pr`；仅限保留 worktree。 |
 | `--wait-ci` | 与 `--deliver pr` 配合，最长等待 PR checks 15 分钟后再最终完成交付。 |
@@ -198,11 +199,11 @@
 对 `--worktree` 循环，需在启动时展示的保留 worktree 内执行该命令。检查运行期间验证输出实时流出；交互式 TUI 通过 `/loop` 提供同样的工作流，并可用 `/loop-pause`、`/loop-continue` 与 `/loop-steer <引导>` 在安全边界控制运行。
 
 `seekforge loop-list`、`loop-show`、`loop-delete` 管理持久化记录；
-`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]` 可从保留 worktree
+`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` 可从保留 worktree
 重试失败的通过后交付，无需重跑 Loop；`loop-show` 会展示持久状态、尝试次数、错误与产物。`loop-history`
 回放持久事件，`loop-recover` 把失去 owner 的记录标为 `interrupted`，`loop-priority <id> <n>`
-调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 持久化执行带共享加权预算、
-重试、失败策略、条件分支、审批门、独占资源和结构化依赖输出的 JSON 依赖图，并支持
+调整恢复顺序，`loop-prune` 只删除合格终态记录。`loop-dag <file>` 以完成驱动方式执行带共享加权预算、
+重试、失败策略、组合条件、可审计审批、独占资源、声明产物和结构化依赖输出的持久 JSON 依赖图，并支持
 `--resume` / `--dag-id` 检查点。`--approve <node-id>` 可通过节点审批门，
 `--rerun <node-id>` 会让该节点及其下游结果失效。TUI 与
 Desktop/WebSocket Loop 还支持在安全边界暂停、继续、设置优先级和引导。

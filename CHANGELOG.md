@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 67: durable completion-driven Loop orchestration
+- Made PR/CI delivery policy and repair progress durable and cooperatively cancellable,
+  so retries cannot bypass an unfinished CI closure.
+- Replaced DAG batch barriers with completion-driven scheduling and added composite
+  conditions, audited approvals, and validated artifact contracts.
+- Added monorepo-aware verification with safe intra-iteration caching, adaptive budget
+  forecasts, richer REST/Desktop management and metrics, and real eval coverage.
+
 ### round 66: full Loop engineering surface
 - Added frozen automatic verification discovery, per-iteration cost/token/time/path
   observability, failure classification, and category-specific recovery strategies.

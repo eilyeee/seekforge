@@ -189,7 +189,7 @@ cooperative cancellation.
 | Flag | Description |
 | --- | --- |
 | `--verify <command>` | Explicit success criterion; exit code 0 passes. Mutually exclusive with `--auto-verify`. |
-| `--auto-verify` | Discover and freeze recognized root verification stages from package scripts, Cargo, Go, or pytest manifests. |
+| `--auto-verify` | Discover and freeze recognized root and bounded path-scoped monorepo package verification stages. |
 | `--max-iters <n>` | Maximum agent iterations; defaults to 8 and cannot exceed 100. |
 | `--budget <usd>` | Stop further work when observed cumulative usage reaches the value. An in-flight provider request can make final billed cost slightly exceed it. |
 | `--token-budget <n>` | Stop at cumulative prompt + completion tokens. |
@@ -203,6 +203,7 @@ cooperative cancellation.
 | `--flaky-retries <n>` | Retry a failed stage 0-5 times and record flaky passes. |
 | `--stuck-recoveries <n>` | Re-diagnose with a new strategy 0-5 times before `no_progress`. |
 | `--rollback-regressions` | Rewind iterations that increase parsed failures; retained Loop worktrees only. |
+| `--adaptive-budget` | Stop before an iteration whose recent usage forecast cannot fit within a hard budget. |
 | `--priority <n>` | Set automatic recovery priority from -10 to 10. |
 | `--deliver <mode>` | After passing, `checkpoint`, `merge`, write a `patch`, or create a draft `pr`; retained worktrees only. |
 | `--wait-ci` | With `--deliver pr`, wait up to 15 minutes for PR checks before finalizing delivery. |
@@ -225,14 +226,15 @@ the interactive TUI exposes the same workflow through `/loop`, with
 runtime control.
 
 `seekforge loop-list`, `loop-show`, and `loop-delete` manage persisted records.
-`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr]` retries a
+`seekforge loop-deliver <loop-id> [--mode checkpoint|merge|patch|pr] [--wait-ci] [--ci-repairs N]` retries a
 failed post-pass delivery from the retained worktree without rerunning the Loop;
 `loop-show` exposes its durable status, attempt count, error, and artifact.
 `loop-history` replays durable events, `loop-recover` marks orphaned owners as
 `interrupted`, `loop-priority <id> <n>` changes recovery order, and `loop-prune`
 removes only eligible terminal records. `loop-dag <file>` persists a JSON graph
-with weighted budgets, retries, failure policies, conditions, approvals, exclusive resources,
-structured dependency outputs, and `--resume`/`--dag-id` checkpoints. Use `--approve <node-id>`
+with completion-driven scheduling, weighted budgets, retries, failure policies, composite conditions,
+audited approvals, exclusive resources, declared artifacts, structured dependency outputs, and
+`--resume`/`--dag-id` checkpoints. Use `--approve <node-id>`
 to cross a node gate and `--rerun <node-id>` to invalidate that node and its descendants.
 checkpoints. TUI and Desktop/WebSocket Loop surfaces also support safe-boundary
 pause, resume, priority, and steering.

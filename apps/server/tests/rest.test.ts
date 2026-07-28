@@ -6,7 +6,7 @@ import { startServer, type RunningServer } from "../src/index.js";
 import { makeWorkspace, unusedAgentFactory, writeFileIn } from "./helpers.js";
 import { writeFixtureServer } from "./mcp-fixture.js";
 import { MAX_STATIC_FILE_BYTES } from "../src/static.js";
-import { appendLoopLog, createLoopState } from "@seekforge/core";
+import { acquireLoopLease, appendLoopLog, createLoopState, readLoopControlEntries } from "@seekforge/core";
 
 const TOKEN = "test-token-rest";
 
@@ -258,10 +258,42 @@ describe("loop management API", () => {
     expect((await jsonOf(plan)).stages).toEqual([{ id: "build", command: "npm run build" }]);
     const listed = await authed("/api/loops");
     expect((await jsonOf(listed)).some((loop: { loopId: string }) => loop.loopId === "rest-loop")).toBe(true);
+    const filtered = await authed("/api/loops?status=running&q=manage&limit=1");
+    expect(await jsonOf(filtered)).toEqual([expect.objectContaining({ loopId: "rest-loop" })]);
     const history = await authed("/api/loops/rest-loop/history?after=0&limit=10");
     expect(await jsonOf(history)).toEqual([
       expect.objectContaining({ seq: 1, event: { type: "iteration.start", iteration: 1 } }),
     ]);
+  });
+
+  it("queues safe-boundary controls only for a live Loop owner", async () => {
+    createLoopState({
+      loopId: "rest-control",
+      task: "control me",
+      workspace,
+      verifyCommand: "npm run build",
+      maxIterations: 2,
+      controlRunId: "control-run",
+    });
+    const lease = acquireLoopLease(workspace, "rest-control", true);
+    try {
+      const controlled = await authed("/api/loops/rest-control/control", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operation: "steer", message: "focus the parser" }),
+      });
+      expect(controlled.status).toBe(202);
+      expect(readLoopControlEntries(workspace, "rest-control", "control-run", 0)).toEqual([
+        expect.objectContaining({ operation: "steer", message: "focus the parser" }),
+      ]);
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("exports aggregate Loop metrics", async () => {
+    const metrics = await authed("/api/metrics");
+    expect(await metrics.text()).toMatch(/seekforge_loops_total \d+/);
   });
 
   it("updates priority and safely deletes one loop", async () => {

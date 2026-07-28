@@ -575,6 +575,7 @@ async function runLoopTaskMode(
       ? { maxNoProgressRecoveries: config.maxNoProgressRecoveries }
       : {}),
     ...(config.rollbackOnRegression !== undefined ? { rollbackOnRegression: config.rollbackOnRegression } : {}),
+    ...(config.adaptiveBudget !== undefined ? { adaptiveBudget: config.adaptiveBudget } : {}),
     ...(config.requirementMode ? { requirementMode: config.requirementMode } : {}),
   });
   let final: LoopResult = initial;

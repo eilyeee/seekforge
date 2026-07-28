@@ -9,6 +9,11 @@
     "verifyCommand": "npm test",
     "maxIterations": 1,
     "expectedStatus": "passed",
+    "adaptiveBudget": true,
+    "verificationPlan": [
+      { "id": "source-tests", "command": "npm test", "paths": ["src"], "cacheable": true },
+      { "id": "test-contract", "command": "npm test", "paths": ["test"], "cacheable": true }
+    ],
     "resume": {
       "expectedInitialStatus": "exhausted",
       "additionalIterations": 1

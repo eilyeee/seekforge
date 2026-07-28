@@ -21,6 +21,7 @@ import * as filesRoutes from "./routes/files.js";
 import * as gitRoutes from "./routes/git.js";
 import * as memoryRoutes from "./routes/memory.js";
 import * as loopRoutes from "./routes/loops.js";
+import { listLoopStates } from "@seekforge/core";
 import * as runRoutes from "./routes/runs.js";
 import * as sessionRoutes from "./routes/sessions.js";
 import * as securityRoutes from "./routes/security.js";
@@ -89,9 +90,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
 
     if (method === "GET" && path === "/api/metrics") {
       const metrics = ctx.runManager.metrics();
+      const loops = ctx.registry.summary.flatMap((workspace) => listLoopStates(workspace.path));
+      const loopMetrics: Record<string, number> = {
+        seekforge_loops_total: loops.length,
+        seekforge_loops_active: loops.filter((loop) => loop.status === "running" || loop.status === "paused").length,
+        seekforge_loops_cost_usd_total: loops.reduce((sum, loop) => sum + loop.costUsd, 0),
+        seekforge_loops_tokens_total: loops.reduce((sum, loop) => sum + (loop.tokensUsed ?? 0), 0),
+        seekforge_loops_verify_runs_total: loops.reduce((sum, loop) => sum + (loop.verifyRuns ?? 0), 0),
+      };
       res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
       res.end(
         `${Object.entries(metrics)
+          .concat(Object.entries(loopMetrics))
           .map(([name, value]) => `${name} ${value}`)
           .join("\n")}\n`,
       );
