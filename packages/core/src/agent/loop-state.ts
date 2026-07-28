@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AgentError } from "@seekforge/shared";
+import type { AgentError, LoopDeliverySummary, LoopPersistedStatus } from "@seekforge/shared";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import type { LoopIterationSnapshot, LoopStageResult, LoopStatus, LoopVerificationStage } from "./auto-loop.js";
+import type { LoopIterationSnapshot, LoopStageResult, LoopVerificationStage } from "./auto-loop.js";
 import {
   DEFAULT_LOOP_AGENT_RETRIES,
   DEFAULT_LOOP_AGENT_TIMEOUT_MS,
@@ -55,39 +55,14 @@ export {
 export type { LoopLease } from "./loop-lease.js";
 export { isValidLoopId } from "./loop-state-paths.js";
 
-export type PersistedLoopStatus = "running" | "paused" | LoopStatus;
+export type PersistedLoopStatus = LoopPersistedStatus;
 export type LoopVerifyResult = { code: number; output: string };
-export type LoopDeliveryMode = "checkpoint" | "merge" | "patch" | "pr";
-export type LoopDeliveryStatus = "running" | "delivered" | "failed";
-export type LoopDeliveryPhase = "prepared" | "action_completed" | "finalized";
-export type LoopDeliveryEvidence = {
-  branch?: string;
-  revision?: string;
-  sha256?: string;
-  url?: string;
-};
-export type LoopDeliveryCiState = {
-  required: true;
-  maxRepairs: number;
-  repairAttempts: number;
-  repairBudgetUsd: number;
-  status: "pending" | "passed" | "failed";
-  updatedAt: string;
-  revision?: string;
-  url?: string;
-  error?: string;
-};
-export type LoopDeliveryState = {
-  mode: LoopDeliveryMode;
-  status: LoopDeliveryStatus;
-  phase?: LoopDeliveryPhase;
-  attempts: number;
-  updatedAt: string;
-  artifact?: string;
-  evidence?: LoopDeliveryEvidence;
-  ci?: LoopDeliveryCiState;
-  error?: string;
-};
+export type LoopDeliveryMode = LoopDeliverySummary["mode"];
+export type LoopDeliveryStatus = LoopDeliverySummary["status"];
+export type LoopDeliveryPhase = NonNullable<LoopDeliverySummary["phase"]>;
+export type LoopDeliveryEvidence = NonNullable<LoopDeliverySummary["evidence"]>;
+export type LoopDeliveryCiState = NonNullable<LoopDeliverySummary["ci"]>;
+export type LoopDeliveryState = LoopDeliverySummary;
 
 /** True only when a delivery artifact has the evidence required by its mode. */
 export function hasCompleteLoopDeliveryEvidence(

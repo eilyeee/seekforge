@@ -1,48 +1,11 @@
 import { createHash } from "node:crypto";
+import type { LoopEvidenceReport as SharedLoopEvidenceReport } from "@seekforge/shared";
 import { isRecord } from "../util/guards.js";
 import type { LoopState } from "./loop-state.js";
 
 export type LoopEvidenceFormat = "json" | "sarif" | "junit";
 
-export type LoopEvidenceReport = {
-  schemaVersion: 1;
-  loopId: string;
-  generatedAt: string;
-  status: LoopState["status"];
-  workspace: string;
-  task: string;
-  usage: { costUsd: number; tokensUsed: number; iterations: number };
-  criteria: Array<{
-    id: string;
-    text: string;
-    requirementIds: string[];
-    status: "met" | "unmet" | "unknown";
-    evidence: string[];
-  }>;
-  verification: Array<{
-    id: string;
-    command: string;
-    required: boolean;
-    code?: number;
-    attempts?: number;
-    durationMs?: number;
-    flaky?: boolean;
-    selection?: "full" | "direct" | "dependency" | "cached";
-    matchedPaths?: string[];
-  }>;
-  iterations: Array<{
-    iteration: number;
-    ts: string;
-    failedTests: number;
-    durationMs?: number;
-    costUsd?: number;
-    tokensUsed?: number;
-    failureCategory?: string;
-    rolledBack?: boolean;
-  }>;
-  delivery?: LoopState["delivery"];
-  integrity: { algorithm: "sha256"; digest: string; revision?: string };
-};
+export type LoopEvidenceReport = SharedLoopEvidenceReport;
 
 export type LoopEvidenceComparison = {
   leftLoopId: string;

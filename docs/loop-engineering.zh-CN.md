@@ -53,10 +53,14 @@ flowchart LR
   `loop-state-paths` 分别负责 JSONL 回放、生命周期协调与路径身份。
 - `loop-managed-worktree` 是 DAG 与推演执行共享的唯一分支/路径绑定层。预算预测、验证选择与
   面向模型的工具结果整形均为纯策略模块；验证清单检测器也与计划组合逻辑分离。
+- `loop-dag-validation` 是 DAG id、相对产物路径、条件、依赖关系与无环拓扑的唯一纯契约。
+  CLI JSON 解码只保留传输结构，随后在 Loop lease、checkpoint、provider 或 worktree 出现前
+  调用同一校验器。
 - CLI JSON 解码和进程生命周期设置位于命令处理器之外；REST 的 DAG/推演路由和 Desktop 的
   列表/详情/资源视图按领域拆分。Server/Desktop 的 Loop 响应类型统一来自
   `@seekforge/shared`，不再由客户端手工镜像。
 - 证据构建、完整性比较与 JSON/SARIF/JUnit 格式化彼此独立，新增导出格式不会改变已签名报告。
+  持久状态、交付和证据 DTO 只在 `@seekforge/shared` 定义一次；Core 直接使用同一类型，不再维护镜像。
 
 ### 运行时序
 

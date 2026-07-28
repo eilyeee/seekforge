@@ -58,12 +58,18 @@ The implementation keeps these boundaries explicit:
   and speculative execution. Budget forecasts, verification selection, and
   model-facing tool-result shaping are pure policy modules. Verification
   manifest detectors are separate from plan composition.
+- `loop-dag-validation` is the single pure contract for DAG ids, relative
+  artifact paths, conditions, dependencies, and acyclic topology. CLI JSON
+  decoding preserves transport shape, then calls that validator before Loop
+  leases, checkpoints, providers, or worktrees exist.
 - CLI JSON decoding and process lifecycle setup live outside command handlers;
   REST DAG/speculation routes and Desktop list/detail/resource views are split by
   domain. Server/Desktop Loop response types come from `@seekforge/shared`
   instead of client-side mirrors.
 - Evidence construction, integrity comparison, and JSON/SARIF/JUnit formatting
   are separate so adding an export format cannot change the signed report.
+  Persisted status, delivery, and evidence DTOs are defined once in
+  `@seekforge/shared`; Core uses those same types instead of parallel mirrors.
 
 ### Run sequence
 

@@ -47,6 +47,7 @@ with `ProviderConfig.streamIdleTimeoutMs` and `streamTimeoutMs`.
 
 ```ts
 import {
+  assertValidLoopDagNodes,
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
@@ -157,24 +158,26 @@ control.steer("focus on parser tests");
 control.resume();
 const result = await running;
 
+const graphNodes = [
+  { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
+  {
+    id: "apps",
+    task: "fix apps",
+    verifyCommand: "pnpm test",
+    dependsOn: ["core"],
+    condition: { nodeId: "core", status: "passed" as const },
+    resources: ["release"],
+    consumeDependencyOutputs: true,
+    requiresApproval: true,
+    maxRetries: 1,
+  },
+];
+assertValidLoopDagNodes(graphNodes); // pure: no lease, checkpoint, provider, or worktree yet
 const graph = await runLoopDag(deps, {
   workspace: process.cwd(),
   dagId: "release-graph",
   resume: true,
-  nodes: [
-    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
-    {
-      id: "apps",
-      task: "fix apps",
-      verifyCommand: "pnpm test",
-      dependsOn: ["core"],
-      condition: { nodeId: "core", status: "passed" },
-      resources: ["release"],
-      consumeDependencyOutputs: true,
-      requiresApproval: true,
-      maxRetries: 1,
-    },
-  ],
+  nodes: graphNodes,
   approveNode: (node) => node.id === "apps",
 });
 // result includes a persisted loopId.
@@ -200,6 +203,12 @@ verification contract.
 Use `rerunFrom` only together with `resume`; the selected nodes and every
 downstream result are invalidated, prior completed metadata is cleared, and
 retained-node usage is recomputed before scheduling.
+
+`assertValidLoopDagNodes` is the canonical semantic contract used by Core and
+the CLI. Call it after decoding untrusted transport shape and before creating
+any runtime dependencies. `parseLoopDagCondition`, `isValidLoopDagId`, and
+`isSafeLoopDagRelativePath` expose the same bounded condition/id/path rules for
+adapters that need field-level decoding; do not copy those rules locally.
 
 Loop state is stored atomically under `.seekforge/loops/`; set `persist: false`
 only for embedders that own equivalent durable orchestration. Iterations are

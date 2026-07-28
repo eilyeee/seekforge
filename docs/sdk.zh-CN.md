@@ -34,6 +34,7 @@ content、reasoning、工具参数设置更严格的上限，同时验证 usage 
 
 ```ts
 import {
+  assertValidLoopDagNodes,
   createAgentCore,
   createDeepSeekProvider,
   createDefaultDispatcher,
@@ -140,24 +141,26 @@ control.steer("focus on parser tests");
 control.resume();
 const result = await running;
 
+const graphNodes = [
+  { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
+  {
+    id: "apps",
+    task: "fix apps",
+    verifyCommand: "pnpm test",
+    dependsOn: ["core"],
+    condition: { nodeId: "core", status: "passed" as const },
+    resources: ["release"],
+    consumeDependencyOutputs: true,
+    requiresApproval: true,
+    maxRetries: 1,
+  },
+];
+assertValidLoopDagNodes(graphNodes); // 纯校验：此时还没有 lease、checkpoint、provider 或 worktree
 const graph = await runLoopDag(deps, {
   workspace: process.cwd(),
   dagId: "release-graph",
   resume: true,
-  nodes: [
-    { id: "core", task: "fix core", verifyCommand: "pnpm --filter @seekforge/core test", budgetWeight: 2 },
-    {
-      id: "apps",
-      task: "fix apps",
-      verifyCommand: "pnpm test",
-      dependsOn: ["core"],
-      condition: { nodeId: "core", status: "passed" },
-      resources: ["release"],
-      consumeDependencyOutputs: true,
-      requiresApproval: true,
-      maxRetries: 1,
-    },
-  ],
+  nodes: graphNodes,
   approveNode: (node) => node.id === "apps",
 });
 // result includes a persisted loopId.
@@ -179,6 +182,10 @@ checkout 后会拒绝旧检查点，而不会复用另一个工作区产生的�
 变化时必须同步修改该 id，避免恢复过程复用另一份验证契约产生的结果。
 `rerunFrom` 只能与 `resume` 一起使用；选中节点及全部下游结果会失效，旧完成元数据会清除，
 调度前会按保留节点重新计算已用资源。
+
+`assertValidLoopDagNodes` 是 Core 与 CLI 共用的唯一语义契约。解码不可信传输结构后、创建任何运行时
+依赖前调用它。需要字段级解码的适配层可使用 `parseLoopDagCondition`、`isValidLoopDagId` 与
+`isSafeLoopDagRelativePath` 复用同一套有界条件/id/路径规则；不要在本地复制这些规则。
 
 循环状态以原子方式存储在 `.seekforge/loops/` 下；只有当嵌入方自己拥有等效的持久化编排时，才应设置 `persist: false`。迭代次数硬性上限为 100。持久化的 Loop 持有独占租约；写入失败会通过有界的 `loop.warning` 事件上报，不会掩盖验证结果。
 `LoopResult.status` 会区分 `passed`、由防护预算触发的 `budget`（含

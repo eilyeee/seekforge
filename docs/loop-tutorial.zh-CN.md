@@ -304,6 +304,9 @@ seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
 seekforge loop-dag ./loop-dag.json --dag-id release --resume --rerun test --approve publish
 ```
 
+`loop-dag` 解码 JSON 文件后，会在取得 lease 或创建 checkpoint/worktree 前，调用 Core 对 id、路径、
+条件、依赖关系与环路执行完整校验。因此非法图会直接失败，不会遗留编排状态或派生仓库。
+
 Desktop 面板提供验证流水线、稳定/抖动/卡住控制，以及只在安全边界生效的暂停、继续和引导。
 回滚与交付要求保留的 Loop worktree。要交付草稿 PR，请使用 `--deliver pr`，并确保 `gh`
 已完成认证。

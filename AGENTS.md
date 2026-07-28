@@ -53,6 +53,16 @@ backend in `crates/runtime`.
 ## Coding Style
 
 - Keep changes small and targeted; follow existing style.
+- Search for an existing owner before adding a parser, validator, lifecycle
+  helper, DTO, formatter, or path/identifier rule. One non-trivial invariant
+  has one implementation owner: dependency-free cross-package contracts belong
+  in `packages/shared`, runtime/domain validation belongs in `packages/core`, and
+  surfaces only decode transport shape and adapt presentation. If equivalent
+  behavior appears in two places, extract it instead of maintaining mirrors.
+- Keep pure validation separate from effects and run the complete validation
+  before acquiring leases, initializing providers/backends, persisting state, or
+  provisioning worktrees. Re-export shared internals through every required
+  package entry point rather than importing private source paths across packages.
 - No new runtime dependencies without strong justification.
 - Comments only for non-obvious constraints, in English.
 

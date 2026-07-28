@@ -63,7 +63,10 @@ and quick start; this folder holds the reference docs.
 
 ## Maintaining quality
 - [Architecture](architecture.md) — package responsibilities, dependency
-  direction, state ownership, internal module boundaries, and change placement.
+  direction, state ownership, invariant ownership, reuse rules, internal module
+  boundaries, and change placement.
+- [Boundary checklist](boundary-checklist.md) — recurring parser, path, cache,
+  async-state, resource-lifecycle, and side-effect ordering defect classes.
 - [Evals & the regression gate](EVALS.md) — the deterministic CI gate, running
   evals, the baseline convention, and `--fail-on-regression`.
 - [Releasing](RELEASING.md) — the DMG checklist, clean-machine verification

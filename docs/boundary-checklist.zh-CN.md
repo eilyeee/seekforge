@@ -1459,7 +1459,8 @@ Hook、sandbox 策略和 MCP 启动配置即使不是产品源码，也会影响
   JSON Schema 中；同时校验反序列化字段形状，并把工具 call/result 关联限制在同一个
   assistant turn 内。
 - **发现位置：** 负数/小数 timeout、tail、depth、range、limit；schema 转换器丢失
-  数值与集合边界；异常 package 元数据；以及复用 tool-call id 时清除了错误轮次。
+  数值与集合边界；异常 package 元数据；复用 tool-call id 时清除了错误轮次；以及正则 predicate
+  把非字符串 Loop DAG id 强制转换成了看似合法的字符串。
 
 ## 124. 评测工作区属于对抗性输入
 
@@ -2249,6 +2250,16 @@ JSON 序列化会忽略函数，因此对 options 对象做哈希无法发现注
   对完整图执行无环拓扑检查。
 - **发现位置：** Loop DAG 曾在运行时初始化及首个 checkpoint 之后才检测依赖环，
   非法图可能留下持久副作用。
+
+## 215. 多入口镜像边界校验器必然发生漂移
+
+两个适配层即使起初遵循同一契约，也会在新增字段与边界条件后悄然分叉。更严格的 CLI 保护不了
+Core 或 Server 的直接调用，而被某个 decoder 漏掉的字段还会无报错消失。
+
+- **正确做法：** 传输结构解码保持轻量，随后调用唯一的已导出语义校验器；字段 decoder 与 predicate
+  也从同一所有者导出复用。
+- **发现位置：** CLI 与 Core 的 Loop DAG 校验对重复依赖和包含 NUL 的产物路径处理不一致，
+  CLI 还会静默丢弃 `verifierId`。
 
 ---
 

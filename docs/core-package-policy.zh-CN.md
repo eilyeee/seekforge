@@ -25,3 +25,10 @@ REST/WebSocket 协议。
 
 在此之前，内部消费者使用 `workspace:*`，第三方集成使用 `seekforge serve`。
 这是分发边界，并不排除未来发布 SDK。
+
+## 内部复用契约
+
+私有并不等于可以重复实现。monorepo 消费者只通过 `@seekforge/core` 入口导入 Core 行为。
+跨包的纯 DTO 与事件属于 `@seekforge/shared`；语义校验、策略和带副作用编排属于 Core。
+App 适配层可以校验 JSON/传输结构，但必须在启动副作用前把领域不变量交给已导出的 Core 校验器。
+不得为了绕过导出，在 CLI、Server、TUI 或 Desktop 中复制 Core validator。

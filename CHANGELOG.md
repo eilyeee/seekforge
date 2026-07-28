@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### round 72: reusable Loop contracts and documentation rules
+- Centralized Loop DAG identifiers, conditions, relative paths, dependency, and
+  topology validation in one pure Core module shared by runtime and CLI input.
+- Reused Shared persisted-status, delivery, and evidence DTOs directly in Core,
+  removing parallel contract definitions and preserving `verifierId` in CLI DAG input.
+- Added invariant-ownership, extraction, validation-before-effects, export, and
+  independent boundary-review guidance across contributor and bilingual docs.
+
 ### round 71: Loop maintainability and boundary consolidation
 - Split Loop persistence, history, leases, managed worktrees, budget policy,
   verification selection, evidence formatting, CLI lifecycle/input parsing,

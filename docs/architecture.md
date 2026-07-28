@@ -58,6 +58,26 @@ domain logic:
 These are ownership boundaries, not additional public APIs. Public behavior is
 defined by the CLI reference, server API, configuration docs, and SDK notes.
 
+## Reuse and invariant ownership
+
+Every non-trivial invariant has one implementation owner. Before adding a
+parser, validator, DTO, formatter, lifecycle helper, or identifier/path rule,
+search the repository for the existing owner and extend it there.
+
+| Concern | Canonical owner | Other layers may do |
+| --- | --- | --- |
+| Dependency-free event and transport shapes | `packages/shared` | Import, project, and render them |
+| Runtime/domain validation and pure policy | `packages/core` | Decode transport shape, then call Core |
+| Filesystem, process, lease, and persistence behavior | Focused Core/Server domain module | Compose it; never mirror its boundary rules |
+| Surface interaction | The owning app | Adapt validated domain results for that UI/transport |
+
+Equivalent boundary logic must be extracted rather than synchronized by hand.
+Shape decoding at a transport boundary is allowed, but it must pass the decoded
+value to the canonical semantic validator. Complete pure validation runs before
+leases, provider/backend initialization, persisted writes, or derived workspace
+creation. Shared symbols used across packages are re-exported through package
+entry points; consumers do not reach into another package's private source tree.
+
 ## State and concurrency
 
 Session traces are append-only JSONL and remain the source of truth for agent

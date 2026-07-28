@@ -1627,7 +1627,8 @@ records outside the domain their consumer assumes.
   shapes, and scope tool-call/result correlation to one assistant turn.
 - **Caught:** negative/fractional timeouts, tails, depths, ranges and limits;
   a schema converter dropping numeric and collection bounds; malformed package
-  metadata; and reused tool-call ids clearing the wrong turn.
+  metadata; reused tool-call ids clearing the wrong turn; and regex predicates
+  coercing non-string Loop DAG ids into apparently valid strings.
 
 ## 124. An evaluation workspace is adversarial input
 
@@ -2595,6 +2596,17 @@ inside the scheduler is too late if leases, checkpoints, or worktrees already ex
   and before the first lifecycle acquisition, persisted write, or resource creation.
 - **Caught:** Loop DAG cycle detection ran only after runtime initialization and
   its initial checkpoint, so an invalid graph could leave durable side effects.
+
+## 215. Mirrored boundary validators drift across entry points
+
+Two adapters can start from the same contract and silently diverge as fields and
+edge cases are added. A stricter CLI does not protect direct Core or Server calls,
+while a field omitted by one decoder disappears without an error.
+
+- **Do:** keep transport shape decoding thin, then call one exported semantic
+  validator; export reusable field decoders and predicates from that same owner.
+- **Caught:** CLI and Core Loop DAG validators disagreed on duplicate dependencies
+  and NUL-containing artifact paths, while CLI silently discarded `verifierId`.
 
 ---
 

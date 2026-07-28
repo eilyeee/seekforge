@@ -386,6 +386,11 @@ seekforge loop-dag ./loop-dag.json --dag-id release --resume --budget 2
 seekforge loop-dag ./loop-dag.json --dag-id release --resume --rerun test --approve publish
 ```
 
+`loop-dag` decodes the JSON file, then applies Core's complete id, path,
+condition, dependency, and cycle contract before it acquires a lease or creates
+checkpoints/worktrees. Invalid graphs therefore fail without leaving orchestration
+state or derived repositories behind.
+
 The Desktop panel exposes the verification pipeline, stability/flaky/stuck
 controls, and safe-boundary Pause/Continue/Steer actions. Rollback and delivery
 require a retained Loop worktree. For draft-PR delivery, use `--deliver pr` with

@@ -39,6 +39,7 @@ test("DAG input resolves workspaces and preserves valid conditions", () => {
           id: "publish",
           task: "publish",
           verifyCommand: "pnpm test",
+          verifierId: "publish-v1",
           dependsOn: ["build"],
           condition: { nodeId: "build", status: "passed" },
           outputPaths: ["dist/result.json"],
@@ -50,6 +51,7 @@ test("DAG input resolves workspaces and preserves valid conditions", () => {
   );
   assert.equal(parsed.nodeWorkspaces.get("build"), resolve(workspace, "packages/core"));
   assert.deepEqual(parsed.nodes[1]?.condition, { nodeId: "build", status: "passed" });
+  assert.equal(parsed.nodes[1]?.verifierId, "publish-v1");
   assert.equal(parsed.fanIn?.maxIterations, 2);
 });
 

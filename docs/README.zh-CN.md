@@ -55,7 +55,9 @@
 
 ## 质量维护
 - [架构](architecture.zh-CN.md) — 各包职责、依赖方向、状态所有权、
-  内部模块边界，以及变更落点。
+  不变量所有权、复用规则、内部模块边界，以及变更落点。
+- [边界检查清单](boundary-checklist.zh-CN.md) — 反复出现的 parser、路径、缓存、
+  异步状态、资源生命周期与副作用顺序缺陷类别。
 - [Evals 与回归门禁](EVALS.zh-CN.md) — 确定性 CI 门禁、运行 evals、
   baseline 约定，以及 `--fail-on-regression`。
 - [发布](RELEASING.zh-CN.md) — DMG 检查清单、干净机器验证门禁，

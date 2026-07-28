@@ -1,4 +1,10 @@
-import { assertLoopDagAcyclic, isRecord, type LoopDagCondition, type LoopDagNode } from "@seekforge/core";
+import {
+  assertValidLoopDagNodes,
+  isRecord,
+  isValidLoopDagId,
+  parseLoopDagCondition,
+  type LoopDagNode,
+} from "@seekforge/core";
 import { resolve } from "node:path";
 
 export type ParsedLoopSpeculation = {
@@ -12,19 +18,6 @@ export type ParsedLoopDag = {
   nodeWorkspaces: Map<string, string>;
   fanIn?: { verifyCommand: string; maxIterations?: number };
 };
-
-const SPECULATION_CANDIDATE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const DAG_ID_RE = SPECULATION_CANDIDATE_ID_RE;
-
-function isSafeRelativePath(value: string): boolean {
-  if (value.length === 0 || value.length > 512 || value.includes("\0")) return false;
-  const normalized = value.replaceAll("\\", "/");
-  return (
-    !normalized.startsWith("/") &&
-    !/^[A-Za-z]:\//.test(normalized) &&
-    normalized.split("/").every((part) => part !== "" && part !== "." && part !== "..")
-  );
-}
 
 export function parseLoopSpeculationInput(value: unknown): ParsedLoopSpeculation {
   if (
@@ -46,7 +39,7 @@ export function parseLoopSpeculationInput(value: unknown): ParsedLoopSpeculation
     if (
       !isRecord(candidate) ||
       typeof candidate.id !== "string" ||
-      !SPECULATION_CANDIDATE_ID_RE.test(candidate.id) ||
+      !isValidLoopDagId(candidate.id) ||
       ids.has(candidate.id) ||
       typeof candidate.guidance !== "string" ||
       !candidate.guidance.trim() ||
@@ -58,19 +51,6 @@ export function parseLoopSpeculationInput(value: unknown): ParsedLoopSpeculation
     return { id: candidate.id, guidance: candidate.guidance };
   });
   return { task: value.task, verifyCommand: value.verifyCommand, candidates };
-}
-
-function parseLoopDagCondition(value: unknown, depth = 0): LoopDagCondition {
-  if (depth > 8 || !isRecord(value)) throw new Error("Loop DAG condition is invalid or too deeply nested");
-  if (typeof value.nodeId === "string" && (value.status === "passed" || value.status === "failed")) {
-    return { nodeId: value.nodeId, status: value.status };
-  }
-  if (value.not !== undefined) return { not: parseLoopDagCondition(value.not, depth + 1) };
-  const key = value.all !== undefined ? "all" : value.any !== undefined ? "any" : undefined;
-  if (!key || !Array.isArray(value[key]) || value[key].length === 0 || value[key].length > 32) {
-    throw new Error("Loop DAG condition must contain nodeId/status, all, any, or not");
-  }
-  return { [key]: value[key].map((child) => parseLoopDagCondition(child, depth + 1)) } as LoopDagCondition;
 }
 
 export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoopDag {
@@ -101,23 +81,11 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
     };
   }
   const nodeWorkspaces = new Map<string, string>();
-  const ids = new Set<string>();
   const nodes = value.nodes.map((node): LoopDagNode => {
     if (!isRecord(node)) throw new Error("Loop DAG nodes must be objects");
     if (typeof node.id !== "string" || typeof node.task !== "string" || typeof node.verifyCommand !== "string") {
       throw new Error("Each Loop DAG node requires string id, task, and verifyCommand fields");
     }
-    if (
-      !DAG_ID_RE.test(node.id) ||
-      ids.has(node.id) ||
-      !node.task.trim() ||
-      node.task.length > 64 * 1024 ||
-      !node.verifyCommand.trim() ||
-      node.verifyCommand.length > 8_192
-    ) {
-      throw new Error(`Loop DAG node must have a unique safe id and bounded task/verifier: ${node.id}`);
-    }
-    ids.add(node.id);
     if (
       node.dependsOn !== undefined &&
       (!Array.isArray(node.dependsOn) || !node.dependsOn.every((id) => typeof id === "string"))
@@ -130,42 +98,19 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
       }
       nodeWorkspaces.set(node.id, resolve(workspace, node.workspace));
     }
-    if (
-      node.priority !== undefined &&
-      (!Number.isSafeInteger(node.priority) || (node.priority as number) < -10 || (node.priority as number) > 10)
-    ) {
-      throw new Error(`Loop DAG node ${node.id} priority must be an integer from -10 to 10`);
-    }
-    if (
-      node.maxRetries !== undefined &&
-      (!Number.isSafeInteger(node.maxRetries) || (node.maxRetries as number) < 0 || (node.maxRetries as number) > 5)
-    ) {
-      throw new Error(`Loop DAG node ${node.id} maxRetries must be an integer from 0 to 5`);
-    }
-    if (
-      node.budgetWeight !== undefined &&
-      (typeof node.budgetWeight !== "number" || !Number.isFinite(node.budgetWeight) || node.budgetWeight <= 0)
-    ) {
-      throw new Error(`Loop DAG node ${node.id} budgetWeight must be positive`);
-    }
-    if (
-      node.failurePolicy !== undefined &&
-      node.failurePolicy !== "skip_dependents" &&
-      node.failurePolicy !== "continue" &&
-      node.failurePolicy !== "stop"
-    ) {
-      throw new Error(`Loop DAG node ${node.id} failurePolicy is invalid`);
-    }
+    if (node.priority !== undefined && typeof node.priority !== "number")
+      throw new Error(`Loop DAG node ${node.id} priority must be numeric`);
+    if (node.maxRetries !== undefined && typeof node.maxRetries !== "number")
+      throw new Error(`Loop DAG node ${node.id} maxRetries must be numeric`);
+    if (node.budgetWeight !== undefined && typeof node.budgetWeight !== "number")
+      throw new Error(`Loop DAG node ${node.id} budgetWeight must be numeric`);
+    if (node.failurePolicy !== undefined && typeof node.failurePolicy !== "string")
+      throw new Error(`Loop DAG node ${node.id} failurePolicy must be a string`);
     if (
       node.resources !== undefined &&
-      (!Array.isArray(node.resources) ||
-        node.resources.length === 0 ||
-        node.resources.length > 32 ||
-        !node.resources.every((item) => typeof item === "string" && DAG_ID_RE.test(item)) ||
-        new Set(node.resources).size !== node.resources.length)
-    ) {
-      throw new Error(`Loop DAG node ${node.id} resources must be unique safe names`);
-    }
+      (!Array.isArray(node.resources) || !node.resources.every((item) => typeof item === "string"))
+    )
+      throw new Error(`Loop DAG node ${node.id} resources must be a string array`);
     if (node.requiresApproval !== undefined && typeof node.requiresApproval !== "boolean") {
       throw new Error(`Loop DAG node ${node.id} requiresApproval must be boolean`);
     }
@@ -174,14 +119,11 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
     }
     if (
       node.outputPaths !== undefined &&
-      (!Array.isArray(node.outputPaths) ||
-        node.outputPaths.length === 0 ||
-        node.outputPaths.length > 64 ||
-        !node.outputPaths.every((item) => typeof item === "string" && isSafeRelativePath(item)) ||
-        new Set(node.outputPaths).size !== node.outputPaths.length)
-    ) {
-      throw new Error(`Loop DAG node ${node.id} outputPaths must be unique safe relative paths`);
-    }
+      (!Array.isArray(node.outputPaths) || !node.outputPaths.every((item) => typeof item === "string"))
+    )
+      throw new Error(`Loop DAG node ${node.id} outputPaths must be a string array`);
+    if (node.verifierId !== undefined && typeof node.verifierId !== "string")
+      throw new Error(`Loop DAG node ${node.id} verifierId must be a string`);
     return {
       id: node.id,
       task: node.task,
@@ -190,7 +132,9 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
       ...(typeof node.priority === "number" ? { priority: node.priority } : {}),
       ...(typeof node.budgetWeight === "number" ? { budgetWeight: node.budgetWeight } : {}),
       ...(typeof node.maxRetries === "number" ? { maxRetries: node.maxRetries } : {}),
-      ...(typeof node.failurePolicy === "string" ? { failurePolicy: node.failurePolicy } : {}),
+      ...(typeof node.failurePolicy === "string"
+        ? { failurePolicy: node.failurePolicy as LoopDagNode["failurePolicy"] }
+        : {}),
       ...(Array.isArray(node.resources) ? { resources: node.resources as string[] } : {}),
       ...(node.condition !== undefined ? { condition: parseLoopDagCondition(node.condition) } : {}),
       ...(typeof node.requiresApproval === "boolean" ? { requiresApproval: node.requiresApproval } : {}),
@@ -198,29 +142,9 @@ export function parseLoopDagInput(value: unknown, workspace: string): ParsedLoop
         ? { consumeDependencyOutputs: node.consumeDependencyOutputs }
         : {}),
       ...(Array.isArray(node.outputPaths) ? { outputPaths: node.outputPaths as string[] } : {}),
+      ...(typeof node.verifierId === "string" ? { verifierId: node.verifierId } : {}),
     };
   });
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const conditionReferences = (condition: LoopDagCondition): string[] => {
-    if ("nodeId" in condition) return [condition.nodeId];
-    if ("not" in condition) return conditionReferences(condition.not);
-    return ("all" in condition ? condition.all : condition.any).flatMap(conditionReferences);
-  };
-  for (const node of nodes) {
-    const dependencies = node.dependsOn ?? [];
-    if (
-      new Set(dependencies).size !== dependencies.length ||
-      dependencies.some((dependency) => dependency === node.id || !byId.has(dependency))
-    ) {
-      throw new Error(`Loop DAG node ${node.id} has invalid dependencies`);
-    }
-    if (
-      node.condition &&
-      conditionReferences(node.condition).some((dependency) => !dependencies.includes(dependency))
-    ) {
-      throw new Error(`Loop DAG node ${node.id} condition must reference one of its dependencies`);
-    }
-  }
-  assertLoopDagAcyclic(nodes);
+  assertValidLoopDagNodes(nodes);
   return { nodes, nodeWorkspaces, ...(fanIn ? { fanIn } : {}) };
 }

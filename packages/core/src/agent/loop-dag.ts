@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import type { AgentCoreDeps } from "./loop.js";
 import { runAutoLoop, type LoopOptions, type LoopResult, type LoopStatus } from "./auto-loop.js";
 import {
@@ -9,6 +9,21 @@ import {
   recordLoopBudgetObservation,
 } from "./loop-budget-history.js";
 import { acquireManagedLoopWorktreeLease, MANAGED_LOOP_BRANCH_RE } from "./loop-managed-worktree.js";
+import {
+  assertValidLoopDagNodes,
+  isValidLoopDagId,
+  isSafeLoopDagRelativePath,
+  loopDagConditionReferences,
+} from "./loop-dag-validation.js";
+
+export {
+  assertLoopDagAcyclic,
+  assertValidLoopDagNodes,
+  isValidLoopDagId,
+  isSafeLoopDagRelativePath,
+  loopDagConditionReferences,
+  parseLoopDagCondition,
+} from "./loop-dag-validation.js";
 import { type acquireSessionLease, acquireSessionLeaseWithPreemption } from "./session-lease.js";
 import { isRecord } from "../util/guards.js";
 import { readWorkspaceStateFile, writeWorkspaceStateFileAtomic } from "../util/workspace-state.js";
@@ -139,7 +154,6 @@ export type PersistedLoopDagState = {
   fanIn?: LoopDagFanInResult;
 };
 
-const DAG_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DAG_STATE_LIMIT = 1024 * 1024;
 const LOOP_STATUSES = new Set<LoopStatus>([
   "passed",
@@ -207,7 +221,7 @@ function parseFanIn(value: unknown): LoopDagFanInResult | undefined | null {
 }
 
 function dagStatePath(dagId: string): string {
-  if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
+  if (!isValidLoopDagId(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
   return `.seekforge/loop-dags/${dagId}.json`;
 }
 
@@ -314,7 +328,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
     if (
       !isRecord(item) ||
       typeof item.id !== "string" ||
-      !DAG_ID_RE.test(item.id) ||
+      !isValidLoopDagId(item.id) ||
       ids.has(item.id) ||
       (item.status !== "passed" &&
         item.status !== "failed" &&
@@ -355,7 +369,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
       (outputValue.artifacts === undefined ||
         (Array.isArray(outputValue.artifacts) &&
           outputValue.artifacts.length <= 64 &&
-          outputValue.artifacts.every((item) => typeof item === "string" && isSafeRelativePath(item))))
+          outputValue.artifacts.every((item) => isSafeLoopDagRelativePath(item))))
         ? (outputValue as LoopDagNodeOutput)
         : undefined;
     if (item.output !== undefined && output === undefined) return null;
@@ -381,7 +395,7 @@ function parseDagState(raw: string, dagId: string, fingerprint?: string): Persis
 }
 
 export function loadLoopDagState(workspace: string, dagId: string): PersistedLoopDagState | null {
-  if (!DAG_ID_RE.test(dagId)) return null;
+  if (!isValidLoopDagId(dagId)) return null;
   const raw = readWorkspaceStateFile(workspace, dagStatePath(dagId), DAG_STATE_LIMIT);
   return raw === undefined ? null : parseDagState(raw, dagId);
 }
@@ -418,36 +432,6 @@ function saveDagState(workspace: string, state: PersistedLoopDagState): void {
   writeWorkspaceStateFileAtomic(workspace, dagStatePath(state.dagId), serialized);
 }
 
-function isSafeRelativePath(path: unknown): path is string {
-  return (
-    typeof path === "string" &&
-    path.length > 0 &&
-    path.length <= 512 &&
-    !isAbsolute(path) &&
-    !/^[A-Za-z]:[\\/]/.test(path) &&
-    path
-      .replaceAll("\\", "/")
-      .split("/")
-      .every((part) => part !== "" && part !== "." && part !== "..")
-  );
-}
-
-function conditionReferences(condition: LoopDagCondition, refs: string[] = [], depth = 0): string[] | undefined {
-  if (depth > 8 || refs.length > 64 || !isRecord(condition)) return undefined;
-  if ("nodeId" in condition) {
-    if (!DAG_ID_RE.test(condition.nodeId) || (condition.status !== "passed" && condition.status !== "failed")) {
-      return undefined;
-    }
-    refs.push(condition.nodeId);
-    return refs.length <= 64 ? refs : undefined;
-  }
-  if ("not" in condition) return conditionReferences(condition.not, refs, depth + 1);
-  const group = "all" in condition ? condition.all : "any" in condition ? condition.any : undefined;
-  if (!Array.isArray(group) || group.length === 0 || group.length > 32) return undefined;
-  for (const child of group) if (!conditionReferences(child, refs, depth + 1)) return undefined;
-  return refs;
-}
-
 function conditionMatches(condition: LoopDagCondition, results: ReadonlyMap<string, LoopDagNodeResult>): boolean {
   if ("nodeId" in condition) return results.get(condition.nodeId)?.status === condition.status;
   if ("not" in condition) return !conditionMatches(condition.not, results);
@@ -472,88 +456,6 @@ function collectArtifacts(workspace: string, paths: readonly string[] | undefine
   return artifacts;
 }
 
-function validateNode(node: LoopDagNode, byId: ReadonlyMap<string, LoopDagNode>): void {
-  if (!DAG_ID_RE.test(node.id)) throw new Error(`Loop DAG node id must be unique and safe: ${node.id}`);
-  if (!node.task.trim() || !node.verifyCommand.trim()) throw new Error(`Loop DAG node is incomplete: ${node.id}`);
-  if (node.task.length > 64 * 1024 || node.verifyCommand.length > 8_192)
-    throw new Error(`Loop DAG node is too large: ${node.id}`);
-  if (
-    node.priority !== undefined &&
-    (!Number.isSafeInteger(node.priority) || node.priority < -10 || node.priority > 10)
-  )
-    throw new Error(`Loop DAG node priority must be -10 to 10: ${node.id}`);
-  if (node.budgetWeight !== undefined && (!Number.isFinite(node.budgetWeight) || node.budgetWeight <= 0))
-    throw new Error(`Loop DAG node budgetWeight must be positive: ${node.id}`);
-  if (
-    node.maxRetries !== undefined &&
-    (!Number.isSafeInteger(node.maxRetries) || node.maxRetries < 0 || node.maxRetries > 5)
-  )
-    throw new Error(`Loop DAG node maxRetries must be 0 to 5: ${node.id}`);
-  if (
-    node.failurePolicy !== undefined &&
-    node.failurePolicy !== "skip_dependents" &&
-    node.failurePolicy !== "continue" &&
-    node.failurePolicy !== "stop"
-  )
-    throw new Error(`Loop DAG node failurePolicy is invalid: ${node.id}`);
-  if (node.verifierId !== undefined && !DAG_ID_RE.test(node.verifierId)) {
-    throw new Error(`Loop DAG node verifierId must be safe: ${node.id}`);
-  }
-  const conditionRefs = node.condition ? conditionReferences(node.condition) : [];
-  if (conditionRefs === undefined || conditionRefs.some((id) => !(node.dependsOn ?? []).includes(id))) {
-    throw new Error(`Loop DAG node condition must reference one of its dependencies: ${node.id}`);
-  }
-  if (
-    node.resources !== undefined &&
-    (!Array.isArray(node.resources) ||
-      node.resources.length === 0 ||
-      node.resources.length > 32 ||
-      new Set(node.resources).size !== node.resources.length ||
-      node.resources.some((resource) => !DAG_ID_RE.test(resource)))
-  ) {
-    throw new Error(`Loop DAG node resources must be unique safe names: ${node.id}`);
-  }
-  if (node.requiresApproval !== undefined && typeof node.requiresApproval !== "boolean") {
-    throw new Error(`Loop DAG node requiresApproval must be boolean: ${node.id}`);
-  }
-  if (node.consumeDependencyOutputs !== undefined && typeof node.consumeDependencyOutputs !== "boolean") {
-    throw new Error(`Loop DAG node consumeDependencyOutputs must be boolean: ${node.id}`);
-  }
-  if (
-    node.outputPaths !== undefined &&
-    (!Array.isArray(node.outputPaths) ||
-      node.outputPaths.length === 0 ||
-      node.outputPaths.length > 64 ||
-      new Set(node.outputPaths).size !== node.outputPaths.length ||
-      node.outputPaths.some((path) => !isSafeRelativePath(path)))
-  ) {
-    throw new Error(`Loop DAG node outputPaths must be unique safe relative paths: ${node.id}`);
-  }
-  for (const dependency of node.dependsOn ?? []) {
-    if (!byId.has(dependency) || dependency === node.id) {
-      throw new Error(`Loop DAG node ${node.id} has invalid dependency: ${dependency}`);
-    }
-  }
-}
-
-/** Rejects dependency cycles before leases, checkpoints, or worktrees are created. */
-export function assertLoopDagAcyclic(nodes: readonly Pick<LoopDagNode, "id" | "dependsOn">[]): void {
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const visit = (id: string): void => {
-    if (visited.has(id)) return;
-    if (visiting.has(id)) throw new Error("Loop DAG contains a dependency cycle");
-    visiting.add(id);
-    for (const dependency of byId.get(id)?.dependsOn ?? []) {
-      if (byId.has(dependency)) visit(dependency);
-    }
-    visiting.delete(id);
-    visited.add(id);
-  };
-  for (const node of nodes) visit(node.id);
-}
-
 function dependencyAllowsContinuation(node: LoopDagNode | undefined, result: LoopDagNodeResult | undefined): boolean {
   return result?.status === "passed" || (result?.status === "failed" && node?.failurePolicy === "continue");
 }
@@ -564,7 +466,7 @@ function dependencyAllowsNode(
   dependencyNode: LoopDagNode | undefined,
   result: LoopDagNodeResult | undefined,
 ): boolean {
-  if (node.condition && conditionReferences(node.condition)?.includes(dependency)) {
+  if (node.condition && loopDagConditionReferences(node.condition)?.includes(dependency)) {
     return result !== undefined && result.status !== "waiting_approval" && result.status !== "approved";
   }
   return dependencyAllowsContinuation(dependencyNode, result);
@@ -572,16 +474,8 @@ function dependencyAllowsNode(
 
 /** Runs a durable dependency DAG; concurrency above one requires an isolated workspace per node. */
 export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): Promise<LoopDagNodeResult[]> {
-  if (!Array.isArray(options.nodes) || options.nodes.length === 0 || options.nodes.length > 64) {
-    throw new Error("Loop DAG must contain 1 to 64 nodes");
-  }
-  const byId = new Map<string, LoopDagNode>();
-  for (const node of options.nodes) {
-    if (byId.has(node.id)) throw new Error(`Loop DAG node id must be unique and safe: ${node.id}`);
-    byId.set(node.id, node);
-  }
-  for (const node of options.nodes) validateNode(node, byId);
-  assertLoopDagAcyclic(options.nodes);
+  assertValidLoopDagNodes(options.nodes);
+  const byId = new Map(options.nodes.map((node) => [node.id, node]));
   const concurrency = options.maxConcurrency ?? 1;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) {
     throw new RangeError("Loop DAG maxConcurrency must be an integer from 1 to 8");
@@ -694,7 +588,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
     )
     .digest("hex");
   const dagId = options.dagId ?? `dag-${fingerprint.slice(0, 16)}`;
-  if (!DAG_ID_RE.test(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
+  if (!isValidLoopDagId(dagId)) throw new Error(`Loop DAG id must be safe: ${dagId}`);
   const lease =
     persistenceEnabled || options.managedWorktrees
       ? await acquireSessionLeaseWithPreemption(options.workspace, `loop-dag-${dagId}`, {
@@ -954,7 +848,7 @@ export async function runLoopDag(deps: AgentCoreDeps, options: LoopDagOptions): 
         for (const id of [...pending]) {
           const node = byId.get(id)!;
           if (node.condition) {
-            const conditionRefs = conditionReferences(node.condition) ?? [];
+            const conditionRefs = loopDagConditionReferences(node.condition) ?? [];
             const conditionResolved = conditionRefs.every((dependency) => {
               const result = results.get(dependency);
               return result?.status === "passed" || result?.status === "failed" || result?.status === "skipped";
